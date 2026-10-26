@@ -1,0 +1,1 @@
+ALTER TABLE `communications` ADD `proposed_transition` text;

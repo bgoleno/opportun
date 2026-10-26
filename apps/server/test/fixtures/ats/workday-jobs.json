@@ -1,0 +1,23 @@
+{
+  "total": 2,
+  "jobPostings": [
+    {
+      "title": "Principal Product Manager - AURL - Web Protection (CDSS)",
+      "externalPath": "/job/Santa-Clara-CA/Principal-Product-Manager---AURL---Web-Protection--CDSS-_JR-000001",
+      "timeType": "Full time",
+      "locationsText": "Santa Clara, CA",
+      "postedOn": "Posted 15 Days Ago",
+      "bulletFields": ["JR-000001"]
+    },
+    {
+      "title": "Senior Product Manager, Remote",
+      "externalPath": "/job/Remote-USA/Senior-Product-Manager--Remote_1000002-1",
+      "timeType": "Full time",
+      "locationsText": "Remote - USA",
+      "postedOn": "Posted Today",
+      "bulletFields": ["1000002-1"]
+    }
+  ],
+  "facets": [],
+  "userAuthenticated": false
+}

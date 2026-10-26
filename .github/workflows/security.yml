@@ -1,0 +1,208 @@
+name: Security
+
+# NFR-SEC8: dependency vulnerability scanning (OSV), static analysis (CodeQL), and a review of
+# every dependency a pull request adds or changes (known vulnerabilities and licenses, C-5).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, so new advisories against unchanged dependencies still surface.
+    - cron: '23 4 * * 1'
+
+permissions:
+  contents: read
+
+# Action references are pinned to full commit SHAs with the version as a trailing comment
+# (Renovate keeps them current). osv-scanner-action stays version-pinned.
+
+jobs:
+  visibility:
+    # Code scanning upload needs a public repo or Advanced Security, so SARIF goes to code
+    # scanning only when the repo is public; otherwise the results are kept as run artifacts.
+    # Read from the API because github.event.repository is absent on scheduled runs.
+    name: Repository visibility
+    runs-on: ubuntu-latest
+    outputs:
+      public: ${{ steps.visibility.outputs.public }}
+    steps:
+      - name: Read repository visibility
+        id: visibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          public="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.private == false' || echo false)"
+          echo "public=${public}" >> "$GITHUB_OUTPUT"
+
+  osv-scanner:
+    name: OSV vulnerability scan
+    needs: visibility
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Scan the lockfile
+        id: scan
+        uses: google/osv-scanner-action/osv-scanner-action@v2.7.0
+        continue-on-error: true
+        with:
+          scan-args: |-
+            --output=osv-results.json
+            --format=json
+            --lockfile=pnpm-lock.yaml
+
+      # The scanner exits nonzero both for findings (the reporter below acts on those) and for
+      # a failed scan; a failed scan writes no results, which must not pass as "no findings".
+      - name: Check that the scan completed
+        if: steps.scan.outcome == 'failure'
+        run: |
+          if [ ! -s osv-results.json ]; then
+            echo "::error::OSV-Scanner failed without writing results; see the scan step."
+            exit 1
+          fi
+
+      - name: Report findings
+        uses: google/osv-scanner-action/osv-reporter-action@v2.7.0
+        with:
+          scan-args: |-
+            --output=osv-results.sarif
+            --new=osv-results.json
+            --gh-annotations=true
+            --fail-on-vuln=true
+
+      - name: Keep the SARIF as a run artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: osv-scanner-sarif
+          path: osv-results.sarif
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # Code scanning upload needs a public repo or Advanced Security.
+      - name: Upload to code scanning
+        if: ${{ !cancelled() && needs.visibility.outputs.public == 'true' }}
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
+        with:
+          sarif_file: osv-results.sarif
+          category: osv-scanner
+
+  codeql:
+    name: CodeQL
+    needs: visibility
+    runs-on: ubuntu-latest
+    permissions:
+      # The analyze action reads its workflow run for its status report, even with upload off.
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+
+      # Code scanning upload needs a public repo or Advanced Security.
+      - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
+        with:
+          category: /language:${{ matrix.language }}
+          upload: ${{ needs.visibility.outputs.public == 'true' && 'always' || 'never' }}
+          output: codeql-sarif
+
+      - name: Keep the SARIF as a run artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: codeql-sarif-${{ matrix.language }}
+          path: codeql-sarif
+          if-no-files-found: ignore
+          retention-days: 30
+
+  dependency-review:
+    name: Dependency review
+    # Dependency review, like code scanning, needs a public repo or Advanced Security; the OSV
+    # scan above still covers known vulnerabilities on private repos.
+    needs: visibility
+    if: github.event_name == 'pull_request' && needs.visibility.outputs.public == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: on-failure
+          # OSI-approved licenses only (C-5). Exceptions by package: caniuse-lite is
+          # browser-support data used at build time (CC-BY-4.0), and mdn-data is css-tree's
+          # test-time data dependency (CC0-1.0); neither is shipped as code.
+          allow-licenses: >-
+            MIT, MIT-0, Apache-2.0, ISC, BSD-2-Clause, BSD-3-Clause, 0BSD, BlueOak-1.0.0,
+            MPL-2.0, Unlicense, AFL-2.1, Python-2.0, Zlib
+          allow-dependencies-licenses: pkg:npm/caniuse-lite, pkg:npm/mdn-data
+
+  label-security-sensitive:
+    # Issue #63: #47 landed issue #5's fix under a PR description that said it touched no
+    # passwords, and #5 then stayed open for a month because nothing linked them. This is not a
+    # body-vs-diff parser (a body claim doesn't have to be dishonest to go stale, same as #47's
+    # branch renaming its own scope mid-flight): it is a static, deterministic path list,
+    # derived from the areas CONTRIBUTING.md and SECURITY.md already name as security-sensitive
+    # (auth, crypto, adapters, fetchers; see .github/scripts/security-paths.mjs), applied with no
+    # regard for what the PR's title or body claims.
+    #
+    # Honest limit: this surfaces the mismatch, it does not block the merge or force a review.
+    # It would have caught #47 because `security` showing up on a PR titled "feat(mail): ..." is
+    # a one-glance catch, which is exactly the glance that did not happen. A label only works if
+    # someone looks at it.
+    name: Label security-sensitive changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .nvmrc
+
+      # The matching logic lives in a plain module precisely so it has a test of its own,
+      # separate from this workflow: security-paths.test.mjs pins it against the real file list
+      # from #47 (must match) and from a real, unrelated web-only PR (must not). Nothing here is
+      # covered by the root `pnpm test`, which only recurses into apps/* and packages/*, so this
+      # step is what actually runs it in CI.
+      - name: Unit-test the path matcher
+        run: node --test .github/scripts/*.test.mjs
+
+      - name: Check the PR's changed paths against the security-sensitive glob list
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          matches="$(gh pr diff "${{ github.event.pull_request.number }}" --name-only \
+            | node .github/scripts/check-security-paths.mjs)"
+          echo "matches<<SECURITY_PATHS_EOF" >> "$GITHUB_OUTPUT"
+          echo "$matches" >> "$GITHUB_OUTPUT"
+          echo "SECURITY_PATHS_EOF" >> "$GITHUB_OUTPUT"
+          if [ -n "$matches" ]; then
+            echo "::notice::Security-sensitive paths changed:"
+            echo "$matches" | sed 's/^/::notice::  /'
+          fi
+
+      - name: Apply the security label
+        if: steps.check.outputs.matches != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr edit "${{ github.event.pull_request.number }}" --add-label security

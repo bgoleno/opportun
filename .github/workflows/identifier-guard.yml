@@ -1,0 +1,46 @@
+# Fails a pull request if a withheld real-world identifier appears in the tree. The list of
+# terms is NOT in this file on purpose (that would re-publish the very names we withhold): it
+# comes from the repository secret BLOCKED_IDENTIFIERS, space- or newline-separated. If the
+# secret is unset the job is a no-op with a warning, so a fork without the secret is not broken.
+name: Identifier guard
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Scan for withheld identifiers
+        env:
+          TERMS: ${{ secrets.BLOCKED_IDENTIFIERS }}
+        run: |
+          if [ -z "${TERMS// /}" ]; then
+            echo "::warning::BLOCKED_IDENTIFIERS secret is not set; identifier guard skipped."
+            exit 0
+          fi
+          # Innocuous substrings that legitimately contain a blocked term (a city name, a
+          # camelCase identifier, a dependency hash). Expand as real false positives appear.
+          allow='francisco|withpepper|withpeople|rhel'
+          bad=0
+          for t in $TERMS; do
+            # Letters-only terms match on word boundaries so a short term does not fire inside
+            # a longer word; anything with punctuation or digits is matched as a literal.
+            if printf '%s' "$t" | grep -qE '^[A-Za-z]+$'; then
+              hits=$(git grep -niIE -- "(^|[^A-Za-z])${t}([^A-Za-z]|\$)" -- . ':!pnpm-lock.yaml' 2>/dev/null | grep -viE "$allow" || true)
+            else
+              hits=$(git grep -niIF -- "$t" -- . ':!pnpm-lock.yaml' 2>/dev/null || true)
+            fi
+            if [ -n "$hits" ]; then
+              echo "::error::withheld identifier present"
+              echo "---- '$t' ----"
+              printf '%s\n' "$hits" | head -5
+              bad=1
+            fi
+          done
+          if [ "$bad" -ne 0 ]; then exit 1; fi
+          echo "Identifier guard: clean."

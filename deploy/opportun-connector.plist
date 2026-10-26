@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent for the Apple Mail connector (docs/install.md, "Apple Mail (macOS)").
+  Runs `opportun-connector watch` in your login session and restarts it if it stops on an
+  error, like the server's `restart: unless-stopped` in compose.yml.
+
+  1. Replace every /Users/YOU with your home directory, and /opt/homebrew/bin/node with the
+     output of `command -v node` (launchd does not read your shell's PATH).
+  2. cp deploy/opportun-connector.plist ~/Library/LaunchAgents/org.opportun.connector.plist
+  3. launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.opportun.connector.plist
+  Stop it with: launchctl bootout gui/$(id -u)/org.opportun.connector
+  It must be a LaunchAgent (your GUI session), not a LaunchDaemon: Mail and the Automation
+  permission belong to your login session.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.opportun.connector</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/YOU/.local/bin/opportun-connector</string>
+    <string>watch</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- The config is read from $HOME/.config/opportun-connector. -->
+    <key>HOME</key>
+    <string>/Users/YOU</string>
+    <!-- Tells the connector to rotate this file itself (#21) instead of appending forever;
+         see the StandardOutPath/StandardErrorPath comment below for why that has to happen
+         here rather than externally. -->
+    <key>OPPORTUN_CONNECTOR_LOG_FILE</key>
+    <string>/Users/YOU/Library/Logs/opportun-connector.log</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!--
+    Restart after any nonzero exit; a clean stop (launchctl bootout, SIGTERM) stays stopped.
+    `watch` rides out server and Mail failures itself and exits nonzero only when retrying
+    cannot help on its own: code 3 (token rejected or revoked) or 2 (bad config). launchd
+    still restarts it then, so those keep being retried until fixed.
+  -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <!--
+    At most one restart per 15 minutes (the default watch interval), so a revoked token or a
+    broken config costs one Mail read and one request every 15 minutes, not a tight loop.
+  -->
+  <key>ThrottleInterval</key>
+  <integer>900</integer>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+
+  <!--
+    Deliberately not the log file (#21): watch runs for days or weeks without exiting, and
+    launchd opens this path once at process start and hands the connector the resulting fd, the
+    same way it would hand a fd to any other child. Nothing after that reopens it, so an
+    external rotator renaming the file out from under that fd (newsyslog's whole approach)
+    would not stop it growing, it would just keep growing under its new, hidden name. The
+    connector reads OPPORTUN_CONNECTOR_LOG_FILE above and opens and rotates that file itself,
+    which only works because it is the one holding the fd. This path only catches output from
+    before that happens (a crash while reading HOME, say), so /dev/null is the right default.
+  -->
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>/dev/null</string>
+</dict>
+</plist>

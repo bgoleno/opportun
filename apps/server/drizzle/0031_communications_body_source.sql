@@ -1,0 +1,1 @@
+ALTER TABLE `communications` ADD `body_source` text;

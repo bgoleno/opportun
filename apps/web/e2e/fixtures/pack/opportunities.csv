@@ -1,0 +1,4 @@
+company,title,stage,posting_url,location,source,applied_at,dismissed_reason,notes_file,resume_doc_ref
+Acme Robotics,Staff Software Engineer,applied,https://jobs.example.com/acme/101,Remote,Referral,2026-09-01,,notes/acme.md,
+Globex,Engineering Manager,interested,,"Austin, TX",Job board,,,,
+Initech,Platform Engineer,discovered,,Remote,,,,,

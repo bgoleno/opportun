@@ -1,0 +1,176 @@
+# Builds the application image and pushes it to GHCR, where it is public: for the demo host
+# (docs/demo-deployment.md) and for anyone who wants to run Opportun without building it
+# (README, "Install"). Manual trigger only: publishing is a decision, not a consequence of
+# merging.
+#
+# Three kinds of tag, for two audiences:
+#   sha-<7>   every build. Immutable by convention. The demo host pins one of these, because
+#             its pull_policy: always plus a moving tag would leave no way to say what is running
+#             or to roll back.
+#   latest    moved to this build, only when dispatched from main. For adopters who want
+#             whatever main last published.
+#   <version> optional, e.g. 0.1.0, when a release version is given at dispatch. Refused if it
+#             already exists, so a version always names one build.
+#
+# Why this exists at all, rather than the `docker build && docker push` the deployment doc
+# used to describe as the only route: that route runs on the owner's Apple Silicon Mac, which
+# produces a linux/arm64 image. The demo host is x86_64, so the pull either refuses the
+# manifest or the container dies with "exec format error". A GitHub runner is native amd64, so
+# the architecture is right by construction here instead of by remembering a flag.
+#
+# The local route still works and stays documented, with the flag it always needed. This is
+# the one that cannot be got wrong.
+name: Publish image
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version to tag as well, e.g. 0.1.0. Leave blank for none.'
+        required: false
+        default: ''
+
+# A publish is the one workflow here that must never be cancelled part-way: an interrupted
+# `docker push` can leave a tag resolving to an incomplete manifest, which is worse than no
+# tag at all. Hence cancel-in-progress: false, unlike CI's pull-request legs.
+concurrency:
+  group: publish-image
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # Lets the automatically-provided GITHUB_TOKEN push to ghcr.io/<owner>/<repo>. This is the
+  # whole reason no personal access token is involved: the `write:packages` PAT the deployment
+  # doc describes is needed only when pushing from a laptop.
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Derive the tag
+        id: tag
+        # Exactly seven characters sliced from GITHUB_SHA rather than `git rev-parse --short`,
+        # which picks its own length from the repository's object count and would not reliably
+        # agree with what the same command prints on a developer's machine. The tag has to be
+        # typed into the host's .env by hand, so it must be predictable, not merely unique.
+        run: echo "tag=sha-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - name: Decide the extra tags
+        id: extra
+        # The version input is free text typed into a form, so it goes through env and is
+        # checked against a strict pattern before it gets anywhere near a command line or an
+        # image reference. A leading `v` is refused rather than stripped: one spelling per
+        # version, so nobody has to guess whether it is 0.1.0 or v0.1.0.
+        #
+        # `latest` moves only on main. Dispatching from a branch is a legitimate way to test a
+        # build, and must not silently become what every adopter pulls.
+        env:
+          VERSION: ${{ inputs.version }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ -n "$VERSION" ] && ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::version '$VERSION' is not MAJOR.MINOR.PATCH (optionally -prerelease), without a leading v"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$REF" = "refs/heads/main" ]; then echo "latest=true" >> "$GITHUB_OUTPUT"; else echo "latest=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Log in to GHCR
+        # --password-stdin, never -p: an argument is visible in the process list of every other
+        # process on the runner for the lifetime of the call.
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+
+      - name: Refuse a version that is already published
+        if: steps.extra.outputs.version != ''
+        # Checked before building, so a mistyped re-release costs seconds rather than a build.
+        # A version that could be re-pushed would stop meaning one specific build, which is the
+        # only thing a version tag is for.
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/opportun
+          VERSION: ${{ steps.extra.outputs.version }}
+        run: |
+          if docker manifest inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "::error::$IMAGE:$VERSION already exists. Pick a new version."
+            exit 1
+          fi
+
+      - name: Build
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/opportun
+          TAG: ${{ steps.tag.outputs.tag }}
+        # --platform is redundant on an amd64 runner and stated anyway: it is the one property
+        # of this artifact that the demo host cannot tolerate being wrong, so it belongs in the
+        # command rather than in an assumption about the runner.
+        #
+        # --pull refuses a cached node:22-slim. A release build should resolve its base image
+        # now, not reuse whatever a previous job happened to leave on this runner.
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --pull \
+            -f deploy/Dockerfile \
+            -t "$IMAGE:$TAG" \
+            .
+
+      - name: Push
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/opportun
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.extra.outputs.version }}
+          LATEST: ${{ steps.extra.outputs.latest }}
+        # The sha tag goes first, so the immutable reference exists before any moving one is
+        # pointed at the same image. If a later push fails, what is left is a published build
+        # with fewer names, never a `latest` or a version that resolves to nothing.
+        run: |
+          docker push "$IMAGE:$TAG"
+          if [ -n "$VERSION" ]; then
+            docker tag "$IMAGE:$TAG" "$IMAGE:$VERSION" && docker push "$IMAGE:$VERSION"
+          fi
+          if [ "$LATEST" = "true" ]; then
+            docker tag "$IMAGE:$TAG" "$IMAGE:latest" && docker push "$IMAGE:latest"
+          fi
+
+      - name: Report the tag and what to do with it
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/opportun
+          TAG: ${{ steps.tag.outputs.tag }}
+          REF: ${{ github.ref_name }}
+          VERSION: ${{ steps.extra.outputs.version }}
+          LATEST: ${{ steps.extra.outputs.latest }}
+        # Written to the run summary because the next step is manual and happens elsewhere:
+        # somebody has to read a value off this page and type it into a file on another
+        # machine. Printing it to a log line that scrolls past is not good enough.
+        run: |
+          {
+            echo "## Published"
+            echo
+            echo '```'
+            echo "OPPORTUN_DEMO_IMAGE_TAG=$TAG"
+            echo '```'
+            echo
+            echo "Built from: \`$REF\` at \`$GITHUB_SHA\`. Pushed:"
+            echo
+            echo "- \`$IMAGE:$TAG\`"
+            if [ -n "$VERSION" ]; then echo "- \`$IMAGE:$VERSION\`"; fi
+            if [ "$LATEST" = "true" ]; then echo "- \`$IMAGE:latest\`"; else echo "- \`latest\` not moved: dispatched from \`$REF\`, not main"; fi
+            echo
+            echo "Set that variable in the demo host's \`.env\`, then on the host:"
+            echo
+            echo '```sh'
+            echo 'docker compose -f deploy/compose.yml -f deploy/compose.demo.yml \'
+            echo '  --env-file .env up -d'
+            echo '```'
+            echo
+            echo "Rolling back is the same two steps with the previous tag. The demo host always"
+            echo "pins a \`sha-\` tag, never \`latest\`."
+            echo
+            echo "The package is public by decision, so anyone can \`docker pull\` these with no login."
+          } >> "$GITHUB_STEP_SUMMARY"

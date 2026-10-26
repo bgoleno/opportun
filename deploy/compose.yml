@@ -1,0 +1,179 @@
+# Opportun behind Caddy. From this directory (see docs/install.md):
+#   cp ../.env.example .env                      # then set COMPOSE_PROJECT_NAME, then edit the rest
+#   mkdir -p data && (umask 077; openssl rand -hex 32 > data/master.key)
+#   docker compose up -d --build
+# Then open http://localhost:8080 (or https://<OPPORTUN_DOMAIN>).
+#
+# SQLite is the default and needs nothing else: opportun.db lives in the sqlite_data named
+# volume below, kept off the ./data bind mount (docs/install.md; incident-driven, issue #179).
+# The optional `postgres` profile adds a Postgres 16 service; turn it on from .env
+# (COMPOSE_PROFILES=postgres plus the database settings, see .env.example and docs/install.md
+# section 15).
+#
+# `name:` below is deliberately not `opportun`, and this matters more than it looks (issue
+# #203). A compose project name is a global namespace on the Docker host: every container,
+# network and named volume it creates is reachable by any other checkout, worktree or CI run
+# that addresses the same name, from any directory, with no flag required to opt in. A real
+# deployment sets COMPOSE_PROJECT_NAME in its own .env (outside the repo, read automatically
+# by compose) to claim a name of its own; this file's own name exists only as the fallback
+# for a checkout that has not set one, and is deliberately a name no real deployment would
+# choose (and names itself after the fix, so anyone who sees it in `docker ps` knows exactly
+# what to do), so an accidental `docker compose down -v` somewhere else lands on nothing that
+# matters. Do not rename it to `opportun`.
+#
+# This fallback is shared by every unconfigured checkout, though, so it protects a real
+# (correctly configured) deployment unconditionally but does not stop two unconfigured
+# checkouts from colliding with each other if both run compose commands on the same host
+# without setting COMPOSE_PROJECT_NAME. For local testing against this file, always pass an
+# explicit `-p <something-unique>`, every invocation, including read-only ones: that is what
+# isolates one ad hoc test run from another, not this fallback.
+name: opportun-set-compose-project-name
+
+services:
+  opportun:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    # Unset: build from this checkout and tag the result opportun:local, as before. Set
+    # OPPORTUN_IMAGE=ghcr.io/bgoleno/opportun:latest in .env to run the published image instead
+    # with no build at all: with both `build:` and `image:` present, compose pulls a named image
+    # that is missing locally rather than building it (verified with `up --dry-run`, which plans
+    # Pulling and no Building). Run it as `docker compose up -d`, without --build, which would
+    # force a local build regardless. The published image is linux/amd64 only.
+    image: ${OPPORTUN_IMAGE:-opportun:local}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      OPPORTUN_BASE_URL: ${OPPORTUN_BASE_URL:-http://localhost:8080}
+      OPPORTUN_MASTER_KEY_FILE: /data/master.key
+      # Optional password pepper (docs/install.md section 4). Empty by default, which is the
+      # same as unset. Kept out of /data deliberately: a pepper in the directory it protects
+      # travels with every copy of the database.
+      OPPORTUN_PEPPER: ${OPPORTUN_PEPPER:-}
+      DATA_DIR: /data
+      # opportun.db's own directory, separate from /data (issue #179, incident #165): SQLite
+      # coordinates concurrent access through this file's WAL and shared-memory index, which
+      # a bind mount cannot do reliably on Docker Desktop for Mac. The named volume below
+      # avoids that path entirely. Attachments, backups, exports and master.key have no such
+      # exposure (content-addressed or write-once) and stay on /data, where a host user can
+      # still reach them.
+      SQLITE_DIR: /sqlite
+      PORT: '8080'
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Database engine (docs/install.md section 15). Unset: SQLite in /sqlite.
+      DB_DIALECT: ${DB_DIALECT:-sqlite}
+      DATABASE_URL: ${DATABASE_URL:-}
+      DATABASE_URL_FILE: ${DATABASE_URL_FILE:-}
+      # The db service below has no TLS on the compose network: DB_SSL=disable there (host
+      # `db` is not loopback, so it would default to require). Managed or remote databases
+      # keep require or verify-full.
+      DB_SSL: ${DB_SSL:-}
+      # Trust X-Forwarded-* only from Caddy (issue #333). The app is published to no host port
+      # (expose only), so the sole peer that reaches it is Caddy on the pinned compose subnet
+      # declared under networks.default below. Trusting that subnet restores the real client IP
+      # for the per-IP rate limits and the X-Forwarded-Proto Secure-cookie derivation (ADR-14,
+      # issue #23), both of which the application's trust-no-proxy default deliberately withholds
+      # so a bare-metal LAN install cannot be spoofed. Kept in sync with the subnet through one
+      # variable; change OPPORTUN_COMPOSE_SUBNET (both here and below) if it collides on the host.
+      OPPORTUN_TRUSTED_PROXIES: ${OPPORTUN_COMPOSE_SUBNET:-172.31.242.0/24}
+    volumes:
+      # attachments/, backups/, exports/, master.key. On Postgres the database lives in the
+      # db service; attachments, backups (.dump), exports and master.key stay here either way.
+      - ./data:/data
+      # opportun.db alone (SQLite only; unused on the postgres profile), on a named volume
+      # rather than a bind mount so a first boot after an upgrade can migrate an existing
+      # ./data/opportun.db into it (db/client.ts's migrateSqliteDir, issue #179).
+      - sqlite_data:/sqlite
+    depends_on:
+      db:
+        condition: service_healthy
+        # Only when the postgres profile is on.
+        required: false
+    # Reachable only through Caddy on the compose network.
+    expose:
+      - '8080'
+
+  # Optional Postgres 16 (profile `postgres`). C collation (libc), as the app requires, so
+  # names and titles sort exactly as on SQLite. Not published on the host.
+  db:
+    image: postgres:16
+    profiles:
+      - postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: opportun
+      POSTGRES_USER: opportun
+      # From .env; the image refuses to initialize a database without one. (Not `:?`: compose
+      # interpolates every service, so a required variable would break the SQLite setup.)
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_INITDB_ARGS: --locale=C --encoding=UTF8
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U opportun -d opportun']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    expose:
+      - '5432'
+
+  caddy:
+    image: caddy:2.11.7-alpine
+    restart: unless-stopped
+    depends_on:
+      opportun:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # A domain turns on automatic HTTPS; without one Caddy serves plain HTTP.
+      OPPORTUN_SITE_ADDRESS: ${OPPORTUN_DOMAIN:-:80}
+    ports:
+      # Every interface by default (ADR-14): the canonical deployment is one machine reached
+      # from the household's phones and laptops, and a loopback default makes that fail with
+      # no error anyone can see. Set OPPORTUN_BIND_ADDRESS=127.0.0.1 in .env to restrict it
+      # to this machine. For a public domain also set OPPORTUN_HTTP_PORT=80, so certificate
+      # issuance and the HTTPS redirect work.
+      - '${OPPORTUN_BIND_ADDRESS:-0.0.0.0}:${OPPORTUN_HTTP_PORT:-8080}:80'
+      - '${OPPORTUN_BIND_ADDRESS:-0.0.0.0}:${OPPORTUN_HTTPS_PORT:-443}:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
+  # The postgres profile's database (back it up with the app's nightly .dump snapshots).
+  pg_data:
+  # opportun.db (SQLite only; back it up with the app's nightly snapshots under ./data/backups,
+  # never by copying this volume's file directly: see db/client.ts's migrateSqliteDir).
+  sqlite_data:
+
+networks:
+  # The default network every service already shares, with a PINNED subnet (issue #333). Without
+  # this, Docker assigns the subnet dynamically, so there is no stable address to tell the app to
+  # trust and Caddy's IP lands in the old ['loopback','linklocal','uniquelocal'] range only by
+  # accident. Pinning it gives OPPORTUN_TRUSTED_PROXIES above a fixed CIDR to name. Nothing but
+  # Caddy, the app and (on the postgres profile) the db sits on this network, and the app is not
+  # published to the host, so trusting the whole subnet exposes no untrusted peer. Change
+  # OPPORTUN_COMPOSE_SUBNET (and the env line above) if this range collides with another network
+  # on the host; `docker compose up` fails loudly on a collision rather than silently.
+  default:
+    ipam:
+      config:
+        - subnet: ${OPPORTUN_COMPOSE_SUBNET:-172.31.242.0/24}

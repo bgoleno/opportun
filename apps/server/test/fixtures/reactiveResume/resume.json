@@ -1,0 +1,211 @@
+{
+  "id": "019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b",
+  "name": "Jane Doe Base Resume",
+  "slug": "jane-doe-base-resume",
+  "tags": ["base"],
+  "isPublic": false,
+  "showDownloadButtons": true,
+  "isLocked": false,
+  "hasPassword": false,
+  "applicationId": null,
+  "createdAt": "2026-09-01T12:00:00.000Z",
+  "updatedAt": "2026-10-01T12:00:00.000Z",
+  "data": {
+    "picture": {
+      "hidden": true,
+      "fit": "cover",
+      "url": "",
+      "size": 64,
+      "rotation": 0,
+      "aspectRatio": 1,
+      "borderRadius": 0,
+      "borderColor": "rgba(0, 0, 0, 0.5)",
+      "borderWidth": 0,
+      "shadowColor": "rgba(0, 0, 0, 0.5)",
+      "shadowWidth": 0
+    },
+    "basics": {
+      "name": "Jane Doe",
+      "headline": "Senior Engineer",
+      "email": "jane@example.com",
+      "phone": "+1 555 0100",
+      "location": "Austin, TX",
+      "website": { "url": "https://jane.example.com", "label": "", "inlineLink": false },
+      "customFields": []
+    },
+    "summary": {
+      "title": "Summary",
+      "icon": "",
+      "columns": 1,
+      "hidden": false,
+      "showHeading": true,
+      "keepTogether": false,
+      "startOnNewPage": false,
+      "content": "<p>Backend engineer focused on payments &amp; billing.</p>"
+    },
+    "sections": {
+      "profiles": {
+        "title": "Profiles",
+        "icon": "",
+        "columns": 1,
+        "hidden": false,
+        "showHeading": true,
+        "keepTogether": false,
+        "startOnNewPage": false,
+        "items": []
+      },
+      "experience": {
+        "title": "Experience",
+        "icon": "",
+        "columns": 1,
+        "hidden": false,
+        "showHeading": true,
+        "keepTogether": false,
+        "startOnNewPage": false,
+        "items": [
+          {
+            "id": "0b6f8f9e-1111-4c1e-9a77-000000000001",
+            "hidden": false,
+            "company": "Initech",
+            "position": "Senior Engineer",
+            "location": "Austin, TX",
+            "period": "2021 - Present",
+            "dates": { "start": "2021", "end": null, "present": true },
+            "website": { "url": "", "label": "", "inlineLink": false },
+            "description": "<ul><li><p>Built the billing platform in Go</p></li><li><p>Cut costs by <strong>40%</strong> with caching</p></li></ul>",
+            "roles": []
+          },
+          {
+            "id": "0b6f8f9e-1111-4c1e-9a77-000000000002",
+            "hidden": true,
+            "company": "Hidden Corp",
+            "position": "Intern",
+            "location": "",
+            "period": "2015",
+            "dates": { "start": "2015", "end": null, "present": false },
+            "website": { "url": "", "label": "", "inlineLink": false },
+            "description": "<p>Not printed</p>",
+            "roles": []
+          }
+        ]
+      },
+      "education": {
+        "title": "Education",
+        "icon": "",
+        "columns": 1,
+        "hidden": false,
+        "showHeading": true,
+        "keepTogether": false,
+        "startOnNewPage": false,
+        "items": []
+      },
+      "projects": {
+        "title": "Projects",
+        "icon": "",
+        "columns": 1,
+        "hidden": false,
+        "showHeading": true,
+        "keepTogether": false,
+        "startOnNewPage": false,
+        "items": []
+      },
+      "skills": {
+        "title": "Skills",
+        "icon": "",
+        "columns": 1,
+        "hidden": false,
+        "showHeading": true,
+        "keepTogether": false,
+        "startOnNewPage": false,
+        "items": [
+          {
+            "id": "0b6f8f9e-2222-4c1e-9a77-000000000001",
+            "hidden": false,
+            "icon": "",
+            "iconColor": "",
+            "name": "Languages",
+            "proficiency": "",
+            "level": 0,
+            "keywords": ["Go", "Python"]
+          }
+        ]
+      },
+      "languages": {
+        "title": "Languages",
+        "icon": "",
+        "columns": 1,
+        "hidden": false,
+        "showHeading": true,
+        "keepTogether": false,
+        "startOnNewPage": false,
+        "items": []
+      },
+      "interests": {
+        "title": "Interests",
+        "icon": "",
+        "columns": 1,
+        "hidden": false,
+        "showHeading": true,
+        "keepTogether": false,
+        "startOnNewPage": false,
+        "items": []
+      },
+      "awards": {
+        "title": "Awards",
+        "icon": "",
+        "columns": 1,
+        "hidden": false,
+        "showHeading": true,
+        "keepTogether": false,
+        "startOnNewPage": false,
+        "items": []
+      },
+      "certifications": {
+        "title": "Certifications",
+        "icon": "",
+        "columns": 1,
+        "hidden": false,
+        "showHeading": true,
+        "keepTogether": false,
+        "startOnNewPage": false,
+        "items": []
+      },
+      "publications": {
+        "title": "Publications",
+        "icon": "",
+        "columns": 1,
+        "hidden": false,
+        "showHeading": true,
+        "keepTogether": false,
+        "startOnNewPage": false,
+        "items": []
+      },
+      "volunteer": {
+        "title": "Volunteer",
+        "icon": "",
+        "columns": 1,
+        "hidden": false,
+        "showHeading": true,
+        "keepTogether": false,
+        "startOnNewPage": false,
+        "items": []
+      },
+      "references": {
+        "title": "References",
+        "icon": "",
+        "columns": 1,
+        "hidden": false,
+        "showHeading": true,
+        "keepTogether": false,
+        "startOnNewPage": false,
+        "items": []
+      }
+    },
+    "customSections": [],
+    "metadata": {
+      "template": "onyx",
+      "notes": "",
+      "styleRules": []
+    }
+  }
+}

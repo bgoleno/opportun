@@ -1,0 +1,54 @@
+{
+  "name": "@opportun/server",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false scripts/dev.ts",
+    "start": "node --import tsx src/index.ts",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "db:generate": "drizzle-kit generate",
+    "labels": "tsx scripts/labelSheet.ts",
+    "backtest": "tsx scripts/backtestTriage.ts"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^22.20.5",
+    "@types/pg": "8.23.1",
+    "@types/qrcode": "^1.5.6",
+    "ai": "^7.0.142",
+    "drizzle-kit": "^0.31.11",
+    "eslint": "^10.12.0",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.3",
+    "@fastify/multipart": "^10.1.4",
+    "@fastify/static": "^10.1.6",
+    "@googleapis/docs": "^14.1.1",
+    "@googleapis/drive": "^26.0.2",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@node-rs/argon2": "^2.2.2",
+    "@opportun/ai": "workspace:^",
+    "@opportun/core": "workspace:^",
+    "better-sqlite3": "^13.0.3",
+    "cron-parser": "^5.10.1",
+    "drizzle-orm": "^0.45.4",
+    "fastify": "^5.12.7",
+    "fastify-plugin": "^6.0.1",
+    "fastify-type-provider-zod": "^7.0.0",
+    "fflate": "^0.8.3",
+    "google-auth-library": "^11.3.1",
+    "pg": "8.23.1",
+    "qrcode": "^1.5.4",
+    "tsx": "^4.23.15",
+    "zod": "^4.6.7"
+  }
+}

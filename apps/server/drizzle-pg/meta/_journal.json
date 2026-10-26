@@ -1,0 +1,139 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1792195200017,
+      "tag": "0000_baseline",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792275584719,
+      "tag": "0001_search",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792400082492,
+      "tag": "0002_posting_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792400082493,
+      "tag": "0003_posting_merge_prompt",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792445734758,
+      "tag": "0004_mail_filter_rules",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792446115823,
+      "tag": "0005_comms_triage_decision",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792453518747,
+      "tag": "0006_reject_out_of_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792460000000,
+      "tag": "0007_comms_triage_prompt",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792530000000,
+      "tag": "0008_ats_job_refs",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792540000000,
+      "tag": "0009_discovery_source_comm",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792542048169,
+      "tag": "0010_resume_archived_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792555114258,
+      "tag": "0011_possible_duplicate_of",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792559204502,
+      "tag": "0012_opportunity_dedupe_candidates",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792567290813,
+      "tag": "0013_communications_body_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1792569038016,
+      "tag": "0014_resume_match_reports",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1792572902560,
+      "tag": "0015_company_match_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1792626020503,
+      "tag": "0016_opportunity_sort_order",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792657353000,
+      "tag": "0017_tailor_match_report",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792697137331,
+      "tag": "0018_users_last_seen_at",
+      "breakpoints": true
+    }
+  ]
+}

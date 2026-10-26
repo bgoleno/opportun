@@ -1,0 +1,9 @@
+﻿Notes:
+"When exporting your connection data, you may notice that some of the email addresses are missing. You will only see email addresses for connections who have allowed their connections to see or download their email address using this setting https://www.linkedin.com/psettings/privacy/email. You can learn more here https://www.linkedin.com/help/linkedin/answer/261"
+
+First Name,Last Name,URL,Email Address,Company,Position,Connected On
+Jane,Doe,https://www.linkedin.com/in/jane-doe-synthetic-0a1b,jane.doe@initech.example,Initech,"Director, Platform Engineering",12 Mar 2024
+Sam,Lee,https://www.linkedin.com/in/sam-lee-synthetic-2c3d,,"Hooli, Inc.",Engineering Manager,03 Jan 2023
+Priya,Shah,,,Globex,"Senior ""Staff"" Recruiter",21 Jul 2025
+Chen,Wu,https://www.linkedin.com/in/chen-wu-synthetic-4e5f/,,,,01 Feb 2022
+Ana,Ruiz,https://www.linkedin.com/in/ana-ruiz-synthetic-6a7b,ana.ruiz@globex.example,Globex,Product Lead,09 Sep 2021

@@ -1,0 +1,1 @@
+ALTER TABLE "communications" ADD COLUMN "body_source" text;

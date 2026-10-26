@@ -1,0 +1,13 @@
+-- ATS job references extracted from a message body at ingest (design 2026-10-19, D-5).
+-- Hand-written for the same reason as 0022 to 0025: drizzle-kit refuses this chain over the
+-- pre-existing 0015-0019 snapshot collision. The Postgres twin is drizzle-pg/0008_ats_job_refs.sql.
+--
+-- Why the column exists at all: Plan 3 stops persisting bodies, and find-posting reads the
+-- bodies of an opportunity's messages to recover the ATS link a recruiter sent. Re-fetching is
+-- not an answer for Apple Mail or a LinkedIn export, which cannot be pulled again, and the
+-- fallback (the snippet) loses a link that was below the fold. So the few hundred bytes of
+-- extracted references are kept and the 11 KB of body is not.
+--
+-- Nullable with no backfill: NULL means "nothing was extracted from this row", and the reader
+-- falls back to the body for a row that still has one.
+ALTER TABLE `communications` ADD COLUMN `ats_job_refs` text;

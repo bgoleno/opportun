@@ -1,0 +1,2 @@
+# Byte-exact fixtures: keep the BOM and CRLF line endings as written.
+* -text

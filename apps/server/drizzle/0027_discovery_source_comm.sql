@@ -1,0 +1,11 @@
+-- Which message a discovery lead was parsed out of (design 2026-10-19, D3b). Hand-written for
+-- the same reason as 0022 to 0026. The Postgres twin is
+-- drizzle-pg/0009_discovery_source_comm.sql.
+--
+-- A job alert digest becomes several leads, and until now a lead carried no way back to the mail
+-- it came from: the user who wanted to see the original had to go and search their mailbox for
+-- it. The link is derived at read time from the message's own identifiers, so no URL is stored.
+--
+-- ON DELETE SET NULL: rejecting or deleting the message leaves the lead, which the user may
+-- still be working on, with nothing to link to.
+ALTER TABLE `discovery_results` ADD COLUMN `source_communication_id` text REFERENCES `communications`(`id`) ON DELETE SET NULL;

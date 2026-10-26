@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Runtime data
+/data/
+/apps/server/data/
+*.db
+*.db-wal
+*.db-shm
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.demo.example
+master.key
+
+# Logs and OS noise
+*.log
+.DS_Store
+
+# Test artifacts
+coverage/
+playwright-report/
+test-results/
+pg-test-report.json
+# Browser-automation debris. Page snapshots and console logs from driving the running app,
+# which carry whatever was on screen plus absolute paths naming the developer's home
+# directory. Untracked files never reach the published snapshot (it is built with
+# `git archive`, which takes tracked files only), but an `add -A` would stage them into the
+# commit that does, so they are ignored rather than merely uncommitted.
+.playwright-mcp/
+
+# Agent tooling scratch
+/.superpowers/
+# Both forms are deliberate. The trailing-slash form matches the directory this normally is.
+# The bare form matches it when it is a symlink, which it became on 2026-10-22 when the ten
+# worktrees were moved to /Volumes/MacMiniExt1 to recover internal disk. A directory-only
+# pattern stops matching silently the moment the path becomes a symlink, and `git add -A` then
+# stages a symlink pointing at an external volume into the repo. Verified with
+# `git add -An .claude`: it staged .claude/worktrees before the bare form was added, and
+# nothing after. Do not collapse these two lines into one.
+/.claude/worktrees/
+/.claude/worktrees

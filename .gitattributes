@@ -1,0 +1,30 @@
+# Files that stay in this repository and never reach the published snapshot.
+#
+# `export-ignore` is honoured by `git archive`, which is how the public tree is built. It
+# changes nothing about this repository: the files stay tracked, reviewed and in history here,
+# and simply do not travel.
+#
+# Each entry below is internal process documentation or internal tooling. None of it is useful
+# to a reader of the published repository, and describing its contents here would defeat the
+# point of withholding it, so this file says only that the entry is excluded.
+
+# The publication process itself.
+docs/pre-publication-checklist.md export-ignore
+
+# Hosting findings and deployment logistics.
+docs/site-deployment.md export-ignore
+
+# The identifier sweep's tooling, which is only useful when run against a live instance of the
+# app by whoever operates this repository. Its test ships nowhere either, since a test for an
+# absent script is just a broken import.
+scripts/collect-identifiers.mjs export-ignore
+scripts/collect-identifiers.test.mjs export-ignore
+
+# Internal planning and working discussion (superpowers workflow artifacts). Private by the
+# owner's rule (2026-10-25): code and the canonical requirements/design docs are public; the
+# AI-assisted plans and specs that worked them out stay private.
+docs/superpowers/** export-ignore
+docs/superpowers/.DS_Store export-ignore
+
+# Editor/OS junk, never published.
+**/.DS_Store export-ignore

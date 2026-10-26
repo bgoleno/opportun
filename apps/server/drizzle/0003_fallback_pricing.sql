@@ -1,0 +1,1 @@
+ALTER TABLE `task_runs` ADD `fallback_pricing` integer DEFAULT false NOT NULL;

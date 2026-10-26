@@ -1,0 +1,26 @@
+{
+  "name": "@opportun/core",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./mailText": "./src/mailText.ts",
+    "./linkedinMarkers": "./src/linkedinMarkers.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "eslint": "^10.12.0",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "uuidv7": "^1.2.1",
+    "zod": "^4.6.7"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Dependency updates (NFR-SEC8): grouped weekly, security fixes immediately, majors one at a time for review.",
+  "extends": ["config:recommended", ":semanticCommits", ":pinDevDependencies"],
+  "timezone": "UTC",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "rangeStrategy": "bump",
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on the first day of the month"]
+  },
+  "vulnerabilityAlerts": { "enabled": true, "schedule": ["at any time"], "labels": ["security"] },
+  "osvVulnerabilityAlerts": true,
+  "packageRules": [
+    {
+      "description": "Minor and patch updates of npm dependencies land together.",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "npm minor and patch"
+    },
+    {
+      "description": "GitHub Actions and container images in one weekly PR.",
+      "matchManagers": ["github-actions", "dockerfile", "docker-compose"],
+      "groupName": "ci and images"
+    },
+    {
+      "description": "The Playwright container tag in ci.yml must match @playwright/test.",
+      "matchPackageNames": ["@playwright/test", "mcr.microsoft.com/playwright"],
+      "groupName": "playwright"
+    },
+    {
+      "description": "Node stays on the 22 LTS line (engines, .nvmrc, Dockerfile).",
+      "matchPackageNames": ["node", "@types/node"],
+      "allowedVersions": "<23"
+    }
+  ]
+}

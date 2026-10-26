@@ -1,0 +1,19 @@
+# Reverse proxy in front of Opportun (deploy/compose.yml mounts this file).
+#
+# OPPORTUN_SITE_ADDRESS is set by compose: your OPPORTUN_DOMAIN when it is set, in which
+# case Caddy obtains and renews a certificate automatically and redirects HTTP to HTTPS;
+# otherwise ":80", plain HTTP for a private network (compose publishes it on
+# OPPORTUN_BIND_ADDRESS:OPPORTUN_HTTP_PORT, every interface on port 8080 by default per
+# ADR-14; set OPPORTUN_BIND_ADDRESS=127.0.0.1 for loopback only).
+{
+	# No admin API: the config is static and nothing should reconfigure the proxy.
+	admin off
+}
+
+{$OPPORTUN_SITE_ADDRESS} {
+	encode zstd gzip
+	# Opportun sets its own security headers (CSP, HSTS on HTTPS, frame and sniffing
+	# protection), trusts X-Forwarded-For only from private networks like this one, and
+	# streams tailoring replies as server-sent events, which Caddy flushes as they arrive.
+	reverse_proxy opportun:8080
+}

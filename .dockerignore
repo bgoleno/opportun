@@ -1,0 +1,23 @@
+# Build context for deploy/Dockerfile. Keep secrets, runtime data and local tooling out.
+.git
+.github
+.superpowers
+node_modules
+**/node_modules
+data
+**/data
+**/dist
+**/coverage
+**/playwright-report
+**/test-results
+**/*.tsbuildinfo
+.env
+**/.env
+**/.env.*
+!.env.example
+**/master.key
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.log
+**/.DS_Store

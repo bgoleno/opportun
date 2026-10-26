@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // URL is the only runtime global used (baseUrl validation); no node IO is imported.
+    "types": ["node"]
+  },
+  "include": ["src"]
+}

@@ -1,0 +1,1 @@
+ALTER TABLE "opportunities" ADD COLUMN "sort_order" bigint DEFAULT 0 NOT NULL;

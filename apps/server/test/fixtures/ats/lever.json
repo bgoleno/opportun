@@ -1,0 +1,45 @@
+[
+  {
+    "additional": "<div>We offer relocation.</div>",
+    "additionalPlain": "We offer relocation.",
+    "categories": {
+      "commitment": "Full-time",
+      "department": "Engineering",
+      "location": "Austin, TX",
+      "team": "Payments",
+      "allLocations": ["Austin, TX"]
+    },
+    "createdAt": 1790000000000,
+    "descriptionPlain": "Own the payments platform.",
+    "description": "<div>Own the <b>payments platform</b>.</div>",
+    "id": "5f1c2b9e-1111-4c2d-9a7e-0123456789ab",
+    "lists": [{ "text": "Requirements", "content": "<li>Kubernetes</li><li>Go</li>" }],
+    "text": "Senior Platform Engineer - Payments",
+    "country": "US",
+    "workplaceType": "hybrid",
+    "opening": "",
+    "openingPlain": "",
+    "descriptionBody": "<div>Own the <b>payments platform</b>.</div>",
+    "descriptionBodyPlain": "Own the payments platform.",
+    "salaryRange": {
+      "currency": "USD",
+      "interval": "per-year-salary",
+      "min": 180000,
+      "max": 220000
+    },
+    "hostedUrl": "https://jobs.lever.co/initech/5f1c2b9e-1111-4c2d-9a7e-0123456789ab",
+    "applyUrl": "https://jobs.lever.co/initech/5f1c2b9e-1111-4c2d-9a7e-0123456789ab/apply"
+  },
+  {
+    "categories": { "commitment": "Full-time", "location": "Remote", "team": "Product" },
+    "createdAt": 1790500000000,
+    "descriptionPlain": "Drive the roadmap.",
+    "description": "<div>Drive the roadmap.</div>",
+    "id": "7a2d3c4e-2222-4c2d-9a7e-0123456789ab",
+    "lists": [],
+    "text": "Senior Product Manager",
+    "workplaceType": "remote",
+    "hostedUrl": "https://jobs.lever.co/initech/7a2d3c4e-2222-4c2d-9a7e-0123456789ab",
+    "applyUrl": "https://jobs.lever.co/initech/7a2d3c4e-2222-4c2d-9a7e-0123456789ab/apply"
+  }
+]

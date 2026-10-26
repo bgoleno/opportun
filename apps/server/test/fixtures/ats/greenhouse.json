@@ -1,0 +1,36 @@
+{
+  "jobs": [
+    {
+      "absolute_url": "https://boards.greenhouse.io/initech/jobs/4012345007",
+      "data_compliance": [{ "type": "gdpr", "requires_consent": false, "retention_period": null }],
+      "internal_job_id": 2001234007,
+      "location": { "name": "Austin, TX" },
+      "metadata": null,
+      "id": 4012345007,
+      "updated_at": "2026-10-01T14:03:11-04:00",
+      "requisition_id": "ENG-112",
+      "title": "Staff Platform Engineer",
+      "company_name": "Initech",
+      "first_published": "2026-09-28T09:00:00-04:00",
+      "content": "&lt;p&gt;Own the &lt;strong&gt;payments platform&lt;/strong&gt;.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Kubernetes&lt;/li&gt;&lt;li&gt;Go&lt;/li&gt;&lt;/ul&gt;&lt;p&gt;Salary &amp;amp; equity.&lt;/p&gt;",
+      "departments": [{ "id": 401, "name": "Engineering", "child_ids": [], "parent_id": null }],
+      "offices": [
+        { "id": 77, "name": "Austin", "location": "Austin, TX", "child_ids": [], "parent_id": null }
+      ]
+    },
+    {
+      "absolute_url": "https://boards.greenhouse.io/initech/jobs/4012399007",
+      "internal_job_id": 2001299007,
+      "location": { "name": "Remote - US" },
+      "metadata": null,
+      "id": 4012399007,
+      "updated_at": "2026-10-03T10:00:00-04:00",
+      "requisition_id": "PM-7",
+      "title": "Senior Product Manager",
+      "content": "&lt;p&gt;Drive the roadmap.&lt;/p&gt;",
+      "departments": [],
+      "offices": []
+    }
+  ],
+  "meta": { "total": 2 }
+}

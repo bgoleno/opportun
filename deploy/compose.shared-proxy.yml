@@ -1,0 +1,39 @@
+# Third override, for a host that already runs its own reverse proxy on :443 for several
+# domains (the shape the demo host is in: one Caddy terminating TLS for the marketing site, the
+# content sites and this demo, routed by hostname).
+#
+# Layer it after the other two:
+#   docker compose -f deploy/compose.yml -f deploy/compose.demo.yml \
+#     -f deploy/compose.shared-proxy.yml --env-file .env up -d
+#
+# Without it, `compose.yml`'s own `caddy` service tries to bind :443 on a host where something
+# already holds it, because that file's canonical deployment is a single machine where the
+# bundled Caddy IS the only proxy. Two processes cannot share the port, and the failure is at
+# `up` time with the demo down, not at config time.
+#
+# Leave this file out on any host where the bundled Caddy should be the proxy. Nothing here
+# changes that default; the override is the opt-in.
+
+services:
+  caddy:
+    # `profiles:` is how compose makes a service opt-in, and adding one here moves the bundled
+    # Caddy out of the default set without deleting anything from compose.yml. Verified with
+    # `docker compose config --services`: only `opportun` remains active, the same mechanism
+    # that already keeps the `db` service out of a SQLite deployment.
+    #
+    # Named rather than empty so `--profile bundled-proxy` can still bring it back for a local
+    # test of the full stack on this same pair of files.
+    profiles:
+      - bundled-proxy
+
+  opportun:
+    # compose.yml deliberately gives this service `expose:` and no `ports:`, so the only peer
+    # that can reach it is the bundled Caddy on the compose network. With that Caddy gated out,
+    # the host's own proxy needs a way in, and a published port is it.
+    #
+    # Bound to 127.0.0.1, never 0.0.0.0: on a public host the second form would serve the
+    # application straight to the internet on this port, bypassing the proxy and every
+    # protection that sits in it. This is the one line in this file that is a security control
+    # rather than a convenience.
+    ports:
+      - '127.0.0.1:${OPPORTUN_DEMO_HOST_PORT:-8080}:8080'

@@ -1,0 +1,78 @@
+# Pull-only override for the public demo deployment (issue #290). The demo host never has a
+# checkout of this repository: `compose.yml` declares both `build:` (context `..`, which would
+# resolve to nothing on a host with no source tree) and `image: opportun:local`, so running it
+# unmodified there would try to build from a context that does not exist. This layers on top of
+# it instead of editing it, the same way the owner's own local deployment layers its own
+# `compose.override.yml` to relocate state outside the repo: the repo stays the single source of
+# truth for the compose file itself.
+#
+# `build: !reset null` removes the inherited `build:` section entirely rather than merely
+# shadowing it (confirmed with `docker compose config`: a plain `build: null` is not enough and
+# leaves the original `build:` block in the merged result). Without it, `docker compose up`
+# could still decide to build the moment the named image happens to be missing locally.
+#
+# Usage (see docs/demo-deployment.md for the full publish-and-pull flow and the .env template):
+#   docker compose -f deploy/compose.yml -f deploy/compose.demo.yml --env-file .env up -d
+
+# Enforces "OPPORTUN_DEMO_AI_KEY_FILE or OPPORTUN_DEMO_AI_KEY is set" at `up` (issue #314), the
+# same fail-fast guarantee the six `:?` lines below give their own single variable each. Neither
+# one alone can do this with compose's plain `:-`/`:?` syntax (there is no "required unless the
+# other is set"), so this nests the check instead: resolve to OPPORTUN_DEMO_AI_KEY_FILE when
+# it's set, else fall back to requiring OPPORTUN_DEMO_AI_KEY (confirmed with `docker compose
+# config`, the same way this file's own `build: !reset null` was). `x-` is a compose extension
+# field: interpolated like any other value but not read by compose and not attached to any
+# service, so it exists purely to run this check -- the two real environment entries below stay
+# plain optional passthroughs and never see this field's resolved value.
+x-opportun-demo-ai-key-required: ${OPPORTUN_DEMO_AI_KEY_FILE:-${OPPORTUN_DEMO_AI_KEY:?set OPPORTUN_DEMO_AI_KEY_FILE (recommended, a path under ./data) or OPPORTUN_DEMO_AI_KEY in .env, never in this repo; see docs/demo-deployment.md}}
+
+services:
+  opportun:
+    build: !reset null
+    # Set by the owner's publish step (docs/demo-deployment.md): build, tag and push from a
+    # machine that has the checkout, never built here. A private package; the host authenticates
+    # with `docker login ghcr.io` before the first pull (same doc).
+    #
+    # The tag is an env var, not a literal, and deliberately has no default (`:?`, not `:-`):
+    # with pull_policy always below, a mutable tag like `latest` would mean every `up -d` runs
+    # whatever was pushed most recently, with no way to say what that is and no way back to the
+    # previous one. #283 pinned a test fixture's image to a digest for the same reason -- a
+    # mutable reference is an untracked input that can move underneath you -- and that argument
+    # applies with more force here: rollback matters exactly when something breaks right before
+    # a demo, which is the worst moment to find there is no previous version to name.
+    image: ghcr.io/bgoleno/opportun:${OPPORTUN_DEMO_IMAGE_TAG:?set in .env to a specific published tag, e.g. sha-<short>; see docs/demo-deployment.md}
+    # Kept explicit rather than left to compose's default (missing), though the practical
+    # difference is narrow now that the tag above is immutable per build: there is normally
+    # nothing new to fetch under a tag already pulled. The one case where it matters is an
+    # operator re-pushing the same tag, a process violation this scheme isn't designed to
+    # tolerate either way -- always would adopt the new content silently, where missing would
+    # keep running what was already there. That is closer to neutral than protective; either
+    # policy is defensible, and this just says which one was chosen on purpose.
+    pull_policy: always
+    # compose.yml's own environment: block has no entries for any of these: a household
+    # deployment never needs them, so they do not belong there. Without this, .env.demo.example
+    # being filled in correctly would still boot a container that cannot see any of it --
+    # OPPORTUN_DEMO's own .env-file interpolation is not the same thing as being in the
+    # container's process.env, and config.ts / seedDemo.ts / demoReset.ts all read the latter.
+    # Required (`:?`), not defaulted, for the same reason OPPORTUN_DEMO_IMAGE_TAG above is:
+    # catch a forgotten value here, at `up`, rather than booting a demo that silently has no
+    # accounts or no AI key.
+    environment:
+      OPPORTUN_DEMO: ${OPPORTUN_DEMO:?set to 1 in .env; see docs/demo-deployment.md}
+      # A literal, not ${...}-interpolated from .env like every other entry here: this is what
+      # tells seedDemo.ts that the demo overlay was actually applied, rather than trusting
+      # OPPORTUN_DEMO=1 alone -- a flag that could survive a copy-paste into a real deployment's
+      # own .env. Present if and only if this file is layered in (`-f deploy/compose.demo.yml`);
+      # do not add it to .env by hand.
+      OPPORTUN_DEMO_SEED_ACK: '1'
+      OPPORTUN_DEMO_ADMIN_PASSWORD: ${OPPORTUN_DEMO_ADMIN_PASSWORD:?set in .env, never in this repo}
+      OPPORTUN_DEMO_USER1_PASSWORD: ${OPPORTUN_DEMO_USER1_PASSWORD:?set in .env, never in this repo}
+      OPPORTUN_DEMO_USER2_PASSWORD: ${OPPORTUN_DEMO_USER2_PASSWORD:?set in .env, never in this repo}
+      OPPORTUN_DEMO_USER3_PASSWORD: ${OPPORTUN_DEMO_USER3_PASSWORD:?set in .env, never in this repo}
+      OPPORTUN_DEMO_USER4_PASSWORD: ${OPPORTUN_DEMO_USER4_PASSWORD:?set in .env, never in this repo}
+      # Neither is `:?` here (the x- field above already enforces that at least one is set):
+      # each stays a plain optional passthrough so an operator who has set only one of the two
+      # doesn't get an empty-string OPPORTUN_DEMO_AI_KEY_FILE shadowing a real
+      # OPPORTUN_DEMO_AI_KEY, or vice versa. credsFromEnv (cli/seedDemo.ts) does its own
+      # file-vs-inline resolution once both reach the container.
+      OPPORTUN_DEMO_AI_KEY: ${OPPORTUN_DEMO_AI_KEY:-}
+      OPPORTUN_DEMO_AI_KEY_FILE: ${OPPORTUN_DEMO_AI_KEY_FILE:-}

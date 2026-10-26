@@ -1,0 +1,3 @@
+ALTER TABLE "opportunities" ADD COLUMN "possible_duplicate_of" text;--> statement-breakpoint
+ALTER TABLE "opportunities" ADD CONSTRAINT "opportunities_possible_duplicate_of_opportunities_id_fk" FOREIGN KEY ("possible_duplicate_of") REFERENCES "public"."opportunities"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "opportunities_user_possible_dup_idx" ON "opportunities" USING btree ("user_id","possible_duplicate_of");

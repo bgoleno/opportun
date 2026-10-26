@@ -1,0 +1,5 @@
+﻿CONVERSATION ID,CONVERSATION TITLE,FROM,SENDER PROFILE URL,TO,RECIPIENT PROFILE URLS,DATE,SUBJECT,CONTENT,FOLDER
+2-c3ludGhldGljLWNvbnZvLTE=,,Jane Doe,https://www.linkedin.com/in/jane-doe-synthetic-0a1b,Alex Tester,https://www.linkedin.com/in/alex-tester-synthetic-9z9z,2026-09-14 16:02:11 UTC,,"Hi Alex, Initech is hiring a Staff Platform Engineer.
+Happy to refer you, just send your resume.",INBOX
+2-c3ludGhldGljLWNvbnZvLTE=,,Alex Tester,https://www.linkedin.com/in/alex-tester-synthetic-9z9z,Jane Doe,https://www.linkedin.com/in/jane-doe-synthetic-0a1b,2026-09-13 09:30:00 UTC,,"Thanks, Jane! Would love to hear more.",INBOX
+2-c3ludGhldGljLWNvbnZvLTI=,Hooli roles,Sam Lee,https://www.linkedin.com/in/sam-lee-synthetic-2c3d,Alex Tester,https://www.linkedin.com/in/alex-tester-synthetic-9z9z,2026-08-02 11:00:00 UTC,Engineering roles at Hooli,"We have openings, ""staff"" and senior.",INBOX

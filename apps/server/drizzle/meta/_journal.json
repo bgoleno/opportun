@@ -1,0 +1,265 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1792116065785,
+      "tag": "0000_init",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1792118437370,
+      "tag": "0001_fts",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792195200000,
+      "tag": "0002_prompt_seeds",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1792195200001,
+      "tag": "0003_fallback_pricing",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1792195200002,
+      "tag": "0004_jobs_user_result",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792195200003,
+      "tag": "0005_comms_proposed_transition",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792195200004,
+      "tag": "0006_prompt_proposals",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1792195200005,
+      "tag": "0007_fence_classify_opportunities",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1792195200006,
+      "tag": "0008_fence_task_inputs",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1792195200007,
+      "tag": "0009_discovery_source_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1792195200008,
+      "tag": "0010_discovery_rank_per_posting",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1792195200009,
+      "tag": "0011_contacts_network",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1792195200010,
+      "tag": "0012_referral_rank_candidates",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1792195200011,
+      "tag": "0013_company_suggest_pipeline",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1792195200012,
+      "tag": "0014_secrets_name_expiry",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1792195200013,
+      "tag": "0015_integration_diagnose_prompt",
+      "breakpoints": true
+    },
+    {
+      "version": "6",
+      "breakpoints": true,
+      "idx": 16,
+      "when": 1792195200014,
+      "tag": "0016_classify_hard_constraints"
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1792195200015,
+      "tag": "0017_m5_auth_and_devices",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1792195200016,
+      "tag": "0018_capture_linkedin_prompt",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1792195200017,
+      "tag": "0019_atomic_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1792400082492,
+      "tag": "0020_posting_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1792400082493,
+      "tag": "0021_posting_merge_prompt",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1792445734758,
+      "tag": "0022_mail_filter_rules",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1792446115823,
+      "tag": "0023_comms_triage_decision",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1792453518747,
+      "tag": "0024_reject_out_of_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1792460000000,
+      "tag": "0025_comms_triage_prompt",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1792530000000,
+      "tag": "0026_ats_job_refs",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "6",
+      "when": 1792540000000,
+      "tag": "0027_discovery_source_comm",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "6",
+      "when": 1792542048169,
+      "tag": "0028_resume_archived_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1792555114258,
+      "tag": "0029_possible_duplicate_of",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1792559204502,
+      "tag": "0030_opportunity_dedupe_candidates",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1792567290813,
+      "tag": "0031_communications_body_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1792569038016,
+      "tag": "0032_resume_match_reports",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1792572902560,
+      "tag": "0033_company_match_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1792626020503,
+      "tag": "0034_opportunity_sort_order",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1792657353000,
+      "tag": "0035_tailor_match_report",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1792697137331,
+      "tag": "0036_users_last_seen_at",
+      "breakpoints": true
+    }
+  ]
+}

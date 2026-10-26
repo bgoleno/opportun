@@ -1,0 +1,3 @@
+# Runtime state and local settings for the compose deployment.
+/data/
+.env

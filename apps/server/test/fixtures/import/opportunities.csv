@@ -1,0 +1,8 @@
+company,title,stage,posting_url,location,source,applied_at,dismissed_reason,notes_file,resume_doc_ref
+Acme Robotics,Staff Software Engineer,applied,https://jobs.example.com/acme/101,Remote,LinkedIn,2026-09-01,,notes/acme.md,doc-acme-tailored
+"Globex, Inc.",Engineering Manager,interested,https://jobs.example.com/globex/202,"Austin, TX",Referral,,,,
+Initech,Platform Engineer,discovered,,Remote,,,,,
+Umbrella Labs,Principal Engineer,dismissed,,Remote,Job board,,compensation,,
+Hooli,Senior Site Reliability Engineer,in_process,https://jobs.example.com/hooli/909,"Palo Alto, CA",Recruiter,2026-08-20,,notes/hooli.md,
+Vandelay Industries,Data Engineer,ofer,,,,,,,
+Stark Labs,"Engineer, ""Developer Tools""",closed,,,,,,,

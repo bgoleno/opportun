@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Opportun</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!--
+      Pre-paint theme script. It runs synchronously before the body renders so the saved
+      theme applies without a flash. It is a same-origin file rather than inline code
+      because the server's CSP (default-src 'self') forbids inline scripts.
+    -->
+    <script src="/theme-init.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

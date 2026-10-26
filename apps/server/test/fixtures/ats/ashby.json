@@ -1,0 +1,53 @@
+{
+  "apiVersion": "1",
+  "jobs": [
+    {
+      "id": "0c3f1a2b-3333-4d5e-8f90-abcdef012345",
+      "title": "Staff Data Engineer",
+      "department": "Engineering",
+      "team": "Data Platform",
+      "employmentType": "FullTime",
+      "location": "New York, NY",
+      "secondaryLocations": [{ "location": "Remote (US)" }],
+      "publishedAt": "2026-09-30T16:00:00.000+00:00",
+      "isListed": true,
+      "isRemote": false,
+      "workplaceType": "Hybrid",
+      "address": {
+        "postalAddress": {
+          "addressLocality": "New York",
+          "addressRegion": "NY",
+          "addressCountry": "USA"
+        }
+      },
+      "jobUrl": "https://jobs.ashbyhq.com/initech/0c3f1a2b-3333-4d5e-8f90-abcdef012345",
+      "applyUrl": "https://jobs.ashbyhq.com/initech/0c3f1a2b-3333-4d5e-8f90-abcdef012345/application",
+      "descriptionHtml": "<p>Build the <em>lakehouse</em>.</p>",
+      "descriptionPlain": "Build the lakehouse.",
+      "compensation": {
+        "compensationTierSummary": "$190K - $230K • Offers Equity",
+        "scrapeableCompensationSalarySummary": "$190K - $230K"
+      }
+    },
+    {
+      "id": "unlisted-1",
+      "title": "Internal Transfer Only",
+      "location": "New York, NY",
+      "publishedAt": "2026-09-01T00:00:00.000+00:00",
+      "isListed": false,
+      "isRemote": false,
+      "jobUrl": "https://jobs.ashbyhq.com/initech/unlisted-1",
+      "descriptionHtml": "<p>Hidden.</p>"
+    },
+    {
+      "id": "9d8e7f6a-4444-4d5e-8f90-abcdef012345",
+      "title": "Developer Advocate",
+      "location": "Remote",
+      "publishedAt": "2026-10-02T12:00:00.000+00:00",
+      "isListed": true,
+      "isRemote": true,
+      "jobUrl": "https://jobs.ashbyhq.com/initech/9d8e7f6a-4444-4d5e-8f90-abcdef012345",
+      "descriptionPlain": "Talk to developers."
+    }
+  ]
+}

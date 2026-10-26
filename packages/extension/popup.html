@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Opportun Capture</title>
+    <link rel="stylesheet" href="./src/popup.css" />
+    <script type="module" src="./src/popup.ts"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Opportun Capture</h1>
+      <p class="hint">
+        Sends the LinkedIn profile or job in this tab to your own Opportun server. Nothing is read
+        until you click Capture.
+      </p>
+      <button id="capture" type="button" class="primary">Capture this page</button>
+      <p id="status" role="status" aria-live="polite"></p>
+
+      <details id="settings-panel">
+        <summary>Settings</summary>
+        <form id="settings" novalidate>
+          <label for="server-url">Server address</label>
+          <input
+            id="server-url"
+            name="serverUrl"
+            type="url"
+            placeholder="https://opportun.example.com"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <label for="token">Device token (Browser capture)</label>
+          <input
+            id="token"
+            name="token"
+            type="password"
+            placeholder="odt_..."
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <p class="hint">Create one in Opportun under Settings &gt; Integrations &gt; Devices.</p>
+          <div class="row">
+            <button id="save" type="submit">Save</button>
+            <button id="test" type="button">Test connection</button>
+          </div>
+        </form>
+      </details>
+    </main>
+  </body>
+</html>

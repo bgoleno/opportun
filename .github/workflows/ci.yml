@@ -1,0 +1,377 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One run per ref. A new push to a pull request cancels the run its commit superseded, which
+# is the single largest source of wasted minutes here: eleven required checks, several of them
+# building images or driving a browser. Pushes to main are never cancelled, because main's run
+# is the record of what landed.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # The dialect matrix (ADR-4, iteration 4 Task 13). sqlite: lint, typecheck and every
+    # package's tests. postgres: the server suite only, against a postgres:16 service, with
+    # DB_DIALECT=postgres (the schema switch), TEST_DB_DIALECT=postgres (the harness) and
+    # TEST_DATABASE_URL; one migrated template database per run, a clone per test app named
+    # after its test file (apps/server/test/pgHarness.ts). Both legs are required.
+    name: check (${{ matrix.db }})
+    # Pinned: postgresql-client-16 (the backup test's pg_dump/pg_restore) is in Ubuntu 24.04's
+    # own archive; a later image may carry only another major.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
+    services:
+      postgres:
+        # An empty image skips the service on the sqlite leg.
+        image: ${{ matrix.db == 'postgres' && 'postgres:16' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          # Same collation as docs/install.md requires (byte order, like SQLite).
+          POSTGRES_INITDB_ARGS: --locale-provider=libc --locale=C --encoding=UTF8
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # corepack first: setup-node's pnpm cache needs the package manager on PATH to find
+      # the store it is caching.
+      - name: Enable pnpm via corepack
+        run: corepack enable
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Format check
+        if: matrix.db == 'sqlite'
+        run: pnpm format:check
+
+      - name: Lint
+        if: matrix.db == 'sqlite'
+        run: pnpm lint
+
+      - name: Typecheck
+        if: matrix.db == 'sqlite'
+        run: pnpm typecheck
+
+      # Neither bundle is otherwise built in CI: lint, typecheck and the unit tests all run
+      # against src, and the docker job builds only @opportun/web and the server's production
+      # tree. So a break in either vite.config.ts, in the generated manifest, or in the
+      # connector's bundling would ship undetected, and the first to notice would be someone
+      # following install.md. Builds the extension's two targets (chrome, firefox) and the
+      # connector's single self-contained file.
+      - name: Build the distributable artifacts
+        if: matrix.db == 'sqlite'
+        run: pnpm --filter @opportun/extension --filter @opportun/connector build
+
+      - name: Test
+        if: matrix.db == 'sqlite'
+        run: pnpm test
+
+      # scripts/merge-when-green.sh (issue #128) isn't in any workspace package, so pnpm test
+      # never reaches it; this is what actually runs its test against a fake gh and sleep.
+      - name: Test merge-when-green.sh
+        if: matrix.db == 'sqlite'
+        run: bash scripts/merge-when-green.test.sh
+
+      # Same reason: scripts/ is outside every workspace, so neither pnpm test nor pnpm lint
+      # reaches it. These tests need no database -- the matcher and the candidate extraction
+      # are pure -- and one of them checks the matcher against grep itself, so the step needs
+      # grep on PATH and nothing else.
+      - name: Test collect-identifiers.mjs
+        # Guarded on the file existing, not only on the dialect leg. The script and its test are
+        # both `export-ignore` in .gitattributes, so neither is present in the published snapshot,
+        # while this workflow file IS (.github is not export-ignored and should not be: the public
+        # tree benefits from the same CI). Without this guard the step runs `node --test` against an
+        # absent file over there and fails the sqlite leg on every push, which it did from
+        # publication until this guard was added. `hashFiles` returns an empty string when nothing
+        # matches, and checkout has already run by this point.
+        if: matrix.db == 'sqlite' && hashFiles('scripts/collect-identifiers.test.mjs') != ''
+        run: node --test scripts/collect-identifiers.test.mjs
+
+      - name: Configure Postgres for the suite and for diagnosis
+        if: matrix.db == 'postgres'
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        # Parallel test files each open pools (max_connections needs a restart); every log
+        # line names its database (opportun_t_<test file>_...) and application; errors log
+        # their statement; lock waits past deadlock_timeout are logged.
+        run: |
+          docker exec "$PG_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET max_connections = 300" \
+            -c "ALTER SYSTEM SET log_line_prefix = '%m [%p] db=%d app=%a '" \
+            -c "ALTER SYSTEM SET log_min_error_statement = 'error'" \
+            -c "ALTER SYSTEM SET log_lock_waits = 'on'"
+          docker restart "$PG_CONTAINER"
+          for i in $(seq 1 60); do
+            docker exec "$PG_CONTAINER" pg_isready -U postgres && break
+            sleep 1
+          done
+          docker exec "$PG_CONTAINER" psql -U postgres -At \
+            -c "SELECT version()" -c "SHOW max_connections" \
+            -c "SELECT datcollate FROM pg_database WHERE datname = current_database()"
+
+      - name: Postgres 16 client tools (the backup test runs pg_dump and pg_restore)
+        if: matrix.db == 'postgres'
+        # Same major as the server: a newer pg_restore emits settings postgres:16 rejects.
+        run: |
+          if [ ! -x /usr/lib/postgresql/16/bin/pg_dump ]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends postgresql-client-16
+          fi
+          echo /usr/lib/postgresql/16/bin >> "$GITHUB_PATH"
+          /usr/lib/postgresql/16/bin/pg_dump --version
+          /usr/lib/postgresql/16/bin/pg_restore --version
+
+      - name: Server suite on Postgres
+        if: matrix.db == 'postgres'
+        working-directory: apps/server
+        env:
+          DB_DIALECT: postgres
+          TEST_DB_DIALECT: postgres
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: >-
+          pnpm exec vitest run
+          --reporter=default --reporter=json --outputFile.json=pg-test-report.json
+
+      - name: Required live Postgres tests ran and passed
+        # describe.runIf(TEST_DATABASE_URL) would let a misconfigured leg skip them silently.
+        # The live schema and seed-row parity test is the only guard against hand-edited
+        # Postgres migration SQL drifting from its snapshot (Wave 2 review): required.
+        if: ${{ !cancelled() && matrix.db == 'postgres' }}
+        working-directory: apps/server
+        run: >-
+          node scripts/requireTests.mjs pg-test-report.json
+          "migration chains in lockstep (live Postgres)"
+          "migrateLockedPg (live Postgres)"
+          "dialect helpers on Postgres (live)"
+          "db client seam (postgres)"
+          "search parity (postgres)"
+          "scope locks hold two open transactions apart"
+          "backups on Postgres"
+          "copy tool (live Postgres)"
+
+      - name: Postgres server log
+        if: ${{ failure() && matrix.db == 'postgres' }}
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: docker logs "$PG_CONTAINER" > postgres.log 2>&1 || true
+
+      - name: Upload Postgres diagnostics
+        if: ${{ failure() && matrix.db == 'postgres' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: postgres-diagnostics
+          path: |
+            postgres.log
+            apps/server/pg-test-report.json
+          retention-days: 7
+
+  e2e:
+    # Critical flows in a real browser against the built SPA and the real server, with AI,
+    # Google Docs and Gmail replaced by the server's env-gated fakes (apps/web/e2e).
+    # Once per database engine: the browser flows must hold on Postgres too.
+    # Pull requests only. A squash merge puts the same tree on main that this job already
+    # tested as the merge result, so re-running the browser and image matrices on the push
+    # buys nothing and costs five of the seven matrix jobs per merge. `check` still runs on
+    # main, so a broken main is still visible.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
+    container:
+      # Keep the tag equal to the @playwright/test version in apps/web/package.json.
+      image: mcr.microsoft.com/playwright:v1.64.0-noble
+      options: --user 1001
+    services:
+      postgres:
+        # An empty image skips the service on the sqlite leg.
+        image: ${{ matrix.db == 'postgres' && 'postgres:16' || '' }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          # Same collation as docs/install.md requires (byte order, like SQLite).
+          POSTGRES_INITDB_ARGS: --locale-provider=libc --locale=C --encoding=UTF8
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable pnpm via corepack
+        # The container runs as uid 1001 and its $HOME has no .local; corepack needs the
+        # install directory to exist.
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          corepack enable --install-directory "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: End-to-end tests
+        env:
+          # The job runs inside the Playwright container, so the service is reachable by
+          # its name. Empty on the sqlite leg: the server stays on SQLite in DATA_DIR.
+          DB_DIALECT: ${{ matrix.db == 'postgres' && 'postgres' || '' }}
+          DATABASE_URL: ${{ matrix.db == 'postgres' && 'postgres://postgres:postgres@postgres:5432/postgres' || '' }}
+          DB_SSL: ${{ matrix.db == 'postgres' && 'disable' || '' }}
+        run: pnpm --filter @opportun/web e2e
+
+      - name: Upload report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: playwright-report
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          retention-days: 7
+
+  docker:
+    # Builds the image and runs the documented compose quick start (docs/install.md),
+    # then checks health, the SPA, the non-root user and the read-only root filesystem.
+    # Once per database: the default (SQLite in ./data), the opt-in postgres profile, and
+    # an existing SQLite install moved to Postgres with the copy tool by the documented
+    # runbook (docs/install.md section 15).
+    # Pull requests only. A squash merge puts the same tree on main that this job already
+    # tested as the merge result, so re-running the browser and image matrices on the push
+    # buys nothing and costs five of the seven matrix jobs per merge. `check` still runs on
+    # main, so a broken main is still visible.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres, sqlite-to-postgres]
+    defaults:
+      run:
+        working-directory: deploy
+    env:
+      # A compose project name is a global namespace on the Docker host (issue #203): without
+      # this, every leg of this matrix, and every other checkout on the same runner, would
+      # share compose.yml's own fallback name, and this job's own `docker compose down -v`
+      # could reach a stack it did not create. Unique per run, attempt and matrix leg, so a
+      # retry or a parallel leg cannot collide with itself either.
+      COMPOSE_PROJECT_NAME: opportun-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.db }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Quick start (as documented)
+        run: |
+          cp ../.env.example .env
+          pw="$(openssl rand -hex 24)"
+          {
+            echo "COMPOSE_PROFILES=postgres"
+            echo "POSTGRES_PASSWORD=$pw"
+            echo "DB_DIALECT=postgres"
+            echo "DATABASE_URL=postgres://opportun:$pw@db:5432/opportun"
+            echo "DB_SSL=disable"
+          } > postgres.env
+          if [ "${{ matrix.db }}" = postgres ]; then cat postgres.env >> .env; fi
+          mkdir -p data && (umask 077; openssl rand -hex 32 > data/master.key)
+          sudo chown -R 10001:10001 data
+          docker compose up -d --build --wait --wait-timeout 180
+
+      - name: Move to Postgres with the copy tool (as documented)
+        if: matrix.db == 'sqlite-to-postgres'
+        run: |
+          docker compose stop opportun
+          docker compose run --rm -T opportun test -f /sqlite/opportun.db
+          cat postgres.env >> .env
+          docker compose up -d --wait --wait-timeout 120 db
+          docker compose run --rm -T opportun node --import tsx src/cli/copyToPostgres.ts --from /sqlite --dry-run
+          docker compose run --rm -T opportun node --import tsx src/cli/copyToPostgres.ts --from /sqlite | tee copy.txt
+          grep -q 'Copied and verified.' copy.txt
+          # A second run is refused (exit 2): the target is no longer empty.
+          code=0
+          docker compose run --rm -T opportun node --import tsx src/cli/copyToPostgres.ts --from /sqlite || code=$?
+          if [ "$code" -ne 2 ]; then
+            echo "a second copy into a non-empty target exited $code, expected 2 (refused)" && exit 1
+          fi
+          docker compose up -d --wait --wait-timeout 180
+
+      - name: Verify the running stack
+        run: |
+          curl -fsS http://127.0.0.1:8080/healthz | tee healthz.json
+          grep -q '"status":"ok"' healthz.json
+          grep -q '"db":"ok"' healthz.json
+          curl -fsS http://127.0.0.1:8080/ | grep -q '<div id="root">'
+          test "$(docker compose exec -T opportun id -u)" = "10001"
+          cid="$(docker compose ps -q opportun)"
+          test "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$cid")" = "true"
+          test "$(docker inspect -f '{{.Config.User}}' "$cid")" = "opportun"
+          if docker compose exec -T opportun sh -c 'touch /app/server/probe'; then
+            echo "root filesystem is writable" && exit 1
+          fi
+          if [ "${{ matrix.db }}" != sqlite ]; then
+            # The database lives in the db service (C collation). A fresh install has no
+            # SQLite file; a moved one keeps it untouched as the rollback.
+            if [ "${{ matrix.db }}" = postgres ]; then
+              docker compose exec -T opportun test ! -f /sqlite/opportun.db
+            else
+              docker compose exec -T opportun test -f /sqlite/opportun.db
+            fi
+            docker compose exec -T db psql -U opportun -d opportun -tAc \
+              "SELECT datcollate FROM pg_database WHERE datname = 'opportun'" | grep -qx C
+            # One seeded system prompt per AI task, read from the source rather than pinned
+            # to a literal that goes stale the next time a task is added.
+            tasks="$(grep -cE "^  '[a-z_]+\.[a-z_]+',$" ../packages/ai/src/types.ts)"
+            test "$tasks" -gt 0 || { echo "could not read TASK_KEYS" && exit 1; }
+            docker compose exec -T db psql -U opportun -d opportun -tAc \
+              'SELECT count(*) FROM prompts' | grep -qx "$tasks"
+            docker compose exec -T opportun pg_dump --version | grep -q ' 16\.'
+          else
+            docker compose exec -T opportun test -f /sqlite/opportun.db
+          fi
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  destroy-script:
+    # deploy/destroy.sh (issue #139) against real, disposable compose stacks under throwaway
+    # alpine fixtures, not the built app image: what it checks is whether the script correctly
+    # reads real `docker inspect` / `docker volume ls` / `docker network ls` output filtered
+    # by the real compose project label, and refuses the right things, not anything specific
+    # to this app's own image. Pull requests only, same reasoning as the docker job above.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: bash deploy/destroy.test.sh

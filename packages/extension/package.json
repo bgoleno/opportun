@@ -1,0 +1,23 @@
+{
+  "name": "@opportun/extension",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build --mode chrome && vite build --mode firefox",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@opportun/core": "workspace:^"
+  },
+  "devDependencies": {
+    "eslint": "^10.12.0",
+    "happy-dom": "21.0.4",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
+  }
+}
