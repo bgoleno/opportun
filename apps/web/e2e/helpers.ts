@@ -6,8 +6,16 @@ export const PASSWORD = 'correct horse battery staple';
 
 let seq = 0;
 
-/** Registers a fresh user through /register and lands on the dashboard. */
-export async function registerUser(page: Page, name = 'Jane Example'): Promise<string> {
+/**
+ * Registers a fresh user through /register and lands on the dashboard. A brand-new account is
+ * offered the first-run tour (FR-U11); every flow but the tour's own declines it with Not now,
+ * which is what a user who wants to get on with it does.
+ */
+export async function registerUser(
+  page: Page,
+  name = 'Jane Example',
+  opts: { keepTour?: boolean } = {},
+): Promise<string> {
   seq += 1;
   const email = `e2e-${Date.now()}-${seq}@example.com`;
   await page.goto('/register');
@@ -17,6 +25,11 @@ export async function registerUser(page: Page, name = 'Jane Example'): Promise<s
   await page.getByLabel(/Confirm/).fill(PASSWORD);
   await page.getByRole('button', { name: 'Create account' }).click();
   await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
+  if (opts.keepTour !== true) {
+    const welcome = page.getByRole('dialog', { name: "Let's get your search running" });
+    await welcome.getByRole('button', { name: 'Not now' }).click();
+    await expect(welcome).toBeHidden();
+  }
   return email;
 }
 
