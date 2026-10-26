@@ -16,6 +16,7 @@
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
+    "@floating-ui/react-dom": "2.1.9",
     "@hookform/resolvers": "^5.9.1",
     "@opportun/core": "workspace:^",
     "@tanstack/react-query": "^5.104.3",

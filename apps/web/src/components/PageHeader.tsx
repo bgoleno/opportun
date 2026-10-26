@@ -1,8 +1,14 @@
 import type { ReactNode } from 'react';
 
-export function PageHeader(props: { title: string; description?: string; actions?: ReactNode }) {
+export function PageHeader(props: {
+  title: string;
+  description?: string;
+  actions?: ReactNode;
+  /** A first-run tour target (components/tour/steps.ts). */
+  tourId?: string;
+}) {
   return (
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+    <div data-tour={props.tourId} className="mb-6 flex flex-wrap items-start justify-between gap-4">
       <div className="grid gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">{props.title}</h1>
         {props.description ? (

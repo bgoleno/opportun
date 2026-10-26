@@ -19,6 +19,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
 import { api, ApiError } from '@/lib/api';
+import { onboardingKey } from '@/components/tour/api';
 import { applyServerError, optionalString } from '@/lib/forms';
 import { qk, stageLabel, type OpportunityView } from '@/lib/opportunities';
 
@@ -95,6 +96,8 @@ export function NewOpportunityDialog(props: {
       await Promise.all([
         qc.invalidateQueries({ queryKey: qk.opportunities }),
         qc.invalidateQueries({ queryKey: qk.dashboard }),
+        // The setup checklist's first-opportunity item (FR-U12).
+        qc.invalidateQueries({ queryKey: onboardingKey }),
       ]);
       toast({
         title: 'Opportunity added',

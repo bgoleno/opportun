@@ -83,7 +83,7 @@ export function Inbox({ initialTab }: { initialTab?: InboxTab }) {
       <Tabs defaultValue={initialTab ?? 'needs_review'}>
         {/* Five tabs with counts are wider than a phone; scroll the strip instead of letting it
             widen the whole page past the viewport (which clipped every row on the right). */}
-        <TabsList className="max-w-full justify-start overflow-x-auto">
+        <TabsList data-tour="inbox-tabs" className="max-w-full justify-start overflow-x-auto">
           {TABS.map((t) => (
             <TabsTrigger key={t.tab} value={t.tab}>
               {t.label}
@@ -322,6 +322,7 @@ function SyncControl() {
     return (
       <Link
         to="/settings/integrations"
+        data-tour="inbox-connect"
         className="text-sm text-primary underline underline-offset-2"
       >
         Connect Gmail (read-only)

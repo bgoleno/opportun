@@ -3,6 +3,7 @@
 // wait for the server, since the version number and active flag are decided there.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/toast';
+import { onboardingKey } from '@/components/tour/api';
 import { api, errorMessage } from '@/lib/api';
 
 export const PROVIDERS = ['anthropic', 'openai', 'openai_compatible'] as const;
@@ -141,6 +142,8 @@ function useInvalidateKeys() {
     Promise.all([
       qc.invalidateQueries({ queryKey: aiKeys.keys }),
       qc.invalidateQueries({ queryKey: ['secrets'] }),
+      // The setup checklist's AI key item (FR-U12).
+      qc.invalidateQueries({ queryKey: onboardingKey }),
     ]);
 }
 

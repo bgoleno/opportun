@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { DashboardData } from '@/lib/opportunities';
 import { mockApi, renderWithProviders } from '@/test/render';
+import { TourProvider } from '@/components/tour/TourProvider';
 import { Dashboard } from './Dashboard';
 
 const NOW = Date.now();
@@ -77,7 +78,11 @@ const payload: DashboardData = {
 describe('Dashboard', () => {
   it('renders stage counts, due next steps, recent activity and the triage badge', async () => {
     mockApi({ 'GET /dashboard': payload });
-    renderWithProviders(<Dashboard />);
+    renderWithProviders(
+      <TourProvider>
+        <Dashboard />
+      </TourProvider>,
+    );
 
     const stages = await screen.findByRole('region', { name: 'Pipeline by stage' });
     const applied = within(stages).getByRole('link', { name: /Applied/ });
@@ -112,7 +117,11 @@ describe('Dashboard', () => {
       'PATCH /next-steps/step-1': { ...payload.dueNextSteps[0], doneAt: NOW },
     });
     const user = userEvent.setup();
-    renderWithProviders(<Dashboard />);
+    renderWithProviders(
+      <TourProvider>
+        <Dashboard />
+      </TourProvider>,
+    );
 
     await user.click(await screen.findByRole('checkbox', { name: 'Done: Send thank-you note' }));
     await waitFor(() =>
@@ -135,7 +144,11 @@ describe('Dashboard', () => {
         needsTriage: { communications: 0 },
       },
     });
-    renderWithProviders(<Dashboard />);
+    renderWithProviders(
+      <TourProvider>
+        <Dashboard />
+      </TourProvider>,
+    );
     expect(await screen.findByText('Nothing due in the next 7 days.')).toBeInTheDocument();
     expect(screen.getByText('No activity yet.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Inbox is clear/ })).toHaveAttribute('href', '/inbox');

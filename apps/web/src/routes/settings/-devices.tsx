@@ -103,7 +103,7 @@ export function DevicesCard() {
 
   const items = tokens.data?.items ?? [];
   return (
-    <Card>
+    <Card data-tour="devices-card">
       <CardHeader>
         <CardTitle>Extensions and Connectors</CardTitle>
         <CardDescription>
