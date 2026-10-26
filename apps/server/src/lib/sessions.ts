@@ -84,6 +84,30 @@ export async function getSessionUser(db: Db, token: string): Promise<UserCtx | n
   return { userId: row.userId, isAdmin: row.isAdmin };
 }
 
+/**
+ * When the caller's current session was created (its sign-in time), or null when the token
+ * is not a live session of `ctx`'s user. Scoped to the user as well as the token.
+ */
+export async function sessionCreatedAt(
+  db: Db,
+  ctx: UserCtx,
+  token: string,
+): Promise<number | null> {
+  if (token.length === 0) return null;
+  const row = await db
+    .select({ createdAt: sessions.createdAt })
+    .from(sessions)
+    .where(
+      and(
+        eq(sessions.id, tokenId(token)),
+        eq(sessions.userId, ctx.userId),
+        eq(sessions.kind, 'session'),
+      ),
+    )
+    .get();
+  return row?.createdAt ?? null;
+}
+
 export async function destroySession(db: Db, token: string): Promise<void> {
   await db
     .delete(sessions)

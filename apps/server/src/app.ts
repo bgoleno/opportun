@@ -85,6 +85,7 @@ import { resumeRoutes } from './routes/resumes';
 import { tailoringRoutes } from './routes/tailoring';
 import { secretRoutes } from './routes/secrets';
 import { mailFilterRoutes } from './routes/mailFilters';
+import { onboardingRoutes } from './routes/onboarding';
 import { settingsRoutes } from './routes/settings';
 import { artifactRoutes } from './routes/artifacts';
 import { hasSpaBuild, spaRoutes } from './routes/spa';
@@ -458,6 +459,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       await api.register(attachmentRoutes);
       await api.register(mailFilterRoutes);
       await api.register(settingsRoutes);
+      await api.register(onboardingRoutes);
       await api.register(aiRoutes);
       await api.register(googleAuthRoutes);
       await api.register(integrationsMailRoutes);
