@@ -79,7 +79,7 @@ export function GoogleCard({
   const data = status.data;
 
   return (
-    <Card>
+    <Card data-tour="google-card">
       <CardHeader>
         <CardTitle>Google</CardTitle>
         <CardDescription>
@@ -190,7 +190,7 @@ function GmailCard() {
   const granted = google.data?.scopes.includes(GMAIL_SCOPE) === true;
 
   return (
-    <Card>
+    <Card data-tour="gmail-card">
       <CardHeader>
         <CardTitle>Gmail</CardTitle>
         <CardDescription>
@@ -242,6 +242,7 @@ function GmailCard() {
             ) : null}
             <div>
               <Button
+                data-tour="gmail-connect"
                 disabled={
                   !google.data?.clientConfigured ||
                   connect.isPending ||

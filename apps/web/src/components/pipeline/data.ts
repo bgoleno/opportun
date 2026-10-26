@@ -119,6 +119,8 @@ export const PipelineSearchSchema = z.object({
   q: z.string().max(200).optional().catch(undefined),
   sort: z.enum(SORT_KEYS).optional().catch(undefined),
   dir: z.enum(['asc', 'desc']).optional().catch(undefined),
+  /** Opens the New opportunity dialog (the setup checklist and the tour link here). */
+  new: z.boolean().optional().catch(undefined),
 });
 export type PipelineSearch = z.infer<typeof PipelineSearchSchema>;
 

@@ -62,3 +62,40 @@ export async function deleteUserSetting(exec: Exec, ctx: UserCtx, name: string):
     .where(and(eq(settings.key, userSettingKey(name, ctx.userId)), eq(settings.userId, ctx.userId)))
     .run();
 }
+
+/** When the user's row for `name` was last written, or null when there is none. */
+export async function userSettingUpdatedAt(
+  exec: Exec,
+  ctx: UserCtx,
+  name: string,
+): Promise<number | null> {
+  const row = await exec
+    .select({ updatedAt: settings.updatedAt })
+    .from(settings)
+    .where(and(eq(settings.key, userSettingKey(name, ctx.userId)), eq(settings.userId, ctx.userId)))
+    .get();
+  return row?.updatedAt ?? null;
+}
+
+/**
+ * Writes `value` only when the user has no row for `name` yet, atomically: of two concurrent
+ * callers exactly one insert lands and the other is a no-op. For write-once facts (a first
+ * activation time) that a repeated read path may try to record more than once.
+ */
+export async function writeUserSettingOnce(
+  exec: Exec,
+  ctx: UserCtx,
+  name: string,
+  value: unknown,
+): Promise<void> {
+  await exec
+    .insert(settings)
+    .values({
+      key: userSettingKey(name, ctx.userId),
+      userId: ctx.userId,
+      value,
+      updatedAt: Date.now(),
+    })
+    .onConflictDoNothing({ target: settings.key })
+    .run();
+}

@@ -23,6 +23,13 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
       headers: { 'x-csrf-token': csrf },
     });
     if (!open.ok()) throw new Error(`opening registration failed: ${open.status()}`);
+    // The admin is a brand-new account too: record the tour as declined, as Not now does, so
+    // flows that sign in as the admin are not met by the first-run tour (FR-U11).
+    const tour = await api.put('/api/v1/onboarding/tour', {
+      data: { status: 'skipped', stepId: 'welcome' },
+      headers: { 'x-csrf-token': csrf },
+    });
+    if (!tour.ok()) throw new Error(`declining the admin's tour failed: ${tour.status()}`);
   } finally {
     await api.dispose();
   }

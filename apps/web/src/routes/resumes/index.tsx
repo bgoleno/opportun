@@ -10,6 +10,7 @@ function ResumesPage() {
   return (
     <section>
       <PageHeader
+        tourId="resumes-header"
         title="Resumes"
         description="Base resumes and the tailored copies made from them."
       />

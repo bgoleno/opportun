@@ -13,16 +13,14 @@ import {
 } from '../adapters/gmail';
 import { communications } from '../db/schema';
 import { audit } from '../lib/audit';
-import { listDeviceTokens } from '../lib/deviceTokens';
 import { HttpError } from '../lib/errors';
-import { GMAIL_SCOPES, readTokens } from '../lib/google';
+import { appleMailState, gmailGranted as gmailGrantedFor } from '../lib/mailStatus';
 import { MAX_LOOKBACK_DAYS } from '../lib/lookback';
 import { requireUser, type UserCtx } from '../repos/base';
 import { getSyncState, putSyncState } from '../repos/communications';
 import { readUserSetting } from '../repos/userSettings';
 import type { Db } from '../db/client';
 import { enqueueGmailSync, GMAIL_INTEGRATION } from '../jobs/gmailSync';
-import { APPLE_MAIL_INTEGRATION } from '../jobs/mailIngest';
 import { withTransaction } from '../db/client';
 
 /** The synced mailbox's address, stored by the sync (adapters/gmail). */
@@ -79,13 +77,7 @@ export async function integrationsMailRoutes(app: FastifyInstance): Promise<void
     );
   }
 
-  async function gmailGranted(ctx: UserCtx): Promise<boolean> {
-    const tokens = await readTokens(db, ctx);
-    if (tokens === undefined || (tokens.refreshToken === null && tokens.accessToken === null)) {
-      return false;
-    }
-    return GMAIL_SCOPES.every((s) => tokens.scopes.includes(s));
-  }
+  const gmailGranted = (ctx: UserCtx) => gmailGrantedFor(db, ctx);
 
   api.post(
     '/integrations/gmail/sync',
@@ -117,17 +109,13 @@ export async function integrationsMailRoutes(app: FastifyInstance): Promise<void
     { schema: { response: { 200: AppleMailStatusSchema } } },
     async (req) => {
       const ctx = requireUser(req);
-      const state = await getSyncState(db, ctx, APPLE_MAIL_INTEGRATION);
-      const lastSyncAt = state?.lastSyncAt ?? null;
-      const hasToken = (await listDeviceTokens(db, ctx)).some(
-        (t) => t.revokedAt === null && t.scopes.includes('mail:push'),
-      );
-      const connected = lastSyncAt !== null && hasToken;
-      const stale = connected && Date.now() - lastSyncAt > APPLE_MAIL_STALE_MS;
+      const { connected, lastSyncAt, status } = await appleMailState(db, ctx);
+      const stale =
+        connected && lastSyncAt !== null && Date.now() - lastSyncAt > APPLE_MAIL_STALE_MS;
       return {
         connected,
         lastSyncAt,
-        status: state?.status ?? null,
+        status,
         count: await channelCount(ctx, 'apple_mail'),
         staleHint: stale ? APPLE_MAIL_STALE_HINT : null,
       };

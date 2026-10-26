@@ -7,3 +7,4 @@ export * from './communication';
 export * from './prompt';
 export * from './discovery';
 export * from './seniority';
+export * from './onboarding';

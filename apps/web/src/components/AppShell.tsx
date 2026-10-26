@@ -10,6 +10,7 @@ import {
   Inbox,
   LayoutDashboard,
   LogOut,
+  Map as MapIcon,
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
@@ -20,6 +21,7 @@ import { useState, type ReactNode } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { ShortcutsOverlay } from '@/components/ShortcutsOverlay';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { TourProvider, useTour } from '@/components/tour/TourProvider';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -78,6 +80,7 @@ function Brand() {
 function UserMenu({ user }: { user: User }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const { launch } = useTour();
   // #151: set only when the server could not confirm the session ended, so the dialog below
   // is the one place this ever offers forceLocalSignOut, never a silent fallback inside
   // signOut itself. Staying on this page with the menu still showing the signed-in account is
@@ -107,6 +110,7 @@ function UserMenu({ user }: { user: User }) {
             variant="ghost"
             className="gap-1.5 px-2"
             aria-label={`Account: ${user.displayName}`}
+            data-tour="account-menu"
           >
             <span
               aria-hidden="true"
@@ -127,6 +131,10 @@ function UserMenu({ user }: { user: User }) {
           <DropdownMenuItem onSelect={() => void navigate({ to: '/settings' })}>
             <Settings aria-hidden="true" />
             Settings
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={launch}>
+            <MapIcon aria-hidden="true" />
+            Take the tour
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => void signOut()}>
             <LogOut aria-hidden="true" />
@@ -214,8 +222,19 @@ function SidebarToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle: 
   );
 }
 
-/** Signed-in layout: header (brand, theme, account), sidebar navigation, main content. */
+/**
+ * Signed-in layout: header (brand, theme, account), sidebar navigation, main content, under the
+ * first-run tour (FR-U11), which renders its Resume pill after the content in tab order.
+ */
 export function AppShell({ user, children }: { user: User; children: ReactNode }) {
+  return (
+    <TourProvider>
+      <Shell user={user}>{children}</Shell>
+    </TourProvider>
+  );
+}
+
+function Shell({ user, children }: { user: User; children: ReactNode }) {
   const { collapsed, toggle } = useSidebarCollapsed();
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">

@@ -352,6 +352,21 @@ ghosted)`. Stage history with timestamps is preserved.
 - FR-U10 (P0): Light and dark mode: user-selectable (light, dark, or auto), with
   auto following the system preference. The choice persists per user and every
   screen renders correctly in both themes.
+- FR-U11 (P1): First-run guided tour: a brand-new account (no opportunities, no AI
+  key) is offered a short tour on first sign-in that walks the three setup steps
+  (AI key, mail, first opportunity) and the main pages, each setup step with a "Do
+  it now" that pauses the tour at the real control and a Resume pill that survives
+  reloads and the Google OAuth redirect. Progress is per user, on the server, and
+  can be skipped, resumed or replayed from the account menu. Accounts that already
+  have data are never interrupted by it. On the public demo instance it runs on
+  every sign-in, view-only. Keyboard and screen-reader operable, usable on a phone,
+  honours reduced motion, and never points at something that is not on screen.
+- FR-U12 (P1): Setup checklist: a dashboard card listing the three activation
+  items, each computed by the server (an AI key that authenticated, Gmail or Apple
+  Mail connected, at least one opportunity), until all are done or the user hides
+  it. The first time all three are true is recorded per user as the activation
+  time, inside the user's own instance (no third-party analytics). Not shown on the
+  demo instance.
 
 ### 5.9 Accounts and authentication (FR-S)
 

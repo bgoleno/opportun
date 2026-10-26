@@ -225,7 +225,7 @@ export function ContactList() {
   return (
     <div className="grid gap-6">
       <AddContactCard />
-      <Card>
+      <Card data-tour="contacts-list">
         <CardHeader className="gap-3">
           <CardTitle>Your contacts</CardTitle>
           <div className="relative max-w-sm">

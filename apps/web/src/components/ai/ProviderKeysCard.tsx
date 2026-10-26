@@ -134,7 +134,7 @@ export function ProviderKeysCard({ now = Date.now() }: { now?: number }) {
   const items = keys.data ?? [];
 
   return (
-    <Card>
+    <Card data-tour="ai-provider-keys">
       <CardHeader>
         <CardTitle>Provider keys</CardTitle>
         <CardDescription>
@@ -185,7 +185,7 @@ export function ProviderKeysCard({ now = Date.now() }: { now?: number }) {
           <FormError message={formError} className="sm:col-span-2" />
           <FormField label="Provider" error={errors.provider?.message}>
             {(p) => (
-              <Select {...p} {...form.register('provider')}>
+              <Select {...p} {...form.register('provider')} data-tour="ai-provider">
                 {PROVIDERS.map((id) => (
                   <option key={id} value={id}>
                     {providerLabel(id)}

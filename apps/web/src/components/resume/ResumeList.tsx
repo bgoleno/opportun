@@ -117,7 +117,7 @@ export function RegisterDocCard({ opportunityId }: { opportunityId?: string } = 
   }
 
   return (
-    <Card>
+    <Card {...(attaching ? {} : { 'data-tour': 'register-resume' })}>
       <CardHeader>
         <CardTitle>{attaching ? 'Attach a new document' : 'Register a base resume'}</CardTitle>
         <CardDescription>

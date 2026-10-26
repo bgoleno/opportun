@@ -1,7 +1,7 @@
 import { OPPORTUNITY_STAGES, type OpportunityStage } from '@opportun/core';
 import { useNavigate } from '@tanstack/react-router';
 import { Columns3, Plus, Rows3 } from 'lucide-react';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { PageHeader } from '@/components/PageHeader';
 import { useStageFlow } from '@/components/stage/useStageFlow';
@@ -77,7 +77,14 @@ export function Pipeline(props: {
   // Read synchronously on first render so the board never flashes the wrong layout.
   const [collapsed, setCollapsed] = useState<ReadonlySet<OpportunityStage>>(readCollapsed);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(search.new === true);
+  // ?new=true (the setup checklist's "Add one", the tour's Do it now) opens the dialog once and
+  // is dropped from the URL, so a reload or Back does not reopen it.
+  useEffect(() => {
+    if (search.new !== true) return;
+    setCreating(true);
+    onSearchChange({ new: undefined });
+  }, [search.new, onSearchChange]);
   const container = useRef<HTMLDivElement>(null);
 
   const view = search.view ?? 'board';
@@ -188,7 +195,7 @@ export function Pipeline(props: {
         title="Pipeline"
         description="Track every opportunity from discovery to offer."
         actions={
-          <Button onClick={() => setCreating(true)}>
+          <Button data-tour="new-opportunity" onClick={() => setCreating(true)}>
             <Plus aria-hidden="true" />
             New opportunity
           </Button>
@@ -255,7 +262,7 @@ export function Pipeline(props: {
       {error ? <FormError message={errorMessage(error)} /> : null}
       {isPending ? <p className="text-sm text-muted-foreground">Loading...</p> : null}
 
-      <div ref={container} className="min-w-0">
+      <div ref={container} data-tour="pipeline-board" className="min-w-0">
         {data === undefined ? null : view === 'table' ? (
           <PipelineTable
             rows={rows}

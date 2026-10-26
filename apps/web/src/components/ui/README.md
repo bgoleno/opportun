@@ -15,3 +15,8 @@ inline styles or scripts):
   inject the scroll-lock style).
 - `toast.tsx` uses Radix Toast (no injected styles) with a small module-level store in
   place of sonner, which injects its stylesheet at runtime.
+- The first-run tour (`components/tour/`) is built here on the native `<dialog>` and
+  `@floating-ui/react-dom` rather than adopted from a tour library: react-joyride
+  injects a `<style>` tag at runtime (blocked by the CSP, same as Radix Select), and
+  Shepherd.js and Intro.js are AGPL-3.0, incompatible with shipping them in this
+  Apache-2.0 bundle. Do not swap it for one of them.

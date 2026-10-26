@@ -7,6 +7,7 @@ import { DueNextSteps } from './DueNextSteps';
 import { RecentActivity } from './RecentActivity';
 import { StageCounts } from './StageCounts';
 import { TriageBadge } from './TriageBadge';
+import { SetupChecklist } from '@/components/tour/SetupChecklist';
 
 export const dashboardQuery = {
   queryKey: qk.dashboard,
@@ -22,6 +23,7 @@ export function Dashboard({ greeting }: { greeting?: string }) {
         description={greeting ?? 'Where your search stands today.'}
         actions={data ? <TriageBadge count={data.needsTriage.communications} /> : undefined}
       />
+      <SetupChecklist />
       {error ? <FormError message={errorMessage(error)} /> : null}
       {isPending ? <p className="text-sm text-muted-foreground">Loading...</p> : null}
       {data ? (

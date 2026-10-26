@@ -20,7 +20,7 @@ function DiscoveryLayout() {
         title="Discovery"
         description="New postings from your sources, ranked against your role targets."
       />
-      <nav aria-label="Discovery sections" className="mb-4">
+      <nav aria-label="Discovery sections" data-tour="discovery-sections" className="mb-4">
         <ul className="flex gap-1 overflow-x-auto border-b pb-2">
           {SECTIONS.map((s) => (
             <li key={s.to}>
