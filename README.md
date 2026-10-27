@@ -71,7 +71,6 @@ you revoke them. The server never fetches LinkedIn pages. The
 [security policy](SECURITY.md) covers the threat model, how to report a vulnerability, and
 the few deliberate deviations (such as the full Google Drive scope).
 
-
 ## Install
 
 Four ways in, each covered in [docs/install.md](docs/install.md):
