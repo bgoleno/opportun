@@ -404,7 +404,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     await runner?.stop();
     await closeDatabase(dbHandle);
   });
-  await app.register(sessionPlugin);
+  await app.register(sessionPlugin, { demo: cfg.demo });
 
   const typed = app.withTypeProvider<ZodTypeProvider>();
   typed.get(

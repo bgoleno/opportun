@@ -120,9 +120,75 @@ The host's Caddy then needs the site block, and nothing else:
 ```
 demo.opportun.app {
 	encode zstd gzip
+	log {
+		output file /var/log/caddy/demo-access.log {
+			roll_size 10MiB
+			roll_keep 10
+		}
+		format json
+	}
+	log_append actor {http.response.header.X-Opportun-Actor}
 	reverse_proxy 127.0.0.1:8080
 }
 ```
+
+The `log` and `log_append` lines are the access log; see "Tracking demo visits" below. The log
+directory must exist and be writable by the user Caddy runs as, or Caddy refuses to load the
+config rather than running without a log.
+
+### Tracking demo visits
+
+The access log above answers who used the demo and when. One JSON line per request, and the
+fields to read are:
+
+| Question      | Field                                                                                  |
+| ------------- | -------------------------------------------------------------------------------------- |
+| When          | `ts` (Unix seconds)                                                                    |
+| Which visitor | `actor`, e.g. `demo-user2.3fa91c04d2`: the demo account, a dot, then a per-session key |
+| Real IP       | `request.client_ip`                                                                    |
+| Click path    | `request.uri`, in order, for one `actor`                                               |
+
+**Which visitor.** The demo accounts are shared logins, so two people can be signed in as
+`demo-user2` at once, and Caddy cannot read the session cookie. With `OPPORTUN_DEMO=1` the app
+puts `<account>.<session key>` on each signed-in `/api` response as `X-Opportun-Actor`
+(`apps/server/src/plugins/session.ts`) and `log_append` copies it into the line. Every sign-in
+is its own session, so each concurrent visitor gets a different `actor`, and one value is all an
+analysis needs: group by `actor`, no join with the IP. The account part is a seeded label
+(`demo-admin`, `demo-user1`..`demo-user4`, or `demo-other`), never an email. The key is a hash of
+the session token, so it cannot be turned back into a cookie. It is stable until that session
+ends, so a visitor who signs out and back in appears as a new `actor`, and the same person in two
+browsers appears as two. The key is not the IP on purpose: visitors behind one office or VPN
+address share an IP, and one visitor moving between wifi and cellular changes it. `actor` is
+absent before sign-in and on the sign-in request itself, so the first line of a visit has an empty
+`actor`; the next request carries it. A real install (`OPPORTUN_DEMO` unset) never sends the
+header.
+
+**Real IP.** `client_ip` is the real visitor only while this Caddy faces the internet directly.
+If a CDN or load balancer sits in front, set `servers { trusted_proxies ... }` in the global
+block, otherwise every line shows that proxy's address. This is not verified for the demo host.
+
+**Click paths.** The web app is a single page: moving between screens makes no page request,
+only the `/api` calls that screen needs. So the path is reconstructed from those calls, such as
+`/api/v1/opportunities/<id>` for opening an opportunity, and it is the app's data requests, not
+literally each click. Page URLs are not logged because the app sends `Referrer-Policy:
+no-referrer`; that header is a deliberate security control and was left alone for this.
+
+**What is not logged.** Caddy replaces the `Cookie` and `Authorization` request headers with
+`REDACTED` by default (verified against Caddy 2.11), so session tokens do not reach the file.
+Request bodies are never logged. The query string is, so do not point an OAuth callback
+(`code`, `state`) at the demo without filtering it.
+
+```sh
+# Distinct visitors per day
+jq -r 'select(.actor != "") | [(.ts|strftime("%Y-%m-%d")), .actor] | @tsv' \
+  /var/log/caddy/demo-access.log | sort -u | cut -f1 | uniq -c
+# One visitor's path, in order
+jq -r 'select(.actor == "demo-user2.3fa91c04d2") | [(.ts|strftime("%H:%M:%S")), .request.uri] | @tsv' \
+  /var/log/caddy/demo-access.log
+```
+
+`log_append` needs Caddy 2.7 or newer. Static asset requests (`/assets/...`) are in the file
+too; filter on `request.uri | startswith("/api/")` to see only activity.
 
 **The loopback bind is a security control, not a tidiness choice.** `0.0.0.0` there would serve
 the application directly to the internet on port 8080, bypassing the proxy and everything that
