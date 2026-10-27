@@ -9,13 +9,6 @@ tedious parts: discovering relevant postings, tailoring your resume for a specif
 role, classifying and filing recruiter email, and suggesting who in your network can
 refer you. This is not intended as a tool to spam your auto generated resumes to all job openings. This is meant to facilitate and automate the job search process. This app respects the access rules of all job sites.
 
-> **Status: beta.** Milestones M1 through M5 are implemented: the tracker and AI resume
-> tailoring, Gmail and Apple Mail ingestion, discovery (including Workday boards), contacts
-> and referrals, and hardened sign-in. The server runs as a single container; the Apple
-> Mail connector and the capture extension run on your own devices. There are no tagged
-> releases yet and the database schema may still change between commits (migrations run
-> automatically on upgrade). Expect rough edges. See the [changelog](CHANGELOG.md).
-
 ## Why Opportun
 
 - **Own your search.** Your pipeline, resumes, and communications live in your
@@ -78,17 +71,7 @@ you revoke them. The server never fetches LinkedIn pages. The
 [security policy](SECURITY.md) covers the threat model, how to report a vulnerability, and
 the few deliberate deviations (such as the full Google Drive scope).
 
-## Roadmap
-
-| Milestone   | Scope                                                                                                                                                                                                                              |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| M0          | Requirements and design (done)                                                                                                                                                                                                     |
-| M1          | MVP: auth, profile and role targets, opportunity pipeline, resume tracking and AI tailoring with Google Docs, import/export, single-container deploy (delivered)                                                                   |
-| M2          | Gmail ingestion, message classification, unified communications (delivered)                                                                                                                                                        |
-| M3          | Discovery engine: source adapters, scheduled runs, review queue, dismissal learning (delivered)                                                                                                                                    |
-| M4          | Contacts, LinkedIn export import, referral suggestions (delivered)                                                                                                                                                                 |
-| M5          | Hardening and reach: OAuth sign-in, 2FA, admin password reset, device tokens, Apple Mail connector, browser capture extension, Reactive Resume, Workday boards (delivered); Postgres assessed ([ADR-4](docs/adr/0004-postgres.md)) |
-| Iteration 4 | Optional Postgres 16 backend (beta) beside the default SQLite, with a verified SQLite-to-Postgres copy tool                                                                                                                        |
+                                                             |
 
 ## Install
 
