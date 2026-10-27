@@ -1,8 +1,10 @@
 // Resolves the session cookie into req.userCtx for /api requests and exposes requireUser
 // as an app decorator. Registered after the security plugin, so forged unsafe requests are
 // rejected by CSRF before any session lookup.
+import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
+import { DEMO_USERS } from '../cli/seedDemoFixture';
 import '../lib/deviceTokens';
 import { getSessionUser } from '../lib/sessions';
 import { requireUser } from '../repos/base';
@@ -21,7 +23,23 @@ declare module 'fastify' {
   }
 }
 
-async function session(app: FastifyInstance): Promise<void> {
+export interface SessionOptions {
+  /** OPPORTUN_DEMO=1: label each signed-in /api response with its demo visitor (see below). */
+  demo?: boolean;
+}
+
+/** Response header naming the demo visitor behind a request. Demo deployments only. */
+export const ACTOR_HEADER = 'x-opportun-actor';
+
+const DEMO_ACTOR_LABELS: ReadonlyMap<string, string> = new Map(
+  DEMO_USERS.map((u) => [u.id, u.email.split('@')[0] ?? u.id]),
+);
+
+function sessionKey(token: string): string {
+  return createHash('sha256').update(`actor:${token}`).digest('hex').slice(0, 10);
+}
+
+async function session(app: FastifyInstance, opts: SessionOptions): Promise<void> {
   app.decorateRequest('userCtx', null);
   app.decorateRequest('deviceCtx', null);
   app.decorateRequest('sessionLookupFailed', false);
@@ -49,9 +67,28 @@ async function session(app: FastifyInstance): Promise<void> {
       req.userCtx = null;
     }
   });
+  if (opts.demo === true) {
+    // The host Caddy's access log (docs/demo-deployment.md, "Tracking demo visits") cannot read
+    // the session cookie, and the demo accounts are shared logins, so the app names the visitor
+    // for it: <account>.<session key>, e.g. demo-user2.3fa91c04d2. Two people signed in as the
+    // same account hold different sessions, so they get different values, and one value is
+    // enough to follow one visitor without joining it to the IP column. The account part is a
+    // seeded label, never an email. The key is a domain-separated hash of the session token, so
+    // it is not the stored sessions.id and cannot be turned back into a cookie; it is stable for
+    // the life of the session and changes on the next sign-in. Off outside the demo: a real
+    // install's users should not be named in response headers.
+    app.addHook('onSend', async (req, reply, payload) => {
+      const token = req.cookies.opportun_session;
+      if (req.userCtx !== null && token !== undefined && token.length > 0) {
+        const account = DEMO_ACTOR_LABELS.get(req.userCtx.userId) ?? 'demo-other';
+        void reply.header(ACTOR_HEADER, `${account}.${sessionKey(token)}`);
+      }
+      return payload;
+    });
+  }
 }
 
-export const sessionPlugin = fp(session, {
+export const sessionPlugin = fp<SessionOptions>(session, {
   name: 'opportun-session',
   dependencies: ['@fastify/cookie', 'opportun-security'],
 });
