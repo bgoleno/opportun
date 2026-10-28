@@ -250,6 +250,7 @@ describe('google connection', () => {
     const setup = {
       redirectUri: 'http://localhost:3000/api/v1/integrations/google/callback',
       jsOrigin: 'http://localhost:3000',
+      signInRedirectUri: 'http://localhost:3000/api/v1/auth/oauth/google/callback',
       aiAvailable: false,
     };
     expect(before.json()).toEqual({

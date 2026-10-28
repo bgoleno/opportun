@@ -98,6 +98,8 @@ export interface GoogleStatus {
   redirectUri: string;
   /** The authorized JavaScript origin to register. */
   jsOrigin: string;
+  /** The redirect URI "Sign in with Google" sends; register it too when sign-in reuses this client. */
+  signInRedirectUri: string;
   /** Whether the user has an AI key (the diagnose assist needs one). */
   aiAvailable: boolean;
   validation: GoogleClientValidation | null;
