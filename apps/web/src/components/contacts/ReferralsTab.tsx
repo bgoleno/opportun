@@ -13,6 +13,7 @@ import { errorMessage } from '@/lib/api';
 import { formatDate } from '@/lib/opportunities';
 import {
   useAskReferral,
+  useContacts,
   useOpportunityReferrals,
   useReferralCandidates,
   useSetReferralStatus,
@@ -148,6 +149,9 @@ export function ReferralsTab({
   const referrals = useOpportunityReferrals(opportunityId);
   const askReferral = useAskReferral(opportunityId);
   const setStatus = useSetReferralStatus(opportunityId);
+  // Once any contacts exist the LinkedIn export has been imported (or contacts added by hand),
+  // so the empty state must not tell the user to import again.
+  const hasContacts = (useContacts('', 0).data?.total ?? 0) > 0;
   const asks = referrals.data?.items ?? [];
   const byContact = new Map(asks.map((a) => [a.contactId, a]));
 
@@ -198,15 +202,20 @@ export function ReferralsTab({
             <FormError message={errorMessage(candidates.error)} />
           ) : data === undefined || data.items.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No contacts at {companyName} yet.{' '}
-              <Link to="/contacts" className={linkClass}>
-                Add contacts
-              </Link>{' '}
-              or{' '}
-              <Link to="/settings/data" className={linkClass}>
-                import your LinkedIn export
-              </Link>
-              .
+              No contacts at {companyName}.
+              {hasContacts ? null : (
+                <>
+                  {' '}
+                  <Link to="/contacts" className={linkClass}>
+                    Add contacts
+                  </Link>{' '}
+                  or{' '}
+                  <Link to="/settings/data" className={linkClass}>
+                    import your LinkedIn export
+                  </Link>
+                  .
+                </>
+              )}
             </p>
           ) : (
             <>

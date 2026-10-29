@@ -148,12 +148,30 @@ describe('ReferralsTab', () => {
         aiUnavailable: null,
       },
       'GET /opportunities/opp-1/referrals': { items: [], total: 0 },
+      'GET /contacts': { items: [], total: 0 },
     });
     renderWithProviders(<ReferralsTab opportunityId="opp-1" companyName="Initech" />);
-    expect(await screen.findByText(/No contacts at Initech yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No contacts at Initech/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'import your LinkedIn export' })).toHaveAttribute(
       'href',
       '/settings/data',
     );
+  });
+
+  it('does not suggest importing when contacts already exist but none are at the company', async () => {
+    mockApi({
+      'GET /opportunities/opp-1/referral-candidates': {
+        items: [],
+        total: 0,
+        ranked: false,
+        aiUnavailable: null,
+      },
+      'GET /opportunities/opp-1/referrals': { items: [], total: 0 },
+      'GET /contacts': { items: [], total: 1200 },
+    });
+    renderWithProviders(<ReferralsTab opportunityId="opp-1" companyName="Initech" />);
+    expect(await screen.findByText('No contacts at Initech.')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'import your LinkedIn export' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Add contacts' })).toBeNull();
   });
 });
