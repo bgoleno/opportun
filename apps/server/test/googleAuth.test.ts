@@ -78,12 +78,34 @@ describe('google connection', () => {
     expect(unknown.statusCode).toBe(400);
   });
 
+  // A state is `body.signature`, the signature being 32 bytes in base64url (43 characters). The
+  // final character carries only 4 bits of data, so its low 2 bits are ignored on decode: ending
+  // the state in a different last character can still decode to the same signature. Overwriting
+  // the last two characters with `xx` was therefore a no-op for about 1 state in 1000, and the
+  // callback then correctly accepted it (302) instead of the 403 this test expects. Change the
+  // FIRST signature character instead: every bit of it is significant, so any other character
+  // decodes to different bytes.
+  function tamperState(state: string): string {
+    const dot = state.indexOf('.');
+    const first = state[dot + 1];
+    return `${state.slice(0, dot + 1)}${first === 'A' ? 'B' : 'A'}${state.slice(dot + 2)}`;
+  }
+
+  it('tamperState always changes the decoded signature, including for states ending in xw, xx, xy or xz', () => {
+    const sig = (tail: string) => `${'A'.repeat(41)}${tail}`;
+    for (const tail of ['xw', 'xx', 'xy', 'xz', 'AA', '__']) {
+      const state = `body.${sig(tail)}`;
+      const decoded = (st: string) => Buffer.from(st.split('.')[1]!, 'base64url').toString('hex');
+      expect(decoded(tamperState(state))).not.toBe(decoded(state));
+    }
+  });
+
   it('answers 403 to a callback with a bad, foreign or missing state, without exchanging the code', async () => {
     const { app, a, b } = await boot();
     await saveClient(a);
     await saveClient(b);
     const state = (await connectUrl(a)).searchParams.get('state')!;
-    const tampered = `${state.slice(0, -2)}xx`;
+    const tampered = tamperState(state);
     const cases = [
       a.request({
         method: 'GET',
