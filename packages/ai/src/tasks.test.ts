@@ -243,7 +243,7 @@ describe('TASKS registry', () => {
     expect([...TASK_PROMPT_VARS['resume.tailor']].sort()).toEqual([
       'base_resume',
       'jd_untrusted',
-      'match_report',
+      'match_report_untrusted',
       'resume_rules',
     ]);
     expect(TASK_PROMPT_VARS['comms.classify']).toContain('message_untrusted');
@@ -261,8 +261,8 @@ describe('TASKS registry', () => {
   // - current_prompt: the user's active prompt (any model proposal was accepted by the user).
   // - feedback_summary: counts of enum-to-enum corrections built by the app; message subjects
   //   are never included (refinePrompt.test.ts pins this).
-  // - match_report: the app's own stored resume.match output (score, missing keywords, weak
-  //   areas, summary) and whether it is stale, never third-party text (issue #303).
+  // match_report was on this list until issue #11: it is model output produced over the
+  // fenced job description, so it is match_report_untrusted and fenced like the JD itself.
   const TRUSTED_VARS = new Set([
     'resume_rules',
     'base_resume',
@@ -271,7 +271,6 @@ describe('TASKS registry', () => {
     'role_target',
     'current_prompt',
     'feedback_summary',
-    'match_report',
   ]);
 
   it('every task variable is fenced or explicitly trusted', () => {
