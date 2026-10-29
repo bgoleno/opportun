@@ -470,6 +470,19 @@ export function GoogleSetupGuide({ status }: { status: GoogleStatus }) {
                 label="Authorized redirect URI"
                 value={status.redirectUri}
               />
+              <CopyField
+                id="google-signin-redirect-uri"
+                label="Second redirect URI, for Sign in with Google"
+                value={status.signInRedirectUri}
+              />
+              <Lines>
+                <li>
+                  Add BOTH redirect URIs to the same client. Connect uses the first; &quot;Sign in
+                  with Google&quot; and linking an account use the second. Skipping it fails with
+                  redirect_uri_mismatch when you sign in or link. Not using Google sign-in? You can
+                  leave it out.
+                </li>
+              </Lines>
               <Lines>
                 <li>
                   After Create, Google shows the Client ID and secret ONCE in a dialog. Copy both

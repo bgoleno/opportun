@@ -106,8 +106,10 @@ registration closes automatically afterward, and an admin can reopen it, see
    5. **Client**: first check the project chip at the top of the console matches the step 1
       project; the console links open in whatever project was last selected, and a client
       created in the wrong project validates and connects but fails later with disabled-API
-      errors. Then: type Web application, with the JavaScript origin and redirect URI the app
-      shows. Leave "Use this client for an AI-powered agent" unchecked if offered: Opportun
+      errors. Then: type Web application, with the JavaScript origin the app shows and BOTH
+      redirect URIs it shows: the Connect one (`/api/v1/integrations/google/callback`) and
+      the sign-in one (`/api/v1/auth/oauth/google/callback`). Sign in with Google and account
+      linking reuse this client and fail with redirect_uri_mismatch without the second. Leave "Use this client for an AI-powered agent" unchecked if offered: Opportun
       is a standard web app client (its AI never calls Google APIs directly) and the
       designation cannot be changed after creation. If you also browse the app at another
       address (like http://localhost:8080), you may add that origin and its
@@ -999,9 +1001,10 @@ keep the server's time synchronized (NTP).
 
 Besides a password, people can sign in with a Google, GitHub or LinkedIn account
 (FR-S4). Each provider needs an OAuth client that you register for this instance; nothing
-is shared with a third party. This is separate from the Google client used for resumes and
-Gmail in [section 2](#2-quick-start-docker-compose): sign-in uses its own client, callback
-and permissions (only `openid email profile` for Google, `read:user user:email` for GitHub,
+is shared with a third party. Sign-in can reuse the Google client used for resumes and
+Gmail in [section 2](#2-quick-start-docker-compose) (the card offers **Use that client**) or
+use its own. Either way it has its own callback, which must be registered on whichever
+client it uses, and its own permissions (only `openid email profile` for Google, `read:user user:email` for GitHub,
 `openid profile email` for LinkedIn).
 
 1. **Register the client.** As an administrator, open **Settings > Users > Sign-in

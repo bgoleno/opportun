@@ -12,6 +12,7 @@ function status(over: Partial<GoogleStatus> = {}): GoogleStatus {
     clientId: null,
     redirectUri: 'https://opportun.example.ts.net/api/v1/integrations/google/callback',
     jsOrigin: 'https://opportun.example.ts.net',
+    signInRedirectUri: 'https://opportun.example.ts.net/api/v1/auth/oauth/google/callback',
     aiAvailable: false,
     validation: null,
     ...over,

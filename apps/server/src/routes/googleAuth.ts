@@ -37,6 +37,7 @@ import {
   type GoogleClientValidation,
 } from '../lib/googleValidate';
 import { spendNonce } from '../lib/oauthState';
+import { redirectUriFor } from '../lib/oauthProviders';
 import { requireUser } from '../repos/base';
 import { getActivePrompt } from '../repos/prompts';
 
@@ -64,6 +65,9 @@ const StatusSchema = z.object({
   redirectUri: z.string(),
   /** The authorized JavaScript origin to register (BASE_URL's origin). */
   jsOrigin: z.string(),
+  /** The redirect URI "Sign in with Google" sends. Sign-in can reuse this client, and Google
+   *  rejects it with redirect_uri_mismatch unless it is registered next to `redirectUri`. */
+  signInRedirectUri: z.string(),
   /** Whether the caller has an AI key, so the diagnose assist can run. */
   aiAvailable: z.boolean(),
   /** The last check of the stored client; null before any. */
@@ -84,6 +88,7 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
   const db = app.db;
   const redirectUri = app.config.baseUrl + GOOGLE_CALLBACK_PATH;
   const jsOrigin = new URL(app.config.baseUrl).origin;
+  const signInRedirectUri = redirectUriFor(app.config.baseUrl, 'google');
 
   /** The caller's session token; requireUser has already proven it is present and valid. */
   const sessionId = (token: string | undefined): string => sessionIdOf(token ?? '');
@@ -260,6 +265,7 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
       clientId: creds?.clientId ?? null,
       redirectUri,
       jsOrigin,
+      signInRedirectUri,
       aiAvailable: await aiAvailable(db, ctx),
       validation: clientConfigured ? await readGoogleValidation(db, ctx) : null,
     };

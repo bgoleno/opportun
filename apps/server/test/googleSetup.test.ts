@@ -252,6 +252,7 @@ describe('GET /integrations/google setup fields', () => {
     expect((await track(status(a))).json()).toMatchObject({
       redirectUri: REDIRECT,
       jsOrigin: 'http://localhost:3000',
+      signInRedirectUri: 'http://localhost:3000/api/v1/auth/oauth/google/callback',
       aiAvailable: false,
     });
     await addAiKey(app, a);
@@ -269,6 +270,7 @@ describe('GET /integrations/google setup fields', () => {
       expect((await track(status(a))).json()).toMatchObject({
         redirectUri: 'https://opportun.example.ts.net/api/v1/integrations/google/callback',
         jsOrigin: 'https://opportun.example.ts.net',
+        signInRedirectUri: 'https://opportun.example.ts.net/api/v1/auth/oauth/google/callback',
       });
     } finally {
       await app.close();

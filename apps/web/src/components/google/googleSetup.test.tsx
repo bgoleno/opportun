@@ -18,6 +18,7 @@ function status(over: Partial<GoogleStatus> = {}): GoogleStatus {
     clientId: null,
     redirectUri: REDIRECT,
     jsOrigin: ORIGIN,
+    signInRedirectUri: `${ORIGIN}/api/v1/auth/oauth/google/callback`,
     aiAvailable: false,
     validation: null,
     ...over,
@@ -48,6 +49,10 @@ describe('GoogleSetupGuide', () => {
     renderWithProviders(<Harness />);
 
     expect(await screen.findByLabelText('Authorized redirect URI')).toHaveValue(REDIRECT);
+    // Sign in with Google reuses this client, so its callback must be registered too.
+    expect(screen.getByLabelText('Second redirect URI, for Sign in with Google')).toHaveValue(
+      'https://opportun.example.ts.net/api/v1/auth/oauth/google/callback',
+    );
     expect(screen.getByLabelText('Authorized JavaScript origin')).toHaveValue(ORIGIN);
     expect(screen.getByLabelText('Application type')).toHaveValue('Web application');
     for (const [i, name] of [
