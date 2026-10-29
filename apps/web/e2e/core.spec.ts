@@ -363,10 +363,10 @@ test('admin resets a member password from Settings > Users (FR-S1)', async ({ pa
     await admin.goto('/settings/users');
     const row = admin.getByRole('row').filter({ hasText: email });
     await row.getByRole('button', { name: 'Reset password for Reset Member' }).click();
-    await admin
-      .getByRole('dialog', { name: 'Reset password for Reset Member?' })
-      .getByRole('button', { name: 'Reset password' })
-      .click();
+    // The reset re-asks for the admin's own password (a stolen cookie alone is not enough).
+    const confirm = admin.getByRole('dialog', { name: 'Confirm your password' });
+    await confirm.getByLabel('Current password').fill(ADMIN.password);
+    await confirm.getByRole('button', { name: 'Continue' }).click();
     const shown = admin.getByRole('dialog', { name: 'Temporary password' });
     const temporary = await shown
       .getByLabel('Temporary password for Reset Member', { exact: true })

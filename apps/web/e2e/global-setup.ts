@@ -19,7 +19,7 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
     const state = await api.storageState();
     const csrf = state.cookies.find((c) => c.name === 'opportun_csrf')?.value ?? '';
     const open = await api.patch('/api/v1/admin/registration', {
-      data: { open: true },
+      data: { open: true, password: ADMIN.password },
       headers: { 'x-csrf-token': csrf },
     });
     if (!open.ok()) throw new Error(`opening registration failed: ${open.status()}`);

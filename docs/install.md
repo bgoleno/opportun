@@ -970,6 +970,10 @@ right after it. Administrators manage the instance under **Settings > Users**:
 - **Registration**: Open registration to let someone create an account (on the register
   page, or with a sign-in provider from [section 14](#14-sign-in-with-google-github-or-linkedin)),
   then close it again. Every account sees only its own data.
+  Opening or closing registration, like resetting a password below, asks for your own
+  password: a stolen session cookie alone cannot let someone create an account or take one
+  over. An administrator who signed in only through a provider sets a password first, under
+  Settings → Security.
 - **Users**: every account on the instance. **Reset password** gives a member a new random
   temporary password, shown once for you to hand over on a channel you trust. It signs that
   member out everywhere, revokes their device tokens and turns off their two-factor sign-in,

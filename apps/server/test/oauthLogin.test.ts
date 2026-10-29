@@ -396,7 +396,11 @@ async function me(app: FastifyInstance, session: string) {
 }
 
 function setRegistration(a: TestClient, open: boolean) {
-  return a.request({ method: 'PATCH', url: '/api/v1/admin/registration', payload: { open } });
+  return a.request({
+    method: 'PATCH',
+    url: '/api/v1/admin/registration',
+    payload: { open, password: PASSWORD },
+  });
 }
 
 const GH_ATTACKER: FakeIdentity = { id: '9001', email: A_EMAIL, emailVerified: false };
