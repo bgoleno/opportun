@@ -107,6 +107,17 @@ fencing, #339.)
   `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP=1`. That allowance matches one of those three literal
   strings an operator typed themselves, never a resolved address, so it carries none of
   the DNS-rebinding exposure described above.
+- **Postgres TLS is encrypted but not verified by default.** For a Postgres host that is not
+  loopback, `DB_SSL` defaults to `require`: the connection is encrypted, but the server
+  certificate chain and hostname are not checked. An attacker positioned on the network
+  path to the database could terminate TLS with any certificate and read the credentials
+  and every row. `require` is the default because it works against a managed or remote
+  database without the operator first provisioning a certificate authority; the strict
+  mode would fail to connect to one using a self-signed or private-CA certificate. Set
+  `DB_SSL=verify-full` (a private CA goes in `NODE_EXTRA_CA_CERTS`) for any database
+  reached over a network you do not control. The shipped `deploy/compose.yml` keeps
+  Postgres on the internal compose network, and SQLite has no network database, so
+  neither is affected. Loopback and unix-socket hosts default to `disable`.
 
 ## Scope notes for self-hosters
 
