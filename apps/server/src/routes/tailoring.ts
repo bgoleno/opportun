@@ -134,6 +134,9 @@ function renderRules(rules: string[]): string {
  * reason confidently about a resume version that no longer exists, which is worse than handing
  * it no score at all.
  */
+/** The pre-#11 name of the match report placeholder, still present in stored prompt bodies. */
+const LEGACY_MATCH_REPORT = /\{\{\s*match_report\s*\}\}/g;
+
 async function matchReportContext(db: Db, ctx: UserCtx, resume: ResumeRow): Promise<string> {
   if (resume.opportunityId === null) {
     return 'No job is linked to this resume, so there is no match score.';
@@ -185,16 +188,27 @@ async function tailorSystem(
     resume.opportunityId === null ? null : await getOpportunity(app.db, ctx, resume.opportunityId);
   const baseResume = await storeFor(app, resume.store).readText(ctx, resume.docRef);
   const matchReport = await matchReportContext(app.db, ctx, resume);
-  const rendered = renderPrompt(prompt.body, {
+  // The report is model output produced over the hostile job description, so it is fenced as
+  // match_report_untrusted (issue #11). Stored prompt versions, including the seeded one, were
+  // written with the old unfenced {{match_report}}; they are read through the new name rather
+  // than rewritten, so every stored body ends up fenced without a data migration.
+  const body = prompt.body.replace(LEGACY_MATCH_REPORT, '{{match_report_untrusted}}');
+  const rendered = renderPrompt(body, {
     resume_rules: rules,
     base_resume: baseResume,
     jd_untrusted: jobDescription(opp),
-    match_report: matchReport,
+    match_report_untrusted: matchReport,
   });
-  // A user-edited prompt may drop either placeholder; both are prepended regardless.
+  // A user-edited prompt may drop either placeholder; both are prepended regardless, and the
+  // report is fenced on this path too.
   let system = rendered;
-  if (!/\{\{\s*match_report\s*\}\}/.test(prompt.body)) system = `${matchReport}\n\n${system}`;
-  if (!/\{\{\s*resume_rules\s*\}\}/.test(prompt.body)) system = `${rules}\n\n${system}`;
+  if (!/\{\{\s*match_report_untrusted\s*\}\}/.test(body)) {
+    const fenced = renderPrompt('{{match_report_untrusted}}', {
+      match_report_untrusted: matchReport,
+    });
+    system = `${fenced}\n\n${system}`;
+  }
+  if (!/\{\{\s*resume_rules\s*\}\}/.test(body)) system = `${rules}\n\n${system}`;
   return { system, promptId: prompt.id };
 }
 

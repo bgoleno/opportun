@@ -35,7 +35,8 @@ export function BlockedRow({ comm }: { comm: CommunicationView }) {
 
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border bg-card p-4">
-      <span className="font-mono text-sm">{comm.from}</span>
+      {/* break-all: an address is one unbroken token, and a long one would otherwise run off a phone. */}
+      <span className="min-w-0 break-all font-mono text-sm">{comm.from}</span>
       <span className="text-xs text-muted-foreground">{when(comm.sentAt)}</span>
       <span className="text-xs text-muted-foreground">blocked by {reason}</span>
       {/* The one place a blocked message can be read is where it already is. */}

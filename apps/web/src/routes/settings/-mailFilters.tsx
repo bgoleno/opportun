@@ -23,12 +23,12 @@ export function LabelScopeField(props: {
   const valid = labelIsSafe(shown);
 
   return (
-    <div className="grid gap-2">
+    <div className="grid grid-cols-1 gap-2">
       <Label htmlFor="mail-label">Gmail label</Label>
       <div className="flex flex-wrap items-center gap-2">
         <Input
           id="mail-label"
-          className="w-64"
+          className="w-64 max-w-full"
           placeholder="JobSearch"
           value={shown}
           onChange={(e) => setDraft(e.currentTarget.value)}
@@ -76,7 +76,7 @@ export function ConsumerVetoToggle(props: {
   onChange: (enabled: boolean) => void;
 }) {
   return (
-    <div className="grid gap-2">
+    <div className="grid grid-cols-1 gap-2">
       <div className="flex items-center gap-2">
         <input
           id="consumer-veto"
@@ -108,7 +108,7 @@ export function RuleList(props: {
   const addId = `add-${props.effect}`;
 
   return (
-    <section className="grid gap-3">
+    <section className="grid grid-cols-1 gap-3">
       <div>
         <h3 className="text-sm font-medium">{props.title}</h3>
         {props.description === '' ? null : (
@@ -122,7 +122,7 @@ export function RuleList(props: {
         </Label>
         <Input
           id={addId}
-          className="w-72"
+          className="w-72 max-w-full"
           placeholder="*@example.com or someone@example.com"
           value={draft}
           onChange={(e) => setDraft(e.currentTarget.value)}
@@ -142,7 +142,7 @@ export function RuleList(props: {
       {props.rules.length === 0 ? (
         <p className="text-xs text-muted-foreground">Nothing here yet.</p>
       ) : (
-        <ul className="grid gap-1">
+        <ul className="grid grid-cols-1 gap-1">
           {props.rules.map((rule) => (
             <li key={rule.id} className="flex items-center gap-2 text-sm">
               <input
@@ -194,7 +194,7 @@ export function JobSenderList(props: {
   const [draft, setDraft] = useState('');
 
   return (
-    <section className="grid gap-3">
+    <section className="grid grid-cols-1 gap-3">
       <p className="text-xs text-muted-foreground">
         Mail from these senders is always treated as job mail, so it is never dropped for looking
         private or for carrying no job words. Your deny list still beats this, and so does anything
@@ -207,7 +207,7 @@ export function JobSenderList(props: {
         </Label>
         <Input
           id="add-job-sender"
-          className="w-72"
+          className="w-72 max-w-full"
           placeholder="*@example.com or someone@example.com"
           value={draft}
           onChange={(e) => setDraft(e.currentTarget.value)}
@@ -224,7 +224,7 @@ export function JobSenderList(props: {
         </Button>
       </div>
 
-      <ul className="grid gap-1">
+      <ul className="grid grid-cols-1 gap-1">
         {props.senders.map((sender) => (
           <li key={sender.pattern} className="flex flex-wrap items-center gap-2 text-sm">
             <input
@@ -276,12 +276,12 @@ export function PatternTester(props: {
   const result = props.result;
 
   return (
-    <section className="grid gap-2">
+    <section className="grid grid-cols-1 gap-2">
       <Label htmlFor="pattern-test">Pattern</Label>
       <div className="flex flex-wrap items-center gap-2">
         <Input
           id="pattern-test"
-          className="w-72 font-mono"
+          className="w-72 max-w-full font-mono"
           placeholder="*.gmail.com"
           value={pattern}
           onChange={(e) => setPattern(e.currentTarget.value)}

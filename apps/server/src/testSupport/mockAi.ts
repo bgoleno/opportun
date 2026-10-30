@@ -24,6 +24,8 @@ export function mockAiOverride(port: number): AiOverride {
       };
     },
     getKey: () => MOCK_KEY,
+    // The mock endpoint is this process's own loopback http listener (see MOCK_AI_PATH).
+    allowLoopbackHttp: true,
   };
 }
 
