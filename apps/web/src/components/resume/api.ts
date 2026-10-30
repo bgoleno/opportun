@@ -259,7 +259,15 @@ export function useTailoringSession(resumeId: string) {
  *  first, so there was nothing left for this one to do (issue #146). */
 export type ApplyEditOutcome = 'applied' | 'already_consumed';
 
-export function useApplyEdit(sessionId: string) {
+/**
+ * Applies one suggested edit, then refetches the document's text: the Document panel on the
+ * same page reads rk.text, and without this kept showing the pre-edit text until a reload
+ * (https://github.com/bgoleno/opportun/issues/8). The match report is deliberately not
+ * refetched: its `stale` flag tracks completed sessions, not applied edits, so the server
+ * would answer with the same report. useCompleteSession is what refreshes it.
+ */
+export function useApplyEdit(resumeId: string, sessionId: string) {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: async (edit: Edit): Promise<ApplyEditOutcome> => {
       const res = await api<{ results: { index: number; outcome: ApplyEditOutcome }[] }>(
@@ -268,6 +276,7 @@ export function useApplyEdit(sessionId: string) {
       );
       return res.results[0]!.outcome;
     },
+    onSuccess: () => qc.invalidateQueries({ queryKey: rk.text(resumeId) }),
   });
 }
 

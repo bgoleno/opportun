@@ -50,10 +50,12 @@ function Bubble({
 
 function MessageItem({
   message,
+  resumeId,
   sessionId,
   canApply,
 }: {
   message: ChatMessage;
+  resumeId: string;
   sessionId: string;
   canApply: boolean;
 }) {
@@ -76,7 +78,12 @@ function MessageItem({
             Suggested edits ({message.edits.length})
           </p>
           {message.edits.map((edit, i) => (
-            <SuggestionCard key={`${message.at}-${i}`} sessionId={sessionId} edit={edit} />
+            <SuggestionCard
+              key={`${message.at}-${i}`}
+              resumeId={resumeId}
+              sessionId={sessionId}
+              edit={edit}
+            />
           ))}
         </div>
       ) : null}
@@ -159,7 +166,13 @@ export function ChatPanel({ resumeId }: { resumeId: string }) {
                 </li>
               ) : null}
               {messages.map((m, i) => (
-                <MessageItem key={`${m.at}-${i}`} message={m} sessionId={sessionId} canApply />
+                <MessageItem
+                  key={`${m.at}-${i}`}
+                  message={m}
+                  resumeId={resumeId}
+                  sessionId={sessionId}
+                  canApply
+                />
               ))}
               {pendingUser !== null ? (
                 <Bubble message={{ role: 'user' }} sessionId={sessionId}>

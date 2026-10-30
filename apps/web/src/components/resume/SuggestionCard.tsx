@@ -35,8 +35,16 @@ function DiffSide({ edit, side }: { edit: Edit; side: 'removed' | 'added' }) {
   );
 }
 
-export function SuggestionCard({ sessionId, edit }: { sessionId: string; edit: Edit }) {
-  const apply = useApplyEdit(sessionId);
+export function SuggestionCard({
+  resumeId,
+  sessionId,
+  edit,
+}: {
+  resumeId: string;
+  sessionId: string;
+  edit: Edit;
+}) {
+  const apply = useApplyEdit(resumeId, sessionId);
   const [outcome, setOutcome] = useState<ApplyEditOutcome | null>(null);
 
   return (

@@ -2,6 +2,7 @@
 // above the chat, in source order, at every width -- not just visually reflowed at `lg`. This
 // file proves both from the rendered DOM rather than from the Tailwind classes that produce it.
 import { screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { mockApi, renderWithProviders } from '@/test/render';
 import type { MatchReportView, Resume, TailoringSession } from './api';
@@ -96,5 +97,45 @@ describe('ResumeWorkspace (issue #321): the document viewer', () => {
     renderWithProviders(<ResumeWorkspace id="r-1" />);
     await screen.findByRole('heading', { name: 'Match report' });
     expect(screen.queryByRole('heading', { name: 'Document' })).toBeNull();
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/8
+describe('ResumeWorkspace: applying a suggested edit', () => {
+  it('shows the edited text in the Document panel without a reload', async () => {
+    const edit = {
+      find: 'Shipped the billing platform rewrite',
+      replace: 'Shipped the Go billing platform rewrite on Kubernetes',
+    };
+    const before = DOC_TEXT;
+    const after = DOC_TEXT.replace(edit.find, edit.replace);
+    // The server's copy of the document: apply changes it and GET /text reads it, as the real
+    // endpoints do, so the panel can only show the new text by fetching it again.
+    let stored = before;
+    mockApi({
+      // local_file with no URL: the only kind of resume the Document panel renders for.
+      'GET /resumes/r-1': { ...RESUME, store: 'local_file', docRef: 'att-1', url: null },
+      'GET /resumes/r-1/match': REPORT,
+      'POST /resumes/r-1/tailoring': {
+        ...SESSION,
+        messages: [
+          { role: 'assistant', content: 'One change.', at: 2, edits: [edit], incomplete: false },
+        ],
+      },
+      'GET /resumes/r-1/text': () => ({ text: stored }),
+      'POST /tailoring/s-1/suggestions/apply': () => {
+        stored = stored.replace(edit.find, edit.replace);
+        return { results: [{ index: 0, outcome: 'applied' }] };
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<ResumeWorkspace id="r-1" />);
+    expect(await screen.findByText(before, { normalizer: (s) => s })).toBeInTheDocument();
+
+    await user.click(await screen.findByRole('button', { name: 'Apply' }));
+
+    expect(await screen.findByText('Applied')).toBeInTheDocument();
+    expect(await screen.findByText(after, { normalizer: (s) => s })).toBeInTheDocument();
+    expect(screen.queryByText(before, { normalizer: (s) => s })).toBeNull();
   });
 });
