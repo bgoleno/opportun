@@ -110,6 +110,7 @@ Administrators see **Settings > Users**:
   joined. **Reset password** gives a member a temporary password, shown once. It signs them
   out everywhere, revokes their device tokens and turns off their two-factor sign-in. You
   cannot reset your own account this way.
+  Both this and opening or closing registration ask for your own password.
 - **Password pepper**: shown only when a pepper is configured (see
   [install guide section 4](../install.md#4-configuration-reference)). Names any account that
   has not signed in since the pepper was last rotated, with its last sign-in date, so you can
