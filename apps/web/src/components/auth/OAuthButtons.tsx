@@ -16,7 +16,7 @@ export function OAuthButtons() {
       </div>
       <div className="grid gap-2">
         {list.map((p) => (
-          <Button key={p} asChild variant="outline">
+          <Button key={p} asChild variant="outline" className="w-full">
             {/* A full navigation: the server redirects to the provider. */}
             <a href={oauthStartHref(p)}>Continue with {providerLabel(p)}</a>
           </Button>

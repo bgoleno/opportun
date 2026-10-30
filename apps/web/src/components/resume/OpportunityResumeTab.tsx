@@ -80,6 +80,7 @@ function AttachExistingCard({ opportunityId }: { opportunityId: string }) {
             {attach.error ? (
               <FormError message={resumeErrorMessage(attach.error) ?? errorMessage(attach.error)} />
             ) : null}
+            {/* eslint-disable-next-line opportun/no-stretched-grid-button -- full width by default, not by decision: w-fit or w-full is still to be chosen (https://github.com/bgoleno/opportun/issues/9) */}
             <Button onClick={attachChosen} disabled={attach.isPending}>
               {attach.isPending ? 'Attaching...' : 'Attach'}
             </Button>
@@ -215,6 +216,7 @@ export function OpportunityResumeTab({ opportunityId }: { opportunityId: string 
                     message={resumeErrorMessage(create.error) ?? errorMessage(create.error)}
                   />
                 ) : null}
+                {/* eslint-disable-next-line opportun/no-stretched-grid-button -- full width by default, not by decision: w-fit or w-full is still to be chosen (https://github.com/bgoleno/opportun/issues/9) */}
                 <Button onClick={createCopy} disabled={create.isPending}>
                   <FilePlus2 aria-hidden="true" />
                   {create.isPending ? 'Copying...' : 'Create tailored copy'}
