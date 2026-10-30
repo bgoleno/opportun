@@ -284,7 +284,7 @@ Application settings (read by the server process):
 | `DB_DIALECT`                                       | `sqlite`                                       | Database engine: `sqlite` (in `SQLITE_DIR`) or `postgres` (beta, [section 15](#15-postgres-optional-beta))                                                                     |
 | `DATABASE_URL` / `DATABASE_URL_FILE`               | (required for `postgres`)                      | `postgres://user:password@host:5432/db`, inline or in a file; never logged                                                                                                     |
 | `DB_POOL_MAX`                                      | `10`                                           | Postgres connection pool size                                                                                                                                                  |
-| `DB_SSL`                                           | `disable` for localhost, else `require`        | Postgres TLS: `disable`, `require` (encrypted) or `verify-full` (certificate and host checked); `sslmode` in the URL is honored when unset                                     |
+| `DB_SSL`                                           | `disable` for localhost, else `require`        | Postgres TLS: `disable`, `require` (encrypted, certificate not verified) or `verify-full` (certificate and host checked); `sslmode` in the URL is honored when unset           |
 | `OPPORTUN_DEMO`                                    | (unset)                                        | `1` declares this deployment the invitation-only demo instance; see **Demo mode** below                                                                                        |
 
 **Password pepper.** `OPPORTUN_PEPPER` is an extra secret mixed into every password hash
@@ -1124,7 +1124,9 @@ server (`chmod 600`; in compose, owned by uid 10001 like `data/`, for example a 
 `POSTGRES_PASSWORD` unset, create the database yourself
 (`CREATE DATABASE opportun TEMPLATE template0 LOCALE_PROVIDER libc LC_COLLATE 'C' LC_CTYPE 'C' ENCODING 'UTF8'`),
 point `DATABASE_URL` (or `DATABASE_URL_FILE`) at it and keep `DB_SSL=require` or
-`verify-full`.
+`verify-full`. `require` encrypts the connection but does not verify the server's certificate,
+so use `verify-full` whenever the database is reached over a network you do not control (see
+[SECURITY.md](../SECURITY.md#deliberate-deviations)).
 
 ### Moving an existing SQLite installation to Postgres
 

@@ -55,7 +55,8 @@ describe('loadConfig: database', () => {
     if (db.dialect !== 'postgres') return;
     expect(db.url).toBe(REMOTE_URL);
     expect(db.poolMax).toBe(10);
-    // Not a loopback host: TLS by default.
+    // Not a loopback host: TLS by default. 'require' is encrypted but unverified, a deliberate
+    // default documented in SECURITY.md (issue #12); change them together.
     expect(db.ssl).toBe('require');
   });
 
