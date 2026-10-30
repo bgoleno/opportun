@@ -136,10 +136,16 @@ export async function expiredKeyHint(
  * Replaces where AI calls go for one app's database: the policy (provider, model, endpoint)
  * and the key. Only the end-to-end mock (src/testSupport, OPPORTUN_AI_MOCK=1) sets one; the
  * budget, prompts and the task_runs ledger still run as usual.
+ *
+ * `allowLoopbackHttp` is the override's own declaration that its policy points at plain-http
+ * loopback (issue #13). It is stated by the override rather than inferred from the override
+ * existing, so registering one can never silently flip the operator's
+ * OPPORTUN_AI_ALLOW_LOOPBACK_HTTP off switch for a caller that did not ask for it.
  */
 export interface AiOverride {
   policyFor(task: TaskKey): ModelPolicy;
   getKey(provider: string): string;
+  allowLoopbackHttp: boolean;
 }
 
 const overrides = new WeakMap<Db, AiOverride>();
@@ -200,14 +206,17 @@ export async function buildAiDeps(
   } = {},
 ): Promise<AiDeps> {
   const override = overrides.get(db);
-  // An AiOverride (the end-to-end mock, testSupport/mockAi.ts) always points its policy at
-  // this same process's own loopback (never production: that module's own header comment),
-  // so it needs the allowance regardless of the operator's real flag -- the mock's existence
-  // at all is already a stronger signal than any env var, the same reasoning aiAvailable above
-  // already uses (overrides.has(db) alone answers its own question).
+  // An AiOverride (the end-to-end mock, testSupport/mockAi.ts) points its policy at this same
+  // process's own loopback, so it declares its own allowance (AiOverride.allowLoopbackHttp)
+  // instead of the allowance following from the override merely existing (issue #13). The
+  // override is env-gated (OPPORTUN_AI_MOCK=1) and loudly warned about, but nothing structural
+  // keeps it out of a running server, so a correctly configured production is the only thing
+  // that keeps it off. While one is registered, policyFor above ignores the user's stored
+  // policies, so a user-supplied baseUrl is never fetched under the override's allowance.
   const allowLoopbackHttp =
-    override !== undefined ||
-    (opts.allowLoopbackHttp ?? process.env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1');
+    override?.allowLoopbackHttp ??
+    opts.allowLoopbackHttp ??
+    process.env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1';
   return {
     getKey: async (provider) =>
       override === undefined ? getProviderKey(db, ctx, provider) : override.getKey(provider),
