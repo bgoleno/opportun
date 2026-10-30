@@ -13,7 +13,7 @@ const EDIT = {
 describe('SuggestionCard', () => {
   it('renders the find text as a deletion and the replacement as an insertion', async () => {
     mockApi({});
-    renderWithProviders(<SuggestionCard resumeId="r1" sessionId="s1" edit={EDIT} />);
+    renderWithProviders(<SuggestionCard sessionId="s1" edit={EDIT} />);
     const del = await screen.findByRole('deletion');
     const ins = screen.getByRole('insertion');
     expect(del).toHaveTextContent(EDIT.find, { normalizeWhitespace: false });
@@ -32,7 +32,7 @@ describe('SuggestionCard', () => {
     const { calls } = mockApi({
       'POST /tailoring/s1/suggestions/apply': { results: [{ index: 0, outcome: 'applied' }] },
     });
-    renderWithProviders(<SuggestionCard resumeId="r1" sessionId="s1" edit={EDIT} />);
+    renderWithProviders(<SuggestionCard sessionId="s1" edit={EDIT} />);
     await user.click(await screen.findByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(screen.getByText('Applied')).toBeInTheDocument());
     const applies = calls.filter((c) => c.path === '/tailoring/s1/suggestions/apply');
@@ -54,7 +54,7 @@ describe('SuggestionCard', () => {
         results: [{ index: 0, outcome: 'already_consumed' }],
       },
     });
-    renderWithProviders(<SuggestionCard resumeId="r1" sessionId="s1" edit={EDIT} />);
+    renderWithProviders(<SuggestionCard sessionId="s1" edit={EDIT} />);
     await user.click(await screen.findByRole('button', { name: 'Apply' }));
     expect(
       await screen.findByText('Already changed by another edit you applied'),
@@ -71,7 +71,7 @@ describe('SuggestionCard', () => {
         body: { error: { code: 'edit_target_missing', index: 0 } },
       }),
     });
-    renderWithProviders(<SuggestionCard resumeId="r1" sessionId="s1" edit={EDIT} />);
+    renderWithProviders(<SuggestionCard sessionId="s1" edit={EDIT} />);
     await user.click(await screen.findByRole('button', { name: 'Apply' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/no longer in the document/i);
     expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();

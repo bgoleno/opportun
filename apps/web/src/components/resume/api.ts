@@ -260,13 +260,24 @@ export function useTailoringSession(resumeId: string) {
 export type ApplyEditOutcome = 'applied' | 'already_consumed';
 
 /**
- * Applies one suggested edit, then refetches the document's text: the Document panel on the
- * same page reads rk.text, and without this kept showing the pre-edit text until a reload
- * (https://github.com/bgoleno/opportun/issues/8). The match report is deliberately not
- * refetched: its `stale` flag tracks completed sessions, not applied edits, so the server
- * would answer with the same report. useCompleteSession is what refreshes it.
+ * Applies one suggested edit, then refreshes the resume data the apply changed: the text the
+ * Document panel shows, which otherwise kept the pre-edit text until a reload
+ * (https://github.com/bgoleno/opportun/issues/8), and for local_file the row's new docRef and
+ * updatedAt. Like the other resume mutations here it invalidates the rk.resumes prefix, with
+ * these exceptions, each deliberate:
+ *
+ * - It refreshes after an error too: the server may have written the document before failing
+ *   (a 500 from audit() after updateResumeDocRef), and a 409 edit_target_missing means the
+ *   cached text no longer matches the document.
+ * - It skips already_consumed: that request wrote nothing, and the apply that consumed the
+ *   text refreshes on its own.
+ * - It never refetches the match report: its `stale` flag tracks completed sessions, not
+ *   applied edits, so the server would answer with the same report. useCompleteSession is
+ *   what refreshes it.
+ * - It does not wait for the refetch: the card's outcome must not hang on a read (api() has no
+ *   timeout) when the write it reports has already happened.
  */
-export function useApplyEdit(resumeId: string, sessionId: string) {
+export function useApplyEdit(sessionId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (edit: Edit): Promise<ApplyEditOutcome> => {
@@ -274,9 +285,24 @@ export function useApplyEdit(resumeId: string, sessionId: string) {
         `/tailoring/${enc(sessionId)}/suggestions/apply`,
         { method: 'POST', body: { edits: [{ find: edit.find, replace: edit.replace }] } },
       );
-      return res.results[0]!.outcome;
+      const result = res.results[0];
+      // One edit sent, so one result is the contract. Without it the edit may still have been
+      // written, so say the outcome is unknown rather than guess either way.
+      if (result === undefined) {
+        throw new Error(
+          'The server did not say whether this edit was applied. Check the document before applying it again.',
+        );
+      }
+      return result.outcome;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: rk.text(resumeId) }),
+    onSettled: (outcome) => {
+      if (outcome === 'already_consumed') return;
+      void qc.invalidateQueries({
+        queryKey: rk.resumes,
+        // rk.match keys: ['resumes', 'match', ...].
+        predicate: (query) => query.queryKey[1] !== 'match',
+      });
+    },
   });
 }
 
