@@ -3,7 +3,7 @@ import { MockLanguageModelV4 } from 'ai/test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createLanguageModel } from '../../../packages/ai/src/providers';
 import { validateAiKey } from '../src/lib/aiKeyValidate';
-import { setProviderResolveOverride } from '../src/lib/ai';
+import { setAiOverride, setProviderResolveOverride } from '../src/lib/ai';
 import { captureLogs } from './helpers';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
@@ -164,6 +164,43 @@ describe('openai_compatible keys', () => {
     expect(v.ok).toBe(false);
     expect(v.error).toMatch(/^unverifiable/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('openai_compatible keys under an AiOverride (issue #13)', () => {
+  const override = (allowLoopbackHttp: boolean) => ({
+    policyFor: () => ({
+      provider: 'openai_compatible' as const,
+      model: 'mock-model',
+      baseUrl: 'http://127.0.0.1:1/mock',
+      maxOutputTokens: 1,
+    }),
+    getKey: () => 'mock-key',
+    allowLoopbackHttp,
+  });
+
+  it("honors the override's own loopback allowance, and validates its policy, not the stored ones", async () => {
+    const { app, a } = await boot();
+    setProviderResolveOverride(app.db, resolvePublic);
+    await putPolicy(a, 'comms.classify', {
+      provider: 'openai_compatible',
+      model: 'llama-4',
+      baseUrl: 'https://llm.example.com/v1',
+    });
+    setAiOverride(app.db, override(true));
+    fetchMock.mockResolvedValue(json(200, { data: [{ id: 'mock-model' }] }));
+    const v = (await addKey(a, 'openai_compatible')).json().validation;
+    // Only the override's endpoint is contacted: a stored policy cannot steer validation.
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(['http://127.0.0.1:1/mock/models']);
+    expect(v.ok).toBe(true);
+  });
+
+  it("does not let the override's mere presence switch loopback http on", async () => {
+    const { app, a } = await boot();
+    setAiOverride(app.db, override(false));
+    const v = (await addKey(a, 'openai_compatible')).json().validation;
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(v.ok).toBe(false);
   });
 });
 

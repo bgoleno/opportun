@@ -45,7 +45,7 @@ function MailFiltersSettings() {
   const deny = rules.filter((r) => r.effect === 'deny');
 
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-1 gap-6">
       <Card>
         <CardHeader>
           <CardTitle>What Opportun watches</CardTitle>
@@ -70,7 +70,7 @@ function MailFiltersSettings() {
             fixed for good.
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-6">
+        <CardContent className="grid grid-cols-1 gap-6">
           <RuleList
             title="Allow list"
             description="Always let through, whatever else would have filtered them."

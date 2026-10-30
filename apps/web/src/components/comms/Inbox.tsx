@@ -81,9 +81,7 @@ export function Inbox({ initialTab }: { initialTab?: InboxTab }) {
         actions={<SyncControl />}
       />
       <Tabs defaultValue={initialTab ?? 'needs_review'}>
-        {/* Five tabs with counts are wider than a phone; scroll the strip instead of letting it
-            widen the whole page past the viewport (which clipped every row on the right). */}
-        <TabsList data-tour="inbox-tabs" className="max-w-full justify-start overflow-x-auto">
+        <TabsList data-tour="inbox-tabs">
           {TABS.map((t) => (
             <TabsTrigger key={t.tab} value={t.tab}>
               {t.label}
@@ -92,7 +90,9 @@ export function Inbox({ initialTab }: { initialTab?: InboxTab }) {
           ))}
         </TabsList>
         {TABS.map((t) => (
-          <TabsContent key={t.tab} value={t.tab} className="grid gap-3 pt-2">
+          // grid-cols-1, not a bare grid: a bare grid's one track is auto and grows to the widest
+          // row's min-content, so a long sender address widened every row past the phone screen.
+          <TabsContent key={t.tab} value={t.tab} className="grid grid-cols-1 gap-3 pt-2">
             {t.note ? <p className="text-sm text-muted-foreground">{t.note}</p> : null}
             <InboxList tab={t.tab} mode={t.mode} empty={t.empty} />
           </TabsContent>
@@ -271,7 +271,7 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
   const clear = () => setSelected(new Set());
 
   return (
-    <div className="grid gap-3">
+    <div className="grid grid-cols-1 gap-3">
       {selectable ? (
         <FilterBar
           q={q}
@@ -294,7 +294,7 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
       ) : data.items.length === 0 ? (
         <p className="text-sm text-muted-foreground">{empty}</p>
       ) : (
-        <ul className="grid gap-3" aria-label="Messages">
+        <ul className="grid grid-cols-1 gap-3" aria-label="Messages">
           {data.items.map((c) =>
             tab === 'blocked' ? (
               <BlockedRow key={c.id} comm={c} />
