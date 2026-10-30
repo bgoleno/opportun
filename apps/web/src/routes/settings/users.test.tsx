@@ -35,6 +35,7 @@ const USERS = [
   },
 ];
 const TEMP = 'Tmp-Password-From-Server-123456';
+const ADMIN_PASSWORD = 'the-admins-own-password';
 
 describe('UsersCard', () => {
   it('lists accounts with role and 2FA, and offers no reset on your own row', async () => {
@@ -67,11 +68,16 @@ describe('UsersCard', () => {
     });
     renderWithProviders(<UsersCard currentUserId="admin-1" />);
     await user.click(await screen.findByRole('button', { name: 'Reset password for Bob Member' }));
-    const confirm = await screen.findByRole('dialog', { name: 'Reset password for Bob Member?' });
+    const confirm = await screen.findByRole('dialog', { name: 'Confirm your password' });
+    expect(confirm).toHaveTextContent(/Bob Member/);
     expect(confirm).toHaveTextContent(/signs them out everywhere/);
     expect(confirm).toHaveTextContent(/two-factor/i);
+    // Nothing is sent until the admin has typed their own password (issue #10).
+    await user.click(within(confirm).getByRole('button', { name: 'Continue' }));
+    expect(await within(confirm).findByText('Enter your current password.')).toBeInTheDocument();
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
-    await user.click(within(confirm).getByRole('button', { name: 'Reset password' }));
+    await user.type(within(confirm).getByLabelText('Current password'), ADMIN_PASSWORD);
+    await user.click(within(confirm).getByRole('button', { name: 'Continue' }));
 
     const shown = await screen.findByRole('dialog', { name: 'Temporary password' });
     expect(within(shown).getByLabelText('Temporary password for Bob Member')).toHaveValue(TEMP);
@@ -87,28 +93,32 @@ describe('UsersCard', () => {
       expect(screen.queryByRole('dialog', { name: 'Temporary password' })).toBeNull(),
     );
     expect(document.body.innerHTML).not.toContain(TEMP);
+    expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ password: ADMIN_PASSWORD });
+    // The admin's own password does not outlive the dialog either.
+    expect(document.body.innerHTML).not.toContain(ADMIN_PASSWORD);
   });
 
-  it('reports a failed reset', async () => {
+  it('keeps the dialog open with an inline message for a wrong password, and shows no temporary password', async () => {
     const user = userEvent.setup();
     mockApi({
       'GET /admin/users': { items: USERS },
       'POST /admin/users/member-1/reset-password': () => ({
         status: 403,
-        body: { error: { code: 'forbidden' } },
+        body: { error: { code: 'invalid_password' } },
       }),
     });
     renderWithProviders(<UsersCard currentUserId="admin-1" />);
     await user.click(await screen.findByRole('button', { name: 'Reset password for Bob Member' }));
-    const confirm = await screen.findByRole('dialog', { name: 'Reset password for Bob Member?' });
-    await user.click(within(confirm).getByRole('button', { name: 'Reset password' }));
-    expect(await screen.findByText('Could not reset the password')).toBeInTheDocument();
+    const confirm = await screen.findByRole('dialog', { name: 'Confirm your password' });
+    await user.type(within(confirm).getByLabelText('Current password'), 'wrong-password');
+    await user.click(within(confirm).getByRole('button', { name: 'Continue' }));
+    expect(await within(confirm).findByText('That is not your current password.')).toBeVisible();
     expect(screen.queryByRole('dialog', { name: 'Temporary password' })).toBeNull();
   });
 });
 
 describe('RegistrationCard', () => {
-  it('shows the current state and toggles it', async () => {
+  it('shows the current state and toggles it once the password is confirmed', async () => {
     const user = userEvent.setup();
     let open = false;
     const { calls } = mockApi({
@@ -121,8 +131,34 @@ describe('RegistrationCard', () => {
     renderWithProviders(<RegistrationCard />);
     expect(await screen.findByText('Registration is closed.')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Open registration' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Confirm your password' });
+    expect(confirm).toHaveTextContent(/Opening registration/);
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+    await user.type(within(confirm).getByLabelText('Current password'), ADMIN_PASSWORD);
+    await user.click(within(confirm).getByRole('button', { name: 'Continue' }));
     expect(await screen.findByText('Registration is open.')).toBeInTheDocument();
-    expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ open: true });
+    expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({
+      open: true,
+      password: ADMIN_PASSWORD,
+    });
     expect(screen.getByRole('button', { name: 'Close registration' })).toBeInTheDocument();
+  });
+
+  it('leaves registration as it was when the password is wrong', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /admin/registration': () => ({ open: false }),
+      'PATCH /admin/registration': () => ({
+        status: 403,
+        body: { error: { code: 'invalid_password' } },
+      }),
+    });
+    renderWithProviders(<RegistrationCard />);
+    await user.click(await screen.findByRole('button', { name: 'Open registration' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Confirm your password' });
+    await user.type(within(confirm).getByLabelText('Current password'), 'wrong-password');
+    await user.click(within(confirm).getByRole('button', { name: 'Continue' }));
+    expect(await within(confirm).findByText('That is not your current password.')).toBeVisible();
+    expect(screen.getByText('Registration is closed.')).toBeInTheDocument();
   });
 });

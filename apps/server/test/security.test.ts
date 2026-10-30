@@ -161,7 +161,7 @@ describe('csrf', () => {
     const noCookie = await a.inject({
       method: 'PATCH',
       url: '/api/v1/admin/registration',
-      payload: { open: true },
+      payload: { open: true, password: PASSWORD },
       cookies: { [SESSION]: session },
       headers: { 'x-csrf-token': csrf },
     });
@@ -170,7 +170,7 @@ describe('csrf', () => {
     const patch = await a.inject({
       method: 'PATCH',
       url: '/api/v1/admin/registration',
-      payload: { open: true },
+      payload: { open: true, password: PASSWORD },
       cookies: { [SESSION]: session, [CSRF]: csrf },
     });
     expect(patch.statusCode).toBe(403);

@@ -31,7 +31,7 @@ const DEFAULT_PROMPT_NAME = 'default';
 // on hostile mail, from imports, or from scraped postings). Unfenced variables are only what the
 // user or the app writes; tasks.test.ts keeps that reviewed list.
 
-const TailorInput = vars('resume_rules', 'base_resume', 'jd_untrusted', 'match_report');
+const TailorInput = vars('resume_rules', 'base_resume', 'jd_untrusted', 'match_report_untrusted');
 const MatchInput = vars('resume_text', 'jd_untrusted');
 const RankInput = vars('role_target', 'posting_untrusted');
 const RefineInput = vars('current_prompt', 'feedback_summary');

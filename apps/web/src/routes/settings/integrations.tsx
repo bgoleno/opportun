@@ -47,7 +47,7 @@ const SCOPE_LABELS = new Map([
 function IntegrationsSettings() {
   const { google } = Route.useSearch();
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-1 gap-6">
       <GoogleCard flash={google} />
       <GmailCard />
       <DevicesCard />
@@ -88,7 +88,7 @@ export function GoogleCard({
           (to read a resume and apply the edits you accept).
         </CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-6">
+      <CardContent className="grid grid-cols-1 gap-6">
         <div className="grid gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
           <p>
             Google lists the Drive permission as access to all your files. It is that broad because

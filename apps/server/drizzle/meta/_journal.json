@@ -260,6 +260,13 @@
       "when": 1792697137331,
       "tag": "0036_users_last_seen_at",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1792750000000,
+      "tag": "0037_fence_match_report",
+      "breakpoints": true
     }
   ]
 }

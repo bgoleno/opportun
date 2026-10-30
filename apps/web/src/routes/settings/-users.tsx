@@ -1,9 +1,10 @@
 // Settings > Users (admins only): every account on the instance, the password reset of last
 // resort (it also turns off the account's two-factor sign-in), and the registration toggle.
+// Both change who can sign in, so both re-ask for the admin's own password (a stolen session
+// cookie alone is not enough, issue #10).
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Copy } from 'lucide-react';
 import { useState } from 'react';
-import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FormError } from '@/components/FormError';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -29,6 +30,7 @@ import {
 import { toast } from '@/components/ui/toast';
 import { api, errorMessage } from '@/lib/api';
 import { relativeTime } from './-devices';
+import { PasswordDialog, passwordError } from './-twoFactor';
 
 export interface AdminUser {
   id: string;
@@ -57,20 +59,19 @@ export function UsersCard({ currentUserId }: { currentUserId: string }) {
   const [target, setTarget] = useState<AdminUser | null>(null);
   const [issued, setIssued] = useState<{ user: AdminUser; password: string } | null>(null);
 
-  async function reset(u: AdminUser) {
+  /** Resolves to an error message for the password dialog to show, or null on success. */
+  async function reset(u: AdminUser, password: string): Promise<string | null> {
     try {
       const res = await api<{ temporaryPassword: string }>(
         `/admin/users/${encodeURIComponent(u.id)}/reset-password`,
-        { method: 'POST' },
+        { method: 'POST', body: { password } },
       );
+      setTarget(null);
       setIssued({ user: u, password: res.temporaryPassword });
       void qc.invalidateQueries({ queryKey: usersQuery.queryKey });
+      return null;
     } catch (err) {
-      toast({
-        title: 'Could not reset the password',
-        description: errorMessage(err),
-        variant: 'destructive',
-      });
+      return passwordError(err);
     }
   }
 
@@ -144,17 +145,13 @@ export function UsersCard({ currentUserId }: { currentUserId: string }) {
           </Table>
         )}
       </CardContent>
-      <ConfirmDialog
+      <PasswordDialog
         open={target !== null}
         onOpenChange={(open) => {
           if (!open) setTarget(null);
         }}
-        title={`Reset password for ${target?.displayName ?? ''}?`}
-        description="This sets a new temporary password, signs them out everywhere, revokes their device tokens and turns off their two-factor sign-in. You will see the temporary password once, to hand over yourself."
-        confirmLabel="Reset password"
-        onConfirm={async () => {
-          if (target !== null) await reset(target);
-        }}
+        description={`Reset the password for ${target?.displayName ?? ''}? This sets a new temporary password, signs them out everywhere, revokes their device tokens and turns off their two-factor sign-in. You will see the temporary password once, to hand over yourself. Enter your own password to continue.`}
+        onConfirm={async (password) => (target === null ? null : await reset(target, password))}
       />
       {issued === null ? null : (
         <TemporaryPasswordDialog
@@ -229,28 +226,25 @@ function TemporaryPasswordDialog(props: { user: AdminUser; password: string; onD
 export function RegistrationCard() {
   const qc = useQueryClient();
   const state = useQuery(registrationQuery);
-  const [busy, setBusy] = useState(false);
+  /** The state the admin asked for, held while their password is being confirmed. */
+  const [pending, setPending] = useState<boolean | null>(null);
 
-  async function set(next: boolean) {
-    setBusy(true);
+  /** Resolves to an error message for the password dialog to show, or null on success. */
+  async function set(next: boolean, password: string): Promise<string | null> {
     try {
       const res = await api<{ open: boolean }>('/admin/registration', {
         method: 'PATCH',
-        body: { open: next },
+        body: { open: next, password },
       });
       qc.setQueryData(registrationQuery.queryKey, res);
+      setPending(null);
       toast({
         title: res.open ? 'Registration opened' : 'Registration closed',
         variant: 'success',
       });
+      return null;
     } catch (err) {
-      toast({
-        title: 'Could not change registration',
-        description: errorMessage(err),
-        variant: 'destructive',
-      });
-    } finally {
-      setBusy(false);
+      return passwordError(err);
     }
   }
 
@@ -270,12 +264,20 @@ export function RegistrationCard() {
             <p role="status" className="text-sm text-muted-foreground">
               Registration is {open ? 'open' : 'closed'}.
             </p>
-            <Button variant="outline" disabled={busy} onClick={() => void set(!open)}>
+            <Button variant="outline" onClick={() => setPending(!open)}>
               {open ? 'Close registration' : 'Open registration'}
             </Button>
           </>
         )}
       </CardContent>
+      <PasswordDialog
+        open={pending !== null}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setPending(null);
+        }}
+        description={`${pending === true ? 'Opening' : 'Closing'} registration changes who can create an account on this instance. Enter your password to continue.`}
+        onConfirm={async (password) => (pending === null ? null : await set(pending, password))}
+      />
     </Card>
   );
 }
