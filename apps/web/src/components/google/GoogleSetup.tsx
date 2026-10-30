@@ -67,7 +67,7 @@ export function CopyField({ id, label, value }: { id: string; label: string; val
     }
   }
   return (
-    <div className="grid gap-1">
+    <div className="grid grid-cols-1 gap-1">
       <Label htmlFor={id}>{label}</Label>
       <div className="flex gap-2">
         <Input
@@ -121,7 +121,7 @@ export function ValidationResult({
       ? null
       : (ERROR_TEXT[validation.error] ?? `Google answered ${validation.error}.`);
   return (
-    <div className="grid gap-2 text-sm" data-testid="google-validation" role="status">
+    <div className="grid grid-cols-1 gap-2 text-sm" data-testid="google-validation" role="status">
       <p className="flex flex-wrap items-center gap-2">
         <Badge variant={chip.variant}>{chip.label}</Badge>
         <span className="text-xs text-muted-foreground">
@@ -163,7 +163,7 @@ export function DiagnoseBox() {
     <details className="rounded-md border px-3 py-2 text-sm">
       <summary className="cursor-pointer font-medium">Diagnose an error</summary>
       <form
-        className="mt-3 grid gap-2"
+        className="mt-3 grid grid-cols-1 gap-2"
         onSubmit={(e) => {
           e.preventDefault();
           diagnose.mutate(trimmed);
@@ -191,7 +191,10 @@ export function DiagnoseBox() {
         </div>
         {diagnose.error ? <FormError message={errorMessage(diagnose.error)} /> : null}
         {diagnose.data ? (
-          <div className="grid gap-1 rounded-md bg-muted/40 px-3 py-2" data-testid="diagnosis">
+          <div
+            className="grid grid-cols-1 gap-1 rounded-md bg-muted/40 px-3 py-2"
+            data-testid="diagnosis"
+          >
             <p>{diagnose.data.explanation}</p>
             <p>
               <span className="font-medium">Fix: </span>
@@ -206,14 +209,14 @@ export function DiagnoseBox() {
 
 function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
   return (
-    <li className="grid grid-cols-[1.75rem_1fr] gap-x-3 gap-y-1">
+    <li className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3 gap-y-1">
       <span
         className="flex size-7 items-center justify-center rounded-full border text-xs font-semibold"
         aria-hidden="true"
       >
         {n}
       </span>
-      <div className="grid gap-2">
+      <div className="grid grid-cols-1 gap-2">
         <h4 className="text-sm font-semibold">
           <span className="sr-only">Step {n}: </span>
           {title}
@@ -226,7 +229,11 @@ function Step({ n, title, children }: { n: number; title: string; children: Reac
 
 /** Short instruction lines under a step. */
 function Lines({ children }: { children: ReactNode }) {
-  return <ul className="grid list-disc gap-1 pl-5 text-sm text-muted-foreground">{children}</ul>;
+  return (
+    <ul className="grid grid-cols-1 list-disc gap-1 pl-5 text-sm break-words text-muted-foreground">
+      {children}
+    </ul>
+  );
 }
 
 /** The classic setup errors and their fixes; always available, AI key or not. */
@@ -257,9 +264,9 @@ export function Troubleshooting() {
         If Google shows an error while you connect, look up its code here. This is a reference of
         possible error responses and their fixes, not a list of issues with your setup.
       </p>
-      <dl className="mt-3 grid gap-3" data-testid="google-troubleshooting">
+      <dl className="mt-3 grid grid-cols-1 gap-3" data-testid="google-troubleshooting">
         {TROUBLESHOOTING.map((t) => (
-          <div key={t.code} className="grid gap-1">
+          <div key={t.code} className="grid grid-cols-1 gap-1">
             <dt className="font-mono text-xs font-semibold">{t.code}</dt>
             <dd className="text-muted-foreground">{t.fix}</dd>
           </div>
@@ -323,7 +330,10 @@ export function GoogleSetupGuide({ status }: { status: GoogleStatus }) {
   }
 
   return (
-    <section className="grid gap-4 border-t pt-6" aria-labelledby="google-setup-heading">
+    <section
+      className="grid grid-cols-1 gap-4 border-t pt-6"
+      aria-labelledby="google-setup-heading"
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 id="google-setup-heading" className="text-sm font-semibold">
           Guided setup
@@ -342,7 +352,7 @@ export function GoogleSetupGuide({ status }: { status: GoogleStatus }) {
         Google has no API for creating OAuth clients, so this takes a few minutes in the Google
         Cloud console. Each link opens the right page in a new tab.
       </p>
-      <ol className="grid gap-5">
+      <ol className="grid grid-cols-1 gap-5">
         {open ? (
           <>
             <Step n={0} title="Choose your Google account">
@@ -496,12 +506,12 @@ export function GoogleSetupGuide({ status }: { status: GoogleStatus }) {
           </>
         ) : null}
         <Step n={6} title="Paste the Client ID and secret">
-          <form onSubmit={submit} className="grid gap-3">
+          <form onSubmit={submit} className="grid grid-cols-1 gap-3">
             <p className="text-sm text-muted-foreground">
               Copy both from the dialog Google shows after Create. Saving checks them with Google
               right away.
             </p>
-            <div className="grid gap-2">
+            <div className="grid grid-cols-1 gap-2">
               <Label htmlFor="google-client-id">Client id</Label>
               <Input
                 id="google-client-id"
@@ -511,7 +521,7 @@ export function GoogleSetupGuide({ status }: { status: GoogleStatus }) {
                 onChange={(e) => setClientId(e.currentTarget.value)}
               />
             </div>
-            <div className="grid gap-2">
+            <div className="grid grid-cols-1 gap-2">
               <Label htmlFor="google-client-secret">Client secret</Label>
               <Input
                 id="google-client-secret"

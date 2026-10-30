@@ -18,7 +18,10 @@ function TabsList({ className, ...props }: React.ComponentProps<typeof TabsPrimi
     <TabsPrimitive.List
       data-slot="tabs-list"
       className={cn(
-        'inline-flex h-9 w-fit items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground',
+        // max-w-full + overflow-x-auto: a strip of tabs wider than a phone scrolls inside itself
+        // instead of widening the page. justify-start, not center, so the first tab stays
+        // reachable when it scrolls (a centered overflow clips its leading edge unreachably).
+        'inline-flex h-9 w-fit max-w-full items-center justify-start overflow-x-auto rounded-lg bg-muted p-1 text-muted-foreground',
         className,
       )}
       {...props}

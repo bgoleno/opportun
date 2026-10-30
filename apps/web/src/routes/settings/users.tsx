@@ -23,7 +23,9 @@ function UsersSettings() {
     );
   }
   return (
-    <div className="grid gap-6">
+    // grid-cols-1: the accounts table scrolls inside its card only if the card may be narrower
+    // than the table, which a bare grid's auto track does not allow.
+    <div className="grid grid-cols-1 gap-6">
       <UsersCard currentUserId={user.id} />
       <PepperRotationCard />
       <RegistrationCard />
