@@ -134,6 +134,13 @@
       "when": 1792697137331,
       "tag": "0018_users_last_seen_at",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792750000000,
+      "tag": "0019_fence_match_report",
+      "breakpoints": true
     }
   ]
 }

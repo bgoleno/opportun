@@ -375,6 +375,9 @@ function loadPostgres(env: NodeJS.ProcessEnv): PostgresConfig {
       `DB_SSL=${fromEnv} contradicts sslmode=${fromUrl} in DATABASE_URL; set one of them`,
     );
   }
+  // 'require' is encrypted but unverified (db/client.ts pgPoolConfig): a deliberate default so a
+  // managed or remote database works without a CA, recorded under "Deliberate deviations" in
+  // SECURITY.md (issue #12). Changing this default means changing that entry with it.
   const ssl = fromEnv ?? fromUrl ?? (hosts.every(isLoopbackHost) ? 'disable' : 'require');
   const rawPool = env.DB_POOL_MAX;
   let poolMax = DEFAULT_POOL_MAX;

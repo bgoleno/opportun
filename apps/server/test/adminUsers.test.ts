@@ -44,8 +44,20 @@ function me(app: FastifyInstance, c: TestClient) {
   });
 }
 
-function reset(c: TestClient, id: string) {
-  return c.request({ method: 'POST', url: `/api/v1/admin/users/${id}/reset-password` });
+function reset(c: TestClient, id: string, password: string | null = PASSWORD) {
+  return c.request({
+    method: 'POST',
+    url: `/api/v1/admin/users/${id}/reset-password`,
+    payload: password === null ? {} : { password },
+  });
+}
+
+function setRegistration(c: TestClient, open: boolean, password: string | null = PASSWORD) {
+  return c.request({
+    method: 'PATCH',
+    url: '/api/v1/admin/registration',
+    payload: password === null ? { open } : { open, password },
+  });
 }
 
 /** Reopens registration directly (same mechanism seedDemo.ts uses between its own pinned
@@ -362,6 +374,104 @@ describe('POST /admin/users/:id/reset-password', () => {
   });
 });
 
+// Issue #10: a stolen admin session cookie must not be enough to take over an account or to
+// reopen registration, the same line lib/reauth.ts draws for 2FA and device tokens. Each case
+// asserts the absence of damage (state byte-identical afterwards), not only the error.
+describe('admin credential changes need the current password (issue #10)', () => {
+  async function snapshot(app: FastifyInstance, userId: string) {
+    const row = (await app.db.select().from(users).where(eq(users.id, userId)).get())!;
+    const open = await app.db
+      .select()
+      .from(settings)
+      .where(eq(settings.key, REGISTRATION_OPEN_KEY))
+      .get();
+    return {
+      user: { hash: row.passwordHash, totp: row.totpEnabled, updatedAt: row.updatedAt },
+      sessions: (await app.db.select().from(sessions).where(eq(sessions.userId, userId)).all())
+        .length,
+      registration: open?.value ?? null,
+      resets: (
+        await app.db.select().from(auditLog).where(eq(auditLog.event, 'admin.password_reset')).all()
+      ).length,
+    };
+  }
+
+  it.each([
+    ['a wrong password', 'not-the-password' as string | null, 403, 'invalid_password'],
+    ['no password', null, 400, undefined],
+  ])('reset-password with %s changes nothing', async (_name, password, status, code) => {
+    const { app, a, b } = await boot();
+    const before = await snapshot(app, b.userId);
+    const res = await reset(a, b.userId, password);
+    expect(res.statusCode, res.body).toBe(status);
+    if (code !== undefined) expect(res.json().error.code).toBe(code);
+    expect(await snapshot(app, b.userId)).toEqual(before);
+    // The target can still sign in with their own password and keeps their session.
+    expect((await login(app, B_EMAIL)).statusCode).toBe(200);
+    expect((await me(app, b)).statusCode).toBe(200);
+  });
+
+  it('audits a wrong password as a failed re-authentication, never the password itself', async () => {
+    const { app, a, b } = await boot();
+    await reset(a, b.userId, 'not-the-password');
+    const rows = await app.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.event, 'auth.reauth_failed'))
+      .all();
+    expect(rows).toHaveLength(1);
+    expect(JSON.stringify(rows[0])).toContain('admin.reset_password');
+    expect(JSON.stringify(rows[0])).not.toContain('not-the-password');
+  });
+
+  it.each([
+    ['a wrong password', 'not-the-password' as string | null, 403],
+    ['no password', null, 400],
+  ])('reopening registration with %s leaves it closed', async (_name, password, status) => {
+    const { app, a, b } = await boot();
+    const before = await snapshot(app, b.userId);
+    const res = await setRegistration(a, true, password);
+    expect(res.statusCode, res.body).toBe(status);
+    expect(await snapshot(app, b.userId)).toEqual(before);
+    expect((await a.request({ method: 'GET', url: '/api/v1/admin/registration' })).json()).toEqual({
+      open: false,
+    });
+  });
+
+  it('closing registration also needs the password', async () => {
+    const { a } = await boot();
+    expect((await setRegistration(a, true)).statusCode).toBe(200);
+    expect((await setRegistration(a, false, 'not-the-password')).statusCode).toBe(403);
+    expect((await a.request({ method: 'GET', url: '/api/v1/admin/registration' })).json()).toEqual({
+      open: true,
+    });
+    expect((await setRegistration(a, false)).statusCode).toBe(200);
+  });
+
+  it('answers a non-admin with forbidden before it checks any password', async () => {
+    const { a, b } = await boot();
+    const res = await setRegistration(b, true, 'not-the-password');
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('forbidden');
+    expect((await reset(b, a.userId, 'not-the-password')).json().error.code).toBe('forbidden');
+  });
+
+  it('shares the re-authentication rate limit, so the password cannot be guessed', async () => {
+    const { a, b } = await boot();
+    // The harness already spent some of the 10-per-15-minutes budget opening and closing
+    // registration, so assert the shape: refused as 403 until the budget runs out, then 429,
+    // and once it has, even the correct password is not tried.
+    const codes: number[] = [];
+    for (let i = 0; i < 12; i++) codes.push((await reset(a, b.userId, `guess-${i}`)).statusCode);
+    const firstLimited = codes.indexOf(429);
+    expect(firstLimited).toBeGreaterThan(0);
+    expect(firstLimited).toBeLessThanOrEqual(10);
+    expect(codes.slice(0, firstLimited).every((c) => c === 403)).toBe(true);
+    expect(codes.slice(firstLimited).every((c) => c === 429)).toBe(true);
+    expect((await reset(a, b.userId)).statusCode).toBe(429);
+  });
+});
+
 describe('pepper through the app', () => {
   it('new hashes use the pepper; a pre-pepper hash still signs in and is upgraded', async () => {
     const { app } = await testApp({ peppers: pepperSet(1, { 1: PEPPER }) });
@@ -392,6 +502,7 @@ describe('pepper through the app', () => {
         url: `/api/v1/admin/users/${b.id}/reset-password`,
         cookies: { opportun_session: session, opportun_csrf: csrf },
         headers: { 'x-csrf-token': csrf },
+        payload: { password: PASSWORD },
       });
       const { temporaryPassword } = reset.json() as { temporaryPassword: string };
       const bHash = (await app.db.select().from(users).where(eq(users.id, b.id)).get())!

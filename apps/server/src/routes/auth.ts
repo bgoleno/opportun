@@ -112,6 +112,9 @@ const DisableBody = SecondFactorShape.extend({ password: CurrentPassword }).refi
 );
 const ActivateBody = z.object({ code: TotpCode, password: CurrentPassword });
 const EnrollBody = z.object({ password: CurrentPassword });
+/** Admin actions that change who can sign in: the admin proves their own password (issue #10). */
+const RegistrationChangeBody = RegistrationBody.extend({ password: CurrentPassword });
+const AdminResetBody = z.object({ password: CurrentPassword });
 const PendingResponse = z.object({ requires2fa: z.literal(true), pendingToken: z.string() });
 const EnrollResponse = z.object({
   secret: z.string(),
@@ -698,18 +701,29 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   api.patch(
     '/admin/registration',
     {
+      // Reopening registration lets an attacker mint a durable account that outlives a
+      // rotated admin password, so a stolen session cookie alone must not be enough (issue
+      // #10, the same line lib/reauth.ts draws for 2FA and device tokens).
+      preHandler: reauthLimits(db),
       schema: {
-        body: RegistrationBody,
+        body: RegistrationChangeBody,
         response: {
           200: RegistrationBody,
           401: ErrorResponse,
           403: ErrorResponse,
+          429: ErrorResponse,
         },
       },
     },
     async (req, reply) => {
       const ctx = requireUser(req);
       if (!ctx.isAdmin) return fail(reply, 403, 'forbidden');
+      const confirmed = await confirmPassword(req, reply, {
+        userId: ctx.userId,
+        password: req.body.password,
+        action: 'admin.registration',
+      });
+      if (!confirmed) return reply;
       const { open } = req.body;
       const now = Date.now();
       await db
@@ -822,14 +836,21 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   api.post(
     '/admin/users/:id/reset-password',
     {
+      // The most account-takeover-shaped action in the API: it must cost more than a cookie
+      // (issue #10), so the admin re-enters their own password, rate limited with the other
+      // re-authentication routes. An admin with no usable password (an OAuth-only account)
+      // sets one first, exactly as for 2FA and device tokens.
+      preHandler: reauthLimits(db),
       schema: {
         params: UserIdParams,
+        body: AdminResetBody,
         response: {
           200: z.object({ temporaryPassword: z.string() }),
           401: ErrorResponse,
           403: ErrorResponse,
           404: ErrorResponse,
           409: ErrorResponse,
+          429: ErrorResponse,
         },
       },
     },
@@ -840,6 +861,13 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // An admin changes their own password with the current one; a stolen admin session must
       // not be able to lock the real admin out by resetting it.
       if (targetId === ctx.userId) return fail(reply, 409, 'self_reset');
+      // Before the target lookup, so a wrong password learns nothing about which ids exist.
+      const confirmed = await confirmPassword(req, reply, {
+        userId: ctx.userId,
+        password: req.body.password,
+        action: 'admin.reset_password',
+      });
+      if (!confirmed) return reply;
       const target = await db
         .select({ id: users.id })
         .from(users)

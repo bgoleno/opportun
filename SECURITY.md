@@ -41,9 +41,8 @@ The full security design is [docs/design.md](docs/design.md), section 7. In shor
   stored records; its responses only acknowledge what was submitted and whether it
   matched an existing record); a strict Content Security Policy; AES-256-GCM encryption of
   stored secrets under a master key kept outside the database; untrusted content fenced in
-  AI prompts, except that model output derived from it (the tailoring match report) is not
-  itself fenced before it reenters a later prompt (a known gap, not a deliberate deviation,
-  tracked in #339), with no AI output
+  AI prompts, including model output derived from it (the tailoring match report is fenced
+  as `match_report_untrusted` before it reenters a later prompt), with no AI output
   able to send an application, email or message without your click; an SSRF-safe fetch
   layer (`lib/safeFetch.ts`) for adapter HTTP to job sites, ATS APIs and captured links; the
   AI provider's `openai_compatible` base URL path goes through its own guarded fetch
@@ -61,8 +60,7 @@ The full security design is [docs/design.md](docs/design.md), section 7. In shor
 These are known, intentional departures from the requirements' strictest reading, kept
 here so a reviewer does not have to rediscover them. (This list covers deliberate
 trade-offs only: an unintended gap is tracked as an issue instead, not listed here
-since it was not a deliberate choice. Currently the tailoring match report's prompt
-fencing, #339.)
+since it was not a deliberate choice.)
 
 - **Google Drive scope (NFR-SEC10).** Resume flows request the full
   `https://www.googleapis.com/auth/drive` scope rather than `drive.file`: copying a base
@@ -107,6 +105,17 @@ fencing, #339.)
   `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP=1`. That allowance matches one of those three literal
   strings an operator typed themselves, never a resolved address, so it carries none of
   the DNS-rebinding exposure described above.
+- **Postgres TLS is encrypted but not verified by default.** For a Postgres host that is not
+  loopback, `DB_SSL` defaults to `require`: the connection is encrypted, but the server
+  certificate chain and hostname are not checked. An attacker positioned on the network
+  path to the database could terminate TLS with any certificate and read the credentials
+  and every row. `require` is the default because it works against a managed or remote
+  database without the operator first provisioning a certificate authority; the strict
+  mode would fail to connect to one using a self-signed or private-CA certificate. Set
+  `DB_SSL=verify-full` (a private CA goes in `NODE_EXTRA_CA_CERTS`) for any database
+  reached over a network you do not control. The shipped `deploy/compose.yml` keeps
+  Postgres on the internal compose network, and SQLite has no network database, so
+  neither is affected. Loopback and unix-socket hosts default to `disable`.
 
 ## Scope notes for self-hosters
 

@@ -284,7 +284,7 @@ Application settings (read by the server process):
 | `DB_DIALECT`                                       | `sqlite`                                       | Database engine: `sqlite` (in `SQLITE_DIR`) or `postgres` (beta, [section 15](#15-postgres-optional-beta))                                                                     |
 | `DATABASE_URL` / `DATABASE_URL_FILE`               | (required for `postgres`)                      | `postgres://user:password@host:5432/db`, inline or in a file; never logged                                                                                                     |
 | `DB_POOL_MAX`                                      | `10`                                           | Postgres connection pool size                                                                                                                                                  |
-| `DB_SSL`                                           | `disable` for localhost, else `require`        | Postgres TLS: `disable`, `require` (encrypted) or `verify-full` (certificate and host checked); `sslmode` in the URL is honored when unset                                     |
+| `DB_SSL`                                           | `disable` for localhost, else `require`        | Postgres TLS: `disable`, `require` (encrypted, certificate not verified) or `verify-full` (certificate and host checked); `sslmode` in the URL is honored when unset           |
 | `OPPORTUN_DEMO`                                    | (unset)                                        | `1` declares this deployment the invitation-only demo instance; see **Demo mode** below                                                                                        |
 
 **Password pepper.** `OPPORTUN_PEPPER` is an extra secret mixed into every password hash
@@ -970,6 +970,10 @@ right after it. Administrators manage the instance under **Settings > Users**:
 - **Registration**: Open registration to let someone create an account (on the register
   page, or with a sign-in provider from [section 14](#14-sign-in-with-google-github-or-linkedin)),
   then close it again. Every account sees only its own data.
+  Opening or closing registration, like resetting a password below, asks for your own
+  password: a stolen session cookie alone cannot let someone create an account or take one
+  over. An administrator who signed in only through a provider sets a password first, under
+  Settings → Security.
 - **Users**: every account on the instance. **Reset password** gives a member a new random
   temporary password, shown once for you to hand over on a channel you trust. It signs that
   member out everywhere, revokes their device tokens and turns off their two-factor sign-in,
@@ -1120,7 +1124,9 @@ server (`chmod 600`; in compose, owned by uid 10001 like `data/`, for example a 
 `POSTGRES_PASSWORD` unset, create the database yourself
 (`CREATE DATABASE opportun TEMPLATE template0 LOCALE_PROVIDER libc LC_COLLATE 'C' LC_CTYPE 'C' ENCODING 'UTF8'`),
 point `DATABASE_URL` (or `DATABASE_URL_FILE`) at it and keep `DB_SSL=require` or
-`verify-full`.
+`verify-full`. `require` encrypts the connection but does not verify the server's certificate,
+so use `verify-full` whenever the database is reached over a network you do not control (see
+[SECURITY.md](../SECURITY.md#deliberate-deviations)).
 
 ### Moving an existing SQLite installation to Postgres
 

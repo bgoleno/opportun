@@ -167,7 +167,7 @@ describe('POST /auth/register', () => {
     const open = await a.inject({
       method: 'PATCH',
       url: '/api/v1/admin/registration',
-      payload: { open: true },
+      payload: { open: true, password: PASSWORD },
       ...authed(admin),
     });
     expect(open.statusCode).toBe(200);
@@ -181,14 +181,14 @@ describe('POST /auth/register', () => {
     const denied = await a.inject({
       method: 'PATCH',
       url: '/api/v1/admin/registration',
-      payload: { open: false },
+      payload: { open: false, password: PASSWORD },
       ...authed(bob),
     });
     expect(denied.statusCode).toBe(403);
     const anon = await a.inject({
       method: 'PATCH',
       url: '/api/v1/admin/registration',
-      payload: { open: false },
+      payload: { open: false, password: PASSWORD },
       cookies: { [CSRF]: 'anon-csrf' },
       headers: { 'x-csrf-token': 'anon-csrf' },
     });
@@ -197,7 +197,7 @@ describe('POST /auth/register', () => {
     const close = await a.inject({
       method: 'PATCH',
       url: '/api/v1/admin/registration',
-      payload: { open: false },
+      payload: { open: false, password: PASSWORD },
       ...authed(admin),
     });
     expect(close.json()).toEqual({ open: false });
@@ -210,7 +210,7 @@ describe('POST /auth/register', () => {
     await a.inject({
       method: 'PATCH',
       url: '/api/v1/admin/registration',
-      payload: { open: true },
+      payload: { open: true, password: PASSWORD },
       ...authed(admin),
     });
     const res = await register(a, { email: 'ADA@example.com' });
@@ -248,7 +248,7 @@ describe('GET /auth/registration', () => {
     await a.inject({
       method: 'PATCH',
       url: '/api/v1/admin/registration',
-      payload: { open: true },
+      payload: { open: true, password: PASSWORD },
       ...authed(admin),
     });
     const res = await a.inject({ method: 'GET', url: '/api/v1/auth/registration' });

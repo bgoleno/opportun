@@ -2,6 +2,8 @@
 // resource it creates: each user creates, the other must get 404, and the owner still reads it.
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { expect, it } from 'vitest';
+import { settings } from '../src/db/schema';
+import { REGISTRATION_OPEN_KEY } from '../src/lib/registration';
 import { testApp, type TestAppOptions } from './helpers';
 
 export type Response = LightMyRequestResponse;
@@ -65,13 +67,16 @@ export async function registerTwoUsers(
   app: FastifyInstance,
 ): Promise<{ a: TestClient; b: TestClient }> {
   const a = await register(app, 'isolation-a@example.com');
+  // Written directly, not through PATCH /admin/registration: that route re-asks for the admin's
+  // password (issue #10) and draws on the same 10-attempt budget the re-authentication tests
+  // assert about, so a harness that used it would start every test with part of that spent.
   const setOpen = async (open: boolean) => {
-    const res = await a.request({
-      method: 'PATCH',
-      url: '/api/v1/admin/registration',
-      payload: { open },
-    });
-    if (res.statusCode !== 200) throw new Error(`registration toggle: ${res.statusCode}`);
+    const now = Date.now();
+    await app.db
+      .insert(settings)
+      .values({ key: REGISTRATION_OPEN_KEY, userId: null, value: open, updatedAt: now })
+      .onConflictDoUpdate({ target: settings.key, set: { value: open, updatedAt: now } })
+      .run();
   };
   await setOpen(true);
   const b = await register(app, 'isolation-b@example.com');
