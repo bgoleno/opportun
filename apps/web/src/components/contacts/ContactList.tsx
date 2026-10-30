@@ -106,7 +106,11 @@ function AddContactCard() {
               onChange={(e) => setEmail(e.currentTarget.value)}
             />
           </div>
-          <Button type="submit" disabled={create.isPending || name.trim() === ''}>
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={create.isPending || name.trim() === ''}
+          >
             <Plus aria-hidden="true" />
             Add
           </Button>

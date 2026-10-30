@@ -4,6 +4,7 @@ import security from 'eslint-plugin-security';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 import { defineConfig } from 'eslint/config';
+import noStretchedGridButton from './apps/web/eslint/no-stretched-grid-button.js';
 
 const fsBan = {
   paths: [
@@ -134,6 +135,26 @@ export default defineConfig(
     rules: {
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'error',
+    },
+  },
+  {
+    // https://github.com/bgoleno/opportun/issues/9: a <Button> that is a grid item must state
+    // its width (w-fit or w-full), because a grid stretches an unconstrained item to its column
+    // and that had been caught three times only by someone seeing the wrong render. Decided over
+    // a natural-width default on Button, which would silently change every render that
+    // stretches on purpose today; the rule's own header
+    // (apps/web/eslint/no-stretched-grid-button.js) has the reasoning and the shapes it cannot
+    // see. Its own rule name rather than one more no-restricted-syntax selector, on purpose:
+    // no-restricted-syntax is array-valued, and a second block setting it for
+    // apps/web/src/**/*.test.tsx would replace envMutationBan there (the clobber that
+    // the comment on the first server block below describes). A separate rule cannot shadow it.
+    // The rule file lives in apps/web, not beside this config, because a file outside every
+    // workspace package is reached by neither pnpm lint nor pnpm test (see ci.yml);
+    // apps/web/src/components/ui/button-in-grid.test.tsx tests it through this config.
+    files: ['apps/web/src/**/*.tsx'],
+    plugins: { opportun: { rules: { 'no-stretched-grid-button': noStretchedGridButton } } },
+    rules: {
+      'opportun/no-stretched-grid-button': 'error',
     },
   },
   {

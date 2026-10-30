@@ -90,7 +90,7 @@ function RegisterPage() {
             />
           )}
         </FormField>
-        <Button type="submit" disabled={isSubmitting}>
+        <Button type="submit" className="w-full" disabled={isSubmitting}>
           {isSubmitting ? 'Creating account...' : 'Create account'}
         </Button>
       </form>

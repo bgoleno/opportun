@@ -4,6 +4,11 @@ import { Slot } from 'radix-ui';
 import type * as React from 'react';
 import { cn } from '@/lib/utils';
 
+// No width in the base classes, on purpose (https://github.com/bgoleno/opportun/issues/9). A grid
+// stretches a Button with no width to its column, and the call site states w-fit or w-full
+// instead, enforced by the lint rule opportun/no-stretched-grid-button. A default here would
+// change every Button that stretches on purpose today, starting with DialogFooter's, which stack
+// full width on phones.
 const buttonVariants = cva(
   "inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
