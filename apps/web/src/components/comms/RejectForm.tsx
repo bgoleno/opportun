@@ -137,6 +137,7 @@ export function RejectForm(props: {
         ) : null}
       </div>
 
+      {/* eslint-disable-next-line opportun/no-stretched-grid-button -- full width by default, not by decision: w-fit or w-full is still to be chosen (https://github.com/bgoleno/opportun/issues/9) */}
       <Button
         type="button"
         variant="destructive"

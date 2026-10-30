@@ -124,6 +124,7 @@ export function NextStepsPanel({ opportunityId }: { opportunityId: string }) {
               onChange={(e) => setDue(e.currentTarget.value)}
             />
           </div>
+          {/* eslint-disable-next-line opportun/no-stretched-grid-button -- full width by default, not by decision: w-fit or w-full is still to be chosen (https://github.com/bgoleno/opportun/issues/9) */}
           <Button type="submit" variant="outline" disabled={create.isPending}>
             Add step
           </Button>

@@ -134,7 +134,7 @@ function LoginPage() {
             />
           )}
         </FormField>
-        <Button type="submit" disabled={isSubmitting}>
+        <Button type="submit" className="w-full" disabled={isSubmitting}>
           {isSubmitting ? 'Signing in...' : 'Sign in'}
         </Button>
       </form>
