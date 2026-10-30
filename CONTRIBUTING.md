@@ -110,6 +110,15 @@ against this file during local testing, including read-only ones** (`config`, `p
 compose down -v` is correct and necessary in a test cycle; the unique `-p` is what keeps it
 from reaching anything it did not create.
 
+## Issue numbers in older comments
+
+A `#N` in an older code, SQL or docs comment, such as `(issue #16)`, usually refers to the
+private tracker this project was developed in before it was published. Those numbers do not
+resolve here, and some collide with unrelated issues and pull requests in this repository.
+They are kept because they record why the code exists. Issues and pull requests in this
+repository are numbered from its own history; link to those by full URL when you cite one in
+a comment.
+
 ## Ground rules
 
 - Be kind and assume good intent.

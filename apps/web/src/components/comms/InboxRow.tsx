@@ -100,7 +100,7 @@ export function InboxRow({
       className={
         onSelect
           ? 'flex items-start gap-3 rounded-xl border bg-card p-4'
-          : 'grid gap-2 rounded-xl border bg-card p-4'
+          : 'grid grid-cols-1 gap-2 rounded-xl border bg-card p-4'
       }
       aria-label={subject}
     >
@@ -114,7 +114,7 @@ export function InboxRow({
       ) : null}
       {/* display:contents keeps the original grid layout for the message body whether or not a
           checkbox is present, so a row reads the same selectable or not. */}
-      <div className={onSelect ? 'grid min-w-0 flex-1 gap-2' : 'contents'}>
+      <div className={onSelect ? 'grid min-w-0 flex-1 grid-cols-1 gap-2' : 'contents'}>
         <div className="flex flex-wrap items-center gap-2">
           {comm.classification ? (
             <Badge variant="secondary">{classificationLabel(comm.classification)}</Badge>

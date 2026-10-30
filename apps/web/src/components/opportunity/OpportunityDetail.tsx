@@ -46,8 +46,10 @@ export function OpportunityDetail({ id }: { id: string }) {
   if (isPending) return <p className="text-sm text-muted-foreground">Loading...</p>;
 
   return (
-    <section className="grid gap-6">
-      <div className="grid gap-3">
+    // grid-cols-1 on these grids keeps a long company or title from widening the track past the
+    // screen (a bare grid's auto track grows to the widest child's min-content).
+    <section className="grid grid-cols-1 gap-6">
+      <div className="grid grid-cols-1 gap-3">
         <BackLink />
         <PossibleDuplicateBanner opp={opp} />
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -124,7 +126,7 @@ export function OpportunityDetail({ id }: { id: string }) {
           <TabsTrigger value="referrals">Referrals</TabsTrigger>
         </TabsList>
         <TabsContent value="timeline" className="pt-2">
-          <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
             <div className="grid content-start gap-4">
               <ActivityComposer opportunityId={opp.id} />
               <TimelineList opportunityId={opp.id} />
