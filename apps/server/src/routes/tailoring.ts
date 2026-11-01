@@ -395,11 +395,26 @@ export async function tailoringRoutes(app: FastifyInstance): Promise<void> {
       for (let attempt = 0; attempt < APPLY_ATTEMPTS; attempt++) {
         // Read fresh on every attempt: a retry must start from the version that beat it.
         const resume = await getResume(db, ctx, session.resumeId);
-        const { docRef, results } = await storeFor(app, resume.store).applyEdits(
-          ctx,
-          resume.docRef,
-          edits,
-        );
+        await racePoint('tailoring.apply.read');
+        let applied;
+        try {
+          applied = await storeFor(app, resume.store).applyEdits(ctx, resume.docRef, edits);
+        } catch (err) {
+          // Another apply can land between that read and this one: its success path deletes
+          // the row of the version this attempt holds, so applyEdits finds nothing there. That
+          // is the same lost race as a false from updateResumeDocRef below, so retry once the
+          // resume has moved on. If it has not, nothing superseded the version and the 404
+          // stands; a resume that is itself gone 404s from getResume here.
+          if (
+            err instanceof HttpError &&
+            err.statusCode === 404 &&
+            (await getResume(db, ctx, session.resumeId)).docRef !== resume.docRef
+          ) {
+            continue;
+          }
+          throw err;
+        }
+        const { docRef, results } = applied;
         // Unchanged for a store that mutates its document in place; a new ref for one whose
         // written content is immutable per version (local_file, #284), which the store itself
         // never writes to this row (ResumeEditOutcomeResult's own doc comment).

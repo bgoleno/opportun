@@ -456,4 +456,52 @@ describe('concurrent applies to one local_file resume (#23)', () => {
     expect(text).toContain('Jane Doe');
     expect(await versionIds(app, ctx)).toEqual([baseRef, live].sort());
   });
+
+  it('an apply whose starting version is superseded before it reads it retries, and both land', async () => {
+    const { app, a } = await boot();
+    const { ctx, baseRef, resumeId, sessionId } = await tailoredSession(app, a);
+    // B is parked right after reading the resume (it holds D0). A runs start to finish
+    // meanwhile: it moves the resume to D1 and deletes D0's row. Then B reads D0 and finds
+    // nothing there.
+    let first = true;
+    let aRes: Awaited<ReturnType<typeof applyEdit>> | undefined;
+    setRaceHook(async (point) => {
+      if (point !== 'tailoring.apply.read' || !first) return;
+      first = false;
+      aRes = await applyEdit(a, sessionId, { find: 'Jane Doe', replace: 'J. Doe' });
+    });
+    const bRes = await applyEdit(a, sessionId, {
+      find: 'Senior Engineer',
+      replace: 'Staff Engineer',
+    });
+    expect(aRes?.statusCode).toBe(200);
+    expect(bRes.statusCode).toBe(200);
+    const live = await liveDocRef(app, resumeId);
+    const text = await app.localFileStore.readText(ctx, live);
+    expect(text).toContain('J. Doe');
+    expect(text).toContain('Staff Engineer');
+    expect(await versionIds(app, ctx)).toEqual([baseRef, live].sort());
+  });
+
+  it('a version that is gone while the resume still points at it is a 404, not a retry', async () => {
+    const { app, a } = await boot();
+    const { ctx, resumeId, sessionId } = await tailoredSession(app, a);
+    const live = await liveDocRef(app, resumeId);
+    // Nothing superseded it, so no retry can help: the 404 stands, rather than the request
+    // spending every attempt and answering resume_changed.
+    let reads = 0;
+    setRaceHook(async (point) => {
+      if (point !== 'tailoring.apply.read') return;
+      reads += 1;
+      await app.db
+        .delete(attachments)
+        .where(and(eq(attachments.userId, ctx.userId), eq(attachments.id, live)))
+        .run();
+    });
+    const res = await applyEdit(a, sessionId, { find: 'Jane Doe', replace: 'J. Doe' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('not_found');
+    expect(reads).toBe(1);
+    expect(await liveDocRef(app, resumeId)).toBe(live);
+  });
 });
