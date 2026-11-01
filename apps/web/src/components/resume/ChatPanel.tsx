@@ -111,13 +111,17 @@ function useFollowNewest() {
     const list = ref.current;
     if (list !== null && atNewest.current) list.scrollTop = list.scrollHeight;
   });
+  // Sending is the reader asking to be at the end: their own message goes there, then the reply.
+  const toNewest = () => {
+    atNewest.current = true;
+  };
   const onScroll = () => {
     const list = ref.current;
     if (list === null) return;
     // Within a line of the end counts as at the end, so rounding cannot unstick it.
     atNewest.current = list.scrollHeight - list.scrollTop - list.clientHeight < 24;
   };
-  return { ref, onScroll };
+  return { ref, onScroll, toNewest };
 }
 
 export function ChatPanel({ resumeId }: { resumeId: string }) {
@@ -131,6 +135,7 @@ export function ChatPanel({ resumeId }: { resumeId: string }) {
   const sessionId = session.data?.id ?? '';
   const complete = useCompleteSession(resumeId, sessionId);
   const busy = streamText !== null;
+  const follow = useFollowNewest();
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -140,6 +145,7 @@ export function ChatPanel({ resumeId }: { resumeId: string }) {
     if (content.length === 0 || session.data === undefined || busy) return;
     setDraft('');
     setError(null);
+    follow.toNewest();
     setPendingUser(content);
     setStreamText('');
     const controller = new AbortController();
@@ -171,7 +177,6 @@ export function ChatPanel({ resumeId }: { resumeId: string }) {
   }
 
   const messages = session.data?.messages ?? [];
-  const follow = useFollowNewest();
 
   // The card fills the height its container gives it, and the conversation takes what the header
   // and composer leave, scrolling inside it, so the composer stays at the bottom. Where nothing
@@ -194,6 +199,9 @@ export function ChatPanel({ resumeId }: { resumeId: string }) {
             <ol
               ref={follow.ref}
               onScroll={follow.onScroll}
+              // Focusable so it scrolls from the keyboard: Safari does not focus a scrolling box
+              // on its own, and a conversation of plain text has nothing else to tab to.
+              tabIndex={0}
               aria-label="Conversation"
               aria-live="polite"
               className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto"
