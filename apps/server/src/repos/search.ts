@@ -431,7 +431,7 @@ export async function search(
     LEFT JOIN communications c
       ON search_index.entity_kind = 'communication' AND c.id = search_index.entity_id
      AND c.user_id = ${ctx.userId}
-    LEFT JOIN contacts p
+    LEFT JOIN network_contacts p
       ON search_index.entity_kind = 'contact' AND p.id = search_index.entity_id
      AND p.user_id = ${ctx.userId}
     WHERE search_index MATCH ${match}
@@ -481,7 +481,7 @@ async function searchPg(
     LEFT JOIN communications c
       ON search_index.entity_kind = 'communication' AND c.id = search_index.entity_id
      AND c.user_id = ${ctx.userId}
-    LEFT JOIN contacts p
+    LEFT JOIN network_contacts p
       ON search_index.entity_kind = 'contact' AND p.id = search_index.entity_id
      AND p.user_id = ${ctx.userId}
     WHERE search_index.tsv @@ to_tsquery('simple', ${query})

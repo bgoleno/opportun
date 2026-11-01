@@ -2,7 +2,7 @@ import { Link } from '@tanstack/react-router';
 import { ArrowLeft, Merge, MoreHorizontal } from 'lucide-react';
 import { useState } from 'react';
 import { CommunicationsTab } from '@/components/comms/CommunicationsTab';
-import { ReferralsTab } from '@/components/contacts/ReferralsTab';
+import { ReferralsTab } from '@/components/network/ReferralsTab';
 import { FormError } from '@/components/FormError';
 import { OpportunityResumeTab } from '@/components/resume/OpportunityResumeTab';
 import { useStageFlow } from '@/components/stage/useStageFlow';

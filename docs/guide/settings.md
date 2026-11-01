@@ -147,9 +147,11 @@ The Devices card is pictured in [Inbox](inbox.md#connect-gmail).
 
 **Settings > Import/Export** has four cards.
 
-- **Import**: a zip or folder with `opportunities.csv` (and optionally `contacts.csv` and the
-  Markdown notes it refers to). Importing the same pack again changes nothing: rows match on
-  company, title and location, and stages only move forward.
+- **Import**: a zip or folder with `opportunities.csv` (and optionally `network.csv` and the
+  Markdown notes it refers to). A pack made before the Network section was renamed calls that
+  file `contacts.csv`, and it imports the same way; a pack holding both is refused. Importing
+  the same pack again changes nothing: rows match on company, title and location, and stages
+  only move forward.
 - **LinkedIn export**: see [Network](network.md#import-your-linkedin-export).
 - **Export**: a zip of everything you own (`export.json` with every table, a Markdown summary
   per opportunity, and an `opportunities.csv` you can import again). Stored keys and tokens

@@ -56,7 +56,7 @@ const GROUPS: ShortcutGroup[] = [
     ],
   },
   {
-    title: 'Contacts',
+    title: 'Network',
     items: [
       { keys: 'n / p', description: 'Next or previous page' },
       { keys: 'Home / End', description: 'First or last page' },

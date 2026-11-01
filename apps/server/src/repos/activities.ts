@@ -30,7 +30,7 @@ import {
   activities,
   communications,
   companies,
-  contacts,
+  networkContacts,
   nextSteps,
   opportunities,
 } from '../db/schema';
@@ -194,9 +194,9 @@ export async function createReferral(
   return await withTransaction(db, async (tx) => {
     await assertOpportunityOwned(tx, ctx, opportunityId);
     const contact = await tx
-      .select({ id: contacts.id, name: contacts.name })
-      .from(contacts)
-      .where(and(eq(contacts.userId, ctx.userId), eq(contacts.id, input.contactId)))
+      .select({ id: networkContacts.id, name: networkContacts.name })
+      .from(networkContacts)
+      .where(and(eq(networkContacts.userId, ctx.userId), eq(networkContacts.id, input.contactId)))
       .get();
     if (contact === undefined) throw notFound();
     const existing = await tx

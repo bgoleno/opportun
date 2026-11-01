@@ -1,4 +1,4 @@
-// Contacts (FR-C1) and referrals (FR-C3, C4): queries and mutations.
+// The Network section's contacts (FR-C1) and referrals (FR-C3, C4): queries and mutations.
 import type { ReferralStatus } from '@opportun/core';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
@@ -82,9 +82,9 @@ export interface OpportunityReferral {
 export const CONTACTS_PAGE_SIZE = 200;
 
 export const ck = {
-  contacts: ['contacts'] as const,
-  list: (q: string, page: number) => ['contacts', 'list', q, page] as const,
-  contact: (id: string) => ['contacts', 'detail', id] as const,
+  network: ['network'] as const,
+  list: (q: string, page: number) => ['network', 'list', q, page] as const,
+  contact: (id: string) => ['network', 'detail', id] as const,
   candidates: (oppId: string) => ['referral-candidates', oppId] as const,
   referrals: (oppId: string) => ['referrals', oppId] as const,
 };
@@ -101,7 +101,7 @@ export function useContacts(q: string, page: number) {
     queryKey: ck.list(query, page),
     queryFn: () =>
       api<Page<Contact>>(
-        `/contacts?sort=name&limit=${CONTACTS_PAGE_SIZE}&offset=${page * CONTACTS_PAGE_SIZE}` +
+        `/network?sort=name&limit=${CONTACTS_PAGE_SIZE}&offset=${page * CONTACTS_PAGE_SIZE}` +
           (query === '' ? '' : `&q=${enc(query)}`),
       ),
     placeholderData: keepPreviousData,
@@ -111,7 +111,7 @@ export function useContacts(q: string, page: number) {
 export function useContact(id: string) {
   return useQuery({
     queryKey: ck.contact(id),
-    queryFn: () => api<ContactDetail>(`/contacts/${enc(id)}`),
+    queryFn: () => api<ContactDetail>(`/network/${enc(id)}`),
   });
 }
 
@@ -119,8 +119,8 @@ export function useCreateContact() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: ContactInput & { name: string }) =>
-      api<Contact>('/contacts', { method: 'POST', body }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ck.contacts }),
+      api<Contact>('/network', { method: 'POST', body }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ck.network }),
   });
 }
 
@@ -128,16 +128,16 @@ export function useUpdateContact(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: ContactInput) =>
-      api<Contact>(`/contacts/${enc(id)}`, { method: 'PATCH', body }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ck.contacts }),
+      api<Contact>(`/network/${enc(id)}`, { method: 'PATCH', body }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ck.network }),
   });
 }
 
 export function useDeleteContact(id: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api<null>(`/contacts/${enc(id)}`, { method: 'DELETE' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ck.contacts }),
+    mutationFn: () => api<null>(`/network/${enc(id)}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ck.network }),
   });
 }
 
@@ -164,7 +164,7 @@ function useRefreshReferrals(oppId: string) {
     Promise.all([
       qc.invalidateQueries({ queryKey: ck.referrals(oppId) }),
       qc.invalidateQueries({ queryKey: qk.timeline(oppId) }),
-      qc.invalidateQueries({ queryKey: ck.contacts }),
+      qc.invalidateQueries({ queryKey: ck.network }),
       qc.invalidateQueries({ queryKey: qk.dashboard }),
     ]);
 }

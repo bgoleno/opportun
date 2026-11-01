@@ -74,7 +74,7 @@ function CandidateRow({
           <div className="flex flex-wrap items-center gap-2">
             {c.rank !== null ? <Badge variant="outline">#{c.rank}</Badge> : null}
             <h3 className="text-sm font-semibold">
-              <Link to="/contacts/$id" params={{ id: c.contactId }} className={linkClass}>
+              <Link to="/network/$id" params={{ id: c.contactId }} className={linkClass}>
                 {c.name}
               </Link>
             </h3>
@@ -206,8 +206,8 @@ export function ReferralsTab({
               {hasContacts ? null : (
                 <>
                   {' '}
-                  <Link to="/contacts" className={linkClass}>
-                    Add contacts
+                  <Link to="/network" className={linkClass}>
+                    Add a contact
                   </Link>{' '}
                   or{' '}
                   <Link to="/settings/data" className={linkClass}>
@@ -258,7 +258,7 @@ export function ReferralsTab({
               {asks.map((a) => (
                 <li key={a.activityId} className="grid gap-2 rounded-md border p-3">
                   <div className="flex items-baseline justify-between gap-2">
-                    <Link to="/contacts/$id" params={{ id: a.contactId }} className={linkClass}>
+                    <Link to="/network/$id" params={{ id: a.contactId }} className={linkClass}>
                       {a.name}
                     </Link>
                     <time

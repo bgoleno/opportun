@@ -67,7 +67,7 @@ import { connectorCaptureRoutes } from './routes/connectorCapture';
 import { communicationRoutes } from './routes/communications';
 import { companyRoutes } from './routes/companies';
 import { companySuggestionRoutes } from './routes/companySuggestions';
-import { contactRoutes } from './routes/contacts';
+import { networkRoutes } from './routes/network';
 import { dashboardRoutes } from './routes/dashboard';
 import { deviceTokenRoutes } from './routes/deviceTokens';
 import { discoveryRoutes } from './routes/discovery';
@@ -475,7 +475,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       await api.register(discoveryRoutes);
       await api.register(captureRoutes);
       await api.register(connectorCaptureRoutes);
-      await api.register(contactRoutes);
+      await api.register(networkRoutes);
       await api.register(referralRoutes);
     },
     { prefix: '/api/v1' },

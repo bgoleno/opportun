@@ -10,7 +10,7 @@ export type TourRoute =
   | '/pipeline'
   | '/discovery'
   | '/resumes'
-  | '/contacts';
+  | '/network';
 export type Placement = 'bottom' | 'top' | 'right' | 'left';
 
 /** What a Do it now does after the tour pauses: go somewhere, then focus the first match. */
@@ -158,7 +158,7 @@ export const TOUR_STEPS: TourStep[] = [
     id: 'discovery',
     route: '/discovery',
     view: () => ({
-      title: 'New roles, ranked for you',
+      title: 'New opportunities, ranked for you',
       body: 'Discovery reads company job boards and job alert emails, then scores each posting against your role targets. Accept the good ones and they land in your pipeline.',
       targets: ['discovery-sections'],
     }),
@@ -168,13 +168,13 @@ export const TOUR_STEPS: TourStep[] = [
     route: '/resumes',
     view: () => ({
       title: 'One resume, tailored for every role',
-      body: 'Register your Google Doc once, then make a tailored copy for each opportunity with an AI chat that proposes edits. Nothing changes in your document until you apply an edit.',
+      body: 'Register as many base resumes as you need, from Google Docs or Reactive Resume, then make a tailored copy for each opportunity with an AI chat that proposes edits. Nothing changes in your document until you apply an edit.',
       targets: ['register-resume', 'resumes-header'],
     }),
   },
   {
     id: 'contacts',
-    route: '/contacts',
+    route: '/network',
     view: () => ({
       title: 'See who can refer you',
       body: 'Import your LinkedIn connections, and each opportunity shows who you know at that company. Opportun ranks who is best placed to refer you.',
