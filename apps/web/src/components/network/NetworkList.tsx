@@ -1,4 +1,4 @@
-// The contacts page (FR-C1): search by name or email, add a contact, open one.
+// The Network page (FR-C1): search by name or email, add a contact, open one.
 import { Link } from '@tanstack/react-router';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Plus, Search } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
@@ -160,7 +160,7 @@ function ContactPager({
   });
   if (pageCount <= 1) return null;
   return (
-    <nav aria-label="Contacts pages" className="flex items-center gap-1">
+    <nav aria-label="Network pages" className="flex items-center gap-1">
       <Button
         variant="outline"
         size="icon"
@@ -204,7 +204,7 @@ function ContactPager({
   );
 }
 
-export function ContactList() {
+export function NetworkList() {
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
   const contacts = useContacts(q, page);
@@ -231,14 +231,14 @@ export function ContactList() {
       <AddContactCard />
       <Card data-tour="contacts-list">
         <CardHeader className="gap-3">
-          <CardTitle>Your contacts</CardTitle>
+          <CardTitle>Your network</CardTitle>
           <div className="relative max-w-sm">
             <Search
               aria-hidden="true"
               className="pointer-events-none absolute top-2.5 left-3 size-4 text-muted-foreground"
             />
             <Input
-              aria-label="Search contacts"
+              aria-label="Search your network"
               placeholder="Search by name or email"
               className="pl-9"
               value={q}
@@ -254,10 +254,10 @@ export function ContactList() {
             <FormError message={errorMessage(contacts.error)} />
           ) : items.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              {q.trim() === '' ? 'No contacts yet.' : 'No contact matches that search.'}
+              {q.trim() === '' ? 'No one in your network yet.' : 'No contact matches that search.'}
             </p>
           ) : (
-            <Table aria-label="Contacts">
+            <Table aria-label="Network">
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
@@ -270,7 +270,7 @@ export function ContactList() {
                 {items.map((c) => (
                   <TableRow key={c.id}>
                     <TableCell>
-                      <Link to="/contacts/$id" params={{ id: c.id }} className={linkClass}>
+                      <Link to="/network/$id" params={{ id: c.id }} className={linkClass}>
                         {c.name}
                       </Link>
                     </TableCell>

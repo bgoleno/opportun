@@ -4,7 +4,7 @@
 import { newId } from '@opportun/core';
 import { and, asc, eq, or, type SQL } from 'drizzle-orm';
 import { jsonContains } from '../db/dialect';
-import { companies, contacts } from '../db/schema';
+import { companies, networkContacts } from '../db/schema';
 import { notFound } from '../lib/errors';
 import { profileSlugOf } from '../lib/linkedinCapture';
 import type { Db, Exec, UserCtx } from './base';
@@ -14,7 +14,7 @@ import { countWhere, likeContains, orderBy, sortColumns, type ListOpts, type Pag
 import { indexContact, removeFromIndex } from './search';
 import { runCount, withTransaction } from '../db/client';
 
-export type ContactRow = typeof contacts.$inferSelect;
+export type ContactRow = typeof networkContacts.$inferSelect;
 export type ContactSource = ContactRow['source'];
 
 export interface ContactHistoryEntry {
@@ -43,14 +43,14 @@ export interface ContactInput {
 }
 
 export const CONTACT_SORTS = sortColumns({
-  name: contacts.name,
-  strength: contacts.strength,
-  createdAt: contacts.createdAt,
-  updatedAt: contacts.updatedAt,
+  name: networkContacts.name,
+  strength: networkContacts.strength,
+  createdAt: networkContacts.createdAt,
+  updatedAt: networkContacts.updatedAt,
 });
 
 function owned(ctx: UserCtx, id: string): SQL | undefined {
-  return and(eq(contacts.userId, ctx.userId), eq(contacts.id, id));
+  return and(eq(networkContacts.userId, ctx.userId), eq(networkContacts.id, id));
 }
 
 /** Lowercased, trimmed and de-duplicated, first occurrence first. */
@@ -107,7 +107,7 @@ async function resolveCompany(
 }
 
 export async function getContactRow(exec: Exec, ctx: UserCtx, id: string): Promise<ContactRow> {
-  const row = await exec.select().from(contacts).where(owned(ctx, id)).get();
+  const row = await exec.select().from(networkContacts).where(owned(ctx, id)).get();
   if (row === undefined) throw notFound();
   return row;
 }
@@ -122,23 +122,26 @@ export async function listContacts(
   opts: ListOpts & { q?: string | undefined; companyId?: string | undefined },
 ): Promise<Page<ContactView>> {
   const where = and(
-    eq(contacts.userId, ctx.userId),
+    eq(networkContacts.userId, ctx.userId),
     opts.q === undefined
       ? undefined
-      : or(likeContains(contacts.name, opts.q), jsonContains(contacts.emails, opts.q)),
-    opts.companyId === undefined ? undefined : eq(contacts.currentCompanyId, opts.companyId),
+      : or(
+          likeContains(networkContacts.name, opts.q),
+          jsonContains(networkContacts.emails, opts.q),
+        ),
+    opts.companyId === undefined ? undefined : eq(networkContacts.currentCompanyId, opts.companyId),
   );
   const rows = await db
     .select()
-    .from(contacts)
+    .from(networkContacts)
     .where(where)
-    .orderBy(...orderBy(opts.sort, 'name', CONTACT_SORTS, contacts.id))
+    .orderBy(...orderBy(opts.sort, 'name', CONTACT_SORTS, networkContacts.id))
     .limit(opts.limit)
     .offset(opts.offset)
     .all();
   const items: ContactView[] = [];
   for (const r of rows) items.push(await toContactView(db, ctx, r));
-  return { items, total: await countWhere(db, contacts, where) };
+  return { items, total: await countWhere(db, networkContacts, where) };
 }
 
 /** Inserts a contact inside the caller's transaction (the LinkedIn import composes this). */
@@ -149,7 +152,7 @@ export async function insertContactSync(
 ): Promise<ContactRow> {
   const now = Date.now();
   const row = await exec
-    .insert(contacts)
+    .insert(networkContacts)
     .values({
       id: newId(),
       userId: ctx.userId,
@@ -190,11 +193,11 @@ export async function updateContactSync(
   patch: Partial<ContactInput>,
 ): Promise<ContactRow> {
   const { company, emails, history, ...rest } = patch;
-  const set: Partial<typeof contacts.$inferInsert> = { ...rest, updatedAt: Date.now() };
+  const set: Partial<typeof networkContacts.$inferInsert> = { ...rest, updatedAt: Date.now() };
   if (emails !== undefined) set.emails = normalizeEmails(emails);
   if (history !== undefined) set.history = history as unknown as Record<string, unknown>[];
   if (company !== undefined) set.currentCompanyId = await resolveCompany(exec, ctx, company);
-  const row = await exec.update(contacts).set(set).where(owned(ctx, id)).returning().get();
+  const row = await exec.update(networkContacts).set(set).where(owned(ctx, id)).returning().get();
   if (row === undefined) throw notFound();
   if (patch.name !== undefined || patch.notes !== undefined) await indexContact(exec, ctx, row);
   return row;
@@ -214,7 +217,7 @@ export async function updateContact(
 
 export async function deleteContact(db: Db, ctx: UserCtx, id: string): Promise<void> {
   await withTransaction(db, async (tx) => {
-    const changes = await runCount(tx.delete(contacts).where(owned(ctx, id)));
+    const changes = await runCount(tx.delete(networkContacts).where(owned(ctx, id)));
     if (changes === 0) throw notFound();
     await removeFromIndex(tx, ctx, 'contact', id);
   });
@@ -263,9 +266,9 @@ async function findCaptured(
 ): Promise<ContactRow | undefined> {
   const mine = await exec
     .select()
-    .from(contacts)
-    .where(eq(contacts.userId, ctx.userId))
-    .orderBy(asc(contacts.createdAt), asc(contacts.id))
+    .from(networkContacts)
+    .where(eq(networkContacts.userId, ctx.userId))
+    .orderBy(asc(networkContacts.createdAt), asc(networkContacts.id))
     .all();
   const byUrl = mine.find((c) => profileSlugOf(c.linkedinUrl) === input.slug);
   if (byUrl !== undefined) return byUrl;

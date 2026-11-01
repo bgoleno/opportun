@@ -7,6 +7,16 @@ milestone's work was merged. Each links the implementation plan it was built fro
 
 ## Unreleased
 
+- **Contacts is now called Network.** The section that holds the people you know is
+  **Network** in the menu and on its page, and it lives at `/network`; one person in it is
+  still a contact. The API moved to `/api/v1/network`, the import pack's `contacts.csv` is now
+  `network.csv`, and the database table is `network_contacts`. The old names keep working:
+  `/contacts` links and bookmarks redirect, `/api/v1/contacts` answers exactly as
+  `/api/v1/network` does, and a pack with `contacts.csv` still imports (a pack holding both
+  files is refused). The data export's `export.json` is now format `opportun-export/2`, because
+  the network's table is keyed `network_contacts` there instead of `contacts`; nothing else in
+  the file changed. The upgrade renames the table in place and keeps every row and every link
+  to it ([#22](https://github.com/bgoleno/opportun/issues/22)).
 - **Capturing a job posting now means "I want this".** A job captured with the browser
   extension becomes an opportunity at Interested instead of a card in the review queue, and it
   completes the lead that was already waiting for it rather than sitting beside it as a second
