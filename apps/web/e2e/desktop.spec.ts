@@ -527,9 +527,10 @@ function expectComposerAndBubbles(
   }
 }
 
-async function openWorkspace(browser: Browser, width: number) {
+/** `tag` names the seeded opportunity; each test needs its own, or creating it is a duplicate. */
+async function openWorkspace(browser: Browser, width: number, tag = `chat column ${width}`) {
   const opened = await pageAt(browser, width, accounts.seed);
-  const id = await seededWorkspace(opened.page, `chat column ${width}`);
+  const id = await seededWorkspace(opened.page, tag);
   await opened.page.goto(`/resumes/${id}`);
   await expect(opened.page.getByRole('list', { name: 'Conversation' })).toContainText(
     'Your platform work maps well to this role.',
@@ -604,7 +605,7 @@ test.describe('resume workspace chat column', () => {
   test('1280px wide: the conversation shows the focus ring when reached from the keyboard', async ({
     browser,
   }) => {
-    const { page, close } = await openWorkspace(browser, 1280);
+    const { page, close } = await openWorkspace(browser, 1280, 'focus ring 1280');
     try {
       const list = page.getByRole('list', { name: 'Conversation' });
       await page.getByLabel('Message').focus();
