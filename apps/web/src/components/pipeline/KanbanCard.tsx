@@ -19,9 +19,9 @@ import { cn } from '@/lib/utils';
 
 /**
  * The one date a card shows (https://github.com/bgoleno/opportun/issues/25): when a New card
- * entered Opportun, and for every other column the newest entry on its timeline. A card with
- * nothing on its timeline but its own creation shows the date it was added, labelled as that,
- * rather than passing the creation off as activity.
+ * entered Opportun, and for every other column the newest entry on its timeline that has already
+ * happened. A card with no such entry (only its own creation, or only activity dated ahead)
+ * shows the date it was added, labelled as that, rather than passing either off as activity.
  */
 function cardDate(opp: OpportunityView): { label: string; at: number } {
   if (opp.stage !== 'discovered' && opp.lastActivityAt !== null) {

@@ -402,6 +402,10 @@ describe('dashboard', () => {
 // lastActivityAt from the list it already fetches, so it has to agree with the detail page's
 // timeline, minus the stage row every opportunity gets when it is created.
 describe('lastActivityAt on opportunity views (#25)', () => {
+  /** Explicit dates either side of any clock this suite runs under. */
+  const PAST = Date.parse('2026-01-05T09:00:00Z');
+  const FUTURE = Date.parse('2099-12-15T09:00:00Z');
+
   async function listed(c: TestClient, id: string): Promise<{ lastActivityAt: number | null }> {
     const res = await c.request({ method: 'GET', url: '/api/v1/opportunities?limit=200' });
     expect(res.statusCode).toBe(200);
@@ -428,7 +432,7 @@ describe('lastActivityAt on opportunity views (#25)', () => {
       app,
       `INSERT INTO communications (id, user_id, opportunity_id, channel, external_id, "from", "to",
            sent_at, needs_review, outreach_kind, created_at, updated_at)
-         VALUES (?, ?, ?, 'gmail', ?, 'r@example.com', '[]', ?, 0, ?, ?, ?)`,
+         VALUES (?, ?, ?, 'gmail', ?, 'r@example.com', '[]', ?, false, ?, ?, ?)`,
       newId(),
       userId,
       oppId,
@@ -478,10 +482,34 @@ describe('lastActivityAt on opportunity views (#25)', () => {
   it('agrees with the timeline on mail: linked mail counts, broadcast spam does not', async () => {
     const { app, a } = await boot();
     const opp = await createOpp(a);
-    const mailAt = Date.now() + DAY;
+    const mailAt = PAST;
     await linkMail(app, a.userId, opp.id, mailAt, null);
     await linkMail(app, a.userId, opp.id, mailAt + DAY, 'broadcast_spam');
     expect((await listed(a, opp.id)).lastActivityAt).toBe(mailAt);
-    expect(await newestOnTimeline(a, opp.id)).toBe(mailAt);
+    const res = await a.request({ method: 'GET', url: `/api/v1/opportunities/${opp.id}/timeline` });
+    const mail = (res.json().items as { kind: string; occurredAt: number }[]).filter(
+      (i) => i.kind === 'communication',
+    );
+    expect(mail.map((i) => i.occurredAt)).toEqual([mailAt]);
+  });
+
+  // Last activity is the newest that has already happened: an interview logged ahead of time is
+  // not the card's "Last activity" (EM's call on https://github.com/bgoleno/opportun/pull/46).
+  it('leaves out anything dated after now: a past and a future activity report the past one', async () => {
+    const { a } = await boot();
+    const opp = await createOpp(a);
+    expect((await addActivity(a, opp.id, { occurredAt: PAST })).statusCode).toBe(201);
+    const ahead = await addActivity(a, opp.id, { kind: 'meeting', occurredAt: FUTURE });
+    expect(ahead.statusCode).toBe(201);
+    expect((await listed(a, opp.id)).lastActivityAt).toBe(PAST);
+  });
+
+  it('has none while the only activity is still ahead, so the card shows when it was added', async () => {
+    const { a } = await boot();
+    const opp = await createOpp(a);
+    expect((await addActivity(a, opp.id, { kind: 'meeting', occurredAt: FUTURE })).statusCode).toBe(
+      201,
+    );
+    expect((await listed(a, opp.id)).lastActivityAt).toBeNull();
   });
 });

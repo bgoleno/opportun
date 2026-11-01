@@ -570,19 +570,22 @@ async function timeline(
 }
 
 /**
- * The time of the newest timeline entry for each opportunity in `ids` that has one, in one
- * query for a whole page of rows rather than one per card
+ * The time of the newest timeline entry that has already happened, for each opportunity in
+ * `ids` that has one, in one query for a whole page of rows rather than one per card
  * (https://github.com/bgoleno/opportun/issues/25). It reads the same three sources as
  * TIMELINE_SOURCES, with the same mail filter, so a pipeline card agrees with the detail
- * page's timeline. One difference: the stage row every opportunity gets when it is created
- * (from_stage NULL) is left out. That entry is the opportunity entering Opportun, not activity
- * on it, and the card shows that date under its own label. An opportunity with nothing else
- * on its timeline is absent from the map.
+ * page's timeline, with two differences. The stage row every opportunity gets when it is
+ * created (from_stage NULL) is left out: that entry is the opportunity entering Opportun, not
+ * activity on it, and the card shows that date under its own label. And anything dated after
+ * `now` is left out: an interview logged ahead of time is coming up, not the last thing that
+ * happened (the EM's call on https://github.com/bgoleno/opportun/pull/46). An opportunity with
+ * nothing else on its timeline is absent from the map.
  */
 export async function lastActivityAt(
   exec: Exec,
   ctx: UserCtx,
   ids: string[],
+  now: number = Date.now(),
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   if (ids.length === 0) return out;
@@ -602,7 +605,7 @@ export async function lastActivityAt(
       UNION ALL
       SELECT c.opportunity_id, c.sent_at FROM communications c
         WHERE c.user_id = ${ctx.userId} AND c.opportunity_id IN (${idList}) AND ${MAIL_ON_TIMELINE}
-    ) AS entries GROUP BY opportunity_id`,
+    ) AS entries WHERE at <= ${now} GROUP BY opportunity_id`,
   );
   for (const row of rows) out.set(row.opportunity_id, row.at);
   return out;

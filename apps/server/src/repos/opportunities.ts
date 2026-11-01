@@ -63,8 +63,8 @@ export type OpportunityView = OpportunityRow & {
   /** Issue #264: true when a 'capture' activity exists on this opportunity's timeline, so the
    *  client knows whether re-deriving a description from it is even possible. */
   hasCapturedPage: boolean;
-  /** The newest timeline entry's time, not counting the opportunity's own creation; null when
-   *  there is nothing else on its timeline (https://github.com/bgoleno/opportun/issues/25,
+  /** The newest timeline entry's time that is not after now, not counting the opportunity's own
+   *  creation; null when there is no such entry (https://github.com/bgoleno/opportun/issues/25,
    *  activities.ts lastActivityAt). */
   lastActivityAt: number | null;
 };
