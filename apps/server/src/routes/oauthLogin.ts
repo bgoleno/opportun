@@ -365,65 +365,79 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     provider: OAuthProvider,
     identity: OAuthIdentity,
   ): Promise<LoginOutcome> {
-    return await withTransaction(db, async (tx): Promise<LoginOutcome> => {
-      const linked = await tx
-        .select({ userId: oauthAccounts.userId })
-        .from(oauthAccounts)
-        .where(
-          and(
-            eq(oauthAccounts.provider, provider),
-            eq(oauthAccounts.providerAccountId, identity.providerAccountId),
-          ),
-        )
-        .get();
-      if (linked !== undefined) return { ok: true, userId: linked.userId, how: 'linked' };
-      if (identity.email === null) return { ok: false, reason: 'no_email' };
-      const match = await tx
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.email, identity.email))
-        .get();
-      // Review Focus 2 / ruling R2: an email never joins a provider account to an existing
-      // one. Unverified proves nothing; verified proves only the mailbox.
-      if (!identity.emailVerified) {
-        return {
-          ok: false,
-          reason: 'unverified_email',
-          ...(match === undefined ? {} : { userId: match.id }),
-        };
-      }
-      if (match !== undefined) return { ok: false, reason: 'existing_account', userId: match.id };
-      const now = Date.now();
-      if (!(await isRegistrationOpen(tx))) return { ok: false, reason: 'registration_closed' };
-      const userId = newId();
-      const displayName = (identity.displayName ?? identity.email.split('@')[0] ?? 'New user')
-        .trim()
-        .slice(0, 100);
-      await tx
-        .insert(users)
-        .values({
-          id: userId,
-          email: identity.email,
-          passwordHash: unusablePasswordHash(),
-          displayName: displayName.length > 0 ? displayName : 'New user',
-          isAdmin: false,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .run();
-      await tx
-        .insert(oauthAccounts)
-        .values({
-          id: newId(),
-          userId,
-          provider,
-          providerAccountId: identity.providerAccountId,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .run();
-      return { ok: true, userId, how: 'created' };
-    });
+    // Scoped to the identity (https://github.com/bgoleno/opportun/issues/56): on Postgres,
+    // without it, two callbacks of one new identity can interleave between the reads below
+    // (READ COMMITTED takes a fresh snapshot per statement), and the one that read "no link"
+    // before the other committed then reads the other's new account by email and says
+    // existing_account. With it, the second waits and finds the identity linked. SQLite's
+    // write gate already serialises the whole transaction.
+    return await withTransaction(
+      db,
+      async (tx): Promise<LoginOutcome> => {
+        const linked = await tx
+          .select({ userId: oauthAccounts.userId })
+          .from(oauthAccounts)
+          .where(
+            and(
+              eq(oauthAccounts.provider, provider),
+              eq(oauthAccounts.providerAccountId, identity.providerAccountId),
+            ),
+          )
+          .get();
+        if (linked !== undefined) return { ok: true, userId: linked.userId, how: 'linked' };
+        if (identity.email === null) return { ok: false, reason: 'no_email' };
+        // Between the two reads, after the scope lock, on purpose: the racing test parks one
+        // sign-in here and checks that another of the same identity cannot get past its lock
+        // and commit in between (see the scope comment above).
+        await racePoint('oauth.login.locked');
+        const match = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.email, identity.email))
+          .get();
+        // Review Focus 2 / ruling R2: an email never joins a provider account to an existing
+        // one. Unverified proves nothing; verified proves only the mailbox.
+        if (!identity.emailVerified) {
+          return {
+            ok: false,
+            reason: 'unverified_email',
+            ...(match === undefined ? {} : { userId: match.id }),
+          };
+        }
+        if (match !== undefined) return { ok: false, reason: 'existing_account', userId: match.id };
+        const now = Date.now();
+        if (!(await isRegistrationOpen(tx))) return { ok: false, reason: 'registration_closed' };
+        const userId = newId();
+        const displayName = (identity.displayName ?? identity.email.split('@')[0] ?? 'New user')
+          .trim()
+          .slice(0, 100);
+        await tx
+          .insert(users)
+          .values({
+            id: userId,
+            email: identity.email,
+            passwordHash: unusablePasswordHash(),
+            displayName: displayName.length > 0 ? displayName : 'New user',
+            isAdmin: false,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run();
+        await tx
+          .insert(oauthAccounts)
+          .values({
+            id: newId(),
+            userId,
+            provider,
+            providerAccountId: identity.providerAccountId,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run();
+        return { ok: true, userId, how: 'created' };
+      },
+      { scope: `oauth:${provider}:${identity.providerAccountId}` },
+    );
   }
 
   async function finishLogin(
