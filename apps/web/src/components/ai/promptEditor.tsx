@@ -283,7 +283,7 @@ export function PromptEditor({ taskKey }: { taskKey: string }) {
         <h3 id={`${taskKey}-edit`} className="text-sm font-semibold">
           Edit
         </h3>
-        <p className="text-sm text-muted-foreground">
+        <p className="max-w-prose text-sm text-muted-foreground">
           Saving creates a new version from the active one. It is used only after you activate it.
           Text in double braces is filled in when the task runs; keep those placeholders.
         </p>

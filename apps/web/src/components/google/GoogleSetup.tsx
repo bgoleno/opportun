@@ -230,7 +230,7 @@ function Step({ n, title, children }: { n: number; title: string; children: Reac
 /** Short instruction lines under a step. */
 function Lines({ children }: { children: ReactNode }) {
   return (
-    <ul className="grid grid-cols-1 list-disc gap-1 pl-5 text-sm break-words text-muted-foreground">
+    <ul className="grid max-w-prose grid-cols-1 list-disc gap-1 pl-5 text-sm break-words text-muted-foreground">
       {children}
     </ul>
   );
@@ -260,7 +260,7 @@ export function Troubleshooting() {
   return (
     <details className="rounded-md border px-3 py-2 text-sm">
       <summary className="cursor-pointer font-medium">Troubleshooting</summary>
-      <p className="mt-2 text-muted-foreground">
+      <p className="max-w-prose mt-2 text-muted-foreground">
         If Google shows an error while you connect, look up its code here. This is a reference of
         possible error responses and their fixes, not a list of issues with your setup.
       </p>
@@ -268,7 +268,7 @@ export function Troubleshooting() {
         {TROUBLESHOOTING.map((t) => (
           <div key={t.code} className="grid grid-cols-1 gap-1">
             <dt className="font-mono text-xs font-semibold">{t.code}</dt>
-            <dd className="text-muted-foreground">{t.fix}</dd>
+            <dd className="max-w-prose text-muted-foreground">{t.fix}</dd>
           </div>
         ))}
       </dl>
@@ -348,7 +348,7 @@ export function GoogleSetupGuide({ status }: { status: GoogleStatus }) {
           {open ? 'Hide console steps' : 'Show console steps'}
         </Button>
       </div>
-      <p className="text-sm text-muted-foreground">
+      <p className="max-w-prose text-sm text-muted-foreground">
         Google has no API for creating OAuth clients, so this takes a few minutes in the Google
         Cloud console. Each link opens the right page in a new tab.
       </p>
@@ -433,7 +433,7 @@ export function GoogleSetupGuide({ status }: { status: GoogleStatus }) {
                 </li>
               </Lines>
               <p
-                className="rounded-md border bg-muted/40 px-3 py-2 text-sm"
+                className="max-w-prose rounded-md border bg-muted/40 px-3 py-2 text-sm"
                 data-testid="google-testing-expiry"
               >
                 While the app is in Testing, Google expires your grant after about 7 days and

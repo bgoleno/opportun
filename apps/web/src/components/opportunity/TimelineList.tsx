@@ -169,7 +169,7 @@ export function TimelineList({ opportunityId }: { opportunityId: string }) {
               <>
                 <p className="text-xs text-muted-foreground">From {item.from}</p>
                 {item.snippet ? (
-                  <p className="text-sm text-muted-foreground">{item.snippet}</p>
+                  <p className="max-w-prose text-sm text-muted-foreground">{item.snippet}</p>
                 ) : null}
               </>
             ) : item.note ? (

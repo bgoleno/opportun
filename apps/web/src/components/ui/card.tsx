@@ -35,11 +35,14 @@ function CardTitle({ className, ...props }: React.ComponentProps<'h2'>) {
   );
 }
 
+// Local change: the description is running text, so it wraps at reading width (max-w-prose,
+// docs/design.md section 9), set here once for every card (issue
+// https://github.com/bgoleno/opportun/issues/34).
 function CardDescription({ className, ...props }: React.ComponentProps<'p'>) {
   return (
     <p
       data-slot="card-description"
-      className={cn('text-sm text-muted-foreground', className)}
+      className={cn('max-w-prose text-sm text-muted-foreground', className)}
       {...props}
     />
   );

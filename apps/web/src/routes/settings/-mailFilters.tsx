@@ -57,7 +57,7 @@ export function LabelScopeField(props: {
           </Button>
         )}
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="max-w-prose text-xs text-muted-foreground">
         Mail outside this label is never fetched, so it never reaches Opportun at all. This is the
         strongest control here, and it applies to every sync, not just the first. Leave it empty to
         watch the whole mailbox.
@@ -87,7 +87,7 @@ export function ConsumerVetoToggle(props: {
         />
         <Label htmlFor="consumer-veto">Skip mail from personal email providers</Label>
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="max-w-prose text-xs text-muted-foreground">
         Gmail, Outlook, iCloud, ISP addresses and the like. Job mail almost never comes from one.
         Your own address is always exempt, and an allow rule beats this for any sender you name.
       </p>
@@ -195,7 +195,7 @@ export function JobSenderList(props: {
 
   return (
     <section className="grid grid-cols-1 gap-3">
-      <p className="text-xs text-muted-foreground">
+      <p className="max-w-prose text-xs text-muted-foreground">
         Mail from these senders is always treated as job mail, so it is never dropped for looking
         private or for carrying no job words. Your deny list still beats this, and so does anything
         that reads as medical, financial or personal content.

@@ -89,7 +89,7 @@ export function GoogleCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="grid grid-cols-1 gap-6">
-        <div className="grid gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+        <div className="max-w-prose grid gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
           <p>
             Google lists the Drive permission as access to all your files. It is that broad because
             Google offers no narrower scope that can copy a document you created outside this app.

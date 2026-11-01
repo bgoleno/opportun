@@ -54,12 +54,12 @@ export function GmailLookbackField({
           Save window
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="max-w-prose text-xs text-muted-foreground">
         The first sync reads this far back (1 to 1095 days; default 180). Changing it makes the next
         sync re-read the whole window: widening pulls older mail in, narrowing keeps what is already
         imported.
       </p>
-      <p className="text-xs text-muted-foreground">
+      <p className="max-w-prose text-xs text-muted-foreground">
         This window applies to everything Opportun reads, not only this mailbox. A LinkedIn export
         import leaves out messages older than it, and says how many it left.
       </p>
