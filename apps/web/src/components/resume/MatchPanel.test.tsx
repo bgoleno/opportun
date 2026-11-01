@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { MatchPanelView, MatchScoreHeader, type MatchPanelViewProps } from './MatchPanel';
@@ -28,6 +28,11 @@ function setup(overrides: Partial<MatchPanelViewProps> = {}) {
   return props;
 }
 
+/** The bar's own row: the meter and the score printed beside it (#30). */
+function scoreRow(): HTMLElement {
+  return screen.getByLabelText('Match score').parentElement!;
+}
+
 describe('MatchPanelView', () => {
   it('a base resume with no opportunity cannot be scored', () => {
     setup({ opportunityId: null });
@@ -49,9 +54,8 @@ describe('MatchPanelView', () => {
   it('a scored, current report shows the score, dated, with no staleness notice', () => {
     setup({ view: REPORT });
     expect(screen.getByRole('button', { name: 'Score again' })).toBeInTheDocument();
-    // The number itself now lives in MatchScoreHeader (issue #304); this view encodes it in
-    // the meter and names the band in words.
     expect(screen.getByLabelText('Match score')).toHaveValue(72);
+    expect(within(scoreRow()).getByText('72')).toBeInTheDocument();
     expect(screen.getByText('Strong match')).toBeInTheDocument();
     expect(screen.getByText('Strong Go background; show infrastructure work.')).toBeInTheDocument();
     expect(screen.getByText('Terraform')).toBeInTheDocument();
@@ -61,12 +65,49 @@ describe('MatchPanelView', () => {
     expect(screen.queryByText(/may no longer reflect/)).toBeNull();
   });
 
+  it.each([0, 41, 72, 100])(
+    'prints a score of %i beside its bar, on the same 0 to 100 scale (#30)',
+    (score) => {
+      setup({ view: { ...REPORT, report: { ...REPORT.report, score } } });
+      const meter = screen.getByLabelText('Match score');
+      expect(meter).toHaveValue(score);
+      expect(meter).toHaveAttribute('max', '100');
+      // The row holds only the bar and its value, so its whole text is the value and the scale.
+      expect(scoreRow().textContent).toBe(`${score} / 100`);
+    },
+  );
+
+  it('a stale report marks the printed score stale the same way as its bar (#30)', () => {
+    setup({ view: { ...REPORT, stale: true } });
+    expect(within(scoreRow()).getByText('72')).toBeInTheDocument();
+    // The badge and the dated note mark the whole score block: band, bar and number together,
+    // so the old number is never shown as current.
+    const block = scoreRow().parentElement!;
+    expect(within(block).getByText('May be outdated')).toBeInTheDocument();
+    expect(
+      within(block).getByText(/may no longer reflect the current document/),
+    ).toBeInTheDocument();
+  });
+
   it('a stale report says plainly that the document may have changed since', () => {
     setup({ view: { ...REPORT, stale: true } });
     // The old score still renders: it is not hidden, only honestly dated (#175).
     expect(screen.getByLabelText('Match score')).toHaveValue(72);
     expect(screen.getByText('May be outdated')).toBeInTheDocument();
     expect(screen.getByText(/may no longer reflect the current document/)).toBeInTheDocument();
+  });
+
+  it('keeps the score and summary at reading width, and lays the cards out across the card (#36)', () => {
+    setup({ view: REPORT });
+    // jsdom has no layout: this pins the structure. The widths themselves were measured in a
+    // browser (see https://github.com/bgoleno/opportun/issues/36's PR).
+    const reading = screen.getByText(REPORT.report.summary).parentElement!;
+    expect(reading).toHaveClass('max-w-prose');
+    expect(reading).toContainElement(scoreRow());
+    const weak = screen.getByRole('list', { name: 'Weak areas' });
+    expect(reading).not.toContainElement(weak);
+    expect(weak).toHaveClass('grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))]');
+    expect(reading).not.toContainElement(screen.getByRole('list', { name: 'Missing keywords' }));
   });
 
   it('scoring in progress disables the button and relabels it', () => {

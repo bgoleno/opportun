@@ -797,10 +797,10 @@ export const taskRuns = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
-// 4.6 Contacts and communications
+// 4.6 Network and communications
 
-export const contacts = sqliteTable(
-  'contacts',
+export const networkContacts = sqliteTable(
+  'network_contacts',
   {
     id: id(),
     userId: userRef(),
@@ -819,8 +819,8 @@ export const contacts = sqliteTable(
     updatedAt: updatedAt(),
   },
   (t) => [
-    index('contacts_user_id_idx').on(t.userId),
-    index('contacts_user_company_idx').on(t.userId, t.currentCompanyId),
+    index('network_contacts_user_id_idx').on(t.userId),
+    index('network_contacts_user_company_idx').on(t.userId, t.currentCompanyId),
   ],
 );
 
@@ -852,7 +852,7 @@ export const communications = sqliteTable(
     opportunityId: text('opportunity_id').references(() => opportunities.id, {
       onDelete: 'set null',
     }),
-    contactId: text('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
+    contactId: text('contact_id').references(() => networkContacts.id, { onDelete: 'set null' }),
     needsReview: bool('needs_review').notNull().default(false),
     /**
      * A stage change the classifier proposes for the linked opportunity (FR-M2). Stored only;

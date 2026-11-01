@@ -1,4 +1,4 @@
-// Contacts (FR-C1). The company is written by name and mapped to the caller's company
+// The Network section's contacts (FR-C1). The company is written by name and mapped to the caller's company
 // (find-or-create); linkedinUrl is stored as metadata and never fetched (C-1).
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -89,18 +89,34 @@ function normalizeHistory(
   }));
 }
 
-export async function contactRoutes(app: FastifyInstance): Promise<void> {
+/**
+ * Where the section's API is served. `/network` is its name; `/contacts` is an alias (issue
+ * https://github.com/bgoleno/opportun/issues/22): the section was called Contacts and served
+ * there until it was renamed Network, so a script written against the old path keeps working.
+ * Both get the same handlers, schemas and auth, and test/network.test.ts checks they answer
+ * alike. Nothing in this repository calls the alias: the web app uses /network, and the
+ * browser extension's only call is POST /connector/capture. It can be removed once a release
+ * note has announced that /api/v1/contacts stops working.
+ */
+export const NETWORK_BASES = ['/network', '/contacts'] as const;
+
+export async function networkRoutes(app: FastifyInstance): Promise<void> {
+  for (const base of NETWORK_BASES) contactRoutesAt(app, base);
+}
+
+/** The section's five routes under one base path. */
+function contactRoutesAt(app: FastifyInstance, base: (typeof NETWORK_BASES)[number]): void {
   const api = app.withTypeProvider<ZodTypeProvider>();
   const db = app.db;
 
   api.get(
-    '/contacts',
+    base,
     { schema: { querystring: ContactQuery, response: { 200: pageOf(ContactSchema) } } },
     async (req) => listContacts(db, app.requireUser(req), req.query),
   );
 
   api.post(
-    '/contacts',
+    base,
     { schema: { body: ContactCreate, response: { 201: ContactSchema } } },
     async (req, reply) => {
       const { history, ...rest } = req.body;
@@ -113,7 +129,7 @@ export async function contactRoutes(app: FastifyInstance): Promise<void> {
   );
 
   api.get(
-    '/contacts/:id',
+    `${base}/:id`,
     { schema: { params: IdParams, response: { 200: ContactDetailSchema } } },
     async (req) => {
       const ctx = app.requireUser(req);
@@ -123,7 +139,7 @@ export async function contactRoutes(app: FastifyInstance): Promise<void> {
   );
 
   api.patch(
-    '/contacts/:id',
+    `${base}/:id`,
     { schema: { params: IdParams, body: ContactPatch, response: { 200: ContactSchema } } },
     async (req) => {
       const { history, ...rest } = req.body;
@@ -135,7 +151,7 @@ export async function contactRoutes(app: FastifyInstance): Promise<void> {
   );
 
   api.delete(
-    '/contacts/:id',
+    `${base}/:id`,
     { schema: { params: IdParams, response: { 204: z.null() } } },
     async (req, reply) => {
       await deleteContact(db, app.requireUser(req), req.params.id);

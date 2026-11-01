@@ -23,6 +23,8 @@ import { Route as DiscoveryCompaniesRouteImport } from './routes/discovery/compa
 import { Route as DiscoveryDecidedRouteImport } from './routes/discovery/decided';
 import { Route as DiscoveryPromptsRouteImport } from './routes/discovery/prompts';
 import { Route as DiscoverySourcesRouteImport } from './routes/discovery/sources';
+import { Route as NetworkIndexRouteImport } from './routes/network/index';
+import { Route as NetworkIdRouteImport } from './routes/network/$id';
 import { Route as OpportunitiesIdRouteImport } from './routes/opportunities.$id';
 import { Route as ResumesIndexRouteImport } from './routes/resumes/index';
 import { Route as ResumesIdRouteImport } from './routes/resumes/$id';
@@ -108,6 +110,16 @@ const DiscoverySourcesRoute = DiscoverySourcesRouteImport.update({
   id: '/sources',
   path: '/sources',
   getParentRoute: () => DiscoveryRouteRoute,
+} as any);
+const NetworkIndexRoute = NetworkIndexRouteImport.update({
+  id: '/network/',
+  path: '/network/',
+  getParentRoute: () => rootRouteImport,
+} as any);
+const NetworkIdRoute = NetworkIdRouteImport.update({
+  id: '/network/$id',
+  path: '/network/$id',
+  getParentRoute: () => rootRouteImport,
 } as any);
 const OpportunitiesIdRoute = OpportunitiesIdRouteImport.update({
   id: '/opportunities/$id',
@@ -198,6 +210,7 @@ export interface FileRoutesByFullPath {
   '/discovery/decided': typeof DiscoveryDecidedRoute;
   '/discovery/prompts': typeof DiscoveryPromptsRoute;
   '/discovery/sources': typeof DiscoverySourcesRoute;
+  '/network/$id': typeof NetworkIdRoute;
   '/opportunities/$id': typeof OpportunitiesIdRoute;
   '/resumes/$id': typeof ResumesIdRoute;
   '/settings/account': typeof SettingsAccountRoute;
@@ -213,6 +226,7 @@ export interface FileRoutesByFullPath {
   '/settings/users': typeof SettingsUsersRoute;
   '/contacts/': typeof ContactsIndexRoute;
   '/discovery/': typeof DiscoveryIndexRoute;
+  '/network/': typeof NetworkIndexRoute;
   '/resumes/': typeof ResumesIndexRoute;
   '/settings/': typeof SettingsIndexRoute;
 }
@@ -227,6 +241,7 @@ export interface FileRoutesByTo {
   '/discovery/decided': typeof DiscoveryDecidedRoute;
   '/discovery/prompts': typeof DiscoveryPromptsRoute;
   '/discovery/sources': typeof DiscoverySourcesRoute;
+  '/network/$id': typeof NetworkIdRoute;
   '/opportunities/$id': typeof OpportunitiesIdRoute;
   '/resumes/$id': typeof ResumesIdRoute;
   '/settings/account': typeof SettingsAccountRoute;
@@ -242,6 +257,7 @@ export interface FileRoutesByTo {
   '/settings/users': typeof SettingsUsersRoute;
   '/contacts': typeof ContactsIndexRoute;
   '/discovery': typeof DiscoveryIndexRoute;
+  '/network': typeof NetworkIndexRoute;
   '/resumes': typeof ResumesIndexRoute;
   '/settings': typeof SettingsIndexRoute;
 }
@@ -259,6 +275,7 @@ export interface FileRoutesById {
   '/discovery/decided': typeof DiscoveryDecidedRoute;
   '/discovery/prompts': typeof DiscoveryPromptsRoute;
   '/discovery/sources': typeof DiscoverySourcesRoute;
+  '/network/$id': typeof NetworkIdRoute;
   '/opportunities/$id': typeof OpportunitiesIdRoute;
   '/resumes/$id': typeof ResumesIdRoute;
   '/settings/account': typeof SettingsAccountRoute;
@@ -274,6 +291,7 @@ export interface FileRoutesById {
   '/settings/users': typeof SettingsUsersRoute;
   '/contacts/': typeof ContactsIndexRoute;
   '/discovery/': typeof DiscoveryIndexRoute;
+  '/network/': typeof NetworkIndexRoute;
   '/resumes/': typeof ResumesIndexRoute;
   '/settings/': typeof SettingsIndexRoute;
 }
@@ -292,6 +310,7 @@ export interface FileRouteTypes {
     | '/discovery/decided'
     | '/discovery/prompts'
     | '/discovery/sources'
+    | '/network/$id'
     | '/opportunities/$id'
     | '/resumes/$id'
     | '/settings/account'
@@ -307,6 +326,7 @@ export interface FileRouteTypes {
     | '/settings/users'
     | '/contacts/'
     | '/discovery/'
+    | '/network/'
     | '/resumes/'
     | '/settings/';
   fileRoutesByTo: FileRoutesByTo;
@@ -321,6 +341,7 @@ export interface FileRouteTypes {
     | '/discovery/decided'
     | '/discovery/prompts'
     | '/discovery/sources'
+    | '/network/$id'
     | '/opportunities/$id'
     | '/resumes/$id'
     | '/settings/account'
@@ -336,6 +357,7 @@ export interface FileRouteTypes {
     | '/settings/users'
     | '/contacts'
     | '/discovery'
+    | '/network'
     | '/resumes'
     | '/settings';
   id:
@@ -352,6 +374,7 @@ export interface FileRouteTypes {
     | '/discovery/decided'
     | '/discovery/prompts'
     | '/discovery/sources'
+    | '/network/$id'
     | '/opportunities/$id'
     | '/resumes/$id'
     | '/settings/account'
@@ -367,6 +390,7 @@ export interface FileRouteTypes {
     | '/settings/users'
     | '/contacts/'
     | '/discovery/'
+    | '/network/'
     | '/resumes/'
     | '/settings/';
   fileRoutesById: FileRoutesById;
@@ -380,9 +404,11 @@ export interface RootRouteChildren {
   PipelineRoute: typeof PipelineRoute;
   RegisterRoute: typeof RegisterRoute;
   ContactsIdRoute: typeof ContactsIdRoute;
+  NetworkIdRoute: typeof NetworkIdRoute;
   OpportunitiesIdRoute: typeof OpportunitiesIdRoute;
   ResumesIdRoute: typeof ResumesIdRoute;
   ContactsIndexRoute: typeof ContactsIndexRoute;
+  NetworkIndexRoute: typeof NetworkIndexRoute;
   ResumesIndexRoute: typeof ResumesIndexRoute;
 }
 
@@ -485,6 +511,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/discovery/sources';
       preLoaderRoute: typeof DiscoverySourcesRouteImport;
       parentRoute: typeof DiscoveryRouteRoute;
+    };
+    '/network/': {
+      id: '/network/';
+      path: '/network';
+      fullPath: '/network/';
+      preLoaderRoute: typeof NetworkIndexRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    '/network/$id': {
+      id: '/network/$id';
+      path: '/network/$id';
+      fullPath: '/network/$id';
+      preLoaderRoute: typeof NetworkIdRouteImport;
+      parentRoute: typeof rootRouteImport;
     };
     '/opportunities/$id': {
       id: '/opportunities/$id';
@@ -657,9 +697,11 @@ const rootRouteChildren: RootRouteChildren = {
   PipelineRoute: PipelineRoute,
   RegisterRoute: RegisterRoute,
   ContactsIdRoute: ContactsIdRoute,
+  NetworkIdRoute: NetworkIdRoute,
   OpportunitiesIdRoute: OpportunitiesIdRoute,
   ResumesIdRoute: ResumesIdRoute,
   ContactsIndexRoute: ContactsIndexRoute,
+  NetworkIndexRoute: NetworkIndexRoute,
   ResumesIndexRoute: ResumesIndexRoute,
 };
 export const routeTree = rootRouteImport

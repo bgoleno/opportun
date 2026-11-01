@@ -69,7 +69,7 @@ describe('copy plan', () => {
       'discovery_runs',
       'mail_filter_rules',
       'task_runs',
-      'contacts',
+      'network_contacts',
       // discovery_results moved below communications when it gained source_communication_id
       // (design D3b): a lead names the message it was parsed out of, so the message copies first.
       'communications',

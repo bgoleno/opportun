@@ -267,6 +267,13 @@
       "when": 1792750000000,
       "tag": "0037_fence_match_report",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1793518476560,
+      "tag": "0038_network_contacts",
+      "breakpoints": true
     }
   ]
 }

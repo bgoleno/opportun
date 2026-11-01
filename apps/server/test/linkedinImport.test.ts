@@ -11,7 +11,7 @@ import { and, count, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { communications, companies, contacts, jobs } from '../src/db/schema';
+import { communications, companies, networkContacts, jobs } from '../src/db/schema';
 import { enqueue, runNextJob } from '../src/jobs/runner';
 import {
   LINKEDIN_IMPORT_JOB_KIND,
@@ -95,17 +95,21 @@ async function importAndRun(app: FastifyInstance, c: TestClient, zip: Buffer) {
 }
 
 async function rowCounts(app: FastifyInstance, userId: string) {
-  const n = async (t: typeof contacts | typeof communications | typeof companies) =>
+  const n = async (t: typeof networkContacts | typeof communications | typeof companies) =>
     (await app.db.select({ n: count() }).from(t).where(eq(t.userId, userId)).get())?.n ?? 0;
   return {
-    contacts: await n(contacts),
+    contacts: await n(networkContacts),
     communications: await n(communications),
     companies: await n(companies),
   };
 }
 
 async function contactsOf(app: FastifyInstance, userId: string) {
-  return await app.db.select().from(contacts).where(eq(contacts.userId, userId)).all();
+  return await app.db
+    .select()
+    .from(networkContacts)
+    .where(eq(networkContacts.userId, userId))
+    .all();
 }
 
 async function linkedinComms(app: FastifyInstance, userId: string) {
@@ -305,7 +309,7 @@ describe('POST /imports/linkedin', () => {
     // A contact the user added by hand, with the same profile URL (trailing slash and case differ).
     const manual = await a.request({
       method: 'POST',
-      url: '/api/v1/contacts',
+      url: '/api/v1/network',
       payload: {
         name: 'Jane D.',
         linkedinUrl: `${JANE_URL.toUpperCase().replace('HTTPS', 'https')}/`,
