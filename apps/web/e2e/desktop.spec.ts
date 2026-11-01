@@ -558,9 +558,9 @@ test.describe('resume workspace chat column', () => {
           Math.abs(g.chat.top - g.document.top),
           'chat top aligned with the first section',
         ).toBeLessThanOrEqual(1);
-        expect(g.chat.bottom, 'the whole chat column is in view').toBeLessThanOrEqual(
-          g.viewportHeight + 1,
-        );
+        // The column is as tall as the window below the app header, so before the page scrolls
+        // its bottom sits below the fold by the height of the workspace's own header. Whether the
+        // whole column is in view is checked once it is stuck, below.
         // The stub's conversation is longer than the column, so it has to scroll inside it.
         expect(g.conversation.scrollHeight).toBeGreaterThan(g.conversation.clientHeight);
         expect(['auto', 'scroll']).toContain(g.conversation.overflowY);
@@ -581,6 +581,9 @@ test.describe('resume workspace chat column', () => {
         const after = await workspaceGeometry(page);
         expect(after.chat.top, 'chat stays below the app header').toBeGreaterThanOrEqual(
           after.headerBottom,
+        );
+        expect(after.chat.top, 'chat did not scroll away with the page').toBeGreaterThan(
+          g.chat.top - by + 2,
         );
         expect(after.chat.bottom, 'chat stays in view').toBeLessThanOrEqual(
           after.viewportHeight + 1,
