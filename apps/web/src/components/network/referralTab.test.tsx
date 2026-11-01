@@ -76,6 +76,8 @@ describe('ReferralsTab', () => {
 
     // Ranked candidates come first, each with its rank and rationale.
     const list = await screen.findByRole('list', { name: 'Referral candidates' });
+    // https://github.com/bgoleno/opportun/issues/34: the asks sit in the one rail width.
+    expect(list.closest('[data-slot="main-with-rail"]')).not.toBeNull();
     const rows = within(list).getAllByRole('listitem');
     expect(rows.map((r) => within(r).getByRole('heading').textContent)).toEqual([
       'Sam Lee',

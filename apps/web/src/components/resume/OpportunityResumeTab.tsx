@@ -3,6 +3,7 @@
 import { Link, useNavigate } from '@tanstack/react-router';
 import { FilePlus2, Unlink } from 'lucide-react';
 import { useState } from 'react';
+import { MainWithRail } from '@/components/MainWithRail';
 import { FormError } from '@/components/FormError';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -137,7 +138,7 @@ export function OpportunityResumeTab({ opportunityId }: { opportunityId: string 
   }
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
+    <MainWithRail>
       <Card>
         <CardHeader>
           <CardTitle>Resumes for this opportunity</CardTitle>
@@ -228,6 +229,6 @@ export function OpportunityResumeTab({ opportunityId }: { opportunityId: string 
         <AttachExistingCard opportunityId={opportunityId} />
         <RegisterDocCard opportunityId={opportunityId} />
       </div>
-    </div>
+    </MainWithRail>
   );
 }

@@ -229,6 +229,24 @@ describe('OpportunityDetail', () => {
     expect(entries[1]).toHaveTextContent('Referred by Sam');
   });
 
+  // https://github.com/bgoleno/opportun/issues/34: one rail width on every main-plus-rail tab, and
+  // a linked message's text in the timeline wraps at reading width.
+  it('lays out the Timeline, Details and Resume tabs as main plus the one rail', async () => {
+    const { user } = setup();
+    const timeline = await screen.findByRole('list', { name: 'Timeline' });
+    expect(timeline.closest('[data-slot="main-with-rail"]')).not.toBeNull();
+    expect(await within(timeline).findByText('Can you do Tuesday?')).toHaveClass('max-w-prose');
+
+    await user.click(screen.getByRole('tab', { name: 'Details' }));
+    const details = await screen.findByRole('tabpanel', { name: 'Details' });
+    expect(details.querySelector('[data-slot="main-with-rail"]')).not.toBeNull();
+
+    await user.click(screen.getByRole('tab', { name: 'Resume' }));
+    const resume = await screen.findByRole('tabpanel', { name: 'Resume' });
+    await within(resume).findByText('No tailored resume yet.');
+    expect(resume.querySelector('[data-slot="main-with-rail"]')).not.toBeNull();
+  });
+
   it('adds a meeting from the composer', async () => {
     const { api, user } = setup();
     const composer = await screen.findByRole('form', { name: 'Add to timeline' });

@@ -65,6 +65,12 @@ describe('MessageDialog', () => {
     expect(calls.some((c) => c.path.endsWith('/body'))).toBe(false);
   });
 
+  it('wraps the message text at reading width (#34)', async () => {
+    // https://github.com/bgoleno/opportun/issues/34: an inbox message body is running text.
+    renderWithProviders(<MessageDialog comm={comm()} open={true} onOpenChange={vi.fn()} />);
+    expect(await screen.findByText(/we are hiring a staff engineer/i)).toHaveClass('max-w-prose');
+  });
+
   it('says plainly that this is all Opportun keeps', async () => {
     renderWithProviders(<MessageDialog comm={comm()} open={true} onOpenChange={vi.fn()} />);
     expect(

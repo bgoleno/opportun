@@ -180,7 +180,9 @@ function ProviderSection({ status }: { status: ProviderStatus }) {
         </p>
       ) : (
         <>
-          <p className="text-sm text-muted-foreground">{consoleHint(status.provider)}</p>
+          <p className="max-w-prose text-sm text-muted-foreground">
+            {consoleHint(status.provider)}
+          </p>
           {status.sharesIntegrationClient ? (
             <p
               className="max-w-md rounded-md border bg-muted/40 px-3 py-2 text-sm"

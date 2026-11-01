@@ -126,7 +126,7 @@ export function UsageTable() {
           </TableBody>
         </Table>
       )}
-      <p className="text-xs text-muted-foreground">
+      <p className="max-w-prose text-xs text-muted-foreground">
         Costs are estimates from list prices; your provider bill is authoritative. Costs marked
         estimated come from models with no list price, which are counted at the highest listed price
         so they still count toward the daily budget.

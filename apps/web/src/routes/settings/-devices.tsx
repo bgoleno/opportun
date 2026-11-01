@@ -215,7 +215,7 @@ function ExtensionRow({
         </Button>
       </div>
       {nothingToDownload ? (
-        <p className="text-xs text-muted-foreground">
+        <p className="max-w-prose text-xs text-muted-foreground">
           This server has no built extension to hand over. Build it from a checkout with{' '}
           <code>{artifacts.buildCommand}</code>, then reload this page.
         </p>
@@ -228,7 +228,7 @@ function AppleMailLine({ status }: { status: AppleMailStatus | undefined }) {
   if (status === undefined) return null;
   if (!status.connected || status.lastSyncAt === null) {
     return (
-      <p className="text-muted-foreground">
+      <p className="max-w-prose text-muted-foreground">
         {status.lastSyncAt === null
           ? 'Apple Mail: not connected.'
           : `Apple Mail: not connected (no active token; last batch ${relativeTime(status.lastSyncAt)}).`}{' '}
