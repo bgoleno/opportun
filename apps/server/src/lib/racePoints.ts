@@ -11,6 +11,10 @@
 // caller there (test/race.ts pauseAt, never holdAt: a barrier would wait for a caller the lock
 // is holding back) and asserts the other never gets past its own lock meanwhile. The same
 // test holds on SQLite, where the write gate keeps the second transaction from starting.
+// The wait is observed, not timed (test/race.ts heldApart and settledOrWaiting,
+// https://github.com/bgoleno/opportun/issues/62): on Postgres the second caller's advisory
+// lock shows as ungranted in pg_locks, on SQLite its request waits at the write gate
+// (WriteGate.waiting).
 
 type RaceHook = (point: string) => Promise<void> | void;
 

@@ -34,6 +34,7 @@ describe('scope locks hold two open transactions apart', () => {
         payload: { email, password: 'correct horse battery', displayName: email },
       });
     const [one, two] = await heldApart(
+      app,
       'auth.register.locked',
       () => register('one@example.com'),
       () => register('two@example.com'),
@@ -47,6 +48,7 @@ describe('scope locks hold two open transactions apart', () => {
     const { app, a } = await boot();
     const ctx = { userId: a.userId, isAdmin: false };
     const [first, second] = await heldApart(
+      app,
       'companies.findOrCreate.locked',
       () => findOrCreateCompany(app.db, ctx, 'Initech'),
       () => findOrCreateCompany(app.db, ctx, 'initech '),
@@ -65,6 +67,7 @@ describe('scope locks hold two open transactions apart', () => {
     const { app, a } = await boot();
     const ctx = { userId: a.userId, isAdmin: false };
     const [one, two] = await heldApart(
+      app,
       'prompts.create.locked',
       () => createPromptVersion(app.db, ctx, 'comms.classify', 'body one'),
       () => createPromptVersion(app.db, ctx, 'comms.classify', 'body two'),
@@ -82,6 +85,7 @@ describe('scope locks hold two open transactions apart', () => {
     const one = await createPromptVersion(app.db, ctx, 'comms.classify', 'body one');
     const two = await createPromptVersion(app.db, ctx, 'comms.classify', 'body two');
     await heldApart(
+      app,
       'prompts.activate.locked',
       () => activatePrompt(app.db, ctx, one.id),
       () => activatePrompt(app.db, ctx, two.id),
@@ -98,6 +102,7 @@ describe('scope locks hold two open transactions apart', () => {
     const { app, a } = await boot();
     const ctx = { userId: a.userId, isAdmin: false };
     await heldApart(
+      app,
       'rr.config.locked',
       () => writeRrConfig(app.db, ctx, 'https://one.example.org', 'key-one'),
       () => writeRrConfig(app.db, ctx, 'https://two.example.org', 'key-two'),
@@ -125,6 +130,7 @@ describe('scope locks hold two open transactions apart', () => {
       scopes: ['https://www.googleapis.com/auth/documents'],
     });
     await heldApart(
+      app,
       'google.replaceSecret.locked',
       () => writeTokens(app.db, ctx, tokens('r-one')),
       () => writeTokens(app.db, ctx, tokens('r-two')),

@@ -1160,6 +1160,16 @@ function watchStatements(tx: unknown, watch: StatementWatch): () => void {
  * int4, so two scopes can share a key: that over-serializes, never under-serializes. (3) The
  * wait is bounded by statement_timeout (30 s), after which the transaction fails.
  */
+/**
+ * Test seam (test/race.ts): the write gate of a SQLite database, so a racing test can observe
+ * a caller held at it (WriteGate.waiting). Undefined on Postgres, which has no gate: there the
+ * same test looks for the waiting advisory lock in pg_locks instead.
+ */
+export function writeGateOf(exec: Exec): WriteGate | undefined {
+  if (isPg(exec) || isPgTransaction(exec)) return undefined;
+  return connOf(exec).gate;
+}
+
 export async function lockScope(exec: Exec, scope: string): Promise<void> {
   if (scope.length === 0) throw new Error('lockScope: empty scope');
   if (isPgTransaction(exec)) {
