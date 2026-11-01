@@ -435,6 +435,129 @@ export const DEMO_NEXT_STEPS: readonly DemoNextStep[] = [
 ] as const;
 
 // ---------------------------------------------------------------------------
+// The network (issue https://github.com/bgoleno/opportun/issues/27): invented people who work
+// at, or used to work at, the demo companies, so the Referrals tab of most demo opportunities
+// has someone to ask. Contoso Robotics has nobody, current or former, so its two opportunities
+// show the empty state. Every name and address is made up, and every address is on a reserved
+// domain (the demo companies' own .example domains, or example.com). No LinkedIn URLs: a made-up
+// profile URL on the real site could name a real person.
+//
+// A contact's current company is one of the demo companies by name (or none): the contact
+// repository maps it to the company row seeded above, as the app does, and never creates a
+// company the demo did not seed. Earlier employers live only in history. Unique names keep the
+// product's candidate order fully determined (current before former, then strength, then name).
+
+export interface DemoContact {
+  name: string;
+  /** A DEMO_COMPANIES name, or null for someone between roles. */
+  company: string | null;
+  emails: string[];
+  history: { company: string; title: string | null; from: string | null; to: string | null }[];
+  /** 1 acquaintance, 2 know well, 3 close; null when not set. */
+  strength: 1 | 2 | 3 | null;
+  notes: string | null;
+  source: 'manual' | 'linkedin_export';
+  tags: string[];
+}
+
+const CLINIC_A = DEMO_COMPANIES[0]!.name;
+const NORTHWIND = DEMO_COMPANIES[1]!.name;
+const FOURTH_COFFEE = DEMO_COMPANIES[2]!.name;
+
+export const DEMO_CONTACTS: readonly DemoContact[] = [
+  {
+    name: 'Rosa Delgado',
+    company: CLINIC_A,
+    emails: ['rosa.delgado@clinic-a.example'],
+    history: [
+      { company: NORTHWIND, title: 'Senior Data Engineer', from: '2016', to: '2021' },
+      { company: CLINIC_A, title: 'Director of Platform Engineering', from: '2021', to: null },
+    ],
+    strength: 3,
+    notes: 'Former teammate at Northwind. Happy to make introductions on the platform side.',
+    source: 'linkedin_export',
+    tags: ['former colleague', 'platform'],
+  },
+  {
+    name: 'Marcus Webb',
+    company: CLINIC_A,
+    emails: ['marcus.webb@clinic-a.example'],
+    history: [{ company: CLINIC_A, title: 'Staff Software Engineer', from: '2022', to: null }],
+    strength: 1,
+    notes: 'Met once after his meetup talk on observability.',
+    source: 'linkedin_export',
+    tags: ['meetup'],
+  },
+  {
+    name: 'Priya Raman',
+    company: FOURTH_COFFEE,
+    emails: ['priya.raman@fourthcoffee-logistics.example'],
+    history: [
+      { company: CLINIC_A, title: 'Senior Backend Engineer', from: '2018', to: '2022' },
+      {
+        company: FOURTH_COFFEE,
+        title: 'Engineering Manager, Fulfillment',
+        from: '2022',
+        to: null,
+      },
+    ],
+    strength: 2,
+    notes: null,
+    source: 'linkedin_export',
+    tags: ['former colleague'],
+  },
+  {
+    name: 'Daniel Okafor',
+    company: NORTHWIND,
+    emails: ['daniel.okafor@northwind-analytics.example'],
+    history: [{ company: NORTHWIND, title: 'Data Engineering Manager', from: '2020', to: null }],
+    strength: 2,
+    notes: 'Hiring for the data platform team this quarter.',
+    source: 'linkedin_export',
+    tags: [],
+  },
+  {
+    name: 'Hannah Lindqvist',
+    company: NORTHWIND,
+    emails: ['hannah.lindqvist@northwind-analytics.example'],
+    history: [{ company: NORTHWIND, title: 'Technical Recruiter', from: '2023', to: null }],
+    strength: null,
+    notes: 'Reached out first about the Principal Engineer opening.',
+    source: 'manual',
+    tags: ['recruiter'],
+  },
+  {
+    name: 'Tomas Novak',
+    company: null,
+    emails: ['tomas.novak@example.com'],
+    history: [
+      {
+        company: FOURTH_COFFEE,
+        title: 'Operations Engineering Lead',
+        from: '2017',
+        to: '2023',
+      },
+    ],
+    strength: 3,
+    notes: 'Between roles. Still knows the warehouse systems team well.',
+    source: 'linkedin_export',
+    tags: ['former colleague'],
+  },
+  {
+    name: 'Grace Kimura',
+    company: null,
+    emails: ['grace.kimura@example.com'],
+    history: [
+      { company: 'Adatum Corporation', title: 'Product Manager', from: '2019', to: '2024' },
+    ],
+    strength: 2,
+    notes: 'Product mentor. Not connected to any company in the pipeline yet.',
+    source: 'manual',
+    tags: ['mentor'],
+  },
+] as const;
+
+// ---------------------------------------------------------------------------
 // Resumes (local_file, #284) and match reports.
 
 export const DEMO_RESUME_BASE_ID = 'da834374-13f5-4080-934e-f77f91b99819';

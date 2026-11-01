@@ -84,8 +84,10 @@ export interface SlowTransaction {
   /**
    * True when the body awaited something outside the database (fetch, files, argon2, a
    * timer): the event loop turned while the gate was held. A database-only body never lets
-   * it turn, because every statement resolves at once under the gate. This is the rule the
-   * guard enforces (no external I/O inside a transaction), and it does not depend on load.
+   * it turn, because every statement resolves at once under the gate. On Postgres, where each
+   * statement is network I/O, the same rule applies to the gaps between statements (see
+   * pgTransaction in db/client.ts). This is the rule the guard enforces (no external I/O
+   * inside a transaction), and it does not depend on load.
    */
   awaitedOutside: boolean;
   /** Stack of withTransaction's caller. */

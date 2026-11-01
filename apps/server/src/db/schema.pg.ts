@@ -752,10 +752,10 @@ export const taskRuns = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// 4.6 Contacts and communications
+// 4.6 Network and communications
 
-export const contacts = pgTable(
-  'contacts',
+export const networkContacts = pgTable(
+  'network_contacts',
   {
     id: id(),
     userId: userRef(),
@@ -774,8 +774,8 @@ export const contacts = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [
-    index('contacts_user_id_idx').on(t.userId),
-    index('contacts_user_company_idx').on(t.userId, t.currentCompanyId),
+    index('network_contacts_user_id_idx').on(t.userId),
+    index('network_contacts_user_company_idx').on(t.userId, t.currentCompanyId),
   ],
 );
 
@@ -803,7 +803,7 @@ export const communications = pgTable(
     opportunityId: text('opportunity_id').references(() => opportunities.id, {
       onDelete: 'set null',
     }),
-    contactId: text('contact_id').references(() => contacts.id, { onDelete: 'set null' }),
+    contactId: text('contact_id').references(() => networkContacts.id, { onDelete: 'set null' }),
     needsReview: bool('needs_review').notNull().default(false),
     proposedTransition: text('proposed_transition', { enum: OPPORTUNITY_STAGES }),
     /** Stage 1 verdict (spec D1): 'passed' reached the classifier, 'filtered' never did. */

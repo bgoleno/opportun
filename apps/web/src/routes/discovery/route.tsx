@@ -10,6 +10,7 @@ const SECTIONS = [
 ] as const;
 
 export const Route = createFileRoute('/discovery')({
+  staticData: { layout: 'fluid' },
   component: DiscoveryLayout,
 });
 

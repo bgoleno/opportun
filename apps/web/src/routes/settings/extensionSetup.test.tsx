@@ -163,7 +163,7 @@ describe('ExtensionSetupDialog', () => {
     });
     await mint(user);
     expect(await screen.findByText(/waiting for the extension/i)).toBeInTheDocument();
-    expect(await screen.findByText(/connected/i, {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText(/connected/i)).toBeInTheDocument();
   });
 
   it('shows the address the download will point the extension at (design D21)', async () => {
@@ -233,7 +233,7 @@ describe('ExtensionSetupDialog', () => {
       },
     });
     await mint(user);
-    await screen.findByText(/connected/i, {}, { timeout: 4000 });
+    await screen.findByText(/connected/i);
     const settled = calls.filter((c) => c.path === '/device-tokens' && c.method === 'GET').length;
     await new Promise((r) => setTimeout(r, 120)); // many poll intervals at pollMs=10
     expect(

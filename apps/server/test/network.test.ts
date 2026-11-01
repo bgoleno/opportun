@@ -1,4 +1,4 @@
-// Contacts API (Task 19, FR-C1): CRUD, company mapping by name on write, list filters, the
+// Network API (Task 19, FR-C1): CRUD, company mapping by name on write, list filters, the
 // FTS index (entity_kind 'contact'), and cross-user isolation.
 import { describe, expect, it } from 'vitest';
 import { useApi } from './api';
@@ -23,7 +23,7 @@ interface ContactBody {
 async function createContact(c: TestClient, body: Record<string, unknown> = {}) {
   const res = await c.request({
     method: 'POST',
-    url: '/api/v1/contacts',
+    url: '/api/v1/network',
     payload: { name: 'Jane Doe', ...body },
   });
   expect(res.statusCode, res.body).toBe(201);
@@ -31,12 +31,12 @@ async function createContact(c: TestClient, body: Record<string, unknown> = {}) 
 }
 
 async function list(c: TestClient, query = '') {
-  const res = await c.request({ method: 'GET', url: `/api/v1/contacts${query}` });
+  const res = await c.request({ method: 'GET', url: `/api/v1/network${query}` });
   expect(res.statusCode, res.body).toBe(200);
   return res.json() as { items: ContactBody[]; total: number };
 }
 
-describe('contacts api', () => {
+describe('network api', () => {
   it('creates, reads, patches and deletes a contact', async () => {
     const { a } = await boot();
     const created = await createContact(a, {
@@ -61,13 +61,13 @@ describe('contacts api', () => {
     });
     expect(created.currentCompanyId).toEqual(expect.any(String));
 
-    const read = await a.request({ method: 'GET', url: `/api/v1/contacts/${created.id}` });
+    const read = await a.request({ method: 'GET', url: `/api/v1/network/${created.id}` });
     expect(read.statusCode).toBe(200);
     expect(read.json()).toMatchObject({ id: created.id, name: 'Jane Doe', referrals: [] });
 
     const patched = await a.request({
       method: 'PATCH',
-      url: `/api/v1/contacts/${created.id}`,
+      url: `/api/v1/network/${created.id}`,
       payload: { strength: null, notes: '', company: null, tags: [] },
     });
     expect(patched.statusCode, patched.body).toBe(200);
@@ -79,9 +79,9 @@ describe('contacts api', () => {
       tags: [],
     });
 
-    const del = await a.request({ method: 'DELETE', url: `/api/v1/contacts/${created.id}` });
+    const del = await a.request({ method: 'DELETE', url: `/api/v1/network/${created.id}` });
     expect(del.statusCode).toBe(204);
-    const gone = await a.request({ method: 'GET', url: `/api/v1/contacts/${created.id}` });
+    const gone = await a.request({ method: 'GET', url: `/api/v1/network/${created.id}` });
     expect(gone.statusCode).toBe(404);
   });
 
@@ -96,7 +96,7 @@ describe('contacts api', () => {
     ]) {
       const res = await a.request({
         method: 'POST',
-        url: '/api/v1/contacts',
+        url: '/api/v1/network',
         payload: { name: 'X', ...bad },
       });
       expect(res.statusCode, JSON.stringify(bad)).toBe(400);
@@ -120,7 +120,7 @@ describe('contacts api', () => {
 
     const moved = await a.request({
       method: 'PATCH',
-      url: `/api/v1/contacts/${sam.id}`,
+      url: `/api/v1/network/${sam.id}`,
       payload: { company: 'INITECH' },
     });
     expect(moved.json()).toMatchObject({
@@ -153,7 +153,7 @@ describe('contacts api', () => {
     // LIKE wildcards in q are literal.
     expect((await list(a, '?q=%25')).total).toBe(0);
 
-    const badSort = await a.request({ method: 'GET', url: '/api/v1/contacts?sort=password' });
+    const badSort = await a.request({ method: 'GET', url: '/api/v1/network?sort=password' });
     expect(badSort.statusCode).toBe(400);
   });
 
@@ -174,13 +174,13 @@ describe('contacts api', () => {
 
     await a.request({
       method: 'PATCH',
-      url: `/api/v1/contacts/${jane.id}`,
+      url: `/api/v1/network/${jane.id}`,
       payload: { notes: 'Now on the payments team.' },
     });
     expect((await search(a, 'observability')).items).toEqual([]);
     expect((await search(a, 'payments')).items).toHaveLength(1);
 
-    await a.request({ method: 'DELETE', url: `/api/v1/contacts/${jane.id}` });
+    await a.request({ method: 'DELETE', url: `/api/v1/network/${jane.id}` });
     expect((await search(a, 'payments')).items).toEqual([]);
     expect((await search(a, 'Jane')).items).toEqual([]);
   });
@@ -193,11 +193,11 @@ describe('contacts api', () => {
     expect((await list(b, '?q=Jane')).total).toBe(0);
     const patch = await b.request({
       method: 'PATCH',
-      url: `/api/v1/contacts/${jane.id}`,
+      url: `/api/v1/network/${jane.id}`,
       payload: { name: 'Pwned' },
     });
     expect(patch.statusCode).toBe(404);
-    const del = await b.request({ method: 'DELETE', url: `/api/v1/contacts/${jane.id}` });
+    const del = await b.request({ method: 'DELETE', url: `/api/v1/network/${jane.id}` });
     expect(del.statusCode).toBe(404);
     // Same company name for B maps to B's own company, never A's.
     const bJane = await createContact(b, { company: 'Initech' });
@@ -206,20 +206,152 @@ describe('contacts api', () => {
 });
 
 assertIsolated({
-  name: 'contacts (GET)',
+  name: 'network (GET)',
+  create: async (c) => (await createContact(c)).id,
+  read: (c, id) => c.request({ method: 'GET', url: `/api/v1/network/${id}` }),
+});
+
+assertIsolated({
+  name: 'network (PATCH)',
+  create: async (c) => (await createContact(c)).id,
+  read: (c, id) =>
+    c.request({ method: 'PATCH', url: `/api/v1/network/${id}`, payload: { notes: 'x' } }),
+});
+
+assertIsolated({
+  name: 'network (DELETE)',
+  create: async (c) => (await createContact(c)).id,
+  read: (c, id) => c.request({ method: 'DELETE', url: `/api/v1/network/${id}` }),
+});
+
+// The /api/v1/contacts alias (issue https://github.com/bgoleno/opportun/issues/22) must answer
+// exactly as /api/v1/network does, route by route: the same status and the same body for the
+// owner, for another user, for bad input and for nobody signed in.
+describe('/api/v1/contacts alias', () => {
+  const NEW = '/api/v1/network';
+  const OLD = '/api/v1/contacts';
+  type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+
+  /** The same request on both paths; both answers must match. Returns the /network one. */
+  async function same(
+    c: TestClient,
+    method: Method,
+    suffix = '',
+    payload?: Record<string, unknown>,
+  ) {
+    const ask = (base: string) =>
+      c.request({ method, url: `${base}${suffix}`, ...(payload === undefined ? {} : { payload }) });
+    const viaOld = await ask(OLD);
+    const viaNew = await ask(NEW);
+    expect(viaOld.statusCode, `${method} ${suffix}`).toBe(viaNew.statusCode);
+    expect(viaOld.body, `${method} ${suffix}`).toBe(viaNew.body);
+    return viaNew;
+  }
+
+  /** What two creates of the same input share: everything but the row's own id and times. */
+  const created = (body: string) => {
+    const { id, createdAt, updatedAt, ...rest } = JSON.parse(body) as Record<string, unknown>;
+    expect([id, createdAt, updatedAt]).toEqual([
+      expect.any(String),
+      expect.any(Number),
+      expect.any(Number),
+    ]);
+    return rest;
+  };
+
+  it('creates the same contact on either path', async () => {
+    const { a } = await boot();
+    const input = {
+      name: 'Jane Doe',
+      emails: ['jane@example.com'],
+      company: 'Initech',
+      strength: 2,
+      notes: 'Met at the platform meetup.',
+      tags: ['platform'],
+    };
+    const viaOld = await a.request({ method: 'POST', url: OLD, payload: input });
+    const viaNew = await a.request({ method: 'POST', url: NEW, payload: input });
+    expect(viaOld.statusCode).toBe(201);
+    expect(viaNew.statusCode).toBe(201);
+    expect(created(viaOld.body)).toEqual(created(viaNew.body));
+  });
+
+  it('lists, reads, updates and deletes the same rows on either path', async () => {
+    const { a } = await boot();
+    const jane = await createContact(a, { company: 'Initech', notes: 'Knows the hiring manager.' });
+    await createContact(a, { name: 'Sam Lee' });
+
+    expect((await same(a, 'GET', '?sort=name')).json()).toMatchObject({ total: 2 });
+    expect((await same(a, 'GET', '?q=Jane')).json()).toMatchObject({ total: 1 });
+    expect((await same(a, 'GET', `/${jane.id}`)).json()).toMatchObject({ id: jane.id });
+
+    // A change made through the alias is the row /network serves.
+    const patched = await a.request({
+      method: 'PATCH',
+      url: `${OLD}/${jane.id}`,
+      payload: { notes: 'Changed through the old path.' },
+    });
+    expect(patched.statusCode, patched.body).toBe(200);
+    const read = await a.request({ method: 'GET', url: `${NEW}/${jane.id}` });
+    expect(read.json()).toEqual({ ...patched.json(), referrals: [] });
+
+    const del = await a.request({ method: 'DELETE', url: `${OLD}/${jane.id}` });
+    expect(del.statusCode).toBe(204);
+    expect((await a.request({ method: 'GET', url: `${NEW}/${jane.id}` })).statusCode).toBe(404);
+    // Gone through either path: the second delete and the reads agree.
+    expect((await same(a, 'DELETE', `/${jane.id}`)).statusCode).toBe(404);
+    expect((await same(a, 'GET', `/${jane.id}`)).statusCode).toBe(404);
+  });
+
+  it("refuses another user's contact on the alias exactly as on /network", async () => {
+    const { a, b } = await boot();
+    const jane = await createContact(a, { company: 'Initech' });
+    expect((await same(b, 'GET')).json()).toMatchObject({ total: 0 });
+    expect((await same(b, 'GET', `?companyId=${jane.currentCompanyId}`)).json()).toMatchObject({
+      total: 0,
+    });
+    expect((await same(b, 'GET', `/${jane.id}`)).statusCode).toBe(404);
+    expect((await same(b, 'PATCH', `/${jane.id}`, { name: 'Pwned' })).statusCode).toBe(404);
+    expect((await same(b, 'DELETE', `/${jane.id}`)).statusCode).toBe(404);
+    // A 404 for everyone would prove nothing: the owner still has the row, unchanged.
+    const mine = await a.request({ method: 'GET', url: `${OLD}/${jane.id}` });
+    expect(mine.statusCode).toBe(200);
+    expect(mine.json()).toMatchObject({ id: jane.id, name: 'Jane Doe' });
+  });
+
+  it('validates input and requires a session the same way', async () => {
+    const { app, a } = await boot();
+    expect((await same(a, 'POST', '', { name: 'X', strength: 4 })).statusCode).toBe(400);
+    expect((await same(a, 'GET', '?sort=password')).statusCode).toBe(400);
+    expect((await same(a, 'PATCH', '/x', { linkedinUrl: 'javascript:alert(1)' })).statusCode).toBe(
+      400,
+    );
+    for (const method of ['GET', 'POST'] as const) {
+      const viaOld = await app.inject({ method, url: OLD, payload: { name: 'X' } });
+      const viaNew = await app.inject({ method, url: NEW, payload: { name: 'X' } });
+      expect(viaOld.statusCode, method).toBe(viaNew.statusCode);
+      expect(viaOld.body, method).toBe(viaNew.body);
+      expect(viaNew.statusCode, method).toBeGreaterThanOrEqual(401);
+      expect(viaNew.statusCode, method).toBeLessThanOrEqual(403);
+    }
+  });
+});
+
+assertIsolated({
+  name: 'the /contacts alias (GET)',
   create: async (c) => (await createContact(c)).id,
   read: (c, id) => c.request({ method: 'GET', url: `/api/v1/contacts/${id}` }),
 });
 
 assertIsolated({
-  name: 'contacts (PATCH)',
+  name: 'the /contacts alias (PATCH)',
   create: async (c) => (await createContact(c)).id,
   read: (c, id) =>
     c.request({ method: 'PATCH', url: `/api/v1/contacts/${id}`, payload: { notes: 'x' } }),
 });
 
 assertIsolated({
-  name: 'contacts (DELETE)',
+  name: 'the /contacts alias (DELETE)',
   create: async (c) => (await createContact(c)).id,
   read: (c, id) => c.request({ method: 'DELETE', url: `/api/v1/contacts/${id}` }),
 });
