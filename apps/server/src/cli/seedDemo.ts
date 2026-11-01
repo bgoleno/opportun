@@ -66,10 +66,17 @@
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { eq, inArray, notInArray } from 'drizzle-orm';
+import { eq, inArray, notInArray, sql } from 'drizzle-orm';
 import { companyMatchKey, dedupeKey } from '@opportun/core';
 import { loadConfig, loadSqliteDir } from '../config';
-import { closeDatabase, connectDatabase, withTransaction, type Db, type Exec } from '../db/client';
+import {
+  closeDatabase,
+  connectDatabase,
+  rawRun,
+  withTransaction,
+  type Db,
+  type Exec,
+} from '../db/client';
 import {
   activities,
   attachments,
@@ -92,10 +99,12 @@ import { REGISTRATION_OPEN_KEY, registerUser } from '../lib/registration';
 import { createStorage, readOperatorFile, type Storage } from '../lib/storage';
 import type { UserCtx } from '../repos/base';
 import { needsReviewFor } from '../repos/communications';
+import { insertContactSync } from '../repos/contacts';
 import {
   DEMO_ACTIVITIES,
   DEMO_COMMUNICATIONS,
   DEMO_COMPANIES,
+  DEMO_CONTACTS,
   DEMO_MATCH_REPORTS,
   DEMO_NEXT_STEPS,
   DEMO_OPPORTUNITIES,
@@ -125,6 +134,8 @@ export interface SeedDemoReport {
   opportunitiesPerUser: number;
   /** The base resume plus every tailored variant (#284). */
   resumesPerUser: number;
+  /** The network (issue https://github.com/bgoleno/opportun/issues/27). */
+  contactsPerUser: number;
 }
 
 export class DemoFlagNotSetError extends Error {}
@@ -247,6 +258,17 @@ async function deleteExistingDemoUsers(tx: Exec, userIds: readonly string[]): Pr
     .delete(users)
     .where(inArray(users.id, [...userIds]))
     .run();
+  // The search index (repos/search) is not a drizzle table and has no foreign key to cascade
+  // from users. The network's contacts are indexed when seeded (issue
+  // https://github.com/bgoleno/opportun/issues/27) and get fresh ids every time, so without
+  // this every reset would leave the previous run's contacts behind as stale index rows.
+  await rawRun(
+    tx,
+    sql`DELETE FROM search_index WHERE user_id IN (${sql.join(
+      userIds.map((id) => sql`${id}`),
+      sql`, `,
+    )})`,
+  );
   return true;
 }
 
@@ -280,7 +302,7 @@ async function seedOneUserData(
   userIndex: number,
   aiApiKey: string,
   now: number,
-): Promise<{ companies: number; opportunities: number }> {
+): Promise<{ companies: number; opportunities: number; contacts: number }> {
   await writeSetting(tx, ctx, budgetKey(ctx.userId), { perTaskDailyUsd: PER_TASK_DAILY_USD });
   // putSecretIn, not putSecret: the vault key is bound to the outer db handle (bindVaultKey,
   // called once above), not to a transaction handle, so sealing the value needs `db`
@@ -472,7 +494,30 @@ async function seedOneUserData(
     ])
     .run();
 
-  return { companies: DEMO_COMPANIES.length, opportunities: DEMO_OPPORTUNITIES.length };
+  // The network (issue https://github.com/bgoleno/opportun/issues/27) goes through the contact
+  // repository's own insert, the one the LinkedIn import composes, not a raw insert like the rows
+  // above. That maps each person's company by name to the company seeded above and indexes them
+  // for search, exactly as the app does. It needs the companies to exist first, and it gives
+  // each contact a fresh id on every seed, unlike the pinned ids above: nothing in the demo
+  // links to a contact by id, so a reset only has to reproduce the same people.
+  for (const person of DEMO_CONTACTS) {
+    await insertContactSync(tx, ctx, {
+      name: person.name,
+      company: person.company,
+      emails: person.emails,
+      history: person.history,
+      strength: person.strength,
+      notes: person.notes,
+      source: person.source,
+      tags: person.tags,
+    });
+  }
+
+  return {
+    companies: DEMO_COMPANIES.length,
+    opportunities: DEMO_OPPORTUNITIES.length,
+    contacts: DEMO_CONTACTS.length,
+  };
 }
 
 interface WrittenResumeFile {
@@ -643,6 +688,7 @@ export async function seedDemo(
   let companiesPerUser = 0;
   let opportunitiesPerUser = 0;
   let resumesPerUser = 0;
+  let contactsPerUser = 0;
   const deletedExisting = await withTransaction(
     db,
     async (tx) => {
@@ -668,6 +714,7 @@ export async function seedDemo(
         const counts = await seedOneUserData(db, tx, ctx, i, creds.aiApiKey, now);
         companiesPerUser = counts.companies;
         opportunitiesPerUser = counts.opportunities;
+        contactsPerUser = counts.contacts;
         resumesPerUser = await seedOneUserResumes(resumeFiles, tx, ctx, i, now);
       }
       await tx
@@ -691,7 +738,14 @@ export async function seedDemo(
     { scope: 'seed_demo' },
   );
 
-  return { deletedExisting, userIds, companiesPerUser, opportunitiesPerUser, resumesPerUser };
+  return {
+    deletedExisting,
+    userIds,
+    companiesPerUser,
+    opportunitiesPerUser,
+    resumesPerUser,
+    contactsPerUser,
+  };
 }
 
 const USAGE = [
@@ -777,8 +831,8 @@ if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
       const report = await seedDemo(db, creds);
       process.stdout.write(
         `${report.deletedExisting ? 'Re-seeded' : 'Seeded'} ${report.userIds.length} accounts, ` +
-          `${report.companiesPerUser} companies, ${report.opportunitiesPerUser} opportunities ` +
-          `and ${report.resumesPerUser} resumes each.\n`,
+          `${report.companiesPerUser} companies, ${report.opportunitiesPerUser} opportunities, ` +
+          `${report.resumesPerUser} resumes and ${report.contactsPerUser} contacts each.\n`,
       );
       return 0;
     } finally {

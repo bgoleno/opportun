@@ -14,7 +14,7 @@ describe('ShortcutsOverlay', () => {
     expect(within(dialog).getByText('Discovery review queue')).toBeInTheDocument();
     expect(within(dialog).getByText('Decided results')).toBeInTheDocument();
     expect(within(dialog).getByText('Pipeline')).toBeInTheDocument();
-    expect(within(dialog).getByText('Contacts')).toBeInTheDocument();
+    expect(within(dialog).getByText('Network')).toBeInTheDocument();
   });
 
   it('lists the board keyboard reorder, issue #240', async () => {
@@ -29,12 +29,12 @@ describe('ShortcutsOverlay', () => {
     ).toBeInTheDocument();
   });
 
-  it('lists paging through contacts, issue #207', async () => {
+  it('lists paging through the network, issue #207', async () => {
     const user = userEvent.setup();
     renderWithProviders(<ShortcutsOverlay />);
     await user.keyboard('?');
     const dialog = await screen.findByRole('dialog');
-    const group = within(dialog).getByText('Contacts').closest('div');
+    const group = within(dialog).getByText('Network').closest('div');
     expect(group).not.toBeNull();
     expect(within(group as HTMLElement).getByText('n / p')).toBeInTheDocument();
     expect(within(group as HTMLElement).getByText('Next or previous page')).toBeInTheDocument();

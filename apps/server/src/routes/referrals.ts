@@ -14,7 +14,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { Db } from '../db/client';
-import { companies, contacts } from '../db/schema';
+import { companies, networkContacts } from '../db/schema';
 import { buildAiDeps } from '../lib/ai';
 import type { UserCtx } from '../repos/base';
 import { sameCompany } from '../repos/communications';
@@ -88,7 +88,11 @@ export async function candidateSet(db: Db, ctx: UserCtx, opp: OpportunityView): 
     ).map((c) => [c.id, c.name]),
   );
   const out: Scored[] = [];
-  for (const row of await db.select().from(contacts).where(eq(contacts.userId, ctx.userId)).all()) {
+  for (const row of await db
+    .select()
+    .from(networkContacts)
+    .where(eq(networkContacts.userId, ctx.userId))
+    .all()) {
     const current =
       row.currentCompanyId === null ? null : (names.get(row.currentCompanyId) ?? null);
     const history = readHistory(row.history);

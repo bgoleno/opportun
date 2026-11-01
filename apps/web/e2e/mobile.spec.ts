@@ -4,34 +4,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { ADMIN } from './global-setup';
 import { createOpportunity, registerUser } from './helpers';
+import { ADMIN_ROUTES, USER_ROUTES } from './routes';
 
 const WIDTHS = [390, 320] as const;
-
-/** Every routed view a signed-in user can reach without existing data. */
-const USER_ROUTES = [
-  '/',
-  '/pipeline',
-  '/discovery',
-  '/discovery/companies',
-  '/discovery/decided',
-  '/discovery/prompts',
-  '/discovery/sources',
-  '/resumes',
-  '/inbox',
-  '/contacts',
-  '/settings',
-  '/settings/account',
-  '/settings/security',
-  '/settings/profile',
-  '/settings/role-targets',
-  '/settings/resume-rules',
-  '/settings/ai',
-  '/settings/integrations',
-  '/settings/mail-filters',
-  '/settings/data',
-];
-
-const ADMIN_ROUTES = ['/settings/users', '/settings/jobs'];
 
 /**
  * How far the document is wider than the viewport, and the outermost elements that stick out
@@ -128,6 +103,68 @@ async function stubInbox(page: Page): Promise<void> {
   });
 }
 
+const STUB_RESUME = 'stub-resume';
+const STUB_TIME = Date.UTC(2026, 9, 30, 12, 0);
+
+/**
+ * A tailored resume with a scored match report that has weak areas, served entirely by stubs
+ * (issue https://github.com/bgoleno/opportun/issues/36): scoring needs no AI, and the resume
+ * needs no stored document. Everything else on the page comes from the real server.
+ */
+async function stubScoredResume(page: Page): Promise<void> {
+  const resume = {
+    id: STUB_RESUME,
+    kind: 'tailored',
+    opportunityId: 'stub-opportunity',
+    title: 'Jane Doe - International Consolidated Platform Intelligence - Principal PM',
+    store: 'google_doc',
+    docRef: 'stub-doc',
+    url: 'https://docs.google.com/document/d/stub-doc/edit',
+    parentResumeId: null,
+    status: 'draft',
+    submittedAt: null,
+    submittedTo: null,
+    archivedAt: null,
+    createdAt: STUB_TIME,
+    updatedAt: STUB_TIME,
+  };
+  const weakAreas = [
+    'Kubernetes operations at scale',
+    'Infrastructure as code',
+    'Observability and on-call',
+    'Cloud cost ownership',
+    'Cross-team leadership',
+    'Hiring and mentoring',
+  ].map((area) => ({
+    area,
+    suggestion: `Give one concrete, measured example of ${area.toLowerCase()} from a role you held, with the outcome in numbers.`,
+  }));
+  const match = {
+    report: {
+      score: 72,
+      missingKeywords: ['Terraform', 'Helm', 'Argo CD', 'SLOs', 'FinOps'],
+      weakAreas,
+      summary:
+        'A strong match on platform engineering, with gaps in infrastructure as code, operations at scale and cost ownership.',
+    },
+    scoredAt: STUB_TIME,
+    stale: false,
+  };
+  const session = {
+    id: 'stub-session',
+    resumeId: STUB_RESUME,
+    acceptedAt: null,
+    createdAt: STUB_TIME,
+    messages: [],
+  };
+  await page.route(/\/api\/v1\/(resumes\/stub-resume|tailoring\/stub-session)/, async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api\/v1/, '');
+    if (path === `/resumes/${STUB_RESUME}`) return await route.fulfill({ json: resume });
+    if (path === `/resumes/${STUB_RESUME}/match`) return await route.fulfill({ json: match });
+    return await route.fulfill({ json: session });
+  });
+}
+
 for (const width of WIDTHS) {
   test.describe(`${width}px wide`, () => {
     test.use({ viewport: { width, height: 844 } });
@@ -169,6 +206,15 @@ for (const width of WIDTHS) {
         await expect(page.getByRole('list', { name: 'Messages' })).toBeVisible();
         await expectFits(page, `inbox ${String(tab)}`);
       }
+    });
+
+    test('a resume with its match report and weak areas showing fits', async ({ page }) => {
+      await registerUser(page);
+      await stubScoredResume(page);
+      await page.goto(`/resumes/${STUB_RESUME}`);
+      // The report opens expanded; its weak-area grid is what once overflowed at 320 (#36).
+      await expect(page.getByRole('list', { name: 'Weak areas' })).toBeVisible();
+      await expectFits(page, 'resume with a match report');
     });
 
     test('an opportunity with a long company and title fits', async ({ page }) => {

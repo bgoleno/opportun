@@ -87,9 +87,10 @@ function ImportCard() {
         <CardTitle>Import</CardTitle>
         <CardDescription>
           Upload a zip or a folder with <code>opportunities.csv</code> (columns: {PACK_COLUMNS}),
-          optionally <code>contacts.csv</code> (name, email, linkedin_url, company, notes) and the
-          Markdown notes it refers to. Importing the same pack again changes nothing: rows match on
-          company, title and location, and stages only move forward.
+          optionally <code>network.csv</code> (name, email, linkedin_url, company, notes; a pack
+          that still calls it <code>contacts.csv</code> works too) and the Markdown notes it refers
+          to. Importing the same pack again changes nothing: rows match on company, title and
+          location, and stages only move forward.
         </CardDescription>
       </CardHeader>
       <CardContent>

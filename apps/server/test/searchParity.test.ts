@@ -62,7 +62,7 @@ async function create(c: TestClient, label: Label, oppId: string): Promise<strin
   if (doc.kind === 'p') {
     const res = await c.request({
       method: 'POST',
-      url: '/api/v1/contacts',
+      url: '/api/v1/network',
       payload: { name: doc.title, notes: doc.text },
     });
     expect(res.statusCode, res.body).toBe(201);

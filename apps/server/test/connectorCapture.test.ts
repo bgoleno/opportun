@@ -11,7 +11,7 @@ import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { z } from 'zod';
-import { contacts, jobs } from '../src/db/schema';
+import { networkContacts, jobs } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND, POSTING_RECONCILE_KIND } from '../src/jobs/discoveryKinds';
 import type { safeFetch } from '../src/lib/safeFetch';
 import { createContact, getContactSync } from '../src/repos/contacts';
@@ -87,7 +87,11 @@ function push(app: FastifyInstance, bearer: string, page: CapturedPage | Record<
 }
 
 async function contactsOf(app: FastifyInstance, userId: string) {
-  return await app.db.select().from(contacts).where(eq(contacts.userId, userId)).all();
+  return await app.db
+    .select()
+    .from(networkContacts)
+    .where(eq(networkContacts.userId, userId))
+    .all();
 }
 
 async function resultsOf(app: FastifyInstance, c: TestClient) {
@@ -119,7 +123,7 @@ describe('POST /connector/capture: profiles', () => {
       'VP of Platform Engineering at Initech | TPS report modernization',
     ]);
     // The session API sees it like any other contact.
-    const read = await a.request({ method: 'GET', url: `/api/v1/contacts/${body.contactId}` });
+    const read = await a.request({ method: 'GET', url: `/api/v1/network/${body.contactId}` });
     expect(read.statusCode).toBe(200);
     expect(fetched).toEqual([]);
   });
@@ -538,7 +542,7 @@ describe('POST /connector/capture: isolation', () => {
     const ja = (await push(app, ta, JOB)).json();
     expect(await contactsOf(app, b.userId)).toEqual([]);
     expect(await resultsOf(app, b)).toEqual([]);
-    const peek = await b.request({ method: 'GET', url: `/api/v1/contacts/${ca.contactId}` });
+    const peek = await b.request({ method: 'GET', url: `/api/v1/network/${ca.contactId}` });
     expect(peek.statusCode).toBe(404);
     expect(
       (await b.request({ method: 'GET', url: `/api/v1/discovery/results/${ja.resultId}` }))
@@ -555,8 +559,8 @@ describe('POST /connector/capture: isolation', () => {
 
     const aContact = (await app.db
       .select()
-      .from(contacts)
-      .where(and(eq(contacts.userId, a.userId), eq(contacts.id, ca.contactId)))
+      .from(networkContacts)
+      .where(and(eq(networkContacts.userId, a.userId), eq(networkContacts.id, ca.contactId)))
       .get())!;
     expect(headlinesIn(aContact.notes)).toEqual([
       'VP of Platform Engineering at Initech | TPS report modernization',
@@ -567,7 +571,7 @@ describe('POST /connector/capture: isolation', () => {
     expect(await resultsOf(app, b)).toHaveLength(1);
     const peekBack = await a.request({
       method: 'GET',
-      url: `/api/v1/contacts/${cb.json().contactId}`,
+      url: `/api/v1/network/${cb.json().contactId}`,
     });
     expect(peekBack.statusCode).toBe(404);
   });

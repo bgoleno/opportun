@@ -33,6 +33,7 @@ function opp(
     possibleDuplicates: [],
     descriptionIsUserWritten: false,
     hasCapturedPage: false,
+    lastActivityAt: null,
     createdAt: NOW,
     updatedAt,
   } as OpportunityView;

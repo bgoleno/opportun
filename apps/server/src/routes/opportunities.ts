@@ -36,6 +36,10 @@ export const OpportunityView = OpportunitySchema.extend({
   /** True when a 'capture' activity exists on this opportunity's timeline (issue #264), so the
    *  client knows whether re-deriving a description from it is possible at all. */
   hasCapturedPage: z.boolean(),
+  /** The newest timeline entry's time that is not after now, not counting the opportunity's own
+   *  creation, or null when there is no such entry. The pipeline card's date for every column
+   *  but Discovered (https://github.com/bgoleno/opportun/issues/25). */
+  lastActivityAt: z.number().int().nullable(),
 });
 
 const Title = z.string().trim().min(1).max(300);

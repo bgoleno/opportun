@@ -8,6 +8,7 @@ import { INBOX_TABS, type InboxTab } from '@/components/comms/api';
  * link people will type and paste, not an API.
  */
 export const Route = createFileRoute('/inbox')({
+  staticData: { layout: 'fluid' },
   validateSearch: (search: Record<string, unknown>): { view?: InboxTab } => {
     const view = INBOX_TABS.find((t) => t === search['view']);
     return view === undefined ? {} : { view };
