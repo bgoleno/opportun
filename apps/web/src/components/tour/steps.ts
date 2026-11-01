@@ -158,7 +158,7 @@ export const TOUR_STEPS: TourStep[] = [
     id: 'discovery',
     route: '/discovery',
     view: () => ({
-      title: 'New roles, ranked for you',
+      title: 'New opportunities, ranked for you',
       body: 'Discovery reads company job boards and job alert emails, then scores each posting against your role targets. Accept the good ones and they land in your pipeline.',
       targets: ['discovery-sections'],
     }),
@@ -168,7 +168,7 @@ export const TOUR_STEPS: TourStep[] = [
     route: '/resumes',
     view: () => ({
       title: 'One resume, tailored for every role',
-      body: 'Register your Google Doc once, then make a tailored copy for each opportunity with an AI chat that proposes edits. Nothing changes in your document until you apply an edit.',
+      body: 'Register as many base resumes as you need, from Google Docs or Reactive Resume, then make a tailored copy for each opportunity with an AI chat that proposes edits. Nothing changes in your document until you apply an edit.',
       targets: ['register-resume', 'resumes-header'],
     }),
   },
