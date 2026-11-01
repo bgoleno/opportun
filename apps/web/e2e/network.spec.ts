@@ -70,3 +70,29 @@ test('network: import a LinkedIn export, rank referrers, ask one, and see it on 
     'Referral ask: Jane Doe',
   );
 });
+
+// /contacts and /contacts/$id are aliases kept for bookmarks made before the section was
+// renamed Network (issue https://github.com/bgoleno/opportun/issues/22).
+test('network: a /contacts bookmark from before the rename opens the Network pages', async ({
+  page,
+}) => {
+  await registerUser(page);
+  await page.goto('/network');
+  await page.getByLabel('Name').fill('Dana Testworth');
+  await page.getByRole('button', { name: 'Add' }).click();
+  await expect(toasts(page).getByText('Contact added')).toBeVisible();
+  await page
+    .getByRole('table', { name: 'Network' })
+    .getByRole('link', { name: 'Dana Testworth' })
+    .click();
+  await expect(page).toHaveURL(/\/network\/[^/]+$/);
+  const id = new URL(page.url()).pathname.split('/').pop() as string;
+
+  await page.goto(`/contacts/${id}`);
+  await expect(page).toHaveURL(new RegExp(`/network/${id}$`));
+  await expect(page.getByRole('heading', { name: 'Dana Testworth' })).toBeVisible();
+
+  await page.goto('/contacts');
+  await expect(page).toHaveURL(/\/network$/);
+  await expect(page.getByRole('heading', { name: 'Network', level: 1 })).toBeVisible();
+});

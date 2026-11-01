@@ -2,16 +2,18 @@
 
 [Guide home](README.md) · Previous: [Discovery](discovery.md) · Next: [Settings](settings.md)
 
-Contacts are the people who can tell you about a team or refer you in. Opportun maps them to
-companies, so each opportunity can show who you know there.
+Your network is the people who can tell you about a team or refer you in. Each of them is a
+contact, and Opportun maps each contact to a company, so each opportunity can show who you know
+there.
 
-## Contacts
+## Your network
 
-**Contacts** lists everyone, with their company and title, email, and where the contact came
+**Network** lists everyone, with their company and title, email, and where the contact came
 from (a badge such as **LinkedIn export** or **Captured**). Search by name or email, or add
-someone by hand with name, company and email.
+someone by hand with name, company and email. Before this section was called Network it was
+called Contacts, and links and bookmarks to `/contacts` still open it.
 
-![The Contacts page: an Add a contact form and a table of synthetic contacts with LinkedIn export badges](images/contacts-list.png)
+![The Network page: an Add a contact form and a table of synthetic contacts with LinkedIn export badges](images/network-list.png)
 
 _Contacts imported from a LinkedIn data export, each mapped to a company._
 

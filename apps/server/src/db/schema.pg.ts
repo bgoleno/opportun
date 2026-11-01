@@ -752,7 +752,7 @@ export const taskRuns = pgTable(
 );
 
 // ---------------------------------------------------------------------------
-// 4.6 Contacts and communications
+// 4.6 Network and communications
 
 export const networkContacts = pgTable(
   'network_contacts',

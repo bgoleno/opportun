@@ -797,7 +797,7 @@ export const taskRuns = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
-// 4.6 Contacts and communications
+// 4.6 Network and communications
 
 export const networkContacts = sqliteTable(
   'network_contacts',
