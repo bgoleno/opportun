@@ -37,8 +37,8 @@ test('network: import a LinkedIn export, rank referrers, ask one, and see it on 
   await page.getByRole('button', { name: 'Import LinkedIn export' }).click();
   await expect(page.getByText('Import finished')).toBeVisible({ timeout: 30_000 });
 
-  await page.goto('/contacts');
-  const contacts = page.getByRole('table', { name: 'Contacts' });
+  await page.goto('/network');
+  const contacts = page.getByRole('table', { name: 'Network' });
   for (const name of ['Jane Doe', 'Bob Porter', 'Ana Ruiz']) {
     await expect(contacts).toContainText(name);
   }

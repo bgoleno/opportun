@@ -55,7 +55,7 @@ const USER_TABLES: UserTable[] = [
   // silently reopen every sender they had blocked.
   schema.mailFilterRules,
   schema.taskRuns,
-  schema.contacts,
+  schema.networkContacts,
   schema.communications,
   schema.syncState,
   schema.settings,

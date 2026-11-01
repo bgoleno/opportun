@@ -178,8 +178,8 @@ test('capture: a LinkedIn profile posted by the extension becomes a contact (FR-
     await extension.dispose();
   }
 
-  await page.goto('/contacts');
-  const contacts = page.getByRole('table', { name: 'Contacts' });
+  await page.goto('/network');
+  const contacts = page.getByRole('table', { name: 'Network' });
   await expect(contacts).toContainText('Dana Testworth');
   await expect(contacts.getByRole('row', { name: /Dana Testworth/ })).toContainText('Captured');
 });

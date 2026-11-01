@@ -21,7 +21,7 @@ import {
   useUpdateContact,
   type ContactDetail as ContactDetailData,
 } from './api';
-import { SOURCE_LABELS } from './ContactList';
+import { SOURCE_LABELS } from './NetworkList';
 import { ReferralStatusBadge } from './ReferralsTab';
 
 const linkClass = 'font-medium text-primary underline-offset-4 hover:underline';
@@ -140,11 +140,11 @@ export function ContactDetail({ id }: { id: string }) {
 
   const back = (
     <Link
-      to="/contacts"
+      to="/network"
       className="inline-flex w-fit items-center gap-1 rounded-sm text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
     >
       <ArrowLeft className="size-4" aria-hidden="true" />
-      Contacts
+      Network
     </Link>
   );
   if (error) {
@@ -279,7 +279,7 @@ export function ContactDetail({ id }: { id: string }) {
           try {
             await remove.mutateAsync();
             toast({ title: 'Contact deleted', description: contact.name });
-            await navigate({ to: '/contacts' });
+            await navigate({ to: '/network' });
           } catch (err) {
             toast({ title: 'Not deleted', description: errorMessage(err), variant: 'destructive' });
           }

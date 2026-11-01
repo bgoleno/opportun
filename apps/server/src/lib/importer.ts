@@ -1,5 +1,6 @@
 // Import pipeline (FR-I1, I2). A pack is a zip or a directory upload holding
-// opportunities.csv (required), contacts.csv (optional) and the .md notes the CSV refers to.
+// opportunities.csv (required), network.csv (optional; contacts.csv before issue
+// https://github.com/bgoleno/opportun/issues/22, still read) and the .md notes the CSV refers to.
 // The upload is validated and reduced to a JobPack at request time; the rows are applied by
 // the `import` job. Re-running a pack is idempotent: opportunities upsert by
 // dedupeKey(company, title, location), stages only move forward along the chain, and
@@ -18,7 +19,14 @@ import { z } from 'zod';
 import type { DocumentStore } from '../adapters/documentStore';
 import { readDocumentStorePref } from '../adapters/reactiveResume';
 import { withTransaction, type Db } from '../db/client';
-import { activities, contacts, jobs, opportunities, resumes, stageHistory } from '../db/schema';
+import {
+  activities,
+  networkContacts,
+  jobs,
+  opportunities,
+  resumes,
+  stageHistory,
+} from '../db/schema';
 import type { JobHandler } from '../jobs/registry';
 import { createActivity } from '../repos/activities';
 import type { Exec, UserCtx } from '../repos/base';
@@ -480,7 +488,11 @@ async function importContact(rec: CsvRecord, db: Db, ctx: UserCtx): Promise<Outc
   return await withTransaction(db, async (tx) => {
     const companyId =
       company === null ? null : (await findOrCreateCompanySync(tx, ctx, company)).id;
-    const mine = await tx.select().from(contacts).where(eq(contacts.userId, ctx.userId)).all();
+    const mine = await tx
+      .select()
+      .from(networkContacts)
+      .where(eq(networkContacts.userId, ctx.userId))
+      .all();
     const match =
       (email === null
         ? undefined
@@ -490,7 +502,7 @@ async function importContact(rec: CsvRecord, db: Db, ctx: UserCtx): Promise<Outc
     const now = Date.now();
     if (match === undefined) {
       await tx
-        .insert(contacts)
+        .insert(networkContacts)
         .values({
           id: newId(),
           userId: ctx.userId,
@@ -506,7 +518,7 @@ async function importContact(rec: CsvRecord, db: Db, ctx: UserCtx): Promise<Outc
         .run();
       return 'created';
     }
-    const patch: Partial<typeof contacts.$inferInsert> = {};
+    const patch: Partial<typeof networkContacts.$inferInsert> = {};
     if (email !== null && !match.emails.some((e) => e.toLowerCase() === email)) {
       patch.emails = [...match.emails, email];
     }
@@ -515,9 +527,9 @@ async function importContact(rec: CsvRecord, db: Db, ctx: UserCtx): Promise<Outc
     if (notes !== null && match.notes === null) patch.notes = notes;
     if (Object.keys(patch).length === 0) return 'skipped';
     await tx
-      .update(contacts)
+      .update(networkContacts)
       .set({ ...patch, updatedAt: now })
-      .where(and(eq(contacts.userId, ctx.userId), eq(contacts.id, match.id)))
+      .where(and(eq(networkContacts.userId, ctx.userId), eq(networkContacts.id, match.id)))
       .run();
     return 'updated';
   });

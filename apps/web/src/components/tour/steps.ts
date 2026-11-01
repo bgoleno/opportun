@@ -10,7 +10,7 @@ export type TourRoute =
   | '/pipeline'
   | '/discovery'
   | '/resumes'
-  | '/contacts';
+  | '/network';
 export type Placement = 'bottom' | 'top' | 'right' | 'left';
 
 /** What a Do it now does after the tour pauses: go somewhere, then focus the first match. */
@@ -174,7 +174,7 @@ export const TOUR_STEPS: TourStep[] = [
   },
   {
     id: 'contacts',
-    route: '/contacts',
+    route: '/network',
     view: () => ({
       title: 'See who can refer you',
       body: 'Import your LinkedIn connections, and each opportunity shows who you know at that company. Opportun ranks who is best placed to refer you.',

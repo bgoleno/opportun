@@ -233,11 +233,11 @@ describe('dialect helpers: Postgres SQL (compiled, no server)', () => {
   });
 
   it('ilike casts a jsonb column to text (no ILIKE on jsonb); jsonContains always does', () => {
-    expect(compile(h.ilike(pgTables.contacts.emails, 'ann'))).toMatchObject({
+    expect(compile(h.ilike(pgTables.networkContacts.emails, 'ann'))).toMatchObject({
       sql: `("contacts"."emails")::text ILIKE $1 ESCAPE '\\'`,
       params: ['%ann%'],
     });
-    expect(compile(h.ilike(pgTables.contacts.name, 'ann')).sql).toBe(
+    expect(compile(h.ilike(pgTables.networkContacts.name, 'ann')).sql).toBe(
       `"contacts"."name" ILIKE $1 ESCAPE '\\'`,
     );
     expect(compile(h.jsonContains(sql`x`, 'ann')).sql).toBe(`(x)::text ILIKE $1 ESCAPE '\\'`);

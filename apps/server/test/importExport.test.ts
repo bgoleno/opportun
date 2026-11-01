@@ -12,7 +12,7 @@ import type { DocumentStore } from '../src/adapters/documentStore';
 import {
   activities,
   companies,
-  contacts,
+  networkContacts,
   jobs,
   opportunities,
   resumes,
@@ -138,7 +138,7 @@ const csvZip = (csv: string, extra: Record<string, string> = {}): Buffer =>
 async function rowCounts(app: FastifyInstance, userId: string): Promise<Record<string, number>> {
   const n = async (table: typeof opportunities | typeof companies | typeof activities) =>
     (await app.db.select({ n: count() }).from(table).where(eq(table.userId, userId)).get())?.n ?? 0;
-  const m = async (table: typeof stageHistory | typeof resumes | typeof contacts) =>
+  const m = async (table: typeof stageHistory | typeof resumes | typeof networkContacts) =>
     (await app.db.select({ n: count() }).from(table).where(eq(table.userId, userId)).get())?.n ?? 0;
   return {
     opportunities: await n(opportunities),
@@ -146,7 +146,7 @@ async function rowCounts(app: FastifyInstance, userId: string): Promise<Record<s
     activities: await n(activities),
     stageHistory: await m(stageHistory),
     resumes: await m(resumes),
-    contacts: await m(contacts),
+    contacts: await m(networkContacts),
   };
 }
 
@@ -290,7 +290,11 @@ describe('import', () => {
       store: 'google_doc',
     });
 
-    const people = await app.db.select().from(contacts).where(eq(contacts.userId, a.userId)).all();
+    const people = await app.db
+      .select()
+      .from(networkContacts)
+      .where(eq(networkContacts.userId, a.userId))
+      .all();
     expect(people.map((p) => p.name).sort()).toEqual(['Jordan Example', 'Sam Sample']);
     const jordan = people.find((p) => p.name === 'Jordan Example')!;
     expect(jordan.emails).toEqual(['jordan@example.com']);
