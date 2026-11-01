@@ -49,6 +49,13 @@ export function ResumeWorkspace({ id }: { id: string }) {
  * into the main column at full width, above the chat -- which also fixes the column collapsing
  * to one below `lg`: there is only ever one column now, so the report is never pushed behind an
  * arbitrarily long transcript regardless of viewport.
+ *
+ * Issue #35: from `xl` the tailoring chat is a column of its own on the right (the --container-chat
+ * token, docs/design.md section 9), beside the document and the report, its top level with
+ * theirs. It is sticky and as tall as the window below the app header, so it stays in view while
+ * the other column scrolls, and the conversation scrolls inside it (ChatPanel). Below `xl` the
+ * sections stack as before, with the chat capped at 48rem so its composer and Send button do not
+ * stretch across the page. In the document the chat still comes after the report.
  */
 function ResumeWorkspaceLoaded({ resume }: { resume: Resume }) {
   const matchQuery = useMatchReport(resume.id, resume.opportunityId);
@@ -100,9 +107,18 @@ function ResumeWorkspaceLoaded({ resume }: { resume: Resume }) {
           content already is plain text, so this only ever renders a document it can show in
           full. A Google Doc or Reactive Resume document already has its own full-fidelity
           viewer, the "Open in ___" link just above. */}
-      {resume.url === null ? <ResumeTextViewer resumeId={resume.id} /> : null}
-      <MatchPanel resume={resume} />
-      <ChatPanel resumeId={resume.id} />
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_var(--container-chat)] xl:items-start">
+        <div className="grid min-w-0 gap-6">
+          {resume.url === null ? <ResumeTextViewer resumeId={resume.id} /> : null}
+          <MatchPanel resume={resume} />
+        </div>
+        {/* top-22 is the app header (h-14) plus the main area's top padding (md:p-8), and the
+            height leaves the same 2rem below, so a stuck column sits where the page's content
+            starts and ends. */}
+        <div className="w-full max-w-3xl xl:sticky xl:top-22 xl:h-[calc(100dvh-7.5rem)] xl:max-w-none">
+          <ChatPanel resumeId={resume.id} />
+        </div>
+      </div>
     </section>
   );
 }

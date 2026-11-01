@@ -2,7 +2,14 @@
 // reaches the document until the user applies a card.
 import { useQueryClient } from '@tanstack/react-query';
 import { Send } from 'lucide-react';
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from 'react';
 import { FormError } from '@/components/FormError';
 import { Markdown } from '@/components/Markdown';
 import { Button } from '@/components/ui/button';
@@ -33,13 +40,15 @@ function Bubble({
   children: React.ReactNode;
 }) {
   const mine = message.role === 'user';
+  // Each bubble stops at reading width (issue #35), border included, so a reply's border never
+  // runs on past text that wraps at 65ch when the conversation is wider than that.
   return (
     <li
       data-session={sessionId}
       className={
         mine
-          ? 'ml-8 justify-self-end rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground'
-          : 'mr-4 grid gap-3 rounded-lg border bg-card px-3 py-2 text-sm'
+          ? 'ml-8 max-w-prose justify-self-end rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground'
+          : 'mr-4 grid max-w-prose gap-3 rounded-lg border bg-card px-3 py-2 text-sm'
       }
     >
       <span className="sr-only">{mine ? 'You:' : 'Assistant:'}</span>
@@ -82,6 +91,33 @@ function MessageItem({
       ) : null}
     </Bubble>
   );
+}
+
+/**
+ * Keeps a scrolling list at its newest item while the reader is there (issue #35). When the chat
+ * has a column of its own the conversation scrolls inside it, so a new message or a streaming
+ * reply would otherwise land out of sight below. A reader who scrolled up to an earlier message
+ * is left where they are. Where the list does not scroll (stacked, as tall as its content),
+ * setting scrollTop does nothing.
+ *
+ * It runs after every render rather than on a list of what can grow the conversation, so nothing
+ * that adds to it (a message, a streamed delta, a suggestion card) can be missed; for a reader
+ * already at the end, scrolling to the end again changes nothing.
+ */
+function useFollowNewest() {
+  const ref = useRef<HTMLOListElement>(null);
+  const atNewest = useRef(true);
+  useLayoutEffect(() => {
+    const list = ref.current;
+    if (list !== null && atNewest.current) list.scrollTop = list.scrollHeight;
+  });
+  const onScroll = () => {
+    const list = ref.current;
+    if (list === null) return;
+    // Within a line of the end counts as at the end, so rounding cannot unstick it.
+    atNewest.current = list.scrollHeight - list.scrollTop - list.clientHeight < 24;
+  };
+  return { ref, onScroll };
 }
 
 export function ChatPanel({ resumeId }: { resumeId: string }) {
@@ -135,23 +171,33 @@ export function ChatPanel({ resumeId }: { resumeId: string }) {
   }
 
   const messages = session.data?.messages ?? [];
+  const follow = useFollowNewest();
 
+  // The card fills the height its container gives it, and the conversation takes what the header
+  // and composer leave, scrolling inside it, so the composer stays at the bottom. Where nothing
+  // limits the height (stacked below xl), everything is as tall as its content, as before.
   return (
-    <Card>
+    <Card className="h-full min-h-0">
       <CardHeader>
         <CardTitle>Tailoring chat</CardTitle>
         <CardDescription>
           Ask for changes for this job. Suggestions never touch the document until you apply them.
         </CardDescription>
       </CardHeader>
-      <CardContent className="grid gap-4">
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-4">
         {session.isPending ? (
           <p className="text-sm text-muted-foreground">Loading conversation...</p>
         ) : session.isError ? (
           <FormError message={resumeErrorMessage(session.error) ?? errorMessage(session.error)} />
         ) : (
           <>
-            <ol aria-label="Conversation" aria-live="polite" className="grid gap-3">
+            <ol
+              ref={follow.ref}
+              onScroll={follow.onScroll}
+              aria-label="Conversation"
+              aria-live="polite"
+              className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto"
+            >
               {messages.length === 0 && pendingUser === null ? (
                 <li className="text-sm text-muted-foreground">
                   No messages yet. Try: &quot;Tailor this resume for the job and propose
