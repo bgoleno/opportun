@@ -3,6 +3,7 @@ import { NetworkList } from '@/components/network/NetworkList';
 import { PageHeader } from '@/components/PageHeader';
 
 export const Route = createFileRoute('/network/')({
+  staticData: { layout: 'fluid' },
   component: NetworkPage,
 });
 

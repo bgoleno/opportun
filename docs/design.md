@@ -564,6 +564,41 @@ SPA served by the same origin as the API; no third-party fonts or CDNs (CSP stay
 applied before first paint to avoid theme flash. Virtualized tables for large
 histories.
 
+### Layout widths
+
+Desktop widths come from a few theme tokens in `apps/web/src/index.css` (`@theme`), so each is
+one line to change. Tailwind turns each `--container-*` token into `max-w-*` and `w-*`
+utilities. The standard and its measurements were proposed in issue
+[#31](https://github.com/bgoleno/opportun/issues/31).
+
+| Width   | Token                                     | Used for                                                                                                                                                                    |
+| ------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reading | `max-w-prose` (Tailwind's built-in, 65ch) | Any block of running text: paragraphs, Markdown, the job description, timeline bodies, notes, chat messages, suggestion text, resume text.                                  |
+| Page    | `--container-page` (`max-w-page`)         | Every view by default. `AppShell` caps the route's content at the page cap and centres it in the main area. The cap's value is set in `index.css` and written nowhere else. |
+| Fluid   | none                                      | Boards and lists that gain from width: Pipeline (kanban and table), Discovery (every tab), the Inbox list, the Network (contacts) list.                                     |
+| Rail    | `--container-rail` (20rem, `w-rail`)      | The side column of a main-plus-rail layout, from `lg`.                                                                                                                      |
+| Chat    | `--container-chat` (28rem, `w-chat`)      | The resume workspace's tailoring chat as a right-hand column from `xl`.                                                                                                     |
+
+Rules that go with them:
+
+1. **Measure belongs to the text block, not the container.** A container can be wide; a block
+   of running text inside it is not. Target 65ch.
+2. **Use extra width with columns, not longer lines.** Independent short items (weak-area
+   cards, missing keywords, dashboard cards) flow into a responsive grid,
+   `repeat(auto-fill, minmax(18rem, 1fr))`, so a wide area becomes two or three columns of
+   readable cards instead of one long column.
+3. **Breakpoints stay Tailwind's defaults**, keyed on the window: main plus rail from `lg`, the
+   workspace chat column from `xl`. Layouts are designed for the expanded sidebar, the narrower
+   case. Container queries on the main area are out of scope.
+4. **Every view is page width unless its route declares `staticData: { layout: 'fluid' }`**
+   (`apps/web/src/lib/layout.ts`). A route inherits the layout of the nearest route above it
+   that declares one, so a section declares it once and its header and tabs do not move between
+   tabs. Going fluid is a reviewed decision: `lib/layout.test.tsx` pins where it is declared,
+   so adding one changes that test.
+5. **Widths come from the tokens.** An arbitrary width value (`max-w-[...]`, `w-[...rem]`,
+   `grid-cols-[1fr_21rem]`) in a view is a review finding. Views that predate the tokens move
+   onto them in the follow-ups listed in #31.
+
 ## 10. Deployment and operations
 
 - **Image**: multi-stage Dockerfile, distroless-style final image, non-root user,
