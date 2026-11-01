@@ -722,11 +722,14 @@ test.describe('keyboard focus indicators', () => {
         await tabTo(page, target, what);
         const look = await focusLook(target);
         expect(look.focusVisible, `${what} is keyboard-focused`).toBe(true);
-        expect(look.outlineStyle, `${what} has an outline in forced colors`).not.toBe('none');
-        expect(look.outlineWidth, `${what}'s outline is at least 1px`).toBeGreaterThanOrEqual(1);
-        expect(look.outlineColor, `${what}'s outline is not transparent`).not.toBe(
-          'rgba(0, 0, 0, 0)',
-        );
+        // Soft, so a failure names every kind of element without an outline, not only the first.
+        expect.soft(look.outlineStyle, `${what} has an outline in forced colors`).not.toBe('none');
+        expect
+          .soft(look.outlineWidth, `${what}'s outline is at least 1px`)
+          .toBeGreaterThanOrEqual(1);
+        expect
+          .soft(look.outlineColor, `${what}'s outline is not transparent`)
+          .not.toBe('rgba(0, 0, 0, 0)');
       }
     } finally {
       await close();
