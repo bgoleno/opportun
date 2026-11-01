@@ -10,7 +10,7 @@ const STEP_HEADINGS = [
   'Let your inbox do the data entry',
   'Your mail will land here',
   'Every role, from first look to offer',
-  'New roles, ranked for you',
+  'New opportunities, ranked for you',
   'One resume, tailored for every role',
   'See who can refer you',
   "You're ready to go",
