@@ -59,11 +59,16 @@ describe('ResumeWorkspace (issue #304)', () => {
   it('shows the score beside the title, not in a side column', async () => {
     boot();
     renderWithProviders(<ResumeWorkspace id="r-1" />);
-    expect(await screen.findByRole('heading', { name: 'Tailored Resume' })).toBeInTheDocument();
-    // "81" is unambiguous: the full report (open by default) encodes the same score in its
-    // meter, not as a second copy of the digits (issue #304's own point about not repeating
-    // the glanceable number next to the reading material it also now has its own home for).
-    expect(await screen.findByText('81')).toBeInTheDocument();
+    const title = await screen.findByRole('heading', { name: 'Tailored Resume' });
+    const report = await screen.findByRole('heading', { name: 'Match report' });
+    // Two copies of "81": the header's, and the one printed beside the report's bar
+    // (https://github.com/bgoleno/opportun/issues/30). The header's comes after the title and
+    // before the report, so it is in the page header, not in a side column.
+    const copies = await screen.findAllByText('81');
+    expect(copies).toHaveLength(2);
+    const [header] = copies;
+    expect(title.compareDocumentPosition(header!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(header!.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('shows no score widget before one exists', async () => {
