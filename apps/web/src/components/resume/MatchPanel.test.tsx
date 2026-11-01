@@ -97,6 +97,19 @@ describe('MatchPanelView', () => {
     expect(screen.getByText(/may no longer reflect the current document/)).toBeInTheDocument();
   });
 
+  it('keeps the score and summary at reading width, and lays the cards out across the card (#36)', () => {
+    setup({ view: REPORT });
+    // jsdom has no layout: this pins the structure. The widths themselves were measured in a
+    // browser (see https://github.com/bgoleno/opportun/issues/36's PR).
+    const reading = screen.getByText(REPORT.report.summary).parentElement!;
+    expect(reading).toHaveClass('max-w-prose');
+    expect(reading).toContainElement(scoreRow());
+    const weak = screen.getByRole('list', { name: 'Weak areas' });
+    expect(reading).not.toContainElement(weak);
+    expect(weak).toHaveClass('grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))]');
+    expect(reading).not.toContainElement(screen.getByRole('list', { name: 'Missing keywords' }));
+  });
+
   it('scoring in progress disables the button and relabels it', () => {
     setup({ view: REPORT, scoring: true });
     expect(screen.getByRole('button', { name: 'Scoring...' })).toBeDisabled();
