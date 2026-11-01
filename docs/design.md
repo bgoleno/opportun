@@ -602,9 +602,13 @@ Rules that go with them:
    that declares one, so a section declares it once and its header and tabs do not move between
    tabs. Going fluid is a reviewed decision: `lib/layout.test.tsx` pins where it is declared,
    so adding one changes that test.
-5. **Widths come from the tokens.** An arbitrary width value (`max-w-[...]`, `w-[...rem]`,
-   `grid-cols-[1fr_21rem]`) in a view is a review finding. Views that predate the tokens move
-   onto them in the follow-ups listed in #31.
+5. **Widths come from the tokens.** An arbitrary width value with a literal length
+   (`max-w-[70ch]`, `w-[37rem]`, `grid-cols-[1fr_21rem]`) anywhere in `apps/web/src` outside
+   `components/ui/` fails `pnpm lint` (`opportun/no-arbitrary-width`,
+   `apps/web/eslint/no-arbitrary-width.js`, which also says what it cannot see). Tokens, such as
+   `grid-cols-[minmax(0,1fr)_var(--container-rail)]`, and column splits with no length
+   (`grid-cols-[auto_1fr]`) pass. A width that has to stay, such as a viewport-relative popover,
+   carries an `eslint-disable-next-line` comment saying why.
 
 ## 10. Deployment and operations
 

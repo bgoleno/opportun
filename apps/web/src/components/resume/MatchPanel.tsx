@@ -192,6 +192,7 @@ export function MatchPanelView({
                         wide, so each card's text is capped at max-w-prose (65ch). */}
                     <ul
                       aria-labelledby={weakAreasId}
+                      // eslint-disable-next-line opportun/no-arbitrary-width -- the card grid docs/design.md section 9 rule 2 prescribes, an 18rem card floor, not a layout width. Kept as an exception by https://github.com/bgoleno/opportun/issues/37 until a named grid utility replaces it.
                       className="grid grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))] gap-2"
                     >
                       {view.report.weakAreas.map((w) => (

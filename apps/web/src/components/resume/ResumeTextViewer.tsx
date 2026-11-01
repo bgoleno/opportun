@@ -51,7 +51,7 @@ export function ResumeTextViewerView({ text, error }: ResumeTextViewerViewProps)
               </Button>
             </CollapsibleTrigger>
             <CollapsibleContent>
-              <div className="max-w-[65ch] text-sm whitespace-pre-wrap">{text}</div>
+              <div className="max-w-prose text-sm whitespace-pre-wrap">{text}</div>
             </CollapsibleContent>
           </Collapsible>
         )}
