@@ -137,7 +137,7 @@ export async function settledOrWaiting(
   };
   void caller.then(done, done);
   const deadline = performance.now() + OBSERVE_DEADLINE_MS;
-  let last = 0;
+  let last: number;
   for (;;) {
     // A second arrival first: a caller that got past its lock and then finished did both.
     if (pause !== undefined && pause.arrived() > 1) return 'arrived';
