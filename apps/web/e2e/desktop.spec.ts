@@ -16,7 +16,14 @@
 // list can only shrink.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import {
+  expect,
+  test,
+  type Browser,
+  type BrowserContext,
+  type Locator,
+  type Page,
+} from '@playwright/test';
 import { ADMIN } from './global-setup';
 import { PASSWORD } from './helpers';
 import { ADMIN_ROUTES, USER_ROUTES } from './routes';
@@ -216,11 +223,17 @@ test.beforeAll(async ({ playwright }, info) => {
   await writeFile(cache, JSON.stringify(accounts));
 });
 
-async function pageAt(browser: Browser, width: number, state: State) {
+interface Look {
+  colorScheme?: 'light' | 'dark';
+  forcedColors?: 'active' | 'none';
+}
+
+async function pageAt(browser: Browser, width: number, state: State, look: Look = {}) {
   const context = await browser.newContext({
     viewport: { width, height: HEIGHT },
     storageState: state,
-    colorScheme: 'light',
+    colorScheme: look.colorScheme ?? 'light',
+    forcedColors: look.forcedColors ?? 'none',
   });
   return { page: await context.newPage(), close: () => context.close() };
 }
@@ -528,8 +541,13 @@ function expectComposerAndBubbles(
 }
 
 /** `tag` names the seeded opportunity; each test needs its own, or creating it is a duplicate. */
-async function openWorkspace(browser: Browser, width: number, tag = `chat column ${width}`) {
-  const opened = await pageAt(browser, width, accounts.seed);
+async function openWorkspace(
+  browser: Browser,
+  width: number,
+  tag = `chat column ${width}`,
+  look: Look = {},
+) {
+  const opened = await pageAt(browser, width, accounts.seed, look);
   const id = await seededWorkspace(opened.page, tag);
   await opened.page.goto(`/resumes/${id}`);
   await expect(opened.page.getByRole('list', { name: 'Conversation' })).toContainText(
@@ -641,6 +659,96 @@ test.describe('resume workspace chat column', () => {
         expect(g.chat.top, 'chat below the match report').toBeGreaterThanOrEqual(g.report.bottom);
         expect(g.chat.width, `chat at most 48rem (${cap}px)`).toBeLessThanOrEqual(cap + 1);
         expectComposerAndBubbles(g, cap);
+      } finally {
+        await close();
+      }
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Keyboard focus in forced-colors mode (issue https://github.com/bgoleno/opportun/issues/68). The
+// app draws its focus rings as a box-shadow with outline-none, and forced-colors mode (Windows
+// High Contrast, for one) does not paint box-shadows, so without a rule of its own a keyboard user
+// there sees no focus at all. index.css gives every :focus-visible element an outline in that
+// mode, once, for the whole app. Each kind of focusable element is reached here with the Tab key,
+// the real keyboard path, and must show an outline under forced colors, and keep its ring and no
+// outline otherwise, in light and in dark.
+
+/** What a focused element shows: an outline and a box-shadow (the ring), as computed. */
+async function focusLook(target: Locator) {
+  return target.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return {
+      focusVisible: el.matches(':focus-visible'),
+      outlineStyle: cs.outlineStyle,
+      outlineWidth: parseFloat(cs.outlineWidth),
+      outlineColor: cs.outlineColor,
+      boxShadow: cs.boxShadow,
+    };
+  });
+}
+
+/** Presses Tab until `target` has focus, so it is reached the way a keyboard user reaches it. */
+async function tabTo(page: Page, target: Locator, what: string) {
+  for (let i = 0; i < 150; i += 1) {
+    if (await target.evaluate((el) => el === document.activeElement)) return;
+    await page.keyboard.press('Tab');
+  }
+  throw new Error(`Tab never reached ${what}`);
+}
+
+/** One of each kind of focusable element on the workspace, in tab order. */
+function focusTargets(page: Page): [string, Locator][] {
+  return [
+    [
+      'the sidebar link',
+      page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Dashboard' }),
+    ],
+    ['the conversation list', page.getByRole('list', { name: 'Conversation' })],
+    ['the message textarea', page.getByLabel('Message')],
+    ['a button', page.getByRole('button', { name: 'Finish tailoring' })],
+  ];
+}
+
+test.describe('keyboard focus indicators', () => {
+  test('forced colors: every kind of focusable element shows an outline', async ({ browser }) => {
+    const { page, close } = await openWorkspace(browser, 1280, 'focus forced colors', {
+      forcedColors: 'active',
+    });
+    try {
+      expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches)).toBe(true);
+      for (const [what, target] of focusTargets(page)) {
+        await tabTo(page, target, what);
+        const look = await focusLook(target);
+        expect(look.focusVisible, `${what} is keyboard-focused`).toBe(true);
+        expect(look.outlineStyle, `${what} has an outline in forced colors`).not.toBe('none');
+        expect(look.outlineWidth, `${what}'s outline is at least 1px`).toBeGreaterThanOrEqual(1);
+        expect(look.outlineColor, `${what}'s outline is not transparent`).not.toBe(
+          'rgba(0, 0, 0, 0)',
+        );
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  for (const colorScheme of ['light', 'dark'] as const) {
+    test(`normal colors, ${colorScheme}: the rings are unchanged and no outline is added`, async ({
+      browser,
+    }) => {
+      const { page, close } = await openWorkspace(browser, 1280, `focus ${colorScheme}`, {
+        colorScheme,
+      });
+      try {
+        expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe(colorScheme);
+        for (const [what, target] of focusTargets(page)) {
+          await tabTo(page, target, what);
+          const look = await focusLook(target);
+          expect(look.focusVisible, `${what} is keyboard-focused`).toBe(true);
+          expect(look.outlineStyle, `${what} has no outline`).toBe('none');
+          expect(look.boxShadow, `${what} shows its 2px ring`).toContain('0px 0px 0px 2px');
+        }
       } finally {
         await close();
       }
