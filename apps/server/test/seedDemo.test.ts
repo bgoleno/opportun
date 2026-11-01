@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createLocalFileStore } from '../src/adapters/localFile';
 import {
@@ -20,6 +20,7 @@ import {
 import {
   DEMO_COMMUNICATIONS,
   DEMO_COMPANIES,
+  DEMO_CONTACTS,
   DEMO_MATCH_REPORTS,
   DEMO_OPPORTUNITIES,
   DEMO_RESUME_BASE_ID,
@@ -28,7 +29,7 @@ import {
   DEMO_TAILORED_RESUMES,
   DEMO_USERS,
 } from '../src/cli/seedDemoFixture';
-import type { Db } from '../src/db/client';
+import { rawAll, type Db } from '../src/db/client';
 import {
   communications,
   companies,
@@ -40,7 +41,12 @@ import {
   users,
 } from '../src/db/schema';
 import { createStorage } from '../src/lib/storage';
+import { runDemoReset } from '../src/jobs/demoReset';
 import type { UserCtx } from '../src/repos/base';
+import { listContacts } from '../src/repos/contacts';
+import { getOpportunity } from '../src/repos/opportunities';
+import { search } from '../src/repos/search';
+import { candidateSet } from '../src/routes/referrals';
 import { openTestDb } from './helpers';
 
 const CREDS: SeedDemoCredentials = {
@@ -500,6 +506,157 @@ describe('credsFromEnv (issue #314: OPPORTUN_DEMO_AI_KEY_FILE)', () => {
       );
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// The demo network (issue https://github.com/bgoleno/opportun/issues/27). Read back through the
+// contact repository and the referral candidate set the Referrals tab uses, not the table, so
+// these tests do not depend on what the table is called.
+describe('seedDemo: the network', () => {
+  const opp = (title: string, company: string): string => {
+    const companyId = DEMO_COMPANIES.find((c) => c.name === company)?.id;
+    const found = DEMO_OPPORTUNITIES.find((o) => o.title === title && o.companyId === companyId);
+    if (found === undefined) throw new Error(`the fixture has no ${title} at ${company}`);
+    return found.id;
+  };
+  const LEAD = opp('Engineering Lead, Platform', 'Clinic-A Health');
+  const PRINCIPAL = opp('Principal Engineer', 'Northwind Analytics');
+  const MANAGER = opp('Engineering Manager, Logistics', 'Fourth Coffee Logistics');
+  const CONTOSO = [
+    opp('Senior Backend Engineer', 'Contoso Robotics'),
+    opp('Staff Engineer, Robotics Platform', 'Contoso Robotics'),
+  ];
+
+  const ctxOf = (i: number): UserCtx => ({ userId: DEMO_USERS.at(i)!.id, isAdmin: i === 0 });
+
+  /** Who the Referrals tab offers for one demo opportunity, in the product's own order. */
+  async function referrers(i: number, templateId: string): Promise<string[]> {
+    const ctx = ctxOf(i);
+    const view = await getOpportunity(db, ctx, derivedId(templateId, i));
+    return (await candidateSet(db, ctx, view)).map((s) => `${s.row.name} (${s.relation})`);
+  }
+
+  const network = async (i: number) =>
+    (await listContacts(db, ctxOf(i), { limit: 200, offset: 0, sort: 'name' })).items;
+
+  /** The contact search rows of one user: entity ids, from the index itself. */
+  const indexedContacts = async (i: number) =>
+    (
+      await rawAll<{ id: string }>(
+        db,
+        sql`SELECT entity_id AS id FROM search_index
+            WHERE user_id = ${ctxOf(i).userId} AND entity_kind = 'contact'`,
+      )
+    )
+      .map((r) => r.id)
+      .sort();
+
+  it('offers people who could refer, in the order the product ranks them', async () => {
+    await seedDemo(db, CREDS, Date.UTC(2026, 9, 1), TEST_ENV);
+    for (let i = 0; i < DEMO_USERS.length; i++) {
+      expect(await referrers(i, LEAD)).toEqual([
+        'Rosa Delgado (current)',
+        'Marcus Webb (current)',
+        'Priya Raman (former)',
+      ]);
+      expect(await referrers(i, PRINCIPAL)).toEqual([
+        'Daniel Okafor (current)',
+        'Hannah Lindqvist (current)',
+        'Rosa Delgado (former)',
+      ]);
+      expect(await referrers(i, MANAGER)).toEqual([
+        'Priya Raman (current)',
+        'Tomas Novak (former)',
+      ]);
+    }
+  });
+
+  it('leaves the Contoso Robotics opportunities with nobody to ask', async () => {
+    await seedDemo(db, CREDS, Date.UTC(2026, 9, 1), TEST_ENV);
+    for (let i = 0; i < DEMO_USERS.length; i++) {
+      for (const id of CONTOSO) expect(await referrers(i, id)).toEqual([]);
+    }
+  });
+
+  it("maps each contact to the user's own seeded company and indexes it for search, as the app does", async () => {
+    await seedDemo(db, CREDS, Date.UTC(2026, 9, 1), TEST_ENV);
+    for (let i = 0; i < DEMO_USERS.length; i++) {
+      const mine = await network(i);
+      expect(mine.map((c) => c.name).sort()).toEqual(DEMO_CONTACTS.map((c) => c.name).sort());
+      for (const fixture of DEMO_CONTACTS) {
+        const row = mine.find((c) => c.name === fixture.name);
+        const company = DEMO_COMPANIES.find((c) => c.name === fixture.company);
+        expect(row?.currentCompanyId, fixture.name).toBe(
+          company === undefined ? null : derivedId(company.id, i),
+        );
+      }
+      const rosa = mine.find((c) => c.name === 'Rosa Delgado');
+      const hits = await search(db, ctxOf(i), 'Delgado', { limit: 10, offset: 0 });
+      expect(hits.items).toEqual([
+        expect.objectContaining({ entityKind: 'contact', entityId: rosa?.id }),
+      ]);
+      expect(await indexedContacts(i)).toEqual(mine.map((c) => c.id).sort());
+    }
+  });
+
+  it('a demo reset restores the same network and referral lists, with no stale search rows', async () => {
+    await seedDemo(db, CREDS, Date.UTC(2026, 9, 1), TEST_ENV);
+    const snapshot = async () => {
+      const out = [];
+      for (let i = 0; i < DEMO_USERS.length; i++) {
+        out.push({
+          // Everything a contact holds except its id and times, which are fresh on every seed.
+          // The company is the user's own row, so it is compared by name.
+          people: (await network(i)).map((c) => ({
+            name: c.name,
+            emails: c.emails,
+            linkedinUrl: c.linkedinUrl,
+            currentCompanyName: c.currentCompanyName,
+            history: c.history,
+            strength: c.strength,
+            notes: c.notes,
+            source: c.source,
+            tags: c.tags,
+          })),
+          lead: await referrers(i, LEAD),
+          contoso: await referrers(i, CONTOSO[0]!),
+        });
+      }
+      return out;
+    };
+    const before = await snapshot();
+    expect(before[0]?.lead).toHaveLength(3);
+    expect(before[0]?.contoso).toEqual([]);
+
+    // The nightly reset's own entry point, with the credentials it reads from the environment.
+    await runDemoReset(
+      db,
+      {
+        ...TEST_ENV,
+        OPPORTUN_DEMO_ADMIN_PASSWORD: CREDS.adminPassword,
+        OPPORTUN_DEMO_USER1_PASSWORD: CREDS.userPasswords[0],
+        OPPORTUN_DEMO_USER2_PASSWORD: CREDS.userPasswords[1],
+        OPPORTUN_DEMO_USER3_PASSWORD: CREDS.userPasswords[2],
+        OPPORTUN_DEMO_USER4_PASSWORD: CREDS.userPasswords[3],
+        OPPORTUN_DEMO_AI_KEY: CREDS.aiApiKey,
+      },
+      Date.UTC(2026, 9, 2),
+    );
+    expect(await snapshot()).toEqual(before);
+    for (let i = 0; i < DEMO_USERS.length; i++) {
+      // The previous night's contacts are gone from the index, not just from the table.
+      const ids = (await network(i)).map((c) => c.id).sort();
+      expect(ids).toHaveLength(DEMO_CONTACTS.length);
+      expect(await indexedContacts(i)).toEqual(ids);
+    }
+  });
+
+  it('every address in the network is on a reserved domain', () => {
+    for (const person of DEMO_CONTACTS) {
+      for (const email of person.emails) {
+        expect(email.split('@')[1], person.name).toMatch(/(\.example|^example\.(com|org|net))$/);
+      }
     }
   });
 });
