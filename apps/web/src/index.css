@@ -111,6 +111,19 @@
   --container-page: 80rem;
   --container-rail: 20rem;
   --container-chat: 28rem;
+  /* The narrowest a card in a card grid gets (grid-cards, below). */
+  --container-card: 18rem;
+}
+
+/* A card grid (docs/design.md section 9, rule 2): as many --container-card columns as fit, one
+   below that. auto-fit, not auto-fill, so a grid with fewer cards than there is room for stretches
+   them across the row instead of leaving empty tracks on the right (measured on
+   https://github.com/bgoleno/opportun/issues/36's PR). min(..., 100%) keeps a lone column from
+   overflowing a container narrower than one card, which on a phone scrolled the whole page
+   sideways. Named here so a view says grid-cards and never writes the width (issue
+   https://github.com/bgoleno/opportun/issues/37). */
+@utility grid-cards {
+  grid-template-columns: repeat(auto-fit, minmax(min(var(--container-card), 100%), 1fr));
 }
 
 @layer base {

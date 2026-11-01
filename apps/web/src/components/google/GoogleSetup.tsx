@@ -209,8 +209,8 @@ export function DiagnoseBox() {
 
 function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
   return (
-    // eslint-disable-next-line opportun/no-arbitrary-width -- the first column is the size-7 step badge (1.75rem) beside it, not a layout width.
-    <li className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3 gap-y-1">
+    // The first column is as wide as the size-7 step badge in it (1.75rem).
+    <li className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
       <span
         className="flex size-7 items-center justify-center rounded-full border text-xs font-semibold"
         aria-hidden="true"

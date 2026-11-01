@@ -46,6 +46,44 @@ describe('no-arbitrary-width', () => {
     expect(message).toContain('docs/design.md section 9, "Layout widths"');
   });
 
+  // The boundary agreed with tl on https://github.com/bgoleno/opportun/pull/64. Tailwind 4's
+  // numeric steps take any number (calc(var(--spacing) * n)), so max-w-160 is a 40rem width
+  // without brackets. Above 96 (24rem, the top of Tailwind's documented spacing scale) a numeric
+  // width step is reported; up to 96, and the named container sizes, pass (below).
+  it.each([
+    ['max-w-160', '<div className="max-w-160" />'],
+    ['w-97', '<div className="w-97" />'],
+    ['md:max-w-120', '<div className="md:max-w-120" />'],
+    ['!w-120', '<div className="!w-120" />'],
+    ['min-w-100', '<div className="sm:min-w-100" />'],
+    ['basis-120', '<div className="basis-120" />'],
+    ['w-96.5', '<div className="w-96.5" />'],
+  ])('fails a numeric width step above 96, %s', async (utility, jsx) => {
+    const found = await hits(component(jsx));
+    expect(found).toHaveLength(1);
+    expect(found[0]?.severity).toBe(2);
+    expect(found[0]?.message).toContain(utility);
+    expect(found[0]?.message).toContain('numeric step');
+    expect(found[0]?.message).toContain('docs/design.md section 9, "Layout widths"');
+  });
+
+  it.each([
+    ['w-96', 'the largest numeric step that passes'],
+    ['w-64', 'a component width'],
+    ['w-4', 'an icon'],
+    ['size-4', 'a square'],
+    ['max-w-md', 'a named container size'],
+    ['max-w-3xl', 'a named container size (the stacked chat cap)'],
+    ['max-w-7xl', 'the largest named container size'],
+    ['w-1/2', 'a fraction'],
+    ['basis-1/3', 'a fraction'],
+    ['w-full', 'a keyword'],
+    ['w-screen', 'a keyword'],
+    ['grid-cols-3', 'a column count, not a width'],
+  ])('passes %s (%s)', async (utility) => {
+    expect(await hits(component(`<div className="${utility}" />`))).toEqual([]);
+  });
+
   it.each([
     ['the reading width', '<p className="max-w-prose text-sm">Running text</p>'],
     ['the page cap', '<div className="mx-auto w-full max-w-page" />'],
@@ -55,7 +93,7 @@ describe('no-arbitrary-width', () => {
       '<div className="grid lg:grid-cols-[minmax(0,1fr)_var(--container-rail)]" />',
     ],
     ['a column split with no length', '<dl className="grid grid-cols-[auto_1fr]" />'],
-    ['a named Tailwind step', '<div className="max-w-2xl w-64" />'],
+    ['the card grid utility', '<ul className="grid grid-cards gap-2" />'],
     ['a fixed square, not a width', '<span className="size-[18px]" />'],
   ])('passes %s', async (_case, jsx) => {
     expect(await hits(component(jsx))).toEqual([]);
