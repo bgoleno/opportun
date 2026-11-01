@@ -4,34 +4,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { ADMIN } from './global-setup';
 import { createOpportunity, registerUser } from './helpers';
+import { ADMIN_ROUTES, USER_ROUTES } from './routes';
 
 const WIDTHS = [390, 320] as const;
-
-/** Every routed view a signed-in user can reach without existing data. */
-const USER_ROUTES = [
-  '/',
-  '/pipeline',
-  '/discovery',
-  '/discovery/companies',
-  '/discovery/decided',
-  '/discovery/prompts',
-  '/discovery/sources',
-  '/resumes',
-  '/inbox',
-  '/network',
-  '/settings',
-  '/settings/account',
-  '/settings/security',
-  '/settings/profile',
-  '/settings/role-targets',
-  '/settings/resume-rules',
-  '/settings/ai',
-  '/settings/integrations',
-  '/settings/mail-filters',
-  '/settings/data',
-];
-
-const ADMIN_ROUTES = ['/settings/users', '/settings/jobs'];
 
 /**
  * How far the document is wider than the viewport, and the outermost elements that stick out

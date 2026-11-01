@@ -476,6 +476,9 @@ const stageSource: TimelineSource = (scope) => sql`
   WHERE h.user_id = ${scope.userId}
   ${scope.opportunityId === undefined ? sql`` : sql`AND h.opportunity_id = ${scope.opportunityId}`}`;
 
+/** Which linked mail (alias `c`) the timeline shows; lastActivityAt uses the same test. */
+const MAIL_ON_TIMELINE = sql`(c.outreach_kind IS NULL OR c.outreach_kind NOT IN ('broadcast_spam', 'irrelevant'))`;
+
 const communicationSource: TimelineSource = (scope) => sql`
   SELECT 'communication' AS kind, c.id AS id, c.opportunity_id AS opportunity_id,
          c.sent_at AS occurred_at, o.title AS opportunity_title,
@@ -488,7 +491,7 @@ const communicationSource: TimelineSource = (scope) => sql`
          ])} AS data
   FROM communications c JOIN opportunities o ON o.id = c.opportunity_id AND o.user_id = c.user_id
   WHERE c.user_id = ${scope.userId}
-    AND (c.outreach_kind IS NULL OR c.outreach_kind NOT IN ('broadcast_spam', 'irrelevant'))
+    AND ${MAIL_ON_TIMELINE}
   ${scope.opportunityId === undefined ? sql`` : sql`AND c.opportunity_id = ${scope.opportunityId}`}`;
 
 const TIMELINE_SOURCES: readonly TimelineSource[] = [
@@ -564,6 +567,48 @@ async function timeline(
     )?.n ?? 0,
   );
   return { items: rows.map(toItem), total };
+}
+
+/**
+ * The time of the newest timeline entry that has already happened, for each opportunity in
+ * `ids` that has one, in one query for a whole page of rows rather than one per card
+ * (https://github.com/bgoleno/opportun/issues/25). It reads the same three sources as
+ * TIMELINE_SOURCES, with the same mail filter, so a pipeline card agrees with the detail
+ * page's timeline, with two differences. The stage row every opportunity gets when it is
+ * created (from_stage NULL) is left out: that entry is the opportunity entering Opportun, not
+ * activity on it, and the card shows that date under its own label. And anything dated after
+ * `now` is left out: an interview logged ahead of time is coming up, not the last thing that
+ * happened (the EM's call on https://github.com/bgoleno/opportun/pull/46). An opportunity with
+ * nothing else on its timeline is absent from the map.
+ */
+export async function lastActivityAt(
+  exec: Exec,
+  ctx: UserCtx,
+  ids: string[],
+  now: number = Date.now(),
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (ids.length === 0) return out;
+  const idList = sql.join(
+    ids.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  const rows = await rawAll<{ opportunity_id: string; at: number }>(
+    exec,
+    sql`SELECT opportunity_id, max(at) AS at FROM (
+      SELECT a.opportunity_id AS opportunity_id, a.occurred_at AS at FROM activities a
+        WHERE a.user_id = ${ctx.userId} AND a.opportunity_id IN (${idList})
+      UNION ALL
+      SELECT h.opportunity_id, h.at FROM stage_history h
+        WHERE h.user_id = ${ctx.userId} AND h.opportunity_id IN (${idList})
+          AND h.from_stage IS NOT NULL
+      UNION ALL
+      SELECT c.opportunity_id, c.sent_at FROM communications c
+        WHERE c.user_id = ${ctx.userId} AND c.opportunity_id IN (${idList}) AND ${MAIL_ON_TIMELINE}
+    ) AS entries WHERE at <= ${now} GROUP BY opportunity_id`,
+  );
+  for (const row of rows) out.set(row.opportunity_id, row.at);
+  return out;
 }
 
 export async function opportunityTimeline(

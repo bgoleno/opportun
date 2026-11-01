@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate, useRouterState } from '@tanstack/react-router';
+import { Link, useMatches, useNavigate, useRouterState } from '@tanstack/react-router';
 import {
   Briefcase,
   Check,
@@ -35,6 +35,7 @@ import { IconButton } from '@/components/ui/icon-button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { errorMessage } from '@/lib/api';
 import { forceLocalSignOut, logout, type User } from '@/lib/auth';
+import { layoutOf } from '@/lib/layout';
 import { useSidebarCollapsed } from '@/lib/sidebar';
 import { ThemeServerSync } from '@/lib/theme';
 import { cn } from '@/lib/utils';
@@ -236,6 +237,7 @@ export function AppShell({ user, children }: { user: User; children: ReactNode }
 
 function Shell({ user, children }: { user: User; children: ReactNode }) {
   const { collapsed, toggle } = useSidebarCollapsed();
+  const layout = useMatches({ select: layoutOf });
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <ThemeServerSync />
@@ -296,7 +298,14 @@ function Shell({ user, children }: { user: User; children: ReactNode }) {
           </ul>
         </nav>
         <main id="main" tabIndex={-1} className="min-w-0 flex-1 p-4 outline-none md:p-8">
-          {children}
+          {/* Page width unless the route says fluid (lib/layout.ts, docs/design.md section 9):
+              capped by the page token and centred in the main area. */}
+          <div
+            data-layout={layout}
+            className={cn('mx-auto w-full', layout === 'page' && 'max-w-page')}
+          >
+            {children}
+          </div>
         </main>
       </div>
     </div>

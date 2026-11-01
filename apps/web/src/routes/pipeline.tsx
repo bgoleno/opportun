@@ -3,6 +3,7 @@ import { Pipeline } from '@/components/pipeline/Pipeline';
 import { PipelineSearchSchema, type PipelineSearch } from '@/components/pipeline/data';
 
 export const Route = createFileRoute('/pipeline')({
+  staticData: { layout: 'fluid' },
   validateSearch: (search): PipelineSearch => PipelineSearchSchema.parse(search),
   component: PipelinePage,
 });
