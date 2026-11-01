@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { mockApi, renderWithProviders } from '@/test/render';
+import { formatDate } from '@/lib/opportunities';
+import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { fetchAllPendingResultIds, type DiscoveryResult } from './api';
 import { groupResults } from './groupResults';
 import { QueueGroupRow, QueueRow } from './QueueRow';
@@ -60,6 +61,7 @@ describe('QueueRow', () => {
         <QueueRow
           result={r}
           selected={false}
+          stale={false}
           onSelect={vi.fn()}
           onAccept={vi.fn()}
           onDismiss={vi.fn()}
@@ -89,6 +91,7 @@ describe('QueueRow', () => {
         <QueueRow
           result={result({ id: 'r1', aiScore: 72.4, resolution: 'needs_capture' })}
           selected
+          stale={false}
           onSelect={vi.fn()}
           onAccept={vi.fn()}
           onDismiss={vi.fn()}
@@ -112,6 +115,7 @@ describe('QueueRow', () => {
             posting: { company: 'A', title: 'B', postingUrl: 'javascript:alert(1)' },
           })}
           selected={false}
+          stale={false}
           onSelect={vi.fn()}
           onAccept={vi.fn()}
           onDismiss={vi.fn()}
@@ -137,6 +141,7 @@ describe('QueueRow', () => {
             },
           })}
           selected={false}
+          stale={false}
           onSelect={vi.fn()}
           onAccept={vi.fn()}
           onDismiss={vi.fn()}
@@ -160,6 +165,7 @@ describe('QueueRow', () => {
         <QueueRow
           result={result({ id: 'r4', posting: { company: 'A', title: 'B', postingUrl: null } })}
           selected={false}
+          stale={false}
           onSelect={vi.fn()}
           onAccept={vi.fn()}
           onDismiss={vi.fn()}
@@ -214,6 +220,7 @@ describe('QueueGroupRow (issue #191)', () => {
         <QueueGroupRow
           group={group!}
           selected={false}
+          stale={false}
           onSelect={vi.fn()}
           onAcceptAll={vi.fn()}
           onDismissAll={vi.fn()}
@@ -241,6 +248,7 @@ describe('QueueGroupRow (issue #191)', () => {
         <QueueGroupRow
           group={group!}
           selected={false}
+          stale={false}
           onSelect={vi.fn()}
           onAcceptAll={vi.fn()}
           onDismissAll={vi.fn()}
@@ -271,6 +279,7 @@ describe('QueueGroupRow (issue #191)', () => {
         <QueueGroupRow
           group={group!}
           selected={false}
+          stale={false}
           onSelect={vi.fn()}
           onAcceptAll={vi.fn()}
           onDismissAll={vi.fn()}
@@ -938,5 +947,105 @@ describe('ReviewQueue bulk triage (#184)', () => {
     releaseSecond?.();
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(await screen.findByText('150 accepted')).toBeInTheDocument();
+  });
+});
+
+// Issue #26 (https://github.com/bgoleno/opportun/issues/26): when each card was first
+// discovered, a sort control, and the stale mark. `now` is passed explicitly, never the clock.
+describe('ReviewQueue dates, sorting and staleness (#26)', () => {
+  const NOW_26 = Date.parse('2026-10-20T12:00:00Z');
+  const DAY = 24 * 60 * 60 * 1000;
+  const STALE = result({
+    id: 'r-stale',
+    aiScore: 90,
+    posting: { company: 'Acme', title: 'Platform Lead' },
+    createdAt: NOW_26 - 7 * DAY - 1,
+  });
+  const FRESH = result({
+    id: 'r-fresh',
+    aiScore: 60,
+    posting: { company: 'Globex', title: 'Staff SRE' },
+    createdAt: NOW_26 - 7 * DAY + 1,
+  });
+
+  /** Answers the way the server does: in the order the request's sort names. */
+  function queue(items: DiscoveryResult[]) {
+    return (call: ApiCall) => {
+      const sort = new URLSearchParams(call.search).get('sort');
+      const sorted = [...items].sort((a, b) =>
+        sort === '-createdAt' ? b.createdAt - a.createdAt : (b.aiScore ?? -1) - (a.aiScore ?? -1),
+      );
+      return { items: sorted, total: sorted.length };
+    };
+  }
+
+  const card = (title: string) => screen.getByText(title).closest('li[data-result-id]')!;
+  /** The card's date as it reads, label included; there must be exactly one. */
+  function dateLine(el: Element): string | null {
+    const times = el.querySelectorAll('time');
+    expect(times).toHaveLength(1);
+    return times[0]!.parentElement!.textContent;
+  }
+  const order = () =>
+    Array.from(screen.getByRole('list', { name: 'Results to review' }).children).map((li) =>
+      li.getAttribute('data-result-id'),
+    );
+
+  it('shows on each card the date it was first discovered', async () => {
+    mockApi({ 'GET /discovery/results': queue([STALE, FRESH]) });
+    renderWithProviders(<ReviewQueue now={NOW_26} />);
+    await screen.findByText('Platform Lead');
+    expect(dateLine(card('Platform Lead'))).toBe(`Discovered ${formatDate(STALE.createdAt)}`);
+    expect(dateLine(card('Staff SRE'))).toBe(`Discovered ${formatDate(FRESH.createdAt)}`);
+  });
+
+  it('dates a location group by its earliest member, not the latest sighting', async () => {
+    const first = result({
+      id: 'g-austin',
+      dedupeKey: 'initech|staff engineer|austin',
+      posting: { company: 'Initech', title: 'Staff Engineer', location: 'Austin' },
+      createdAt: NOW_26 - 9 * DAY,
+    });
+    const again = result({
+      id: 'g-remote',
+      dedupeKey: 'initech|staff engineer|remote',
+      posting: { company: 'Initech', title: 'Staff Engineer', location: 'Remote' },
+      createdAt: NOW_26,
+    });
+    mockApi({ 'GET /discovery/results': queue([again, first]) });
+    renderWithProviders(<ReviewQueue now={NOW_26} />);
+    await screen.findByText('Staff Engineer');
+    expect(dateLine(card('Staff Engineer'))).toBe(`Discovered ${formatDate(first.createdAt)}`);
+  });
+
+  it('defaults to relevance; Date discovered asks the server newest first and reorders', async () => {
+    const user = userEvent.setup();
+    const { calls } = mockApi({ 'GET /discovery/results': queue([STALE, FRESH]) });
+    renderWithProviders(<ReviewQueue now={NOW_26} />);
+    await screen.findByText('Platform Lead');
+    const sort = screen.getByLabelText('Sort by');
+    expect(sort).toHaveDisplayValue('Relevance');
+    expect(order()).toEqual(['r-stale', 'r-fresh']);
+    await user.selectOptions(sort, 'Date discovered');
+    await waitFor(() => expect(order()).toEqual(['r-fresh', 'r-stale']));
+    await waitFor(() =>
+      expect(calls.some((c) => new URLSearchParams(c.search).get('sort') === '-createdAt')).toBe(
+        true,
+      ),
+    );
+    await user.selectOptions(sort, 'Relevance');
+    await waitFor(() => expect(order()).toEqual(['r-stale', 'r-fresh']));
+  });
+
+  it('marks a card awaiting a decision for more than 7 days, with a text cue as well as red', async () => {
+    mockApi({ 'GET /discovery/results': queue([STALE, FRESH]) });
+    renderWithProviders(<ReviewQueue now={NOW_26} />);
+    await screen.findByText('Platform Lead');
+    const stale = card('Platform Lead');
+    expect(within(stale as HTMLElement).getByText('Going stale')).toBeInTheDocument();
+    expect(stale).toHaveClass('border-destructive');
+    const fresh = card('Staff SRE');
+    expect(within(fresh as HTMLElement).queryByText('Going stale')).toBeNull();
+    expect(fresh).not.toHaveClass('border-destructive');
   });
 });

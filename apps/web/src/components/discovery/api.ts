@@ -12,7 +12,7 @@ import type {
   NormalizedPosting,
   Resolution,
 } from '@opportun/core';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import type { PromptVersion } from '@/components/ai/api';
 import { toast } from '@/components/ui/toast';
@@ -261,12 +261,20 @@ export function parseMcpConfig(
 
 // --- review queue ----------------------------------------------------------------
 
-/** Pending results, best AI score first (the list convention sorts ascending without '-'). */
-export function useReviewQueue() {
+/**
+ * Pending results in the server order `sort` names (the list convention sorts ascending
+ * without '-'), best AI score first by default. Each order is cached under its own key below
+ * discoveryKeys.queue (https://github.com/bgoleno/opportun/issues/26), and the outgoing page
+ * stays on screen while another order loads, so the queue can reorder it at once.
+ */
+export function useReviewQueue(sort = '-ai_score') {
   return useQuery({
-    queryKey: discoveryKeys.queue,
+    queryKey: [...discoveryKeys.queue, sort],
     queryFn: () =>
-      api<Page<DiscoveryResult>>('/discovery/results?disposition=pending&sort=-ai_score&limit=200'),
+      api<Page<DiscoveryResult>>(
+        `/discovery/results?disposition=pending&sort=${enc(sort)}&limit=200`,
+      ),
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -285,17 +293,21 @@ function useQueueMutation<TVars extends { id: string }>(
     mutationFn,
     onMutate: async (vars: TVars) => {
       await qc.cancelQueries({ queryKey: discoveryKeys.queue });
-      const previous = qc.getQueryData<Page<DiscoveryResult>>(discoveryKeys.queue);
-      if (previous !== undefined) {
-        qc.setQueryData<Page<DiscoveryResult>>(discoveryKeys.queue, {
-          items: previous.items.filter((r) => r.id !== vars.id),
-          total: Math.max(0, previous.total - 1),
-        });
-      }
+      // Every sort order the queue has loaded is its own cached page (useReviewQueue): drop
+      // the result from each, and lower each total, since it counts all pending results.
+      const previous = qc.getQueriesData<Page<DiscoveryResult>>({ queryKey: discoveryKeys.queue });
+      qc.setQueriesData<Page<DiscoveryResult>>({ queryKey: discoveryKeys.queue }, (old) =>
+        old === undefined
+          ? old
+          : {
+              items: old.items.filter((r) => r.id !== vars.id),
+              total: Math.max(0, old.total - 1),
+            },
+      );
       return { previous };
     },
     onError: (_err, _vars, context) => {
-      if (context?.previous !== undefined) qc.setQueryData(discoveryKeys.queue, context.previous);
+      for (const [key, data] of context?.previous ?? []) qc.setQueryData(key, data);
     },
     onSettled: async () => {
       await Promise.all([

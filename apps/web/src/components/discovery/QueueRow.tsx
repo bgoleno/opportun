@@ -7,10 +7,11 @@ import { Check, ExternalLink, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { safeHttpUrl } from '@/lib/opportunities';
+import { formatDate, safeHttpUrl } from '@/lib/opportunities';
 import { cn } from '@/lib/utils';
 import { resolutionLabel, sourceKindLabel, type DiscoveryResult } from './api';
 import { rowKey, type ResultGroup } from './groupResults';
+import { firstDiscoveredAt } from './queueOrder';
 
 /** Longest description excerpt shown in the row (the detail dialog shows all of it). */
 const EXCERPT = 280;
@@ -47,6 +48,31 @@ export function ScoreBadge({ score }: { score: number | null }) {
 
 const NEEDS_ATTENTION: readonly Resolution[] = ['needs_capture', 'capture_failed'];
 
+/** When Opportun first discovered this card (https://github.com/bgoleno/opportun/issues/26). */
+function DiscoveredLine({ at }: { at: number }) {
+  return (
+    <span className="text-xs text-muted-foreground">
+      Discovered <time dateTime={new Date(at).toISOString()}>{formatDate(at)}</time>
+    </span>
+  );
+}
+
+/** The stale mark's text half: the red outline alone would be colour only (WCAG 1.4.1). */
+function StaleBadge() {
+  return (
+    <Badge
+      variant="outline"
+      title="First discovered more than 7 days ago and still waiting for a decision"
+      className="border-destructive text-destructive"
+    >
+      Going stale
+    </Badge>
+  );
+}
+
+/** The card's outline when stale; after `selected`, so a stale card keeps it under the cursor. */
+const STALE_OUTLINE = 'border-destructive';
+
 export function ResolutionChip({ resolution }: { resolution: Resolution }) {
   return (
     <Badge variant={NEEDS_ATTENTION.includes(resolution) ? 'destructive' : 'outline'}>
@@ -58,6 +84,8 @@ export function ResolutionChip({ resolution }: { resolution: Resolution }) {
 export function QueueRow(props: {
   result: DiscoveryResult;
   selected: boolean;
+  /** Awaiting a decision more than 7 days after first discovered (queueOrder.ts isStale). */
+  stale: boolean;
   onSelect: () => void;
   onAccept: () => void;
   onDismiss: () => void;
@@ -85,6 +113,7 @@ export function QueueRow(props: {
       className={cn(
         'grid gap-2 rounded-xl border bg-card p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring',
         selected && 'border-primary ring-1 ring-primary',
+        props.stale && STALE_OUTLINE,
       )}
     >
       <div className="flex flex-wrap items-center gap-2">
@@ -97,6 +126,7 @@ export function QueueRow(props: {
           aria-label={`Select ${label}`}
         />
         <ScoreBadge score={r.aiScore} />
+        {props.stale ? <StaleBadge /> : null}
         <ResolutionChip resolution={r.resolution} />
         <Badge variant="secondary">{sourceKindLabel(r.sourceKind)}</Badge>
         {p.location ? (
@@ -113,6 +143,7 @@ export function QueueRow(props: {
           {p.title}
         </button>
         <span className="text-sm break-words text-muted-foreground">{p.company}</span>
+        <DiscoveredLine at={r.createdAt} />
       </div>
       {r.aiRationale ? (
         <p className="text-sm break-words">
@@ -166,6 +197,8 @@ export function QueueRow(props: {
 export function QueueGroupRow(props: {
   group: ResultGroup;
   selected: boolean;
+  /** Awaiting a decision more than 7 days after its earliest member was first discovered. */
+  stale: boolean;
   onSelect: () => void;
   onAcceptAll: () => void;
   onDismissAll: () => void;
@@ -187,10 +220,12 @@ export function QueueGroupRow(props: {
       className={cn(
         'grid gap-2 rounded-xl border bg-card p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring',
         selected && 'border-primary ring-1 ring-primary',
+        props.stale && STALE_OUTLINE,
       )}
     >
       <div className="flex flex-wrap items-center gap-2">
         <ScoreBadge score={primary.aiScore} />
+        {props.stale ? <StaleBadge /> : null}
         <Badge variant="secondary">{n} locations</Badge>
         <Badge variant="secondary">{sourceKindLabel(primary.sourceKind)}</Badge>
       </div>
@@ -203,6 +238,7 @@ export function QueueGroupRow(props: {
           {p.title}
         </button>
         <span className="text-sm break-words text-muted-foreground">{p.company}</span>
+        <DiscoveredLine at={firstDiscoveredAt(group)} />
       </div>
       <ul
         className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground"
