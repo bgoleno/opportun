@@ -430,11 +430,7 @@ export async function tailoringRoutes(app: FastifyInstance): Promise<void> {
         });
         return { results };
       }
-      throw new HttpError(
-        409,
-        'resume_changed',
-        'The resume changed while this edit was being applied. Try again.',
-      );
+      throw new HttpError(409, 'resume_changed');
     },
   );
 
