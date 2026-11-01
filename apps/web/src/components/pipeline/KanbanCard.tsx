@@ -17,6 +17,19 @@ import {
 } from '@/lib/opportunities';
 import { cn } from '@/lib/utils';
 
+/**
+ * The one date a card shows (https://github.com/bgoleno/opportun/issues/25): when a New card
+ * entered Opportun, and for every other column the newest entry on its timeline that has already
+ * happened. A card with no such entry (only its own creation, or only activity dated ahead)
+ * shows the date it was added, labelled as that, rather than passing either off as activity.
+ */
+function cardDate(opp: OpportunityView): { label: string; at: number } {
+  if (opp.stage !== 'discovered' && opp.lastActivityAt !== null) {
+    return { label: 'Last activity', at: opp.lastActivityAt };
+  }
+  return { label: 'Added', at: opp.createdAt };
+}
+
 export function KanbanCard(props: {
   opp: OpportunityView;
   selected: boolean;
@@ -34,6 +47,7 @@ export function KanbanCard(props: {
   const { attributes, setNodeRef, listeners, isDragging } = useSortable({ id: opp.id });
 
   const label = subjectLabel(opp);
+  const date = cardDate(opp);
   return (
     <article
       ref={setNodeRef}
@@ -68,6 +82,9 @@ export function KanbanCard(props: {
         >
           {opp.title}
         </Link>
+        <p className="text-xs text-muted-foreground">
+          {date.label} <time dateTime={new Date(date.at).toISOString()}>{formatDate(date.at)}</time>
+        </p>
       </div>
       {!isTerminal(opp.stage) ? (
         // #138: this used to carry a title ("Dismiss <label>") richer than its aria-label
