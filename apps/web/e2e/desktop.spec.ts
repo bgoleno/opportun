@@ -9,72 +9,39 @@
 //   - a page-width view's content box is wider than the page cap or is off-centre in the main
 //     area. The cap is read from the --container-page token, never written here: its value is
 //     the owner's call.
-// Views that do not conform yet are expected failures (KNOWN below), each naming the issue that
-// fixes it. Playwright fails an expected failure that passes, so a fix has to remove its entry
-// and the list can only shrink.
+// Views that do not conform yet are listed in KNOWN, each with the issue that fixes it and the
+// exact findings it excuses (element and the start of its text, at the widths it fails). Any other
+// finding on that view still fails the test, and a cap or centring finding can never be excused.
+// An excuse that no longer matches anything also fails the test, so a fix has to remove it and the
+// list can only shrink.
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { ADMIN } from './global-setup';
 import { PASSWORD } from './helpers';
 import { ADMIN_ROUTES, USER_ROUTES } from './routes';
+import { KNOWN } from './widthKnown';
+import { judge, WIDTHS, type Finding } from './widthStandard';
 
-const WIDTHS = [1280, 1536, 1920, 2560] as const;
 const HEIGHT = 900;
 const MAX_CH = 80;
 
-/** Running text at reading width across views (W3). */
-const READING_WIDTH = 'https://github.com/bgoleno/opportun/issues/34';
-/** The tailoring chat in its own column, capped when stacked (W4). */
-const CHAT_COLUMN = 'https://github.com/bgoleno/opportun/issues/35';
-
 /**
- * Views that do not meet the standard yet, by test title (the route, or a seeded view's name),
- * with the window widths they fail at and the issue that fixes them. Taken from the CI run on
- * https://github.com/bgoleno/opportun/pull/52 before this list existed; every entry is a wrapped
- * line wider than MAX_CH, none is a page cap or centring finding. A fix makes its entry pass,
- * which Playwright reports as a failure until the entry is removed.
- */
-const KNOWN = new Map<string, { widths: readonly number[]; issue: string }>([
-  // Card descriptions and help text under each card title, at the full page width.
-  ['/settings/security', { widths: [1280], issue: READING_WIDTH }],
-  ['/settings/ai', { widths: WIDTHS, issue: READING_WIDTH }],
-  ['/settings/integrations', { widths: WIDTHS, issue: READING_WIDTH }],
-  ['/settings/mail-filters', { widths: WIDTHS, issue: READING_WIDTH }],
-  ['/settings/data', { widths: WIDTHS, issue: READING_WIDTH }],
-  ['/settings/users', { widths: WIDTHS, issue: READING_WIDTH }],
-  ['/settings/jobs', { widths: WIDTHS, issue: READING_WIDTH }],
-  // The Deny explanation under each suggested company, until the card grid adds a column.
-  ['/discovery/companies', { widths: [1280, 1536], issue: READING_WIDTH }],
-  // The job description (Markdown) and a timeline note's body.
-  [
-    '/opportunities/:id details with a long job description',
-    { widths: [1536, 1920, 2560], issue: READING_WIDTH },
-  ],
-  [
-    '/opportunities/:id timeline with a long note',
-    { widths: [1536, 1920, 2560], issue: READING_WIDTH },
-  ],
-  // The chat's messages and a suggestion's rationale. The document text and the match report
-  // already wrap at reading width.
-  [
-    '/resumes/:id with text, a conversation and a match report',
-    { widths: WIDTHS, issue: CHAT_COLUMN },
-  ],
-]);
-
-/**
- * Everything wrong with the view on screen: a wrapped line wider than MAX_CH (naming the element,
- * its measured width in ch and the start of its text), and a page-width content box that is wider
+ * Everything wrong with the view on screen: each wrapped line wider than MAX_CH (its element, its
+ * measured width in ch and the start of its text), and a page-width content box that is wider
  * than the page cap or off-centre.
  */
-async function findings(page: Page): Promise<string[]> {
+async function findings(page: Page): Promise<Finding[]> {
   return page.evaluate((maxCh) => {
-    const out: string[] = [];
+    type Found =
+      | { kind: 'line'; tag: string; element: string; ch: number; lines: number; text: string }
+      | { kind: 'layout'; message: string };
+    const out: Found[] = [];
+    const layout = (message: string) => out.push({ kind: 'layout', message });
     const main = document.getElementById('main');
     const box = main?.querySelector<HTMLElement>('[data-layout]');
     if (main === null || main === undefined || box === null || box === undefined) {
-      return ['no #main [data-layout] content box'];
+      return [{ kind: 'layout', message: 'no #main [data-layout] content box' }];
     }
 
     const describe = (el: Element) =>
@@ -96,12 +63,12 @@ async function findings(page: Page): Promise<string[]> {
       const r = box.getBoundingClientRect();
       const left = r.left - inner.left;
       const right = inner.right - r.right;
-      if (!(cap > 0)) out.push('could not read the page cap from --container-page');
+      if (!(cap > 0)) layout('could not read the page cap from --container-page');
       else if (r.width > cap + 0.5) {
-        out.push(`content box is ${r.width.toFixed(1)}px, wider than the page cap (${cap}px)`);
+        layout(`content box is ${r.width.toFixed(1)}px, wider than the page cap (${cap}px)`);
       }
       if (Math.abs(left - right) > 1) {
-        out.push(
+        layout(
           `content box is off-centre: ${left.toFixed(1)}px on the left, ${right.toFixed(1)}px on the right`,
         );
       }
@@ -157,29 +124,41 @@ async function findings(page: Page): Promise<string[]> {
       if (!(ch > 0)) continue;
       const widest = Math.max(...lines.map((l) => l.right - l.left)) / ch;
       if (widest > maxCh) {
-        const text = (block.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
-        out.push(
-          `${describe(block)} has a ${widest.toFixed(1)}ch line (${lines.length} lines): "${text}"`,
-        );
+        out.push({
+          kind: 'line',
+          tag: block.tagName.toLowerCase(),
+          element: describe(block),
+          ch: widest,
+          lines: lines.length,
+          text: (block.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60),
+        });
       }
     }
     return out;
   }, MAX_CH);
 }
 
+/**
+ * Expects the view on screen to meet the standard, apart from what KNOWN excuses for `title` at
+ * this width: every other finding fails the test, and so does an excuse that no longer matches
+ * any finding (the view was fixed: remove the excuse).
+ */
+async function expectStandard(page: Page, title: string, width: number): Promise<void> {
+  const entry = KNOWN.get(title);
+  const { unexcused, stale } = judge(entry?.excuses ?? [], width, await findings(page));
+  expect(unexcused, `${title} at ${width}px:\n  ${unexcused.join('\n  ')}`).toEqual([]);
+  expect(
+    stale,
+    `${title} at ${width}px no longer has these findings; if ${entry?.issue ?? 'its issue'} fixed them, remove their excuses from KNOWN`,
+  ).toEqual([]);
+}
+
 /** Opens `path` at this test's width and expects it to meet the standard. */
-async function expectStandard(page: Page, path: string, width: number, title: string) {
+async function expectRoute(page: Page, path: string, width: number): Promise<void> {
   await page.goto(path);
   await page.waitForLoadState('networkidle');
   await expect(page.locator('#main [data-layout]')).toBeVisible();
-  const found = await findings(page);
-  expect(found, `${title} at ${width}px:\n  ${found.join('\n  ')}`).toEqual([]);
-}
-
-/** Marks this test as an expected failure when KNOWN lists it at this width. */
-function known(title: string, width: number): void {
-  const entry = KNOWN.get(title);
-  test.fail(entry?.widths.includes(width) === true, entry?.issue);
+  await expectStandard(page, path, width);
 }
 
 // ---------------------------------------------------------------------------
@@ -392,10 +371,9 @@ for (const width of WIDTHS) {
   test.describe(`${width}px wide`, () => {
     for (const path of USER_ROUTES) {
       test(path, async ({ browser }) => {
-        known(path, width);
         const { page, close } = await pageAt(browser, width, accounts.user);
         try {
-          await expectStandard(page, path, width, path);
+          await expectRoute(page, path, width);
         } finally {
           await close();
         }
@@ -404,10 +382,9 @@ for (const width of WIDTHS) {
 
     for (const path of ADMIN_ROUTES) {
       test(path, async ({ browser }) => {
-        known(path, width);
         const { page, close } = await pageAt(browser, width, accounts.admin);
         try {
-          await expectStandard(page, path, width, path);
+          await expectRoute(page, path, width);
         } finally {
           await close();
         }
@@ -416,11 +393,12 @@ for (const width of WIDTHS) {
 
     test('/opportunities/:id timeline with a long note', async ({ browser }) => {
       const title = '/opportunities/:id timeline with a long note';
-      known(title, width);
       const { page, close } = await pageAt(browser, width, accounts.seed);
       try {
         const id = await seededOpportunity(page, `timeline ${width}`);
-        await expectStandard(page, `/opportunities/${id}`, width, title);
+        await page.goto(`/opportunities/${id}`);
+        await expect(page.getByText('Call with the hiring manager.').first()).toBeVisible();
+        await expectStandard(page, title, width);
       } finally {
         await close();
       }
@@ -428,15 +406,13 @@ for (const width of WIDTHS) {
 
     test('/opportunities/:id details with a long job description', async ({ browser }) => {
       const title = '/opportunities/:id details with a long job description';
-      known(title, width);
       const { page, close } = await pageAt(browser, width, accounts.seed);
       try {
         const id = await seededOpportunity(page, `details ${width}`);
         await page.goto(`/opportunities/${id}`);
         await page.getByRole('tab', { name: 'Details' }).click();
         await expect(page.getByText('What we are looking for')).toBeVisible();
-        const found = await findings(page);
-        expect(found, `${title} at ${width}px:\n  ${found.join('\n  ')}`).toEqual([]);
+        await expectStandard(page, title, width);
       } finally {
         await close();
       }
@@ -444,7 +420,6 @@ for (const width of WIDTHS) {
 
     test('/resumes/:id with text, a conversation and a match report', async ({ browser }) => {
       const title = '/resumes/:id with text, a conversation and a match report';
-      known(title, width);
       const { page, close } = await pageAt(browser, width, accounts.seed);
       try {
         const id = await seededWorkspace(page, `workspace ${width}`);
@@ -457,8 +432,7 @@ for (const width of WIDTHS) {
         await expect(page.getByRole('button', { name: 'Hide details' })).toBeVisible();
         await expect(page.getByText('Infrastructure as code')).toBeVisible();
         await expect(page.getByText(/Summary: You will own/)).toBeVisible();
-        const found = await findings(page);
-        expect(found, `${title} at ${width}px:\n  ${found.join('\n  ')}`).toEqual([]);
+        await expectStandard(page, title, width);
       } finally {
         await close();
       }
