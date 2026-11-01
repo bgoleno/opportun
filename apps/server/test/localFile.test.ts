@@ -639,6 +639,53 @@ describe('deleting a local_file resume (#43)', () => {
     expect(await versionIds(app, A.ctx)).toEqual([A.baseRef]);
   });
 
+  // No path creates two resumes naming one version row, and resumes.doc_ref has no unique
+  // index, so that is an invariant, not a constraint. dropVersionRow refuses to delete a row any
+  // resume still names, so a live document is protected by construction even if the invariant
+  // ever breaks (sec's suggestion on https://github.com/bgoleno/opportun/pull/51). Both tests
+  // build that unreachable state directly.
+  async function sharedDocument(app: App, c: TestClient) {
+    const ctx = ctxFor(c);
+    const { attachmentId, resume: first } = await seedBase(app, ctx);
+    const second = await insertResume(app.db, ctx, {
+      kind: 'base',
+      title: 'Same document, second resume',
+      store: 'local_file',
+      docRef: attachmentId,
+      opportunityId: null,
+      parentResumeId: null,
+    });
+    return { ctx, shared: attachmentId, first, second };
+  }
+
+  it('deleting one of two resumes that name one document keeps it for the other', async () => {
+    const { app, a } = await boot();
+    const { shared, first } = await sharedDocument(app, a);
+    const before = await storedState(app);
+
+    expect((await deleteVia(a, first.id)).json()).toEqual({ outcome: 'deleted' });
+    await sweepOrphanedAttachments(app.db, app.storage, { graceMs: 0 });
+
+    // Only the deleted resume's own row changed; the shared row and its file are untouched.
+    expect(await storedState(app)).toEqual(without(before, first.id, `${shared}:not-a-row`));
+  });
+
+  it('moving one of two resumes that name one document to a new version keeps it for the other', async () => {
+    const { app, a } = await boot();
+    const { ctx, shared, first, second } = await sharedDocument(app, a);
+    const { docRef } = await app.localFileStore.applyEdits(ctx, shared, [
+      { find: 'Jane Doe', replace: 'J. Doe' },
+    ]);
+    const sharedBefore = (await storedState(app)).files.get(shared);
+
+    expect(await updateResumeDocRef(app.db, ctx, first.id, shared, docRef)).toBe(true);
+    await sweepOrphanedAttachments(app.db, app.storage, { graceMs: 0 });
+
+    expect(await liveDocRef(app, second.id)).toBe(shared);
+    expect((await storedState(app)).files.get(shared)).toBe(sharedBefore);
+    expect(sharedBefore).not.toBeNull();
+  });
+
   it('archiving a submitted resume keeps its document, row and file', async () => {
     const { app, a } = await boot();
     const A = await tailoredSession(app, a);
