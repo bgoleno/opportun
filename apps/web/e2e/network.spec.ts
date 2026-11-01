@@ -89,7 +89,7 @@ test('network: a /contacts bookmark from before the rename opens the Network pag
   const id = new URL(page.url()).pathname.split('/').pop() as string;
 
   await page.goto(`/contacts/${id}`);
-  await expect(page).toHaveURL(new RegExp(`/network/${id}$`));
+  await expect.poll(() => new URL(page.url()).pathname).toBe(`/network/${id}`);
   await expect(page.getByRole('heading', { name: 'Dana Testworth' })).toBeVisible();
 
   await page.goto('/contacts');
