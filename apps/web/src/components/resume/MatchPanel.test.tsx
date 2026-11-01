@@ -102,7 +102,7 @@ describe('MatchPanelView', () => {
     // jsdom has no layout: this pins the structure. The widths themselves were measured in a
     // browser (see https://github.com/bgoleno/opportun/issues/36's PR).
     const reading = screen.getByText(REPORT.report.summary).parentElement!;
-    expect(reading).toHaveClass('max-w-[65ch]');
+    expect(reading).toHaveClass('max-w-prose');
     expect(reading).toContainElement(scoreRow());
     const weak = screen.getByRole('list', { name: 'Weak areas' });
     expect(reading).not.toContainElement(weak);

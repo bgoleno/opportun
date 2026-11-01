@@ -119,7 +119,7 @@ export function MatchPanelView({
                     cards below use the card's full width instead, in columns, rather than
                     stacking into a tall single column with the right half of the card empty
                     (https://github.com/bgoleno/opportun/issues/36). */}
-                <div className="grid max-w-[65ch] gap-4">
+                <div className="grid max-w-prose gap-4">
                   <div className="grid gap-1">
                     <p className="flex items-baseline gap-2">
                       <span className="font-medium">{band(view.report.score)}</span>
@@ -187,18 +187,18 @@ export function MatchPanelView({
                         report with fewer weak areas than there is room for stretches its cards
                         across the card instead of leaving empty tracks on the right (measured
                         on https://github.com/bgoleno/opportun/issues/36's PR). A column can
-                        then grow wide, so each card's text is capped at 75ch. */}
+                        then grow wide, so each card's text is capped at max-w-prose (65ch). */}
                     <ul
                       aria-labelledby={weakAreasId}
                       className="grid grid-cols-[repeat(auto-fit,minmax(18rem,1fr))] gap-2"
                     >
                       {view.report.weakAreas.map((w) => (
                         <li key={w.area} className="rounded-md border px-3 py-2">
-                          <p className="max-w-[75ch] font-medium">{w.area}</p>
+                          <p className="max-w-prose font-medium">{w.area}</p>
                           {/* The suggestion is the guidance, not a caption under it: it is
                               the single most actionable text on the page (issue #304), so it
                               reads at the same weight as the rest of the report, not muted. */}
-                          <p className="max-w-[75ch]">{w.suggestion}</p>
+                          <p className="max-w-prose">{w.suggestion}</p>
                         </li>
                       ))}
                     </ul>
