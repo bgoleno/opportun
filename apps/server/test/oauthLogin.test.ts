@@ -11,7 +11,7 @@ import { fakeOAuth, type FakeIdentity, type FakeOAuth } from './fakeOAuth';
 import { registerTwoUsers, type TestClient } from './isolation';
 import { exec, queryAll, queryOne } from './db';
 import { onSlowTransaction } from '../src/db/gate';
-import { heldApart, holdAt, pauseAt } from './race';
+import { heldApart, holdAt, pauseAt, settledOrWaiting } from './race';
 
 let provider: FakeOAuth;
 const boot = useApi(() => {
@@ -958,6 +958,7 @@ describe('oauth link and unlink', () => {
         { [OAUTH_COOKIE]: s.binding, opportun_session: a.session },
       );
     const [one, two] = await heldApart(
+      app,
       'oauth.link.locked',
       () => back(first, '1'),
       () => back(second, '2'),
@@ -1025,14 +1026,15 @@ describe('oauth link and unlink', () => {
     await Promise.race([pause.reached, first]);
     expect(pause.arrived()).toBe(1);
     const second = back(flows[1]!);
-    await Promise.race([second, new Promise((r) => setTimeout(r, 200))]);
-    const passedTheLock = pause.arrived() > 1;
+    // Observed, not timed (https://github.com/bgoleno/opportun/issues/62): held at the
+    // identity's lock (Postgres) or the gate (SQLite), or past it.
+    const seen = await settledOrWaiting(app, second, pause);
     // Nothing held the second back: let it commit, so the first's email read sees its account.
-    if (passedTheLock) await second;
+    if (seen !== 'waiting') await second;
     pause.release();
     const responses = await Promise.all([first, second]);
     expect(responses.map((r) => r.headers.location)).toEqual(['/', '/']);
-    expect(passedTheLock).toBe(false);
+    expect(seen).toBe('waiting');
     expect(await userCount(app)).toBe(users + 1);
     expect((await oauthRows(app)).filter((r) => r.accountId === '4343')).toHaveLength(1);
     expect(await events(app, 'auth.oauth_existing_account')).toHaveLength(0);
