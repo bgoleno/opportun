@@ -419,9 +419,9 @@ for (const width of WIDTHS) {
         await expect(page.getByRole('list', { name: 'Conversation' })).toContainText(
           'Your platform work maps well to this role.',
         );
-        // Both panels open collapsed; the text being measured is behind them.
-        await page.getByRole('button', { name: 'Show document' }).click();
-        await page.getByRole('button', { name: 'Show details' }).click();
+        // Both panels open expanded; the text being measured is inside them.
+        await expect(page.getByRole('button', { name: 'Hide document' })).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Hide details' })).toBeVisible();
         await expect(page.getByText('Infrastructure as code')).toBeVisible();
         await expect(page.getByText(/Summary: You will own/)).toBeVisible();
         const found = await findings(page);
