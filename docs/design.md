@@ -547,8 +547,15 @@ Information architecture (FR-U):
 - **Opportunity** `/opportunities/:id` : header (company, title, stage control),
   tabs: Timeline, Communications, Resume, Referrals, Details/JD.
 - **Resumes** `/resumes` : base resumes, tailored versions grid; `/resumes/:id`
-  tailoring workspace: left = chat with the model, right = current intro/body with
-  per-hunk accept, top = status + "create Google Doc copy" action.
+  tailoring workspace: a header with the title, a link to open the document in its
+  store, the match score and the status control; then the document's text (for a
+  resume with no external link) and the match report; and the tailoring chat, where
+  the model proposes edits as cards, each applied on its own. From `xl` the chat is
+  a column on the right (the Chat width below), level with the first section, that
+  stays in view while the other column scrolls; its conversation scrolls inside it,
+  with the composer at the bottom. Below `xl` the sections stack, chat last, capped
+  at 48rem (`max-w-3xl`). Issue
+  [#35](https://github.com/bgoleno/opportun/issues/35).
 - **Discovery** `/discovery` : posting review queue (keyboard-first triage, FR-U8)
   for results still pending, and a decided-results view, browsed rather than
   triaged since there is nothing left to decide, for ones already accepted or
