@@ -23,12 +23,45 @@ const WIDTHS = [1280, 1536, 1920, 2560] as const;
 const HEIGHT = 900;
 const MAX_CH = 80;
 
+/** Running text at reading width across views (W3). */
+const READING_WIDTH = 'https://github.com/bgoleno/opportun/issues/34';
+/** The tailoring chat in its own column, capped when stacked (W4). */
+const CHAT_COLUMN = 'https://github.com/bgoleno/opportun/issues/35';
+
 /**
  * Views that do not meet the standard yet, by test title (the route, or a seeded view's name),
- * with the window widths they fail at and the issue that fixes them. Empty until the first CI
- * run shows what fails.
+ * with the window widths they fail at and the issue that fixes them. Taken from the CI run on
+ * https://github.com/bgoleno/opportun/pull/52 before this list existed; every entry is a wrapped
+ * line wider than MAX_CH, none is a page cap or centring finding. A fix makes its entry pass,
+ * which Playwright reports as a failure until the entry is removed.
  */
-const KNOWN = new Map<string, { widths: readonly number[]; issue: string }>([]);
+const KNOWN = new Map<string, { widths: readonly number[]; issue: string }>([
+  // Card descriptions and help text under each card title, at the full page width.
+  ['/settings/security', { widths: [1280], issue: READING_WIDTH }],
+  ['/settings/ai', { widths: WIDTHS, issue: READING_WIDTH }],
+  ['/settings/integrations', { widths: WIDTHS, issue: READING_WIDTH }],
+  ['/settings/mail-filters', { widths: WIDTHS, issue: READING_WIDTH }],
+  ['/settings/data', { widths: WIDTHS, issue: READING_WIDTH }],
+  ['/settings/users', { widths: WIDTHS, issue: READING_WIDTH }],
+  ['/settings/jobs', { widths: WIDTHS, issue: READING_WIDTH }],
+  // The Deny explanation under each suggested company, until the card grid adds a column.
+  ['/discovery/companies', { widths: [1280, 1536], issue: READING_WIDTH }],
+  // The job description (Markdown) and a timeline note's body.
+  [
+    '/opportunities/:id details with a long job description',
+    { widths: [1536, 1920, 2560], issue: READING_WIDTH },
+  ],
+  [
+    '/opportunities/:id timeline with a long note',
+    { widths: [1536, 1920, 2560], issue: READING_WIDTH },
+  ],
+  // The chat's messages and a suggestion's rationale. The document text and the match report
+  // already wrap at reading width.
+  [
+    '/resumes/:id with text, a conversation and a match report',
+    { widths: WIDTHS, issue: CHAT_COLUMN },
+  ],
+]);
 
 /**
  * Everything wrong with the view on screen: a wrapped line wider than MAX_CH (naming the element,
