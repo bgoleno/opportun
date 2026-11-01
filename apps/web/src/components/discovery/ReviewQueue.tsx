@@ -19,6 +19,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { NewOpportunityDialog } from '@/components/pipeline/NewOpportunityDialog';
 import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
 import { toast } from '@/components/ui/toast';
 import { ApiError, errorMessage } from '@/lib/api';
 import { safeHttpUrl } from '@/lib/opportunities';
@@ -37,7 +39,15 @@ import {
   type DiscoveryResult,
 } from './api';
 import { CaptureDialog } from './CaptureDialog';
-import { groupResults, rowKey, type ResultGroup } from './groupResults';
+import { rowKey, type ResultGroup } from './groupResults';
+import {
+  arrangeQueue,
+  DEFAULT_QUEUE_SORT,
+  isStale,
+  QUEUE_SORTS,
+  queueSort,
+  type QueueSort,
+} from './queueOrder';
 import {
   BulkAcceptConfirmDialog,
   BulkDismissDialog,
@@ -66,8 +76,10 @@ function summarize(
   return parts.join('; ');
 }
 
-export function ReviewQueue() {
-  const { data, error, isPending } = useReviewQueue();
+/** `now` dates the stale mark; tests pass a fixed time instead of reading the clock. */
+export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
+  const [sort, setSort] = useState<QueueSort>(DEFAULT_QUEUE_SORT);
+  const { data, error, isPending } = useReviewQueue(queueSort(sort).param);
   const acceptM = useAcceptResult();
   const dismissM = useDismissResult();
   const bulkAcceptM = useBulkAccept();
@@ -97,7 +109,7 @@ export function ReviewQueue() {
   const container = useRef<HTMLUListElement>(null);
   const lastToggledIndex = useRef<number | null>(null);
   const items = data?.items;
-  const groups = useMemo(() => groupResults(items ?? []), [items]);
+  const groups = useMemo(() => arrangeQueue(items ?? [], sort), [items, sort]);
   /** Ids we can prove belong to a multi-location group (issue #209): every member of a group
    *  with more than one member, among the currently loaded page. A multi-location group's
    *  members have no checkbox of their own on QueueGroupRow, and a flat-index range (shift-
@@ -554,6 +566,27 @@ export function ReviewQueue() {
               ? '1 result to review.'
               : `${data.total} results to review.`}
         </p>
+        <div className="flex items-center gap-2">
+          <Label htmlFor="queue-sort" className="text-sm font-normal text-muted-foreground">
+            Sort by
+          </Label>
+          <div className="w-40">
+            <Select
+              id="queue-sort"
+              value={sort}
+              onChange={(e) => {
+                const value = e.currentTarget.value;
+                setSort(queueSort(value).key);
+              }}
+            >
+              {QUEUE_SORTS.map((o) => (
+                <option key={o.key} value={o.key}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </div>
         <p className="ml-auto hidden text-xs text-muted-foreground lg:block">
           <kbd className="rounded border px-1">j</kbd>/<kbd className="rounded border px-1">k</kbd>{' '}
           select, <kbd className="rounded border px-1">i</kbd> accept,{' '}
@@ -625,6 +658,7 @@ export function ReviewQueue() {
             <QueueRow
               key={rowKey(g)}
               result={g.members[0]!}
+              stale={isStale(g, now)}
               selected={rowKey(g) === selectedKey}
               onSelect={() => setSelectedKey(rowKey(g))}
               onAccept={() => void acceptGroup(g)}
@@ -644,6 +678,7 @@ export function ReviewQueue() {
             <QueueGroupRow
               key={rowKey(g)}
               group={g}
+              stale={isStale(g, now)}
               selected={rowKey(g) === selectedKey}
               onSelect={() => setSelectedKey(rowKey(g))}
               onAcceptAll={() => void acceptGroup(g)}

@@ -340,6 +340,29 @@ describe('discovery.run job', () => {
     expect((await listResults(app.db, ctx, PAGE)).total).toBe(1);
   });
 
+  it('keeps the first-discovered date when a later run sees the same posting again (#26)', async () => {
+    // The review queue shows a result's createdAt as the date it was first discovered
+    // (https://github.com/bgoleno/opportun/issues/26), so a re-sighting must not move it.
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    registerSource(fakeSource('ats_lever', { postings: [P1] }));
+    const src = await createSource(app.db, ctx, { kind: 'ats_lever', config: { org: 'initech' } });
+    await runSource(app, a, src.id);
+    const [first] = (await listResults(app.db, ctx, PAGE)).items;
+    // An explicit first sighting, so a reset to "now" by the second run cannot pass unnoticed.
+    const FIRST_SEEN = Date.parse('2026-09-01T08:00:00Z');
+    await app.db
+      .update(discoveryResults)
+      .set({ createdAt: FIRST_SEEN })
+      .where(eq(discoveryResults.id, first!.id))
+      .run();
+    await runSource(app, a, src.id);
+    const { items, total } = await listResults(app.db, ctx, PAGE);
+    expect(total).toBe(1);
+    expect(items[0]!.id).toBe(first!.id);
+    expect(items[0]!.createdAt).toBe(FIRST_SEEN);
+  });
+
   it('marks the later of two pending results from different sources as multi-posted (FR-O10)', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
