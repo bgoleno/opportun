@@ -21,9 +21,13 @@
 // the process, including V8's garbage collector and compiler threads, which run beside the
 // measured code and do not run evenly: a probe counted 416 ms of process CPU against an idle
 // main thread while a Worker spun. Under heavy load pgSnippet's scan read 11.0x at a factor of
-// 4, and helper time landing unevenly on the large side is the likely cause (inferred, never
-// reproduced under that load). process.threadCpuUsage counts only the calling thread, the one
-// running the work, so helper threads cannot move the ratio; scaling.test.ts builds that state.
+// 4. Timing the same batches on both clocks inside pgSnippet.test.ts at a load average near 34
+// showed the mechanism at work: one run read 12.0 on the process clock and 5.3 on the main
+// thread's, the large side carrying 45 to 65 ms per call the main thread never spent (review of
+// https://github.com/bgoleno/opportun/pull/54). That the heavier-load failures came from the
+// same source is inferred, since none was measured there. process.threadCpuUsage counts only the
+// calling thread, the one running the work, so helper threads cannot move the ratio;
+// scaling.test.ts builds that state on purpose.
 
 /**
  * The clock every CPU measurement here reads, named in each failure message.
