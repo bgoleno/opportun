@@ -4,6 +4,7 @@ import { newId } from '@opportun/core';
 import { and, desc, eq, type SQL } from 'drizzle-orm';
 import { attachments, resumes, settings } from '../db/schema';
 import { HttpError, notFound } from '../lib/errors';
+import { racePoint } from '../lib/racePoints';
 import type { Db, UserCtx } from './base';
 import { assertOpportunityOwned } from './activities';
 import { countWhere, type ListOpts, type Page } from './list';
@@ -285,6 +286,7 @@ export async function deleteResume(db: Db, ctx: UserCtx, id: string): Promise<De
       .get();
     if (row === undefined) throw notFound();
     if (row.status !== 'submitted') {
+      await racePoint('resumes.delete.locked');
       await tx
         .delete(resumes)
         .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
