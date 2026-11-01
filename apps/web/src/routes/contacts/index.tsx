@@ -3,6 +3,7 @@ import { ContactList } from '@/components/contacts/ContactList';
 import { PageHeader } from '@/components/PageHeader';
 
 export const Route = createFileRoute('/contacts/')({
+  staticData: { layout: 'fluid' },
   component: ContactsPage,
 });
 

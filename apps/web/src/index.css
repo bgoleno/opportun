@@ -101,6 +101,18 @@
     ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
+/* Layout widths (docs/design.md section 9, "Layout widths"). Tailwind turns each --container-*
+   into max-w-* and w-* utilities (max-w-page, w-rail, ...); running text uses the built-in
+   max-w-prose. Not inline, so the utilities read these variables: each width is set here and
+   nowhere else. The page cap's value is the owner's call (issue
+   https://github.com/bgoleno/opportun/issues/32): change it here only, never write it into a
+   view, a test or a doc. */
+@theme {
+  --container-page: 80rem;
+  --container-rail: 20rem;
+  --container-chat: 28rem;
+}
+
 @layer base {
   * {
     border-color: var(--border);
