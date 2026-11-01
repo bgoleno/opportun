@@ -16,6 +16,7 @@ import { MAX_EDITS, RESUME_EDIT_OUTCOMES, ResumeEditSchema } from '../adapters/d
 import { buildAiDeps, expiredKeyHint } from '../lib/ai';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
+import { racePoint } from '../lib/racePoints';
 import { SECURITY_HEADERS } from '../plugins/security';
 import { requireUser, type Db, type UserCtx } from '../repos/base';
 import { getOpportunity, type OpportunityView } from '../repos/opportunities';
@@ -392,7 +393,10 @@ export async function tailoringRoutes(app: FastifyInstance): Promise<void> {
       // Unchanged for a store that mutates its document in place; a new ref for one whose
       // written content is immutable per version (local_file, #284), which the store itself
       // never writes to this row (ResumeEditOutcomeResult's own doc comment).
-      if (docRef !== resume.docRef) await updateResumeDocRef(db, ctx, resume.id, docRef);
+      if (docRef !== resume.docRef) {
+        await racePoint('tailoring.apply');
+        await updateResumeDocRef(db, ctx, resume.id, docRef);
+      }
       const appliedCount = results.filter((r) => r.outcome === 'applied').length;
       await audit(db, 'resume.edits_applied', {
         userId: ctx.userId,
