@@ -76,4 +76,22 @@ describe('SuggestionCard', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/no longer in the document/i);
     expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
   });
+
+  it('says the resume changed and to try again when other applies kept landing first (#23)', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      // The server's envelope carries the code only (plugins/security.ts errorHandler), so the
+      // wording has to come from the client.
+      'POST /tailoring/s1/suggestions/apply': () => ({
+        status: 409,
+        body: { error: { code: 'resume_changed' } },
+      }),
+    });
+    renderWithProviders(<SuggestionCard sessionId="s1" edit={EDIT} />);
+    await user.click(await screen.findByRole('button', { name: 'Apply' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The resume changed while this edit was being applied. Try again.',
+    );
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+  });
 });

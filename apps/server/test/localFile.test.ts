@@ -5,12 +5,16 @@
 import { and, eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { attachments, resumes } from '../src/db/schema';
+import { sweepOrphanedAttachments } from '../src/jobs/attachmentSweep';
 import { HttpError } from '../src/lib/errors';
+import { setRaceHook } from '../src/lib/racePoints';
 import { insertResume, updateResumeDocRef } from '../src/repos/resumes';
 import type { UserCtx } from '../src/repos/base';
+import { APPLY_ATTEMPTS } from '../src/routes/tailoring';
 import { useApi } from './api';
 import { createOpportunity } from './resumeFixtures';
 import type { TestClient } from './isolation';
+import { holdAt } from './race';
 
 const boot = useApi();
 
@@ -65,6 +69,53 @@ async function seedBase(
 
 function ctxFor(c: TestClient): UserCtx {
   return { userId: c.userId, isAdmin: false };
+}
+
+type App = Awaited<ReturnType<typeof boot>>['app'];
+
+/** A local_file tailored copy of a seeded base, with an open tailoring session to apply through. */
+async function tailoredSession(app: App, c: TestClient) {
+  const ctx = ctxFor(c);
+  const { attachmentId: baseRef, resume: base } = await seedBase(app, ctx);
+  const opportunityId = await createOpportunity(c);
+  const tailored = await c.request({
+    method: 'POST',
+    url: '/api/v1/resumes',
+    payload: { baseResumeId: base.id, opportunityId },
+  });
+  if (tailored.statusCode !== 201) throw new Error(`tailored copy: ${tailored.statusCode}`);
+  const resumeId = tailored.json().id as string;
+  const session = await c.request({ method: 'POST', url: `/api/v1/resumes/${resumeId}/tailoring` });
+  if (session.statusCode !== 200) throw new Error(`tailoring session: ${session.statusCode}`);
+  return { ctx, baseRef, resumeId, sessionId: session.json().id as string };
+}
+
+function applyEdit(c: TestClient, sessionId: string, edit: { find: string; replace: string }) {
+  return c.request({
+    method: 'POST',
+    url: `/api/v1/tailoring/${sessionId}/suggestions/apply`,
+    payload: { edits: [edit] },
+  });
+}
+
+async function liveDocRef(app: App, resumeId: string): Promise<string> {
+  const row = await app.db
+    .select({ docRef: resumes.docRef })
+    .from(resumes)
+    .where(eq(resumes.id, resumeId))
+    .get();
+  if (row === undefined) throw new Error('resume row missing');
+  return row.docRef;
+}
+
+/** Every attachments row the user owns, sorted: the base, the live version, and any leak. */
+async function versionIds(app: App, ctx: UserCtx): Promise<string[]> {
+  const rows = await app.db
+    .select({ id: attachments.id })
+    .from(attachments)
+    .where(eq(attachments.userId, ctx.userId))
+    .all();
+  return rows.map((r) => r.id).sort();
 }
 
 describe('local file document store', () => {
@@ -216,7 +267,7 @@ describe('local file document store', () => {
     const { docRef } = await app.localFileStore.applyEdits(ctx, attachmentId, [
       { find: 'Jane Doe', replace: 'J. Doe' },
     ]);
-    await updateResumeDocRef(app.db, ctx, resume.id, docRef);
+    expect(await updateResumeDocRef(app.db, ctx, resume.id, attachmentId, docRef)).toBe(true);
     const row = await app.db
       .select({ docRef: resumes.docRef })
       .from(resumes)
@@ -229,6 +280,37 @@ describe('local file document store', () => {
       .where(eq(attachments.id, attachmentId))
       .get();
     expect(old).toBeUndefined();
+  });
+
+  it('updateResumeDocRef is a compare-and-set: a writer holding a stale ref changes nothing live (#23)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxFor(a);
+    const { attachmentId, resume } = await seedBase(app, ctx);
+    // Two versions computed from the same original, as two racing applies compute them.
+    const { docRef: won } = await app.localFileStore.applyEdits(ctx, attachmentId, [
+      { find: 'Jane Doe', replace: 'J. Doe' },
+    ]);
+    const { docRef: stale } = await app.localFileStore.applyEdits(ctx, attachmentId, [
+      { find: 'Senior Engineer', replace: 'Staff Engineer' },
+    ]);
+    expect(await updateResumeDocRef(app.db, ctx, resume.id, attachmentId, won)).toBe(true);
+    const resumeBefore = await app.db.select().from(resumes).where(eq(resumes.id, resume.id)).get();
+    const liveBefore = await app.db.select().from(attachments).where(eq(attachments.id, won)).get();
+
+    expect(await updateResumeDocRef(app.db, ctx, resume.id, attachmentId, stale)).toBe(false);
+    // The stored state, not just the return value: the resume row and the live version's row
+    // are exactly as they were, and the live text still reads back.
+    expect(await app.db.select().from(resumes).where(eq(resumes.id, resume.id)).get()).toEqual(
+      resumeBefore,
+    );
+    expect(await app.db.select().from(attachments).where(eq(attachments.id, won)).get()).toEqual(
+      liveBefore,
+    );
+    expect(await app.localFileStore.readText(ctx, won)).toBe(
+      BASE_TEXT.replace('Jane Doe', 'J. Doe'),
+    );
+    // The stale writer's own version is the only row dropped: nothing references it.
+    expect(await versionIds(app, ctx)).toEqual([won]);
   });
 
   it('a local_file tailored resume can be edited through the real tailoring route end to end', async () => {
@@ -271,5 +353,155 @@ describe('local file document store', () => {
       .get();
     expect(row?.docRef).not.toBe(resume.docRef);
     expect(await app.localFileStore.readText(ctx, row!.docRef)).toContain('J. Doe');
+  });
+});
+
+// Two applies on one resume used to both read version D0, write D1 and D2 from it, and persist
+// in turn, so the second replaced the first and its edit was silently lost
+// (https://github.com/bgoleno/opportun/issues/23). holdAt parks both at the race point between
+// writing a version and persisting it: the interleaving that lost the edit, every run.
+describe('concurrent applies to one local_file resume (#23)', () => {
+  it('two applies of different edits at once: both land, and nothing is left behind', async () => {
+    const { app, a } = await boot();
+    const { ctx, baseRef, resumeId, sessionId } = await tailoredSession(app, a);
+    const barrier = holdAt('tailoring.apply', 2);
+    const responses = await Promise.all([
+      applyEdit(a, sessionId, { find: 'Jane Doe', replace: 'J. Doe' }),
+      applyEdit(a, sessionId, { find: 'Senior Engineer', replace: 'Staff Engineer' }),
+    ]);
+    expect(barrier.arrived()).toBe(2);
+    for (const res of responses) {
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ results: [{ index: 0, outcome: 'applied' }] });
+    }
+    const live = await liveDocRef(app, resumeId);
+    const text = await app.localFileStore.readText(ctx, live);
+    expect(text).toContain('J. Doe');
+    expect(text).toContain('Staff Engineer');
+    // Superseded versions and the losing attempt's own version are all gone.
+    expect(await versionIds(app, ctx)).toEqual([baseRef, live].sort());
+  });
+
+  it('two applies rewriting the same text at once: one lands, the other is refused, not lost', async () => {
+    const { app, a } = await boot();
+    const { ctx, baseRef, resumeId, sessionId } = await tailoredSession(app, a);
+    const edits = [
+      { find: 'Jane Doe', replace: 'J. Doe' },
+      { find: 'Jane Doe', replace: 'Jane Q. Doe' },
+    ];
+    const barrier = holdAt('tailoring.apply', 2);
+    const outcomes = await Promise.all(
+      edits.map(async (edit) => ({ edit, res: await applyEdit(a, sessionId, edit) })),
+    );
+    expect(barrier.arrived()).toBe(2);
+    expect(outcomes.map((o) => o.res.statusCode).sort()).toEqual([200, 409]);
+    const won = outcomes.find((o) => o.res.statusCode === 200)!;
+    const lost = outcomes.find((o) => o.res.statusCode === 409)!;
+    // The loser retried against the winner's version, where its find text no longer is.
+    expect(lost.res.json().error.code).toBe('edit_target_missing');
+    const live = await liveDocRef(app, resumeId);
+    const text = await app.localFileStore.readText(ctx, live);
+    expect(text).toContain(won.edit.replace);
+    expect(text).not.toContain(lost.edit.replace);
+    expect(await versionIds(app, ctx)).toEqual([baseRef, live].sort());
+  });
+
+  it('two identical applies at once share one stored file: dropping the loser keeps the live bytes', async () => {
+    const { app, a } = await boot();
+    const { ctx, baseRef, resumeId, sessionId } = await tailoredSession(app, a);
+    const edit = { find: 'Jane Doe', replace: 'J. Doe' };
+    const barrier = holdAt('tailoring.apply', 2);
+    const responses = await Promise.all([
+      applyEdit(a, sessionId, edit),
+      applyEdit(a, sessionId, edit),
+    ]);
+    expect(barrier.arrived()).toBe(2);
+    expect(responses.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+    // Identical text is one content-addressed file under two version rows. Only the losing
+    // row is dropped, so the sweep, run with no grace period, still finds the file referenced.
+    await sweepOrphanedAttachments(app.db, app.storage, { graceMs: 0 });
+    const live = await liveDocRef(app, resumeId);
+    expect(await app.localFileStore.readText(ctx, live)).toBe(
+      BASE_TEXT.replace('Jane Doe', 'J. Doe'),
+    );
+    expect(await versionIds(app, ctx)).toEqual([baseRef, live].sort());
+  });
+
+  it('an apply that loses every compare-and-set answers 409 and leaves the live version alone', async () => {
+    const { app, a } = await boot();
+    const { ctx, baseRef, resumeId, sessionId } = await tailoredSession(app, a);
+    // Another apply lands between this one writing its version and persisting it, every time.
+    let landed = 0;
+    let lastLanded = '';
+    setRaceHook(async (point) => {
+      if (point !== 'tailoring.apply') return;
+      const from = await liveDocRef(app, resumeId);
+      const { docRef } = await app.localFileStore.applyEdits(ctx, from, [
+        { find: 'Go', replace: 'Go!' },
+      ]);
+      if (!(await updateResumeDocRef(app.db, ctx, resumeId, from, docRef))) {
+        throw new Error('the competing apply lost its own compare-and-set');
+      }
+      landed += 1;
+      lastLanded = docRef;
+    });
+    const res = await applyEdit(a, sessionId, { find: 'Jane Doe', replace: 'J. Doe' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('resume_changed');
+    expect(landed).toBe(APPLY_ATTEMPTS);
+    const live = await liveDocRef(app, resumeId);
+    expect(live).toBe(lastLanded);
+    const text = await app.localFileStore.readText(ctx, live);
+    expect(text).toContain(`Go${'!'.repeat(APPLY_ATTEMPTS)}`);
+    expect(text).toContain('Jane Doe');
+    expect(await versionIds(app, ctx)).toEqual([baseRef, live].sort());
+  });
+
+  it('an apply whose starting version is superseded before it reads it retries, and both land', async () => {
+    const { app, a } = await boot();
+    const { ctx, baseRef, resumeId, sessionId } = await tailoredSession(app, a);
+    // B is parked right after reading the resume (it holds D0). A runs start to finish
+    // meanwhile: it moves the resume to D1 and deletes D0's row. Then B reads D0 and finds
+    // nothing there.
+    let first = true;
+    let aRes: Awaited<ReturnType<typeof applyEdit>> | undefined;
+    setRaceHook(async (point) => {
+      if (point !== 'tailoring.apply.read' || !first) return;
+      first = false;
+      aRes = await applyEdit(a, sessionId, { find: 'Jane Doe', replace: 'J. Doe' });
+    });
+    const bRes = await applyEdit(a, sessionId, {
+      find: 'Senior Engineer',
+      replace: 'Staff Engineer',
+    });
+    expect(aRes?.statusCode).toBe(200);
+    expect(bRes.statusCode).toBe(200);
+    const live = await liveDocRef(app, resumeId);
+    const text = await app.localFileStore.readText(ctx, live);
+    expect(text).toContain('J. Doe');
+    expect(text).toContain('Staff Engineer');
+    expect(await versionIds(app, ctx)).toEqual([baseRef, live].sort());
+  });
+
+  it('a version that is gone while the resume still points at it is a 404, not a retry', async () => {
+    const { app, a } = await boot();
+    const { ctx, resumeId, sessionId } = await tailoredSession(app, a);
+    const live = await liveDocRef(app, resumeId);
+    // Nothing superseded it, so no retry can help: the 404 stands, rather than the request
+    // spending every attempt and answering resume_changed.
+    let reads = 0;
+    setRaceHook(async (point) => {
+      if (point !== 'tailoring.apply.read') return;
+      reads += 1;
+      await app.db
+        .delete(attachments)
+        .where(and(eq(attachments.userId, ctx.userId), eq(attachments.id, live)))
+        .run();
+    });
+    const res = await applyEdit(a, sessionId, { find: 'Jane Doe', replace: 'J. Doe' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe('not_found');
+    expect(reads).toBe(1);
+    expect(await liveDocRef(app, resumeId)).toBe(live);
   });
 });
