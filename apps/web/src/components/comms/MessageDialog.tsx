@@ -32,7 +32,7 @@ export function MessageDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <div className="max-h-[60vh] overflow-y-auto rounded-md border bg-muted/40 p-3">
-          <p className="text-sm break-words whitespace-pre-wrap">
+          <p className="max-w-prose text-sm break-words whitespace-pre-wrap">
             {comm.snippet ?? 'This message has no text.'}
           </p>
         </div>

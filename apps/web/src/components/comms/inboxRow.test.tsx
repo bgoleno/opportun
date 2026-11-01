@@ -198,6 +198,18 @@ describe('InboxRow', () => {
     expect(screen.getByText('From snippet')).toBeInTheDocument();
   });
 
+  it("wraps the row's message preview at reading width (#34)", async () => {
+    // https://github.com/bgoleno/opportun/issues/34: the Inbox list is fluid, so on a wide window
+    // the two-line preview would otherwise run the full row width.
+    mockApi({});
+    renderWithProviders(
+      <ul>
+        <InboxRow comm={BASE} mode="linked" />
+      </ul>,
+    );
+    expect(await screen.findByText('Thank you for your interest...')).toHaveClass('max-w-prose');
+  });
+
   it('a filtered row shows why it was filtered', async () => {
     mockApi({});
     renderWithProviders(

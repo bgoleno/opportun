@@ -239,7 +239,7 @@ export function PolicyEditor() {
 
   return (
     <div className="grid gap-3">
-      <p className="text-sm text-muted-foreground">
+      <p className="max-w-prose text-sm text-muted-foreground">
         Daily budget: ${policies.data.budget.perTaskDailyUsd.toFixed(2)} per task, measured by
         estimated cost. Calls for a task stop once it is reached, until the next UTC day. Models
         without a list price (including local or gateway models) are counted at the highest listed

@@ -4,6 +4,7 @@
 import { REFERRAL_STATUSES, type ReferralStatus } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { Send } from 'lucide-react';
+import { MainWithRail } from '@/components/MainWithRail';
 import { FormError } from '@/components/FormError';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -187,7 +188,7 @@ export function ReferralsTab({
 
   const data = candidates.data;
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
+    <MainWithRail>
       <Card>
         <CardHeader>
           <CardTitle>Who could refer you</CardTitle>
@@ -278,6 +279,6 @@ export function ReferralsTab({
           )}
         </CardContent>
       </Card>
-    </div>
+    </MainWithRail>
   );
 }

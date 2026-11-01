@@ -3,6 +3,7 @@
 import { Link, useNavigate } from '@tanstack/react-router';
 import { ArrowLeft, ExternalLink, Trash2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
+import { MainWithRail } from '@/components/MainWithRail';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FormError } from '@/components/FormError';
 import { Badge } from '@/components/ui/badge';
@@ -117,6 +118,7 @@ function EditForm({ contact }: { contact: ContactDetailData }) {
         <Label htmlFor="c-notes">Notes</Label>
         <Textarea
           id="c-notes"
+          className="max-w-prose"
           rows={4}
           value={notes}
           onChange={(e) => setNotes(e.currentTarget.value)}
@@ -195,7 +197,7 @@ export function ContactDetail({ id }: { id: string }) {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
+      <MainWithRail>
         <Card>
           <CardHeader>
             <CardTitle>Details</CardTitle>
@@ -267,7 +269,7 @@ export function ContactDetail({ id }: { id: string }) {
             </CardContent>
           </Card>
         </div>
-      </div>
+      </MainWithRail>
 
       <ConfirmDialog
         open={confirming}

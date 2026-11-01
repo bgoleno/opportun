@@ -38,7 +38,7 @@ export function FormField(props: {
         ...(describedBy === undefined ? {} : { 'aria-describedby': describedBy }),
       })}
       {props.hint ? (
-        <p id={hintId} className="text-xs text-muted-foreground">
+        <p id={hintId} className="max-w-prose text-xs text-muted-foreground">
           {props.hint}
         </p>
       ) : null}

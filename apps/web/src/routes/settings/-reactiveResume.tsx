@@ -54,13 +54,13 @@ export function ReactiveResumeSettings(props: ReactiveResumeSettingsProps) {
   return (
     <div className="grid gap-6 text-sm">
       <div className="grid gap-2 rounded-md border bg-muted/40 px-3 py-2 text-muted-foreground">
-        <p data-testid="rr-versions">
+        <p className="max-w-prose" data-testid="rr-versions">
           Written for Reactive Resume {status.targetVersions.join(', ')} (its REST API with an API
           key, created in Reactive Resume under Settings, API keys). Earlier versions are not
           supported. The instance must be served over https at a public address: addresses on a
           private network or localhost are refused, like every outbound fetch here.
         </p>
-        <p data-testid="rr-lossy">
+        <p className="max-w-prose" data-testid="rr-lossy">
           Compared with Google Docs, this is lossy: Opportun reads the visible text fields of the
           resume (not dates, links or layout), and an accepted edit replaces text inside one field.
           An edit that crosses bold, italic or link formatting is refused, to be made by hand in
@@ -156,7 +156,7 @@ export function ReactiveResumeSettings(props: ReactiveResumeSettingsProps) {
             {label}
           </label>
         ))}
-        <p className="text-xs text-muted-foreground">
+        <p className="max-w-prose text-xs text-muted-foreground">
           Existing resumes stay in the store they were registered in, and tailored copies are made
           next to their base, so switching never strands a resume.
         </p>
