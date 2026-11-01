@@ -1029,14 +1029,18 @@ export async function withTransaction<T>(
  * it). There is no gate on Postgres, so the SQLite guards are replaced by timing:
  * - outside tests, the same watchdog as SQLite's gate warns once about a transaction open
  *   longer than GATE_WATCHDOG_MS (it holds a pooled connection and its row locks);
- * - in tests, the body's wall time (from its start, after the connection was acquired and
- *   BEGIN ran, to its end, before COMMIT) is split into time with a statement in flight on
- *   the transaction's connection and time without one. The SQLite check (did the event loop
- *   turn?) cannot work here, since every statement is network I/O. A body that spent more
- *   than SLOW_TRANSACTION_MS waiting on something other than its own statements is reported
- *   as awaitedOutside (test/setup.ts fails the test). Blind spots: an outside await shorter
- *   than the budget (an argon2 hash, a fast fake fetch) passes; the SQLite leg, which runs the
- *   same code paths with the stricter event-loop check, is the authority for those.
+ * - in tests, the SQLite gate's rule, applied to the gaps between statements: a body is
+ *   reported as awaitedOutside (test/setup.ts fails the test) when the event loop turns while
+ *   it has no statement in flight on the transaction's connection. Every statement is network
+ *   I/O, so the loop turns during each one, but never between them in a body that only runs
+ *   statements: one resolves, and the body continues and issues the next within the same
+ *   turn's microtasks, however slowly a loaded machine runs that code. Anything else the body
+ *   awaits (fetch, files, argon2, a timer) needs a turn. This replaced a wall-clock budget for
+ *   the time between statements, which a loaded machine exceeded on a long database-only body
+ *   (https://github.com/bgoleno/opportun/issues/41). Waiting for a pooled connection, and
+ *   BEGIN, come before the body starts and are not its doing. Blind spot, shared with SQLite:
+ *   synchronous work between statements does not turn the loop; the slow-transaction warning
+ *   (durationMs over the budget) still names that body.
  */
 async function pgTransaction<T>(
   conn: PgConn,
@@ -1054,20 +1058,22 @@ async function pgTransaction<T>(
   // other transactions hold the pool is not the body's doing and is not counted.
   let started: number | undefined;
   let ended: number | undefined;
-  const timing = { dbMs: 0, inFlight: 0, since: 0 };
+  const watch: StatementWatch = { inFlight: 0, settled: false, awaitedOutside: false };
   let restore: (() => void) | undefined;
   try {
     return await pgTransactionContext.run(conn, () =>
       conn.raw.transaction(
         async (tx) => {
           if (caller === undefined) return body(tx as unknown as Exec);
-          restore = timeStatements(tx, timing);
+          restore = watchStatements(tx, watch);
           started = performance.now();
+          checkNextTurn(watch); // an outside await before the first statement counts too
           try {
             return await body(tx as unknown as Exec);
           } finally {
             ended = performance.now();
-            restore?.();
+            watch.settled = true;
+            restore();
             restore = undefined;
           }
         },
@@ -1079,8 +1085,7 @@ async function pgTransaction<T>(
     disarm?.();
     if (caller !== undefined && started !== undefined) {
       const durationMs = Math.round((ended ?? performance.now()) - started);
-      const outsideMs = durationMs - Math.round(timing.dbMs);
-      const awaitedOutside = outsideMs > SLOW_TRANSACTION_MS;
+      const { awaitedOutside } = watch;
       if (awaitedOutside || durationMs > SLOW_TRANSACTION_MS) {
         reportSlowTransaction({ durationMs, awaitedOutside, stack: caller });
       }
@@ -1088,25 +1093,40 @@ async function pgTransaction<T>(
   }
 }
 
+/** Tests: what pgTransaction watches on the transaction's pooled connection. */
+interface StatementWatch {
+  /** Statements in flight right now (overlapping ones each counted). */
+  inFlight: number;
+  /** The body has returned or thrown: later turns belong to COMMIT or ROLLBACK. */
+  settled: boolean;
+  awaitedOutside: boolean;
+}
+
+/** Marks the body as awaitedOutside if the event loop's next turn finds no statement in flight. */
+function checkNextTurn(watch: StatementWatch): void {
+  setImmediate(() => {
+    if (watch.inFlight === 0 && !watch.settled) watch.awaitedOutside = true;
+  });
+}
+
 /**
- * Tests: accumulates into `timing.dbMs` the time during which at least one statement is in
- * flight on the transaction's pooled connection (overlapping statements counted once).
- * Returns the undo; the connection goes back to the pool unpatched.
+ * Tests: counts the statements in flight on the transaction's pooled connection, and arms
+ * checkNextTurn each time the count drops to zero. Returns the undo; the connection goes back
+ * to the pool unpatched. Throws when the connection cannot be patched, rather than leaving the
+ * guard silently off (a driver upgrade that moved `session.client` would otherwise disable it).
  */
-function timeStatements(
-  tx: unknown,
-  timing: { dbMs: number; inFlight: number; since: number },
-): (() => void) | undefined {
+function watchStatements(tx: unknown, watch: StatementWatch): () => void {
   const client = (tx as { session?: { client?: { query?: unknown } } }).session?.client;
-  if (client === undefined || typeof client.query !== 'function') return undefined;
+  if (client === undefined || typeof client.query !== 'function') {
+    throw new Error("the transaction timing guard cannot watch this transaction's statements");
+  }
   const original = client.query as (...args: unknown[]) => unknown;
   const done = () => {
-    timing.inFlight -= 1;
-    if (timing.inFlight === 0) timing.dbMs += performance.now() - timing.since;
+    watch.inFlight -= 1;
+    if (watch.inFlight === 0) checkNextTurn(watch);
   };
   client.query = function (this: unknown, ...args: unknown[]) {
-    if (timing.inFlight === 0) timing.since = performance.now();
-    timing.inFlight += 1;
+    watch.inFlight += 1;
     let result: unknown;
     try {
       result = original.apply(this, args);

@@ -15,7 +15,12 @@
 // 11.0 and 18.8 across three runs, and CPU ratios of 2.8, 4.6 and 4.9.
 //
 // SECOND, THEY ASSERT SHAPE, NOT A BOUND. Both sizes are measured moments apart, so whatever
-// is left of the load affects both.
+// is left of the load affects both. For expectLinear that means alternating their batches:
+// timed as every small batch and then every large one, a stretch of load during the large
+// phase alone still took correct code to a CPU ratio of 11.0 against a limit of 10
+// (https://github.com/bgoleno/opportun/issues/41). Measured side by side at load averages of
+// 24 to 34, that order gave ratios of 3.4 to 7.6 for pgSnippet's full scan, and alternation
+// 3.7 to 5.3.
 
 /** Process CPU time used so far, in milliseconds. */
 function cpuMs(): number {
@@ -40,15 +45,30 @@ function perIterationMs(work: () => void, minMs: number): { ms: number; reps: nu
   }
 }
 
-/** The lowest per-iteration CPU cost over `runs` batches of `reps`. */
-function fastestBatchMs(runs: number, reps: number, work: () => void): number {
-  let best = Number.POSITIVE_INFINITY;
+/** Per-iteration CPU cost of one batch of `reps`. */
+function batchMs(reps: number, work: () => void): number {
+  const started = cpuMs();
+  for (let i = 0; i < reps; i += 1) work();
+  return (cpuMs() - started) / reps;
+}
+
+/**
+ * The lowest per-iteration CPU cost of each workload over `runs` batches of `reps`, their
+ * batches alternating so that load at any moment falls on both (see the header).
+ */
+function fastestInterleavedMs(
+  runs: number,
+  reps: number,
+  small: () => void,
+  large: () => void,
+): { smallMs: number; largeMs: number } {
+  let smallMs = Number.POSITIVE_INFINITY;
+  let largeMs = Number.POSITIVE_INFINITY;
   for (let r = 0; r < runs; r += 1) {
-    const started = cpuMs();
-    for (let i = 0; i < reps; i += 1) work();
-    best = Math.min(best, (cpuMs() - started) / reps);
+    smallMs = Math.min(smallMs, batchMs(reps, small));
+    largeMs = Math.min(largeMs, batchMs(reps, large));
   }
-  return best;
+  return { smallMs, largeMs };
 }
 
 export interface LinearCheck {
@@ -89,8 +109,7 @@ export function expectLinear({
   large();
   // Repetitions come from the small side, the one at risk of being too fast to measure.
   const { reps } = perIterationMs(small, 20);
-  const smallMs = fastestBatchMs(runs, reps, small);
-  const largeMs = fastestBatchMs(runs, reps, large);
+  const { smallMs, largeMs } = fastestInterleavedMs(runs, reps, small, large);
   const ratio = largeMs / Math.max(smallMs, 0.001);
   const detail = `${label}: ${smallMs.toFixed(2)} ms at 1x, ${largeMs.toFixed(2)} ms at ${String(factor)}x over ${String(reps)} reps (CPU ratio ${ratio.toFixed(1)})`;
   if (ratio > factor * 2.5) {
@@ -102,7 +121,7 @@ export function expectLinear({
 }
 
 /** Lowest wall-clock ms over `runs` calls: the minimum, not the mean, for the same reason as
- * `fastestBatchMs` above, a run slowed by something else on the machine can only push this
+ * `fastestInterleavedMs` above, a run slowed by something else on the machine can only push this
  * up, never down, so the fastest observed call is the one closest to the work's own cost. */
 async function fastestAsyncMs(runs: number, work: () => Promise<unknown>): Promise<number> {
   let best = Number.POSITIVE_INFINITY;

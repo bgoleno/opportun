@@ -38,7 +38,7 @@ describe('expectLinear', () => {
   // synthetic 3s synchronous test against a 1s timeout ran the full 3s before vitest reported
   // it). Under genuine full-suite contention that wall-clock duration -- not this test's own
   // CPU-time math -- is what crossed 30s (observed: 33.6s and 64.5s on two independent
-  // sessions' machines the same night). ceilingMs below is a PER-CALL cost (fastestBatchMs
+  // sessions' machines the same night). ceilingMs below is a PER-CALL cost (batchMs
   // divides by reps), so a single quadraticWork(24_000) call would need to cost 60 real seconds
   // to trip it -- it was never the actual failure mode. 180s is comfortably above every
   // observed case while still catching a genuine hang.
@@ -65,6 +65,32 @@ describe('expectLinear', () => {
       ).toThrow(/superlinear/);
     },
   );
+
+  // https://github.com/bgoleno/opportun/issues/41: timed as all the small batches and then all
+  // the large ones, a stretch of load that landed on the large phase alone inflated the ratio
+  // of correct code to 11.0 against a limit of 10. Timed in alternation, the load lands on
+  // both. Counting switches between the two keeps this independent of how many repetitions
+  // the probe picks: in sequence there are 3 (warm-up, probe, the one phase change), in
+  // alternation 2 per batch pair.
+  it('times the two sizes in alternation, so load lands on both', () => {
+    const order: ('s' | 'l')[] = [];
+    expectLinear({
+      label: 'order',
+      factor: 4,
+      ceilingMs: 5_000,
+      runs: 5,
+      small: () => {
+        order.push('s');
+        linearWork(400_000);
+      },
+      large: () => {
+        order.push('l');
+        linearWork(1_600_000);
+      },
+    });
+    const switches = order.filter((size, i) => i > 0 && size !== order[i - 1]).length;
+    expect(switches).toBeGreaterThanOrEqual(2 * 5);
+  });
 
   it('fails a linear implementation that is simply far too slow', () => {
     expect(() =>
