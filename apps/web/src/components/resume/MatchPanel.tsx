@@ -186,11 +186,13 @@ export function MatchPanelView({
                     {/* As many 18rem columns as fit, one below that. auto-fit, not auto-fill: a
                         report with fewer weak areas than there is room for stretches its cards
                         across the card instead of leaving empty tracks on the right (measured
-                        on https://github.com/bgoleno/opportun/issues/36's PR). A column can
-                        then grow wide, so each card's text is capped at max-w-prose (65ch). */}
+                        on https://github.com/bgoleno/opportun/issues/36's PR). min(18rem, 100%):
+                        on a phone narrower than about 360px the card is under 18rem wide, and
+                        a fixed 18rem floor scrolled the whole page sideways. A column can grow
+                        wide, so each card's text is capped at max-w-prose (65ch). */}
                     <ul
                       aria-labelledby={weakAreasId}
-                      className="grid grid-cols-[repeat(auto-fit,minmax(18rem,1fr))] gap-2"
+                      className="grid grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))] gap-2"
                     >
                       {view.report.weakAreas.map((w) => (
                         <li key={w.area} className="rounded-md border px-3 py-2">

@@ -106,7 +106,7 @@ describe('MatchPanelView', () => {
     expect(reading).toContainElement(scoreRow());
     const weak = screen.getByRole('list', { name: 'Weak areas' });
     expect(reading).not.toContainElement(weak);
-    expect(weak).toHaveClass('grid-cols-[repeat(auto-fit,minmax(18rem,1fr))]');
+    expect(weak).toHaveClass('grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))]');
     expect(reading).not.toContainElement(screen.getByRole('list', { name: 'Missing keywords' }));
   });
 
