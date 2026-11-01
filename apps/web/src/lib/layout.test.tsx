@@ -28,7 +28,7 @@ describe('fluid routes', () => {
       .map((r) => r.id as string)
       .sort();
     // Discovery declares it once, on its section route, for every tab.
-    expect(fluid).toEqual(['/contacts/', '/discovery', '/inbox', '/pipeline']);
+    expect(fluid).toEqual(['/discovery', '/inbox', '/network/', '/pipeline']);
   });
 
   it('make every Discovery tab fluid, and leave other views at page width', () => {

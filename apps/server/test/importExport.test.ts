@@ -6,13 +6,14 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { and, count, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { strFromU8, unzipSync, zipSync } from 'fflate';
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
+import { newId } from '@opportun/core';
 import type { DocumentStore } from '../src/adapters/documentStore';
 import {
   activities,
   companies,
-  contacts,
+  networkContacts,
   jobs,
   opportunities,
   resumes,
@@ -138,7 +139,7 @@ const csvZip = (csv: string, extra: Record<string, string> = {}): Buffer =>
 async function rowCounts(app: FastifyInstance, userId: string): Promise<Record<string, number>> {
   const n = async (table: typeof opportunities | typeof companies | typeof activities) =>
     (await app.db.select({ n: count() }).from(table).where(eq(table.userId, userId)).get())?.n ?? 0;
-  const m = async (table: typeof stageHistory | typeof resumes | typeof contacts) =>
+  const m = async (table: typeof stageHistory | typeof resumes | typeof networkContacts) =>
     (await app.db.select({ n: count() }).from(table).where(eq(table.userId, userId)).get())?.n ?? 0;
   return {
     opportunities: await n(opportunities),
@@ -146,7 +147,7 @@ async function rowCounts(app: FastifyInstance, userId: string): Promise<Record<s
     activities: await n(activities),
     stageHistory: await m(stageHistory),
     resumes: await m(resumes),
-    contacts: await m(contacts),
+    contacts: await m(networkContacts),
   };
 }
 
@@ -290,7 +291,11 @@ describe('import', () => {
       store: 'google_doc',
     });
 
-    const people = await app.db.select().from(contacts).where(eq(contacts.userId, a.userId)).all();
+    const people = await app.db
+      .select()
+      .from(networkContacts)
+      .where(eq(networkContacts.userId, a.userId))
+      .all();
     expect(people.map((p) => p.name).sort()).toEqual(['Jordan Example', 'Sam Sample']);
     const jordan = people.find((p) => p.name === 'Jordan Example')!;
     expect(jordan.emails).toEqual(['jordan@example.com']);
@@ -603,7 +608,7 @@ describe('import hardening', () => {
     expect(stored.length).toBeLessThan(500);
     expect(JSON.parse(stored)).toEqual({
       purged: true,
-      files: { opportunitiesCsvBytes: csv.length, contactsCsvBytes: 0, notes: 1 },
+      files: { opportunitiesCsvBytes: csv.length, networkCsvBytes: 0, notes: 1 },
     });
     const status = await a.request({ method: 'GET', url: `/api/v1/imports/${jobId}` });
     expect(status.json()).toMatchObject({
@@ -713,7 +718,7 @@ describe('export', () => {
       format: string;
       tables: Record<string, Record<string, unknown>[]>;
     };
-    expect(data.format).toBe('opportun-export/1');
+    expect(data.format).toBe('opportun-export/2');
     const tables = data.tables;
 
     // Every table with a user_id column is exported or deliberately excluded.
@@ -722,7 +727,7 @@ describe('export', () => {
       expect(t in tables || EXPORT_EXCLUDED_TABLES.includes(t), `table ${t}`).toBe(true);
     }
     expect(Object.keys(tables)).toEqual(
-      expect.arrayContaining(['users', 'opportunities', 'contacts']),
+      expect.arrayContaining(['users', 'opportunities', 'network_contacts']),
     );
     for (const excluded of ['secrets', 'sessions', 'oauth_accounts']) {
       expect(tables).not.toHaveProperty(excluded);
@@ -823,3 +828,200 @@ describe('export', () => {
     expect(res.statusCode).toBe(401);
   });
 });
+
+// The pack's network file was contacts.csv until the section was renamed Network (issue
+// https://github.com/bgoleno/opportun/issues/22). Packs made for the old name, import jobs
+// queued under it, and exports made before the rename must all import as they did.
+describe('network.csv, and contacts.csv from before the rename', () => {
+  const asOldPack = (files: Record<string, Uint8Array>): Record<string, Uint8Array> => {
+    const { 'network.csv': network, ...rest } = files;
+    expect(network, 'the fixture pack has network.csv').toBeDefined();
+    return { ...rest, 'contacts.csv': network as Uint8Array };
+  };
+  const zip = (files: Record<string, Uint8Array | string>) =>
+    Buffer.from(
+      zipSync(
+        Object.fromEntries(
+          Object.entries(files).map(([k, v]) => [k, typeof v === 'string' ? strToU8(v) : v]),
+        ),
+      ),
+    );
+  const NETWORK_HEADER = 'name,email,linkedin_url,company,notes';
+
+  /** A user's contacts as content, without the ids and times that differ between users. */
+  async function peopleOf(app: FastifyInstance, userId: string) {
+    const rows = await app.db
+      .select({
+        name: networkContacts.name,
+        emails: networkContacts.emails,
+        linkedinUrl: networkContacts.linkedinUrl,
+        company: companies.name,
+        history: networkContacts.history,
+        strength: networkContacts.strength,
+        notes: networkContacts.notes,
+        source: networkContacts.source,
+        tags: networkContacts.tags,
+      })
+      .from(networkContacts)
+      .leftJoin(companies, eq(companies.id, networkContacts.currentCompanyId))
+      .where(eq(networkContacts.userId, userId))
+      .all();
+    return rows.sort((x, y) => x.name.localeCompare(y.name));
+  }
+
+  /** An import job row exactly as an earlier release stored it, bypassing today's enqueue. */
+  async function storedImportJob(app: FastifyInstance, userId: string, pack: unknown) {
+    const id = newId();
+    const now = Date.now();
+    await app.db
+      .insert(jobs)
+      .values({
+        id,
+        kind: IMPORT_JOB_KIND,
+        payload: { pack },
+        runAt: now,
+        maxAttempts: 3,
+        userId,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+    return id;
+  }
+
+  it("imports an older pack's contacts.csv into the same rows as network.csv", async () => {
+    const { app, a, b } = await boot();
+    const files = await fixtureFiles();
+    const viaNew = await importAndRun(app, a, zip(files));
+    const viaOld = await importAndRun(app, b, zip(asOldPack(files)));
+    expect(viaNew.status).toBe('done');
+    expect(viaOld.status).toBe('done');
+    expect(viaOld.report).toEqual(viaNew.report);
+    const people = await peopleOf(app, a.userId);
+    expect(people.map((p) => p.name)).toEqual(['Jordan Example', 'Sam Sample']);
+    expect(await peopleOf(app, b.userId)).toEqual(people);
+  });
+
+  it('refuses a pack holding both network.csv and contacts.csv, naming both', async () => {
+    const { app, a } = await boot();
+    const files = await fixtureFiles();
+    const res = await uploadZip(a, zip({ ...files, 'contacts.csv': files['network.csv']! }));
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({ error: { code: 'invalid_pack' } });
+    expect(res.body).toContain('network.csv');
+    expect(res.body).toContain('contacts.csv');
+    // Refused at upload: nothing was queued, so nothing was imported from either file.
+    const queued = await app.db.select().from(jobs).where(eq(jobs.userId, a.userId)).all();
+    expect(queued).toEqual([]);
+  });
+
+  it('checks either name against the same header, and names the file it read', async () => {
+    const { a } = await boot();
+    for (const name of ['network.csv', 'contacts.csv']) {
+      const res = await uploadZip(a, zip({ 'opportunities.csv': HEADER, [name]: 'name,email\n' }));
+      expect(res.statusCode, name).toBe(422);
+      expect(res.json(), name).toMatchObject({
+        error: { message: `${name} header must be exactly: ${NETWORK_HEADER}` },
+      });
+    }
+  });
+
+  it('reports a bad row under the name of the file it came from', async () => {
+    const { app, a, b } = await boot();
+    const bad = `${NETWORK_HEADER}\nJordan Example,,javascript:alert(1),,\n`;
+    for (const [c, name] of [
+      [a, 'network.csv'],
+      [b, 'contacts.csv'],
+    ] as const) {
+      const status = await importAndRun(app, c, zip({ 'opportunities.csv': HEADER, [name]: bad }));
+      expect(status.report?.errors).toEqual([
+        { line: 2, message: `${name}: linkedin_url must be an http(s) URL` },
+      ]);
+    }
+  });
+
+  it('queues networkCsv only, whichever name the pack used', async () => {
+    const { app, a } = await boot();
+    const res = await uploadZip(a, zip(asOldPack(await fixtureFiles())));
+    expect(res.statusCode, res.body).toBe(202);
+    const { jobId } = res.json() as { jobId: string };
+    const row = await app.db.select().from(jobs).where(eq(jobs.id, jobId)).get();
+    const pack = (row?.payload as { pack: Record<string, unknown> }).pack;
+    expect(pack).toHaveProperty('networkCsv');
+    expect(pack).not.toHaveProperty('contactsCsv');
+  });
+
+  it('imports the contacts of a job queued before the upgrade, which carries contactsCsv', async () => {
+    const { app, a } = await boot();
+    const files = await fixtureFiles();
+    const id = await storedImportJob(app, a.userId, {
+      opportunitiesCsv: HEADER,
+      contactsCsv: strFromU8(files['network.csv']!),
+      notes: {},
+    });
+    await app.jobs.drain();
+    const job = await app.db.select().from(jobs).where(eq(jobs.id, id)).get();
+    expect(job?.status, job?.lastError ?? '').toBe('done');
+    expect(job?.result).toMatchObject({ report: { created: 2, errors: [] } });
+    expect((await peopleOf(app, a.userId)).map((p) => p.name)).toEqual([
+      'Jordan Example',
+      'Sam Sample',
+    ]);
+  });
+
+  it('refuses a stored job payload carrying both contactsCsv and networkCsv', async () => {
+    const { app, a } = await boot();
+    const csv = strFromU8((await fixtureFiles())['network.csv']!);
+    const id = await storedImportJob(app, a.userId, {
+      opportunitiesCsv: HEADER,
+      contactsCsv: csv,
+      networkCsv: csv,
+      notes: {},
+    });
+    await app.jobs.drain();
+    const job = await app.db.select().from(jobs).where(eq(jobs.id, id)).get();
+    expect(job?.status).toBe('dead');
+    expect(job?.lastError).toContain('invalid payload');
+    expect(await peopleOf(app, a.userId)).toEqual([]);
+  });
+
+  it('imports an export made before the rename exactly as it did before', async () => {
+    const { app, a, b } = await boot();
+    await importAndRun(app, a, await fixtureZip());
+    const res = await a.request({ method: 'GET', url: '/api/v1/export' });
+    expect(res.statusCode).toBe(200);
+    const current = unzipSync(new Uint8Array(res.rawPayload));
+    // What this release's export says, rewritten to what the release before it said: the only
+    // differences are the format version and the table's key (lib/exporter.ts).
+    const data = JSON.parse(strFromU8(current['export.json']!)) as {
+      format: string;
+      tables: Record<string, unknown[]>;
+    };
+    expect(data.format).toBe('opportun-export/2');
+    const { network_contacts: people, ...others } = data.tables;
+    expect(people).toHaveLength(2);
+    const before = {
+      ...data,
+      format: 'opportun-export/1',
+      tables: { ...others, contacts: people },
+    };
+    const oldExport = { ...current, 'export.json': strToU8(JSON.stringify(before, null, 2)) };
+
+    const viaOld = await importAndRun(app, b, zip(oldExport));
+    expect(viaOld.status).toBe('done');
+    expect(viaOld.report?.errors).toEqual([]);
+    // The same pack in this release's shape adds nothing: the two exports carry the same rows.
+    const viaNew = await importAndRun(app, b, zip(current));
+    expect(viaNew.report).toMatchObject({ created: 0, updated: 0, errors: [] });
+    const strip = (rows: Awaited<ReturnType<typeof oppsOf>>) =>
+      rows.map(({ company, title, location, stage }) => ({ company, title, location, stage }));
+    expect(strip(await oppsOf(app, b.userId)).sort(byTitle)).toEqual(
+      strip(await oppsOf(app, a.userId)).sort(byTitle),
+    );
+    // An export's CSVs have never carried the network (export.json is a record of it, not a
+    // restore path), so its contacts do not come back, before the rename or after.
+    expect(await peopleOf(app, b.userId)).toEqual([]);
+  });
+});
+
+const byTitle = (x: { title: string }, y: { title: string }) => x.title.localeCompare(y.title);

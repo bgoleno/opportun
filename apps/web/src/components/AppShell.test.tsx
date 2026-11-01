@@ -190,7 +190,7 @@ describe('AppShell mobile navigation menu', () => {
       'Discovery',
       'Resumes',
       'Inbox',
-      'Contacts',
+      'Network',
       'Settings',
     ]);
   });
@@ -215,10 +215,10 @@ describe('AppShell mobile navigation menu', () => {
 
     await userEvent.click(menuButton());
     const menu = await screen.findByRole('menu');
-    await userEvent.click(within(menu).getByRole('menuitem', { name: 'Contacts' }));
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'Network' }));
 
     await waitFor(() => {
-      expect(router.state.location.pathname).toBe('/contacts');
+      expect(router.state.location.pathname).toBe('/network');
     });
   });
 });

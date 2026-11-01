@@ -41,7 +41,7 @@ import { ThemeServerSync } from '@/lib/theme';
 import { cn } from '@/lib/utils';
 
 interface NavItem {
-  to: '/' | '/pipeline' | '/discovery' | '/resumes' | '/inbox' | '/contacts' | '/settings';
+  to: '/' | '/pipeline' | '/discovery' | '/resumes' | '/inbox' | '/network' | '/settings';
   label: string;
   icon: LucideIcon;
   exact?: boolean;
@@ -53,7 +53,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/discovery', label: 'Discovery', icon: Compass },
   { to: '/resumes', label: 'Resumes', icon: FileText },
   { to: '/inbox', label: 'Inbox', icon: Inbox },
-  { to: '/contacts', label: 'Contacts', icon: Contact },
+  { to: '/network', label: 'Network', icon: Contact },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 

@@ -16,6 +16,7 @@ import { MAX_EDITS, RESUME_EDIT_OUTCOMES, ResumeEditSchema } from '../adapters/d
 import { buildAiDeps, expiredKeyHint } from '../lib/ai';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
+import { racePoint } from '../lib/racePoints';
 import { SECURITY_HEADERS } from '../plugins/security';
 import { requireUser, type Db, type UserCtx } from '../repos/base';
 import { getOpportunity, type OpportunityView } from '../repos/opportunities';
@@ -41,6 +42,14 @@ export { MatchReportSchema };
 
 /** How often a streaming reply is written back to the transcript. */
 const FLUSH_INTERVAL_MS = 750;
+
+/**
+ * How many times one apply tries to persist a new local_file version before answering 409
+ * resume_changed (https://github.com/bgoleno/opportun/issues/23). Each lost attempt means
+ * another apply did land, so N applies racing on one resume need at most N - 1 retries: three
+ * covers several suggestion cards clicked in quick succession without retrying forever.
+ */
+export const APPLY_ATTEMPTS = 3;
 
 const EditView = z.object({
   find: z.string(),
@@ -382,24 +391,46 @@ export async function tailoringRoutes(app: FastifyInstance): Promise<void> {
       const ctx = requireUser(req);
       // Both lookups are user-scoped: another user's session or resume is a 404.
       const session = await getSession(db, ctx, req.params.id);
-      const resume = await getResume(db, ctx, session.resumeId);
       const edits = req.body.edits.map(({ find, replace }) => ({ find, replace }));
-      const { docRef, results } = await storeFor(app, resume.store).applyEdits(
-        ctx,
-        resume.docRef,
-        edits,
-      );
-      // Unchanged for a store that mutates its document in place; a new ref for one whose
-      // written content is immutable per version (local_file, #284), which the store itself
-      // never writes to this row (ResumeEditOutcomeResult's own doc comment).
-      if (docRef !== resume.docRef) await updateResumeDocRef(db, ctx, resume.id, docRef);
-      const appliedCount = results.filter((r) => r.outcome === 'applied').length;
-      await audit(db, 'resume.edits_applied', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { resumeId: resume.id, sessionId: session.id, count: edits.length, appliedCount },
-      });
-      return { results };
+      for (let attempt = 0; attempt < APPLY_ATTEMPTS; attempt++) {
+        // Read fresh on every attempt: a retry must start from the version that beat it.
+        const resume = await getResume(db, ctx, session.resumeId);
+        await racePoint('tailoring.apply.read');
+        let applied;
+        try {
+          applied = await storeFor(app, resume.store).applyEdits(ctx, resume.docRef, edits);
+        } catch (err) {
+          // Another apply can land between that read and this one: its success path deletes
+          // the row of the version this attempt holds, so applyEdits finds nothing there. That
+          // is the same lost race as a false from updateResumeDocRef below, so retry once the
+          // resume has moved on. If it has not, nothing superseded the version and the 404
+          // stands; a resume that is itself gone 404s from getResume here.
+          if (
+            err instanceof HttpError &&
+            err.statusCode === 404 &&
+            (await getResume(db, ctx, session.resumeId)).docRef !== resume.docRef
+          ) {
+            continue;
+          }
+          throw err;
+        }
+        const { docRef, results } = applied;
+        // Unchanged for a store that mutates its document in place; a new ref for one whose
+        // written content is immutable per version (local_file, #284), which the store itself
+        // never writes to this row (ResumeEditOutcomeResult's own doc comment).
+        if (docRef !== resume.docRef) {
+          await racePoint('tailoring.apply');
+          if (!(await updateResumeDocRef(db, ctx, resume.id, resume.docRef, docRef))) continue;
+        }
+        const appliedCount = results.filter((r) => r.outcome === 'applied').length;
+        await audit(db, 'resume.edits_applied', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { resumeId: resume.id, sessionId: session.id, count: edits.length, appliedCount },
+        });
+        return { results };
+      }
+      throw new HttpError(409, 'resume_changed');
     },
   );
 

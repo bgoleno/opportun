@@ -1,5 +1,6 @@
 // Import pipeline (FR-I1, I2). A pack is a zip or a directory upload holding
-// opportunities.csv (required), contacts.csv (optional) and the .md notes the CSV refers to.
+// opportunities.csv (required), network.csv (optional; contacts.csv before issue
+// https://github.com/bgoleno/opportun/issues/22, still read) and the .md notes the CSV refers to.
 // The upload is validated and reduced to a JobPack at request time; the rows are applied by
 // the `import` job. Re-running a pack is idempotent: opportunities upsert by
 // dedupeKey(company, title, location), stages only move forward along the chain, and
@@ -18,7 +19,14 @@ import { z } from 'zod';
 import type { DocumentStore } from '../adapters/documentStore';
 import { readDocumentStorePref } from '../adapters/reactiveResume';
 import { withTransaction, type Db } from '../db/client';
-import { activities, contacts, jobs, opportunities, resumes, stageHistory } from '../db/schema';
+import {
+  activities,
+  networkContacts,
+  jobs,
+  opportunities,
+  resumes,
+  stageHistory,
+} from '../db/schema';
 import type { JobHandler } from '../jobs/registry';
 import { createActivity } from '../repos/activities';
 import type { Exec, UserCtx } from '../repos/base';
@@ -61,13 +69,46 @@ export class PackError extends Error {
   override name = 'PackError';
 }
 
+/**
+ * The pack's network file. It was contacts.csv until the section was renamed Network (issue
+ * https://github.com/bgoleno/opportun/issues/22), and a pack made for that name still imports:
+ * the name is mapped here, at the pack boundary, and both go through the same parser and
+ * checks. A pack holding both is refused rather than guessed at. The old name can go once a
+ * release note has announced that a pack must name the file network.csv.
+ */
+export const NETWORK_FILE = 'network.csv';
+export const LEGACY_NETWORK_FILE = 'contacts.csv';
+const NETWORK_FILES = [NETWORK_FILE, LEGACY_NETWORK_FILE] as const;
+type NetworkFile = (typeof NETWORK_FILES)[number];
+
 /** What the import job carries: the CSV texts plus the notes the rows refer to. */
 export const ImportPackSchema = z.object({
   opportunitiesCsv: z.string(),
-  contactsCsv: z.string().optional(),
+  networkCsv: z.string().optional(),
+  /** The name networkCsv had in the pack, so a row error names the file the user sent. */
+  networkFile: z.enum(NETWORK_FILES).optional(),
   notes: z.record(z.string(), z.string()),
 });
 export type ImportPack = z.infer<typeof ImportPackSchema>;
+
+/**
+ * The pack as an import job's stored payload holds it. `contactsCsv` is networkCsv's name from
+ * before issue https://github.com/bgoleno/opportun/issues/22: an import the previous release
+ * queued, still pending when this one starts, carries it, and without this alias zod would
+ * strip it and the job would finish without its contacts. New jobs write only networkCsv. A
+ * payload carrying both is invalid (the runner marks the job dead) rather than resolved by
+ * picking one. The alias can go once upgrading straight from a release before #22 is no longer
+ * supported, since only such an upgrade can find a job queued under the old name.
+ */
+const StoredImportPackSchema = ImportPackSchema.extend({ contactsCsv: z.string().optional() })
+  .refine((p) => p.contactsCsv === undefined || p.networkCsv === undefined, {
+    message: 'an import pack carries both contactsCsv and networkCsv',
+  })
+  .transform(({ contactsCsv, ...pack }): ImportPack =>
+    contactsCsv === undefined
+      ? pack
+      : { ...pack, networkCsv: contactsCsv, networkFile: LEGACY_NETWORK_FILE },
+  );
 
 export interface ImportError {
   line: number;
@@ -160,9 +201,9 @@ function packFromMap(files: Map<string, string>): ImportPack {
   const opportunitiesCsv = files.get('opportunities.csv') as string;
   const oppRecords = parseOrThrow(opportunitiesCsv, 'opportunities.csv');
   checkHeader(oppRecords, 'opportunities.csv', OPPORTUNITY_COLUMNS);
-  const contactsCsv = files.get('contacts.csv');
-  if (contactsCsv !== undefined) {
-    checkHeader(parseOrThrow(contactsCsv, 'contacts.csv'), 'contacts.csv', CONTACT_COLUMNS);
+  const network = networkCsvOf(files);
+  if (network !== undefined) {
+    checkHeader(parseOrThrow(network.csv, network.file), network.file, CONTACT_COLUMNS);
   }
   const notesIdx = OPPORTUNITY_COLUMNS.indexOf('notes_file');
   const notes: Record<string, string> = {};
@@ -174,7 +215,25 @@ function packFromMap(files: Map<string, string>): ImportPack {
     // eslint-disable-next-line security/detect-object-injection -- ref is a validated pack path
     if (text !== undefined) notes[ref] = text;
   }
-  return { opportunitiesCsv, ...(contactsCsv === undefined ? {} : { contactsCsv }), notes };
+  return {
+    opportunitiesCsv,
+    ...(network === undefined ? {} : { networkCsv: network.csv, networkFile: network.file }),
+    notes,
+  };
+}
+
+/** The pack's network file under whichever name it has; both names at once is refused. */
+function networkCsvOf(files: Map<string, string>): { file: NetworkFile; csv: string } | undefined {
+  const found = NETWORK_FILES.flatMap((file) => {
+    const csv = files.get(file);
+    return csv === undefined ? [] : [{ file, csv }];
+  });
+  if (found.length > 1) {
+    throw new PackError(
+      `the pack holds both ${NETWORK_FILE} and ${LEGACY_NETWORK_FILE}, the older name for the same file: keep only one`,
+    );
+  }
+  return found[0];
 }
 
 /** Builds a pack from a zip. Only .csv and .md entries are inflated, within size caps. */
@@ -480,7 +539,11 @@ async function importContact(rec: CsvRecord, db: Db, ctx: UserCtx): Promise<Outc
   return await withTransaction(db, async (tx) => {
     const companyId =
       company === null ? null : (await findOrCreateCompanySync(tx, ctx, company)).id;
-    const mine = await tx.select().from(contacts).where(eq(contacts.userId, ctx.userId)).all();
+    const mine = await tx
+      .select()
+      .from(networkContacts)
+      .where(eq(networkContacts.userId, ctx.userId))
+      .all();
     const match =
       (email === null
         ? undefined
@@ -490,7 +553,7 @@ async function importContact(rec: CsvRecord, db: Db, ctx: UserCtx): Promise<Outc
     const now = Date.now();
     if (match === undefined) {
       await tx
-        .insert(contacts)
+        .insert(networkContacts)
         .values({
           id: newId(),
           userId: ctx.userId,
@@ -506,7 +569,7 @@ async function importContact(rec: CsvRecord, db: Db, ctx: UserCtx): Promise<Outc
         .run();
       return 'created';
     }
-    const patch: Partial<typeof contacts.$inferInsert> = {};
+    const patch: Partial<typeof networkContacts.$inferInsert> = {};
     if (email !== null && !match.emails.some((e) => e.toLowerCase() === email)) {
       patch.emails = [...match.emails, email];
     }
@@ -515,9 +578,9 @@ async function importContact(rec: CsvRecord, db: Db, ctx: UserCtx): Promise<Outc
     if (notes !== null && match.notes === null) patch.notes = notes;
     if (Object.keys(patch).length === 0) return 'skipped';
     await tx
-      .update(contacts)
+      .update(networkContacts)
       .set({ ...patch, updatedAt: now })
-      .where(and(eq(contacts.userId, ctx.userId), eq(contacts.id, match.id)))
+      .where(and(eq(networkContacts.userId, ctx.userId), eq(networkContacts.id, match.id)))
       .run();
     return 'updated';
   });
@@ -551,7 +614,7 @@ export async function runImport(
   deps: ImportDeps = {},
 ): Promise<ImportResult> {
   const oppRecords = parseCsv(pack.opportunitiesCsv).slice(1);
-  const contactRecords = pack.contactsCsv === undefined ? [] : parseCsv(pack.contactsCsv).slice(1);
+  const contactRecords = pack.networkCsv === undefined ? [] : parseCsv(pack.networkCsv).slice(1);
   const report: ImportReport = { created: 0, updated: 0, skipped: 0, errors: [] };
   const progress: ImportProgress = {
     processed: 0,
@@ -594,7 +657,8 @@ export async function runImport(
     } catch (err) {
       const message = rowMessage(err);
       if (message === undefined) throw err;
-      report.errors.push({ line: rec.line, message: `contacts.csv: ${message}` });
+      const file = pack.networkFile ?? NETWORK_FILE;
+      report.errors.push({ line: rec.line, message: `${file}: ${message}` });
     }
     await step();
   }
@@ -618,7 +682,7 @@ export interface ImportResult {
  */
 export interface PurgedImportPayload {
   purged: true;
-  files: { opportunitiesCsvBytes: number; contactsCsvBytes: number; notes: number };
+  files: { opportunitiesCsvBytes: number; networkCsvBytes: number; notes: number };
 }
 
 export function purgedPayload(pack: ImportPack): PurgedImportPayload {
@@ -626,7 +690,7 @@ export function purgedPayload(pack: ImportPack): PurgedImportPayload {
     purged: true,
     files: {
       opportunitiesCsvBytes: Buffer.byteLength(pack.opportunitiesCsv),
-      contactsCsvBytes: pack.contactsCsv === undefined ? 0 : Buffer.byteLength(pack.contactsCsv),
+      networkCsvBytes: pack.networkCsv === undefined ? 0 : Buffer.byteLength(pack.networkCsv),
       notes: Object.keys(pack.notes).length,
     },
   };
@@ -634,7 +698,7 @@ export function purgedPayload(pack: ImportPack): PurgedImportPayload {
 
 export const importJob: JobHandler<{ pack: ImportPack }> = {
   kind: IMPORT_JOB_KIND,
-  payloadSchema: z.object({ pack: ImportPackSchema }),
+  payloadSchema: z.object({ pack: StoredImportPackSchema }),
   maxAttempts: 3,
   async run(db, { pack }, ctx) {
     try {

@@ -535,6 +535,8 @@ export function resumeErrorMessage(err: unknown): string | undefined {
   switch (err.code) {
     case 'edit_target_missing':
       return 'That text is no longer in the document. It may already be changed.';
+    case 'resume_changed':
+      return 'The resume changed while this edit was being applied. Try again.';
     case 'edit_spans_paragraphs':
       return 'This edit spans several paragraphs; apply it by hand in Google Docs.';
     case 'google_not_connected':

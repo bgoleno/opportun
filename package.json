@@ -33,9 +33,15 @@
     "vite": "^8.3.4",
     "vitest": "^5.0.5"
   },
+  "//": {
+    "pnpm.overrides glob@^13": "Raises glob 13 to 14.0.2 or later for GHSA-3g3m-2fjr-6pw4 (an aborted walk keeps reading directories; https://github.com/bgoleno/opportun/issues/39). glob reaches the server at runtime through @fastify/static, whose latest release (10.1.8) still depends on glob ^13. Remove this entry once a @fastify/static release depends on glob 14.0.2 or later and the lockfile resolves glob to 14.0.2 or later without it.",
+    "pnpm.overrides minimatch@^10": "Raises minimatch 10 to 11.0.1 or later for GHSA-g3hv-75wg-m249 (pattern amplification; https://github.com/bgoleno/opportun/issues/39). minimatch arrives through glob 13 (above) and, for linting, through eslint, @eslint/config-array and @typescript-eslint/typescript-estree, whose latest releases (10.14.0, 0.23.5, 8.72.1) still depend on minimatch ^10. Remove this entry once those three depend on minimatch 11.0.1 or later and the lockfile resolves minimatch to 11.0.1 or later without it."
+  },
   "pnpm": {
     "overrides": {
-      "@esbuild-kit/core-utils>esbuild": "^0.25.0"
+      "@esbuild-kit/core-utils>esbuild": "^0.25.0",
+      "glob@^13": "^14.0.2",
+      "minimatch@^10": "^11.0.1"
     }
   }
 }

@@ -14,6 +14,8 @@ export const TOUR_STEP_IDS = [
   'first-opportunity',
   'discovery',
   'resumes',
+  // The Network step. It keeps the id from before the section was renamed (issue
+  // https://github.com/bgoleno/opportun/issues/22) because ids are stored in saved progress.
   'contacts',
   'finish',
 ] as const;
