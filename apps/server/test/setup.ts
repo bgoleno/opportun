@@ -2,8 +2,8 @@
 // holding the write gate fails the running test (no external I/O inside a transaction; see
 // SlowTransaction in db/gate.ts). One that merely ran past the time budget is a warning:
 // wall time alone also measures the OS descheduling a busy test process. On Postgres there
-// is no gate: db/client.ts times the body instead (pgTransaction) and reports more than the
-// budget spent outside the database as awaitedOutside.
+// is no gate: db/client.ts (pgTransaction) reports awaitedOutside when the event loop turns
+// while the body has no statement in flight.
 import { afterEach, beforeEach } from 'vitest';
 import { onSlowTransaction, type SlowTransaction } from '../src/db/gate';
 import { databasesOfCurrentTest } from './pgHarness';

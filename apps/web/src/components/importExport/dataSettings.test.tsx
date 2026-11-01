@@ -55,7 +55,7 @@ describe('DataSettings', () => {
       'aria-valuenow',
       '30',
     );
-    const table = await screen.findByRole('table', { name: 'Import problems' }, { timeout: 3000 });
+    const table = await screen.findByRole('table', { name: 'Import problems' });
     expect(within(table).getByRole('row', { name: /7 stage "ofer"/ })).toBeInTheDocument();
     expect(screen.getByText('Import finished')).toBeInTheDocument();
     expect(screen.getByText('Unchanged').nextSibling).toHaveTextContent('2');

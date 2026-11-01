@@ -142,6 +142,10 @@ describe(`db client seam (${testDialect})`, () => {
     'a scope serializes transactions holding it, and only those',
     async () => {
       const { db } = await open();
+      // a holds its lock by awaiting `held`, a promise outside the database, on purpose: the
+      // timing guard reports that, and only that (the race.ts helpers do the same).
+      const reports: SlowTransaction[] = [];
+      onSlowTransaction((s) => reports.push(s));
       const order: string[] = [];
       let release!: () => void;
       const held = new Promise<void>((r) => (release = r));
@@ -159,6 +163,7 @@ describe(`db client seam (${testDialect})`, () => {
       release();
       await Promise.all([a, b]);
       expect(order).toEqual(['a:in', 'c:in', 'c:out', 'a:out', 'b:in', 'b:out']);
+      expect(reports.filter((r) => r.awaitedOutside)).toHaveLength(1);
     },
   );
 });
@@ -181,6 +186,39 @@ describe.runIf(testDialect === 'postgres')('transaction timing guard on Postgres
     // A body awaiting a timer is flagged.
     await withTransaction(db, async () => {
       await new Promise((r) => setTimeout(r, SLOW_TRANSACTION_MS + 100));
+    });
+    expect(reports.filter((r) => r.awaitedOutside)).toHaveLength(1);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/41: a loaded machine runs the code between a
+  // long body's statements slower, which once added up past the budget for the demo seed's
+  // hundreds of statements with nothing awaited outside. Busy-waiting stands in for that load
+  // here, deterministically: 30 statements with 15 ms of this process's own work after each,
+  // over 400 ms in all, during which the event loop never turns.
+  it('does not flag a database-only body whose own work between statements is slow', async () => {
+    const { db } = await open();
+    const reports: SlowTransaction[] = [];
+    onSlowTransaction((s) => reports.push(s));
+    await withTransaction(db, async (tx) => {
+      for (let i = 0; i < 30; i += 1) {
+        await rawGet(tx, sql`SELECT 1 AS one`);
+        const until = performance.now() + 15;
+        while (performance.now() < until) {
+          // this process's own work: the event loop does not turn
+        }
+      }
+    });
+    expect(reports.filter((r) => r.awaitedOutside)).toEqual([]);
+  });
+
+  it('flags an outside await between statements, however short', async () => {
+    const { db } = await open();
+    const reports: SlowTransaction[] = [];
+    onSlowTransaction((s) => reports.push(s));
+    await withTransaction(db, async (tx) => {
+      await rawGet(tx, sql`SELECT 1 AS one`);
+      await new Promise((r) => setTimeout(r, 20));
+      await rawGet(tx, sql`SELECT 1 AS one`);
     });
     expect(reports.filter((r) => r.awaitedOutside)).toHaveLength(1);
   });
