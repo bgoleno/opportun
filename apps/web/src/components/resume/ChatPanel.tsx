@@ -200,11 +200,13 @@ export function ChatPanel({ resumeId }: { resumeId: string }) {
               ref={follow.ref}
               onScroll={follow.onScroll}
               // Focusable so it scrolls from the keyboard: Safari does not focus a scrolling box
-              // on its own, and a conversation of plain text has nothing else to tab to.
+              // on its own, and a conversation of plain text has nothing else to tab to. Focused
+              // from the keyboard it shows the ring the app's other focusable boxes use (kanban
+              // cards, discovery rows), not the browser's default outline.
               tabIndex={0}
               aria-label="Conversation"
               aria-live="polite"
-              className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto"
+              className="grid min-h-0 flex-1 content-start gap-3 overflow-y-auto outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {messages.length === 0 && pendingUser === null ? (
                 <li className="text-sm text-muted-foreground">
