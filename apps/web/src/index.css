@@ -223,3 +223,18 @@
     pointer-events: none;
   }
 }
+
+/* Keyboard focus in forced-colors mode (issue #68). Focus rings here are box-shadows over
+   outline-none (focus-visible:ring-2 ring-ring), and forced-colors mode (Windows High Contrast,
+   for one) paints no box-shadow, so a keyboard user there would see no focus at all. This gives
+   every keyboard-focused element an outline in that mode only, once for the whole app instead of
+   at each of the many outline-none call sites. It is deliberately outside @layer: unlayered
+   styles win over Tailwind's utilities layer, where outline-none lives. Highlight is the system
+   colour forced-colors mode uses for selection, so the outline follows the user's palette.
+   Normal mode is untouched. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
