@@ -439,3 +439,176 @@ for (const width of WIDTHS) {
     });
   });
 }
+
+// ---------------------------------------------------------------------------
+// The resume workspace's tailoring chat (issue https://github.com/bgoleno/opportun/issues/35):
+// from xl (1280) a 28rem column on the right that stays in view while the other column scrolls,
+// with the conversation scrolling inside it; below xl stacked under the report and capped at
+// 48rem. At every width Send lines up with the textarea's right edge, and a chat bubble is no
+// wider than the reading measure, so its border never runs far past text that stops at 65ch.
+
+interface Box {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  width: number;
+}
+
+/** Where the workspace's parts are on screen, in CSS pixels, plus the units to judge them in. */
+async function workspaceGeometry(page: Page) {
+  return page.evaluate(() => {
+    const box = (el: Element | null | undefined, what: string): Box => {
+      if (el === null || el === undefined) throw new Error(`no ${what} on the page`);
+      const r = el.getBoundingClientRect();
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width };
+    };
+    const card = (title: string) =>
+      [...document.querySelectorAll('[data-slot="card"]')].find(
+        (c) => c.querySelector('[data-slot="card-title"]')?.textContent === title,
+      );
+    const chat = card('Tailoring chat');
+    const conversation = chat?.querySelector<HTMLElement>('ol[aria-label="Conversation"]');
+    const send = [...(chat?.querySelectorAll('button') ?? [])].find(
+      (b) => b.textContent?.trim() === 'Send',
+    );
+    // Each bubble, by the screen-reader label it starts with, and 1ch in its own font.
+    const bubbles = [...(conversation?.querySelectorAll('li') ?? [])]
+      .filter((li) => /^(You|Assistant):$/.test(li.querySelector('.sr-only')?.textContent ?? ''))
+      .map((li) => {
+        const probe = document.createElement('span');
+        probe.style.cssText = 'position:absolute;visibility:hidden;display:inline-block;width:1ch';
+        li.append(probe);
+        const ch = probe.getBoundingClientRect().width;
+        probe.remove();
+        return {
+          who: li.querySelector('.sr-only')?.textContent ?? '',
+          width: box(li, 'bubble').width,
+          ch,
+        };
+      });
+    return {
+      rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
+      viewportHeight: window.innerHeight,
+      headerBottom: box(document.querySelector('header'), 'app header').bottom,
+      maxScroll: document.documentElement.scrollHeight - window.innerHeight,
+      document: box(card('Document'), 'Document card'),
+      report: box(card('Match report'), 'Match report card'),
+      chat: box(chat, 'Tailoring chat card'),
+      conversation: {
+        ...box(conversation, 'conversation'),
+        scrollHeight: conversation?.scrollHeight ?? 0,
+        clientHeight: conversation?.clientHeight ?? 0,
+        overflowY: conversation ? getComputedStyle(conversation).overflowY : '',
+      },
+      textarea: box(chat?.querySelector('textarea'), 'message textarea'),
+      send: box(send, 'Send button'),
+      bubbles,
+    };
+  });
+}
+
+/** Expectations that hold at every desktop width: Send aligned, bubbles at reading width. */
+function expectComposerAndBubbles(
+  g: Awaited<ReturnType<typeof workspaceGeometry>>,
+  column: number,
+) {
+  expect(g.textarea.width, 'textarea no wider than its column').toBeLessThanOrEqual(column + 1);
+  expect(
+    Math.abs(g.send.right - g.textarea.right),
+    `Send's right edge (${g.send.right}) is aligned with the textarea's (${g.textarea.right})`,
+  ).toBeLessThanOrEqual(1);
+  expect(g.bubbles.map((b) => b.who)).toEqual(['You:', 'Assistant:']);
+  for (const b of g.bubbles) {
+    expect(
+      b.width,
+      `${b.who} bubble no wider than 65ch (${(65 * b.ch).toFixed(1)}px)`,
+    ).toBeLessThanOrEqual(65 * b.ch + 1);
+  }
+}
+
+async function openWorkspace(browser: Browser, width: number) {
+  const opened = await pageAt(browser, width, accounts.seed);
+  const id = await seededWorkspace(opened.page, `chat column ${width}`);
+  await opened.page.goto(`/resumes/${id}`);
+  await expect(opened.page.getByRole('list', { name: 'Conversation' })).toContainText(
+    'Your platform work maps well to this role.',
+  );
+  await expect(opened.page.getByText(/Summary: You will own/)).toBeVisible();
+  return opened;
+}
+
+test.describe('resume workspace chat column', () => {
+  for (const width of WIDTHS) {
+    test(`${width}px wide: the chat is a 28rem column on the right that stays in view`, async ({
+      browser,
+    }) => {
+      const { page, close } = await openWorkspace(browser, width);
+      try {
+        const g = await workspaceGeometry(page);
+        const column = 28 * g.rem;
+        expect(
+          Math.abs(g.chat.width - column),
+          `chat column is 28rem (${column}px)`,
+        ).toBeLessThanOrEqual(1);
+        expect(g.chat.left, 'chat is to the right of the match report').toBeGreaterThanOrEqual(
+          g.report.right,
+        );
+        expect(
+          Math.abs(g.chat.top - g.document.top),
+          'chat top aligned with the first section',
+        ).toBeLessThanOrEqual(1);
+        expect(g.chat.bottom, 'the whole chat column is in view').toBeLessThanOrEqual(
+          g.viewportHeight + 1,
+        );
+        // The stub's conversation is longer than the column, so it has to scroll inside it.
+        expect(g.conversation.scrollHeight).toBeGreaterThan(g.conversation.clientHeight);
+        expect(['auto', 'scroll']).toContain(g.conversation.overflowY);
+        expect(g.send.bottom, 'composer at the bottom of the column').toBeGreaterThan(
+          g.chat.bottom - 2 * g.rem,
+        );
+        expectComposerAndBubbles(g, column);
+
+        // Scroll the page: the document and report move, the chat column stays in view.
+        expect(g.maxScroll, 'the page is tall enough to scroll the other column').toBeGreaterThan(
+          200,
+        );
+        const by = Math.min(400, g.maxScroll);
+        await page.evaluate((y) => window.scrollTo(0, y), by);
+        await expect
+          .poll(async () => (await workspaceGeometry(page)).document.top)
+          .toBeLessThan(g.document.top - by + 2);
+        const after = await workspaceGeometry(page);
+        expect(after.chat.top, 'chat stays below the app header').toBeGreaterThanOrEqual(
+          after.headerBottom,
+        );
+        expect(after.chat.bottom, 'chat stays in view').toBeLessThanOrEqual(
+          after.viewportHeight + 1,
+        );
+        expect(after.textarea.bottom, 'composer stays in view').toBeLessThanOrEqual(
+          after.viewportHeight,
+        );
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  // Below xl. 1279 is the widest such window, where the 48rem cap is narrower than the column.
+  for (const width of [1024, 1279]) {
+    test(`${width}px wide: the chat is stacked under the report and at most 48rem`, async ({
+      browser,
+    }) => {
+      const { page, close } = await openWorkspace(browser, width);
+      try {
+        const g = await workspaceGeometry(page);
+        const cap = 48 * g.rem;
+        expect(g.chat.top, 'chat below the match report').toBeGreaterThanOrEqual(g.report.bottom);
+        expect(g.chat.width, `chat at most 48rem (${cap}px)`).toBeLessThanOrEqual(cap + 1);
+        expectComposerAndBubbles(g, cap);
+      } finally {
+        await close();
+      }
+    });
+  }
+});
