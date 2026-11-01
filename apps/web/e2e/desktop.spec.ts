@@ -597,6 +597,37 @@ test.describe('resume workspace chat column', () => {
     });
   }
 
+  // The conversation takes focus so it scrolls from the keyboard (#63). Reached from the
+  // keyboard it shows the ring the app's other focusable boxes use (outline-none,
+  // focus-visible:ring-2 ring-ring), not the browser's default outline. jsdom applies no CSS and
+  // has no :focus-visible, so this is checked here, in a browser.
+  test('1280px wide: the conversation shows the focus ring when reached from the keyboard', async ({
+    browser,
+  }) => {
+    const { page, close } = await openWorkspace(browser, 1280);
+    try {
+      const list = page.getByRole('list', { name: 'Conversation' });
+      await page.getByLabel('Message').focus();
+      // Back from the composer: past the suggestion's Apply button inside the list, to the list.
+      for (
+        let i = 0;
+        i < 5 && !(await list.evaluate((el) => el === document.activeElement));
+        i += 1
+      ) {
+        await page.keyboard.press('Shift+Tab');
+      }
+      await expect(list).toBeFocused();
+      const style = await list.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { boxShadow: cs.boxShadow, outlineStyle: cs.outlineStyle };
+      });
+      expect(style.boxShadow, 'a 2px ring').toContain('0px 0px 0px 2px');
+      expect(style.outlineStyle, 'no default outline as well').toBe('none');
+    } finally {
+      await close();
+    }
+  });
+
   // Below xl. 1279 is the widest such window, where the 48rem cap is narrower than the column.
   for (const width of [1024, 1279]) {
     test(`${width}px wide: the chat is stacked under the report and at most 48rem`, async ({
