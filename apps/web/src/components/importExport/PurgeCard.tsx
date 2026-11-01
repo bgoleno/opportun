@@ -105,7 +105,7 @@ export function PurgeCard() {
         {counts === undefined ? (
           <p className="text-sm text-muted-foreground">Counting...</p>
         ) : (
-          <ul className="grid gap-1 text-sm" aria-label="What would be deleted">
+          <ul className="max-w-prose grid gap-1 text-sm" aria-label="What would be deleted">
             <li>
               <strong className="tabular-nums">{counts.discoveryResults}</strong> discovery results
               would keep their company and role, and lose the description, the link and the
@@ -125,7 +125,7 @@ export function PurgeCard() {
           </ul>
         )}
 
-        <p className="text-xs text-muted-foreground">
+        <p className="max-w-prose text-xs text-muted-foreground">
           This changes the live database and cannot be undone from here.{' '}
           {nonAdmin
             ? 'Backups cover the whole instance and are managed by its administrator; check with them that one has completed recently and passed its integrity check before deleting.'

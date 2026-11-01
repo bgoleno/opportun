@@ -1,5 +1,6 @@
 import { Download, ExternalLink, Paperclip, Trash2 } from 'lucide-react';
 import { useRef, useState, type ChangeEvent } from 'react';
+import { MainWithRail } from '@/components/MainWithRail';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FormError } from '@/components/FormError';
 import { FormField } from '@/components/FormField';
@@ -314,7 +315,7 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
   facts.push(['Added', formatDate(opp.createdAt)]);
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
+    <MainWithRail>
       <Card className="gap-4">
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
           <CardTitle>Description</CardTitle>
@@ -412,6 +413,6 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
       {found === null ? null : (
         <FindPostingDialog opp={opp} result={found} onClose={() => setFound(null)} />
       )}
-    </div>
+    </MainWithRail>
   );
 }

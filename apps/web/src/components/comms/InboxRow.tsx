@@ -154,7 +154,7 @@ export function InboxRow({
           {subject}
         </button>
         {comm.snippet ? (
-          <p className="line-clamp-2 text-sm text-muted-foreground">{comm.snippet}</p>
+          <p className="line-clamp-2 max-w-prose text-sm text-muted-foreground">{comm.snippet}</p>
         ) : null}
         {mode === 'filtered' && comm.mismatchReason ? (
           <p className="text-sm">

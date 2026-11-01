@@ -547,8 +547,15 @@ Information architecture (FR-U):
 - **Opportunity** `/opportunities/:id` : header (company, title, stage control),
   tabs: Timeline, Communications, Resume, Referrals, Details/JD.
 - **Resumes** `/resumes` : base resumes, tailored versions grid; `/resumes/:id`
-  tailoring workspace: left = chat with the model, right = current intro/body with
-  per-hunk accept, top = status + "create Google Doc copy" action.
+  tailoring workspace: a header with the title, a link to open the document in its
+  store, the match score and the status control; then the document's text (for a
+  resume with no external link) and the match report; and the tailoring chat, where
+  the model proposes edits as cards, each applied on its own. From `xl` the chat is
+  a column on the right (the Chat width below), level with the first section, that
+  stays in view while the other column scrolls; its conversation scrolls inside it,
+  with the composer at the bottom. Below `xl` the sections stack, chat last, capped
+  at 48rem (`max-w-3xl`). Issue
+  [#35](https://github.com/bgoleno/opportun/issues/35).
 - **Discovery** `/discovery` : posting review queue (keyboard-first triage, FR-U8)
   for results still pending, and a decided-results view, browsed rather than
   triaged since there is nothing left to decide, for ones already accepted or
@@ -571,13 +578,13 @@ one line to change. Tailwind turns each `--container-*` token into `max-w-*` and
 utilities. The standard and its measurements were proposed in issue
 [#31](https://github.com/bgoleno/opportun/issues/31).
 
-| Width   | Token                                     | Used for                                                                                                                                                                    |
-| ------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Reading | `max-w-prose` (Tailwind's built-in, 65ch) | Any block of running text: paragraphs, Markdown, the job description, timeline bodies, notes, chat messages, suggestion text, resume text.                                  |
-| Page    | `--container-page` (`max-w-page`)         | Every view by default. `AppShell` caps the route's content at the page cap and centres it in the main area. The cap's value is set in `index.css` and written nowhere else. |
-| Fluid   | none                                      | Boards and lists that gain from width: Pipeline (kanban and table), Discovery (every tab), the Inbox list, the Network (contacts) list.                                     |
-| Rail    | `--container-rail` (20rem, `w-rail`)      | The side column of a main-plus-rail layout, from `lg`.                                                                                                                      |
-| Chat    | `--container-chat` (28rem, `w-chat`)      | The resume workspace's tailoring chat as a right-hand column from `xl`.                                                                                                     |
+| Width   | Token                                     | Used for                                                                                                                                                                                                                                           |
+| ------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reading | `max-w-prose` (Tailwind's built-in, 65ch) | Any block of running text: paragraphs, Markdown, the job description, timeline bodies, notes, chat messages, suggestion text, resume text. Set once in `Markdown`, `CardDescription` and `FormField`'s hint, so text through those needs no class. |
+| Page    | `--container-page` (`max-w-page`)         | Every view by default. `AppShell` caps the route's content at the page cap and centres it in the main area. The cap's value is set in `index.css` and written nowhere else.                                                                        |
+| Fluid   | none                                      | Boards and lists that gain from width: Pipeline (kanban and table), Discovery (every tab), the Inbox list, the Network (contacts) list.                                                                                                            |
+| Rail    | `--container-rail` (20rem, `w-rail`)      | The side column of a main-plus-rail layout, from `lg`. Lay one out with `MainWithRail` (`components/MainWithRail.tsx`), not a grid of your own.                                                                                                    |
+| Chat    | `--container-chat` (28rem, `w-chat`)      | The resume workspace's tailoring chat as a right-hand column from `xl`.                                                                                                                                                                            |
 
 Rules that go with them:
 

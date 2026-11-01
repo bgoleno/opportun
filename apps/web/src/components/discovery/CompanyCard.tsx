@@ -66,7 +66,7 @@ export function DenyCompanyForm(props: {
           Deny
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="max-w-prose text-xs text-muted-foreground">
         Stops new postings from this company reaching your review queue. Denial is per company: it
         will not reach a subsidiary (denying Microsoft does not deny GitHub) or a parent company,
         and does not remove postings already in your queue -- those stay until you dismiss them

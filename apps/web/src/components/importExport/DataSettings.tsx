@@ -181,7 +181,7 @@ function LinkedInImportCard() {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="mb-4 grid gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+        <div className="max-w-prose mb-4 grid gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
           <p>
             <a
               className="font-medium underline"

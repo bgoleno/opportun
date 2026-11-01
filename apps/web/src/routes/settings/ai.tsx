@@ -65,7 +65,7 @@ function PromptsCard() {
             Advanced: prompts
           </summary>
           <div className="mt-4 grid gap-4">
-            <p className="text-sm text-muted-foreground">
+            <p className="max-w-prose text-sm text-muted-foreground">
               View and edit the instructions each task sends to the model. Edits are saved as your
               own versions; the defaults stay available through Reset to default.
             </p>

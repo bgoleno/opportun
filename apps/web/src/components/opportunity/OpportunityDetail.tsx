@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { ArrowLeft, Merge, MoreHorizontal } from 'lucide-react';
 import { useState } from 'react';
+import { MainWithRail } from '@/components/MainWithRail';
 import { CommunicationsTab } from '@/components/comms/CommunicationsTab';
 import { ReferralsTab } from '@/components/network/ReferralsTab';
 import { FormError } from '@/components/FormError';
@@ -126,13 +127,13 @@ export function OpportunityDetail({ id }: { id: string }) {
           <TabsTrigger value="referrals">Referrals</TabsTrigger>
         </TabsList>
         <TabsContent value="timeline" className="pt-2">
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <MainWithRail>
             <div className="grid content-start gap-4">
               <ActivityComposer opportunityId={opp.id} />
               <TimelineList opportunityId={opp.id} />
             </div>
             <NextStepsPanel opportunityId={opp.id} />
-          </div>
+          </MainWithRail>
         </TabsContent>
         <TabsContent value="details" className="pt-2">
           <DetailsPanel opp={opp} />

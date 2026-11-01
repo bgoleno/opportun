@@ -1,6 +1,6 @@
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/render';
 import { parseSse, type ChatMessage, type TailoringSession } from './api';
 import { ChatPanel } from './ChatPanel';
@@ -126,5 +126,103 @@ describe('ChatPanel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/your message is saved/i);
     await waitFor(() => expect(screen.getByLabelText('Message')).toBeEnabled());
     expect(screen.getByText('Hi')).toBeInTheDocument();
+  });
+});
+
+// Issue #35: from xl the conversation scrolls inside the chat column, so it has to show its
+// newest message the way a page would after the reader scrolled down to the composer. jsdom has
+// no layout, so the list's scroll box is simulated: scrollHeight and clientHeight come from
+// `layout`, and scrollTop is stored per element.
+describe('ChatPanel conversation scrolling (issue #35)', () => {
+  const layout = { scrollHeight: 1000, clientHeight: 300 };
+  const tops = new WeakMap<Element, number>();
+  const proto = HTMLOListElement.prototype;
+
+  beforeEach(() => {
+    layout.scrollHeight = 1000;
+    Object.defineProperty(proto, 'scrollHeight', {
+      configurable: true,
+      get: () => layout.scrollHeight,
+    });
+    Object.defineProperty(proto, 'clientHeight', {
+      configurable: true,
+      get: () => layout.clientHeight,
+    });
+    Object.defineProperty(proto, 'scrollTop', {
+      configurable: true,
+      get(this: Element) {
+        return tops.get(this) ?? 0;
+      },
+      set(this: Element, value: number) {
+        tops.set(this, value);
+      },
+    });
+  });
+
+  afterEach(() => {
+    for (const key of ['scrollHeight', 'clientHeight', 'scrollTop']) {
+      Reflect.deleteProperty(proto, key);
+    }
+  });
+
+  const turn = (role: 'user' | 'assistant', content: string, at: number): ChatMessage => ({
+    role,
+    content,
+    at,
+    edits: [],
+    incomplete: false,
+  });
+
+  it('opens at the newest message', async () => {
+    const saved = session([turn('user', 'First', NOW), turn('assistant', 'Reply', NOW + 1)]);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(saved))),
+    );
+    renderWithProviders(<ChatPanel resumeId="r1" />);
+    expect(await screen.findByText('Reply')).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Conversation' }).scrollTop).toBe(1000);
+  });
+
+  it('follows a reply as it streams in while the reader is at the newest message', async () => {
+    const user = userEvent.setup();
+    const reply = turn('assistant', 'Here is a change.', NOW + 2);
+    const { release } = stub(
+      [ev({ type: 'delta', text: 'Here is ' }), ev({ type: 'delta', text: 'a change.' })],
+      session([turn('user', 'Tailor it', NOW + 1), reply]),
+    );
+    renderWithProviders(<ChatPanel resumeId="r1" />);
+    await user.type(await screen.findByLabelText('Message'), 'Tailor it');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText('Here is')).toBeInTheDocument();
+    const list = screen.getByRole('list', { name: 'Conversation' });
+    expect(list.scrollTop).toBe(1000);
+
+    layout.scrollHeight = 1400; // the rest of the reply makes the conversation taller
+    release();
+    expect(await screen.findByText('Here is a change.')).toBeInTheDocument();
+    await waitFor(() => expect(list.scrollTop).toBe(1400));
+  });
+
+  it('leaves a reader who scrolled up to an earlier message where they are', async () => {
+    const user = userEvent.setup();
+    const reply = turn('assistant', 'Here is a change.', NOW + 2);
+    const { release } = stub(
+      [ev({ type: 'delta', text: 'Here is ' }), ev({ type: 'delta', text: 'a change.' })],
+      session([turn('user', 'Tailor it', NOW + 1), reply]),
+    );
+    renderWithProviders(<ChatPanel resumeId="r1" />);
+    await user.type(await screen.findByLabelText('Message'), 'Tailor it');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText('Here is')).toBeInTheDocument();
+    const list = screen.getByRole('list', { name: 'Conversation' });
+
+    list.scrollTop = 100; // the reader scrolls up to reread an earlier message
+    fireEvent.scroll(list);
+    layout.scrollHeight = 1400;
+    release();
+    expect(await screen.findByText('Here is a change.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Message')).toBeEnabled());
+    expect(list.scrollTop).toBe(100);
   });
 });

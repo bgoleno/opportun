@@ -336,7 +336,7 @@ export function ExtensionSetupDialog({
                     ) : null}
                   </>
                 ) : (
-                  <p className="text-sm text-muted-foreground">
+                  <p className="max-w-prose text-sm text-muted-foreground">
                     This server has no built extension to hand over. Build it from a checkout with{' '}
                     <code>{artifacts.data?.buildCommand ?? 'pnpm build'}</code>, then reload this
                     page.

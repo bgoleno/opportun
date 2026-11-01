@@ -56,6 +56,20 @@ describe('OAuthProvidersCard', () => {
     expect(linkedin).toHaveTextContent(/official token and userinfo endpoints/);
   });
 
+  // https://github.com/bgoleno/opportun/pull/55: where to register each provider is running text,
+  // so it wraps at reading width (desktop.spec found 80.1ch and 82.4ch lines without it).
+  it("wraps each provider's console instructions at reading width", async () => {
+    mockApi({ 'GET /admin/oauth-providers': { items: items({ google: false, github: false }) } });
+    renderWithProviders(<OAuthProvidersCard />);
+    for (const start of [
+      /^Google Cloud console > /,
+      /^GitHub > Settings > /,
+      /^LinkedIn Developer /,
+    ]) {
+      expect(await screen.findByText(start)).toHaveClass('max-w-prose');
+    }
+  });
+
   it('saves credentials and never pre-fills or echoes the secret', async () => {
     const user = userEvent.setup();
     let configured = false;
