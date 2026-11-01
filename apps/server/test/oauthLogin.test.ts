@@ -10,7 +10,8 @@ import { testApp } from './helpers';
 import { fakeOAuth, type FakeIdentity, type FakeOAuth } from './fakeOAuth';
 import { registerTwoUsers, type TestClient } from './isolation';
 import { exec, queryAll, queryOne } from './db';
-import { heldApart, holdAt } from './race';
+import { onSlowTransaction } from '../src/db/gate';
+import { heldApart, holdAt, pauseAt } from './race';
 
 let provider: FakeOAuth;
 const boot = useApi(() => {
@@ -989,13 +990,52 @@ describe('oauth link and unlink', () => {
       ),
     );
     expect(barrier.arrived()).toBe(2);
-    // One creates the account; the other signs in to it, or (a lost insert race on an engine
-    // without the write gate) is sent back to start over. Never a second account.
-    const locations = responses.map((r) => r.headers.location);
-    expect(locations).toContain('/');
-    for (const l of locations) expect(['/', '/login?oauth=error']).toContain(l);
+    // One creates the account and the other, held at the identity's scope lock (Postgres) or
+    // the write gate (SQLite), then finds it linked and signs in to it. Never a second account.
+    expect(responses.map((r) => r.headers.location)).toEqual(['/', '/']);
     expect(await userCount(app)).toBe(users + 1);
     expect((await oauthRows(app)).filter((r) => r.accountId === '4242')).toHaveLength(1);
+    expect(await events(app, 'auth.oauth_existing_account')).toHaveLength(0);
+  });
+
+  it("two sign-ins of one new identity: one that commits between the other one's two reads does not make it say existing_account", async () => {
+    // https://github.com/bgoleno/opportun/issues/56. The first sign-in parks between its two
+    // reads (no link found, email not yet looked up). Without a lock on the identity, the
+    // second one runs start to finish meanwhile on Postgres, creating the account, and the
+    // first then finds the email taken and wrongly flashes existing_account. With the lock
+    // (or SQLite's write gate) the second waits for the first, then finds the identity linked.
+    // Not heldApart: it throws before the outcome, and the outcome is what this test is about.
+    const { a, app } = await boot();
+    await configure(a, 'github');
+    await setRegistration(a, true);
+    const identity = { id: '4343', email: 'between@example.org', emailVerified: true };
+    const flows = [await start(app, 'github', 'login'), await start(app, 'github', 'login')];
+    const users = await userCount(app);
+    const back = (s: Started) =>
+      callback(
+        app,
+        'github',
+        { code: provider.issue(identity), state: s.state },
+        { [OAUTH_COOKIE]: s.binding },
+      );
+    // The parked transaction stays open across event-loop turns on purpose.
+    onSlowTransaction(() => undefined);
+    const pause = pauseAt('oauth.login.locked');
+    const first = back(flows[0]!);
+    await Promise.race([pause.reached, first]);
+    expect(pause.arrived()).toBe(1);
+    const second = back(flows[1]!);
+    await Promise.race([second, new Promise((r) => setTimeout(r, 200))]);
+    const passedTheLock = pause.arrived() > 1;
+    // Nothing held the second back: let it commit, so the first's email read sees its account.
+    if (passedTheLock) await second;
+    pause.release();
+    const responses = await Promise.all([first, second]);
+    expect(responses.map((r) => r.headers.location)).toEqual(['/', '/']);
+    expect(passedTheLock).toBe(false);
+    expect(await userCount(app)).toBe(users + 1);
+    expect((await oauthRows(app)).filter((r) => r.accountId === '4343')).toHaveLength(1);
+    expect(await events(app, 'auth.oauth_existing_account')).toHaveLength(0);
   });
 
   it('unlinks with the current password and CSRF', async () => {

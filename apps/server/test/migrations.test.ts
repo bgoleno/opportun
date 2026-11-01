@@ -1,7 +1,8 @@
 // Upgrade-path guard: drizzle's migrator applies a migration only when its journal `when` is
 // greater than the last applied migration's, so an out-of-order `when` is silently skipped on
 // databases that already exist (fresh databases still get everything, hiding the bug).
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promptVariables, renderPrompt, TASK_PROMPT_VARS, type TaskKey } from '@opportun/ai';
@@ -42,16 +43,44 @@ describe.runIf(sqliteOnly)('migration journal', () => {
     }
   });
 
-  it('every migration applies to a database migrated up to each earlier one', async () => {
-    const { entries } = await readJournal(MIGRATIONS_DIR);
-    // For each prefix: migrate a fresh database with only that prefix of the journal, then
-    // reopen it with the real migrations, exactly as an upgrade does.
-    for (let keep = 1; keep < entries.length; keep++) {
+  // For each prefix of the journal: migrate a fresh database with only that prefix, then reopen
+  // it with the real migrations, exactly as an upgrade does, and expect every migration applied.
+  //
+  // One test per prefix, not one test looping over them all (issue
+  // https://github.com/bgoleno/opportun/issues/58). The loop was quadratic in the journal (one
+  // fresh database and a full migration run per prefix) under a single 30 s budget, and timed
+  // out at 30 s in a full local run at load average about 52, though the file passed in 4.4 s
+  // alone. Measured at 39 migrations on the 10-core host, the loop took 1.4 to 1.8 s run alone at
+  // load 23 to 49 (5.3 and 6.4 s on the first run of a batch), and 5.9 s inside a full server run
+  // at load 65. Split, the slowest prefix took 63 to 143 ms run alone at load 42 to 79, and each
+  // one grows only linearly with the journal. Each test keeps the suite's 30 s default
+  // (vitest.config.ts): about 200 times the slowest measured prefix, and still about 38 times the
+  // share each prefix had of the failing run's 30 s. A failure also names its prefix.
+  //
+  // Each prefix's folder holds only what drizzle's migrator reads: meta/_journal.json and one
+  // <tag>.sql per journal entry (readMigrationFiles in drizzle-orm/migrator). Copying the whole
+  // drizzle/ folder per prefix also copied drizzle-kit's snapshots, about 95% of its 3.8 MB and
+  // three quarters of the loop's time.
+  describe('every migration applies to a database migrated up to each earlier one', () => {
+    const journal = JSON.parse(
+      readFileSync(join(MIGRATIONS_DIR, 'meta', '_journal.json'), 'utf8'),
+    ) as Journal;
+    const { entries } = journal;
+    const prefixes = entries.slice(0, -1).map((entry, i) => ({ last: entry.tag, keep: i + 1 }));
+
+    it.each(prefixes)('upgrade from $last', async ({ last, keep }) => {
       const partial = await tempDir();
-      await cp(MIGRATIONS_DIR, partial, { recursive: true });
-      const journal = await readJournal(partial);
-      journal.entries = journal.entries.slice(0, keep);
-      await writeFile(join(partial, 'meta', '_journal.json'), JSON.stringify(journal));
+      await mkdir(join(partial, 'meta'));
+      const kept = entries.slice(0, keep);
+      await writeFile(
+        join(partial, 'meta', '_journal.json'),
+        JSON.stringify({ ...journal, entries: kept }),
+      );
+      await Promise.all(
+        kept.map((e) =>
+          copyFile(join(MIGRATIONS_DIR, `${e.tag}.sql`), join(partial, `${e.tag}.sql`)),
+        ),
+      );
 
       const dataDir = await tempDir();
       const old = new Database(join(dataDir, 'opportun.db'));
@@ -63,14 +92,12 @@ describe.runIf(sqliteOnly)('migration journal', () => {
         const applied = sqlite.prepare('SELECT count(*) AS n FROM __drizzle_migrations').get() as {
           n: number;
         };
-        expect(applied.n, `upgrade from ${entries[keep - 1]!.tag}`).toBe(entries.length);
+        expect(applied.n, `upgrade from ${last}`).toBe(entries.length);
       } finally {
         sqlite.close();
       }
-    }
-    // Quadratic in the journal length (one fresh database per prefix): its runtime grows with
-    // every migration and with machine load, so it gets more than the default 5 s.
-  }, 30_000);
+    });
+  });
 
   it('a database last migrated at 0002 gains task_runs.fallback_pricing and records runs', async () => {
     const { entries } = await readJournal(MIGRATIONS_DIR);
