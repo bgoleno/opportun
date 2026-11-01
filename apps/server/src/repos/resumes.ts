@@ -1,10 +1,11 @@
 // Resumes (FR-R1, R2, R3): base resumes registered from an existing document, and tailored
 // copies linked to an opportunity and to the base they were copied from.
 import { newId } from '@opportun/core';
-import { and, desc, eq, type SQL } from 'drizzle-orm';
+import { and, desc, eq, isNull, notExists, sql, type SQL } from 'drizzle-orm';
 import { attachments, resumes, settings } from '../db/schema';
 import { HttpError, notFound } from '../lib/errors';
-import type { Db, UserCtx } from './base';
+import { racePoint } from '../lib/racePoints';
+import type { Db, Exec, UserCtx } from './base';
 import { assertOpportunityOwned } from './activities';
 import { countWhere, type ListOpts, type Page } from './list';
 import { withTransaction } from '../db/client';
@@ -107,6 +108,41 @@ export async function getResume(db: Db, ctx: UserCtx, id: string): Promise<Resum
 }
 
 /**
+ * Deletes the attachments row a local_file version ref names. The row only: identical content
+ * shares one stored file, which attachmentSweep reclaims once no row names it. Only rows with no
+ * opportunity, the only kind localFile.ts writes, so a ref can never reach a file someone
+ * attached to an opportunity. A no-op for a google_doc or reactive_resume ref, which never
+ * matches an attachments id.
+ *
+ * Never a row any of the user's resumes still names. One version row per resume is an
+ * invariant today (every version is a fresh row), not a constraint: resumes.doc_ref has no
+ * unique index. This makes a live resume's document safe by construction, not by that
+ * invariant (sec's suggestion on https://github.com/bgoleno/opportun/pull/51). Only the user's
+ * resumes: another user can hold a doc_ref of their choosing (a Reactive Resume ref) and must
+ * not be able to block this user's cleanup by naming one of their version ids. Callers run it
+ * after their own update or delete of the resume row, in the same transaction, so that row no
+ * longer counts.
+ */
+async function dropVersionRow(tx: Exec, ctx: UserCtx, ref: string): Promise<void> {
+  await tx
+    .delete(attachments)
+    .where(
+      and(
+        eq(attachments.userId, ctx.userId),
+        eq(attachments.id, ref),
+        isNull(attachments.opportunityId),
+        notExists(
+          tx
+            .select({ one: sql`1` })
+            .from(resumes)
+            .where(and(eq(resumes.userId, ctx.userId), eq(resumes.docRef, ref))),
+        ),
+      ),
+    )
+    .run();
+}
+
+/**
  * Persists a ref the store (never this row) returned from applyEdits (#284), as a
  * compare-and-set on `fromRef`, the ref those edits were computed from. True when this call
  * moved the resume from fromRef to docRef. Also drops the attachments row fromRef named, once
@@ -123,6 +159,11 @@ export async function getResume(db: Db, ctx: UserCtx, id: string): Promise<Resum
  * row, a version nothing references, is dropped (rows only, never files: identical content
  * shares one stored file, which attachmentSweep keeps while any row still names it). The
  * caller re-reads and retries, or gives up with a 409.
+ *
+ * 404 when the resume was deleted after the caller wrote `docRef`: nothing will ever name that
+ * version, so it is dropped first, and the 404 is thrown only once that drop has committed
+ * (thrown inside the transaction, it would roll the drop back and leave the row behind,
+ * https://github.com/bgoleno/opportun/issues/43).
  */
 export async function updateResumeDocRef(
   db: Db,
@@ -131,7 +172,7 @@ export async function updateResumeDocRef(
   fromRef: string,
   docRef: string,
 ): Promise<boolean> {
-  return await withTransaction(db, async (tx) => {
+  const outcome = await withTransaction(db, async (tx) => {
     const moved = await tx
       .update(resumes)
       .set({ docRef, updatedAt: Date.now() })
@@ -144,23 +185,18 @@ export async function updateResumeDocRef(
         .from(resumes)
         .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
         .get();
-      if (row === undefined) throw notFound();
-      if (row.docRef !== docRef) {
-        await tx
-          .delete(attachments)
-          .where(and(eq(attachments.userId, ctx.userId), eq(attachments.id, docRef)))
-          .run();
+      if (row === undefined) {
+        await dropVersionRow(tx, ctx, docRef);
+        return 'gone' as const;
       }
-      return false;
+      if (row.docRef !== docRef) await dropVersionRow(tx, ctx, docRef);
+      return 'lost' as const;
     }
-    if (fromRef !== docRef) {
-      await tx
-        .delete(attachments)
-        .where(and(eq(attachments.userId, ctx.userId), eq(attachments.id, fromRef)))
-        .run();
-    }
-    return true;
+    if (fromRef !== docRef) await dropVersionRow(tx, ctx, fromRef);
+    return 'moved' as const;
   });
+  if (outcome === 'gone') throw notFound();
+  return outcome === 'moved';
 }
 
 export type ResumeInsert = Pick<
@@ -271,10 +307,15 @@ export async function setResumeStatus(
 export type DeleteResumeResult = { outcome: 'deleted' } | { outcome: 'archived'; row: ResumeRow };
 
 /**
- * Stops tracking a resume. The document itself is left untouched, and a submitted resume is
- * archived (archivedAt set, status and every relationship left alone) rather than deleted,
- * so the record of what was sent is not destroyed (#70). An already-archived resume is a no-op
- * that reports 'archived' again, so a retried request is safe.
+ * Stops tracking a resume. A submitted resume is archived (archivedAt set, status and every
+ * relationship left alone) rather than deleted, so the record of what was sent is not
+ * destroyed (#70), and it keeps its document. An already-archived resume is a no-op that
+ * reports 'archived' again, so a retried request is safe.
+ *
+ * Any other resume is deleted. A google_doc or reactive_resume document lives outside Opportun
+ * and is left untouched. A local_file document is stored here, so its version row goes too, in
+ * the same transaction (https://github.com/bgoleno/opportun/issues/43), and the sweep then
+ * reclaims its file once no row names it.
  */
 export async function deleteResume(db: Db, ctx: UserCtx, id: string): Promise<DeleteResumeResult> {
   return await withTransaction(db, async (tx) => {
@@ -285,10 +326,16 @@ export async function deleteResume(db: Db, ctx: UserCtx, id: string): Promise<De
       .get();
     if (row === undefined) throw notFound();
     if (row.status !== 'submitted') {
-      await tx
+      await racePoint('resumes.delete.locked');
+      // The doc_ref as the row is deleted, not as read above: on Postgres an apply can move the
+      // resume to a new version in between, and the version read above is one that apply has
+      // already dropped.
+      const gone = await tx
         .delete(resumes)
         .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
-        .run();
+        .returning({ store: resumes.store, docRef: resumes.docRef })
+        .get();
+      if (gone?.store === 'local_file') await dropVersionRow(tx, ctx, gone.docRef);
       return { outcome: 'deleted' };
     }
     if (row.archivedAt !== null) return { outcome: 'archived', row };

@@ -2,8 +2,9 @@
 // dependency, so unlike googleDocs/reactiveResume this runs against the real db and storage
 // rather than a fake. useApi() gives both for free (app.localFileStore, app.db), plus two
 // real registered users for the ownership checks.
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
+import { onSlowTransaction } from '../src/db/gate';
 import { attachments, resumes } from '../src/db/schema';
 import { sweepOrphanedAttachments } from '../src/jobs/attachmentSweep';
 import { HttpError } from '../src/lib/errors';
@@ -14,7 +15,7 @@ import { APPLY_ATTEMPTS } from '../src/routes/tailoring';
 import { useApi } from './api';
 import { createOpportunity } from './resumeFixtures';
 import type { TestClient } from './isolation';
-import { holdAt } from './race';
+import { holdAt, pauseAt } from './race';
 
 const boot = useApi();
 
@@ -503,5 +504,227 @@ describe('concurrent applies to one local_file resume (#23)', () => {
     expect(res.json().error.code).toBe('not_found');
     expect(reads).toBe(1);
     expect(await liveDocRef(app, resumeId)).toBe(live);
+  });
+});
+
+/** A stored file's bytes (base64), or null when there is no file at that path. */
+async function storedBytes(app: App, storedPath: string): Promise<string | null> {
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of await app.storage.openAttachment(storedPath)) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
+    }
+    return Buffer.concat(chunks).toString('base64');
+  } catch {
+    return null;
+  }
+}
+
+/** Every resumes and attachments row of every user, and the bytes of each file a row names. */
+async function storedState(app: App) {
+  const byId = <T extends { id: string }>(rows: T[]) =>
+    [...rows].sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+  const rows = byId(await app.db.select().from(attachments).all());
+  const files = new Map<string, string | null>();
+  for (const r of rows) files.set(r.id, await storedBytes(app, r.storedPath));
+  return { resumes: byId(await app.db.select().from(resumes).all()), attachments: rows, files };
+}
+
+/** `state` less one resume and the one attachment row (and its file entry) it named. */
+function without(
+  state: Awaited<ReturnType<typeof storedState>>,
+  resumeId: string,
+  attachmentId: string,
+) {
+  return {
+    resumes: state.resumes.filter((r) => r.id !== resumeId),
+    attachments: state.attachments.filter((r) => r.id !== attachmentId),
+    files: new Map([...state.files].filter(([id]) => id !== attachmentId)),
+  };
+}
+
+async function storedPaths(app: App): Promise<string[]> {
+  return (await app.storage.listAttachmentFiles()).map((f) => f.storedPath).sort();
+}
+
+function deleteVia(c: TestClient, resumeId: string) {
+  return c.request({ method: 'DELETE', url: `/api/v1/resumes/${resumeId}` });
+}
+
+// Deleting a local_file resume drops the document it names
+// (https://github.com/bgoleno/opportun/issues/43). Each test compares the whole stored state,
+// both users included, before and after: the right row going and nothing else changing are
+// one assertion. Only the sweep removes files, so every test runs it with no grace period.
+describe('deleting a local_file resume (#43)', () => {
+  it('drops its document (row and file) and leaves every other row and file byte-identical', async () => {
+    const { app, a, b } = await boot();
+    const A = await tailoredSession(app, a);
+    // Text of its own, so the copy's stored file is not one the base also names.
+    const edited = await applyEdit(a, A.sessionId, { find: 'Jane Doe', replace: 'J. Doe' });
+    expect(edited.statusCode).toBe(200);
+    await tailoredSession(app, b);
+    const doomed = await liveDocRef(app, A.resumeId);
+    const doomedPath = (await app.db
+      .select({ storedPath: attachments.storedPath })
+      .from(attachments)
+      .where(eq(attachments.id, doomed))
+      .get())!.storedPath;
+    const before = await storedState(app);
+
+    const res = await deleteVia(a, A.resumeId);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ outcome: 'deleted' });
+    await sweepOrphanedAttachments(app.db, app.storage, { graceMs: 0 });
+
+    expect(await storedPaths(app)).not.toContain(doomedPath);
+    expect(await storedState(app)).toEqual(without(before, A.resumeId, doomed));
+  });
+
+  it('keeps the base document when the deleted copy shares its file, as an unedited copy does', async () => {
+    const { app, a } = await boot();
+    const A = await tailoredSession(app, a);
+    const copyRef = await liveDocRef(app, A.resumeId);
+    const rows = await app.db
+      .select({ storedPath: attachments.storedPath })
+      .from(attachments)
+      .where(inArray(attachments.id, [copyRef, A.baseRef]))
+      .all();
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r) => r.storedPath)).size).toBe(1);
+    const before = await storedState(app);
+
+    expect((await deleteVia(a, A.resumeId)).json()).toEqual({ outcome: 'deleted' });
+    await sweepOrphanedAttachments(app.db, app.storage, { graceMs: 0 });
+
+    expect(await storedState(app)).toEqual(without(before, A.resumeId, copyRef));
+  });
+
+  it('an apply in flight when its resume is deleted leaves no version behind', async () => {
+    const { app, a } = await boot();
+    const A = await tailoredSession(app, a);
+    const filesBefore = await storedPaths(app);
+    // Parked after writing its new version, before persisting it.
+    const pause = pauseAt('tailoring.apply');
+    const applying = applyEdit(a, A.sessionId, { find: 'Jane Doe', replace: 'J. Doe' });
+    await pause.reached;
+    expect((await deleteVia(a, A.resumeId)).json()).toEqual({ outcome: 'deleted' });
+    pause.release();
+
+    const res = await applying;
+    expect(res.statusCode).toBe(404);
+    expect(await versionIds(app, A.ctx)).toEqual([A.baseRef]);
+    await sweepOrphanedAttachments(app.db, app.storage, { graceMs: 0 });
+    expect(await storedPaths(app)).toEqual(filesBefore);
+  });
+
+  // The Postgres oracle, as races.test.ts's .locked tests are: there a parked delete holds no
+  // lock on the resumes row, so an apply can land in full between the delete reading the
+  // resume and deleting it. On SQLite the write gate holds the apply back until the delete
+  // commits, so this passes there with or without the fix.
+  it('a delete that read the resume before an apply landed still drops the version that apply wrote', async () => {
+    const { app, a } = await boot();
+    const A = await tailoredSession(app, a);
+    // The delete's transaction stays open across event-loop turns on purpose.
+    onSlowTransaction(() => undefined);
+    const pause = pauseAt('resumes.delete.locked');
+    const deleting = deleteVia(a, A.resumeId);
+    await pause.reached;
+    const applying = applyEdit(a, A.sessionId, { find: 'Jane Doe', replace: 'J. Doe' });
+    await Promise.race([applying, new Promise((r) => setTimeout(r, 300))]);
+    pause.release();
+
+    const [deleted, applied] = await Promise.all([deleting, applying]);
+    expect(deleted.json()).toEqual({ outcome: 'deleted' });
+    expect([200, 404]).toContain(applied.statusCode);
+    expect(await versionIds(app, A.ctx)).toEqual([A.baseRef]);
+  });
+
+  // No path creates two resumes naming one version row, and resumes.doc_ref has no unique
+  // index, so that is an invariant, not a constraint. dropVersionRow refuses to delete a row any
+  // resume still names, so a live document is protected by construction even if the invariant
+  // ever breaks (sec's suggestion on https://github.com/bgoleno/opportun/pull/51). Both tests
+  // build that unreachable state directly.
+  async function sharedDocument(app: App, c: TestClient) {
+    const ctx = ctxFor(c);
+    const { attachmentId, resume: first } = await seedBase(app, ctx);
+    const second = await insertResume(app.db, ctx, {
+      kind: 'base',
+      title: 'Same document, second resume',
+      store: 'local_file',
+      docRef: attachmentId,
+      opportunityId: null,
+      parentResumeId: null,
+    });
+    return { ctx, shared: attachmentId, first, second };
+  }
+
+  it('deleting one of two resumes that name one document keeps it for the other', async () => {
+    const { app, a } = await boot();
+    const { shared, first } = await sharedDocument(app, a);
+    const before = await storedState(app);
+
+    expect((await deleteVia(a, first.id)).json()).toEqual({ outcome: 'deleted' });
+    await sweepOrphanedAttachments(app.db, app.storage, { graceMs: 0 });
+
+    // Only the deleted resume's own row changed; the shared row and its file are untouched.
+    expect(await storedState(app)).toEqual(without(before, first.id, `${shared}:not-a-row`));
+  });
+
+  it('moving one of two resumes that name one document to a new version keeps it for the other', async () => {
+    const { app, a } = await boot();
+    const { ctx, shared, first, second } = await sharedDocument(app, a);
+    const { docRef } = await app.localFileStore.applyEdits(ctx, shared, [
+      { find: 'Jane Doe', replace: 'J. Doe' },
+    ]);
+    const sharedBefore = (await storedState(app)).files.get(shared);
+
+    expect(await updateResumeDocRef(app.db, ctx, first.id, shared, docRef)).toBe(true);
+    await sweepOrphanedAttachments(app.db, app.storage, { graceMs: 0 });
+
+    expect(await liveDocRef(app, second.id)).toBe(shared);
+    expect((await storedState(app)).files.get(shared)).toBe(sharedBefore);
+    expect(sharedBefore).not.toBeNull();
+  });
+
+  it("another user's resume naming the same id does not keep this user's document", async () => {
+    // A Reactive Resume ref is whatever that user's own server confirms, so another user can
+    // hold a doc_ref equal to this user's version id. The guard must look at this user's
+    // resumes only, or that row would block this user's cleanup (sec, on #51).
+    const { app, a, b } = await boot();
+    const { shared, first, second } = await sharedDocument(app, a);
+    await insertResume(app.db, ctxFor(b), {
+      kind: 'base',
+      title: "Another user's resume",
+      store: 'reactive_resume',
+      docRef: shared,
+      opportunityId: null,
+      parentResumeId: null,
+    });
+    expect((await deleteVia(a, second.id)).json()).toEqual({ outcome: 'deleted' });
+    expect((await deleteVia(a, first.id)).json()).toEqual({ outcome: 'deleted' });
+    expect(await versionIds(app, ctxFor(a))).toEqual([]);
+  });
+
+  it('archiving a submitted resume keeps its document, row and file', async () => {
+    const { app, a } = await boot();
+    const A = await tailoredSession(app, a);
+    const edited = await applyEdit(a, A.sessionId, { find: 'Jane Doe', replace: 'J. Doe' });
+    expect(edited.statusCode).toBe(200);
+    const submit = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/resumes/${A.resumeId}`,
+      payload: { status: 'submitted', submittedTo: 'Acme careers' },
+    });
+    expect(submit.statusCode).toBe(200);
+    const before = await storedState(app);
+
+    const res = await deleteVia(a, A.resumeId);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().outcome).toBe('archived');
+    await sweepOrphanedAttachments(app.db, app.storage, { graceMs: 0 });
+
+    const after = await storedState(app);
+    expect(after.attachments).toEqual(before.attachments);
+    expect(after.files).toEqual(before.files);
   });
 });
