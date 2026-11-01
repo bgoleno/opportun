@@ -20,6 +20,25 @@ describe('WriteGate', () => {
     expect(mustWaitWhenWoken).toBe(true);
   });
 
+  it('counts what waits for it, queued transactions and idle statements alike, and nothing else', async () => {
+    // test/race.ts heldApart reads waiting() to observe a caller held back: a request may be
+    // stopped at a statement before its transaction opens, or queued at BEGIN.
+    const gate = new WriteGate();
+    expect(gate.waiting()).toBe(0);
+    const releaseA = await gate.acquire(Symbol('a'));
+    expect(gate.waiting()).toBe(0); // the holder is not waiting
+    const queued = gate.acquire(Symbol('b'));
+    expect(gate.waiting()).toBe(1);
+    const idle = gate.idleFor(undefined);
+    expect(gate.waiting()).toBe(2);
+    releaseA(); // hands the gate to b; the idle statement still waits
+    const releaseB = await queued;
+    expect(gate.waiting()).toBe(1);
+    releaseB();
+    await idle;
+    expect(gate.waiting()).toBe(0);
+  });
+
   it('hands the gate straight to a queued transaction, without waking idle statements', async () => {
     const gate = new WriteGate();
     const releaseA = await gate.acquire(Symbol('a'));

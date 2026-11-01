@@ -13,9 +13,10 @@ import { insertResume, updateResumeDocRef } from '../src/repos/resumes';
 import type { UserCtx } from '../src/repos/base';
 import { APPLY_ATTEMPTS } from '../src/routes/tailoring';
 import { useApi } from './api';
+import { testDialect } from './db';
 import { createOpportunity } from './resumeFixtures';
 import type { TestClient } from './isolation';
-import { holdAt, pauseAt } from './race';
+import { holdAt, pauseAt, settledOrWaiting } from './race';
 
 const boot = useApi();
 
@@ -630,7 +631,11 @@ describe('deleting a local_file resume (#43)', () => {
     const deleting = deleteVia(a, A.resumeId);
     await pause.reached;
     const applying = applyEdit(a, A.sessionId, { find: 'Jane Doe', replace: 'J. Doe' });
-    await Promise.race([applying, new Promise((r) => setTimeout(r, 300))]);
+    // Observed, not timed (https://github.com/bgoleno/opportun/issues/62): on Postgres the
+    // apply runs to the end meanwhile; on SQLite it is seen held at the write gate.
+    expect(await settledOrWaiting(app, applying)).toBe(
+      testDialect === 'postgres' ? 'settled' : 'waiting',
+    );
     pause.release();
 
     const [deleted, applied] = await Promise.all([deleting, applying]);

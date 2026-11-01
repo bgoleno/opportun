@@ -234,7 +234,8 @@ export function TourOverlay(props: TourOverlayProps) {
               'grid gap-3 overflow-y-auto rounded-lg border bg-popover p-4 text-popover-foreground shadow-lg motion-reduce:duration-0 motion-reduce:**:transition-none motion-reduce:**:duration-0',
               docked
                 ? 'fixed inset-x-4 bottom-4 max-h-[calc(100dvh-2rem)] pb-[max(1rem,env(safe-area-inset-bottom))]'
-                : 'w-[min(22rem,calc(100vw-2rem))]',
+                : // eslint-disable-next-line opportun/no-arbitrary-width -- viewport-relative: an anchored popover 22rem wide, never wider than the window less a 1rem gutter each side; no token is.
+                  'w-[min(22rem,calc(100vw-2rem))]',
               centered &&
                 'fixed top-1/2 left-1/2 max-h-[calc(100dvh-2rem)] -translate-x-1/2 -translate-y-1/2',
               anchored &&

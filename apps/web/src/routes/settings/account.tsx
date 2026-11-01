@@ -24,6 +24,7 @@ function AccountSettings() {
           <CardDescription>Who you are signed in as.</CardDescription>
         </CardHeader>
         <CardContent>
+          {/* eslint-disable-next-line opportun/no-arbitrary-width -- the label column of a two-column definition list: a form column, not a layout width. */}
           <dl className="grid gap-3 text-sm sm:grid-cols-[8rem_1fr]">
             <dt className="text-muted-foreground">Name</dt>
             <dd>{user.displayName}</dd>

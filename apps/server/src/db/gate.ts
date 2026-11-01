@@ -54,6 +54,16 @@ export class WriteGate {
     };
   }
 
+  /**
+   * How many callers are waiting for the gate: transactions queued at BEGIN plus statements
+   * waiting for it to be free (a request held back may be stopped at either, depending on
+   * whether it reads before opening its transaction). Read-only, for tests that must observe
+   * a caller being held (test/race.ts heldApart); production code does not read it.
+   */
+  waiting(): number {
+    return this.#queue.length + this.#idle.length;
+  }
+
   /** Runs `fn` with `token` as the current context's transaction token. */
   run<T>(token: symbol, fn: () => T): T {
     return context.run(token, fn);

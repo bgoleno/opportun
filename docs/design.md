@@ -585,15 +585,19 @@ utilities. The standard and its measurements were proposed in issue
 | Fluid   | none                                      | Boards and lists that gain from width: Pipeline (kanban and table), Discovery (every tab), the Inbox list, the Network (contacts) list.                                                                                                            |
 | Rail    | `--container-rail` (20rem, `w-rail`)      | The side column of a main-plus-rail layout, from `lg`. Lay one out with `MainWithRail` (`components/MainWithRail.tsx`), not a grid of your own.                                                                                                    |
 | Chat    | `--container-chat` (28rem, `w-chat`)      | The resume workspace's tailoring chat as a right-hand column from `xl`.                                                                                                                                                                            |
+| Card    | `--container-card` (18rem, `grid-cards`)  | The narrowest card in a card grid. Lay one out with the `grid-cards` utility (`index.css`), see rule 2.                                                                                                                                            |
 
 Rules that go with them:
 
 1. **Measure belongs to the text block, not the container.** A container can be wide; a block
    of running text inside it is not. Target 65ch.
 2. **Use extra width with columns, not longer lines.** Independent short items (weak-area
-   cards, missing keywords, dashboard cards) flow into a responsive grid,
-   `repeat(auto-fill, minmax(18rem, 1fr))`, so a wide area becomes two or three columns of
-   readable cards instead of one long column.
+   cards, missing keywords, dashboard cards) flow into a card grid, `grid grid-cards`, so a
+   wide area becomes two or three columns of readable cards instead of one long column. The
+   utility is `repeat(auto-fit, minmax(min(var(--container-card), 100%), 1fr))`. It uses
+   `auto-fit`, not `auto-fill`, so fewer cards than there is room for stretch across the row
+   instead of leaving empty tracks, and `min(..., 100%)` keeps one card from overflowing a
+   phone.
 3. **Breakpoints stay Tailwind's defaults**, keyed on the window: main plus rail from `lg`, the
    workspace chat column from `xl`. Layouts are designed for the expanded sidebar, the narrower
    case. Container queries on the main area are out of scope.
@@ -602,9 +606,28 @@ Rules that go with them:
    that declares one, so a section declares it once and its header and tabs do not move between
    tabs. Going fluid is a reviewed decision: `lib/layout.test.tsx` pins where it is declared,
    so adding one changes that test.
-5. **Widths come from the tokens.** An arbitrary width value (`max-w-[...]`, `w-[...rem]`,
-   `grid-cols-[1fr_21rem]`) in a view is a review finding. Views that predate the tokens move
-   onto them in the follow-ups listed in #31.
+5. **Widths come from the tokens.** Anywhere in `apps/web/src` outside `components/ui/`,
+   `pnpm lint` (`opportun/no-arbitrary-width`, `apps/web/eslint/no-arbitrary-width.js`, which
+   also says what it cannot see) fails:
+   - an arbitrary width value with a literal length: `max-w-[70ch]`, `w-[37rem]`,
+     `grid-cols-[1fr_21rem]`;
+   - a numeric width step wider than 96, such as `max-w-160` or `w-97`. In Tailwind 4 these
+     steps are open-ended, and 96 (24rem) is the top of its documented spacing scale, so
+     anything wider is a layout width.
+
+   These pass, on purpose:
+   - tokens, including inside a track (`grid-cols-[minmax(0,1fr)_var(--container-rail)]`);
+   - column splits with no length (`grid-cols-[auto_1fr]`) and column counts (`grid-cols-3`);
+   - numeric steps up to 96 (`w-4`, `w-64`, `w-96`), fractions (`w-1/2`) and keywords
+     (`w-full`, `w-fit`, `w-screen`);
+   - squares (`size-*`);
+   - Tailwind's named container sizes, `max-w-xs` to `max-w-7xl` (20rem to 80rem). These are
+     an allowance, decided in [#64](https://github.com/bgoleno/opportun/pull/64): theme tokens
+     like ours, from a fixed set, used for dialog and form widths and the stacked chat cap
+     (`max-w-3xl`).
+
+   A width that has to stay, such as a viewport-relative popover, carries an
+   `eslint-disable-next-line` comment saying why.
 
 ## 10. Deployment and operations
 

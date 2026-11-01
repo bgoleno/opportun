@@ -15,6 +15,7 @@ export function ResumePill(props: {
   return (
     <div
       className={cn(
+        // eslint-disable-next-line opportun/no-arbitrary-width -- viewport-relative: a fixed pill that stays inside the window with a 1rem gutter each side; no token is.
         'fixed bottom-4 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-1 rounded-full border bg-popover p-1 text-sm text-popover-foreground shadow-lg sm:right-4 sm:left-auto sm:translate-x-0',
         props.done && 'border-success',
       )}
