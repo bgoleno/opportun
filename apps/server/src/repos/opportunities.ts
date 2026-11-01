@@ -33,6 +33,7 @@ import {
 } from '../db/schema';
 import { duplicate, HttpError, notFound } from '../lib/errors';
 import { isSystemWritten } from '../lib/postingFingerprint';
+import { lastActivityAt } from './activities';
 import type { Db, Exec, UserCtx } from './base';
 import { findOrCreateCompanySync } from './companies';
 import { detectDedupeCandidates, rejectDedupeCandidate } from './opportunityDedupe';
@@ -62,6 +63,10 @@ export type OpportunityView = OpportunityRow & {
   /** Issue #264: true when a 'capture' activity exists on this opportunity's timeline, so the
    *  client knows whether re-deriving a description from it is even possible. */
   hasCapturedPage: boolean;
+  /** The newest timeline entry's time that is not after now, not counting the opportunity's own
+   *  creation; null when there is no such entry (https://github.com/bgoleno/opportun/issues/25,
+   *  activities.ts lastActivityAt). */
+  lastActivityAt: number | null;
 };
 
 export interface CreateOpportunityInput {
@@ -237,6 +242,14 @@ function withHasCapturedPage<T extends { id: string }>(
   return { ...row, hasCapturedPage: captured.has(row.id) };
 }
 
+/** A view-only derived field (issue #25): what the pipeline card dates a non-new card by. */
+function withLastActivityAt<T extends { id: string }>(
+  row: T,
+  latest: Map<string, number>,
+): T & { lastActivityAt: number | null } {
+  return { ...row, lastActivityAt: latest.get(row.id) ?? null };
+}
+
 function withPossibleDuplicates<T extends { id: string; possibleDuplicateOf: string | null }>(
   row: T,
   reverse: Map<string, string[]>,
@@ -253,11 +266,14 @@ function withPossibleDuplicates<T extends { id: string; possibleDuplicateOf: str
 async function getViewSync(exec: Exec, ctx: UserCtx, id: string): Promise<OpportunityView> {
   const row = await selectView(exec).where(owned(ctx, id)).get();
   if (row === undefined) throw notFound();
-  return withDescriptionAuthorship(
-    withHasCapturedPage(
-      withPossibleDuplicates(row, await reverseDuplicatesOf(exec, ctx, [id])),
-      await capturedOpportunityIds(exec, ctx, [id]),
+  return withLastActivityAt(
+    withDescriptionAuthorship(
+      withHasCapturedPage(
+        withPossibleDuplicates(row, await reverseDuplicatesOf(exec, ctx, [id])),
+        await capturedOpportunityIds(exec, ctx, [id]),
+      ),
     ),
+    await lastActivityAt(exec, ctx, [id]),
   );
 }
 
@@ -346,8 +362,12 @@ export async function listOpportunities(
   const ids = rows.map((r) => r.id);
   const reverse = await reverseDuplicatesOf(db, ctx, ids);
   const captured = await capturedOpportunityIds(db, ctx, ids);
+  const latest = await lastActivityAt(db, ctx, ids);
   const items = rows.map((r) =>
-    withDescriptionAuthorship(withHasCapturedPage(withPossibleDuplicates(r, reverse), captured)),
+    withLastActivityAt(
+      withDescriptionAuthorship(withHasCapturedPage(withPossibleDuplicates(r, reverse), captured)),
+      latest,
+    ),
   );
   const total =
     (

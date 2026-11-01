@@ -4,7 +4,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import type { OpportunityView } from '@/lib/opportunities';
+import { formatDate, type OpportunityView } from '@/lib/opportunities';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { KanbanCard } from './KanbanCard';
 import type { StageFlow } from '@/components/stage/useStageFlow';
@@ -48,10 +48,14 @@ function opp(
     possibleDuplicates: [],
     descriptionIsUserWritten: false,
     hasCapturedPage: false,
+    lastActivityAt: null,
     createdAt: NOW,
     updatedAt,
   } as OpportunityView;
 }
+
+/** When the fake server records a move: the stage row the move writes is its newest activity. */
+const MOVED_AT = NOW + 5 * 86_400_000;
 
 const FIXTURE = [
   opp('opp-1', 'Acme', 'Staff PM', 'discovered', NOW - 1, 0),
@@ -68,6 +72,7 @@ function routes(stage?: (call: ApiCall) => unknown, reorder?: (call: ApiCall) =>
     const current = items.find((o) => o.id === id);
     if (current === undefined) return { status: 404, body: { error: { code: 'not_found' } } };
     current.stage = (call.body as { to: OpportunityStage }).to;
+    current.lastActivityAt = MOVED_AT;
     return { ...current };
   };
   const reorderOk = (call: ApiCall) => {
@@ -621,5 +626,64 @@ describe('manual order within a column (issue #240)', () => {
     );
     expect(await screen.findByText('Order not saved')).toBeInTheDocument();
     expect(reorderCalls(api.calls)).toHaveLength(1);
+  });
+});
+
+// One date per card (https://github.com/bgoleno/opportun/issues/25).
+describe('card date (#25)', () => {
+  const flow = {
+    dismiss: () => {},
+    move: () => {},
+    pending: null,
+    close: () => {},
+  } as unknown as StageFlow;
+  const LAST = NOW - 10 * 86_400_000;
+
+  const card = (over: Partial<OpportunityView>) => {
+    renderWithProviders(
+      <KanbanCard
+        opp={{ ...opp('o1', 'Soylent', 'Staff Product Manager', 'interested'), ...over }}
+        selected={false}
+        dueAt={undefined}
+        flow={flow}
+        onSelect={() => {}}
+      />,
+    );
+    return screen.findByRole('article');
+  };
+
+  /** The card's one date as it reads, label included, e.g. "Added Oct 9"; it must be the only one. */
+  function dateLine(el: HTMLElement): string | null {
+    const times = el.querySelectorAll('time');
+    expect(times).toHaveLength(1);
+    return times[0]!.parentElement!.textContent;
+  }
+
+  it('a New card shows when it was added, even once it has activity', async () => {
+    const el = await card({ stage: 'discovered', lastActivityAt: LAST });
+    expect(dateLine(el)).toBe(`Added ${formatDate(NOW)}`);
+  });
+
+  it('a card in any other column shows its newest activity date', async () => {
+    const el = await card({ stage: 'interested', lastActivityAt: LAST });
+    expect(dateLine(el)).toBe(`Last activity ${formatDate(LAST)}`);
+    expect(el.querySelector('time')).toHaveAttribute('datetime', new Date(LAST).toISOString());
+  });
+
+  it('a card with no activity yet shows when it was added, labelled as that', async () => {
+    const el = await card({ stage: 'applied', lastActivityAt: null });
+    expect(dateLine(el)).toBe(`Added ${formatDate(NOW)}`);
+  });
+
+  it('updates after a move, with no reload', async () => {
+    const { user } = await renderBoard();
+    const before = within(column('Applied')).getByRole('article', { name: /Initech/ });
+    expect(dateLine(before)).toBe(`Added ${formatDate(NOW)}`);
+    await user.click(within(before).getByRole('button', { name: 'Move Initech: Director' }));
+    await user.click(
+      within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'In process' }),
+    );
+    const after = await within(column('In process')).findByRole('article', { name: /Initech/ });
+    await waitFor(() => expect(dateLine(after)).toBe(`Last activity ${formatDate(MOVED_AT)}`));
   });
 });
