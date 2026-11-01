@@ -12,7 +12,12 @@ import type { UserCtx } from '../repos/base';
 import { formatCsv } from './csv';
 import { OPPORTUNITY_COLUMNS } from './importer';
 
-export const EXPORT_FORMAT = 'opportun-export/1';
+/**
+ * export.json's format. 2 since issue https://github.com/bgoleno/opportun/issues/22: the network's
+ * table is keyed network_contacts (its table name), where format 1 keyed it contacts. Nothing
+ * else in the file changed, and nothing in the app reads export.json back.
+ */
+export const EXPORT_FORMAT = 'opportun-export/2';
 
 /** Tables with a user_id that are deliberately left out, and why. */
 export const EXPORT_EXCLUDED_TABLES: readonly string[] = [

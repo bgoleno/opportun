@@ -135,13 +135,15 @@ const SEED: [table: string, rows: Row[]][] = [
   ],
   [
     'communications',
-    [
-      ['m-1', U1, 'c-1', 'o-1'],
-      ['m-2', U1, 'c-2', null],
-      ['m-3', U1, null, null],
-      ['m-4', U2, 'c-3', null],
-      ['m-5', U1, 'c-1', null],
-    ].map(([id, user, contact, opp]) => ({
+    (
+      [
+        ['m-1', U1, 'c-1', 'o-1'],
+        ['m-2', U1, 'c-2', null],
+        ['m-3', U1, null, null],
+        ['m-4', U2, 'c-3', null],
+        ['m-5', U1, 'c-1', null],
+      ] as [string, string, string | null, string | null][]
+    ).map(([id, user, contact, opp]) => ({
       id,
       user_id: user,
       channel: 'gmail',

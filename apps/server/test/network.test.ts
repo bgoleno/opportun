@@ -233,7 +233,12 @@ describe('/api/v1/contacts alias', () => {
   type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
 
   /** The same request on both paths; both answers must match. Returns the /network one. */
-  async function same(c: TestClient, method: Method, suffix = '', payload?: object) {
+  async function same(
+    c: TestClient,
+    method: Method,
+    suffix = '',
+    payload?: Record<string, unknown>,
+  ) {
     const ask = (base: string) =>
       c.request({ method, url: `${base}${suffix}`, ...(payload === undefined ? {} : { payload }) });
     const viaOld = await ask(OLD);
