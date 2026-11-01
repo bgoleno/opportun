@@ -16,10 +16,30 @@
 //
 // SECOND, THEY ASSERT SHAPE, NOT A BOUND. Both sizes are measured moments apart, so whatever
 // is left of the load affects both.
+//
+// THIRD, THEY TIME THE MAIN THREAD ONLY (issue #41). process.cpuUsage counts every thread of
+// the process, including V8's garbage collector and compiler threads, which run beside the
+// measured code and do not run evenly: a probe counted 416 ms of process CPU against an idle
+// main thread while a Worker spun. Under heavy load pgSnippet's scan read 11.0x at a factor of
+// 4, and helper time landing unevenly on the large side is the likely cause (inferred, never
+// reproduced under that load). process.threadCpuUsage counts only the calling thread, the one
+// running the work, so helper threads cannot move the ratio; scaling.test.ts builds that state.
 
-/** Process CPU time used so far, in milliseconds. */
-function cpuMs(): number {
-  const { user, system } = process.cpuUsage();
+/**
+ * The clock every CPU measurement here reads, named in each failure message.
+ *
+ * process.threadCpuUsage exists from Node 22.19 (and 23.9). package.json allows any Node 22, so
+ * an older 22.x falls back to the process-wide clock: the measurements still work there, with
+ * the helper-thread noise this issue removed. CI resolves .nvmrc's 22 to the latest 22.x.
+ */
+// The typings declare threadCpuUsage unconditionally; at runtime it can be missing.
+export const CPU_CLOCK =
+  typeof process.threadCpuUsage === 'function' ? 'process.threadCpuUsage' : 'process.cpuUsage';
+
+/** CPU time used so far, by the main thread where the runtime can say, in milliseconds. */
+export function cpuMs(): number {
+  const { user, system } =
+    CPU_CLOCK === 'process.threadCpuUsage' ? process.threadCpuUsage() : process.cpuUsage();
   return (user + system) / 1000;
 }
 
@@ -76,6 +96,11 @@ export interface LinearCheck {
  * per doubling (roughly n^1.3, steady from 128 KB to 4 MB), so a 4x input honestly costs about
  * 6.5x. A tighter bound would fail correct code. Quadratic growth at a factor of 4 is 16x, well
  * clear of the 10x allowed here, so the regression worth catching is still caught.
+ *
+ * Re-measured on the main-thread clock (issue #41): five isolated runs of pgSnippet's full scan
+ * at a load average near 10 on a 10-core host read 5.5 to 6.8x, still inside the limit. The old
+ * process-wide clock read 4.2 to 5.5x in the same session, lower only because helper-thread time
+ * roughly doubled the small side's reading, which dilutes a ratio when the machine is quiet.
  */
 export function expectLinear({
   small,
@@ -88,11 +113,17 @@ export function expectLinear({
   small(); // warm the JIT on both paths before either is timed
   large();
   // Repetitions come from the small side, the one at risk of being too fast to measure.
+  //
+  // 20 ms per batch is enough to measure and is deliberately not longer (issue #41). Each size
+  // counts its fastest of `runs` batches, so one disturbed batch cannot fail the check: every
+  // large batch has to be inflated. A longer batch only averages within itself, which does not
+  // help against that, and it multiplies the cost: pgSnippet's large side is about 100 ms a
+  // call, five times over, per extra rep.
   const { reps } = perIterationMs(small, 20);
   const smallMs = fastestBatchMs(runs, reps, small);
   const largeMs = fastestBatchMs(runs, reps, large);
   const ratio = largeMs / Math.max(smallMs, 0.001);
-  const detail = `${label}: ${smallMs.toFixed(2)} ms at 1x, ${largeMs.toFixed(2)} ms at ${String(factor)}x over ${String(reps)} reps (CPU ratio ${ratio.toFixed(1)})`;
+  const detail = `${label}: ${smallMs.toFixed(2)} ms at 1x, ${largeMs.toFixed(2)} ms at ${String(factor)}x over ${String(reps)} reps (CPU ratio ${ratio.toFixed(1)}, clock ${CPU_CLOCK})`;
   if (ratio > factor * 2.5) {
     throw new Error(`${detail}; expected about ${String(factor)}x, so this is superlinear`);
   }
