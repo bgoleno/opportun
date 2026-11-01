@@ -224,10 +224,12 @@ either opportunity cannot re-propose a pair the user already rejected.
   input_tokens, output_tokens, est_cost, duration_ms, status, error. The cost ledger
   (FR-A5) is an aggregate over this table.
 
-### 4.6 Contacts and communications
+### 4.6 Network and communications
 
-- **contacts**: id, user_id, name, emails (JSON), linkedin_url, current_company_id,
-  history (JSON), strength, notes, source (`manual` | `linkedin_export` | `capture`).
+- **network_contacts** (one row per contact in the user's network; `contacts` until issue
+  [#22](https://github.com/bgoleno/opportun/issues/22)): id, user_id, name, emails (JSON),
+  linkedin_url, current_company_id, history (JSON), strength, notes, source (`manual` |
+  `linkedin_export` | `capture`), tags (JSON).
 - **communications**: id, user_id, channel (`gmail` | `apple_mail` | `linkedin`),
   external_id (unique per channel for idempotent sync), thread_key, from, to (JSON),
   subject, snippet, body_ref (legacy only: an attachment pointer on rows ingested
@@ -552,7 +554,8 @@ Information architecture (FR-U):
   triaged since there is nothing left to decide, for ones already accepted or
   dismissed; company suggestion queue (accept/deny with fit rationale, FR-D8),
   sources, runs, prompt editor with version diff (FR-U6).
-- **Contacts** `/contacts`, **Settings** `/settings` (account, security, AI
+- **Network** `/network` (one contact at `/network/:id`; the old `/contacts` paths
+  redirect here), **Settings** `/settings` (account, security, AI
   providers + per-task models + budget, integrations, import/export, jobs, audit).
 
 SPA served by the same origin as the API; no third-party fonts or CDNs (CSP stays

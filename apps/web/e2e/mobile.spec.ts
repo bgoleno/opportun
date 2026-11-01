@@ -18,7 +18,7 @@ const USER_ROUTES = [
   '/discovery/sources',
   '/resumes',
   '/inbox',
-  '/contacts',
+  '/network',
   '/settings',
   '/settings/account',
   '/settings/security',

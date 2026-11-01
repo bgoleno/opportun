@@ -156,7 +156,7 @@ async function buildSource(): Promise<Source> {
     ['opportunity', 'opportunities', 'title', 'description_md'],
     ['activity', 'activities', 'title', 'body_md'],
     ['communication', 'communications', 'subject', 'snippet'],
-    ['contact', 'contacts', 'name', 'notes'],
+    ['contact', 'network_contacts', 'name', 'notes'],
   ];
   for (const [kind, table, a, b] of indexed) {
     for (const r of sqlite

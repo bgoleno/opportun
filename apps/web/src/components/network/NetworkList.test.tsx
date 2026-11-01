@@ -2,7 +2,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
-import { ContactList } from './ContactList';
+import { NetworkList } from './NetworkList';
 import type { Contact } from './api';
 
 const TOTAL = 1754;
@@ -40,14 +40,14 @@ function paged(search: URLSearchParams) {
 
 function bootContacts() {
   return mockApi({
-    'GET /contacts': (call: ApiCall) => paged(new URLSearchParams(call.search)),
+    'GET /network': (call: ApiCall) => paged(new URLSearchParams(call.search)),
   });
 }
 
-describe('ContactList pagination (issue #207)', () => {
+describe('NetworkList pagination (issue #207)', () => {
   it('shows the first page with its position and a page count, not stuck at 200', async () => {
     bootContacts();
-    renderWithProviders(<ContactList />);
+    renderWithProviders(<NetworkList />);
     expect(await screen.findByText(/Showing 1–200 of 1754\./)).toBeInTheDocument();
     expect(screen.getByText('Page 1 of 9')).toBeInTheDocument();
     expect(screen.getByRole('row', { name: /Contact 0000/ })).toBeInTheDocument();
@@ -57,7 +57,7 @@ describe('ContactList pagination (issue #207)', () => {
   it('pages forward and back with the on-screen controls', async () => {
     const user = userEvent.setup();
     bootContacts();
-    renderWithProviders(<ContactList />);
+    renderWithProviders(<NetworkList />);
     await screen.findByText(/Showing 1–200 of 1754\./);
 
     await user.click(screen.getByRole('button', { name: 'Next page' }));
@@ -72,7 +72,7 @@ describe('ContactList pagination (issue #207)', () => {
   it('jumps to the last page, which holds the remainder, not a full 200', async () => {
     const user = userEvent.setup();
     bootContacts();
-    renderWithProviders(<ContactList />);
+    renderWithProviders(<NetworkList />);
     await screen.findByText(/Showing 1–200 of 1754\./);
 
     await user.click(screen.getByRole('button', { name: 'Last page' }));
@@ -91,11 +91,11 @@ describe('ContactList pagination (issue #207)', () => {
   it('pages with the keyboard: n, p, Home and End', async () => {
     const user = userEvent.setup();
     bootContacts();
-    renderWithProviders(<ContactList />);
+    renderWithProviders(<NetworkList />);
     await screen.findByText(/Showing 1–200 of 1754\./);
     // Focus must be outside the search input, or useHotkeys ignores the keystroke (never
     // steals a key while typing).
-    await user.click(screen.getByRole('table', { name: 'Contacts' }));
+    await user.click(screen.getByRole('table', { name: 'Network' }));
 
     await user.keyboard('n');
     expect(await screen.findByText(/Showing 201–400 of 1754\./)).toBeInTheDocument();
@@ -112,7 +112,7 @@ describe('ContactList pagination (issue #207)', () => {
 
   it('does not page past either end', async () => {
     bootContacts();
-    renderWithProviders(<ContactList />);
+    renderWithProviders(<NetworkList />);
     await screen.findByText(/Showing 1–200 of 1754\./);
     expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'First page' })).toBeDisabled();
@@ -120,26 +120,26 @@ describe('ContactList pagination (issue #207)', () => {
 
   it('shows no pager at all when everything fits on one page', async () => {
     const { calls } = mockApi({
-      'GET /contacts': { items: [contact(0), contact(1)], total: 2 },
+      'GET /network': { items: [contact(0), contact(1)], total: 2 },
     });
-    renderWithProviders(<ContactList />);
+    renderWithProviders(<NetworkList />);
     await screen.findByText(/Showing 1–2 of 2\./);
-    expect(screen.queryByRole('navigation', { name: 'Contacts pages' })).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'Network pages' })).toBeNull();
     expect(calls).toHaveLength(1);
   });
 
   it('a search resets to the first page, not wherever paging left off', async () => {
     const user = userEvent.setup();
     const { calls } = mockApi({
-      'GET /contacts': (call: ApiCall) => paged(new URLSearchParams(call.search)),
+      'GET /network': (call: ApiCall) => paged(new URLSearchParams(call.search)),
     });
-    renderWithProviders(<ContactList />);
+    renderWithProviders(<NetworkList />);
     await screen.findByText(/Showing 1–200 of 1754\./);
 
     await user.click(screen.getByRole('button', { name: 'Last page' }));
     await screen.findByText(/Showing 1601–1754 of 1754\./);
 
-    await user.type(screen.getByLabelText('Search contacts'), 'Contact 0005');
+    await user.type(screen.getByLabelText('Search your network'), 'Contact 0005');
     // Exactly one match ("Contact 0005"), so the reset lands on a real first page, not an
     // empty one left over from the old query's last page.
     expect(await screen.findByText(/Showing 1–1 of 1\./)).toBeInTheDocument();
@@ -158,7 +158,7 @@ describe('ContactList pagination (issue #207)', () => {
       c.name.includes('0'),
     );
     const { calls } = mockApi({
-      'GET /contacts': (call: ApiCall) => {
+      'GET /network': (call: ApiCall) => {
         const search = new URLSearchParams(call.search);
         const q = search.get('q');
         const offset = Number(search.get('offset') ?? '0');
@@ -166,9 +166,9 @@ describe('ContactList pagination (issue #207)', () => {
         return { items: rows.slice(offset, offset + PAGE_SIZE), total: rows.length };
       },
     });
-    renderWithProviders(<ContactList />);
+    renderWithProviders(<NetworkList />);
     await screen.findByText(/Showing 1–200 of 1754\./);
-    await user.type(screen.getByLabelText('Search contacts'), '0');
+    await user.type(screen.getByLabelText('Search your network'), '0');
     await screen.findByText((text) => text.includes(`of ${matches.length}.`));
 
     await user.click(screen.getByRole('button', { name: 'Next page' }));

@@ -14,7 +14,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { unzipSync } from 'fflate';
 import { z } from 'zod';
 import { withTransaction, type Db } from '../db/client';
-import { communications, companies, contacts, jobs } from '../db/schema';
+import { communications, companies, networkContacts, jobs } from '../db/schema';
 import { ingestLookbackDays } from '../adapters/gmail';
 import { enqueueClassify } from '../jobs/gmailSync';
 import type { JobHandler } from '../jobs/registry';
@@ -366,8 +366,8 @@ class ContactIndex {
     }
     for (const row of await db
       .select()
-      .from(contacts)
-      .where(eq(contacts.userId, ctx.userId))
+      .from(networkContacts)
+      .where(eq(networkContacts.userId, ctx.userId))
       .all()) {
       index.put(row);
     }

@@ -535,7 +535,7 @@ const INDEXED: Record<SearchKind, string> = {
   opportunity: 'opportunities',
   activity: 'activities',
   communication: 'communications',
-  contact: 'contacts',
+  contact: 'network_contacts',
 };
 
 interface Rebuild {

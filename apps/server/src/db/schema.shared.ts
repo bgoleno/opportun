@@ -119,7 +119,7 @@ export const TABLE_EXPORTS = [
   'dismissalFeedback',
   'mailFilterRules',
   'taskRuns',
-  'contacts',
+  'networkContacts',
   'communications',
   'syncState',
   'jobs',

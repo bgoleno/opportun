@@ -20,7 +20,7 @@ async function createOpp(c: TestClient, title = 'Staff Platform Engineer') {
 async function createContact(c: TestClient, name = 'Jane Doe') {
   const res = await c.request({
     method: 'POST',
-    url: '/api/v1/contacts',
+    url: '/api/v1/network',
     payload: { name, company: 'Initech' },
   });
   expect(res.statusCode, res.body).toBe(201);
@@ -148,7 +148,7 @@ describe('referral asks', () => {
     await ask(a, first.id, { contactId: sam.id });
     await setStatus(a, r1, 'submitted');
 
-    const view = await a.request({ method: 'GET', url: `/api/v1/contacts/${jane.id}` });
+    const view = await a.request({ method: 'GET', url: `/api/v1/network/${jane.id}` });
     expect(view.statusCode).toBe(200);
     const referrals = view.json().referrals as Record<string, unknown>[];
     expect(referrals.map((r) => r.activityId).sort()).toEqual([r1, r2].sort());
@@ -165,7 +165,7 @@ describe('referral asks', () => {
       url: `/api/v1/opportunities/${first.id}/activities`,
       payload: { kind: 'referral', title: 'Manual', participants: [jane.id, 'Jane Doe'] },
     });
-    const again = await a.request({ method: 'GET', url: `/api/v1/contacts/${jane.id}` });
+    const again = await a.request({ method: 'GET', url: `/api/v1/network/${jane.id}` });
     expect(again.json().referrals).toHaveLength(2);
   });
 
@@ -185,7 +185,7 @@ describe('referral asks', () => {
       url: `/api/v1/opportunities/${oppA.id}/referrals`,
     });
     expect(listB.statusCode).toBe(404);
-    const viewB = await b.request({ method: 'GET', url: `/api/v1/contacts/${janeB.id}` });
+    const viewB = await b.request({ method: 'GET', url: `/api/v1/network/${janeB.id}` });
     expect(viewB.json().referrals).toEqual([]);
   });
 });
