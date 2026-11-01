@@ -116,23 +116,32 @@ export function MatchPanelView({
                   not the 45-75 character default a maximally wide line would blow past. */}
               <div className="grid max-w-[65ch] gap-4 text-sm">
                 <div className="grid gap-1">
-                  {/* The number itself lives in the page header now (MatchScoreHeader),
-                      where it is always visible; repeating it here, only reachable once this
-                      section is expanded, would just be the same digits twice on one page. */}
                   <p className="flex items-baseline gap-2">
                     <span className="font-medium">{band(view.report.score)}</span>
                     {view.stale ? <Badge variant="outline">May be outdated</Badge> : null}
                   </p>
-                  <meter
-                    className="h-2 w-full"
-                    min={0}
-                    max={100}
-                    low={50}
-                    high={70}
-                    optimum={100}
-                    value={view.report.score}
-                    aria-label="Match score"
-                  />
+                  {/* The bar's value is printed beside it, not only in the page header
+                      (https://github.com/bgoleno/opportun/issues/30): a bar alone cannot be
+                      read exactly, and the owner asked for the number here. It follows the
+                      meter in reading order, so a screen reader meets it in the same place.
+                      When stale, the badge above and the dated note below mark this whole
+                      block, the number included, exactly as they mark the bar. */}
+                  <div className="flex items-center gap-3">
+                    <meter
+                      className="h-2 min-w-0 flex-1"
+                      min={0}
+                      max={100}
+                      low={50}
+                      high={70}
+                      optimum={100}
+                      value={view.report.score}
+                      aria-label="Match score"
+                    />
+                    <span className="shrink-0 tabular-nums">
+                      <span className="font-medium">{view.report.score}</span>{' '}
+                      <span className="text-muted-foreground">/ 100</span>
+                    </span>
+                  </div>
                   {view.stale ? (
                     // A tailoring session changed the document after this was scored: say so,
                     // rather than showing the old score as if it still describes what is
