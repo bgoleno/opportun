@@ -4,7 +4,18 @@ import security from 'eslint-plugin-security';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 import { defineConfig } from 'eslint/config';
+import noArbitraryWidth from './apps/web/eslint/no-arbitrary-width.js';
 import noStretchedGridButton from './apps/web/eslint/no-stretched-grid-button.js';
+
+// This repository's own rules, as one plugin object. Flat config refuses two different objects
+// under one plugin name, and each rule below needs its own block (its own `files`), so both blocks
+// reference this same object.
+const opportun = {
+  rules: {
+    'no-arbitrary-width': noArbitraryWidth,
+    'no-stretched-grid-button': noStretchedGridButton,
+  },
+};
 
 const fsBan = {
   paths: [
@@ -152,9 +163,27 @@ export default defineConfig(
     // workspace package is reached by neither pnpm lint nor pnpm test (see ci.yml);
     // apps/web/src/components/ui/button-in-grid.test.tsx tests it through this config.
     files: ['apps/web/src/**/*.tsx'],
-    plugins: { opportun: { rules: { 'no-stretched-grid-button': noStretchedGridButton } } },
+    plugins: { opportun },
     rules: {
       'opportun/no-stretched-grid-button': 'error',
+    },
+  },
+  {
+    // https://github.com/bgoleno/opportun/issues/37: widths come from the layout tokens
+    // (docs/design.md section 9, "Layout widths"), so an arbitrary width value with a literal
+    // length (max-w-[70ch], w-[37rem], grid-cols-[1fr_21rem]) fails here, when it is written,
+    // instead of in the e2e width check in CI. The rule file
+    // (apps/web/eslint/no-arbitrary-width.js) says what it flags and the shapes it cannot see.
+    // Its own block, not a second rule in the block above: it covers .ts files too (a class
+    // constant built with cn()), and it skips components/ui/, the vendored primitives, which
+    // no-stretched-grid-button still checks. An exception that has to stay carries an
+    // eslint-disable-next-line with its reason, at the value. Tested through this config by
+    // apps/web/src/components/no-arbitrary-width.test.ts.
+    files: ['apps/web/src/**/*.{ts,tsx}'],
+    ignores: ['apps/web/src/components/ui/**'],
+    plugins: { opportun },
+    rules: {
+      'opportun/no-arbitrary-width': 'error',
     },
   },
   {

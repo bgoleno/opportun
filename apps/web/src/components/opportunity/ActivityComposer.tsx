@@ -82,6 +82,7 @@ export function ActivityComposer({ opportunityId }: { opportunityId: string }) {
         Add to timeline
       </h2>
       <FormError message={formError} />
+      {/* eslint-disable-next-line opportun/no-arbitrary-width -- the Type select's column beside the title field, sized to its options: a form column, not a layout width. */}
       <div className="grid gap-3 sm:grid-cols-[10rem_1fr]">
         <FormField label="Type">
           {(c) => (

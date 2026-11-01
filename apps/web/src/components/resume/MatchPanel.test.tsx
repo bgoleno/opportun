@@ -106,7 +106,8 @@ describe('MatchPanelView', () => {
     expect(reading).toContainElement(scoreRow());
     const weak = screen.getByRole('list', { name: 'Weak areas' });
     expect(reading).not.toContainElement(weak);
-    expect(weak).toHaveClass('grid-cols-[repeat(auto-fit,minmax(min(18rem,100%),1fr))]');
+    // The card grid of docs/design.md section 9 rule 2, as a named utility (index.css).
+    expect(weak).toHaveClass('grid', 'grid-cards');
     expect(reading).not.toContainElement(screen.getByRole('list', { name: 'Missing keywords' }));
   });
 
