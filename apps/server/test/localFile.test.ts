@@ -390,17 +390,19 @@ describe('concurrent applies to one local_file resume (#23)', () => {
       { find: 'Jane Doe', replace: 'Jane Q. Doe' },
     ];
     const barrier = holdAt('tailoring.apply', 2);
-    const responses = await Promise.all(edits.map((e) => applyEdit(a, sessionId, e)));
+    const outcomes = await Promise.all(
+      edits.map(async (edit) => ({ edit, res: await applyEdit(a, sessionId, edit) })),
+    );
     expect(barrier.arrived()).toBe(2);
-    expect(responses.map((r) => r.statusCode).sort()).toEqual([200, 409]);
-    const won = responses.findIndex((r) => r.statusCode === 200);
-    const lost = 1 - won;
+    expect(outcomes.map((o) => o.res.statusCode).sort()).toEqual([200, 409]);
+    const won = outcomes.find((o) => o.res.statusCode === 200)!;
+    const lost = outcomes.find((o) => o.res.statusCode === 409)!;
     // The loser retried against the winner's version, where its find text no longer is.
-    expect(responses[lost]!.json().error.code).toBe('edit_target_missing');
+    expect(lost.res.json().error.code).toBe('edit_target_missing');
     const live = await liveDocRef(app, resumeId);
     const text = await app.localFileStore.readText(ctx, live);
-    expect(text).toContain(edits[won]!.replace);
-    expect(text).not.toContain(edits[lost]!.replace);
+    expect(text).toContain(won.edit.replace);
+    expect(text).not.toContain(lost.edit.replace);
     expect(await versionIds(app, ctx)).toEqual([baseRef, live].sort());
   });
 

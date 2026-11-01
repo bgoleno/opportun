@@ -43,6 +43,14 @@ export { MatchReportSchema };
 /** How often a streaming reply is written back to the transcript. */
 const FLUSH_INTERVAL_MS = 750;
 
+/**
+ * How many times one apply tries to persist a new local_file version before answering 409
+ * resume_changed (https://github.com/bgoleno/opportun/issues/23). Each lost attempt means
+ * another apply did land, so N applies racing on one resume need at most N - 1 retries: three
+ * covers several suggestion cards clicked in quick succession without retrying forever.
+ */
+export const APPLY_ATTEMPTS = 3;
+
 const EditView = z.object({
   find: z.string(),
   replace: z.string(),
@@ -383,27 +391,35 @@ export async function tailoringRoutes(app: FastifyInstance): Promise<void> {
       const ctx = requireUser(req);
       // Both lookups are user-scoped: another user's session or resume is a 404.
       const session = await getSession(db, ctx, req.params.id);
-      const resume = await getResume(db, ctx, session.resumeId);
       const edits = req.body.edits.map(({ find, replace }) => ({ find, replace }));
-      const { docRef, results } = await storeFor(app, resume.store).applyEdits(
-        ctx,
-        resume.docRef,
-        edits,
-      );
-      // Unchanged for a store that mutates its document in place; a new ref for one whose
-      // written content is immutable per version (local_file, #284), which the store itself
-      // never writes to this row (ResumeEditOutcomeResult's own doc comment).
-      if (docRef !== resume.docRef) {
-        await racePoint('tailoring.apply');
-        await updateResumeDocRef(db, ctx, resume.id, docRef);
+      for (let attempt = 0; attempt < APPLY_ATTEMPTS; attempt++) {
+        // Read fresh on every attempt: a retry must start from the version that beat it.
+        const resume = await getResume(db, ctx, session.resumeId);
+        const { docRef, results } = await storeFor(app, resume.store).applyEdits(
+          ctx,
+          resume.docRef,
+          edits,
+        );
+        // Unchanged for a store that mutates its document in place; a new ref for one whose
+        // written content is immutable per version (local_file, #284), which the store itself
+        // never writes to this row (ResumeEditOutcomeResult's own doc comment).
+        if (docRef !== resume.docRef) {
+          await racePoint('tailoring.apply');
+          if (!(await updateResumeDocRef(db, ctx, resume.id, resume.docRef, docRef))) continue;
+        }
+        const appliedCount = results.filter((r) => r.outcome === 'applied').length;
+        await audit(db, 'resume.edits_applied', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { resumeId: resume.id, sessionId: session.id, count: edits.length, appliedCount },
+        });
+        return { results };
       }
-      const appliedCount = results.filter((r) => r.outcome === 'applied').length;
-      await audit(db, 'resume.edits_applied', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { resumeId: resume.id, sessionId: session.id, count: edits.length, appliedCount },
-      });
-      return { results };
+      throw new HttpError(
+        409,
+        'resume_changed',
+        'The resume changed while this edit was being applied. Try again.',
+      );
     },
   );
 

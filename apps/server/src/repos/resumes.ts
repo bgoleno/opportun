@@ -107,36 +107,59 @@ export async function getResume(db: Db, ctx: UserCtx, id: string): Promise<Resum
 }
 
 /**
- * Persists a ref the store (never this row) returned from applyEdits (#284). Also drops the
- * attachments row the OLD ref named, once the new one is in place, not before: a crash
- * between the two leaves a resume pointing at a still-valid old row (the applyEdits doc
- * comment's named "superseded content" case), never a dangling one. A no-op delete for
- * google_doc/reactive_resume, whose refs never match an attachments id.
+ * Persists a ref the store (never this row) returned from applyEdits (#284), as a
+ * compare-and-set on `fromRef`, the ref those edits were computed from. True when this call
+ * moved the resume from fromRef to docRef. Also drops the attachments row fromRef named, once
+ * the new one is in place, not before: a crash between the two leaves a resume pointing at a
+ * still-valid old row (the applyEdits doc comment's named "superseded content" case), never a
+ * dangling one. A no-op delete for google_doc/reactive_resume, whose refs never match an
+ * attachments id.
+ *
+ * False when the stored ref is no longer fromRef: another apply persisted its own version
+ * after this caller read the resume. Writing anyway would replace that version with one built
+ * from older text and silently drop its edits
+ * (https://github.com/bgoleno/opportun/issues/23). On false nothing live is touched: the
+ * resume row and the version it points at stay exactly as they are, and only `docRef`'s own
+ * row, a version nothing references, is dropped (rows only, never files: identical content
+ * shares one stored file, which attachmentSweep keeps while any row still names it). The
+ * caller re-reads and retries, or gives up with a 409.
  */
 export async function updateResumeDocRef(
   db: Db,
   ctx: UserCtx,
   id: string,
+  fromRef: string,
   docRef: string,
-): Promise<void> {
-  await withTransaction(db, async (tx) => {
-    const row = await tx
-      .select({ docRef: resumes.docRef })
-      .from(resumes)
-      .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
-      .get();
-    if (row === undefined) throw notFound();
-    await tx
+): Promise<boolean> {
+  return await withTransaction(db, async (tx) => {
+    const moved = await tx
       .update(resumes)
       .set({ docRef, updatedAt: Date.now() })
-      .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
-      .run();
-    if (row.docRef !== docRef) {
+      .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id), eq(resumes.docRef, fromRef)))
+      .returning({ id: resumes.id })
+      .get();
+    if (moved === undefined) {
+      const row = await tx
+        .select({ docRef: resumes.docRef })
+        .from(resumes)
+        .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
+        .get();
+      if (row === undefined) throw notFound();
+      if (row.docRef !== docRef) {
+        await tx
+          .delete(attachments)
+          .where(and(eq(attachments.userId, ctx.userId), eq(attachments.id, docRef)))
+          .run();
+      }
+      return false;
+    }
+    if (fromRef !== docRef) {
       await tx
         .delete(attachments)
-        .where(and(eq(attachments.userId, ctx.userId), eq(attachments.id, row.docRef)))
+        .where(and(eq(attachments.userId, ctx.userId), eq(attachments.id, fromRef)))
         .run();
     }
+    return true;
   });
 }
 
