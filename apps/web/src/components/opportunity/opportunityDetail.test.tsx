@@ -25,6 +25,7 @@ const OPP = {
   possibleDuplicates: [],
   descriptionIsUserWritten: false,
   hasCapturedPage: false,
+  lastActivityAt: null,
   createdAt: NOW - 10 * DAY,
   updatedAt: NOW - DAY,
 } as OpportunityView;
