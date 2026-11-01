@@ -14,30 +14,40 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { AppShell } from '@/components/AppShell';
 import type { User } from '@/lib/auth';
+import { layoutOf } from '@/lib/layout';
 import { ThemeProvider } from '@/lib/theme';
 import { routeTree } from '@/routeTree.gen';
 import { mockApi } from '@/test/render';
 
 describe('fluid routes', () => {
-  it('are exactly the boards and lists docs/design.md section 9 names', () => {
-    const router = createRouter({ routeTree, context: { queryClient: new QueryClient() } });
+  const router = createRouter({ routeTree, context: { queryClient: new QueryClient() } });
+
+  it('are declared exactly where docs/design.md section 9 says', () => {
     const fluid = Object.values(router.routesById)
       .filter((r) => r.options.staticData?.layout === 'fluid')
       .map((r) => r.id as string)
       .sort();
-    expect(fluid).toEqual([
-      '/contacts/',
-      '/discovery/',
-      '/discovery/decided',
-      '/inbox',
-      '/pipeline',
-    ]);
+    // Discovery declares it once, on its section route, for every tab.
+    expect(fluid).toEqual(['/contacts/', '/discovery', '/inbox', '/pipeline']);
+  });
+
+  it('make every Discovery tab fluid, and leave other views at page width', () => {
+    const at = (path: string) => layoutOf(router.matchRoutes(path));
+    for (const tab of ['', '/decided', '/companies', '/sources', '/prompts']) {
+      expect(at(`/discovery${tab}`), `/discovery${tab}`).toBe('fluid');
+    }
+    for (const path of ['/', '/resumes', '/settings/account', '/opportunities/x']) {
+      expect(at(path), path).toBe('page');
+    }
   });
 });
 
 const user: User = { id: 'u1', email: 'owner@example.com', displayName: 'Alex', isAdmin: false };
 
-/** AppShell around a small route tree: plain, fluid, and a layout route with one fluid tab. */
+/**
+ * AppShell around a small route tree: plain, fluid, and a fluid section whose tabs inherit its
+ * layout, one of them declaring page width for itself.
+ */
 async function contentBoxAt(path: string) {
   mockApi({ 'GET /settings/theme': { theme: 'auto' } });
   const root = createRootRoute({
@@ -50,7 +60,12 @@ async function contentBoxAt(path: string) {
     ),
   });
   const page = (text: string) => () => <p>{text}</p>;
-  const tabs = createRoute({ getParentRoute: () => root, path: '/tabs', component: Outlet });
+  const tabs = createRoute({
+    getParentRoute: () => root,
+    path: '/tabs',
+    staticData: { layout: 'fluid' },
+    component: Outlet,
+  });
   const router = createRouter({
     routeTree: root.addChildren([
       createRoute({ getParentRoute: () => root, path: '/plain', component: page('Plain') }),
@@ -61,13 +76,13 @@ async function contentBoxAt(path: string) {
         component: page('Wide'),
       }),
       tabs.addChildren([
+        createRoute({ getParentRoute: () => tabs, path: '/', component: page('Board tab') }),
         createRoute({
           getParentRoute: () => tabs,
-          path: '/',
-          staticData: { layout: 'fluid' },
-          component: page('Board tab'),
+          path: '/settings',
+          staticData: { layout: 'page' },
+          component: page('Form tab'),
         }),
-        createRoute({ getParentRoute: () => tabs, path: '/settings', component: page('Form tab') }),
       ]),
     ]),
     history: createMemoryHistory({ initialEntries: [path] }),
@@ -99,11 +114,11 @@ describe('AppShell content box', () => {
     expect(box).toHaveClass('w-full');
   });
 
-  it('goes by the deepest route, so one tab of a layout route can be fluid alone', async () => {
+  it("gives a section's tabs the layout the section declares", async () => {
     expect(await contentBoxAt('/tabs')).toHaveAttribute('data-layout', 'fluid');
   });
 
-  it('keeps the other tabs of that layout route at page width', async () => {
+  it('lets a tab that declares its own layout override its section', async () => {
     expect(await contentBoxAt('/tabs/settings')).toHaveAttribute('data-layout', 'page');
   });
 });
