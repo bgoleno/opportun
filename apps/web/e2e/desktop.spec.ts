@@ -257,11 +257,15 @@ const RESUME_TEXT = [
   `Northwind Labs, Staff Platform Engineer, 2021 to now. ${PARAGRAPH} ${PARAGRAPH}`,
 ].join('\n');
 
-/** An opportunity with a long job description and a long note on its timeline. */
-async function seededOpportunity(page: Page): Promise<string> {
+/**
+ * An opportunity with a long job description and a long note on its timeline. Its title carries
+ * `tag` (the test and width), because every seeded view belongs to one user and the server
+ * refuses a second opportunity with the same company and title as a duplicate.
+ */
+async function seededOpportunity(page: Page, tag: string): Promise<string> {
   const opp = await api<{ id: string }>(page, 'POST', '/api/v1/opportunities', {
     companyName: 'Northwind Labs',
-    title: 'Staff Platform Engineer',
+    title: `Staff Platform Engineer (${tag})`,
     descriptionMd: LONG_JD,
     sourceKind: 'manual',
   });
@@ -279,8 +283,8 @@ async function seededOpportunity(page: Page): Promise<string> {
  * and the conversation and report would need the model, so those four responses are stubbed
  * through page.route, as mobile.spec.ts stubs the inbox.
  */
-async function seededWorkspace(page: Page): Promise<string> {
-  const oppId = await seededOpportunity(page);
+async function seededWorkspace(page: Page, tag: string): Promise<string> {
+  const oppId = await seededOpportunity(page, tag);
   const base = await api<{ id: string }>(page, 'POST', '/api/v1/resumes', {
     docRef: 'e2eBaseResumeDoc01',
   });
@@ -382,7 +386,7 @@ for (const width of WIDTHS) {
       known(title, width);
       const { page, close } = await pageAt(browser, width, accounts.seed);
       try {
-        const id = await seededOpportunity(page);
+        const id = await seededOpportunity(page, `timeline ${width}`);
         await expectStandard(page, `/opportunities/${id}`, width, title);
       } finally {
         await close();
@@ -394,7 +398,7 @@ for (const width of WIDTHS) {
       known(title, width);
       const { page, close } = await pageAt(browser, width, accounts.seed);
       try {
-        const id = await seededOpportunity(page);
+        const id = await seededOpportunity(page, `details ${width}`);
         await page.goto(`/opportunities/${id}`);
         await page.getByRole('tab', { name: 'Details' }).click();
         await expect(page.getByText('What we are looking for')).toBeVisible();
@@ -410,7 +414,7 @@ for (const width of WIDTHS) {
       known(title, width);
       const { page, close } = await pageAt(browser, width, accounts.seed);
       try {
-        const id = await seededWorkspace(page);
+        const id = await seededWorkspace(page, `workspace ${width}`);
         await page.goto(`/resumes/${id}`);
         await expect(page.getByRole('list', { name: 'Conversation' })).toContainText(
           'Your platform work maps well to this role.',
