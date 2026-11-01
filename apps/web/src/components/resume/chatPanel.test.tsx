@@ -225,4 +225,31 @@ describe('ChatPanel conversation scrolling (issue #35)', () => {
     await waitFor(() => expect(screen.getByLabelText('Message')).toBeEnabled());
     expect(list.scrollTop).toBe(100);
   });
+
+  it('goes to the newest message when the reader sends one, even after scrolling up', async () => {
+    const user = userEvent.setup();
+    const { release } = stub([ev({ type: 'delta', text: 'Sure.' })], session([]));
+    renderWithProviders(<ChatPanel resumeId="r1" />);
+    const input = await screen.findByLabelText('Message');
+    const list = screen.getByRole('list', { name: 'Conversation' });
+    list.scrollTop = 100; // reading an earlier message
+    fireEvent.scroll(list);
+
+    layout.scrollHeight = 1200; // the message just sent, at the end
+    await user.type(input, 'One more change');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText('One more change')).toBeInTheDocument();
+    expect(list.scrollTop).toBe(1200);
+    release();
+  });
+
+  it('can be scrolled from the keyboard, so it takes focus', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(session([turn('user', 'Hi', NOW)])))),
+    );
+    renderWithProviders(<ChatPanel resumeId="r1" />);
+    expect(await screen.findByText('Hi')).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Conversation' })).toHaveAttribute('tabindex', '0');
+  });
 });
