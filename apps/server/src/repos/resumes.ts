@@ -114,11 +114,14 @@ export async function getResume(db: Db, ctx: UserCtx, id: string): Promise<Resum
  * attached to an opportunity. A no-op for a google_doc or reactive_resume ref, which never
  * matches an attachments id.
  *
- * Never a row any resume still names. One version row per resume is an invariant today (every
- * version is a fresh row), not a constraint: resumes.doc_ref has no unique index. This makes a
- * live resume's document safe by construction, not by that invariant (sec's suggestion on
- * https://github.com/bgoleno/opportun/pull/51). Callers run it after their own update or
- * delete of the resume row, in the same transaction, so that row no longer counts.
+ * Never a row any of the user's resumes still names. One version row per resume is an
+ * invariant today (every version is a fresh row), not a constraint: resumes.doc_ref has no
+ * unique index. This makes a live resume's document safe by construction, not by that
+ * invariant (sec's suggestion on https://github.com/bgoleno/opportun/pull/51). Only the user's
+ * resumes: another user can hold a doc_ref of their choosing (a Reactive Resume ref) and must
+ * not be able to block this user's cleanup by naming one of their version ids. Callers run it
+ * after their own update or delete of the resume row, in the same transaction, so that row no
+ * longer counts.
  */
 async function dropVersionRow(tx: Exec, ctx: UserCtx, ref: string): Promise<void> {
   await tx
@@ -132,7 +135,7 @@ async function dropVersionRow(tx: Exec, ctx: UserCtx, ref: string): Promise<void
           tx
             .select({ one: sql`1` })
             .from(resumes)
-            .where(eq(resumes.docRef, ref)),
+            .where(and(eq(resumes.userId, ctx.userId), eq(resumes.docRef, ref))),
         ),
       ),
     )

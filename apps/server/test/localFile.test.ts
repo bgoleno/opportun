@@ -686,6 +686,25 @@ describe('deleting a local_file resume (#43)', () => {
     expect(sharedBefore).not.toBeNull();
   });
 
+  it("another user's resume naming the same id does not keep this user's document", async () => {
+    // A Reactive Resume ref is whatever that user's own server confirms, so another user can
+    // hold a doc_ref equal to this user's version id. The guard must look at this user's
+    // resumes only, or that row would block this user's cleanup (sec, on #51).
+    const { app, a, b } = await boot();
+    const { shared, first, second } = await sharedDocument(app, a);
+    await insertResume(app.db, ctxFor(b), {
+      kind: 'base',
+      title: "Another user's resume",
+      store: 'reactive_resume',
+      docRef: shared,
+      opportunityId: null,
+      parentResumeId: null,
+    });
+    expect((await deleteVia(a, second.id)).json()).toEqual({ outcome: 'deleted' });
+    expect((await deleteVia(a, first.id)).json()).toEqual({ outcome: 'deleted' });
+    expect(await versionIds(app, ctxFor(a))).toEqual([]);
+  });
+
   it('archiving a submitted resume keeps its document, row and file', async () => {
     const { app, a } = await boot();
     const A = await tailoredSession(app, a);
