@@ -257,6 +257,24 @@ describe.runIf(sqliteOnly)('0038 network_contacts on SQLite', () => {
     Object.fromEntries(
       COMPARED.map((t) => [renamed(t), db.prepare(`SELECT * FROM "${name(t)}" ORDER BY id`).all()]),
     );
+  const promptIds = (db: Sqlite) =>
+    (db.prepare('SELECT id FROM prompts').all() as { id: string }[]).map((r) => r.id);
+  /**
+   * Row counts after the upgrade, less the system default prompts that migrations after 0038
+   * seed (0039_capture_job_prompt, https://github.com/bgoleno/opportun/issues/76): the upgrade
+   * runs the whole chain, and this test is about 0038 keeping rows, not about later seeds. Any
+   * new prompt row must be a system default (no user), or it is counted and fails.
+   */
+  const countsLessLaterSeeds = (db: Sqlite, before: string[]) => {
+    const added = (
+      db.prepare('SELECT id, user_id AS userId FROM prompts').all() as {
+        id: string;
+        userId: string | null;
+      }[]
+    ).filter((r) => !before.includes(r.id) && r.userId === null);
+    const out = counts(db);
+    return { ...out, prompts: (out.prompts ?? 0) - added.length };
+  };
   const searchRows = (db: Sqlite) =>
     db
       .prepare(
@@ -270,6 +288,7 @@ describe.runIf(sqliteOnly)('0038 network_contacts on SQLite', () => {
     const countsBefore = counts(before);
     const rowsBefore = contents(before, (t) => t);
     const searchBefore = searchRows(before);
+    const promptIdsBefore = promptIds(before);
     before.close();
     // The seed is what the comparison is about: make sure it is all there to lose.
     expect(countsBefore.network_contacts).toBe(4);
@@ -279,7 +298,7 @@ describe.runIf(sqliteOnly)('0038 network_contacts on SQLite', () => {
     const { sqlite } = openDatabase(dataDir);
     try {
       expect(tableNames(sqlite)).not.toContain('contacts');
-      expect(counts(sqlite)).toEqual(countsBefore);
+      expect(countsLessLaterSeeds(sqlite, promptIdsBefore)).toEqual(countsBefore);
       expect(contents(sqlite, renamed)).toEqual(rowsBefore);
       expect(searchRows(sqlite)).toEqual(searchBefore);
       expect(sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
@@ -366,6 +385,19 @@ describe.runIf(livePgUrl !== undefined)('0020 network_contacts on Postgres (live
     }
     return out;
   };
+  const promptIds = async (pool: pg.Pool) =>
+    (await query<{ id: string }>(pool, 'SELECT id FROM prompts')).map((r) => r.id);
+  /** As the SQLite leg: counts less the system default prompts later migrations seed (#76). */
+  const countsLessLaterSeeds = async (pool: pg.Pool, before: string[]) => {
+    const added = (
+      await query<{ id: string; userId: string | null }>(
+        pool,
+        'SELECT id, user_id AS "userId" FROM prompts',
+      )
+    ).filter((r) => !before.includes(r.id) && r.userId === null);
+    const out = await counts(pool);
+    return { ...out, prompts: (out.prompts ?? 0) - added.length };
+  };
   const searchRows = (pool: pg.Pool) =>
     query(
       pool,
@@ -406,13 +438,14 @@ describe.runIf(livePgUrl !== undefined)('0020 network_contacts on Postgres (live
         const countsBefore = await counts(pool);
         const rowsBefore = await contents(pool, (t) => t);
         const searchBefore = await searchRows(pool);
+        const promptIdsBefore = await promptIds(pool);
         expect(countsBefore.network_contacts).toBe(4);
         expect(countsBefore.communications).toBe(5);
 
         await migrateLockedPg(pool);
 
         expect(await tableNames(pool)).not.toContain('contacts');
-        expect(await counts(pool)).toEqual(countsBefore);
+        expect(await countsLessLaterSeeds(pool, promptIdsBefore)).toEqual(countsBefore);
         expect(await contents(pool, renamed)).toEqual(rowsBefore);
         expect(await searchRows(pool)).toEqual(searchBefore);
         // Postgres's own foreign_key_check: no row points at a parent that is not there.

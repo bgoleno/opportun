@@ -6,9 +6,10 @@
 // Order of work: the deterministic shape check (lib/captureRecognizers) runs first, so a feed,
 // search page or sign-in wall is refused (422 unrecognized_page) before any AI or database
 // work. A profile then upserts a contact (repos/contacts upsertCapturedProfile); a job
-// resolves to an opportunity through lib/captureResolve. capture.linkedin refines a LinkedIn
-// page's fields when AI is available; without it (no key, budget, provider error), and on a
-// site with no refine prompt, the deterministic reading is stored as is.
+// resolves to an opportunity through lib/captureResolve. When AI is available, capture.linkedin
+// refines a LinkedIn page's fields, and the site-neutral capture.job adds the location and pay of
+// an Indeed job (https://github.com/bgoleno/opportun/issues/76). Without AI (no key, budget,
+// provider error) the deterministic reading is stored as is.
 //
 // Since 2026-10-19 a job capture no longer lands in the review queue: it resolves to an
 // opportunity at `interested`, completing any pending lead for the same req instead of storing
@@ -18,6 +19,7 @@
 // C-1: the URL is provenance metadata. This route never fetches it, or anything else.
 import {
   AiUnavailableError,
+  JobCaptureOutputSchema,
   LinkedInCaptureOutputSchema,
   renderPrompt,
   runStructured,
@@ -75,6 +77,7 @@ const JobResponse = z.object({
 const CaptureResponse = z.union([ProfileResponse, JobResponse]);
 
 type Refined = z.infer<typeof LinkedInCaptureOutputSchema>;
+type JobRefined = z.infer<typeof JobCaptureOutputSchema>;
 
 /** A model-supplied single-line field: control characters flattened, trimmed, capped. */
 function field(value: string | null, max: number): string | null {
@@ -98,19 +101,25 @@ const pageUrlOf = (page: RecognizedPage): string =>
   page.kind === 'profile' ? page.profileUrl : page.jobUrl;
 
 /**
- * The refine prompt for each capture site that has one. `capture.linkedin` is written for
- * LinkedIn pages, so it never runs on another site's page: a site with no entry here is stored
- * as its recognizer read it, as if AI were unavailable. Indeed has none until there is a
- * site-neutral prompt (https://github.com/bgoleno/opportun/issues/73, out of scope there).
+ * The refine prompt for each capture site. `capture.linkedin` is written for LinkedIn pages, so
+ * it never runs on another site's page. Another site's job gets the site-neutral `capture.job`
+ * (https://github.com/bgoleno/opportun/issues/76), which reads only the location and pay: the
+ * title, company and description stay the site recognizer's. A site with no entry here is
+ * stored as its recognizer read it, as if AI were unavailable.
  */
-const REFINE_PROMPTS: ReadonlyMap<string, 'capture.linkedin'> = new Map([
+type RefineTask = 'capture.linkedin' | 'capture.job';
+const REFINE_PROMPTS: ReadonlyMap<string, RefineTask> = new Map<string, RefineTask>([
   ['linkedin', 'capture.linkedin'],
+  ['indeed', 'capture.job'],
 ]);
+
+type Refinement =
+  { task: 'capture.linkedin'; out: Refined } | { task: 'capture.job'; out: JobRefined };
 
 /**
  * The site's refine prompt over the page, or null when the site has none, AI is unavailable (no
- * prompt, no key, budget, provider error) or the model reads the page as a different kind than
- * the shape check did.
+ * prompt, no key, budget, provider error) or, for capture.linkedin, the model reads the page as a
+ * different kind than the shape check did. capture.job only ever reads a job.
  */
 async function refine(
   db: Db,
@@ -118,30 +127,37 @@ async function refine(
   page: RecognizedPage,
   title: string,
   text: string,
-): Promise<Refined | null> {
-  const promptName = REFINE_PROMPTS.get(page.siteId);
-  if (promptName === undefined) return null;
-  const prompt = await getActivePrompt(db, ctx, promptName);
+): Promise<Refinement | null> {
+  const task = REFINE_PROMPTS.get(page.siteId);
+  if (task === undefined || (task === 'capture.job' && page.kind !== 'job')) return null;
+  const prompt = await getActivePrompt(db, ctx, task);
   if (prompt === undefined) return null;
   const body =
     text.length > CAPTURE_MAX_TEXT ? `${text.slice(0, CAPTURE_MAX_TEXT)}\n[truncated]` : text;
-  let out: Refined;
+  const request = {
+    system: renderPrompt(prompt.body, {
+      page_url_untrusted: pageUrlOf(page),
+      page_title_untrusted: title,
+      page_untrusted: body,
+    }),
+    prompt: 'Read the captured page and return the result.',
+    promptId: prompt.id,
+  };
   try {
-    out = await runStructured(await buildAiDeps(db, ctx), promptName, {
-      system: renderPrompt(prompt.body, {
-        page_url_untrusted: pageUrlOf(page),
-        page_title_untrusted: title,
-        page_untrusted: body,
-      }),
-      prompt: 'Read the captured page and return the result.',
+    const deps = await buildAiDeps(db, ctx);
+    if (task === 'capture.job') {
+      const out = await runStructured(deps, task, { ...request, schema: JobCaptureOutputSchema });
+      return { task, out };
+    }
+    const out = await runStructured(deps, task, {
+      ...request,
       schema: LinkedInCaptureOutputSchema,
-      promptId: prompt.id,
     });
+    return out.kind === page.kind ? { task, out } : null;
   } catch (err) {
     if (err instanceof AiUnavailableError) return null;
     throw err;
   }
-  return out.kind === page.kind ? out : null;
 }
 
 export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void> {
@@ -180,7 +196,8 @@ export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void
       if (page.kind === 'unrecognized') {
         throw new HttpError(422, 'unrecognized_page', undefined, { reason: page.reason });
       }
-      const refined = await refine(db, ctx, page, title, text);
+      const refinement = await refine(db, ctx, page, title, text);
+      const refined = refinement?.task === 'capture.linkedin' ? refinement.out : null;
 
       if (page.kind === 'profile') {
         const slug = profileSlugOf(page.profileUrl) as string;
@@ -199,18 +216,33 @@ export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void
           kind: 'profile' as const,
           contactId: contact.id,
           created,
-          refined: refined !== null,
+          refined: refinement !== null,
         });
       }
 
       // Title and company come from the page (they are the lead's dedupe identity); the model
       // adds what the shape check does not read. sanitizePosting cleans all of it on insert.
+      //
+      // A capture.job site (Indeed, #76) keeps the model's location and pay only when the page
+      // text contains them (isGroundedIn, as profile fields), and its description is always
+      // the recognizer's: the composed text is already the posting and nothing else. LinkedIn
+      // job fields are deliberately left as they were, ungrounded: whether to ground them too is
+      // an open owner question (raised on #76), not an oversight here, and changing them would
+      // change LinkedIn results that #76 promises to keep.
+      const jobRefine = refinement?.task === 'capture.job' ? refinement.out : null;
+      const siteNeutral = REFINE_PROMPTS.get(page.siteId) === 'capture.job';
       const posting: NormalizedPosting = {
         company: page.company,
         title: page.title,
-        location: field(refined?.location ?? null, 300),
-        compNote: field(refined?.compNote ?? null, 500),
-        descriptionMd: refined?.descriptionMd?.trim() || page.descriptionMd,
+        location: siteNeutral
+          ? grounded(jobRefine?.location ?? null, 300, text)
+          : field(refined?.location ?? null, 300),
+        compNote: siteNeutral
+          ? grounded(jobRefine?.compNote ?? null, 500, text)
+          : field(refined?.compNote ?? null, 500),
+        descriptionMd: siteNeutral
+          ? page.descriptionMd
+          : refined?.descriptionMd?.trim() || page.descriptionMd,
         postingUrl: page.jobUrl,
         // `<site>:<jobId>`, the identity lib/captureSites reads back (design D20).
         externalId: `${page.siteId}:${page.jobId}`,
@@ -233,7 +265,7 @@ export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void
         kind: 'job' as const,
         resultId: resolved.resultId,
         duplicate: false,
-        refined: refined !== null,
+        refined: refinement !== null,
         opportunityId: resolved.opportunityId,
         stage: resolved.stageMovedTo,
       });

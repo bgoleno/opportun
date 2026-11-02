@@ -7,6 +7,13 @@ milestone's work was merged. Each links the implementation plan it was built fro
 
 ## Unreleased
 
+- **Indeed captures get their location and pay.** With an AI key, a job captured from Indeed now
+  gets the location and the pay the posting states, read by a new site-neutral prompt
+  (`capture.job`, added to the prompt list by an automatic upgrade step). A value is kept only
+  when the captured page itself contains it, so anything the posting does not say stays empty;
+  the title, company and description are still read from the page exactly as before. Without an
+  AI key nothing changes, and LinkedIn captures are unchanged
+  ([#76](https://github.com/bgoleno/opportun/issues/76)).
 - **The browser extension captures Indeed jobs.** On an Indeed job page
   (`indeed.com/viewjob?jk=...`), or an Indeed search with a job open on the right, **Capture
   this page** turns the job into an opportunity at Interested, exactly as a LinkedIn job does.
