@@ -7,6 +7,14 @@ milestone's work was merged. Each links the implementation plan it was built fro
 
 ## Unreleased
 
+- **LinkedIn job captures keep only what the page says.** With an AI key, a job captured from
+  LinkedIn now keeps the location and pay the model reads only when the captured page itself
+  contains them, as Indeed captures already do, and its description is the page's own text
+  rather than the model's rewrite of it. So a figure, a link or a location the posting never
+  showed can no longer end up on the opportunity. The LinkedIn prompt now asks for location and
+  pay copied exactly, updated by an automatic upgrade step; a prompt version you made yourself is
+  left as it is. Captures without an AI key, profile captures and Indeed captures are unchanged
+  ([#88](https://github.com/bgoleno/opportun/issues/88)).
 - **Indeed captures get their location and pay.** With an AI key, a job captured from Indeed now
   gets the location and the pay the posting states, read by a new site-neutral prompt
   (`capture.job`, added to the prompt list by an automatic upgrade step). A value is kept only

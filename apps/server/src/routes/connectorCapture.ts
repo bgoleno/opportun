@@ -8,8 +8,9 @@
 // work. A profile then upserts a contact (repos/contacts upsertCapturedProfile); a job
 // resolves to an opportunity through lib/captureResolve. When AI is available, capture.linkedin
 // refines a LinkedIn page's fields, and the site-neutral capture.job adds the location and pay of
-// an Indeed job (https://github.com/bgoleno/opportun/issues/76). Without AI (no key, budget,
-// provider error) the deterministic reading is stored as is.
+// an Indeed job (https://github.com/bgoleno/opportun/issues/76). On every site a model field is
+// kept only when the page text contains it, and a job's description is always the page's own
+// (#88). Without AI (no key, budget, provider error) the deterministic reading is stored as is.
 //
 // Since 2026-10-19 a job capture no longer lands in the review queue: it resolves to an
 // opportunity at `interested`, completing any pending lead for the same req instead of storing
@@ -220,29 +221,22 @@ export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void
         });
       }
 
-      // Title and company come from the page (they are the lead's dedupe identity); the model
-      // adds what the shape check does not read. sanitizePosting cleans all of it on insert.
-      //
-      // A capture.job site (Indeed, #76) keeps the model's location and pay only when the page
-      // text contains them (isGroundedIn, as profile fields), and its description is always
-      // the recognizer's: the composed text is already the posting and nothing else. LinkedIn
-      // job fields are deliberately left as they were, ungrounded: whether to ground them too is
-      // an open owner question (raised on #76), not an oversight here, and changing them would
-      // change LinkedIn results that #76 promises to keep.
-      const jobRefine = refinement?.task === 'capture.job' ? refinement.out : null;
-      const siteNeutral = REFINE_PROMPTS.get(page.siteId) === 'capture.job';
+      // Title, company and description come from the page: the first two are the lead's dedupe
+      // identity, and the description is the recognizer's reading of the page the user captured.
+      // The model adds only what the shape check does not read, the location and the pay, and
+      // keeps each only when the page text contains it (isGroundedIn, the check profile fields
+      // get). One rule for every site: Indeed since #76, LinkedIn since
+      // https://github.com/bgoleno/opportun/issues/88, where the owner decided its job fields get
+      // the same check. Before #88 a LinkedIn job stored the model's location, pay and Markdown
+      // description unchecked, so an invented figure or link could reach the stored posting.
+      // sanitizePosting cleans all of it on insert.
+      const jobRefine = refinement === null ? null : refinement.out;
       const posting: NormalizedPosting = {
         company: page.company,
         title: page.title,
-        location: siteNeutral
-          ? grounded(jobRefine?.location ?? null, 300, text)
-          : field(refined?.location ?? null, 300),
-        compNote: siteNeutral
-          ? grounded(jobRefine?.compNote ?? null, 500, text)
-          : field(refined?.compNote ?? null, 500),
-        descriptionMd: siteNeutral
-          ? page.descriptionMd
-          : refined?.descriptionMd?.trim() || page.descriptionMd,
+        location: grounded(jobRefine?.location ?? null, 300, text),
+        compNote: grounded(jobRefine?.compNote ?? null, 500, text),
+        descriptionMd: page.descriptionMd,
         postingUrl: page.jobUrl,
         // `<site>:<jobId>`, the identity lib/captureSites reads back (design D20).
         externalId: `${page.siteId}:${page.jobId}`,

@@ -155,6 +155,13 @@
       "when": 1793600000000,
       "tag": "0021_capture_job_prompt",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1793700000000,
+      "tag": "0022_capture_linkedin_verbatim",
+      "breakpoints": true
     }
   ]
 }
