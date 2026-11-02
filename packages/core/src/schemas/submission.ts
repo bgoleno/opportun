@@ -36,6 +36,35 @@ export const SUBMISSION_FAILURE_REASONS = [
 ] as const;
 export type SubmissionFailureReason = (typeof SUBMISSION_FAILURE_REASONS)[number];
 
+/**
+ * The resume snapshot of a live attempt (https://github.com/bgoleno/opportun/issues/115):
+ * `pending` while it is exported, `ready` when the file is stored, `unsupported` when the
+ * resume's store has no PDF to give (the user attaches a file themselves; text is never
+ * substituted), `failed` when the export failed and the user must act (share the document
+ * again, reconnect Google, or choose the resume again to retry). Separate from `status`: a
+ * failed export is not a failed application, so the draft and its answers stay.
+ */
+export const SUBMISSION_SNAPSHOT_STATES = ['pending', 'ready', 'unsupported', 'failed'] as const;
+export type SubmissionSnapshotState = (typeof SUBMISSION_SNAPSHOT_STATES)[number];
+
+/**
+ * Why there is no snapshot: `export_unsupported`, or the resume store's export failure code
+ * (DocumentExportFailure in apps/server/src/adapters/documentStore.ts), so the UI can say what
+ * to do. The server's type must stay assignable to this list.
+ */
+export const SUBMISSION_SNAPSHOT_ERRORS = [
+  'export_unsupported',
+  'unavailable',
+  'rate_limited',
+  'not_found',
+  'no_access',
+  'reauth_required',
+  'too_large',
+  'not_pdf',
+  'rejected',
+] as const;
+export type SubmissionSnapshotError = (typeof SUBMISSION_SNAPSHOT_ERRORS)[number];
+
 /** Who wrote an answer: the user, or an AI draft the user accepted. */
 export const SUBMISSION_ANSWER_SOURCES = ['user', 'ai_draft_accepted'] as const;
 export type SubmissionAnswerSource = (typeof SUBMISSION_ANSWER_SOURCES)[number];
@@ -79,6 +108,13 @@ export const SubmissionSchema = z.object({
   resumeSha256: z.string().nullable(),
   resumeTitle: z.string().nullable(),
   resumeStore: z.enum(RESUME_STORES).nullable(),
+  snapshotState: z.enum(SUBMISSION_SNAPSHOT_STATES),
+  /**
+   * The snapshot's attachments row (on the opportunity, GET /opportunities/:id/attachments has
+   * its filename, size and mime), or null when there is none or it was deleted.
+   */
+  resumeAttachmentId: IdSchema.nullable(),
+  snapshotError: z.enum(SUBMISSION_SNAPSHOT_ERRORS).nullable(),
   fields: SubmissionFieldsSchema,
   answers: SubmissionAnswersSchema,
   /**
