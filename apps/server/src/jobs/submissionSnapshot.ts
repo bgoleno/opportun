@@ -36,7 +36,7 @@ import {
   type DocumentExportResult,
   type DocumentStore,
 } from '../adapters/documentStore';
-import { withTransaction } from '../db/client';
+import { lockScope, withTransaction } from '../db/client';
 import type { Db } from '../db/client';
 import { applicationSubmissions, attachments, resumes } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
@@ -129,6 +129,10 @@ async function record(
     outcome.kind === 'ready' ? await services.storage.writeAttachment(outcome.result.bytes) : null;
   await racePoint('submissions.snapshot.beforeWrite');
   await withTransaction(db, async (tx) => {
+    // The attempt's lock, the one every write to an attempt takes (repos/submissionReview.ts
+    // submissionScope; sec on #129): a review or edit in flight sees this write after it, or
+    // runs after it. Spelled out here because that module imports this one.
+    await lockScope(tx, `submission:${row.id}`);
     const now = Date.now();
     let attachmentId: string | null = null;
     if (outcome.kind === 'ready' && stored !== null) {

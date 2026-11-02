@@ -746,3 +746,78 @@ describe('a newly chosen resume gets its own job with its full tries (tl on #131
     expect((await read(a, draft.id)).resumeSha256).toBe(sha(two));
   });
 });
+
+describe('review waits for the snapshot (POST /submissions/:id/review, wired on #131)', () => {
+  async function reviewNow(c: TestClient, id: string) {
+    const current = await c.request({ method: 'GET', url: `/api/v1/submissions/${id}` });
+    const { reviewDigest } = current.json<{ reviewDigest: string }>();
+    return await c.request({
+      method: 'POST',
+      url: `/api/v1/submissions/${id}/review`,
+      payload: { reviewDigest, acknowledged: true },
+    });
+  }
+
+  async function unchanged(app: FastifyInstance, id: string) {
+    const row = await app.db
+      .select()
+      .from(applicationSubmissions)
+      .where(eq(applicationSubmissions.id, id))
+      .get();
+    expect(row).toMatchObject({ status: 'draft', reviewedAt: null, reviewDigest: null });
+  }
+
+  it('is refused while the snapshot is pending, with nothing changed', async () => {
+    const { app, a } = await boot(ON);
+    const opp = await seedOpportunity(app, a);
+    const resume = await seedResume(app, a);
+    const draft = await createDraft(a, opp, resume.id); // its job not run yet
+    const res = await reviewNow(a, draft.id);
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json()).toMatchObject({ error: { code: 'snapshot_pending' } });
+    await unchanged(app, draft.id);
+  });
+
+  it('is refused while the snapshot has failed, then allowed once the resume is chosen again', async () => {
+    const { app, a } = await boot(ON);
+    const opp = await seedOpportunity(app, a);
+    const resume = await seedResume(app, a);
+    const draft = await createDraft(a, opp, resume.id);
+    google.fail = new DocumentExportError('no_access');
+    await app.jobs.drain();
+    const res = await reviewNow(a, draft.id);
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json()).toMatchObject({ error: { code: 'snapshot_failed' } });
+    await unchanged(app, draft.id);
+
+    google.fail = null;
+    expect((await patchResume(a, draft.id, resume.id)).statusCode).toBe(200);
+    await app.jobs.drain();
+    const again = await reviewNow(a, draft.id);
+    expect(again.statusCode, again.body).toBe(200);
+    expect(again.json()).toMatchObject({ status: 'reviewed', snapshotState: 'ready' });
+  });
+
+  it('is allowed when the snapshot is ready', async () => {
+    const { app, a } = await boot(ON);
+    const { id } = await readyDraft(app, a);
+    const res = await reviewNow(a, id);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ status: 'reviewed', snapshotState: 'ready' });
+  });
+
+  it('is allowed when the store has no PDF to give (unsupported, no hash)', async () => {
+    const { app, a } = await boot(ON);
+    const opp = await seedOpportunity(app, a);
+    const resume = await seedResume(app, a, 'local_file');
+    const draft = await createDraft(a, opp, resume.id);
+    await app.jobs.drain();
+    const res = await reviewNow(a, draft.id);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({
+      status: 'reviewed',
+      snapshotState: 'unsupported',
+      resumeSha256: null,
+    });
+  });
+});
