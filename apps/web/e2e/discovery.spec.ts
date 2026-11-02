@@ -105,6 +105,10 @@ test('discovery: a dismissed result gets an Unsuppress action in the Decided vie
   await choose(dismiss, 'Reason', 'Industry');
   await dismiss.getByRole('button', { name: 'Dismiss' }).click();
   await expect(dismiss).toBeHidden();
+  // The dialog closes before the request is sent (ReviewQueue.dismissGroup), so it says nothing
+  // about the dismiss having landed; the toast does. Navigating sooner cancels the page's wait
+  // for it (#139).
+  await expect(toasts(page).getByText('Dismissed', { exact: true })).toBeVisible();
 
   // The Decided view (#97) is where the unsuppress action (#96) lives, not the review queue:
   // it is already gone from there once decided (the assertion above already covers that).
@@ -137,6 +141,9 @@ test('discovery: follow a suggested company and see its job board detected', asy
   await expect(suggestion).toContainText('Builds developer platforms');
   await suggestion.getByRole('button', { name: 'Follow Pied Piper' }).click();
   await expect(suggestion).toBeHidden();
+  // The suggestion leaves the list before the follow is answered (optimistic); the toast says it
+  // landed. The reloads below would otherwise race the request (#139).
+  await expect(toasts(page).getByText('Following', { exact: true })).toBeVisible();
 
   // Following queues board detection; the fixture Greenhouse board answers the probe.
   const followed = page
