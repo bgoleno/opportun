@@ -1,9 +1,9 @@
 # Opportun Capture (browser extension)
 
 A Manifest V3 browser extension for Chrome (and Chromium browsers) and Firefox. When you are
-looking at a LinkedIn profile or job posting and click **Capture this page**, it sends that
-tab's visible text to **your own** Opportun server, which turns a profile into a contact and a
-job into a lead in your review queue (FR-C5).
+looking at a LinkedIn profile or job posting, or an Indeed job, and click **Capture this page**,
+it sends that tab's text to **your own** Opportun server, which turns a profile into a contact
+and a job into an opportunity (FR-C5).
 
 ## Compliance (C-1): why it works this way
 
@@ -13,17 +13,22 @@ fetches linkedin.com, and this extension is built so that it cannot be used as a
 - **Explicit click only.** Nothing runs until you open the popup and click Capture. There is no
   background worker, no content script and no timer; the manifest declares none (a unit test
   enforces it). The page is read by one injection (`activeTab` + `scripting`) into the tab you
-  clicked on, at the moment you clicked. The manifest grants host access to linkedin.com, but
-  only that click path ever uses it.
+  clicked on, at the moment you clicked. The manifest grants host access to linkedin.com and
+  indeed.com, but only that click path ever uses it.
 - **Pages you personally visit only.** It reads the tab you are already looking at, as
   rendered for you. It never opens, navigates, scrolls, clicks or reloads pages, never follows
-  links, and never reads other tabs. Tabs that are not on linkedin.com are not read at all.
+  links, and never reads other tabs. Tabs that are not on linkedin.com or indeed.com are not
+  read at all; which reader runs is decided from the tab's address alone.
 - **Your own server only.** The text goes to the Opportun server address you configure, with a
   device token you create there. There is no other destination: no analytics, no telemetry,
   no third-party service, no remote code (everything the extension runs is bundled; the
   default extension Content Security Policy is unchanged).
-- **No credentials.** The extension never sees or uses your LinkedIn password or session; it
-  reads text the browser already shows you.
+- **No credentials.** The extension never sees or uses your LinkedIn or Indeed password or
+  session; it reads text the browser already shows you.
+
+Indeed is captured the same way (C-2): the Opportun server never fetches indeed.com pages, so a
+job you are looking at reaches it only through this click, or as text you paste
+([#74](https://github.com/bgoleno/opportun/issues/74)).
 
 ## What is sent
 
@@ -43,6 +48,27 @@ body `{ url, title, text }`:
 
 The server decides what the page is. Feeds, search results, company pages, the sign-in wall
 and half-loaded pages are refused (`422 unrecognized_page`) and the popup tells you why.
+
+### Indeed
+
+Indeed jobs are read on `www.indeed.com` (and `indeed.com`) only, on a single job page
+(`/viewjob?jk=<jk>`) or in the search split view with a job open in the pane
+(`/jobs?...&vjk=<jk>`). Indeed's country sites are not read. The body differs from LinkedIn's,
+following the Indeed capture text contract
+(https://github.com/bgoleno/opportun/issues/73#issuecomment-6568000179):
+
+- `url`: always `https://www.indeed.com/viewjob?jk=<jk>`, for both layouts. A tab with no valid
+  job key (search results with no job open, a company page) is not read, and nothing is sent.
+- `title`: the job's title, read from the job itself. The tab title is never sent: in the split
+  view it names your search.
+- `text`: composed from named parts of the job, one per line: the title, the company, the
+  company's metadata lines (rating, location, work setting), the "Job details" block if there
+  is one, the line `Full job description`, then the description. Nothing else is sent: not the
+  site's navigation or account menu, the search form, the buttons, the results list or the
+  recommended jobs under the description.
+
+If the job's parts cannot be found (Indeed changed its page), the popup says Indeed's layout was
+not recognized and sends nothing. It never falls back to the whole page.
 
 ## Installing it normally
 
@@ -86,8 +112,8 @@ icon on its card.
 
 1. Open `about:debugging#/runtime/this-firefox`.
 2. Click **Load Temporary Add-on...** and pick `packages/extension/dist/firefox/manifest.json`.
-3. Firefox may grant the linkedin.com access only on request: open the Extensions menu (puzzle
-   icon), and allow Opportun Capture on linkedin.com if asked.
+3. Firefox may grant the linkedin.com and indeed.com access only on request: open the
+   Extensions menu (puzzle icon), and allow Opportun Capture on those sites if asked.
 
 Temporary add-ons are removed when Firefox restarts. For a permanent install, the add-on has
 to be signed by Mozilla (for example as an unlisted add-on via `web-ext sign`).
@@ -134,14 +160,21 @@ Use a test account or your own profile; check each item in Chrome and Firefox.
       server stopped: "Could not reach the server".
 - [ ] On a profile (`linkedin.com/in/<someone>/`) after it has loaded: "Contact added"; capture
       again: "Contact updated"; the contact appears in Opportun.
-- [ ] On a job page (`linkedin.com/jobs/view/<id>/`): "Job added to your review queue";
-      again: "already in your review queue".
+- [ ] On a job page (`linkedin.com/jobs/view/<id>/`): "Added to your pipeline as Interested.";
+      the opportunity appears in Opportun at Interested, not in the review queue.
 - [ ] On the jobs search view with a job selected (`/jobs/search/?currentJobId=<id>`): the job
-      is captured (same lead as its `/jobs/view/<id>/` page).
+      is captured (the same opportunity as its `/jobs/view/<id>/` page).
 - [ ] On the feed, a search results page and a company page: "Not captured" with the reason;
       nothing is created in Opportun.
-- [ ] On a non-LinkedIn tab (and on `chrome://` or `about:` pages): "Open a LinkedIn profile or
-      job page"; the browser's network panel for the popup shows no request.
+- [ ] On an Indeed job page (`indeed.com/viewjob?jk=<jk>`): "Added to your pipeline"; the
+      opportunity's posting link is `https://www.indeed.com/viewjob?jk=<jk>`.
+- [ ] On an Indeed search with a job open on the right (`/jobs?...&vjk=<jk>`): the same job and
+      the same result as its `/viewjob` page; nothing from the results list in the description.
+- [ ] On an Indeed search with no job open, and on a company page: "Open a single Indeed job";
+      no request.
+- [ ] On a tab that is neither LinkedIn nor Indeed (and on `chrome://` or `about:` pages): "Open
+      a LinkedIn profile or job page, or an Indeed job"; the browser's network panel for the
+      popup shows no request.
 - [ ] Signed out of LinkedIn on a profile URL: the sign-in message.
 - [ ] 31 captures within 15 minutes: the capture limit message with a wait time.
 - [ ] Inspect the popup (right-click > Inspect): the console shows no token, and the only
@@ -157,10 +190,12 @@ npx -y pnpm@9 --filter @opportun/extension typecheck
 npx -y pnpm@9 --filter @opportun/extension lint
 ```
 
-The logic lives in small, separately tested modules under `src/`: `extract.ts` (the one
-function injected into the tab; it must stay self-contained), `canonical.ts` and
+The logic lives in small, separately tested modules under `src/`: `extract.ts` (the functions
+injected into the tab, `extractPage` for LinkedIn and `extractIndeedJob` for Indeed; each must
+stay self-contained), `canonical.ts` and
 `normalize.ts` (URL rewrite and text normalization), `settings.ts`, `api.ts` (the request and
 response classification), `render.ts` (popup messages), `popupController.ts` (the popup with
 injected browser APIs) and `manifest.ts`. `popup.ts` only wires in the real `chrome.*` APIs.
-Test fixtures are synthetic pages mirroring the server's capture fixtures (no real people),
-and the extraction tests run the server's own recognizer on what the extension would send.
+Test fixtures are synthetic pages mirroring the server's capture fixtures (no real people,
+companies or job keys), and the extraction tests run the server's own recognizer on what the
+extension would send.

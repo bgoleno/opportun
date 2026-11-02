@@ -1,6 +1,7 @@
 // One line of feedback for the popup per Outcome. Pure, unit-tested. Takes no settings, so
 // it can never echo the token.
 import type { Outcome } from './api';
+import type { CaptureSiteId } from './canonical';
 
 export interface Rendered {
   tone: 'success' | 'info' | 'error';
@@ -10,8 +11,17 @@ export interface Rendered {
 const NOT_LOADED =
   'the page had not finished loading. Wait for it (scroll the profile or job description into view) and try again.';
 
-/** The server's refusal reasons (apps/server/src/lib/linkedinCapture.ts UnrecognizedReason). */
-const REASONS = new Map<string, string>([
+const siteLabel = (site: CaptureSiteId): string => (site === 'indeed' ? 'Indeed' : 'LinkedIn');
+
+/** An unclaimed host: `unsupported_site`, or `not_linkedin` from a server older than Indeed. */
+const NOT_A_SITE = 'this is not a site Opportun captures from.';
+
+/**
+ * The server's refusal reasons (apps/server/src/lib/linkedinCapture.ts UnrecognizedReason), worded
+ * for the site of the tab. A reason missing from a site's map falls back to the common one, then
+ * to the server's own code.
+ */
+const LINKEDIN_REASONS = new Map<string, string>([
   ['not_linkedin', 'this is not a LinkedIn page.'],
   [
     'unsupported_path',
@@ -28,6 +38,27 @@ const REASONS = new Map<string, string>([
   ['no_description', NOT_LOADED],
 ]);
 
+/** https://github.com/bgoleno/opportun/issues/74. Indeed captures jobs only. */
+const INDEED_REASONS = new Map<string, string>([
+  ['not_linkedin', NOT_A_SITE],
+  [
+    'unsupported_path',
+    'open a single Indeed job: a job page, or a search with a job open on the right. Search results and company pages are not captured.',
+  ],
+  ['no_title_company', NOT_LOADED],
+  ['no_description', NOT_LOADED],
+]);
+
+function refusalText(reason: string, site: CaptureSiteId): string | undefined {
+  const own = (site === 'indeed' ? INDEED_REASONS : LINKEDIN_REASONS).get(reason);
+  if (own !== undefined) return own;
+  if (reason === 'unsupported_site') return NOT_A_SITE;
+  if (reason === 'verification_wall') {
+    return `${siteLabel(site)} is showing a sign-in or verification page. Complete it in this tab, then try again.`;
+  }
+  return undefined;
+}
+
 /** Longest server-supplied string (error code, refusal reason) shown in the popup. */
 export const MAX_SERVER_STRING = 200;
 const bounded = (s: string): string => s.slice(0, MAX_SERVER_STRING);
@@ -43,7 +74,8 @@ function stageLabel(stage: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-export function renderOutcome(outcome: Outcome): Rendered {
+/** `site` is the site of the tab captured (LinkedIn when the outcome is not about a tab). */
+export function renderOutcome(outcome: Outcome, site: CaptureSiteId = 'linkedin'): Rendered {
   switch (outcome.kind) {
     case 'profile':
       return {
@@ -68,7 +100,7 @@ export function renderOutcome(outcome: Outcome): Rendered {
       return {
         tone: 'error',
         text: `Not captured: ${
-          REASONS.get(outcome.reason) ??
+          refusalText(outcome.reason, site) ??
           `the server did not recognize this page (${bounded(outcome.reason)}).`
         }`,
       };
@@ -108,8 +140,21 @@ export function renderOutcome(outcome: Outcome): Rendered {
       };
     case 'no_settings':
       return { tone: 'error', text: 'Save your server address and token first.' };
-    case 'not_linkedin':
-      return { tone: 'error', text: 'Open a LinkedIn profile or job page, then click Capture.' };
+    case 'unsupported_tab':
+      return {
+        tone: 'error',
+        text: 'Open a LinkedIn profile or job page, or an Indeed job, then click Capture.',
+      };
+    case 'not_a_posting':
+      return {
+        tone: 'error',
+        text: 'Open a single Indeed job (a job page, or a search with a job open on the right), then click Capture.',
+      };
+    case 'layout_unrecognized':
+      return {
+        tone: 'error',
+        text: `Not captured: ${siteLabel(site)}’s layout was not recognized, so nothing was sent. Reload the job and try again; if it keeps happening, the extension needs an update.`,
+      };
     case 'empty_page':
       return {
         tone: 'error',
