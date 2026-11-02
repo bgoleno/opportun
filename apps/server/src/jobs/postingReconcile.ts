@@ -34,7 +34,7 @@ import { descriptionFingerprint, isSystemWritten } from '../lib/postingFingerpri
 import { mergePostingText } from '../lib/postingMerge';
 import { findPosting, type BoardLookup, type BodyReader } from '../lib/postingSearch';
 import { sanitizePosting } from '../lib/postingSanitize';
-import { siteLabel } from '../lib/captureSites';
+import { siteLabel, siteOfLabel } from '../lib/captureSites';
 import { sourceLabel } from '../lib/sourceLabels';
 import { createActivity, listActivities, updateActivity } from '../repos/activities';
 import type { UserCtx } from '../repos/base';
@@ -68,15 +68,23 @@ export async function capturedPage(
   db: Db,
   ctx: UserCtx,
   opportunityId: string,
-): Promise<{ text: string; siteLabel: string } | null> {
+): Promise<{ text: string; siteLabel: string; siteId: string | null } | null> {
   const { items } = await listActivities(db, ctx, opportunityId, { limit: 50, offset: 0 });
   const capture = items
     .filter((a) => a.kind === 'capture' && a.bodyMd != null && a.bodyMd !== '')
     .sort((x, y) => y.occurredAt - x.occurredAt)[0];
   if (capture === undefined) return null;
-  // "Captured from LinkedIn" names the site the merge heading has to read.
+  // "Captured from LinkedIn" names the site the merge heading has to read, and the site whose
+  // extraction re-derive runs over the text (https://github.com/bgoleno/opportun/issues/93).
+  // recordCapture writes that title for every capture; a title without it is read as LinkedIn,
+  // as it always was. A label no site claims (siteLabel's fallback to a bare id) has no site.
   const from = /^Captured from (.+)$/.exec(capture.title)?.[1];
-  return { text: capture.bodyMd as string, siteLabel: from ?? siteLabel('linkedin') };
+  const label = from ?? siteLabel('linkedin');
+  return {
+    text: capture.bodyMd as string,
+    siteLabel: label,
+    siteId: siteOfLabel(label)?.id ?? null,
+  };
 }
 
 /** The passages the capture carries that the ATS text does not, or [] when AI is unavailable. */
