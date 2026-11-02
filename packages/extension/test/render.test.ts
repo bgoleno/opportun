@@ -84,6 +84,25 @@ describe('renderOutcome', () => {
     expect(r.text).not.toMatch(/LinkedIn/);
   });
 
+  // https://github.com/bgoleno/opportun/issues/92: a title too long to store is not a page
+  // that "had not finished loading". It says so, for both sites, and the other reasons keep
+  // their words (the tables above).
+  it.each([
+    ['LinkedIn', 'linkedin'],
+    ['Indeed', 'indeed'],
+  ] as const)(
+    '%s: a title_too_long refusal says the title is too long, in plain words',
+    (_name, site) => {
+      const r = renderOutcome({ kind: 'refused', reason: 'title_too_long' }, site);
+      expect(r.tone).toBe('error');
+      expect(r.text).toMatch(/^Not captured: /);
+      expect(r.text).toMatch(/job title is longer than 300 characters/);
+      expect(r.text).toMatch(/nothing was saved/i);
+      expect(r.text).not.toMatch(/finished loading/);
+      expect(r.text).not.toMatch(/title_too_long/);
+    },
+  );
+
   it('a LinkedIn tab still gets the LinkedIn wording, and understands the new reasons', () => {
     expect(renderOutcome({ kind: 'refused', reason: 'not_linkedin' }, 'linkedin').text).toMatch(
       /not a LinkedIn page/,
