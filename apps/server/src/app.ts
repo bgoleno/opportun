@@ -53,6 +53,7 @@ import { REFINE_CRON, REFINE_JOB_KIND } from './jobs/refineClassifyPrompt';
 import { DISCOVERY_REFINE_CRON, DISCOVERY_REFINE_KIND } from './jobs/refineDiscoveryPrompt';
 import { enqueueRepairAlertLeadsOnce } from './jobs/repairAlertLeads';
 import { enqueueRepairDedupeKeysOnce } from './jobs/repairDedupeKeys';
+import { enqueueBackfillAtsJobRefsOnce } from './jobs/atsJobRefBackfill';
 import { enqueueRepairCompanyMatchKeysOnce } from './jobs/companyMatchKeyRepair';
 import { enqueueCompanyDomainBackfillOnce } from './jobs/companyDomainResolve';
 import { OPPORTUNITY_DEDUPE_AI_CRON, OPPORTUNITY_DEDUPE_AI_KIND } from './jobs/opportunityDedupeAi';
@@ -377,6 +378,9 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   // One-shot: backfill company_match_key for companies written before that column existed
   // (issue #193). Guarded by its own marker, same reasoning as the one above.
   await enqueueRepairCompanyMatchKeysOnce(db);
+  // One-shot: give every confirmed posting on a recognised board the ATS identity an attach did
+  // not record before issue #137. Guarded by its own marker, same reasoning as above.
+  await enqueueBackfillAtsJobRefsOnce(db);
   // One-shot: resolve a homepage for every company already sitting in an active pipeline
   // stage before this shipped (issue #239), so an opportunity reported before now does not
   // need to be moved again to pick one up. Guarded by its own marker, same reasoning as above.

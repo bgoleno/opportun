@@ -135,3 +135,22 @@ export function extractAtsJobRefs(text: string, max: number = DEFAULT_MAX): AtsJ
   }
   return out;
 }
+
+/**
+ * The ATS identity a stored posting URL gives an opportunity (issue #137): its job reference,
+ * only when the URL is a recognised ATS board host of the same kind; null for anything else,
+ * including a company career page that embeds a board (`?gh_jid=`). Every writer of a posting
+ * URL derives the identity here (attach, reconcile, a URL edit, a user's confirm, the backfill),
+ * so no two paths can disagree. The board-host rule is the handoff's own (destinationAllowed in
+ * repos/submissionReview.ts): a ref read from a career page would give a draft whose handoff
+ * can never pass. The board's slug stands in when the link names none, so the draft is pinned to
+ * that board.
+ */
+export function postingAtsJobRef(postingUrl: string | null | undefined): AtsJobRef | null {
+  if (postingUrl == null) return null;
+  const board = boardFromUrl(postingUrl);
+  if (board === null) return null;
+  const ref = extractAtsJobRefs(postingUrl, 1)[0];
+  if (ref === undefined || ref.kind !== board.kind) return null;
+  return { ...ref, org: ref.org ?? board.slug };
+}

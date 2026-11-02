@@ -17,6 +17,7 @@ import {
   type OpportunityView,
   type UpdateOpportunityInput,
 } from '../repos/opportunities';
+import { postingAtsJobRef } from './atsJobRef';
 import { HttpError } from './errors';
 import {
   descriptionFingerprint,
@@ -95,9 +96,12 @@ export async function attachPosting(
   if (current.compNote == null && posting.compNote != null) patch.compNote = posting.compNote;
   await updateOpportunity(db, ctx, opportunityId, patch);
   // A posting the user chose or pasted is settled, not waiting on a board search (design D17).
+  // Its ATS identity is the stored URL's, written with the confirm (issue #137): null when that
+  // URL is not a recognised board, so a ref from an earlier posting never survives this one.
   const updated = await setPostingState(db, ctx, opportunityId, {
     postingState: 'confirmed',
     postingStateDetail: null,
+    atsJobRef: postingAtsJobRef(patch.postingUrl),
   });
   const howSaid = (refetch ? HOW_SAID_REFETCH : HOW_SAID).get(how) ?? '';
   await createActivity(db, ctx, opportunityId, {
