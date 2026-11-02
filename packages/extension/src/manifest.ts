@@ -2,8 +2,9 @@
 // Least privilege by construction (C-1, unit-tested):
 // - no background worker, no content scripts: nothing runs unless the user opens the popup
 //   and clicks, and then only in the active tab (activeTab + scripting, one injection);
-// - host access to www.linkedin.com only, plus the user's own server origin, requested at
-//   runtime for that one origin when the settings are saved (optional_host_permissions). The
+// - host access to the two capture sites only, www.linkedin.com and www.indeed.com
+//   (https://github.com/bgoleno/opportun/issues/74), plus the user's own server origin, requested
+//   at runtime for that one origin when the settings are saved (optional_host_permissions). The
 //   optional http pattern is wide because match patterns cannot say "private host"; the rule
 //   that matters lives in settings.ts isPrivateHost (ADR-14);
 // - the default extension CSP (script-src 'self'): no remote code.
@@ -66,7 +67,7 @@ export function buildManifest(
     // instead: both browsers display it in place of `version` wherever they show one.
     version_name: `${version}+${stamp.contentHash} (${stamp.commit ?? 'unknown'}, ${stamp.builtAt})`,
     description:
-      'Send the profile or job posting you are looking at to your own Opportun server, one click at a time.',
+      'Send the LinkedIn profile or job, or the Indeed job, you are looking at to your own Opportun server, one click at a time.',
     action: {
       default_popup: 'popup.html',
       default_title: 'Capture to Opportun',
@@ -74,7 +75,9 @@ export function buildManifest(
     },
     icons: ICONS,
     permissions: ['activeTab', 'scripting', 'storage'],
-    host_permissions: ['https://www.linkedin.com/*'],
+    // The capture sites. Even with this, a tab is read only when the user clicks Capture in the
+    // popup (one injection; no content scripts, no background worker).
+    host_permissions: ['https://www.linkedin.com/*', 'https://www.indeed.com/*'],
     // Broader than the rule settings.ts enforces, because match patterns cannot express
     // "a private host" (design D17, ADR-14). Nothing here is granted at install time: the
     // popup asks for one origin, at runtime, and the user approves it.
