@@ -1,15 +1,20 @@
-// One-shot backfill of opportunities.ats_job_ref (issue #137). Before #137, attaching a found,
-// chosen or pasted posting confirmed it without recording its ATS identity; only reconcile did.
-// So an opportunity whose posting was attached by hand has a confirmed posting on a recognised
-// board and no ref, and assisted apply refuses it (`no_ats_identity`). This derives the ref
-// once, by the same rule every posting writer now uses (lib/atsJobRef postingAtsJobRef).
+// One-shot backfill of opportunities.ats_job_ref (issue #137). Before #137 the ref an opportunity
+// carried could disagree with its confirmed posting in three ways:
+// - attaching a found, chosen or pasted posting confirmed it without recording a ref at all, so
+//   assisted apply refuses it (`no_ats_identity`);
+// - attaching posting B over one that reconcile had confirmed as A kept ref A, so a draft would
+//   hand the user off to the wrong job (tl on #140): worse than refusing;
+// - reconcile read refs from career pages (`gh_jid`), which no handoff can pass.
+// This re-derives the ref of every confirmed posting with a URL, once, by the rule every posting
+// writer now uses (lib/atsJobRef postingAtsJobRef), and writes only where the result differs
+// (null included). A row whose ref already matches its URL is never written.
 //
-// Safe to run twice: it reads only confirmed rows with a posting URL and no ref, and writes only
-// where the row still has no ref (a conditional update), so a row with a ref, however it got
-// one, is never touched, and a second run finds nothing it can change. A URL that is not a
-// recognised board gives no ref and the row stays as it is. Same one-shot-per-deployment shape
-// as companyMatchKeyRepair.ts.
-import { and, eq, isNotNull, isNull } from 'drizzle-orm';
+// Safe to run twice: a second run derives the same refs and finds nothing to change. Each write
+// is conditional on the row being as it was read (the same posting URL and updated_at), so an
+// attach, reconcile or URL edit landing meanwhile wins. Same one-shot-per-deployment shape as
+// companyMatchKeyRepair.ts.
+import type { AtsJobRef } from '@opportun/core';
+import { and, eq, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client';
 import { opportunities, settings, users } from '../db/schema';
@@ -24,30 +29,51 @@ export const BACKFILL_ATS_JOB_REFS_KIND = 'opportunities.backfill_ats_job_refs';
 export const BACKFILL_ATS_JOB_REFS_MARKER_KEY = 'backfill_ats_job_refs:done';
 
 export interface AtsJobRefBackfillOutcome {
-  /** Confirmed postings with a URL and no ref. */
-  scanned: number;
-  /** Those given a ref (their URL is a recognised board posting). */
-  filled: number;
+  /** Confirmed postings with a URL. */
+  read: number;
+  /** Had no ref; now carry their URL's. */
+  set: number;
+  /** Carried another posting's ref; now carry their URL's. */
+  changed: number;
+  /** Carried a ref their URL does not give (a career page, say); now carry none. */
+  cleared: number;
 }
 
-/** Derives the ref for every confirmed posting of this user's that has a URL and no ref. */
+/** The same identity, field by field (the JSON column's key order is not reliable). */
+function sameRef(a: AtsJobRef | null | undefined, b: AtsJobRef | null): boolean {
+  if (a == null || b === null) return (a ?? null) === b;
+  return (
+    a.kind === b.kind &&
+    a.org === b.org &&
+    a.externalId === b.externalId &&
+    a.url === b.url &&
+    (a.host ?? null) === (b.host ?? null) &&
+    (a.externalPath ?? null) === (b.externalPath ?? null)
+  );
+}
+
+/** Re-derives the ref of every confirmed posting of this user's that has a URL. */
 export async function backfillAtsJobRefs(db: Db, ctx: UserCtx): Promise<AtsJobRefBackfillOutcome> {
   const rows = await db
-    .select({ id: opportunities.id, postingUrl: opportunities.postingUrl })
+    .select({
+      id: opportunities.id,
+      postingUrl: opportunities.postingUrl,
+      atsJobRef: opportunities.atsJobRef,
+      updatedAt: opportunities.updatedAt,
+    })
     .from(opportunities)
     .where(
       and(
         eq(opportunities.userId, ctx.userId),
         eq(opportunities.postingState, 'confirmed'),
         isNotNull(opportunities.postingUrl),
-        isNull(opportunities.atsJobRef),
       ),
     )
     .all();
-  let filled = 0;
+  const outcome: AtsJobRefBackfillOutcome = { read: rows.length, set: 0, changed: 0, cleared: 0 };
   for (const row of rows) {
     const ref = postingAtsJobRef(row.postingUrl);
-    if (ref === null) continue;
+    if (sameRef(row.atsJobRef, ref)) continue;
     // Between the read above and this write, an attach, reconcile or URL edit may land.
     await racePoint('opportunities.backfillAtsJobRef.beforeWrite');
     const changed = await db
@@ -57,15 +83,18 @@ export async function backfillAtsJobRefs(db: Db, ctx: UserCtx): Promise<AtsJobRe
         and(
           eq(opportunities.userId, ctx.userId),
           eq(opportunities.id, row.id),
-          // Still no ref, and still this URL: a ref or a new posting written since wins.
-          isNull(opportunities.atsJobRef),
+          // The row as it was read: any write since (a ref, a new posting) wins.
           eq(opportunities.postingUrl, row.postingUrl as string),
+          eq(opportunities.updatedAt, row.updatedAt),
         ),
       )
       .returning({ id: opportunities.id });
-    filled += changed.length;
+    if (changed.length === 0) continue;
+    if (ref === null) outcome.cleared += 1;
+    else if (row.atsJobRef == null) outcome.set += 1;
+    else outcome.changed += 1;
   }
-  return { scanned: rows.length, filled };
+  return outcome;
 }
 
 /**
@@ -111,6 +140,9 @@ export const backfillAtsJobRefsJob: JobHandler<z.infer<typeof PayloadSchema>> = 
   maxAttempts: 2,
   async run(db, _payload, ctx) {
     if (ctx.userId === null) throw new Error(`${BACKFILL_ATS_JOB_REFS_KIND} needs a user`);
-    await ctx.setResult(await backfillAtsJobRefs(db, { userId: ctx.userId, isAdmin: false }));
+    const outcome = await backfillAtsJobRefs(db, { userId: ctx.userId, isAdmin: false });
+    // Counts only (the EM on #140): no ids, URLs or company names leave the database this way.
+    ctx.services.log?.info({ ...outcome }, 'ats job ref backfill');
+    await ctx.setResult(outcome);
   },
 };

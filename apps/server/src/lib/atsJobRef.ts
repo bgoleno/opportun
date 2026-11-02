@@ -143,8 +143,9 @@ export function extractAtsJobRefs(text: string, max: number = DEFAULT_MAX): AtsJ
  * URL derives the identity here (attach, reconcile, a URL edit, a user's confirm, the backfill),
  * so no two paths can disagree. The board-host rule is the handoff's own (destinationAllowed in
  * repos/submissionReview.ts): a ref read from a career page would give a draft whose handoff
- * can never pass. The board's slug stands in when the link names none, so the draft is pinned to
- * that board.
+ * can never pass. The org is always the board's own slug, from the host and path: a Greenhouse
+ * `board=` parameter can name another board than the path does, and the handoff compares the
+ * destination's slug (tl on #140).
  */
 export function postingAtsJobRef(postingUrl: string | null | undefined): AtsJobRef | null {
   if (postingUrl == null) return null;
@@ -152,5 +153,5 @@ export function postingAtsJobRef(postingUrl: string | null | undefined): AtsJobR
   if (board === null) return null;
   const ref = extractAtsJobRefs(postingUrl, 1)[0];
   if (ref === undefined || ref.kind !== board.kind) return null;
-  return { ...ref, org: ref.org ?? board.slug };
+  return { ...ref, org: board.slug };
 }
