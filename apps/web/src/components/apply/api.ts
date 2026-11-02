@@ -258,7 +258,7 @@ export function useCancelSubmission(opportunityId: string) {
   });
 }
 
-/** The caller's own daily review usage (GET /submissions/review-usage, #130). */
+/** The caller's own daily review usage (GET /settings/applications, #130). */
 export interface ReviewUsage {
   used: number;
   cap: number;
@@ -277,7 +277,7 @@ export function useReviewUsage() {
     queryKey: ak.reviewUsage,
     queryFn: async (): Promise<ReviewUsage | null> => {
       try {
-        return await api<ReviewUsage>('/submissions/review-usage');
+        return await api<ReviewUsage>('/settings/applications');
       } catch (err) {
         if (err instanceof ApiError && err.status === 404) return null;
         throw err;
@@ -292,7 +292,7 @@ export function useSetReviewCap() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (cap: number | null) =>
-      api<ReviewUsage>('/submissions/review-cap', { method: 'PUT', body: { cap } }),
+      api<ReviewUsage>('/settings/applications', { method: 'PUT', body: { dailyReviewCap: cap } }),
     onSuccess: (usage) => qc.setQueryData(ak.reviewUsage, usage),
     onSettled: () => qc.invalidateQueries({ queryKey: ak.reviewUsage }),
   });

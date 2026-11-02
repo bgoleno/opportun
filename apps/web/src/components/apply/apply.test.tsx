@@ -1150,7 +1150,7 @@ describe('the review screen shows the daily review usage from the server (#130)'
     const nextFreeAt = NOW + 3 * 60 * MIN;
     mockApi(
       routes(submission(), {
-        'GET /submissions/review-usage': {
+        'GET /settings/applications': {
           used: 4,
           cap: 10,
           instanceCap: 10,
@@ -1168,7 +1168,7 @@ describe('the review screen shows the daily review usage from the server (#130)'
   it('a review reads the usage again, so the count moves with it', async () => {
     const api = mockApi(
       routes(submission(), {
-        'GET /submissions/review-usage': {
+        'GET /settings/applications': {
           used: 4,
           cap: 10,
           instanceCap: 10,
@@ -1182,12 +1182,12 @@ describe('the review screen shows the daily review usage from the server (#130)'
     fakeWindowOpen();
     const { user, router } = renderStep('review');
     await screen.findByText(/4 of 10 reviews used/);
-    const before = calls(api.calls, 'GET', '/submissions/review-usage').length;
+    const before = calls(api.calls, 'GET', '/settings/applications').length;
     await user.click(screen.getByRole('checkbox'));
     await user.click(screen.getByRole('button', { name: /confirm review/i }));
     await waitFor(() => expect(router.state.location.search).toEqual({ step: 'open' }));
     await waitFor(() =>
-      expect(calls(api.calls, 'GET', '/submissions/review-usage').length).toBeGreaterThan(before),
+      expect(calls(api.calls, 'GET', '/settings/applications').length).toBeGreaterThan(before),
     );
   });
 

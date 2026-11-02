@@ -1,7 +1,7 @@
 // The daily review cap, as the user sees it (https://github.com/bgoleno/opportun/issues/130):
 // how many reviews they have used in the last 24 hours and when the next frees up, on the review
 // screen; and their own lower limit, in Settings. Every number comes from the server
-// (GET /submissions/review-usage), which counts with the cap's own function: no client counting.
+// (GET /settings/applications), which counts with the cap's own function: no client counting.
 // Where the feature is off, or on the demo, the route is 404 and neither part renders.
 import { useEffect, useId, useState } from 'react';
 import { FormError } from '@/components/FormError';

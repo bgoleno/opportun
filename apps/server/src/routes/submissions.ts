@@ -118,7 +118,7 @@ const BURST = { limit: 10, windowMs: 60 * 1000 } as const;
 
 /** The user's own daily review cap; null goes back to the instance's (#130). */
 const ReviewCapBody = z
-  .object({ cap: z.number().int().min(1).max(MAX_DAILY_REVIEW_CAP).nullable() })
+  .object({ dailyReviewCap: z.number().int().min(1).max(MAX_DAILY_REVIEW_CAP).nullable() })
   .strict();
 
 const ReviewUsageSchema = z.object({
@@ -232,23 +232,24 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  // The caller's own daily review usage and cap (#130). Static paths, so they win over
-  // /submissions/:id; both are behind the flag hook above like every route here.
+  // The caller's own daily review usage and cap (#130): a per-user setting, so under /settings
+  // like the others, and not a submission route (test/submissionRouteShape.test.ts keeps those
+  // to one id each). Registered here so the flag hook above covers them too.
   api.get(
-    '/submissions/review-usage',
+    '/settings/applications',
     { schema: { response: { 200: ReviewUsageSchema } } },
     async (req) => reviewUsage(db, app.requireUser(req), app.config),
   );
 
   api.put(
-    '/submissions/review-cap',
+    '/settings/applications',
     {
       attachValidation: true,
       schema: { body: ReviewCapBody, response: { 200: ReviewUsageSchema } },
     },
     async (req, reply) => {
       if (answeredInvalid(req, reply)) return reply;
-      return setUserReviewCap(db, app.requireUser(req), app.config, req.body.cap);
+      return setUserReviewCap(db, app.requireUser(req), app.config, req.body.dailyReviewCap);
     },
   );
 

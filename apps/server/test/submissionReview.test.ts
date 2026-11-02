@@ -1035,9 +1035,9 @@ describe('a draft refused at creation for its destination (#135)', () => {
 
 describe('review usage and the user’s own cap (#130)', () => {
   const DAY_MS = 24 * 60 * 60 * 1000;
-  const usage = (c: TestClient) => api(c, 'GET', '/submissions/review-usage');
+  const usage = (c: TestClient) => api(c, 'GET', '/settings/applications');
   const setCap = (c: TestClient, cap: number | null) =>
-    api(c, 'PUT', '/submissions/review-cap', { cap });
+    api(c, 'PUT', '/settings/applications', { dailyReviewCap: cap });
 
   async function seed(app: FastifyInstance, c: TestClient, times: number[]) {
     for (const at of times) {
@@ -1125,12 +1125,13 @@ describe('review usage and the user’s own cap (#130)', () => {
     expect((await usage(a)).json()).toMatchObject({ cap: 10, userCap: null });
   });
 
-  it('refuses a body that is not exactly { cap }', async () => {
+  it('refuses a body that is not exactly { dailyReviewCap }', async () => {
     const { a } = await boot(ON);
     expect(
-      (await api(a, 'PUT', '/submissions/review-cap', { cap: 3, userId: 'x' })).statusCode,
+      (await api(a, 'PUT', '/settings/applications', { dailyReviewCap: 3, userId: 'x' }))
+        .statusCode,
     ).toBe(422);
-    expect((await api(a, 'PUT', '/submissions/review-cap', {})).statusCode).toBe(422);
+    expect((await api(a, 'PUT', '/settings/applications', {})).statusCode).toBe(422);
   });
 
   it('one user never sees or changes another’s usage or cap (isolation)', async () => {

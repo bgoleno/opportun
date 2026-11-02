@@ -1,5 +1,5 @@
 // The daily review usage and the user's own cap (https://github.com/bgoleno/opportun/issues/130),
-// against a stubbed API: the numbers come from GET /submissions/review-usage, never from the
+// against a stubbed API: the numbers come from GET /settings/applications, never from the
 // client; where that route is 404 (flag off, demo) neither part renders.
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -45,7 +45,7 @@ describe('usageText', () => {
 
 describe('the usage line on the review screen', () => {
   it('shows the server’s numbers', async () => {
-    mockApi({ 'GET /submissions/review-usage': usage({ used: 7, cap: 8 }) });
+    mockApi({ 'GET /settings/applications': usage({ used: 7, cap: 8 }) });
     renderWithProviders(<ReviewUsageLine />);
     expect(await screen.findByRole('status')).toHaveTextContent(
       '7 of 8 reviews used in the last 24 hours.',
@@ -53,7 +53,7 @@ describe('the usage line on the review screen', () => {
   });
 
   it('renders nothing where the feature is off', async () => {
-    const api = mockApi({ 'GET /submissions/review-usage': OFF });
+    const api = mockApi({ 'GET /settings/applications': OFF });
     const { container } = renderWithProviders(<ReviewUsageLine />);
     await waitFor(() => expect(api.calls).toHaveLength(1));
     expect(container.textContent).toBe('');
@@ -65,11 +65,11 @@ describe('the user’s own limit in Settings', () => {
     // A stateful stub: what a PUT sets, the next GET returns, as the server does.
     let current = u;
     const api = mockApi({
-      'GET /submissions/review-usage': () => current,
-      'PUT /submissions/review-cap':
+      'GET /settings/applications': () => current,
+      'PUT /settings/applications':
         put ??
         ((c: ApiCall) => {
-          const cap = (c.body as { cap: number | null }).cap;
+          const cap = (c.body as { dailyReviewCap: number | null }).dailyReviewCap;
           current = { ...current, userCap: cap, cap: cap ?? current.instanceCap };
           return current;
         }),
@@ -80,7 +80,7 @@ describe('the user’s own limit in Settings', () => {
   }
 
   const puts = (calls: ApiCall[]) =>
-    calls.filter((c) => c.method === 'PUT' && c.path === '/submissions/review-cap');
+    calls.filter((c) => c.method === 'PUT' && c.path === '/settings/applications');
 
   it('shows the current limit, the server’s ceiling and the usage', async () => {
     setup(usage({ userCap: 4, cap: 4 }));
@@ -98,7 +98,7 @@ describe('the user’s own limit in Settings', () => {
     await user.type(input, '3');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(puts(api.calls)).toHaveLength(1));
-    expect(puts(api.calls)[0]?.body).toEqual({ cap: 3 });
+    expect(puts(api.calls)[0]?.body).toEqual({ dailyReviewCap: 3 });
     expect(await screen.findByText(/3 of 3 reviews used/)).toBeVisible();
   });
 
@@ -120,7 +120,7 @@ describe('the user’s own limit in Settings', () => {
     const { api, user } = setup(usage({ userCap: 4, cap: 4 }));
     await user.click(await screen.findByRole('button', { name: 'Use the server’s limit' }));
     await waitFor(() => expect(puts(api.calls)).toHaveLength(1));
-    expect(puts(api.calls)[0]?.body).toEqual({ cap: null });
+    expect(puts(api.calls)[0]?.body).toEqual({ dailyReviewCap: null });
   });
 
   it('no own value: no "use the server’s limit" button', async () => {
@@ -141,7 +141,7 @@ describe('the user’s own limit in Settings', () => {
   });
 
   it('renders nothing where the feature is off (no Settings control)', async () => {
-    const api = mockApi({ 'GET /submissions/review-usage': OFF });
+    const api = mockApi({ 'GET /settings/applications': OFF });
     const { container } = renderWithProviders(<ReviewCapCard />);
     await waitFor(() => expect(api.calls).toHaveLength(1));
     expect(container.textContent).toBe('');
