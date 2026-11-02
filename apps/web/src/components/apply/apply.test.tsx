@@ -7,7 +7,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DetailsPanel } from '@/components/opportunity/DetailsPanel';
 import { OpportunityDetail } from '@/components/opportunity/OpportunityDetail';
-import type { OpportunityView } from '@/lib/opportunities';
+import { formatDateTime, type OpportunityView } from '@/lib/opportunities';
 import { parseApplySearch } from '@/routes/opportunities.$id_.apply';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { ApplyPage } from './ApplyPage';
@@ -1274,5 +1274,69 @@ describe('what happened after submitting (#148)', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Mark confirmed' }));
     expect(await within(dialog).findByText(/changed in another tab or window/i)).toBeVisible();
     expect(dialog).not.toHaveTextContent('invalid_transition');
+  });
+});
+
+describe('an earlier submission can still be reported on (#148, tl)', () => {
+  const EARLIER_AT = NOW - 5 * 24 * 60 * MIN;
+  const earlier = submission({
+    id: 'sub-old',
+    status: 'unknown',
+    submittedAt: EARLIER_AT,
+    createdAt: NOW - 6 * 24 * 60 * MIN,
+  });
+
+  function panelWith(items: SubmissionView[]) {
+    const api = mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items, total: items.length },
+      'POST /submissions/sub-old/outcome': () => ({
+        status: 200,
+        body: { ...earlier, status: 'confirmed', confirmationKind: 'user' },
+      }),
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<ApplyPanel opp={OPP} />);
+    return { api, user };
+  }
+
+  it.each([
+    ['while a re-application is in progress', submission({ id: 'sub-new', status: 'draft' })],
+    [
+      'after a newer attempt was cancelled',
+      submission({ id: 'sub-new', status: 'abandoned', failureReason: 'cancelled_by_user' }),
+    ],
+    [
+      'after a newer attempt’s review expired',
+      submission({ id: 'sub-new', status: 'abandoned', failureReason: 'review_expired' }),
+    ],
+  ])('%s, named by when it was submitted', async (_n, newer) => {
+    const { api, user } = panelWith([newer, earlier]);
+    const block = await screen.findByRole('region', { name: 'Earlier application' });
+    expect(block).toHaveTextContent(`Earlier application, submitted ${formatDateTime(EARLIER_AT)}`);
+    expect(block).toHaveTextContent('No confirmation seen');
+    await user.click(within(block).getByRole('button', { name: 'I saw a confirmation' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Mark as confirmed?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Mark confirmed' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // The report is about the earlier attempt, never the newer one.
+    expect(calls(api.calls, 'POST', '/submissions/sub-old/outcome')).toHaveLength(1);
+    expect(api.calls.filter((c) => c.path === '/submissions/sub-new/outcome')).toHaveLength(0);
+  });
+
+  it('the newest submission shows its actions once, with no "earlier" block', async () => {
+    panelWith([earlier]);
+    expect(await screen.findByRole('button', { name: 'I saw a confirmation' })).toBeVisible();
+    expect(screen.queryByRole('region', { name: 'Earlier application' })).not.toBeInTheDocument();
+  });
+
+  it('nothing reportable: no block', async () => {
+    panelWith([
+      submission({ id: 'sub-new', status: 'draft' }),
+      { ...earlier, status: 'confirmed' },
+    ]);
+    await screen.findByRole('region', { name: 'Assisted apply' });
+    expect(screen.queryByRole('region', { name: 'Earlier application' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'I saw a confirmation' })).not.toBeInTheDocument();
   });
 });
