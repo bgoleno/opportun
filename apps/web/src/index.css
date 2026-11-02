@@ -237,4 +237,12 @@
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }
+  /* An element whose ring is drawn inside it (focus-visible:ring-inset) gets its outline inside
+     too, so it shows where the ring does: a pipeline table row fills its table's scroller, which
+     cut the 2px-out outline's sides (issue https://github.com/bgoleno/opportun/issues/70). This
+     outranks the bare :focus-visible above on specificity (0,2,0 against 0,1,0), and it depends
+     on Tailwind's class name for that variant: rename the class and this stops matching. */
+  .focus-visible\:ring-inset:focus-visible {
+    outline-offset: -2px;
+  }
 }
