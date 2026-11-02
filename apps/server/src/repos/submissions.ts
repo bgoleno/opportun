@@ -489,7 +489,34 @@ export async function getSnapshotForDownload(
 }
 
 /** Attempts a posting change reaches: live and not yet opened on the ATS (#144). */
-const NOT_YET_OPENED: SubmissionStatus[] = ['draft', 'reviewed'];
+const NOT_YET_OPENED_STATUSES = ['draft', 'reviewed'] as const;
+
+/**
+ * Takes the lock of the opportunity's live attempt that a posting change would reach, if it has
+ * one (#144). Called first in an opportunity writer's transaction, before its company lookup and
+ * before it writes the opportunity, so the lock order is the attempt's, then the user's, then
+ * rows, the same as a review's (see submissionScope in repos/submissionReview.ts).
+ */
+export async function lockLiveAttempt(
+  tx: Exec,
+  ctx: UserCtx,
+  opportunityId: string,
+): Promise<void> {
+  const live = await tx
+    .select({ id: applicationSubmissions.id })
+    .from(applicationSubmissions)
+    .where(
+      and(
+        eq(applicationSubmissions.userId, ctx.userId),
+        eq(applicationSubmissions.opportunityId, opportunityId),
+        inArray(applicationSubmissions.status, [...NOT_YET_OPENED_STATUSES]),
+      ),
+    )
+    .get();
+  if (live !== undefined) await lockScope(tx, `submission:${live.id}`);
+}
+
+const NOT_YET_OPENED: SubmissionStatus[] = [...NOT_YET_OPENED_STATUSES];
 
 /**
  * The opportunity's posting URL or ATS identity changed (#144, owner decision option A): its
@@ -518,6 +545,8 @@ export async function markPostingChanged(
     )
     .get();
   if (live === undefined) return;
+  // The caller took this lock first (lockLiveAttempt); taking it again in the same transaction
+  // is a no-op, and keeps this safe for a caller that did not.
   await lockScope(tx, `submission:${live.id}`);
   const [changed] = await tx
     .update(applicationSubmissions)

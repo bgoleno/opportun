@@ -9,12 +9,18 @@ import { describe, expect, it } from 'vitest';
 import { applicationSubmissions, auditLog, opportunities, resumes } from '../src/db/schema';
 import { confirm } from '../src/jobs/postingReconcile';
 import type { UserCtx } from '../src/repos/base';
-import { createOpportunity, getOpportunity, setPostingState } from '../src/repos/opportunities';
+import {
+  createOpportunity,
+  getOpportunity,
+  mergeOpportunities,
+  setPostingState,
+} from '../src/repos/opportunities';
 import { backfillAtsJobRefs } from '../src/jobs/atsJobRefBackfill';
 import { insertResume } from '../src/repos/resumes';
+import { submissionDigest } from '../src/lib/submissionDigest';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
-import { pauseAt } from './race';
+import { heldApart } from './race';
 
 const boot = useApi();
 const ON = { submissions: true };
@@ -238,19 +244,23 @@ describe('criterion 3: the old destination is handed off only after a fresh revi
 });
 
 describe('criterion 4: a posting change during a review (race), and nothing lost', () => {
-  it('a change landing while a review is in flight makes that review stale', async () => {
+  it('a change while a review holds its locks waits for it, then sends the attempt back to draft', async () => {
     const { app, a } = await boot(ON);
     const d = await draft(app, a);
-    // The review has read its attempt and is about to open its transaction.
-    const pause = pauseAt('submissions.review');
-    const inFlight = review(a, d.id, d.digest);
-    await pause.reached;
-    expect((await changePosting(a, d.oppId, NEW_URL)).statusCode).toBe(200);
-    pause.release();
-    const res = await inFlight;
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ error: { code: 'review_stale' } });
-    expect(await rowOf(app, d.id)).toMatchObject({ status: 'draft', reviewedAt: null });
+    // The review is inside both its locks, every check done, about to write (tl on #154); the
+    // change must be seen waiting, not run past it.
+    const [r, c] = await heldApart(
+      app,
+      'submissions.review.locked',
+      () => review(a, d.id, d.digest),
+      () => changePosting(a, d.oppId, NEW_URL),
+    );
+    expect(r.statusCode, r.body).toBe(200);
+    expect(c.statusCode, c.body).toBe(200);
+    // The review landed first; the change then sent it back to draft.
+    const row = await rowOf(app, d.id);
+    expect(row).toMatchObject({ status: 'draft', reviewDigest: null });
+    expect(row?.postingChangedAt).not.toBeNull();
   });
 
   it('nothing is cancelled or lost: one live attempt, its work intact', async () => {
@@ -273,6 +283,30 @@ describe('criterion 4: a posting change during a review (race), and nothing lost
   });
 });
 
+describe('the digest of an attempt whose posting never changed is what it always was (tl on #154)', () => {
+  const input = {
+    userId: 'u-1',
+    opportunityId: 'o-1',
+    resumeId: 'r-1',
+    resumeSha256: null,
+    destinationUrl: 'https://boards.greenhouse.io/examplecorp/jobs/1000001',
+    atsKind: 'ats_greenhouse',
+    atsExternalId: '1000001',
+    fields: { email: 'jane@example.com' },
+    answers: [{ questionKey: 'why', label: 'Why us?', value: 'Latex.', source: 'user' as const }],
+  };
+  // Computed with main's submissionDigest (e8e8b36), before posting_changed_at existed.
+  const BEFORE_144 = '3c5065e8dc16147b470d4c90d7ebe852d98abd5025a0ae6b51e39fbdb25ec0cc';
+
+  it('absent or null: the same digest as before #144; set: a different one', () => {
+    expect(submissionDigest(input)).toBe(BEFORE_144);
+    expect(submissionDigest({ ...input, postingChangedAt: null })).toBe(BEFORE_144);
+    expect(submissionDigest({ ...input, postingChangedAt: 1_800_000_000_000 })).not.toBe(
+      BEFORE_144,
+    );
+  });
+});
+
 describe('the related note: the live attempt is shown, not only a refusal', () => {
   it('a create on an opportunity whose posting went bad answers live_submission_exists, naming it', async () => {
     const { app, a } = await boot(ON);
@@ -287,5 +321,47 @@ describe('the related note: the live attempt is shown, not only a refusal', () =
     expect(res.json()).toMatchObject({
       error: { code: 'live_submission_exists', submissionId: d.id },
     });
+  });
+});
+
+describe('lock order: the attempt, then the user, then rows (tl on #154; the deadlocks are Postgres)', () => {
+  // With the old order these pairs deadlock on Postgres (40P01, one request a 500). On SQLite the
+  // write gate serialises them either way; CI's Postgres leg is the guard.
+  it('an edit naming the company and the posting, against a review holding only the attempt lock: both finish', async () => {
+    const { app, a } = await boot(ON);
+    const d = await draft(app, a);
+    const [r, e] = await heldApart(
+      app,
+      'submissions.review.attemptLocked', // the attempt's lock held, not yet the user's
+      () => review(a, d.id, d.digest),
+      () =>
+        api(a, 'PATCH', `/opportunities/${d.oppId}`, {
+          companyName: 'Example Corp', // findOrCreateCompanySync takes the user's lock
+          postingUrl: NEW_URL,
+        }),
+    );
+    expect(r.statusCode, r.body).toBe(200);
+    expect(e.statusCode, e.body).toBe(200);
+    expect(await rowOf(app, d.id)).toMatchObject({ status: 'draft' });
+  });
+
+  it('a merge moving the live attempt, against an edit of the merged-away opportunity: both finish', async () => {
+    const { app, a } = await boot(ON);
+    const d = await draft(app, a); // the live attempt is on d.oppId, the one merged away
+    const keep = await createOpportunity(app.db, ctxOf(a), {
+      companyName: 'Example Corp',
+      title: `Senior Example Engineer ${newId().slice(-6)}`,
+      sourceKind: 'manual',
+    });
+    const [merged, e] = await heldApart(
+      app,
+      'opportunities.merge.moved', // moved, the merged-away opportunity not yet deleted
+      () => mergeOpportunities(app.db, ctxOf(a), keep.id, d.oppId),
+      () => changePosting(a, d.oppId, NEW_URL),
+    );
+    expect(merged.id).toBe(keep.id);
+    // The merge won; the edit then finds its opportunity merged away. Never a 500.
+    expect(e.statusCode, e.body).toBe(404);
+    expect(await rowOf(app, d.id)).toMatchObject({ opportunityId: keep.id, status: 'draft' });
   });
 });

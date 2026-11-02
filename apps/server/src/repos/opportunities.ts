@@ -33,7 +33,8 @@ import {
   stageHistory,
 } from '../db/schema';
 import { postingAtsJobRef } from '../lib/atsJobRef';
-import { markPostingChanged } from './submissions';
+import { racePoint } from '../lib/racePoints';
+import { lockLiveAttempt, markPostingChanged } from './submissions';
 import { duplicate, HttpError, notFound } from '../lib/errors';
 import { isSystemWritten } from '../lib/postingFingerprint';
 import { lastActivityAt } from './activities';
@@ -474,6 +475,10 @@ export async function updateOpportunity(
 ): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
     const current = await getViewSync(tx, ctx, id);
+    // A new posting URL will mark the live attempt (#144): its lock comes first, before the
+    // company lookup below takes the user's (lock order: submissionScope).
+    const urlWillChange = patch.postingUrl !== undefined && patch.postingUrl !== current.postingUrl;
+    if (urlWillChange) await lockLiveAttempt(tx, ctx, id);
     if (patch.roleTargetId != null) await assertRoleTargetOwned(tx, ctx, patch.roleTargetId);
     const { companyName, ...fields } = patch;
     let companyId = current.companyId;
@@ -592,6 +597,10 @@ export async function setPostingState(
   return await withTransaction(db, async (tx) => {
     const before = await getViewSync(tx, ctx, id);
     const now = Date.now();
+    const requisitionChanges =
+      patch.atsJobRef !== undefined && !sameRequisition(before.atsJobRef, patch.atsJobRef);
+    // The live attempt's lock before the opportunity row (lock order: submissionScope).
+    if (requisitionChanges) await lockLiveAttempt(tx, ctx, id);
     await tx
       .update(opportunities)
       .set({
@@ -606,9 +615,7 @@ export async function setPostingState(
       .where(owned(ctx, id))
       .run();
     // Another ATS identity under a live attempt (#144): it says so and its review lapses.
-    if (patch.atsJobRef !== undefined && !sameRequisition(before.atsJobRef, patch.atsJobRef)) {
-      await markPostingChanged(tx, ctx, id, now);
-    }
+    if (requisitionChanges) await markPostingChanged(tx, ctx, id, now);
     return await getViewSync(tx, ctx, id);
   });
 }
@@ -734,6 +741,11 @@ export async function mergeOpportunities(
 ): Promise<OpportunityView> {
   if (keepId === otherId) throw new HttpError(422, 'merge_self');
   return await withTransaction(db, async (tx) => {
+    // The live attempts' locks before anything is moved or deleted (lock order: submissionScope),
+    // in a fixed order so two merges cannot wait on each other.
+    for (const opportunityId of [keepId, otherId].sort()) {
+      await lockLiveAttempt(tx, ctx, opportunityId);
+    }
     const keep = await getViewSync(tx, ctx, keepId);
     const other = await getViewSync(tx, ctx, otherId);
     const now = Date.now();
@@ -844,6 +856,9 @@ export async function mergeOpportunities(
       .get();
     await indexActivity(tx, ctx, note);
     await removeFromIndex(tx, ctx, 'opportunity', otherId);
+    // Everything moved, the other opportunity not yet deleted: a test parks the merge here to
+    // prove the lock order with an edit of that opportunity (test/submissionPostingChange.test.ts).
+    await racePoint('opportunities.merge.moved');
     await tx.delete(opportunities).where(owned(ctx, otherId)).run();
     return await getViewSync(tx, ctx, keepId);
   });

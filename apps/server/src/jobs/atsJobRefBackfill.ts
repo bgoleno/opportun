@@ -21,7 +21,7 @@ import { opportunities, settings, users } from '../db/schema';
 import { postingAtsJobRef } from '../lib/atsJobRef';
 import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
-import { markPostingChanged } from '../repos/submissions';
+import { lockLiveAttempt, markPostingChanged } from '../repos/submissions';
 import type { JobHandler } from './registry';
 import { enqueue } from './runner';
 
@@ -78,6 +78,8 @@ export async function backfillAtsJobRefs(db: Db, ctx: UserCtx): Promise<AtsJobRe
     // Between the read above and this write, an attach, reconcile or URL edit may land.
     await racePoint('opportunities.backfillAtsJobRef.beforeWrite');
     const changed = await withTransaction(db, async (tx) => {
+      // The live attempt's lock before the opportunity row (lock order: submissionScope).
+      await lockLiveAttempt(tx, ctx, row.id);
       const now = Date.now();
       const written = await tx
         .update(opportunities)

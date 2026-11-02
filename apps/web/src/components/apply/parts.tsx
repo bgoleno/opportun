@@ -132,15 +132,15 @@ export function Notice({
 }
 
 /**
- * Whether the opportunity's posting changed under this attempt (#144) so that it now names
- * another job than the one the attempt was started for. The attempt keeps its pinned
- * destination; this is what the screens tell the user about.
+ * Whether the opportunity's posting now names another job than the one this attempt was started
+ * for (#144). An attempt is always created with the opportunity's identity, so any difference
+ * is a change, recorded or not: a change landing during a create finds no attempt to mark yet
+ * (tl on #154). The attempt keeps its pinned destination; this is what the screens say.
  */
 export function postingMoved(
-  live: Pick<SubmissionView, 'postingChangedAt' | 'atsKind' | 'atsRef' | 'atsExternalId'>,
+  live: Pick<SubmissionView, 'atsKind' | 'atsRef' | 'atsExternalId'>,
   opp: Pick<OpportunityView, 'atsJobRef'>,
 ): boolean {
-  if (live.postingChangedAt == null) return false;
   const ref = opp.atsJobRef;
   return !(
     ref != null &&

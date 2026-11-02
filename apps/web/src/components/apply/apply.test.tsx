@@ -539,6 +539,15 @@ describe('#144: a posting change under the attempt is shown, and nothing is canc
     ).toBeVisible();
   });
 
+  it('a different job with no recorded change still shows the notice (a change during the create, tl on #154)', async () => {
+    mockApi({
+      ...routes(submission({ postingChangedAt: null })),
+      'GET /opportunities/opp-1': moved,
+    });
+    renderStep('review');
+    expect(await screen.findByText(/The posting changed after you started/)).toBeVisible();
+  });
+
   it('no notice when the posting never changed, or changed back to the same job', async () => {
     mockApi(routes(submission()));
     renderStep('review');
