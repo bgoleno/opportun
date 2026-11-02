@@ -189,6 +189,7 @@ test('apply: choose a resume, add details, review everything, open the form, and
   await expect(attest.getByLabel('When did you submit?')).toBeVisible();
   await attest.getByRole('button', { name: 'Yes, I submitted it' }).click();
   await page.waitForURL(`**/opportunities/${id}`);
-  await expect(panel.getByText('Submitted', { exact: true })).toBeVisible();
+  // The chip reads "Submission status: Submitted" (its label is part of the text).
+  await expect(panel.getByText(/Submission status: Submitted/)).toBeVisible();
   await expect(page.getByText(/Applied via Greenhouse:/).first()).toBeVisible();
 });
