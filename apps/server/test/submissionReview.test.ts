@@ -94,7 +94,7 @@ const api = (
   c: TestClient,
   method: 'GET' | 'POST' | 'PATCH' | 'PUT',
   url: string,
-  payload?: object,
+  payload?: Record<string, unknown>,
 ) => c.request({ method, url: `/api/v1${url}`, ...(payload === undefined ? {} : { payload }) });
 
 /** A draft for a fresh eligible opportunity, with an answer carrying the sentinel. */
@@ -109,14 +109,18 @@ async function draft(app: FastifyInstance, c: TestClient, ats: AtsJobRef = ATS_R
   const id = (created.json() as SubmissionJson).id;
   const edited = await api(c, 'PATCH', `/submissions/${id}`, {
     fields: { email: 'jane@example.com' },
-    answers: [{ question: 'Why us?', answer: SENTINEL }],
+    answers: [{ questionKey: 'why_us', label: 'Why us?', value: SENTINEL, source: 'user' }],
   });
   expect(edited.statusCode, edited.body).toBe(200);
   return { oppId, resumeId, id, submission: edited.json() as SubmissionJson };
 }
 
-const review = (c: TestClient, id: string, reviewDigest: string, extra: object = {}) =>
-  api(c, 'POST', `/submissions/${id}/review`, { reviewDigest, acknowledged: true, ...extra });
+const review = (
+  c: TestClient,
+  id: string,
+  reviewDigest: string,
+  extra: Record<string, unknown> = {},
+) => api(c, 'POST', `/submissions/${id}/review`, { reviewDigest, acknowledged: true, ...extra });
 
 const handoff = (c: TestClient, id: string) => api(c, 'POST', `/submissions/${id}/handoff`, {});
 
@@ -164,7 +168,9 @@ describe('the review digest', () => {
     expect((read.json() as SubmissionJson).reviewDigest).toBe(d.submission.reviewDigest);
 
     const edited = await api(a, 'PATCH', `/submissions/${d.id}`, {
-      answers: [{ question: 'Why us?', answer: 'something else' }],
+      answers: [
+        { questionKey: 'why_us', label: 'Why us?', value: 'something else', source: 'user' },
+      ],
     });
     expect((edited.json() as SubmissionJson).reviewDigest).not.toBe(d.submission.reviewDigest);
   });
@@ -296,7 +302,16 @@ describe('AC1: handoff is refused, with nothing else changed', () => {
     // handoff is the second guard.
     await app.db
       .update(applicationSubmissions)
-      .set({ answers: [{ question: 'Why us?', answer: 'changed after review' }] })
+      .set({
+        answers: [
+          {
+            questionKey: 'why_us',
+            label: 'Why us?',
+            value: 'changed after review',
+            source: 'user',
+          },
+        ],
+      })
       .where(eq(applicationSubmissions.id, r.id))
       .run();
     await refusedWithNothingChanged(app, a, r.id, 'review_stale');

@@ -80,6 +80,12 @@ export const SubmissionSchema = z.object({
   resumeStore: z.enum(RESUME_STORES).nullable(),
   fields: SubmissionFieldsSchema,
   answers: SubmissionAnswersSchema,
+  /**
+   * The digest of the attempt as it stands now (design Part A 4.5). The review screen sends it
+   * back with POST /submissions/:id/review, proving it showed the state the server holds.
+   */
+  reviewDigest: z.string(),
+  /** Until when a review may be handed off: a fixed time, never a countdown (owner's decision). */
   reviewExpiresAt: TimestampSchema.nullable(),
   reviewedAt: TimestampSchema.nullable(),
   handedOffAt: TimestampSchema.nullable(),
