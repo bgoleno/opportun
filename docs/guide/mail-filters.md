@@ -16,8 +16,10 @@ quote, a backslash or a line break. This setting is for Gmail only.
 
 ## How a message is checked
 
-Every message Opportun receives is checked in this order. The first step that applies decides
-whether it is let through or kept out:
+Every message Opportun receives is checked in this order, on your own Opportun server, and
+nothing is sent anywhere for these steps. Most of them look only at the sender; the private
+content and job wording steps also read the subject and text. The first step that applies
+decides whether a message is let through or kept out:
 
 1. **Your own address** is always let through.
 2. A match on your **allow list** is let through. An allow rule beats everything below,
@@ -41,9 +43,9 @@ could not check.
 
 ### The AI check
 
-A message let through at step 6, 7 or 8 gets one more check: the `comms.triage` AI task reads
-the sender's address, the subject and the first 500 characters of the message, and decides
-whether it is part of your job search. Only a confident "no" keeps a message out. If the model
+A message let through at step 6, 7 or 8 gets one more check: the `comms.triage` AI task sends
+the sender's address, the subject and the first 500 characters of the message to your AI
+provider, which decides whether it is part of your job search. Only a confident "no" keeps a message out. If the model
 is unsure, or cannot answer at all (no AI key, the daily budget spent, a provider error), the
 message is let through. The check is skipped for your allow list, your own address, and the
 job alert senders that [Discovery](discovery.md#job-alert-emails) reads.
@@ -95,18 +97,19 @@ that Discovery reads count as known job senders too.
 
 A message kept out by a filter or by the AI check is stored without its content:
 
-- **Kept**: the From line (name and address), the date, the rule that decided, and the
-  identifiers needed to link back to the original in your mailbox.
+- **Kept**: who sent it (the From line, name and address), who it was sent to (the To line),
+  the date, the rule that decided, and the ids that link back to the original in your mailbox
+  (which mail source it came from, and its message and thread ids).
 - **Not kept**: the subject, the text, and any links in it.
 
 It is never classified and never creates an opportunity. It appears in the **Blocked** tab of
 the [Inbox](inbox.md), with the rule that kept it out ("blocked by your deny list", "blocked by
 nothing in it about a job") and, where there is one, **Open the original**. If a sender you
-want is there, add them to your allow list so their next message gets through. **See filtered mail**, at the bottom of the Mail
-filters page, opens that tab.
+want is there, add them to your allow list so their next message gets through. **See filtered
+mail**, at the bottom of the Mail filters page, opens that tab.
 
-For a message the AI check kept out, the model did read the sender's address, the subject and
-the first 500 characters before deciding. None of that is stored.
+For a message the AI check kept out, the sender's address, the subject and the first 500
+characters were sent to your AI provider before it decided. Opportun does not store them.
 
 <!-- nav:bottom -->
 

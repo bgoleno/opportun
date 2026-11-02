@@ -34,11 +34,14 @@ _The Gmail card with its lookback window, and the Extensions and Connectors card
 ## How classification works
 
 Before a message is classified, your mail filters (under **Settings > Mail filters**) decide
-whether it is about your job search at all, and for some messages a short AI check, the
-`comms.triage` task, reads the sender, the subject and the first 500 characters of the message
-to decide the same. A message either one keeps out is stored without its subject or text: only
-the sender, the date and the rule that decided. It appears in the **Blocked** tab, so you can
-spot a sender kept out by mistake and change the rule.
+whether it is about your job search at all. They run on your own Opportun server: they read the
+sender and, for some checks, the subject and text, and send nothing anywhere. For some
+messages a short AI check, the `comms.triage` task, then sends the sender's address, the
+subject and the first 500 characters to your AI provider to decide the same. A message either
+one keeps out is stored without its subject or text;
+[Mail filters](mail-filters.md#what-happens-to-a-message-that-is-kept-out) lists what is kept.
+It appears in the **Blocked** tab, so you can spot a sender kept out by mistake and change the
+rule.
 
 Each message that gets through goes to the `comms.classify` AI task, which decides:
 
@@ -66,7 +69,7 @@ unclassified and are queued automatically when you add one.
 | Linked       | Messages linked to an opportunity                                                                                                                                              |
 | Spam         | Broadcast outreach. It never creates opportunities. **Not spam** brings one back                                                                                               |
 | Filtered     | Not-a-fit outreach, with the reason it does not fit                                                                                                                            |
-| Blocked      | Messages kept out before classification (see above): only the sender, the date and the rule that decided, with a link to the original where there is one                       |
+| Blocked      | Messages kept out before classification (see above), each shown with its sender, its date and the rule that decided, and a link to the original where there is one             |
 
 ![The Linked tab: a targeted Apple Mail message, and a Gmail interview request with a suggested move to In process](images/inbox-linked.png)
 
