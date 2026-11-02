@@ -59,10 +59,12 @@ export function ApplyPage({
   const submissions = useOpportunitySubmissions(opportunityId);
   const heading = useRef<HTMLHeadingElement>(null);
 
-  // Moving between steps moves focus to the step's heading (design (g)), as AppShell does.
+  // Moving between steps, and arriving, moves focus to the step's heading (design (g)), as
+  // AppShell does. `loaded`: the heading exists only once both queries have answered.
+  const loaded = !opp.isPending && !submissions.isPending;
   useEffect(() => {
-    heading.current?.focus();
-  }, [step]);
+    if (loaded) heading.current?.focus();
+  }, [step, loaded]);
 
   if (opp.isPending || submissions.isPending) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
@@ -1008,13 +1010,14 @@ function CopyDetails({ live }: { live: SubmissionView }) {
               <Button
                 variant="outline"
                 size="sm"
+                // A whole name, not text plus an sr-only span: name computation can drop the space.
+                aria-label={`${copied === r.key ? 'Copied' : 'Copy'} ${r.label}`}
                 onClick={() => {
                   void navigator.clipboard?.writeText(r.value).then(() => setCopied(r.key));
                 }}
               >
                 <Copy className="size-4" aria-hidden="true" />
                 {copied === r.key ? 'Copied' : 'Copy'}
-                <span className="sr-only"> {r.label}</span>
               </Button>
             </li>
           ))}

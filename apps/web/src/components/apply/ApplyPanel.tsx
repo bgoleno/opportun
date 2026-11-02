@@ -117,7 +117,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   }
 
   return (
-    <Card aria-labelledby="assisted-apply-title">
+    <Card role="region" aria-labelledby="assisted-apply-title">
       <CardHeader>
         <CardTitle id="assisted-apply-title" className="text-base">
           Assisted apply
