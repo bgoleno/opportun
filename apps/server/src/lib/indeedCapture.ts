@@ -86,6 +86,17 @@ function readJob(
   return { ok: true, title, company, descriptionMd };
 }
 
+/**
+ * The description recognizeIndeedPage reads from this capture text, or null when the text does
+ * not have the contract's shape. Re-derive runs it over a capture already stored on an
+ * opportunity's timeline (https://github.com/bgoleno/opportun/issues/93), which carries the
+ * text but not the URL check: the capture was recognized as an Indeed job when it was stored.
+ */
+export function indeedDescriptionOf(text: string): string | null {
+  const job = readJob(linesOf(text));
+  return job.ok ? job.descriptionMd : null;
+}
+
 /** Decides what a captured Indeed tab is. Never throws; never touches the network. */
 export function recognizeIndeedPage(input: {
   url: string;

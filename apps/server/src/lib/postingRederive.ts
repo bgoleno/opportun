@@ -17,6 +17,12 @@
 // from it. A straight `descriptionOf` with no pre-cut would have reproduced #246's bug on the
 // one path built specifically to repair it.
 //
+// That is LinkedIn's extraction. Since Indeed became a capture site, the stored text is read with
+// the extraction of the site the capture came from (https://github.com/bgoleno/opportun/issues/93):
+// each recognizer in lib/captureRecognizers.ts says how (`storedDescriptionOf`, where LinkedIn's
+// pre-cut now lives), and the capture's own "Captured from <site>" title names the site. A capture
+// from a site with no recognizer finds no description and changes nothing.
+//
 // Design question 3 (#264): a board posting may exist and be better than the capture alone
 // (confirm()'s own merge of the ATS copy with capture passages). This tries that exact path
 // first -- the same findPosting + confirm() the automatic reconcile job uses, reused verbatim --
@@ -25,8 +31,8 @@
 // (candidates, none or no board) does this fall back to deriving a description from the capture
 // text alone.
 //
-// Design question 5 (#264): that fallback is deliberately the same deterministic `descriptionOf`
-// extraction a capture already falls back to when AI is unavailable, not a second AI call. The
+// Design question 5 (#264): that fallback is deliberately the same deterministic extraction
+// a capture already falls back to when AI is unavailable, not a second AI call. The
 // AI step (capture.linkedin) needs the page's own tab title as a prompt variable, and that title
 // is never stored once an opportunity exists -- CaptureInput (lib/captureResolve.ts) never
 // carries it past the capture route. Synthesizing one would mean feeding the model fabricated
@@ -40,7 +46,7 @@ import { createActivity } from '../repos/activities';
 import type { UserCtx } from '../repos/base';
 import { getOpportunity, updateOpportunity, type OpportunityView } from '../repos/opportunities';
 import { HttpError } from './errors';
-import { cutTrailingNoise, descriptionOf, linesOf } from './linkedinCapture';
+import { storedDescriptionOf } from './captureRecognizers';
 import { descriptionFingerprint, isSystemWritten } from './postingFingerprint';
 import { findPosting, type BoardLookup, type BodyReader } from './postingSearch';
 
@@ -50,7 +56,7 @@ const noBodies: BodyReader = async () => '';
 export type RederiveOutcome =
   | { kind: 'merged'; opportunity: OpportunityView }
   | { kind: 'capture_only'; opportunity: OpportunityView }
-  /** The capture carried no recognizable "About the job" section; nothing was changed. */
+  /** The capture's site found no description in it (or has no recognizer); nothing was changed. */
   | { kind: 'no_description_found' };
 
 /**
@@ -123,14 +129,10 @@ export async function rederivePosting(
     return { kind: 'merged', opportunity: await getOpportunity(db, ctx, opportunityId) };
   }
 
-  // A capture made before #246 shipped still carries the rail in its raw stored text (every
-  // capture on the owner's instance does, as of issue #264). Cutting it here, the same way
-  // extractPage already cuts it at capture time, is not optional: descriptionOf's own end
-  // markers exist to find where "About the job" ends, not to find the rail, and a real capture
-  // was confirmed (read-only) to have nothing stop it between the posting and the rail. Without
-  // this, re-deriving an old capture would reproduce #246's bug on the one path meant to repair
-  // it.
-  const derived = descriptionOf(linesOf(cutTrailingNoise(capture.text)));
+  // The capture's own site's extraction (https://github.com/bgoleno/opportun/issues/93). For a
+  // LinkedIn capture that still cuts the recommended rail before reading, as issue #264 requires:
+  // see linkedInStoredDescriptionOf in lib/captureRecognizers.ts.
+  const derived = storedDescriptionOf(capture.siteId, capture.text);
   if (derived === null) return { kind: 'no_description_found' };
 
   const updated = await updateOpportunity(db, ctx, opportunityId, {

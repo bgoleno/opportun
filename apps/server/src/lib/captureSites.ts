@@ -67,6 +67,15 @@ export const CAPTURE_SITES: readonly CaptureSite[] = [
 
 const byId = new Map(CAPTURE_SITES.map((s) => [s.id, s]));
 
+/**
+ * The site whose label is `label`, or null. The inverse of siteLabel for a known site: a capture
+ * activity names its site only by label ("Captured from Indeed"), so this is how a stored
+ * capture is traced back to the site that read it (https://github.com/bgoleno/opportun/issues/93).
+ */
+export function siteOfLabel(label: string): CaptureSite | null {
+  return CAPTURE_SITES.find((s) => s.label === label) ?? null;
+}
+
 /** The site's label, or the id itself when nothing claims it. */
 export function siteLabel(siteId: string): string {
   return byId.get(siteId.toLowerCase())?.label ?? siteId;
