@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "b6bbb716-d3dd-417f-9adf-8e6ac48b21dc",
+  "id": "3929d8c2-6b26-41c1-8ae3-10593ef11a31",
   "prevId": "0fc1cf45-2135-4614-9969-601ab4bae64f",
   "tables": {
     "activities": {
@@ -365,6 +365,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "followup_next_step_id": {
+          "name": "followup_next_step_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "reapply_of": {
           "name": "reapply_of",
           "type": "text",
@@ -475,6 +482,15 @@
           "tableFrom": "application_submissions",
           "tableTo": "activities",
           "columnsFrom": ["confirmation_activity_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "application_submissions_followup_next_step_id_next_steps_id_fk": {
+          "name": "application_submissions_followup_next_step_id_next_steps_id_fk",
+          "tableFrom": "application_submissions",
+          "tableTo": "next_steps",
+          "columnsFrom": ["followup_next_step_id"],
           "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"

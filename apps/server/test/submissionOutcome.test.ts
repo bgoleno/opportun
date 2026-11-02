@@ -433,6 +433,28 @@ describe('criterion 2: no confirmation after 3 days shows a next step; nothing i
     expect((await countsFor(app, d.oppId)).nextSteps).toBe(1);
   });
 
+  it('links the attempt to the next step it created; deleting the step clears the link', async () => {
+    const { app, a } = await boot(ON);
+    const d = await handedOff(app, a);
+    const submittedAt = (await rowOf(app, d.id))?.handedOffAt as number;
+    await attest(a, d.id, { moveToApplied: false, submittedAt });
+    expect((await rowOf(app, d.id))?.followupNextStepId).toBeNull();
+    await followUpSubmissions(app.db, submittedAt + FOLLOWUP_MS);
+    const step = await app.db
+      .select()
+      .from(nextSteps)
+      .where(eq(nextSteps.opportunityId, d.oppId))
+      .get();
+    expect(step).toBeDefined();
+    expect((await rowOf(app, d.id))?.followupNextStepId).toBe(step?.id);
+    // ON DELETE SET NULL (both engines' migrations): the user's own delete just clears it.
+    await app.db
+      .delete(nextSteps)
+      .where(eq(nextSteps.id, step?.id as string))
+      .run();
+    expect(await rowOf(app, d.id)).toMatchObject({ status: 'unknown', followupNextStepId: null });
+  });
+
   it('leaves a confirmed or reported attempt alone', async () => {
     const { app, a } = await boot(ON);
     const d = await handedOff(app, a);

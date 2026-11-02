@@ -1,1 +1,3 @@
-ALTER TABLE "application_submissions" ADD COLUMN "reapply_reason" text;
+ALTER TABLE "application_submissions" ADD COLUMN "reapply_reason" text;--> statement-breakpoint
+ALTER TABLE "application_submissions" ADD COLUMN "followup_next_step_id" text;--> statement-breakpoint
+ALTER TABLE "application_submissions" ADD CONSTRAINT "application_submissions_followup_next_step_id_next_steps_id_fk" FOREIGN KEY ("followup_next_step_id") REFERENCES "public"."next_steps"("id") ON DELETE set null ON UPDATE no action;

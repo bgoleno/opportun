@@ -320,11 +320,17 @@ export async function followUpSubmissions(db: Db, now: number = Date.now()): Pro
       // Confirmed, reported or cancelled meanwhile: nothing to follow up.
       if (updated === undefined) return false;
       const opp = await opportunityFacts(tx, ctx, updated.opportunityId);
-      await createNextStep(tx, ctx, updated.opportunityId, {
+      const step = await createNextStep(tx, ctx, updated.opportunityId, {
         action: `Check whether your application to ${opp.company} was received`,
         dueAt: now,
         owner: 'you',
       });
+      // Linked to the attempt, so recording an outcome can close it (#148).
+      await tx
+        .update(applicationSubmissions)
+        .set({ followupNextStepId: step.id })
+        .where(owned(ctx, id))
+        .run();
       await audit(tx, 'submission.unknown', {
         userId,
         detail: { submissionId: id, opportunityId: updated.opportunityId },

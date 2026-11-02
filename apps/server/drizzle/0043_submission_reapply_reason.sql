@@ -1,1 +1,2 @@
-ALTER TABLE `application_submissions` ADD `reapply_reason` text;
+ALTER TABLE `application_submissions` ADD `reapply_reason` text;--> statement-breakpoint
+ALTER TABLE `application_submissions` ADD `followup_next_step_id` text REFERENCES next_steps(id) ON DELETE set null;

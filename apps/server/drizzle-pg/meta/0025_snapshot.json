@@ -1,5 +1,5 @@
 {
-  "id": "46bfa733-5f00-4284-b823-dd039a264ebe",
+  "id": "8cc0aa13-6f4d-44f9-b5af-a51197d582ff",
   "prevId": "8e0312b4-a785-4a63-b4ba-db2112916e58",
   "version": "7",
   "dialect": "postgresql",
@@ -350,6 +350,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "followup_next_step_id": {
+          "name": "followup_next_step_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "reapply_of": {
           "name": "reapply_of",
           "type": "text",
@@ -543,6 +549,15 @@
           "tableFrom": "application_submissions",
           "tableTo": "activities",
           "columnsFrom": ["confirmation_activity_id"],
+          "columnsTo": ["id"],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "application_submissions_followup_next_step_id_next_steps_id_fk": {
+          "name": "application_submissions_followup_next_step_id_next_steps_id_fk",
+          "tableFrom": "application_submissions",
+          "tableTo": "next_steps",
+          "columnsFrom": ["followup_next_step_id"],
           "columnsTo": ["id"],
           "onDelete": "set null",
           "onUpdate": "no action"
