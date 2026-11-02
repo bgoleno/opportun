@@ -22,8 +22,7 @@ import { isUniqueViolation, withTransaction } from '../db/client';
 import { applicationSubmissions, attachments, opportunities, resumes } from '../db/schema';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
-import { enqueue } from '../jobs/runner';
-import { SNAPSHOT_JOB_KIND, snapshotJobKey } from '../jobs/submissionSnapshot';
+import { enqueueSnapshot } from '../jobs/submissionSnapshot';
 import type { Db, Exec, UserCtx } from './base';
 import { countWhere, type ListOpts, type Page } from './list';
 
@@ -141,21 +140,6 @@ async function liveFor(
 }
 
 /**
- * Queues the resume snapshot for an attempt (#115). The payload is the id alone: the job reads
- * the resume from the stored row when it runs, never from a request. While a job for this
- * attempt is still queued or running the key keeps it to one, and that job exports whatever
- * resume the row holds by then (jobs/submissionSnapshot.ts).
- */
-async function enqueueSnapshot(db: Db, ctx: UserCtx, id: string): Promise<void> {
-  await enqueue(
-    db,
-    SNAPSHOT_JOB_KIND,
-    { submissionId: id },
-    { dedupeKey: snapshotJobKey(id), userId: ctx.userId },
-  );
-}
-
-/**
  * Why review must wait for the snapshot, or null when it need not (#115, tl's answers): a
  * pending snapshot is not there yet, and a failed one needs the user first (choosing the resume
  * again retries it). `ready` and `unsupported` may be reviewed: with no PDF from the store the
@@ -220,6 +204,11 @@ export async function createSubmissionDraft(
     // resume, is a client bug: never answer it silently with the first request's choice.
     if (prior.opportunityId !== opportunityId || prior.resumeId !== input.resumeId) {
       throw new HttpError(409, 'idempotency_key_reused', 'That key was used for another request.');
+    }
+    // A create interrupted between its insert and its enqueue is retried with the same key:
+    // queue the snapshot here too (a no-op while it is queued or running; tl on #131).
+    if (prior.status === 'draft' && prior.snapshotState === 'pending') {
+      await enqueueSnapshot(db, ctx.userId, prior.id, prior.resumeId);
     }
     return { submission: view(prior), replayed: true };
   };
@@ -296,7 +285,8 @@ export async function createSubmissionDraft(
       })
       .returning();
     const created = row as SubmissionRow;
-    await enqueueSnapshot(db, ctx, created.id);
+    // The payload names the attempt and the resume by id; the job reads both from storage.
+    await enqueueSnapshot(db, ctx.userId, created.id, resume.id);
     return { submission: view(created), replayed: false };
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
@@ -404,7 +394,9 @@ export async function updateSubmissionDraft(
     return changed;
   });
   // After the commit, so the job never runs ahead of the row it reads.
-  if (patch.resumeId !== undefined) await enqueueSnapshot(db, ctx, id);
+  if (patch.resumeId !== undefined) {
+    await enqueueSnapshot(db, ctx.userId, id, updated.resumeId);
+  }
   return view(updated);
 }
 

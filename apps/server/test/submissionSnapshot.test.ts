@@ -22,8 +22,13 @@ import {
   resumes,
 } from '../src/db/schema';
 import { ATTACHMENT_SWEEP_GRACE_MS, sweepOrphanedAttachments } from '../src/jobs/attachmentSweep';
-import { runNextJob } from '../src/jobs/runner';
-import { SNAPSHOT_JOB_KIND } from '../src/jobs/submissionSnapshot';
+import { readSchedules, runNextJob } from '../src/jobs/runner';
+import {
+  reconcilePendingSnapshots,
+  SNAPSHOT_JOB_KIND,
+  SNAPSHOT_PENDING_GRACE_MS,
+  SNAPSHOT_RECONCILE_JOB_KIND,
+} from '../src/jobs/submissionSnapshot';
 import type { UserCtx } from '../src/repos/base';
 import { createOpportunity } from '../src/repos/opportunities';
 import { insertResume } from '../src/repos/resumes';
@@ -253,9 +258,10 @@ describe('criterion 1: choosing a resume produces an immutable snapshot', () => 
     expect(patched.statusCode).toBe(422);
     await app.jobs.drain();
     expect(google.calls).toEqual([{ userId: a.userId, ref: resume.docRef }]);
-    // The job's payload carries the attempt's id and nothing of the resume.
+    // The job's payload carries ids only, the attempt's and the chosen resume's: nothing of the
+    // resume's content or its document ref.
     const [job] = await snapshotJobs(app);
-    expect(job?.payload).toEqual({ submissionId: draft.id });
+    expect(job?.payload).toEqual({ submissionId: draft.id, resumeId: resume.id });
     expect(job?.userId).toBe(a.userId);
   });
 
@@ -380,8 +386,11 @@ describe('criterion 4: export failures are retried, then the draft shows snapsho
   beforeEach(() => {
     clock = Date.now();
   });
-  async function runAttempts(app: FastifyInstance, n: number) {
-    const tries = async () => (await snapshotJobs(app))[0]?.attempts ?? 0;
+  async function runAttempts(app: FastifyInstance, n: number, resumeId?: string) {
+    const tries = async () =>
+      (await snapshotJobs(app)).find(
+        (j) => resumeId === undefined || (j.payload as { resumeId: string }).resumeId === resumeId,
+      )?.attempts ?? 0;
     const target = (await tries()) + n;
     for (let step = 0; step < 50 && (await tries()) < target; step++) {
       clock += 2 * 60 * 60 * 1000;
@@ -572,5 +581,168 @@ describe('the snapshot job keeps to its own row', () => {
     await app.jobs.drain();
     expect(google.calls).toEqual([]);
     expect(await app.db.select().from(attachments).all()).toEqual([]);
+  });
+});
+
+describe('nothing leaves a draft pending with no job to settle it (tl on #131)', () => {
+  it('the same resume chosen again just after the write is exported again by the running job', async () => {
+    const { app, a } = await boot(ON);
+    const opp = await seedOpportunity(app, a);
+    const resume = await seedResume(app, a);
+    const draft = await createDraft(a, opp, resume.id);
+    // The job has written `ready` and still counts as running: the PATCH cannot queue its own.
+    const pause = pauseAt('submissions.snapshot.afterWrite');
+    const running = app.jobs.drain();
+    await pause.reached;
+    expect((await read(a, draft.id)).snapshotState).toBe('ready');
+    const res = await patchResume(a, draft.id, resume.id);
+    expect(res.json()).toMatchObject({ snapshotState: 'pending' });
+    expect(await snapshotJobs(app)).toHaveLength(1);
+    pause.release();
+    await running;
+    expect((await read(a, draft.id)).snapshotState).toBe('ready');
+    expect(google.calls).toHaveLength(2);
+  });
+
+  it.each(['none', 'done', 'dead'] as const)(
+    'the reconciling pass queues a stranded draft again (its job: %s)',
+    async (jobState) => {
+      const { app, a } = await boot(ON);
+      const opp = await seedOpportunity(app, a);
+      const bytes = pdf('resume one');
+      const resume = await seedResume(app, a, 'google_doc', bytes);
+      const draft = await createDraft(a, opp, resume.id);
+      // Built directly: pending for longer than the grace period, with no job left to settle it.
+      if (jobState === 'none')
+        await app.db.delete(jobs).where(eq(jobs.kind, SNAPSHOT_JOB_KIND)).run();
+      else {
+        await app.db
+          .update(jobs)
+          .set({ status: jobState })
+          .where(eq(jobs.kind, SNAPSHOT_JOB_KIND))
+          .run();
+      }
+      const old = Date.now() - 2 * SNAPSHOT_PENDING_GRACE_MS;
+      await app.db
+        .update(applicationSubmissions)
+        .set({ updatedAt: old })
+        .where(eq(applicationSubmissions.id, draft.id))
+        .run();
+      await app.jobs.drain();
+      expect((await read(a, draft.id)).snapshotState).toBe('pending'); // stranded
+
+      expect(await reconcilePendingSnapshots(app.db)).toEqual({ checked: 1 });
+      await app.jobs.drain();
+      expect(await read(a, draft.id)).toMatchObject({
+        snapshotState: 'ready',
+        resumeSha256: sha(bytes),
+      });
+    },
+  );
+
+  it('the pass leaves alone a draft pending within the grace period, and anything not a draft', async () => {
+    const { app, a } = await boot(ON);
+    const opp = await seedOpportunity(app, a);
+    const resume = await seedResume(app, a);
+    await createDraft(a, opp, resume.id);
+    const other = await createDraft(a, await seedOpportunity(app, a), resume.id);
+    await app.db
+      .update(applicationSubmissions)
+      .set({ status: 'abandoned', updatedAt: 0 })
+      .where(eq(applicationSubmissions.id, other.id))
+      .run();
+    expect(await reconcilePendingSnapshots(app.db)).toEqual({ checked: 0 });
+  });
+
+  it('a create retried after its enqueue was lost queues the snapshot on the replay', async () => {
+    const { app, a } = await boot(ON);
+    const opp = await seedOpportunity(app, a);
+    const resume = await seedResume(app, a);
+    const body = { idempotencyKey: crypto.randomUUID(), resumeId: resume.id };
+    const url = `/api/v1/opportunities/${opp}/submissions`;
+    const first = await a.request({ method: 'POST', url, payload: body });
+    expect(first.statusCode).toBe(201);
+    await app.db.delete(jobs).where(eq(jobs.kind, SNAPSHOT_JOB_KIND)).run();
+    const again = await a.request({ method: 'POST', url, payload: body });
+    expect(again.statusCode).toBe(200);
+    expect(await snapshotJobs(app)).toHaveLength(1);
+    await app.jobs.drain();
+    expect((await read(a, first.json<{ id: string }>().id)).snapshotState).toBe('ready');
+  });
+
+  it('the pass is scheduled only while the feature is on', async () => {
+    const kinds = async (app: FastifyInstance) => (await readSchedules(app.db)).map((r) => r.kind);
+    const on = await boot(ON);
+    expect(await kinds(on.app)).toContain(SNAPSHOT_RECONCILE_JOB_KIND);
+    const off = await boot({ submissions: false });
+    expect(await kinds(off.app)).not.toContain(SNAPSHOT_RECONCILE_JOB_KIND);
+  });
+
+  it('a write for a draft no longer pending does not land (the pending condition)', async () => {
+    const { app, a } = await boot(ON);
+    const opp = await seedOpportunity(app, a);
+    const resume = await seedResume(app, a);
+    const draft = await createDraft(a, opp, resume.id);
+    const pause = pauseAt('submissions.snapshot.beforeWrite');
+    const running = app.jobs.drain();
+    await pause.reached;
+    // Same draft, same resume, but settled meanwhile: only the pending condition stops the write.
+    await app.db
+      .update(applicationSubmissions)
+      .set({ snapshotState: 'failed', snapshotError: 'no_access' })
+      .where(eq(applicationSubmissions.id, draft.id))
+      .run();
+    pause.release();
+    await running;
+    expect(await read(a, draft.id)).toMatchObject({ snapshotState: 'failed', resumeSha256: null });
+    expect(await app.db.select().from(attachments).all()).toEqual([]);
+  });
+});
+
+describe('a newly chosen resume gets its own job with its full tries (tl on #131)', () => {
+  let clock = 0;
+  beforeEach(() => {
+    clock = Date.now();
+  });
+  async function runJob(app: FastifyInstance, resumeId: string) {
+    const job = async () =>
+      (await snapshotJobs(app)).find(
+        (j) => (j.payload as { resumeId: string }).resumeId === resumeId,
+      );
+    const before = (await job())?.attempts ?? 0;
+    for (let step = 0; step < 50 && ((await job())?.attempts ?? 0) === before; step++) {
+      clock += 2 * 60 * 60 * 1000;
+      const t = clock;
+      await runNextJob(app.db, { now: () => t, random: () => 0.5, services: app.jobs.services });
+    }
+    return await job();
+  }
+
+  it('after two failed tries of resume A, resume B still has three', async () => {
+    const { app, a } = await boot(ON);
+    const opp = await seedOpportunity(app, a);
+    const first = await seedResume(app, a);
+    const two = pdf('resume two');
+    const second = await seedResume(app, a, 'google_doc', two);
+    const draft = await createDraft(a, opp, first.id);
+    google.fail = new DocumentExportError('unavailable');
+    await runJob(app, first.id);
+    expect((await runJob(app, first.id))?.attempts).toBe(2);
+
+    expect((await patchResume(a, draft.id, second.id)).statusCode).toBe(200);
+    google.fail = new DocumentExportError('rate_limited');
+    const firstTry = await runJob(app, second.id);
+    expect(firstTry).toMatchObject({ attempts: 1, status: 'pending' }); // retried, not failed
+    expect((await read(a, draft.id)).snapshotState).toBe('pending');
+    google.fail = null;
+    await runJob(app, second.id);
+    expect(await read(a, draft.id)).toMatchObject({
+      resumeId: second.id,
+      snapshotState: 'ready',
+      resumeSha256: sha(two),
+    });
+    // A's job, whenever it runs again, finds another resume chosen and does nothing.
+    await app.jobs.drain();
+    expect((await read(a, draft.id)).resumeSha256).toBe(sha(two));
   });
 });
