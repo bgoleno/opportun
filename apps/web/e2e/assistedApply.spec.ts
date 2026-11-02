@@ -153,6 +153,13 @@ test('apply: choose a resume, add details, review everything, open the form, and
   }
   const box = page.getByRole('checkbox', { name: /I will press Submit myself/ });
   await expect(box).not.toBeChecked();
+  // The saved copy (#115): the snapshot job exports the Google Doc (OPPORTUN_DOCS_MOCK), and the
+  // review shows it, with its download, once it is ready (the page polls while it is pending).
+  const copy = page.getByRole('link', { name: /download the saved copy/i });
+  await expect(copy).toBeVisible({ timeout: 30_000 });
+  const pdf = await page.request.get(String(await copy.getAttribute('href')));
+  expect(pdf.status()).toBe(200);
+  expect(pdf.headers()['content-type']).toContain('application/pdf');
 
   // Criterion 2: an edit after this point goes back through the review.
   await page.getByRole('link', { name: 'Back' }).click();
