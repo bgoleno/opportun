@@ -210,6 +210,13 @@ export async function reviewSubmission(
       });
     }
     if (submissionDigest(row) !== input.reviewDigest) throw reviewStale();
+
+    // The user's lock from here on: the daily cap counts every review of theirs, and the
+    // re-apply check reads their other attempts. Under the attempt's own lock alone, two reviews
+    // of two attempts at one requisition, at the same moment, each saw the other still a draft
+    // and both passed without a reason (qa on #145, on Postgres). Same order as before: the
+    // attempt's lock, then the user's, so no two reviews wait on each other in a circle.
+    await lockScope(tx, userScope(ctx));
     // Applying again to the same requisition is allowed, with a typed reason (owner decision 6,
     // #118). The review is where the user sees the earlier application, so it is asked here.
     const earlier = await earlierApplication(tx, ctx, row);
@@ -223,7 +230,6 @@ export async function reviewSubmission(
       );
     }
 
-    await lockScope(tx, userScope(ctx));
     const cap = await dailyCap(tx, ctx, cfg);
     const used = await reviewsInWindow(tx, ctx, now, id);
     if (used.length >= cap) {

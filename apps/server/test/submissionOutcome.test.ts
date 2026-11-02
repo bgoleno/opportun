@@ -659,6 +659,39 @@ describe('criterion 3: applying again to the same requisition needs a typed reas
     },
   );
 
+  it('two attempts at one requisition reviewed at the same moment: only one passes without a reason (race, qa on #145)', async () => {
+    const { app, a } = await boot(ON);
+    const ats = freshRef();
+    const one = await draftFor(app, a, 'interested', ats);
+    const two = await draftFor(app, a, 'interested', ats);
+    // Both reviews have read their own attempt and are about to open their transactions.
+    const barrier = holdAt('submissions.review', 2);
+    const results = await Promise.all([
+      review(a, one.id, one.digest),
+      review(a, two.id, two.digest),
+    ]);
+    expect(barrier.arrived()).toBe(2);
+    expect(results.map((r) => r.statusCode).sort()).toEqual([200, 422]);
+    const refused = results.find((r) => r.statusCode === 422);
+    expect(refused?.json()).toMatchObject({ error: { code: 'reapply_reason_required' } });
+  });
+
+  it('the board is part of the requisition: the same job id on another board is not a re-application', async () => {
+    const { app, a } = await boot(ON);
+    const ats = freshRef();
+    const first = await handedOff(app, a, 'interested', ats);
+    await attest(a, first.id, { moveToApplied: false });
+    const otherBoard: AtsJobRef = {
+      ...ats,
+      org: 'othercorp',
+      url: `https://boards.greenhouse.io/othercorp/jobs/${ats.externalId}`,
+    };
+    const again = await draftFor(app, a, 'interested', otherBoard);
+    const res = await review(a, again.id, again.digest);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ reapplyOf: null });
+  });
+
   it('a draft elsewhere is not yet an application: no reason needed', async () => {
     const { app, a } = await boot(ON);
     const ats = freshRef();
