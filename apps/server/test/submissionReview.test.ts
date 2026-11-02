@@ -636,6 +636,15 @@ describe('AC6: the destination', () => {
       { ...ATS_REF, url: 'https://careers.example.com/open-roles?gh_jid=1000002' },
     ],
     [
+      // tl on #129: no career-page branch until M3 can tie the host to the company.
+      'a career page carrying the posting id (any host can)',
+      { ...ATS_REF, url: 'https://careers.example.com/open-roles?gh_jid=1000001' },
+    ],
+    [
+      "the same requisition id on another company's board",
+      { ...ATS_REF, url: 'https://boards.greenhouse.io/othercorp/jobs/1000001' },
+    ],
+    [
       'the ATS board for another requisition',
       { ...ATS_REF, url: 'https://boards.greenhouse.io/examplecorp/jobs/1000002' },
     ],
@@ -700,10 +709,6 @@ describe('AC6: the destination', () => {
   it.each([
     ['a recognised ATS posting URL', 'https://boards.greenhouse.io/examplecorp/jobs/1000001'],
     [
-      'a career page carrying the posting id',
-      'https://careers.example.com/open-roles?gh_jid=1000001',
-    ],
-    [
       'a recognised URL with tracking parameters',
       'https://boards.greenhouse.io/examplecorp/jobs/1000001?utm_source=example',
     ],
@@ -745,7 +750,10 @@ describe('the expiry sweeper', () => {
       failureReason: 'review_expired',
     });
     expect((await rowOf(app, fresh.id))?.status).toBe('reviewed');
-    expect((await rowOf(app, idle.id))?.status).toBe('abandoned');
+    expect(await rowOf(app, idle.id)).toMatchObject({
+      status: 'abandoned',
+      failureReason: 'handoff_idle',
+    });
     expect((await rowOf(app, recent.id))?.status).toBe('handed_off');
     expect(await auditEvents(app, a, 'submission.abandoned')).toHaveLength(2);
   });

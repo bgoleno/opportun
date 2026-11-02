@@ -17,7 +17,7 @@ import {
   type SubmissionStatus,
 } from '@opportun/core';
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import { isUniqueViolation, withTransaction } from '../db/client';
+import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
 import { applicationSubmissions, opportunities, resumes } from '../db/schema';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
@@ -337,6 +337,9 @@ export async function updateSubmissionDraft(
   patch: SubmissionPatch,
 ): Promise<Submission> {
   return await withTransaction(db, async (tx) => {
+    // The attempt's lock (repos/submissionReview.ts): a review or handoff in flight checks the
+    // row after this edit, or this edit waits until it is done.
+    await lockScope(tx, `submission:${id}`);
     const row = await getRow(tx, ctx, id);
     if (row.status !== 'draft' && row.status !== 'reviewed') throw notNow(row, 'draft');
     applySubmissionTransition(row, 'draft');
@@ -377,6 +380,9 @@ export async function updateSubmissionDraft(
  */
 export async function cancelSubmission(db: Db, ctx: UserCtx, id: string): Promise<Submission> {
   return await withTransaction(db, async (tx) => {
+    // The attempt's lock (repos/submissionReview.ts): a review or handoff in flight checks the
+    // row after this edit, or this edit waits until it is done.
+    await lockScope(tx, `submission:${id}`);
     const row = await getRow(tx, ctx, id);
     if (row.status === 'abandoned' && row.failureReason === 'cancelled_by_user') return view(row);
     if (!canSubmissionTransition(row.status, 'abandoned')) throw notNow(row, 'abandoned');

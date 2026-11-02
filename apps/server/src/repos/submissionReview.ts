@@ -7,21 +7,26 @@
 //   recomputes the digest and refuses if anything changed, if the review expired, or if the
 //   attempt is not reviewed; a refusal changes nothing, not even the audit log.
 // - At most N reviews per user in a rolling 24 hours (the instance value, which the user may
-//   lower), counted in the database under the user's scope lock, so a restart does not reset
-//   it and two concurrent reviews on Postgres cannot both count the same rows.
+//   lower), counted from the audit log under the user's scope lock, so a restart or a deleted
+//   opportunity does not reset it and two concurrent reviews on Postgres cannot both count the
+//   same entries.
 // - The handoff returns the pinned destination and never fetches it. The destination must be
-//   https, never LinkedIn or Indeed, and a recognised posting URL for this requisition or a
-//   career page carrying its posting id.
-// - Concurrent reviews or handoffs of one attempt produce one transition and one audit entry;
-//   the other caller gets the current state back, not an error.
+//   https, never LinkedIn or Indeed, and a recognised posting URL for this requisition on its
+//   own board or tenant.
+// - Every write to one attempt (edit, cancel, review, handoff) takes its lock and checks the row
+//   it re-read under it, so concurrent requests serialize: one transition and one audit entry,
+//   the other caller gets the current state back, and an edit cannot slip between a check and
+//   the write it guards.
 //
 // Opportun never transmits an application: nothing here contacts an employer or an ATS.
-import { and, eq, gt, lte, min, ne, or, count as sqlCount } from 'drizzle-orm';
+import { and, eq, gt, lte, max, or } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Submission } from '@opportun/core';
 import { DEFAULT_DAILY_REVIEW_CAP, MAX_DAILY_REVIEW_CAP, type Config } from '../config';
 import { lockScope, withTransaction } from '../db/client';
-import { applicationSubmissions } from '../db/schema';
+import { jsonText } from '../db/dialect';
+import { applicationSubmissions, auditLog } from '../db/schema';
+import { boardFromUrl } from '../jobs/atsDetect';
 import { extractAtsJobRefs } from '../lib/atsJobRef';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
@@ -43,6 +48,12 @@ export const DAILY_REVIEW_CAP_SETTING = 'submissions.dailyReviewCap';
 export const SUBMISSION_EXPIRE_JOB_KIND = 'submission.expire';
 
 const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
+/**
+ * One lock per attempt, taken first by every write to it (edit, cancel, review, handoff), so
+ * each re-reads the row after the lock and checks the state it is about to change. Lock order is
+ * this scope, then the user's.
+ */
+export const submissionScope = (id: string): string => `submission:${id}`;
 
 /** The cap that applies to this user: their own value if lower, else the instance's. */
 async function dailyCap(
@@ -61,6 +72,38 @@ async function dailyCap(
   return own === null ? instance : Math.min(own, instance);
 }
 
+/**
+ * The attempts this user reviewed in the window, other than `exceptId`, each with the time of
+ * its latest review in the window, oldest first. Counted from `submission.reviewed` audit
+ * entries rather than submission rows: deleting an opportunity cascades its attempts away but
+ * leaves the audit log, so a deletion cannot free a place under the cap. One attempt reviewed
+ * several times counts once.
+ */
+async function reviewsInWindow(
+  exec: Exec,
+  ctx: UserCtx,
+  now: number,
+  exceptId: string,
+): Promise<number[]> {
+  const submissionId = jsonText(auditLog.detail, 'submissionId');
+  const rows = await exec
+    .select({ submissionId, at: max(auditLog.createdAt) })
+    .from(auditLog)
+    .where(
+      and(
+        eq(auditLog.userId, ctx.userId),
+        eq(auditLog.event, 'submission.reviewed'),
+        gt(auditLog.createdAt, now - REVIEW_CAP_WINDOW_MS),
+      ),
+    )
+    .groupBy(submissionId)
+    .all();
+  return rows
+    .filter((r) => r.submissionId !== exceptId && r.at !== null)
+    .map((r) => r.at as number)
+    .sort((a, b) => a - b);
+}
+
 const reviewStale = (): HttpError =>
   new HttpError(
     409,
@@ -72,12 +115,16 @@ export interface ReviewInput {
   reviewDigest: string;
 }
 
-type ReviewOutcome =
-  { kind: 'reviewed'; row: SubmissionRow } | { kind: 'capped'; resetAt: number } | { kind: 'lost' };
+type ReviewOutcome = { kind: 'reviewed'; row: SubmissionRow } | { kind: 'capped'; resetAt: number };
 
 /**
  * Reviews a draft whose digest matches the state the client rendered. A repeat with the same
- * digest (a double click, or the loser of a race) answers the reviewed attempt unchanged.
+ * digest while the review is valid (a double click, or the loser of a race) answers the
+ * reviewed attempt unchanged. An expired review with the same digest is reviewed again: it
+ * gets a new valid-until and counts under the cap as a fresh review.
+ *
+ * Every check runs inside the transaction, on the row re-read under the attempt's lock, so an
+ * edit cannot land between the digest check and the write (#129).
  */
 export async function reviewSubmission(
   db: Db,
@@ -86,31 +133,30 @@ export async function reviewSubmission(
   id: string,
   input: ReviewInput,
 ): Promise<Submission> {
-  const row = await getRow(db, ctx, id);
-  if (row.status === 'reviewed' && row.reviewDigest === input.reviewDigest) return view(row);
-  if (row.status !== 'draft') throw notNow(row, 'reviewed');
-  if (submissionDigest(row) !== input.reviewDigest) throw reviewStale();
-  // Every caller past its checks, none past its write (test/submissionReview.test.ts races).
+  // Ownership first, outside any lock: another user's id is a 404 and takes no lock.
+  await getRow(db, ctx, id);
+  // Every caller before its transaction (test/submissionReview.test.ts races).
   await racePoint('submissions.review');
 
   const outcome = await withTransaction(db, async (tx): Promise<ReviewOutcome> => {
-    await lockScope(tx, userScope(ctx));
+    await lockScope(tx, submissionScope(id));
+    const row = await getRow(tx, ctx, id);
     const now = Date.now();
+    const sameDigest = row.reviewDigest === input.reviewDigest;
+    if (row.status === 'reviewed' && sameDigest && (row.reviewExpiresAt ?? 0) > now) {
+      return { kind: 'reviewed', row };
+    }
+    const refresh = row.status === 'reviewed' && sameDigest;
+    if (row.status !== 'draft' && !refresh) throw notNow(row, 'reviewed');
+    if (submissionDigest(row) !== input.reviewDigest) throw reviewStale();
+
+    await lockScope(tx, userScope(ctx));
     const cap = await dailyCap(tx, ctx, cfg);
-    // Attempts reviewed in the window, this one excluded: an edit after review keeps its
-    // reviewed_at, so re-reviewing it moves that time rather than counting it twice.
-    const inWindow = and(
-      eq(applicationSubmissions.userId, ctx.userId),
-      gt(applicationSubmissions.reviewedAt, now - REVIEW_CAP_WINDOW_MS),
-      ne(applicationSubmissions.id, id),
-    );
-    const used = await tx
-      .select({ n: sqlCount(), oldest: min(applicationSubmissions.reviewedAt) })
-      .from(applicationSubmissions)
-      .where(inWindow)
-      .get();
-    if ((used?.n ?? 0) >= cap) {
-      const resetAt = (used?.oldest ?? now) + REVIEW_CAP_WINDOW_MS;
+    const used = await reviewsInWindow(tx, ctx, now, id);
+    if (used.length >= cap) {
+      // The cap frees a place when enough of the oldest reviews leave the window for the count
+      // to drop below it: the (n - cap + 1)th oldest.
+      const resetAt = (used[used.length - cap] ?? now) + REVIEW_CAP_WINDOW_MS;
       await audit(tx, 'submission.review_cap_hit', {
         userId: ctx.userId,
         detail: { submissionId: id, opportunityId: row.opportunityId, cap, resetAt },
@@ -126,9 +172,10 @@ export async function reviewSubmission(
         reviewExpiresAt: now + REVIEW_TTL_MS,
         updatedAt: now,
       })
-      .where(and(owned(ctx, id), eq(applicationSubmissions.status, 'draft')))
+      .where(and(owned(ctx, id), eq(applicationSubmissions.status, row.status)))
       .returning();
-    if (updated === undefined) return { kind: 'lost' };
+    // Unreachable while every writer takes the attempt's lock; kept as a guard.
+    if (updated === undefined) throw notNow(await getRow(tx, ctx, id), 'reviewed');
     await audit(tx, 'submission.reviewed', {
       userId: ctx.userId,
       detail: { submissionId: id, opportunityId: row.opportunityId, atsKind: row.atsKind },
@@ -137,20 +184,12 @@ export async function reviewSubmission(
   });
 
   if (outcome.kind === 'reviewed') return view(outcome.row);
-  if (outcome.kind === 'capped') {
-    throw new HttpError(
-      429,
-      'daily_review_cap',
-      'You reached the most applications you can review in 24 hours.',
-      { resetAt: outcome.resetAt },
-    );
-  }
-  // Another request changed the row between the checks and the write.
-  const current = await getRow(db, ctx, id);
-  if (current.status === 'reviewed' && current.reviewDigest === input.reviewDigest) {
-    return view(current);
-  }
-  throw notNow(current, 'reviewed');
+  throw new HttpError(
+    429,
+    'daily_review_cap',
+    'You reached the most applications you can review in 24 hours.',
+    { resetAt: outcome.resetAt },
+  );
 }
 
 export interface HandoffResult {
@@ -166,24 +205,16 @@ const handedOff = (row: SubmissionRow): HandoffResult => ({
 });
 
 /**
- * The query parameter an ATS's embedded job board puts on a company career page to name one
- * posting: Greenhouse's `gh_jid`, Ashby's `ashby_jid`. Lever and Workday postings live on their
- * own hosts, which the recognised-URL branch covers.
- */
-const CAREER_PAGE_JOB_PARAM: Readonly<Record<string, string>> = {
-  ats_greenhouse: 'gh_jid',
-  ats_ashby: 'ashby_jid',
-};
-
-/**
  * Whether `destination` may be opened for this requisition (design 7.2): https only, no
- * credentials, never a LinkedIn or Indeed host, and either a recognised ATS posting URL for this
- * very requisition, or a company career page whose ATS job parameter (`gh_jid`, `ashby_jid`)
- * names it. An id merely appearing in a path is not enough: a lookalike host can carry one.
+ * credentials, never a LinkedIn or Indeed host, and a recognised ATS posting URL for this very
+ * requisition: the same ATS, the same requisition id, and the same board or tenant where the
+ * URL names one (a Workday requisition id is only unique within its tenant). A company career
+ * page that embeds an ATS board is not accepted: nothing here can tell the company's own host
+ * from a lookalike, which needs the M3 company-domain check.
  */
 export function destinationAllowed(
   destination: string,
-  sub: Pick<SubmissionRow, 'atsKind' | 'atsExternalId'>,
+  sub: Pick<SubmissionRow, 'atsKind' | 'atsExternalId' | 'atsRef'>,
 ): boolean {
   let url: URL;
   try {
@@ -193,37 +224,48 @@ export function destinationAllowed(
   }
   if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') return false;
   if (isPageFetchProhibited(url.hostname)) return false;
-  const refs = extractAtsJobRefs(url.href);
-  if (refs.some((r) => r.kind === sub.atsKind && r.externalId === sub.atsExternalId)) return true;
-  // A recognised ATS URL for another requisition: not this posting.
-  if (refs.length > 0) return false;
-  const param = CAREER_PAGE_JOB_PARAM[sub.atsKind];
-  return param !== undefined && url.searchParams.get(param) === sub.atsExternalId;
+  // A recognised ATS board host, never a page that merely embeds a board: extractAtsJobRefs
+  // also reads `gh_jid` on any host, which is how a lookalike could name this requisition.
+  const board = boardFromUrl(url.href);
+  if (board === null || board.kind !== sub.atsKind) return false;
+  // atsRef is the board the draft was created from (repos/submissions.ts): the same tenant.
+  if (sub.atsRef !== null && board.slug.toLowerCase() !== sub.atsRef.toLowerCase()) return false;
+  return extractAtsJobRefs(url.href).some(
+    (r) => r.kind === sub.atsKind && r.externalId === sub.atsExternalId,
+  );
 }
 
 /**
  * Hands off a reviewed attempt: the user is about to open the employer's form. Audit only, no
  * timeline entry (design 5.2). A repeat answers the same destination and writes nothing.
+ *
+ * Every check runs inside the transaction, on the row re-read under the attempt's lock: an edit
+ * and re-review that lands while a handoff is in flight is either fully before it (and the
+ * handoff hands off what was reviewed) or fully after it (and finds the attempt handed off).
  */
 export async function handoffSubmission(db: Db, ctx: UserCtx, id: string): Promise<HandoffResult> {
-  const row = await getRow(db, ctx, id);
-  if (row.status === 'handed_off') return handedOff(row);
-  if (row.status !== 'reviewed') throw notNow(row, 'handed_off');
-  const now = Date.now();
-  if (row.reviewExpiresAt === null || row.reviewExpiresAt <= now) {
-    throw new HttpError(409, 'review_expired', 'This review has expired. Review it again.');
-  }
-  if (row.reviewDigest === null || submissionDigest(row) !== row.reviewDigest) throw reviewStale();
-  if (!destinationAllowed(row.destinationUrl, row)) {
-    throw new HttpError(
-      422,
-      'destination_not_allowed',
-      "This application's destination is not the employer's posting for this requisition.",
-    );
-  }
+  await getRow(db, ctx, id);
   await racePoint('submissions.handoff');
 
-  const won = await withTransaction(db, async (tx) => {
+  return await withTransaction(db, async (tx) => {
+    await lockScope(tx, submissionScope(id));
+    const row = await getRow(tx, ctx, id);
+    if (row.status === 'handed_off') return handedOff(row);
+    if (row.status !== 'reviewed') throw notNow(row, 'handed_off');
+    const now = Date.now();
+    if (row.reviewExpiresAt === null || row.reviewExpiresAt <= now) {
+      throw new HttpError(409, 'review_expired', 'This review has expired. Review it again.');
+    }
+    if (row.reviewDigest === null || submissionDigest(row) !== row.reviewDigest) {
+      throw reviewStale();
+    }
+    if (!destinationAllowed(row.destinationUrl, row)) {
+      throw new HttpError(
+        422,
+        'destination_not_allowed',
+        "This application's destination is not the employer's posting for this requisition.",
+      );
+    }
     const [updated] = await tx
       .update(applicationSubmissions)
       .set({ status: 'handed_off', handedOffAt: now, updatedAt: now })
@@ -231,11 +273,12 @@ export async function handoffSubmission(db: Db, ctx: UserCtx, id: string): Promi
         and(
           owned(ctx, id),
           eq(applicationSubmissions.status, 'reviewed'),
-          eq(applicationSubmissions.reviewDigest, row.reviewDigest as string),
+          eq(applicationSubmissions.reviewDigest, row.reviewDigest),
         ),
       )
       .returning();
-    if (updated === undefined) return undefined;
+    // Unreachable while every writer takes the attempt's lock; kept as a guard.
+    if (updated === undefined) throw notNow(await getRow(tx, ctx, id), 'handed_off');
     await audit(tx, 'submission.handed_off', {
       userId: ctx.userId,
       detail: {
@@ -245,12 +288,8 @@ export async function handoffSubmission(db: Db, ctx: UserCtx, id: string): Promi
         host: new URL(row.destinationUrl).hostname,
       },
     });
-    return updated;
+    return handedOff(updated);
   });
-  if (won !== undefined) return handedOff(won);
-  const current = await getRow(db, ctx, id);
-  if (current.status === 'handed_off') return handedOff(current);
-  throw notNow(current, 'handed_off');
 }
 
 /**
@@ -290,9 +329,7 @@ export async function sweepSubmissions(db: Db, now: number = Date.now()): Promis
         .update(applicationSubmissions)
         .set({
           status: 'abandoned',
-          // A lapsed handoff has no dedicated reason in SUBMISSION_FAILURE_REASONS: 'other', with
-          // the cause in the audit entry.
-          failureReason: expiredReview ? 'review_expired' : 'other',
+          failureReason: expiredReview ? 'review_expired' : 'handoff_idle',
           updatedAt: now,
         })
         .where(

@@ -31,6 +31,7 @@ export const SUBMISSION_FAILURE_REASONS = [
   'destination_mismatch',
   'review_expired',
   'cancelled_by_user',
+  'handoff_idle',
   'other',
 ] as const;
 export type SubmissionFailureReason = (typeof SUBMISSION_FAILURE_REASONS)[number];
