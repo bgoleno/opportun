@@ -33,10 +33,10 @@ describe('recognizeCapturedPage', () => {
     expect(recognizeCapturedPage(PROFILE)).toMatchObject({ kind: 'profile', siteId: 'linkedin' });
   });
 
-  it('ships exactly one recognizer today, and every one names a known site', async () => {
+  it('ships a recognizer for LinkedIn and Indeed, and every one names a known site', async () => {
     const { CAPTURE_SITES } = await import('../src/lib/captureSites');
     const siteIds = CAPTURE_SITES.map((s) => s.id);
-    expect(CAPTURE_RECOGNIZERS.map((r) => r.siteId)).toEqual(['linkedin']);
+    expect(CAPTURE_RECOGNIZERS.map((r) => r.siteId)).toEqual(['linkedin', 'indeed']);
     for (const r of CAPTURE_RECOGNIZERS) expect(siteIds).toContain(r.siteId);
   });
 });

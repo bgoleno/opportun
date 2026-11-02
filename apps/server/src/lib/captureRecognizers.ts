@@ -12,6 +12,7 @@
 // C-1 is unchanged: a recognizer reads the text the user's own browser already rendered and
 // nothing here ever fetches a URL.
 import { siteOfUrl } from './captureSites';
+import { recognizeIndeedPage } from './indeedCapture';
 import { recognizeLinkedInPage, type Recognition } from './linkedinCapture';
 
 export interface CaptureInputPage {
@@ -37,6 +38,7 @@ export interface CaptureRecognizer {
 
 export const CAPTURE_RECOGNIZERS: readonly CaptureRecognizer[] = [
   { siteId: 'linkedin', recognize: recognizeLinkedInPage },
+  { siteId: 'indeed', recognize: recognizeIndeedPage },
 ];
 
 const bySite = new Map(CAPTURE_RECOGNIZERS.map((r) => [r.siteId, r]));
@@ -49,7 +51,11 @@ export function recognizeCapturedPage(input: CaptureInputPage): CapturedPage {
   const site = siteOfUrl(input.url);
   const recognizer = site === null ? undefined : bySite.get(site.id);
   if (site === null || recognizer === undefined) {
-    return { kind: 'unrecognized', reason: 'not_linkedin' };
+    // Site-neutral since Indeed (https://github.com/bgoleno/opportun/issues/73); this was
+    // `not_linkedin`. An installed extension only posts LinkedIn tabs, so it never meets this
+    // reason, and the extension work that adds Indeed teaches render.ts the new name while
+    // keeping the old one. recognizeLinkedInPage itself still returns `not_linkedin`.
+    return { kind: 'unrecognized', reason: 'unsupported_site' };
   }
   const page = recognizer.recognize(input);
   return page.kind === 'unrecognized' ? page : { ...page, siteId: site.id };

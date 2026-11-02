@@ -36,6 +36,10 @@ export type LinkedInPage =
 
 export type UnrecognizedReason =
   | 'not_linkedin'
+  /** A host no capture site claims (lib/captureRecognizers.ts); `not_linkedin` before #73. */
+  | 'unsupported_site'
+  /** A sign-in or verification interstitial in place of the page (lib/indeedCapture.ts). */
+  | 'verification_wall'
   | 'unsupported_path'
   | 'login_wall'
   | 'no_name'
