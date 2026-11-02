@@ -65,6 +65,13 @@ export function createMockDocumentStore(): DocumentStore {
     async readText(ctx, ref) {
       return get(ctx, docId(ref)).text;
     },
+    // Stands in for the Google store's PDF export (issue #125): a minimal file with the PDF
+    // header, named after the document. Read-only, like the real one.
+    async exportFile(ctx, ref) {
+      const doc = get(ctx, docId(ref));
+      const bytes = Buffer.from(`%PDF-1.4\n% opportun mock export\n%%EOF\n`);
+      return { ok: true, bytes, mime: 'application/pdf', filename: `${doc.title}.pdf` } as const;
+    },
     async applyEdits(ctx, ref, edits: ResumeEdit[]) {
       const doc = get(ctx, docId(ref));
       // Same ordering as the real stores: applied in sequence, so an edit whose find text an

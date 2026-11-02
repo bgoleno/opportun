@@ -504,6 +504,12 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
       return flattenRrResume(resume.data).text;
     },
 
+    // Owner decision 2 keeps Reactive Resume manual for now: no export call is made, and the
+    // resume's text is never handed on in place of a PDF (issue #125).
+    async exportFile() {
+      return { ok: false, reason: 'export_unsupported' } as const;
+    },
+
     async applyEdits(ctx, ref, edits: ResumeEdit[]) {
       if (edits.some((e) => e.find.includes('\n'))) {
         throw new HttpError(422, 'edit_spans_paragraphs');

@@ -145,6 +145,9 @@ export function createMockGoogleApi(now: number = Date.now()): GoogleApi {
     async copyFile() {
       throw notFound();
     },
+    async exportFile() {
+      throw notFound();
+    },
     async getFile(_client, fileId) {
       const file = MOCK_DRIVE_FILES.find((f) => f.id === fileId);
       if (file === undefined) throw notFound();

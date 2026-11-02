@@ -137,6 +137,12 @@ export interface GoogleApi {
     requests: docs_v1.Schema$Request[],
   ): Promise<docs_v1.Schema$BatchUpdateDocumentResponse>;
   copyFile(client: OAuth2Client, fileId: string, name: string): Promise<DriveFileMeta>;
+  /**
+   * drive.files.export: the file converted to `mimeType`, as bytes (issue #125). Read-only:
+   * Drive converts a copy for the response and leaves the document as it is. Covered by the
+   * `drive` scope the docs connection already holds; no new scope.
+   */
+  exportFile(client: OAuth2Client, fileId: string, mimeType: string): Promise<Buffer>;
   /** A file's id and name (files.get, minimal fields). Used to resolve a search result's
    *  parent folder name; also fit for any other "just the name" lookup. */
   getFile(client: OAuth2Client, fileId: string): Promise<DriveFileMeta>;
@@ -242,6 +248,15 @@ export const realGoogleApi: GoogleApi = {
     });
     if (typeof res.data.id !== 'string') throw new Error('drive copy returned no id');
     return { id: res.data.id, name: res.data.name ?? name };
+  },
+  async exportFile(client, fileId, mimeType) {
+    // An arraybuffer is safe to hold: Drive itself refuses to export more than 10 MB, and the
+    // store then applies its own cap (MAX_EXPORT_BYTES, adapters/documentStore.ts).
+    const res = await driveClient({ version: 'v3', auth: client }).files.export(
+      { fileId, mimeType },
+      { responseType: 'arraybuffer' },
+    );
+    return Buffer.from(res.data as ArrayBuffer);
   },
   async getFile(client, fileId) {
     const res = await driveClient({ version: 'v3', auth: client }).files.get({
