@@ -498,7 +498,10 @@ describe('a hostname with extra trailing dots is treated as the same host by eve
   });
 
   it('safeFetch refuses them in allowPublic mode, without a request', async () => {
-    const h = harness(DOTTED, URLS.map(() => ok()));
+    const h = harness(
+      DOTTED,
+      URLS.map(() => ok()),
+    );
     const fetch = createSafeFetch(h);
     for (const url of URLS) {
       expect(await reason(fetch(url, { allowHosts: [], allowPublic: true })), url).toBe(
@@ -509,7 +512,10 @@ describe('a hostname with extra trailing dots is treated as the same host by eve
   });
 
   it('safeFetch refuses them with an allowlist naming the host, without a request', async () => {
-    const h = harness(DOTTED, URLS.map(() => ok()));
+    const h = harness(
+      DOTTED,
+      URLS.map(() => ok()),
+    );
     const fetch = createSafeFetch(h);
     const opts = { allowHosts: ['indeed.com', 'linkedin.com', 'lnkd.in'] };
     for (const url of URLS) expect(await reason(fetch(url, opts)), url).toBe('host_not_allowed');

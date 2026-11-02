@@ -289,7 +289,10 @@ describe('MCP http transport', () => {
   });
 
   it('a hostname with extra trailing dots is treated as the same host (PR #78 review)', async () => {
-    const d = deps({ 'www.linkedin.com..': ['93.184.216.34'], 'mcp.indeed.com..': ['93.184.216.34'] });
+    const d = deps({
+      'www.linkedin.com..': ['93.184.216.34'],
+      'mcp.indeed.com..': ['93.184.216.34'],
+    });
     const guarded = guardedMcpFetch(d);
     // C-1 is refused however many trailing dots the name carries.
     const err = await guarded('https://www.linkedin.com../mcp', { method: 'POST' }).catch(
