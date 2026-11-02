@@ -1144,3 +1144,135 @@ describe('a draft refused at creation for its destination (#135)', () => {
     expect(router.state.location.search).toEqual({ step: 'resume' });
   });
 });
+
+describe('what happened after submitting (#148)', () => {
+  const SUBMITTED = { status: 'submitted', submittedAt: NOW - 60 * MIN } as const;
+
+  function panel(sub: SubmissionView, extra: Record<string, unknown> = {}) {
+    const api = mockApi(routes(sub, extra));
+    const user = userEvent.setup();
+    renderWithProviders(<ApplyPanel opp={OPP} />);
+    return { api, user };
+  }
+
+  it.each([
+    ['submitted', SUBMITTED, false],
+    ['no confirmation seen', { status: 'unknown', submittedAt: NOW - 4 * 24 * 60 * MIN }, true],
+  ] as const)('a %s attempt offers both actions', async (_n, over, explains) => {
+    panel(submission(over as Partial<SubmissionView>));
+    expect(await screen.findByText('What happened?')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'I saw a confirmation' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'The site refused it' })).toBeVisible();
+    expect(screen.queryAllByText(/This is not a failure/).length > 0).toBe(explains);
+  });
+
+  it.each(['confirmed', 'rejected', 'abandoned', 'draft', 'reviewed', 'handed_off'] as const)(
+    'a %s attempt offers neither',
+    async (status) => {
+      panel(submission({ status, reviewExpiresAt: NOW + 30 * MIN }));
+      await screen.findByRole('region', { name: 'Assisted apply' });
+      expect(
+        screen.queryByRole('button', { name: 'I saw a confirmation' }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'The site refused it' })).not.toBeInTheDocument();
+    },
+  );
+
+  it('"I saw a confirmation" says what it records, then records it and closes', async () => {
+    const unknown = submission({ status: 'unknown', submittedAt: NOW - 4 * 24 * 60 * MIN });
+    const { api, user } = panel(unknown, {
+      'POST /submissions/sub-1/outcome': () => ({
+        status: 200,
+        body: submission({ status: 'confirmed', confirmationKind: 'user' }),
+      }),
+    });
+    await user.click(await screen.findByRole('button', { name: 'I saw a confirmation' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Mark as confirmed?' });
+    expect(dialog).toHaveTextContent('No evidence will be attached.');
+    expect(dialog).toHaveTextContent('Marked confirmed by you (no evidence attached)');
+    expect(dialog).toHaveTextContent(
+      'Check whether your application to Acme was received” as done, if it is still open.',
+    );
+    expect(dialog).toHaveTextContent('Leave this opportunity’s stage as it is.');
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/outcome')).toHaveLength(0);
+
+    const reads = calls(api.calls, 'GET', '/opportunities/opp-1/submissions').length;
+    await user.click(within(dialog).getByRole('button', { name: 'Mark confirmed' }));
+    // A native <dialog>: closed, it stays in the DOM but is no longer a dialog.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/outcome')[0]?.body).toEqual({
+      outcome: 'confirmed_by_user',
+    });
+    // The attempt (and the opportunity, with its next steps) are read again.
+    await waitFor(() =>
+      expect(calls(api.calls, 'GET', '/opportunities/opp-1/submissions').length).toBeGreaterThan(
+        reads,
+      ),
+    );
+    expect(await screen.findByText('Confirmation recorded')).toBeVisible();
+  });
+
+  it('"The site refused it" takes the user\'s note and records it', async () => {
+    const { api, user } = panel(submission(SUBMITTED), {
+      'POST /submissions/sub-1/outcome': () => ({
+        status: 200,
+        body: submission({ status: 'rejected' }),
+      }),
+    });
+    await user.click(await screen.findByRole('button', { name: 'The site refused it' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Record that the site refused it?' });
+    expect(dialog).toHaveTextContent('The application site refused the form');
+    expect(dialog).toHaveTextContent('Leave this opportunity’s stage as it is.');
+    // A submitted attempt has no follow-up step yet, so none is promised.
+    expect(dialog).not.toHaveTextContent('Check whether');
+    await user.type(within(dialog).getByLabelText(/What did the site say/), '  Already applied.  ');
+    await user.click(within(dialog).getByRole('button', { name: 'Record refusal' }));
+    // A native <dialog>: closed, it stays in the DOM but is no longer a dialog.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/outcome')[0]?.body).toEqual({
+      outcome: 'ats_refused',
+      note: 'Already applied.',
+    });
+  });
+
+  it('a refusal with no note sends none', async () => {
+    const { api, user } = panel(submission(SUBMITTED), {
+      'POST /submissions/sub-1/outcome': () => ({
+        status: 200,
+        body: submission({ status: 'rejected' }),
+      }),
+    });
+    await user.click(await screen.findByRole('button', { name: 'The site refused it' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Record refusal' }));
+    // A native <dialog>: closed, it stays in the DOM but is no longer a dialog.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/outcome')[0]?.body).toEqual({
+      outcome: 'ats_refused',
+    });
+  });
+
+  it('Not now records nothing', async () => {
+    const { api, user } = panel(submission(SUBMITTED));
+    await user.click(await screen.findByRole('button', { name: 'I saw a confirmation' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Not now' }));
+    // A native <dialog>: closed, it stays in the DOM but is no longer a dialog.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/outcome')).toHaveLength(0);
+  });
+
+  it('a refused report stays open and says why in words', async () => {
+    const { user } = panel(submission(SUBMITTED), {
+      'POST /submissions/sub-1/outcome': () => ({
+        status: 409,
+        body: { error: { code: 'invalid_transition' } },
+      }),
+    });
+    await user.click(await screen.findByRole('button', { name: 'I saw a confirmation' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Mark confirmed' }));
+    expect(await within(dialog).findByText(/changed in another tab or window/i)).toBeVisible();
+    expect(dialog).not.toHaveTextContent('invalid_transition');
+  });
+});
