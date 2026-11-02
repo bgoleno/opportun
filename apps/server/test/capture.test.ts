@@ -157,6 +157,69 @@ describe('POST /capture', () => {
     expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
   });
 
+  it('an indeed.com URL returns the same 422 paste-the-text hint without any fetch (issue #75)', async () => {
+    const { app, a } = await boot();
+    const { urls, fetch } = noFetch();
+    app.jobs.services.sourceFetch = fetch;
+    for (const url of [
+      'https://www.indeed.com/viewjob?jk=00000000deadbeef',
+      'https://indeed.com/viewjob?jk=00000000deadbeef',
+      'https://www.indeed.com/jobs?q=engineer&vjk=00000000deadbeef',
+    ]) {
+      const res = await a.request({ method: 'POST', url: '/api/v1/capture', payload: { url } });
+      expect(res.statusCode, url).toBe(422);
+      expect(res.json().error).toEqual({ code: 'prohibited_host', hint: PASTE_TEXT_HINT });
+    }
+    expect(urls).toEqual([]);
+    expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
+  });
+
+  it('a hostname with extra trailing dots gets the same 422 as the plain host (PR #78 review)', async () => {
+    const { app, a } = await boot();
+    const { urls, fetch } = noFetch();
+    app.jobs.services.sourceFetch = fetch;
+    for (const url of [
+      'https://www.indeed.com../viewjob?jk=00000000deadbeef',
+      'https://www.linkedin.com.../jobs/view/1/',
+    ]) {
+      const res = await a.request({ method: 'POST', url: '/api/v1/capture', payload: { url } });
+      expect(res.statusCode, url).toBe(422);
+      expect(res.json().error).toEqual({ code: 'prohibited_host', hint: PASTE_TEXT_HINT });
+    }
+    expect(urls).toEqual([]);
+  });
+
+  it('a host that only resembles indeed.com is fetched as usual (issue #75)', async () => {
+    const { app, a } = await boot();
+    const requested: string[] = [];
+    app.jobs.services.sourceFetch = createSafeFetch({
+      now: () => 0,
+      sleep: async () => undefined,
+      resolve: async () => ['93.184.216.34'],
+      request: async (target): Promise<RawResponse> => {
+        requested.push(target.url.href);
+        return {
+          status: 200,
+          headers: { 'content-type': 'text/plain' },
+          body: (async function* () {
+            yield Buffer.from(PASTED);
+          })(),
+        };
+      },
+    });
+    const urls = ['https://notindeed.com/jobs/42', 'https://indeed.com.example.org/jobs/42'];
+    for (const [i, url] of urls.entries()) {
+      vi.mocked(runStructured).mockResolvedValueOnce({
+        ...EXTRACTED,
+        title: `Staff Platform Engineer ${i}`,
+        postingUrl: null,
+      });
+      const res = await a.request({ method: 'POST', url: '/api/v1/capture', payload: { url } });
+      expect(res.statusCode, `${url}: ${res.body}`).toBe(201);
+    }
+    expect(requested).toEqual(urls);
+  });
+
   it('a URL resolving to a private address is blocked', async () => {
     const { app, a } = await boot();
     const requested: string[] = [];

@@ -2,8 +2,9 @@
 // the server extracts it into the review queue. Opened from the queue for a new posting, or
 // from a needs_capture lead to complete that lead in place (its link pre-filled).
 //
-// Server answers handled here: 422 with a hint (LinkedIn and other unfetchable pages: paste the
-// text instead), 503 ai_unavailable (fall back to the New Opportunity dialog), 409 duplicate.
+// Server answers handled here: 422 with a hint (LinkedIn, Indeed and other unfetchable pages:
+// paste the text instead), 503 ai_unavailable (fall back to the New Opportunity dialog), 409
+// duplicate.
 // Server text (hints, messages) and posting fields are rendered as text only.
 import { useId, useState, type FormEvent } from 'react';
 import { FormError } from '@/components/FormError';
