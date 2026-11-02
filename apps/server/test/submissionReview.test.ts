@@ -797,6 +797,26 @@ describe('an edit racing the review or the handoff (tl on #129)', () => {
     expect(row?.status).toBe('draft');
   });
 
+  it('a handoff in flight checks the row as it is under the lock, not as it was read before', async () => {
+    const { app, a } = await boot(ON);
+    const d = await reviewed(app, a);
+    setRaceHook(async (point) => {
+      if (point !== 'submissions.handoff') return;
+      // The content changes while the handoff waits, keeping the status and the stored digest:
+      // only a digest recomputed from the locked row can tell.
+      await app.db
+        .update(applicationSubmissions)
+        .set({ answers: UNREVIEWED.answers })
+        .where(eq(applicationSubmissions.id, d.id))
+        .run();
+    });
+    const h = await handoff(a, d.id);
+    setRaceHook(undefined);
+    expect(h.statusCode, h.body).toBe(409);
+    expect(h.json().error.code).toBe('review_stale');
+    expect((await rowOf(app, d.id))?.status).toBe('reviewed');
+  });
+
   it('a handoff in flight while the attempt is edited and re-reviewed: never hands off unreviewed answers', async () => {
     const { app, a } = await boot(ON);
     const d = await reviewed(app, a);
