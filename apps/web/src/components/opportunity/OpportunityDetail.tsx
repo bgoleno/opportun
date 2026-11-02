@@ -22,6 +22,7 @@ import { errorMessage } from '@/lib/api';
 import { priorityLabel } from '@/lib/opportunities';
 import { ActivityComposer } from './ActivityComposer';
 import { useOpportunity, useUpdateOpportunity } from './api';
+import { ApplyPanel } from '@/components/apply/ApplyPanel';
 import { CompanyLink } from './CompanyLink';
 import { DetailsPanel } from './DetailsPanel';
 import { MergeDialog } from './MergeDialog';
@@ -132,7 +133,11 @@ export function OpportunityDetail({ id }: { id: string }) {
               <ActivityComposer opportunityId={opp.id} />
               <TimelineList opportunityId={opp.id} />
             </div>
-            <NextStepsPanel opportunityId={opp.id} />
+            {/* The rail: assisted apply first (it renders nothing where the feature is off). */}
+            <div className="grid content-start gap-4">
+              <ApplyPanel opp={opp} />
+              <NextStepsPanel opportunityId={opp.id} />
+            </div>
           </MainWithRail>
         </TabsContent>
         <TabsContent value="details" className="pt-2">

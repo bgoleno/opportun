@@ -40,6 +40,7 @@ import { Route as SettingsResumeRulesRouteImport } from './routes/settings/resum
 import { Route as SettingsRoleTargetsRouteImport } from './routes/settings/role-targets';
 import { Route as SettingsSecurityRouteImport } from './routes/settings/security';
 import { Route as SettingsUsersRouteImport } from './routes/settings/users';
+import { Route as OpportunitiesIdApplyRouteImport } from './routes/opportunities.$id_.apply';
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -196,6 +197,11 @@ const SettingsUsersRoute = SettingsUsersRouteImport.update({
   path: '/users',
   getParentRoute: () => SettingsRouteRoute,
 } as any);
+const OpportunitiesIdApplyRoute = OpportunitiesIdApplyRouteImport.update({
+  id: '/opportunities/$id_/apply',
+  path: '/opportunities/$id/apply',
+  getParentRoute: () => rootRouteImport,
+} as any);
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute;
@@ -229,6 +235,7 @@ export interface FileRoutesByFullPath {
   '/network/': typeof NetworkIndexRoute;
   '/resumes/': typeof ResumesIndexRoute;
   '/settings/': typeof SettingsIndexRoute;
+  '/opportunities/$id/apply': typeof OpportunitiesIdApplyRoute;
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute;
@@ -260,6 +267,7 @@ export interface FileRoutesByTo {
   '/network': typeof NetworkIndexRoute;
   '/resumes': typeof ResumesIndexRoute;
   '/settings': typeof SettingsIndexRoute;
+  '/opportunities/$id/apply': typeof OpportunitiesIdApplyRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
@@ -294,6 +302,7 @@ export interface FileRoutesById {
   '/network/': typeof NetworkIndexRoute;
   '/resumes/': typeof ResumesIndexRoute;
   '/settings/': typeof SettingsIndexRoute;
+  '/opportunities/$id_/apply': typeof OpportunitiesIdApplyRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
@@ -328,7 +337,8 @@ export interface FileRouteTypes {
     | '/discovery/'
     | '/network/'
     | '/resumes/'
-    | '/settings/';
+    | '/settings/'
+    | '/opportunities/$id/apply';
   fileRoutesByTo: FileRoutesByTo;
   to:
     | '/'
@@ -359,7 +369,8 @@ export interface FileRouteTypes {
     | '/discovery'
     | '/network'
     | '/resumes'
-    | '/settings';
+    | '/settings'
+    | '/opportunities/$id/apply';
   id:
     | '__root__'
     | '/'
@@ -392,7 +403,8 @@ export interface FileRouteTypes {
     | '/discovery/'
     | '/network/'
     | '/resumes/'
-    | '/settings/';
+    | '/settings/'
+    | '/opportunities/$id_/apply';
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -410,6 +422,7 @@ export interface RootRouteChildren {
   ContactsIndexRoute: typeof ContactsIndexRoute;
   NetworkIndexRoute: typeof NetworkIndexRoute;
   ResumesIndexRoute: typeof ResumesIndexRoute;
+  OpportunitiesIdApplyRoute: typeof OpportunitiesIdApplyRoute;
 }
 
 declare module '@tanstack/react-router' {
@@ -631,6 +644,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsUsersRouteImport;
       parentRoute: typeof SettingsRouteRoute;
     };
+    '/opportunities/$id_/apply': {
+      id: '/opportunities/$id_/apply';
+      path: '/opportunities/$id/apply';
+      fullPath: '/opportunities/$id/apply';
+      preLoaderRoute: typeof OpportunitiesIdApplyRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
   }
 }
 
@@ -703,6 +723,7 @@ const rootRouteChildren: RootRouteChildren = {
   ContactsIndexRoute: ContactsIndexRoute,
   NetworkIndexRoute: NetworkIndexRoute,
   ResumesIndexRoute: ResumesIndexRoute,
+  OpportunitiesIdApplyRoute: OpportunitiesIdApplyRoute,
 };
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

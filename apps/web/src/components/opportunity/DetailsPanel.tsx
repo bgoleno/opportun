@@ -1,5 +1,6 @@
 import { Download, ExternalLink, Paperclip, Trash2 } from 'lucide-react';
 import { useRef, useState, type ChangeEvent } from 'react';
+import { useOpportunitySubmissions } from '@/components/apply/api';
 import { MainWithRail } from '@/components/MainWithRail';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FormError } from '@/components/FormError';
@@ -45,6 +46,14 @@ function Attachments({ opportunityId }: { opportunityId: string }) {
   const { data, error } = useAttachments(opportunityId);
   const upload = useUploadAttachment(opportunityId);
   const remove = useDeleteAttachment(opportunityId);
+  // A resume snapshot an application names (assisted apply, #115 and #117): deleting it is
+  // allowed, but the confirm says what is lost and what is kept. null where the feature is off.
+  const submissions = useOpportunitySubmissions(opportunityId);
+  const snapshotIds = new Set(
+    (submissions.data?.items ?? []).flatMap((s) =>
+      typeof s.resumeAttachmentId === 'string' ? [s.resumeAttachmentId] : [],
+    ),
+  );
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<AttachmentMeta | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -127,13 +136,25 @@ function Attachments({ opportunityId }: { opportunityId: string }) {
         onOpenChange={(open) => {
           if (!open) setDeleting(null);
         }}
-        title="Delete this file?"
-        description={deleting ? `${deleting.filename} will be deleted.` : ''}
+        title={
+          deleting !== null && snapshotIds.has(deleting.id)
+            ? 'Delete this resume snapshot?'
+            : 'Delete this file?'
+        }
+        description={
+          deleting === null
+            ? ''
+            : snapshotIds.has(deleting.id)
+              ? `${deleting.filename} is the copy of the resume an application on this opportunity was prepared with. It cannot be changed, but you can delete it: the file goes, and Opportun keeps its fingerprint and title so the record still shows which resume was used.`
+              : `${deleting.filename} will be deleted.`
+        }
         confirmLabel="Delete"
         onConfirm={async () => {
           if (deleting === null) return;
           try {
             await remove.mutateAsync(deleting.id);
+            // The server clears the application's reference to a deleted snapshot.
+            if (snapshotIds.has(deleting.id)) void submissions.refetch();
           } catch (err) {
             toast({
               title: 'Could not delete',

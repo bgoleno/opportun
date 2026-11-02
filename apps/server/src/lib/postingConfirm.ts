@@ -12,6 +12,7 @@ import type { UserCtx } from '../repos/base';
 import type { Db } from '../db/client';
 import { createActivity } from '../repos/activities';
 import { getOpportunity, setPostingState, type OpportunityView } from '../repos/opportunities';
+import { postingAtsJobRef } from './atsJobRef';
 import { HttpError } from './errors';
 
 /** The flagged states a user can stand behind without the board ever confirming it. `edited`
@@ -35,6 +36,8 @@ export async function confirmPosting(
   const updated = await setPostingState(db, ctx, opportunityId, {
     postingState: 'confirmed',
     postingStateDetail: 'user_confirmed',
+    // The posting the user vouched for carries its own ATS identity, or none (issue #137).
+    atsJobRef: postingAtsJobRef(current.postingUrl),
   });
   await createActivity(db, ctx, opportunityId, {
     kind: 'note',
