@@ -235,7 +235,9 @@ for (const width of WIDTHS) {
         await extension.dispose();
       }
       await page.goto(`/opportunities/${opportunityId}`);
-      const link = page.getByRole('link', { name: /linkedin\.com\/jobs\/view/ }).first();
+      const link = page
+        .getByRole('link', { name: /^https:\/\/www\.linkedin\.com\/jobs\/view\// })
+        .first();
       await expect(link).toBeVisible();
       await expectFits(page, 'the opportunity page');
       // The link still opens the captured address, safely, and its name is the whole URL.
