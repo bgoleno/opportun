@@ -113,8 +113,8 @@ reopened and which still hold their key.
 company, title, location and description, and adds the result to the queue. If extraction
 cannot find the essentials, it tells you to create the opportunity by hand instead.
 
-Opportun never fetches LinkedIn pages. A LinkedIn link is refused with a prompt to paste the
-description text instead.
+Opportun never fetches LinkedIn or Indeed pages. A LinkedIn or Indeed link is refused with a
+prompt to paste the description text instead.
 
 ![The Capture posting dialog refusing a LinkedIn link and offering Paste the text instead](images/discovery-capture-linkedin.png)
 

@@ -10,7 +10,9 @@ import {
   createSafeFetch,
   OFFICIAL_API_URLS,
   FetchBlockedError,
+  isPageFetchProhibited,
   isPrivateAddress,
+  isProhibitedHost,
   safeFetch,
   type FetchTarget,
   type RawResponse,
@@ -378,6 +380,146 @@ describe('safeFetch allowPublic mode (user-entered URLs)', () => {
       'host_not_allowed',
     );
     expect(h.requests).toHaveLength(1);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/75: indeed.com is captured only from the user's
+// own browser, so the server never fetches it, in either mode and on any hop. Every DNS table
+// below maps the Indeed host to a public address and the transport would answer, so a refusal
+// is the rule's doing, and the empty request list proves nothing was sent.
+describe('safeFetch never fetches indeed.com (C-2)', () => {
+  const PUBLIC = { allowHosts: [] as string[], allowPublic: true };
+  const INDEED_DNS = {
+    'indeed.com': [PUBLIC_IP],
+    'www.indeed.com': [PUBLIC_IP],
+    'secure.indeed.com': [PUBLIC_IP],
+  };
+
+  it('refuses indeed.com and its subdomains in allowPublic mode, without a request', async () => {
+    const h = harness(INDEED_DNS, [ok(), ok(), ok(), ok()]);
+    const fetch = createSafeFetch(h);
+    for (const url of [
+      'https://www.indeed.com/viewjob?jk=00000000deadbeef',
+      'https://indeed.com/viewjob?jk=00000000deadbeef',
+      'https://secure.indeed.com/',
+      'https://WWW.Indeed.COM./viewjob?jk=00000000deadbeef',
+    ]) {
+      expect(await reason(fetch(url, PUBLIC))).toBe('host_not_allowed');
+    }
+    expect(h.requests).toEqual([]);
+  });
+
+  it('refuses indeed.com even when a caller puts it on its allowlist', async () => {
+    const h = harness(INDEED_DNS, [ok(), ok()]);
+    const fetch = createSafeFetch(h);
+    const opts = { allowHosts: ['indeed.com', 'www.indeed.com'] };
+    expect(await reason(fetch('https://www.indeed.com/viewjob?jk=00000000deadbeef', opts))).toBe(
+      'host_not_allowed',
+    );
+    expect(await reason(fetch('https://indeed.com/', opts))).toBe('host_not_allowed');
+    expect(h.requests).toEqual([]);
+  });
+
+  it('a redirect from a public page into indeed.com is refused before the second hop', async () => {
+    const h = harness({ 'careers.initech.example': [PUBLIC_IP], ...INDEED_DNS }, [
+      {
+        status: 302,
+        headers: { location: 'https://www.indeed.com/viewjob?jk=00000000deadbeef' },
+        body: body(),
+      },
+      ok('indeed page'),
+    ]);
+    expect(await reason(createSafeFetch(h)('https://careers.initech.example/', PUBLIC))).toBe(
+      'host_not_allowed',
+    );
+    expect(h.requests.map((r) => r.url.hostname)).toEqual(['careers.initech.example']);
+  });
+
+  it('hosts that only resemble indeed.com are fetched as before', async () => {
+    const lookAlikes = [
+      'notindeed.com',
+      'indeed.com.example.org',
+      'indeed.co',
+      'myindeed.com',
+      'indeed-jobs.example',
+    ];
+    const h = harness(
+      Object.fromEntries(lookAlikes.map((host) => [host, [PUBLIC_IP]])),
+      lookAlikes.map((host) => ok(host)),
+    );
+    const fetch = createSafeFetch(h);
+    for (const host of lookAlikes) {
+      const res = await fetch(`https://${host}/jobs`, PUBLIC);
+      expect(res.body.toString()).toBe(host);
+    }
+    expect(h.requests.map((r) => r.url.hostname)).toEqual(lookAlikes);
+  });
+
+  it('isPageFetchProhibited covers both lists; isProhibitedHost stays the C-1 list only', () => {
+    for (const host of ['indeed.com', 'www.indeed.com', 'www.indeed.com.', 'WWW.INDEED.COM']) {
+      expect(isPageFetchProhibited(host), host).toBe(true);
+      expect(isProhibitedHost(host), host).toBe(false);
+    }
+    for (const host of ['www.linkedin.com', 'lnkd.in']) {
+      expect(isPageFetchProhibited(host), host).toBe(true);
+      expect(isProhibitedHost(host), host).toBe(true);
+    }
+    for (const host of ['notindeed.com', 'indeed.com.example.org', 'careers.initech.example']) {
+      expect(isPageFetchProhibited(host), host).toBe(false);
+    }
+  });
+});
+
+// sec review of https://github.com/bgoleno/opportun/pull/78: only one trailing dot used to be
+// removed before the host-list checks. Every list now compares one normalized form.
+describe('a hostname with extra trailing dots is treated as the same host by every host-list check', () => {
+  const DOTTED = {
+    'www.indeed.com..': [PUBLIC_IP],
+    'www.indeed.com.': [PUBLIC_IP],
+    'www.linkedin.com...': [PUBLIC_IP],
+    'www.linkedin.com..': [PUBLIC_IP],
+    'lnkd.in..': [PUBLIC_IP],
+    'lnkd.in.': [PUBLIC_IP],
+  };
+  const URLS = [
+    'https://www.indeed.com../viewjob?jk=00000000deadbeef',
+    'https://www.linkedin.com.../jobs/view/1/',
+    'https://lnkd.in../abc',
+  ];
+
+  it('the predicates: both lists, isProhibitedHost still C-1 only', () => {
+    expect(isPageFetchProhibited('www.indeed.com..')).toBe(true);
+    expect(isPageFetchProhibited('WWW.INDEED.COM...')).toBe(true);
+    expect(isPageFetchProhibited('www.linkedin.com..')).toBe(true);
+    expect(isProhibitedHost('www.linkedin.com..')).toBe(true);
+    expect(isProhibitedHost('lnkd.in...')).toBe(true);
+    expect(isProhibitedHost('www.indeed.com..')).toBe(false);
+    expect(isPageFetchProhibited('notindeed.com..')).toBe(false);
+  });
+
+  it('safeFetch refuses them in allowPublic mode, without a request', async () => {
+    const h = harness(
+      DOTTED,
+      URLS.map(() => ok()),
+    );
+    const fetch = createSafeFetch(h);
+    for (const url of URLS) {
+      expect(await reason(fetch(url, { allowHosts: [], allowPublic: true })), url).toBe(
+        'host_not_allowed',
+      );
+    }
+    expect(h.requests).toEqual([]);
+  });
+
+  it('safeFetch refuses them with an allowlist naming the host, without a request', async () => {
+    const h = harness(
+      DOTTED,
+      URLS.map(() => ok()),
+    );
+    const fetch = createSafeFetch(h);
+    const opts = { allowHosts: ['indeed.com', 'linkedin.com', 'lnkd.in'] };
+    for (const url of URLS) expect(await reason(fetch(url, opts)), url).toBe('host_not_allowed');
+    expect(h.requests).toEqual([]);
   });
 });
 

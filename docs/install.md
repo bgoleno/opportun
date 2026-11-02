@@ -751,7 +751,7 @@ confident match is attached straight away; several are listed for you to choose 
 search box over the whole board; a company with no reachable board leaves you the paste
 paths (a link, or the description text). LinkedIn links are never fetched (see
 [section 10](#10-capture-extension-linkedin)); paste the text, or capture the job with the
-extension, instead. Workday links work too: the posting the link names is read directly.
+extension, instead. Indeed links are never fetched either; paste the text. Workday links work too: the posting the link names is read directly.
 
 The description is stored as text, so it survives the posting being taken down, and an
 existing description is never overwritten: edit it in place instead.

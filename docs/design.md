@@ -460,7 +460,15 @@ interface DocumentStore {
   (`api.linkedin.com/v2/userinfo`), after the user consents on LinkedIn. Those two
   URLs are listed in `safeFetch.ts` (`OFFICIAL_API_URLS`), each call names its one
   URL exactly, no redirect is followed, and every other LinkedIn URL is still
-  refused; a compliance test pins the list.
+  refused; a compliance test pins the list. `safeFetch` also refuses indeed.com
+  and its subdomains (`PAGE_FETCH_PROHIBITED_HOSTS`, C-2), in every mode, on every
+  redirect hop and with no official-API exception: Indeed pages reach Opportun
+  only from the user's own browser (the capture extension) or as pasted text, so
+  Capture posting with an Indeed link answers with the paste-the-text hint and
+  enrichment skips Indeed links. The list is separate from LinkedIn's on purpose:
+  it covers only the server fetching pages, so the MCP and AI provider guards
+  check the C-1 list alone, and an MCP connector the user points at an Indeed
+  host stays their choice (C-2, ADR-12).
 - **LinkedIn** (M4/M5): official data export ZIP ingester (connections, messages);
   later a WebExtension that captures only pages the user visits and POSTs them to
   the user's own server (C-1).
