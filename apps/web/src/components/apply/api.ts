@@ -136,7 +136,12 @@ export function useOpportunitySubmissions(opportunityId: string) {
 
 function useInvalidate(opportunityId: string) {
   const qc = useQueryClient();
-  return () => qc.invalidateQueries({ queryKey: ak.submissions(opportunityId) });
+  // An attempt changed: its list, and the daily review usage a review may have moved (#130).
+  return () =>
+    Promise.all([
+      qc.invalidateQueries({ queryKey: ak.submissions(opportunityId) }),
+      qc.invalidateQueries({ queryKey: ak.reviewUsage }),
+    ]);
 }
 
 export function useCreateSubmission(opportunityId: string) {

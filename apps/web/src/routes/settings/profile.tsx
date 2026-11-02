@@ -9,6 +9,7 @@ import { FormError } from '@/components/FormError';
 import { FormField } from '@/components/FormField';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
+import { ReviewCapCard } from '@/components/apply/ReviewUsage';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
@@ -66,7 +67,13 @@ function ProfileSettings() {
     );
   }
   // Keyed on load so the form takes fresh defaults if the profile is replaced elsewhere.
-  return <ProfileForm key={profile.data.userId} profile={profile.data} />;
+  return (
+    <div className="grid gap-6">
+      <ProfileForm key={profile.data.userId} profile={profile.data} />
+      {/* Assisted apply's daily review limit (#130); renders nothing where the feature is off. */}
+      <ReviewCapCard />
+    </div>
+  );
 }
 
 function ProfileForm({ profile }: { profile: Profile }) {
