@@ -7,6 +7,7 @@ import { extractIndeedJob, type ExtractResult, type RawPage } from '../src/extra
 import { COMPANY, JK, NEVER_SENT, splitView, TITLE, viewjobPage } from './fixtures/indeedPages';
 import { load, type FixturePage } from './fixtures/pages';
 import { mountPopup, type PopupDeps } from '../src/popupController';
+import { renderOutcome } from '../src/render';
 import type { SettingsStorage } from '../src/settings';
 
 const TOKEN = `odt_${'C'.repeat(43)}`;
@@ -540,5 +541,40 @@ describe('mount does not block on anything that can hang (issue #79, characteriz
     await Promise.resolve();
 
     expect($<HTMLInputElement>('server-url').value).toBe(typedByHand);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/101: the popup's own text. It says what the
+// extension captures since Indeed (https://github.com/bgoleno/opportun/pull/81), and it names the
+// place the web app actually creates the token: Settings > Integrations, the "Extensions and
+// Connectors" card, whose "Browser extension" row has Set up (apps/web/src/routes/settings).
+describe('popup text', () => {
+  const LOCATION = 'Settings > Integrations > Extensions and Connectors';
+
+  it('says it captures LinkedIn profiles and jobs and Indeed jobs, not LinkedIn alone', () => {
+    const { doc } = setup();
+    const intro = doc.querySelector('main > p.hint')?.textContent?.replace(/\s+/g, ' ') ?? '';
+    expect(intro).toMatch(/LinkedIn profile or job/);
+    expect(intro).toMatch(/Indeed job/);
+    expect(intro).toMatch(/Nothing is read until you click Capture/);
+  });
+
+  it('names where the web app creates the token, and not the old Devices location', () => {
+    const { doc } = setup();
+    const hint = doc.querySelector('#settings p.hint')?.textContent?.replace(/\s+/g, ' ') ?? '';
+    expect(hint).toContain(LOCATION);
+    expect(hint).toMatch(/Browser extension/);
+    expect(hint).toMatch(/Set up/);
+    expect(hint).not.toMatch(/Devices/);
+  });
+
+  it('names the same place as the popup’s token errors', () => {
+    const { doc } = setup();
+    const hint = doc.querySelector('#settings p.hint')?.textContent?.replace(/\s+/g, ' ') ?? '';
+    for (const kind of ['unauthorized', 'forbidden'] as const) {
+      const text = renderOutcome({ kind }).text;
+      expect(text).toContain(LOCATION);
+      expect(hint).toContain(LOCATION);
+    }
   });
 });
