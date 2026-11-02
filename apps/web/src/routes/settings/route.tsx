@@ -35,8 +35,11 @@ function SettingsLayout() {
               same negative margin, so no link moves (issue
               https://github.com/bgoleno/opportun/issues/70). All four sides, not only the scroll
               axis: overflow-x-auto makes overflow-y compute to auto too, which is why a link's
-              top was cut as well. */}
-          <ul className="-m-1 flex gap-1 overflow-x-auto p-1 lg:flex-col">
+              top was cut as well. scroll-px-1 (scroll-padding-inline: 4px): when keyboard focus
+              scrolls the list on a phone, it stops 4px short of the edge, so the link and its
+              indicator end fully in view. Without it, Tab left the last link 8.8px past the
+              list's end at 375 (qa's report on https://github.com/bgoleno/opportun/pull/71). */}
+          <ul className="-m-1 flex scroll-px-1 gap-1 overflow-x-auto p-1 lg:flex-col">
             {sections.map((s) => (
               <li key={s.to}>
                 <Link
