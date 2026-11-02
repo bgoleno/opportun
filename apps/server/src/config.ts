@@ -213,10 +213,12 @@ export const DEFAULT_DAILY_REVIEW_CAP = 10;
 function loadDailyReviewCap(env: NodeJS.ProcessEnv): number {
   const raw = env.OPPORTUN_DAILY_REVIEW_CAP;
   if (raw === undefined || raw === '') return DEFAULT_DAILY_REVIEW_CAP;
-  const cap = Number(raw);
+  // Digits only: Number() would also take 0x5, 1e1, 5.0 and padded values (#136), so a typo
+  // or a pasted expression could set a cap nobody meant.
+  const cap = /^[0-9]+$/.test(raw) ? Number(raw) : NaN;
   if (!Number.isInteger(cap) || cap < 1 || cap > MAX_DAILY_REVIEW_CAP) {
     throw new ConfigError(
-      `OPPORTUN_DAILY_REVIEW_CAP must be an integer between 1 and ${MAX_DAILY_REVIEW_CAP}, got: ${raw}`,
+      `OPPORTUN_DAILY_REVIEW_CAP must be a whole number from 1 to ${MAX_DAILY_REVIEW_CAP}, written in digits only, got: ${JSON.stringify(raw)}`,
     );
   }
   return cap;
