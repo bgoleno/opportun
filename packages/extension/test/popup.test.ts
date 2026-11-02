@@ -272,6 +272,27 @@ describe('popup capture', () => {
     expect(status(doc).dataset.tone).toBe('error');
   });
 
+  it('renders the server’s title_too_long refusal of a LinkedIn job (#92)', async () => {
+    const { doc, deps, $ } = setup({
+      stored: SAVED,
+      tabUrl: 'https://www.linkedin.com/jobs/view/3901234567/',
+      raw: {
+        url: 'https://www.linkedin.com/jobs/view/3901234567/',
+        title: 'A very long job title | Example Corp | LinkedIn',
+        text: 'About the job',
+      },
+      status: 422,
+      body: { error: { code: 'unrecognized_page', reason: 'title_too_long' } },
+    });
+    await mountPopup(doc, deps);
+    await click($('capture'), () => status(doc).textContent !== '');
+    expect(status(doc).textContent).toMatch(
+      /^Not captured: the job title is longer than 300 characters/,
+    );
+    expect(status(doc).textContent).not.toMatch(/finished loading/);
+    expect(status(doc).dataset.tone).toBe('error');
+  });
+
   it('a failed injection is reported, nothing sent', async () => {
     const { doc, deps, fetch, $ } = setup({ stored: SAVED, raw: null });
     await mountPopup(doc, deps);
@@ -368,6 +389,7 @@ describe('popup capture on Indeed', () => {
     ['no_title_company', /finished loading/],
     ['no_description', /finished loading/],
     ['unsupported_site', /not a site Opportun captures from/],
+    ['title_too_long', /job title is longer than 300 characters/],
   ])('shows the server’s %s refusal, naming Indeed', async (reason, pattern) => {
     const fixture = viewjobPage();
     const { doc, deps, $ } = setup({
