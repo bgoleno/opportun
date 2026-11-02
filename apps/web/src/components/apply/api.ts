@@ -7,7 +7,7 @@
 // contacts it.
 import type { Submission, SubmissionAnswer, SubmissionFields } from '@opportun/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, errorMessage } from '@/lib/api';
 import type { Page } from '@/lib/opportunities';
 
 const enc = encodeURIComponent;
@@ -28,6 +28,40 @@ export type SubmissionView = Submission & {
   /** The saved copy, an attachments row on the opportunity (#115). */
   resumeAttachmentId?: string | null;
 };
+
+/**
+ * A refusal from the submission routes, in words. The server's error envelope carries the code
+ * only (plugins/security.ts), so an ApiError's message is the code itself: never show it.
+ */
+export function submissionErrorText(err: unknown): string {
+  const code = err instanceof ApiError ? err.code : null;
+  switch (code) {
+    case 'live_submission_exists':
+      return 'This opportunity already has an application in progress, perhaps from another tab. It is shown now.';
+    case 'invalid_transition':
+    case 'conflict':
+      return 'This application changed in another tab or window. The page now shows where it stands.';
+    case 'resume_not_final':
+      return 'Choose a finished resume: one marked Final.';
+    case 'resume_not_found':
+      return 'That resume is no longer available. Choose another.';
+    case 'no_ats_identity':
+      return "This opportunity is not linked to a posting on the company's own job board yet.";
+    case 'posting_not_confirmed':
+      return "This opportunity's posting needs review. Confirm it on the Details tab first.";
+    case 'stage_not_eligible':
+      return 'Applying is available at Interested, Preparing or Applied.';
+    case 'destination_not_https':
+      return "The posting's address is not a secure (https) address, so it cannot be opened from here.";
+    case 'idempotency_key_reused':
+      return 'Something went wrong starting this application. Reload the page and try again.';
+    case null:
+      return 'Could not reach Opportun. Check your connection and try again.';
+    default:
+      // The shared wording (validation, rate_limited, csrf, ...), never a bare code.
+      return errorMessage(err);
+  }
+}
 
 /** What the user can do about a snapshot that could not be made, in words (#115's codes). */
 export function snapshotErrorText(code: string | null | undefined): string {
@@ -101,7 +135,9 @@ export function useCreateSubmission(opportunityId: string) {
         method: 'POST',
         body,
       }),
-    onSuccess: invalidate,
+    // Settled: a refused create (another tab started one: live_submission_exists) must show
+    // the attempt that exists, not leave the page retrying the same refusal.
+    onSettled: invalidate,
   });
 }
 
@@ -117,7 +153,7 @@ export function usePatchSubmission(opportunityId: string) {
   return useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: SubmissionPatch }) =>
       api<SubmissionView>(`/submissions/${enc(id)}`, { method: 'PATCH', body: patch }),
-    onSuccess: invalidate,
+    onSettled: invalidate,
   });
 }
 

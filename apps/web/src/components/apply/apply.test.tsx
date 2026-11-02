@@ -646,3 +646,228 @@ describe('the saved copy at the review gate (#115: 409 snapshot_pending, snapsho
     expect(screen.queryByText(/could not save your review/i)).not.toBeInTheDocument();
   });
 });
+
+describe('tl on #138', () => {
+  it('(1) a double click on a valid review opens one tab and hands off once', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const api = mockApi(
+      routes(submission({ status: 'reviewed', reviewExpiresAt: NOW + 30 * MIN }), {
+        'POST /submissions/sub-1/handoff': async () => {
+          await held;
+          return { destinationUrl: DEST, expiresAt: NOW };
+        },
+      }),
+    );
+    const { open } = fakeWindowOpen();
+    const { user, router } = renderStep('review');
+    const button = await screen.findByRole('button', { name: 'Open boards.greenhouse.io' });
+    await user.dblClick(button);
+    await user.click(button);
+    release();
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'open' }));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/handoff')).toHaveLength(1);
+  });
+
+  it('(1) a double click on a first confirm reviews once and hands off once', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const api = mockApi(
+      routes(submission(), {
+        'POST /submissions/sub-1/review': async () => {
+          await held;
+          // Wrapped: a bare submission's `status` would be read as the HTTP status.
+          return {
+            status: 200,
+            body: submission({ status: 'reviewed', reviewExpiresAt: NOW + 30 * MIN }),
+          };
+        },
+        'POST /submissions/sub-1/handoff': { destinationUrl: DEST, expiresAt: NOW },
+      }),
+    );
+    const { open } = fakeWindowOpen();
+    const { user, router } = renderStep('review');
+    await user.click(await screen.findByRole('checkbox'));
+    const button = screen.getByRole('button', { name: /confirm review/i });
+    await user.dblClick(button);
+    release();
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'open' }));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/review')).toHaveLength(1);
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/handoff')).toHaveLength(1);
+  });
+
+  it('(2) a create refused with live_submission_exists says so in words and shows the attempt', async () => {
+    let reads = 0;
+    const api = mockApi({
+      ...routes(null),
+      // Another tab started an attempt after this page loaded.
+      'GET /opportunities/opp-1/submissions': () => {
+        reads += 1;
+        return reads < 2
+          ? { items: [], total: 0 }
+          : { items: [submission({ resumeId: 'res-1' })], total: 1 };
+      },
+      'POST /opportunities/opp-1/submissions': () => ({
+        status: 409,
+        body: { error: { code: 'live_submission_exists', submissionId: 'sub-1' } },
+      }),
+    });
+    const { user } = renderStep('resume');
+    await user.click(await screen.findByRole('button', { name: 'Next: Details' }));
+    expect(await screen.findByText(/already has an application in progress/i)).toBeVisible();
+    expect(document.body.textContent).not.toContain('live_submission_exists');
+    await waitFor(() =>
+      expect(calls(api.calls, 'GET', '/opportunities/opp-1/submissions').length).toBeGreaterThan(1),
+    );
+    // The attempt that exists is now the page's: the saved copy it carries is shown.
+    expect(await screen.findByRole('link', { name: /download the saved copy/i })).toBeVisible();
+  });
+
+  it('(2) a refused edit says so in words, never the code', async () => {
+    mockApi(
+      routes(submission(), {
+        'PATCH /submissions/sub-1': () => ({
+          status: 409,
+          body: { error: { code: 'invalid_transition' } },
+        }),
+      }),
+    );
+    const { user } = renderStep('details');
+    await user.type(await screen.findByLabelText('Phone'), '555 0100');
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    expect(await screen.findByText(/changed in another tab or window/i)).toBeVisible();
+    expect(document.body.textContent).not.toContain('invalid_transition');
+  });
+
+  it('(3) the review shows the saved copy itself: its download, and what can and cannot change', async () => {
+    mockApi(routes(submission()));
+    renderStep('review');
+    const section = (await screen.findByRole('heading', { name: 'Resume' })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(within(section).getByText('Jane Final')).toBeVisible();
+    expect(within(section).getByRole('link', { name: /download the saved copy/i })).toHaveAttribute(
+      'href',
+      '/api/v1/submissions/sub-1/snapshot',
+    );
+    expect(section).toHaveTextContent(/this copy cannot change/i);
+    expect(section).toHaveTextContent(/delete it from Attachments/i);
+  });
+
+  it.each([
+    [
+      'unsupported',
+      { snapshotState: 'unsupported', snapshotError: 'export_unsupported' },
+      /attach the resume file yourself/i,
+    ],
+    ['deleted', { resumeAttachmentId: null }, /the saved file was deleted/i],
+  ] as const)('(3) the review says so when the saved copy is %s', async (_n, over, text) => {
+    mockApi(routes(submission(over as Partial<SubmissionView>)));
+    renderStep('review');
+    const section = (await screen.findByRole('heading', { name: 'Resume' })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(section).toHaveTextContent(text);
+    expect(within(section).queryByRole('link', { name: /download/i })).not.toBeInTheDocument();
+  });
+
+  it('(4) a handoff refused as invalid_transition says the attempt changed, not the connection', async () => {
+    mockApi(
+      routes(submission({ status: 'reviewed', reviewExpiresAt: NOW + 30 * MIN }), {
+        'POST /submissions/sub-1/handoff': () => ({
+          status: 409,
+          body: { error: { code: 'invalid_transition' } },
+        }),
+      }),
+    );
+    const { tab } = fakeWindowOpen();
+    const { user } = renderStep('review');
+    await user.click(await screen.findByRole('button', { name: 'Open boards.greenhouse.io' }));
+    expect(await screen.findByText(/changed in another tab or window/i)).toBeVisible();
+    expect(screen.queryByText(/check your connection/i)).not.toBeInTheDocument();
+    expect(tab.close).toHaveBeenCalled();
+  });
+
+  it('(4) a review the sweep closed says so, with the way to start again', async () => {
+    mockApi(routes(submission({ status: 'abandoned', failureReason: 'review_expired' })));
+    renderStep('review');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/your review expired and this application was closed/i);
+    expect(within(alert).getByRole('link', { name: 'resume step' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1/apply?step=resume',
+    );
+  });
+
+  it('(4) Review again that is refused shows why', async () => {
+    mockApi(
+      routes(submission({ status: 'reviewed', reviewExpiresAt: NOW - MIN }), {
+        'PATCH /submissions/sub-1': () => ({
+          status: 409,
+          body: { error: { code: 'invalid_transition' } },
+        }),
+      }),
+    );
+    const { user } = renderStep('review');
+    await user.click(await screen.findByRole('button', { name: 'Review again' }));
+    expect(await screen.findByText(/changed in another tab or window/i)).toBeVisible();
+  });
+
+  it('(4) Try again on a failed copy that is refused shows why', async () => {
+    mockApi(
+      routes(submission({ snapshotState: 'failed', snapshotError: 'unavailable' }), {
+        'PATCH /submissions/sub-1': () => ({
+          status: 429,
+          body: { error: { code: 'rate_limited' } },
+        }),
+      }),
+    );
+    const { user } = renderStep('resume');
+    await user.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText(/too many attempts/i)).toBeVisible();
+  });
+
+  it('(5) a handoff address that is not http(s) never reaches the tab', async () => {
+    mockApi(
+      routes(submission({ status: 'reviewed', reviewExpiresAt: NOW + 30 * MIN }), {
+        'POST /submissions/sub-1/handoff': {
+          destinationUrl: 'javascript:alert(1)',
+          expiresAt: NOW,
+        },
+      }),
+    );
+    const { tab } = fakeWindowOpen();
+    const { user, router } = renderStep('review');
+    await user.click(await screen.findByRole('button', { name: 'Open boards.greenhouse.io' }));
+    expect(
+      await screen.findByText(/this posting's address cannot be opened from here/i),
+    ).toBeVisible();
+    expect(tab.location.href).toBe('about:blank');
+    expect(tab.close).toHaveBeenCalled();
+    expect(router.state.location.search).toEqual({ step: 'review' });
+  });
+
+  it('(optional) after the daily cap, confirm stays off until the reset time', async () => {
+    const resetAt = NOW + 5 * 60 * MIN;
+    const api = mockApi(
+      routes(submission(), {
+        'POST /submissions/sub-1/review': () => ({
+          status: 429,
+          body: { error: { code: 'daily_review_cap', resetAt } },
+        }),
+      }),
+    );
+    fakeWindowOpen();
+    const { user } = renderStep('review');
+    await user.click(await screen.findByRole('checkbox'));
+    const button = screen.getByRole('button', { name: /confirm review/i });
+    await user.click(button);
+    await screen.findByText(/review limit reached for today/i);
+    await user.click(screen.getByRole('checkbox'));
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    await user.click(button);
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/review')).toHaveLength(1);
+  });
+});

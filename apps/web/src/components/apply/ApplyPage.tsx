@@ -29,6 +29,7 @@ import {
   hostOf,
   isLive,
   snapshotErrorText,
+  submissionErrorText,
   useCancelSubmission,
   useCreateSubmission,
   useHandoffSubmission,
@@ -103,6 +104,23 @@ export function ApplyPage({
       <WillNotSubmitCallout host={host} />
       {step === 'resume' ? (
         <ResumeStep opp={o} live={live} items={items} />
+      ) : live === undefined && items[0]?.failureReason === 'review_expired' ? (
+        // The sweep closed a review that was not used in time (tl on #138).
+        <Notice role="alert">
+          <span>
+            <strong>Your review expired and this application was closed.</strong> Nothing was
+            submitted. Start again from the{' '}
+            <Link
+              to="/opportunities/$id/apply"
+              params={{ id: o.id }}
+              search={{ step: 'resume' }}
+              className="text-primary underline-offset-4 hover:underline"
+            >
+              resume step
+            </Link>
+            : your details are kept.
+          </span>
+        </Notice>
       ) : live === undefined ? (
         <p className="text-sm text-muted-foreground">
           This application has not started yet.{' '}
@@ -202,7 +220,7 @@ function ResumeStep({
         search: { step: 'details' },
       });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not save your choice. Try again.');
+      setError(submissionErrorText(err));
     }
   }
 
@@ -255,9 +273,20 @@ function ResumeStep({
   );
 }
 
-/** The saved copy of the resume (#115's snapshot), or why there is none (design S2). */
-function SavedCopy({ live }: { live: SubmissionView | undefined }) {
+/**
+ * The saved copy of the resume (#115's snapshot), or why there is none: on the resume step
+ * (design S2), and on the review (S4, criterion 1), where pending and failed are already said by
+ * the gate's own notices and so are only named here.
+ */
+function SavedCopy({
+  live,
+  where = 'resume',
+}: {
+  live: SubmissionView | undefined;
+  where?: 'resume' | 'review';
+}) {
   const patch = usePatchSubmission(live?.opportunityId ?? '');
+  const [error, setError] = useState<string | null>(null);
   if (live === undefined) {
     return (
       <p className="text-sm text-muted-foreground">The saved copy is made when you continue.</p>
@@ -272,7 +301,9 @@ function SavedCopy({ live }: { live: SubmissionView | undefined }) {
     );
   }
   if (state === 'pending') {
-    return (
+    return where === 'review' ? (
+      <p className="text-sm text-muted-foreground">The saved copy is still being prepared.</p>
+    ) : (
       <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
         <Loader2 className="size-4 motion-safe:animate-spin" aria-hidden="true" />
         Preparing your resume file. This usually takes a few seconds.
@@ -298,18 +329,42 @@ function SavedCopy({ live }: { live: SubmissionView | undefined }) {
           // The user deleted the file from Attachments; the server keeps its fingerprint.
           <p className="text-muted-foreground">
             The saved file was deleted. Its fingerprint is kept, so this application still records
-            which resume it used.
+            which resume it used. Attach your resume yourself on the application site.
           </p>
         ) : (
-          <Button variant="outline" size="sm" asChild className="w-fit">
-            <a href={`${API_BASE}/submissions/${encodeURIComponent(live.id)}/snapshot`} download>
-              <Download className="size-4" aria-hidden="true" />
-              Download copy
-            </a>
-          </Button>
+          <>
+            <Button variant="outline" size="sm" asChild className="w-fit">
+              <a href={`${API_BASE}/submissions/${encodeURIComponent(live.id)}/snapshot`} download>
+                <Download className="size-4" aria-hidden="true" />
+                Download the saved copy (PDF)
+              </a>
+            </Button>
+            {/* sec on #117: not "immutable" outright; the user can delete the file. */}
+            <p className="text-xs text-muted-foreground">
+              This copy cannot change. You can delete it from Attachments: the file goes, and its
+              fingerprint stays on this application.
+            </p>
+          </>
         )}
       </div>
     );
+  }
+  if (where === 'review') {
+    return (
+      <p className="text-sm text-muted-foreground">
+        {state === 'unsupported'
+          ? 'You will attach the resume file yourself on the application site.'
+          : 'The saved copy could not be made (see above).'}
+      </p>
+    );
+  }
+  async function retry(resumeId: string) {
+    setError(null);
+    try {
+      await patch.mutateAsync({ id: (live as SubmissionView).id, patch: { resumeId } });
+    } catch (err) {
+      setError(submissionErrorText(err));
+    }
   }
   return (
     <div role="alert" className="grid gap-2 text-sm">
@@ -320,13 +375,12 @@ function SavedCopy({ live }: { live: SubmissionView | undefined }) {
           size="sm"
           className="w-fit"
           disabled={patch.isPending}
-          onClick={() =>
-            void patch.mutateAsync({ id: live.id, patch: { resumeId: live.resumeId as string } })
-          }
+          onClick={() => void retry(live.resumeId as string)}
         >
           Try again
         </Button>
       ) : null}
+      <FormError message={error} />
     </div>
   );
 }
@@ -395,7 +449,7 @@ function DetailsStep({ opp, live }: { opp: OpportunityView; live: SubmissionView
         search: { step: 'review' },
       });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not save your details. Try again.');
+      setError(submissionErrorText(err));
     }
   }
 
@@ -515,6 +569,7 @@ type Banner =
   | { kind: 'expired'; at: number }
   | { kind: 'cap'; resetAt: number | null }
   | { kind: 'destination' }
+  | { kind: 'changed' }
   | { kind: 'error' };
 
 function ReviewStep({
@@ -544,6 +599,9 @@ function ReviewStep({
   const checkbox = useRef<HTMLButtonElement>(null);
   const bannerRef = useRef<HTMLDivElement>(null);
   const busy = review.isPending || handoff.isPending || patch.isPending;
+  // Set in the click itself: two clicks in one tick both see `busy` still false (tl on #138).
+  const inFlight = useRef(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const now = Date.now();
   const reviewedAndValid =
@@ -562,8 +620,16 @@ function ReviewStep({
       : live.snapshotState === 'failed'
         ? 'failed'
         : null;
+  // After a 429 daily_review_cap, confirming again before the reset is refused again: keep it
+  // off until then, with the reason (tl's optional point on #138).
+  const capUntil =
+    banner?.kind === 'cap' && banner.resetAt !== null && banner.resetAt > now
+      ? banner.resetAt
+      : null;
   const confirmDisabled =
-    !reviewedAndValid && (!ticked || !digestReady || busy || snapshotBlock !== null);
+    busy ||
+    capUntil !== null ||
+    (!reviewedAndValid && (!ticked || !digestReady || snapshotBlock !== null));
 
   useEffect(() => {
     if (banner !== null) bannerRef.current?.focus();
@@ -591,19 +657,25 @@ function ReviewStep({
   }
 
   async function confirm() {
+    // One handoff per click, whatever the review's state: never a second employer tab.
+    if (inFlight.current || busy) return;
     if (confirmDisabled) {
       // aria-disabled, not disabled: say why and move to what unlocks it (design S4).
       if (snapshotBlock === 'pending') {
         setHint(SNAPSHOT_PENDING_TEXT);
       } else if (snapshotBlock === 'failed') {
         setHint(SNAPSHOT_FAILED_HINT);
+      } else if (capUntil !== null) {
+        setHint(`Review limit reached. You can confirm another after ${formatDateTime(capUntil)}.`);
       } else {
         setHint('Tick the box to continue.');
         checkbox.current?.focus();
       }
       return;
     }
+    inFlight.current = true;
     setBanner(null);
+    setActionError(null);
     // Opened inside the click, so a pop-up blocker allows it; pointed at the address only once
     // the server has handed off. Nothing is opened if anything is refused.
     const tab = window.open('about:blank', '_blank');
@@ -612,9 +684,17 @@ function ReviewStep({
         await review.mutateAsync({ id: live.id, reviewDigest: live.reviewDigest as string });
       }
       const out = await handoff.mutateAsync(live.id);
+      // The blank tab shares Opportun's origin: never point it at anything but http(s), even
+      // though the server hands off only an https address it checked (sec, low, on #138).
+      const href = safeHttpUrl(out.destinationUrl);
+      if (href === null) {
+        tab?.close();
+        setBanner({ kind: 'destination' });
+        return;
+      }
       if (tab !== null) {
         tab.opener = null;
-        tab.location.href = out.destinationUrl;
+        tab.location.href = href;
       }
       await navigate({
         to: '/opportunities/$id/apply',
@@ -634,15 +714,25 @@ function ReviewStep({
       } else if (code === 'destination_not_allowed') setBanner({ kind: 'destination' });
       // The saved copy changed state under the screen: the refreshed row shows which (below).
       else if (code === 'snapshot_pending' || code === 'snapshot_failed') setBanner(null);
+      // The attempt moved on elsewhere (another tab, or the sweep closed an expired review):
+      // the refreshed list shows where it stands.
+      else if (code === 'invalid_transition' || code === 'conflict') setBanner({ kind: 'changed' });
       else setBanner({ kind: 'error' });
+    } finally {
+      inFlight.current = false;
     }
   }
 
   async function reviewAgain() {
-    // An unchanged edit sends the attempt back to draft, so it can be reviewed afresh.
-    await patch.mutateAsync({ id: live.id, patch: { fields: live.fields } });
-    setBanner(null);
-    setTicked(false);
+    setActionError(null);
+    try {
+      // An unchanged edit sends the attempt back to draft, so it can be reviewed afresh.
+      await patch.mutateAsync({ id: live.id, patch: { fields: live.fields } });
+      setBanner(null);
+      setTicked(false);
+    } catch (err) {
+      setActionError(submissionErrorText(err));
+    }
   }
 
   const expiredAt =
@@ -738,6 +828,10 @@ function ReviewStep({
         {banner?.kind === 'destination' ? (
           <FormError message="This posting's address cannot be opened from here. Check the posting on the Details tab. Nothing was opened." />
         ) : null}
+        {banner?.kind === 'changed' ? (
+          <FormError message="This application changed in another tab or window. Nothing was opened. The page now shows where it stands." />
+        ) : null}
+        <FormError message={actionError} />
         {banner?.kind === 'error' ? (
           <FormError message="Could not save your review. Nothing was opened. Check your connection and try again." />
         ) : null}
@@ -763,21 +857,10 @@ function ReviewStep({
       </ReviewSection>
 
       <ReviewSection title="Resume">
-        <p className="text-sm">
+        <p className="text-sm font-medium [overflow-wrap:anywhere]">
           {live.resumeTitle ?? 'Resume'}
-          {live.resumeSha256 !== null ? (
-            <span className="ml-2 font-mono text-xs text-muted-foreground">
-              Fingerprint {live.resumeSha256.slice(0, 8)}
-            </span>
-          ) : null}
         </p>
-        <p className="text-sm text-muted-foreground">
-          {live.snapshotState === 'ready'
-            ? 'The saved copy is the file you will attach.'
-            : live.snapshotState === 'unsupported' || live.snapshotState === 'failed'
-              ? 'You will attach the resume file yourself on the application site.'
-              : 'The saved copy of this resume is not available yet.'}
-        </p>
+        <SavedCopy live={live} where="review" />
       </ReviewSection>
 
       <ReviewSection title="Your details">
