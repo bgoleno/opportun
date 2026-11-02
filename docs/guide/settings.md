@@ -128,6 +128,12 @@ _Two accounts: the administrator and a member._
 Each user sees only their own data. More detail: [install guide section 12](../install.md#12-users-and-registration)
 and [section 14](../install.md#14-sign-in-with-google-github-or-linkedin).
 
+## Mail filters
+
+**Settings > Mail filters** holds the Gmail label Opportun watches, your allow and deny lists,
+the known job senders, and a pattern tester. What each one does, and what happens to a message
+they keep out, is in [Mail filters](mail-filters.md).
+
 ## Device tokens
 
 Programs on your own devices (the [Apple Mail connector](inbox.md#apple-mail) and the

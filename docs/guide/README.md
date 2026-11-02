@@ -18,12 +18,14 @@ so a few AI-written lines read "Mock answer." where your own model would write a
 3. [Resumes](resumes.md): base and tailored resumes, the tailoring chat, match scores, and
    Reactive Resume.
 4. [Inbox](inbox.md): Gmail, classification, review flags, linking mail, and Apple Mail.
-5. [Discovery](discovery.md): companies, job boards (Workday included), job alert emails,
+5. [Mail filters](mail-filters.md): which messages Opportun reads at all, allow and deny
+   rules, known job senders, and what is kept of a blocked message.
+6. [Discovery](discovery.md): companies, job boards (Workday included), job alert emails,
    the review queue, capture, ranking prompts, and dismissal learning.
-6. [Browser extension](browser-extension.md): capturing a profile or posting from the page
+7. [Browser extension](browser-extension.md): capturing a profile or posting from the page
    you are looking at, and why it works the way it does.
-7. [Network](network.md): contacts, the LinkedIn export, and referrals.
-8. [Settings](settings.md): AI keys and models, prompts, security, users, device tokens,
+8. [Network](network.md): contacts, the LinkedIn export, and referrals.
+9. [Settings](settings.md): AI keys and models, prompts, security, users, device tokens,
    import and export, and backups.
 
 ## A word on AI

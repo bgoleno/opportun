@@ -1,6 +1,6 @@
 # Inbox
 
-[Guide home](README.md) · Previous: [Resumes](resumes.md) · Next: [Discovery](discovery.md)
+[Guide home](README.md) · Previous: [Resumes](resumes.md) · Next: [Mail filters](mail-filters.md)
 
 The inbox collects recruiter mail, classifies it with AI, links it to the opportunities it is
 about, and suggests stage changes. It never sends, labels, moves or deletes mail.
@@ -19,6 +19,10 @@ Gmail uses the same Google OAuth client as resumes (see
 3. Optionally set **How far back to read (days)**: 1 to 1095, default 180. The first sync
    reads that far back, outside spam and trash. Changing it later makes the next sync re-read
    the whole window: widening pulls older mail in, narrowing keeps what is already there.
+
+Which messages Opportun reads at all is up to your [mail filters](mail-filters.md): a Gmail
+label to watch, allow and deny lists, and the checks every message passes before it is
+classified.
 
 Opportun syncs every 15 minutes on its own. **Sync now** (on the Inbox or the Gmail card)
 runs one immediately.
@@ -111,5 +115,5 @@ from the same card and the connector is cut off on its next request.
 
 ---
 
-| [← Resumes](resumes.md) | [Guide home](README.md) | [Discovery →](discovery.md) |
-| :---------------------- | :---------------------: | --------------------------: |
+| [← Resumes](resumes.md) | [Guide home](README.md) | [Mail filters →](mail-filters.md) |
+| :---------------------- | :---------------------: | --------------------------------: |
