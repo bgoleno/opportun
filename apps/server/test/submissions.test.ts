@@ -3,11 +3,11 @@
 // Every opportunity and resume here is synthetic. Nothing here, or in the code under test,
 // contacts an employer or an ATS: the posting URL is stored, never fetched.
 import { newId, type AtsJobRef, type OpportunityStage } from '@opportun/core';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, like } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { isUniqueViolation } from '../src/db/client';
-import { applicationSubmissions, opportunities, resumes } from '../src/db/schema';
+import { applicationSubmissions, auditLog, jobs, opportunities, resumes } from '../src/db/schema';
 import type { UserCtx } from '../src/repos/base';
 import { createOpportunity } from '../src/repos/opportunities';
 import { createSubmissionDraft } from '../src/repos/submissions';
@@ -823,5 +823,82 @@ describe('a same-key create that checked the key before the draft existed', () =
     expect(aResult.replayed).toBe(false);
     expect(bResult).toEqual({ submission: aResult.submission, replayed: true });
     expect(await rowsFor(app, a)).toHaveLength(1);
+  });
+});
+
+describe('the destination at creation (#135)', () => {
+  // The handoff opens only a recognised ATS posting for this requisition (destinationAllowed,
+  // repos/submissionReview.ts). A draft whose destination could never pass it is refused at the
+  // start, before the user fills it in and spends a review on it.
+  it.each([
+    [
+      'a career page carrying the posting id',
+      { ...ATS_REF, org: null, url: 'https://careers.example.com/open-roles?gh_jid=1000001' },
+    ],
+    ['a LinkedIn job page', { ...ATS_REF, url: 'https://www.linkedin.com/jobs/view/1000001' }],
+    [
+      'a lookalike ATS host',
+      { ...ATS_REF, url: 'https://boards.greenhouse.io.example.com/examplecorp/jobs/1000001' },
+    ],
+    [
+      'another company’s board',
+      { ...ATS_REF, url: 'https://boards.greenhouse.io/othercorp/jobs/1000001' },
+    ],
+    [
+      'another requisition',
+      { ...ATS_REF, url: 'https://boards.greenhouse.io/examplecorp/jobs/1000002' },
+    ],
+    [
+      'credentials in the URL',
+      { ...ATS_REF, url: 'https://jane@boards.greenhouse.io/examplecorp/jobs/1000001' },
+    ],
+  ])(
+    'an opportunity whose destination is %s gets 422 destination_not_allowed, and nothing is stored',
+    async (_n, ats) => {
+      const { app, a } = await boot(ON);
+      const oppId = await seedOpportunity(app, a, { ats });
+      const res = await create(a, oppId, {
+        idempotencyKey: crypto.randomUUID(),
+        resumeId: await seedResume(app, a),
+      });
+      expect(res.statusCode, res.body).toBe(422);
+      expect(res.json().error.code).toBe('destination_not_allowed');
+      expect(await rowsFor(app, a)).toEqual([]);
+      // No audit entry and no snapshot job either: the refusal changes nothing.
+      const audited = await app.db
+        .select()
+        .from(auditLog)
+        .where(and(eq(auditLog.userId, a.userId), like(auditLog.event, 'submission.%')))
+        .all();
+      expect(audited).toEqual([]);
+      expect(await app.db.select().from(jobs).where(like(jobs.kind, 'submission.%')).all()).toEqual(
+        [],
+      );
+    },
+  );
+
+  it.each([
+    ['a Greenhouse board posting', ATS_REF],
+    [
+      'a Greenhouse posting with tracking parameters',
+      { ...ATS_REF, url: `${ATS_REF.url}?gh_src=abc&utm_source=x` },
+    ],
+    [
+      'a Workday posting on its own tenant',
+      {
+        kind: 'ats_workday',
+        org: 'acme/External',
+        externalId: 'JR-000001',
+        url: 'https://acme.wd1.myworkdayjobs.com/en-US/External/job/X/Engineer_JR-000001',
+      } satisfies AtsJobRef,
+    ],
+  ])('an opportunity whose destination is %s is created as before', async (_n, ats) => {
+    const { app, a } = await boot(ON);
+    const res = await create(a, await seedOpportunity(app, a, { ats }), {
+      idempotencyKey: crypto.randomUUID(),
+      resumeId: await seedResume(app, a),
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    expect(res.json().destinationUrl).toBe(ats.url);
   });
 });

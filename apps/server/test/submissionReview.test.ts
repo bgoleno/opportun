@@ -992,3 +992,29 @@ describe('the burst limits (#136)', () => {
     expect((await handoff(b, other.id)).statusCode).toBe(200);
   });
 });
+
+describe('a draft refused at creation for its destination (#135)', () => {
+  it('uses no daily-cap place: with a cap of 1, the next good review still passes', async () => {
+    const { app, a } = await boot({ ...ON, dailyReviewCap: 1 });
+    const careerPage: AtsJobRef = {
+      ...ATS_REF,
+      org: null,
+      url: 'https://careers.example.com/open-roles?gh_jid=1000001',
+    };
+    const refused = await api(
+      a,
+      'POST',
+      `/opportunities/${await seedOpportunity(app, a, careerPage)}/submissions`,
+      {
+        idempotencyKey: crypto.randomUUID(),
+        resumeId: await seedResume(app, a),
+      },
+    );
+    expect(refused.statusCode, refused.body).toBe(422);
+    expect(refused.json().error.code).toBe('destination_not_allowed');
+    expect(await auditEvents(app, a, 'submission.reviewed')).toHaveLength(0);
+    // The one place under the cap is still free.
+    await reviewed(app, a);
+    expect(await auditEvents(app, a, 'submission.reviewed')).toHaveLength(1);
+  });
+});

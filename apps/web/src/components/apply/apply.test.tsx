@@ -923,3 +923,23 @@ describe('tl on #138', () => {
     expect(calls(api.calls, 'POST', '/submissions/sub-1/review')).toHaveLength(1);
   });
 });
+
+describe('a draft refused at creation for its destination (#135)', () => {
+  it('says so in words, never the code, and stays on the resume step', async () => {
+    mockApi(
+      routes(null, {
+        'POST /opportunities/opp-1/submissions': () => ({
+          status: 422,
+          body: { error: { code: 'destination_not_allowed' } },
+        }),
+      }),
+    );
+    const { user, router } = renderStep('resume');
+    await user.click(await screen.findByRole('button', { name: 'Next: Details' }));
+    expect(
+      await screen.findByText(/isn't the employer's own posting on a recognised application site/i),
+    ).toBeVisible();
+    expect(document.body.textContent).not.toContain('destination_not_allowed');
+    expect(router.state.location.search).toEqual({ step: 'resume' });
+  });
+});

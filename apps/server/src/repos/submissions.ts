@@ -25,6 +25,9 @@ import { racePoint } from '../lib/racePoints';
 import { submissionDigest } from '../lib/submissionDigest';
 import { enqueueSnapshot } from '../jobs/submissionSnapshot';
 import type { Db, Exec, UserCtx } from './base';
+// A cycle (submissionReview imports this module's row helpers), safe because neither module uses
+// the other at load time: destinationAllowed is only called inside createSubmissionDraft.
+import { destinationAllowed } from './submissionReview';
 import { countWhere, type ListOpts, type Page } from './list';
 
 export type SubmissionRow = typeof applicationSubmissions.$inferSelect;
@@ -38,6 +41,7 @@ export type IneligibleReason =
   | 'posting_not_confirmed'
   | 'stage_not_eligible'
   | 'destination_not_https'
+  | 'destination_not_allowed'
   | 'resume_not_found'
   | 'resume_not_final';
 
@@ -52,6 +56,10 @@ const INELIGIBLE_MESSAGES = new Map<IneligibleReason, string>([
   ],
   ['stage_not_eligible', 'Applying is available at Interested, Preparing or Applied.'],
   ['destination_not_https', "The posting's address is not https."],
+  [
+    'destination_not_allowed',
+    "The posting's address is not the employer's posting on a recognised application site, so it could never be opened from here.",
+  ],
   ['resume_not_found', 'That resume was not found.'],
   ['resume_not_final', 'Choose a finished resume: one marked final, or already submitted.'],
 ]);
@@ -238,8 +246,7 @@ export async function createSubmissionDraft(
   if (!(SUBMISSION_ELIGIBLE_STAGES as readonly string[]).includes(opp.stage)) {
     throw ineligible('stage_not_eligible');
   }
-  // The destination is only ever stored and shown; it is never fetched. Fuller destination checks
-  // (a recognised ATS host, never LinkedIn or Indeed) arrive with the handoff (M1c).
+  // The destination is only ever stored and shown; it is never fetched.
   let destination: URL;
   try {
     destination = new URL(ref.url);
@@ -247,6 +254,18 @@ export async function createSubmissionDraft(
     throw ineligible('destination_not_https');
   }
   if (destination.protocol !== 'https:') throw ineligible('destination_not_https');
+  // The handoff's own rule (a recognised ATS posting for this requisition, never LinkedIn or
+  // Indeed), applied at the start too: a draft that could never be handed off is refused before
+  // the user fills it in and spends a review on it (#135). The handoff keeps its check.
+  if (
+    !destinationAllowed(ref.url, {
+      atsKind: ref.kind,
+      atsExternalId: ref.externalId,
+      atsRef: ref.org,
+    })
+  ) {
+    throw ineligible('destination_not_allowed');
+  }
   const resume = await finalResume(db, ctx, input.resumeId);
 
   const live = await liveFor(db, ctx, opportunityId);
