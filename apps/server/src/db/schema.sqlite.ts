@@ -962,6 +962,11 @@ export const applicationSubmissions = sqliteTable(
     confirmationActivityId: text('confirmation_activity_id').references(() => activities.id, {
       onDelete: 'set null',
     }),
+    /**
+     * Why the user is applying again to a requisition they already applied to (owner decision 6,
+     * #118): typed by the user at review, required then, and kept with the attempt.
+     */
+    reapplyReason: text('reapply_reason'),
     /** A re-application to the same requisition names the attempt it repeats. */
     reapplyOf: text('reapply_of').references((): AnySQLiteColumn => applicationSubmissions.id, {
       onDelete: 'set null',

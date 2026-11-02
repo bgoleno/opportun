@@ -98,6 +98,9 @@ export function view(row: SubmissionRow): Submission {
     confirmedAt: row.confirmedAt,
     confirmationKind: row.confirmationKind,
     failureReason: row.failureReason,
+    reapplyOf: row.reapplyOf,
+    reapplyReason: row.reapplyReason,
+    submittedActivityId: row.submittedActivityId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

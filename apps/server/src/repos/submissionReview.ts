@@ -19,7 +19,7 @@
 //   the write it guards.
 //
 // Opportun never transmits an application: nothing here contacts an employer or an ATS.
-import { and, eq, gt, lte, max, or } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lte, max, ne, or } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Submission } from '@opportun/core';
 import { DEFAULT_DAILY_REVIEW_CAP, MAX_DAILY_REVIEW_CAP, type Config } from '../config';
@@ -125,6 +125,41 @@ const reviewStale = (): HttpError =>
 
 export interface ReviewInput {
   reviewDigest: string;
+  /** Why the user applies again to a requisition they already applied to (owner decision 6). */
+  reapplyReason?: string | undefined;
+}
+
+/** Attempts that count as an application made: the user said they submitted it. */
+const APPLIED_STATUSES = ['submitted', 'confirmed', 'unknown'] as const;
+
+/**
+ * The user's latest earlier application to the same requisition (the same ATS, board or
+ * tenant, and requisition id), on any opportunity: an attempt they said they submitted. A form
+ * the ATS refused, or an attempt that never got that far, is not one.
+ */
+async function earlierApplication(
+  exec: Exec,
+  ctx: UserCtx,
+  row: SubmissionRow,
+): Promise<SubmissionRow | undefined> {
+  return await exec
+    .select()
+    .from(applicationSubmissions)
+    .where(
+      and(
+        eq(applicationSubmissions.userId, ctx.userId),
+        ne(applicationSubmissions.id, row.id),
+        eq(applicationSubmissions.atsKind, row.atsKind),
+        row.atsRef === null
+          ? isNull(applicationSubmissions.atsRef)
+          : eq(applicationSubmissions.atsRef, row.atsRef),
+        eq(applicationSubmissions.atsExternalId, row.atsExternalId),
+        inArray(applicationSubmissions.status, [...APPLIED_STATUSES]),
+      ),
+    )
+    .orderBy(desc(applicationSubmissions.submittedAt), desc(applicationSubmissions.id))
+    .limit(1)
+    .get();
 }
 
 type ReviewOutcome = { kind: 'reviewed'; row: SubmissionRow } | { kind: 'capped'; resetAt: number };
@@ -170,6 +205,18 @@ export async function reviewSubmission(
       });
     }
     if (submissionDigest(row) !== input.reviewDigest) throw reviewStale();
+    // Applying again to the same requisition is allowed, with a typed reason (owner decision 6,
+    // #118). The review is where the user sees the earlier application, so it is asked here.
+    const earlier = await earlierApplication(tx, ctx, row);
+    const reason = input.reapplyReason?.trim() ?? '';
+    if (earlier !== undefined && reason === '') {
+      throw new HttpError(
+        422,
+        'reapply_reason_required',
+        'You already applied for this job. Say why you are applying again.',
+        { submissionId: earlier.id },
+      );
+    }
 
     await lockScope(tx, userScope(ctx));
     const cap = await dailyCap(tx, ctx, cfg);
@@ -189,6 +236,9 @@ export async function reviewSubmission(
       .set({
         status: 'reviewed',
         reviewDigest: input.reviewDigest,
+        // Kept only for a re-application; a first application stores no reason.
+        reapplyOf: earlier?.id ?? null,
+        reapplyReason: earlier === undefined ? null : reason,
         reviewedAt: now,
         reviewExpiresAt: now + REVIEW_TTL_MS,
         updatedAt: now,

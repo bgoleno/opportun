@@ -54,6 +54,14 @@ board APIs).
   application never sends an email, message, or application without the user
   pressing send. Features that would mainly enable application spam are rejected
   even when technically easy.
+  Clarifying note (additive; it relaxes no clause above): assisted application
+  (FR-X) is permitted because Opportun itself transmits nothing. It prepares and
+  records; the user's browser fills a form the user is viewing; the user presses
+  the destination's own submit control. No code path in the server, the connector
+  or the extension may invoke an application submit. A direct submission API
+  integration remains out of scope, because candidate access to such APIs does not
+  exist (they require an employer-issued key) and doing it without one would
+  violate C-2.
 - NG-4: No mobile apps in scope. The web UI should be responsive, but native apps are
   out of scope.
 - NG-5: Not an applicant tracking system for employers. The user is the candidate.
@@ -393,6 +401,30 @@ ghosted)`. Stage history with timestamps is preserved.
   any time.
 - FR-I4 (P1): One-command backup and restore of the full application state.
 
+### 5.11 Assisted application (FR-X)
+
+The design, the owner's decisions and the milestones are on
+https://github.com/bgoleno/opportun/issues/79. The feature sits behind
+`OPPORTUN_SUBMISSIONS=1`, off by default and never on the demo.
+
+- FR-X1 (P1): An opportunity whose posting is on an ATS board Opportun recognises can
+  record an application attempt (a _submission_), carrying the exact resume as
+  reviewed. Opportun never transmits an application itself.
+- FR-X2 (P1): Pre-review gate: a submission cannot be handed off until the user has
+  reviewed the destination, the resume snapshot, the fields and the answers on one
+  screen. Any change invalidates the review. One opportunity per action, no batch,
+  and a server-enforced daily review ceiling. Applying again to a requisition the
+  user already applied to needs a reason the user types.
+- FR-X3 (P1): The submission's outcome and confirmation evidence (the user's
+  "I submitted it", a captured confirmation page, a matched confirmation email) are
+  recorded on the opportunity timeline and in the resume's submitted record (FR-R3).
+  The stage moves to Applied only on the user's click. The absence of a confirmation
+  is surfaced as a next step, never as a failure, and is never acted on
+  automatically.
+- FR-X4 (P2): The browser extension may prefill the ATS form in the tab the user is
+  viewing, on an explicit click. It never presses the form's submit control.
+- FR-X5 (P1): The feature is unavailable on the demo deployment.
+
 ## 6. Non-functional requirements (NFR)
 
 ### 6.1 Security (NFR-SEC)
@@ -414,7 +446,8 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
   and host allowlists per adapter, no redirects to private address space, timeouts
   and size caps.
 - NFR-SEC7: Audit log of security-relevant events (sign-ins, failed attempts, key
-  changes, exports, admin actions).
+  changes, exports, admin actions, and the lifecycle of an application submission,
+  FR-X).
 - NFR-SEC8: Dependency hygiene: lockfiles, automated vulnerability scanning in CI,
   documented update cadence. No dependencies with non-OSI licenses.
 - NFR-SEC9: A published security policy (SECURITY.md) with a private disclosure
@@ -547,6 +580,9 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
   refuse to invent experience.
 - C-5: **Open source.** All runtime dependencies OSI-licensed and compatible with the
   project license.
+- C-6: **ATS submission.** No employer-issued ATS key is ever requested, stored or
+  used, and no apply form is fetched or driven server-side. The extension may fill,
+  but never submit, a form in the user's active tab.
 
 ## 9. Success metrics
 

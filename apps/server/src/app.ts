@@ -36,6 +36,7 @@ import type { JobServices } from './jobs/registry';
 import { ATS_REVERIFY_CRON, ATS_REVERIFY_KIND } from './jobs/atsDetect';
 import { ATTACHMENT_SWEEP_CRON, ATTACHMENT_SWEEP_JOB_KIND } from './jobs/attachmentSweep';
 import { SUBMISSION_EXPIRE_CRON, SUBMISSION_EXPIRE_JOB_KIND } from './jobs/submissionExpire';
+import { SUBMISSION_FOLLOWUP_CRON, SUBMISSION_FOLLOWUP_JOB_KIND } from './jobs/submissionFollowup';
 import { BACKUP_CRON, BACKUP_JOB_KIND } from './jobs/backup';
 import { DEMO_RESET_CRON, DEMO_RESET_JOB_KIND } from './jobs/demoReset';
 import { JOB_PRUNE_CRON, JOB_PRUNE_JOB_KIND } from './jobs/jobPrune';
@@ -366,6 +367,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   // and Settings > Jobs should not show a schedule the deployment has no use for.
   if (submissionsEnabled(cfg)) {
     await seedSchedule(db, SUBMISSION_EXPIRE_JOB_KIND, SUBMISSION_EXPIRE_CRON);
+    // The follow-up for applications with no confirmation (#118), same reasoning.
+    await seedSchedule(db, SUBMISSION_FOLLOWUP_JOB_KIND, SUBMISSION_FOLLOWUP_CRON);
   }
   await seedSchedule(db, GMAIL_SYNC_ALL_KIND, GMAIL_SYNC_ALL_CRON);
   await seedSchedule(db, REFINE_JOB_KIND, REFINE_CRON);

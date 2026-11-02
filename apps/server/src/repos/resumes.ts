@@ -244,7 +244,7 @@ export interface ResumePatch {
  * never changed here either way.
  */
 export async function updateResume(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   id: string,
   patch: ResumePatch,
