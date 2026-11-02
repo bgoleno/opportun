@@ -793,11 +793,11 @@ instead of Google Docs, so Opportun works without a Google account (FR-R7).
 
 ## 10. Capture extension (LinkedIn)
 
-Opportun never fetches LinkedIn itself (C-1). To add a LinkedIn profile as a contact or a
-LinkedIn job as an opportunity, use the **Opportun Capture** browser extension (Chrome,
-Chromium browsers and Firefox 128+): open the profile or job in your browser, click the
-extension, and click **Capture this page**. It sends only that tab's visible text, only when
-you click, and only to your own server.
+Opportun never fetches LinkedIn itself (C-1), or Indeed (C-2). To add a LinkedIn profile as a
+contact, or a LinkedIn or Indeed job as an opportunity, use the **Opportun Capture** browser
+extension (Chrome, Chromium browsers and Firefox 128+): open the profile or job in your
+browser, click the extension, and click **Capture this page**. It sends only that tab's text,
+only when you click, and only to your own server.
 
 A captured job becomes an opportunity at Interested rather than a review-queue card, and
 Opportun then looks the same posting up on the company's own ATS board in the background,
@@ -823,9 +823,11 @@ When it cannot settle that, it changes nothing and flags the opportunity for you
   network (localhost, a `.local`, `.lan` or `.home.arpa` name, a name with no dots, or a
   private address such as `192.168.x.x`). Add the token, Save, allow the access prompt for your
   server, then **Test connection**.
-- **Limits**: profiles (`/in/<name>`) and job pages (`/jobs/view/<id>`, or the jobs search
-  view with a job selected) only; feeds, search results and company pages are refused. Each
-  token may capture 30 pages per 15 minutes.
+- **Limits**: on LinkedIn, profiles (`/in/<name>`) and job pages (`/jobs/view/<id>`, or the
+  jobs search view with a job selected) only; feeds, search results and company pages are
+  refused. On Indeed (`www.indeed.com` only, not the country sites), a job page
+  (`/viewjob?jk=<jk>`) or a search with a job open (`/jobs?...&vjk=<jk>`) only. Each token may
+  capture 30 pages per 15 minutes.
 
 What it does and how to use it day to day is in the user guide:
 [Browser extension](guide/browser-extension.md). The compliance rationale and a manual QA

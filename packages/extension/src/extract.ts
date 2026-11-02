@@ -86,3 +86,98 @@ export function extractPage(markers: ExtractMarkers, doc: Document = document): 
     text: text.slice(0, 1_000_000),
   };
 }
+
+/**
+ * What an injected reader returns: the page, or why it was not read. A refusal carries no page
+ * text at all, so nothing can be sent from it.
+ */
+export type ExtractResult =
+  { ok: true; page: RawPage } | { ok: false; reason: 'layout_unrecognized' };
+
+/**
+ * The function that runs inside an Indeed tab, only when the user clicks Capture
+ * (https://github.com/bgoleno/opportun/issues/74). Self-contained like extractPage: serialized
+ * with toString() and injected, so no imports and no module-level names (types are erased).
+ *
+ * It composes the text from named parts of the job, exactly as the Indeed capture text contract
+ * defines it (https://github.com/bgoleno/opportun/issues/73#issuecomment-6568000179), rather than
+ * one innerText. The job is `[data-testid="viewjob-main-content"]` on both layouts. On /viewjob
+ * there is no <main> and <body> holds the site nav and account menu; in the split view <main>
+ * holds the results list too; and the job pane ends with a block of other recommended jobs. So:
+ *   1 the title: textContent of vj-job-title (the full header can be visibility: hidden while a
+ *     sticky compact copy shows, so innerText could be empty);
+ *   2 the company: textContent of the first link in company-info-metadata;
+ *   3 the later metadata children (rating, location, work setting), separators left out;
+ *   4 the structured job summary, if any (innerText);
+ *   5 the literal line "Full job description";
+ *   6 innerText of each element after the description heading in its container, except the
+ *     page's visibility sentinels. The recommended jobs are a sibling of that container, so they
+ *     are never reached.
+ * Each part is trimmed and empty parts are left out. When the root or a required part (title,
+ * company link, description heading, a non-empty description) is missing, Indeed's layout has
+ * changed: the capture is refused, never guessed at, and never taken from <main>, <body> or the
+ * tab title.
+ *
+ * The title it reports is the job title (part 1), not document.title: in the split view the tab
+ * title names the search, which has no business leaving the browser.
+ */
+export function extractIndeedJob(doc: Document = document): ExtractResult {
+  const refuse: ExtractResult = { ok: false, reason: 'layout_unrecognized' };
+  const collapse = (s: string | null | undefined): string => (s ?? '').replace(/\s+/g, ' ').trim();
+  // A part's own lines keep their order and breaks; only whitespace at the end of each is cut.
+  const visible = (el: Element): string =>
+    ((el as HTMLElement).innerText ?? el.textContent ?? '')
+      .split('\n')
+      .map((line) => line.trimEnd())
+      .join('\n')
+      .trim();
+
+  const root = doc.querySelector('[data-testid="viewjob-main-content"]');
+  if (root === null) return refuse;
+
+  const titleEl = root.querySelector('[data-testid="vj-job-title"]');
+  const title = collapse(titleEl?.textContent);
+  const meta = root.querySelector('[data-testid="company-info-metadata"]');
+  const companyLink = meta?.querySelector('a') ?? null;
+  const company = collapse(companyLink?.textContent);
+  if (title === '' || meta === null || companyLink === null || company === '') return refuse;
+
+  const parts: string[] = [title, company];
+  let afterCompany = false;
+  for (const child of Array.from(meta.children)) {
+    if (!afterCompany) {
+      afterCompany = child === companyLink || child.contains(companyLink);
+      continue;
+    }
+    const line = collapse(child.textContent);
+    if (line !== '' && line !== '·' && line !== '•') parts.push(line);
+  }
+
+  const summary = root.querySelector('[data-testid="structured-job-summary"]');
+  if (summary !== null) parts.push(visible(summary));
+
+  const heading = root.querySelector('[data-testid="vj-job-description-heading"]');
+  const container = heading?.parentElement ?? null;
+  if (heading === null || container === null) return refuse;
+  const description: string[] = [];
+  let afterHeading = false;
+  for (const child of Array.from(container.children)) {
+    if (!afterHeading) {
+      afterHeading = child === heading;
+      continue;
+    }
+    if ((child.getAttribute('data-testid') ?? '').startsWith('vj-rcv-flag-sentinel')) continue;
+    const text = visible(child);
+    if (text !== '') description.push(text);
+  }
+  if (description.length === 0) return refuse;
+
+  const text = [...parts, 'Full job description', ...description]
+    .map((p) => p.trim())
+    .filter((p) => p !== '')
+    .join('\n');
+  return {
+    ok: true,
+    page: { url: doc.location.href, title, text: text.slice(0, 1_000_000) },
+  };
+}
