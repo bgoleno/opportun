@@ -128,7 +128,7 @@ describe('BlockedRow', () => {
     expect(text).toContain(STORED_TEXT);
   });
 
-  it('says nothing was read, on no row a mail filter kept out', async () => {
+  it('adds no AI line to a row a mail filter kept out', async () => {
     for (const rule of ['consumer_domain', 'deny_list', 'private_content', 'no_signal'] as const) {
       const { container, unmount } = renderWithProviders(
         <BlockedRow comm={blocked({ triageRule: rule })} />,
@@ -149,7 +149,7 @@ describe('BlockedRow', () => {
 });
 
 describe('Inbox: the Blocked tab note (#104)', () => {
-  it("says filters read nothing, and that the AI check's rows say what it read", async () => {
+  it("says filters send the message nowhere, and that the AI check's rows say what it sent", async () => {
     mockApi({
       'GET /integrations/gmail': CONNECTED,
       'GET /communications': { items: [], total: 0 },
@@ -158,9 +158,13 @@ describe('Inbox: the Blocked tab note (#104)', () => {
     const panel = await screen.findByRole('tabpanel');
     const note = within(panel).getByText(/Kept out by your mail filters/);
     const text = note.textContent?.replace(/\s+/g, ' ') ?? '';
-    // The filters' sentence is today's, now about the filters only.
-    expect(text).toContain('Kept out by your mail filters before anything read them,');
-    expect(text).toContain('or by the AI check, whose rows say what it read.');
+    // tl on #110: some filter rules read the subject and body on the server, so the note says
+    // what is true of every filter rule (the message went nowhere), not that nothing read it.
+    expect(text).toContain(
+      'Kept out by your mail filters, which check each message on your own Opportun server and send it nowhere,',
+    );
+    expect(text).toContain('or by the AI check, whose rows say what it sent to your AI provider.');
+    expect(text).not.toMatch(/before anything read them/);
     expect(text).toContain(STORED_TEXT);
     // sec on #110: a blocked row keeps the recipients and the ids too, not only the sender.
     expect(text).not.toMatch(/stored only the sender/);

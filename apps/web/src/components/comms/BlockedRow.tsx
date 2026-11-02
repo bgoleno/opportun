@@ -41,10 +41,10 @@ export const STORED_ON_BLOCK =
 
 /**
  * What was read before an `ai_gate` block (https://github.com/bgoleno/opportun/issues/104). A mail
- * filter rule decides from the sender and headers and reads nothing, which the Blocked tab's note
- * says. The AI check (lib/triageGate.ts on the server) is different: the user's AI provider was
- * given the sender, the subject and the first GATE_INPUT_CHARS characters to decide. The row says
- * so in the user guide's words.
+ * filter rule runs on the user's own server and sends the message nowhere (some rules read its
+ * subject and body there), which the Blocked tab's note says. The AI check (lib/triageGate.ts on
+ * the server) is different: the user's AI provider was given the sender, the subject and the
+ * first GATE_INPUT_CHARS characters to decide. The row says so in the user guide's words.
  */
 const AI_GATE_READ = `Your AI provider read the sender, the subject and the first ${GATE_INPUT_CHARS} characters to decide. ${STORED_ON_BLOCK}`;
 
