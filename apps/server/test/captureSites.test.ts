@@ -170,6 +170,34 @@ describe('postingIdentity: Indeed', () => {
     }
   });
 
+  it('prefers the URL job key to an opaque externalId another source stored', () => {
+    // A user-mapped MCP source can store its own id beside the Indeed URL. Read as the site's
+    // id, it would contradict a capture of the same posting.
+    expect(
+      postingIdentity(
+        posting({
+          externalId: 'mcp-job-123',
+          postingUrl: 'https://www.indeed.com/viewjob?jk=0000000000000a01',
+        }),
+      ),
+    ).toBe('indeed:0000000000000a01');
+  });
+
+  it('takes a bare externalId only in the site id shape when the URL has no job key', () => {
+    const elsewhere = 'https://www.indeed.com/rc/clk?from=ja';
+    expect(
+      postingIdentity(posting({ externalId: '0000000000000a01', postingUrl: elsewhere })),
+    ).toBe('indeed:0000000000000a01');
+    expect(
+      postingIdentity(posting({ externalId: 'mcp-job-123', postingUrl: elsewhere })),
+    ).toBeNull();
+    expect(
+      postingIdentity(
+        posting({ externalId: 'mcp-job-123', postingUrl: 'https://www.linkedin.com/jobs/' }),
+      ),
+    ).toBeNull();
+  });
+
   it('is still null for a bare externalId on a URL no site claims', () => {
     expect(
       postingIdentity(

@@ -16,6 +16,7 @@ import { useApi } from './api';
 import { queryAll } from './db';
 import type { TestClient } from './isolation';
 import { resolveCapture } from '../src/lib/captureResolve';
+import { listActivities } from '../src/repos/activities';
 import type { UserCtx } from '../src/repos/base';
 import {
   createRun,
@@ -44,8 +45,9 @@ async function seedIndeedAlertLead(
   app: FastifyInstance,
   ctx: UserCtx,
   over: Partial<NormalizedPosting> = {},
+  kind: 'alert_email' | 'manual' = 'alert_email',
 ): Promise<DiscoveryResultView> {
-  const source = await ensureChannelSource(app.db, ctx, 'alert_email');
+  const source = await ensureChannelSource(app.db, ctx, kind);
   const run = await createRun(app.db, ctx, { sourceId: source.id });
   const posting: NormalizedPosting = {
     company: COMPANY,
@@ -157,6 +159,118 @@ describe('resolveCapture: Indeed', () => {
     expect(out.resultId).not.toBe(other.id);
     expect(out.linkedLeadIds).toEqual([]);
     expect((await getResult(app.db, ctx, other.id)).disposition).toBe('pending');
+  });
+});
+
+describe('resolveCapture: Indeed, once the first job is an opportunity', () => {
+  // Review point 3 on https://github.com/bgoleno/opportun/pull/77. An Indeed capture has no
+  // location, so "Senior" and "Principal" at one company (or one title in two cities) share a
+  // dedupe key on every capture. The first one's opportunity holds that key; the second must
+  // not be filed under it, because the lead behind it is a different job key on the same site.
+  const principal = (over: Partial<NormalizedPosting> = {}) =>
+    indeedCapture({
+      title: 'Principal Example Engineer',
+      postingUrl: indeedUrl(OTHER_JK),
+      externalId: `indeed:${OTHER_JK}`,
+      ...over,
+    });
+
+  const activityTitles = async (app: FastifyInstance, ctx: UserCtx, oppId: string) =>
+    (await listActivities(app.db, ctx, oppId, { limit: 50, offset: 0 })).items.map((a) => a.title);
+
+  it('gives the second job key its own opportunity, flagged as a possible duplicate', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const first = await resolve(app, ctx, indeedCapture(), 'indeed');
+    expect(dedupeKey(COMPANY, 'Principal Example Engineer', null)).toBe(
+      dedupeKey(COMPANY, TITLE, null),
+    );
+
+    const second = await resolve(app, ctx, principal(), 'indeed');
+
+    expect(second.createdOpportunity).toBe(true);
+    expect(second.opportunityId).not.toBe(first.opportunityId);
+    expect(await opportunityCount(app, ctx)).toBe(2);
+    const [row] = await queryAll<{ possible_duplicate_of: string | null }>(
+      app,
+      'SELECT possible_duplicate_of FROM opportunities WHERE id = ?',
+      second.opportunityId,
+    );
+    expect(row?.possible_duplicate_of).toBe(first.opportunityId);
+    // Nothing of the second job lands on the first one's timeline.
+    const firstTitles = await activityTitles(app, ctx, first.opportunityId);
+    expect(firstTitles.filter((t) => /captured from/i.test(t))).toHaveLength(1);
+    expect(await activityTitles(app, ctx, second.opportunityId)).toContainEqual(
+      expect.stringMatching(/kept apart from a different indeed posting/i),
+    );
+
+    // Each job still finds its own opportunity again.
+    expect((await resolve(app, ctx, indeedCapture(), 'indeed')).opportunityId).toBe(
+      first.opportunityId,
+    );
+    expect((await resolve(app, ctx, principal(), 'indeed')).opportunityId).toBe(
+      second.opportunityId,
+    );
+    expect(await opportunityCount(app, ctx)).toBe(2);
+  });
+
+  it('completes a pending alert lead for the second job key into its own opportunity', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const first = await resolve(app, ctx, indeedCapture(), 'indeed');
+    const lead = await seedIndeedAlertLead(app, ctx, {
+      title: 'Principal Example Engineer',
+      postingUrl: indeedUrl(OTHER_JK),
+      externalId: OTHER_JK,
+      location: null,
+    });
+
+    const second = await resolve(app, ctx, principal(), 'indeed');
+
+    expect(second.resultId).toBe(lead.id);
+    expect(second.opportunityId).not.toBe(first.opportunityId);
+    expect((await getResult(app.db, ctx, lead.id)).opportunityId).toBe(second.opportunityId);
+    expect(await opportunityCount(app, ctx)).toBe(2);
+  });
+
+  it('still attaches to an opportunity under the key that no lead contradicts', async () => {
+    // D20's residual case is unchanged: an opportunity the user made by hand has no lead, so
+    // nothing says it is a different job.
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const { createOpportunity } = await import('../src/repos/opportunities');
+    const manual = await createOpportunity(app.db, ctx, {
+      companyName: COMPANY,
+      title: TITLE,
+      location: null,
+      sourceKind: 'manual',
+    });
+
+    const out = await resolve(app, ctx, indeedCapture(), 'indeed');
+
+    expect(out.opportunityId).toBe(manual.id);
+    expect(await opportunityCount(app, ctx)).toBe(1);
+  });
+});
+
+describe('resolveCapture: Indeed leads from other sources', () => {
+  it('completes a lead that stored its own id beside the Indeed URL', async () => {
+    // Review point 4. A user-mapped MCP source stores its own opaque externalId; the URL's job
+    // key is the identity, so the capture of that job key completes the lead.
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const lead = await seedIndeedAlertLead(
+      app,
+      ctx,
+      { externalId: 'mcp-job-123', location: null },
+      'manual',
+    );
+
+    const out = await resolve(app, ctx, indeedCapture(), 'indeed');
+
+    expect(out.resultId).toBe(lead.id);
+    expect(await pendingCount(app, ctx)).toBe(0);
+    expect(await opportunityCount(app, ctx)).toBe(1);
   });
 });
 
