@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { companyMatchKey, dedupeGroupKey, dedupeKey } from './dedupe';
+import { companyMatchKey, dedupeGroupKey, dedupeKey, matchText, titleMatchKey } from './dedupe';
 
 describe('dedupeKey', () => {
   it('ignores case, punctuation, and extra whitespace', () => {
@@ -177,3 +177,28 @@ describe('companyMatchKey', () => {
 const SAMPLE_COMPANY_HASH = '6400da4deae3';
 const SAMPLE_TITLE_HASH = '0c06d800f155';
 const SAMPLE_LOCATION_HASH = '130016b2599b';
+
+// https://github.com/bgoleno/opportun/issues/126: the same normalisation, exported for matching a
+// role title and company name against free text (a confirmation email's subject and body).
+describe('titleMatchKey and matchText', () => {
+  it('normalises a title as dedupeKey does, seniority stripped at either end', () => {
+    expect(titleMatchKey('Senior Example Engineer')).toBe('example engineer');
+    expect(titleMatchKey('Example Engineer, Staff')).toBe('example engineer');
+    expect(titleMatchKey('Lead')).toBe('lead');
+    expect(dedupeKey('Example Corp', 'Senior Example Engineer')).toContain(
+      titleMatchKey('Senior Example Engineer'),
+    );
+  });
+
+  it('matchText normalises free text the same way: case, accents, punctuation, spacing', () => {
+    expect(
+      matchText('Thank you for applying to Exámple  Corp!\nRole: Senior Example-Engineer'),
+    ).toBe('thank you for applying to example corp role senior exampleengineer');
+  });
+
+  it('a title key found in normalised text reads as the same words', () => {
+    expect(matchText('Your application: Senior Example Engineer at Example Corp.')).toContain(
+      titleMatchKey('Sr. Example Engineer'),
+    );
+  });
+});

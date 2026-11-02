@@ -116,3 +116,22 @@ export function dedupeKey(company: string, title: string, location?: string | nu
 export function dedupeGroupKey(key: string): string {
   return key.split('|').slice(0, 2).join('|');
 }
+
+/**
+ * A role title as dedupeKey reads it (normalised, seniority stripped at either end), for finding
+ * the title in free text normalised by matchText (https://github.com/bgoleno/opportun/issues/126).
+ * Like dedupeKey, a title with no Latin letters falls back to a hash, which free text never
+ * contains: such a title is simply never found.
+ */
+export function titleMatchKey(title: string): string {
+  return orFallback(stripSeniority(normalize(title)), title);
+}
+
+/**
+ * Free text (an email's subject or body) normalised exactly as titles and company names are
+ * here: lowercase, accents and punctuation removed, whitespace collapsed. Search it for
+ * titleMatchKey and companyMatchKey values (https://github.com/bgoleno/opportun/issues/126).
+ */
+export function matchText(text: string): string {
+  return normalize(text);
+}
