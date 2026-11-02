@@ -160,10 +160,10 @@ Use a test account or your own profile; check each item in Chrome and Firefox.
       server stopped: "Could not reach the server".
 - [ ] On a profile (`linkedin.com/in/<someone>/`) after it has loaded: "Contact added"; capture
       again: "Contact updated"; the contact appears in Opportun.
-- [ ] On a job page (`linkedin.com/jobs/view/<id>/`): "Job added to your review queue";
-      again: "already in your review queue".
+- [ ] On a job page (`linkedin.com/jobs/view/<id>/`): "Added to your pipeline as Interested.";
+      the opportunity appears in Opportun at Interested, not in the review queue.
 - [ ] On the jobs search view with a job selected (`/jobs/search/?currentJobId=<id>`): the job
-      is captured (same lead as its `/jobs/view/<id>/` page).
+      is captured (the same opportunity as its `/jobs/view/<id>/` page).
 - [ ] On the feed, a search results page and a company page: "Not captured" with the reason;
       nothing is created in Opportun.
 - [ ] On an Indeed job page (`indeed.com/viewjob?jk=<jk>`): "Added to your pipeline"; the

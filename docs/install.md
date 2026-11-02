@@ -16,7 +16,7 @@ Contents:
 7. [Configuring discovery sources](#7-configuring-discovery-sources)
 8. [Attaching a posting to an opportunity](#8-attaching-a-posting-to-an-opportunity)
 9. [Reactive Resume (optional, instead of Google Docs)](#9-reactive-resume-optional-instead-of-google-docs)
-10. [Capture extension (LinkedIn)](#10-capture-extension-linkedin)
+10. [Capture extension (LinkedIn, Indeed)](#10-capture-extension-linkedin-indeed)
 11. [Apple Mail (macOS)](#11-apple-mail-macos)
 12. [Users and registration](#12-users-and-registration)
 13. [Two-factor sign-in](#13-two-factor-sign-in)
@@ -749,9 +749,9 @@ Opportun looks for an ATS job link in the messages already linked to that opport
 falls back to the company's board, detecting it first if the company has none recorded. One
 confident match is attached straight away; several are listed for you to choose from, with a
 search box over the whole board; a company with no reachable board leaves you the paste
-paths (a link, or the description text). LinkedIn links are never fetched (see
-[section 10](#10-capture-extension-linkedin)); paste the text, or capture the job with the
-extension, instead. Indeed links are never fetched either; paste the text. Workday links work too: the posting the link names is read directly.
+paths (a link, or the description text). LinkedIn and Indeed links are never fetched (see
+[section 10](#10-capture-extension-linkedin-indeed)); paste the text, or capture the job with
+the extension, instead. Workday links work too: the posting the link names is read directly.
 
 The description is stored as text, so it survives the posting being taken down, and an
 existing description is never overwritten: edit it in place instead.
@@ -791,7 +791,7 @@ instead of Google Docs, so Opportun works without a Google account (FR-R7).
   builder meanwhile is never overwritten (retry the edit). PDF export stays in Reactive
   Resume.
 
-## 10. Capture extension (LinkedIn)
+## 10. Capture extension (LinkedIn, Indeed)
 
 Opportun never fetches LinkedIn itself (C-1), or Indeed (C-2). To add a LinkedIn profile as a
 contact, or a LinkedIn or Indeed job as an opportunity, use the **Opportun Capture** browser

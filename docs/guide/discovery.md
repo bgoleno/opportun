@@ -114,7 +114,8 @@ company, title, location and description, and adds the result to the queue. If e
 cannot find the essentials, it tells you to create the opportunity by hand instead.
 
 Opportun never fetches LinkedIn or Indeed pages. A LinkedIn or Indeed link is refused with a
-prompt to paste the description text instead.
+prompt to paste the description text instead, or capture the job with the
+[browser extension](browser-extension.md) from your own browser.
 
 ![The Capture posting dialog refusing a LinkedIn link and offering Paste the text instead](images/discovery-capture-linkedin.png)
 

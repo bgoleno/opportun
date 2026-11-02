@@ -3,7 +3,11 @@
 // text contract (https://github.com/bgoleno/opportun/issues/73#issuecomment-6568000179) defines
 // it. Every page is a synthetic fixture (fixtures/indeedPages.ts); nothing here touches Indeed.
 import { describe, expect, it } from 'vitest';
-import { canonicalCaptureUrl, captureSiteOf, indeedJobKey } from '../src/canonical';
+// Contract checks against the server half (https://github.com/bgoleno/opportun/pull/77), pure
+// and with no IO, like extract.test.ts's LinkedIn check. Test-only imports.
+import { INDEED_JOB_KEY as SERVER_INDEED_JOB_KEY } from '../../../apps/server/src/lib/alertParsers/indeed';
+import { recognizeCapturedPage } from '../../../apps/server/src/lib/captureRecognizers';
+import { canonicalCaptureUrl, captureSiteOf, INDEED_JOB_KEY, indeedJobKey } from '../src/canonical';
 import { extractIndeedJob, type ExtractResult } from '../src/extract';
 import { normalizeCapture } from '../src/normalize';
 import {
@@ -245,5 +249,46 @@ describe('what the popup sends for an Indeed job', () => {
     });
     expect(payloads[0]).toEqual({ url: CANONICAL, title: TITLE, text: EXPECTED_TEXT });
     expect(payloads[1]).toEqual(payloads[0]);
+  });
+});
+
+describe('what the server reads from what the extension sends for Indeed', () => {
+  it('the extension and the server agree on what an Indeed job key is', () => {
+    expect(INDEED_JOB_KEY.source).toBe(SERVER_INDEED_JOB_KEY.source);
+    expect(INDEED_JOB_KEY.flags).toBe(SERVER_INDEED_JOB_KEY.flags);
+  });
+
+  it.each([
+    ['/viewjob', viewjobPage()],
+    ['the split view, full header hidden', splitView({ compactHeaderShowing: true })],
+  ])('%s is recognized as the job, with nothing from around it', (_name, fixture) => {
+    const n = normalizeCapture(ok(extractIndeedJob(load(fixture))));
+    if (!n.ok) throw new Error(n.error);
+    const page = recognizeCapturedPage(n.payload);
+    expect(page).toMatchObject({
+      kind: 'job',
+      siteId: 'indeed',
+      jobId: JK,
+      jobUrl: CANONICAL,
+      title: TITLE,
+      company: COMPANY,
+    });
+    if (page.kind !== 'job') throw new Error(page.kind);
+    expect(page.descriptionMd.split('\n')[0]).toBe(
+      'Example Corp builds placeholder software for example customers.',
+    );
+    expect(page.descriptionMd).toContain('Five years of example experience.');
+    for (const never of NEVER_SENT) expect(page.descriptionMd).not.toContain(never);
+  });
+
+  it('a title with " - " and words like "Security Check" is still the job, not a wall', () => {
+    const fixture = viewjobPage({ title: 'Security Check Analyst - Night - Level 2' });
+    const n = normalizeCapture(ok(extractIndeedJob(load(fixture))));
+    if (!n.ok) throw new Error(n.error);
+    expect(recognizeCapturedPage(n.payload)).toMatchObject({
+      kind: 'job',
+      title: 'Security Check Analyst - Night - Level 2',
+      company: COMPANY,
+    });
   });
 });

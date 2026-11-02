@@ -126,6 +126,10 @@ is not.
   anything back. Run **Set up** again to get a new token. From this release on the id is
   pinned, so later upgrades keep the address and token; after re-downloading an upgrade,
   press the reload icon on its card in `chrome://extensions`.
+- **Indeed is not captured after upgrading**: the release that added Indeed also asks for
+  access to `www.indeed.com`. If the browser asks when you reload or first use the extension
+  on Indeed, allow it. Firefox may grant site access only on request: open the Extensions
+  menu (puzzle icon) and allow Opportun Capture on indeed.com.
 
 <!-- nav:bottom -->
 
