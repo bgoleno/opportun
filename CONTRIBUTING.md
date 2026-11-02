@@ -44,11 +44,12 @@ repository is public (`needs.visibility.outputs.public == 'true'`) and a require
 never reports would make every pull request unmergeable. It is worth requiring on the day
 the public repository exists.
 
-Two ways to merge, both of which respect the required checks:
+Two ways to merge, both of which respect the required checks and merge only `<head-sha>`, the
+full SHA of the head commit that was reviewed (a commit pushed after the review is refused):
 
 ```sh
-scripts/merge-when-green.sh <pr-number>   # waits for the checks, then squash merges
-gh pr merge <pr-number> --squash --auto   # lets GitHub merge it when they pass
+scripts/merge-when-green.sh <pr-number> <head-sha>   # waits for the checks, then squash merges
+gh pr merge <pr-number> --squash --auto --match-head-commit <head-sha>   # GitHub merges when they pass
 ```
 
 Either way the merged branch is deleted on the remote by a repository setting, and your local
