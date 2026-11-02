@@ -11,6 +11,7 @@
 // extension's own LinkedIn-specific gates (manifest host permissions, the popup's URL check)
 // are a separate piece of work, deliberately not in this seam.
 import type { NormalizedPosting } from '@opportun/core';
+import { INDEED_JOB_KEY } from './alertParsers/indeed';
 
 export interface CaptureSite {
   /** Stable, lowercase, and the prefix stored in a posting's externalId. */
@@ -27,12 +28,35 @@ const LINKEDIN_HOST = /^(?:www\.|[a-z][a-z]\.)?linkedin\.com$/;
 /** `/jobs/view/<id>` with an optional trailing slash; ids are digits. */
 const LINKEDIN_JOB_PATH = /^\/jobs\/view\/(\d{1,20})\/?$/;
 
+/**
+ * indeed.com and its www host only. Country sites (uk.indeed.com, indeed.co.uk) are out of scope
+ * for https://github.com/bgoleno/opportun/issues/73 and stay unclaimed.
+ */
+const INDEED_HOST = /^(?:www\.)?indeed\.com$/;
+
+/**
+ * The job key of an Indeed single-posting URL, `/viewjob?jk=<jk>`. The key rule is the alert
+ * parser's own constant, not a second regex: an alert lead stores the same `jk` bare, and the
+ * two must agree on what a job key is for the identity match to hold.
+ */
+function indeedJobKey(url: URL): string | null {
+  if (url.pathname !== '/viewjob') return null;
+  const jk = url.searchParams.get('jk');
+  return jk !== null && INDEED_JOB_KEY.test(jk) ? jk.toLowerCase() : null;
+}
+
 export const CAPTURE_SITES: readonly CaptureSite[] = [
   {
     id: 'linkedin',
     label: 'LinkedIn',
     matchesHost: (host) => LINKEDIN_HOST.test(host),
     jobIdFromUrl: (url) => LINKEDIN_JOB_PATH.exec(url.pathname)?.[1] ?? null,
+  },
+  {
+    id: 'indeed',
+    label: 'Indeed',
+    matchesHost: (host) => INDEED_HOST.test(host),
+    jobIdFromUrl: indeedJobKey,
   },
 ];
 
