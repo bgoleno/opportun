@@ -174,7 +174,6 @@ describe('criterion 5: nothing of the feature where it is off', () => {
 
   it('the opportunity page shows the card in the rail when the feature is on', async () => {
     mockApi({
-      'GET /opportunities/opp-1': OPP,
       'GET /opportunities/opp-1/timeline': { items: [], total: 0 },
       'GET /opportunities/opp-1/next-steps': { items: [], total: 0 },
       ...routes(null),
