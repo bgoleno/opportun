@@ -20,6 +20,7 @@ import {
 import { enqueueCompanyDomainResolve } from '../jobs/companyDomainResolve';
 import {
   activities,
+  applicationSubmissions,
   attachments,
   communications,
   companies,
@@ -686,6 +687,42 @@ export async function mergeOpportunities(
     const keep = await getViewSync(tx, ctx, keepId);
     const other = await getViewSync(tx, ctx, otherId);
     const now = Date.now();
+    // Application attempts move with everything else (assisted apply, #114): deleting the other
+    // opportunity would otherwise cascade-delete them, answers and history included. Each
+    // opportunity may have one live attempt (application_submissions_live_uq), so when both
+    // have one the merge is refused, naming the other's, and the user cancels one first. Nothing
+    // is decided for them: either attempt may hold answers they want to keep.
+    const liveOf = (opportunityId: string) =>
+      tx
+        .select({ id: applicationSubmissions.id })
+        .from(applicationSubmissions)
+        .where(
+          and(
+            eq(applicationSubmissions.userId, ctx.userId),
+            eq(applicationSubmissions.opportunityId, opportunityId),
+            inArray(applicationSubmissions.status, ['draft', 'reviewed', 'handed_off']),
+          ),
+        )
+        .get();
+    const otherLive = await liveOf(otherId);
+    if (otherLive !== undefined && (await liveOf(keepId)) !== undefined) {
+      throw new HttpError(
+        409,
+        'live_submission_conflict',
+        'Both opportunities have an open application. Cancel one of them before merging.',
+        { submissionId: otherLive.id },
+      );
+    }
+    const [movedAttempts] = await tx
+      .select({ n: count() })
+      .from(applicationSubmissions)
+      .where(
+        and(
+          eq(applicationSubmissions.userId, ctx.userId),
+          eq(applicationSubmissions.opportunityId, otherId),
+        ),
+      )
+      .all();
     const move = { opportunityId: keepId };
     for (const table of [
       activities,
@@ -696,6 +733,7 @@ export async function mergeOpportunities(
       attachments,
       discoveryResults,
       dismissalFeedback,
+      applicationSubmissions,
     ] as const) {
       await tx
         .update(table)
@@ -741,6 +779,9 @@ export async function mergeOpportunities(
           `Merged opportunity ${other.id} into this one.`,
           `Its stage was ${other.stage}; source ${other.sourceKind}.`,
           other.postingUrl === null ? null : `Posting: ${other.postingUrl}`,
+          (movedAttempts?.n ?? 0) === 0
+            ? null
+            : `Its ${movedAttempts?.n === 1 ? 'application attempt' : `${movedAttempts?.n} application attempts`} moved here.`,
         ]
           .filter((l): l is string => l !== null)
           .join('\n'),

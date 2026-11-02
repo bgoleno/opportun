@@ -1,0 +1,50 @@
+CREATE TABLE `application_submissions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`user_id` text NOT NULL,
+	`opportunity_id` text NOT NULL,
+	`resume_id` text,
+	`ats_kind` text NOT NULL,
+	`ats_ref` text,
+	`ats_external_id` text NOT NULL,
+	`destination_url` text NOT NULL,
+	`status` text DEFAULT 'draft' NOT NULL,
+	`idempotency_key` text NOT NULL,
+	`resume_attachment_id` text,
+	`resume_sha256` text,
+	`resume_title` text,
+	`resume_store` text,
+	`resume_doc_ref` text,
+	`resume_revision` text,
+	`fields` text NOT NULL,
+	`answers` text NOT NULL,
+	`review_digest` text,
+	`review_expires_at` integer,
+	`reviewed_at` integer,
+	`handed_off_at` integer,
+	`submitted_at` integer,
+	`confirmed_at` integer,
+	`submitted_basis` text,
+	`confirmation_kind` text,
+	`confirmation_comm_id` text,
+	`confirmation_basis` text,
+	`failure_reason` text,
+	`submitted_activity_id` text,
+	`confirmation_activity_id` text,
+	`reapply_of` text,
+	`created_at` integer NOT NULL,
+	`updated_at` integer NOT NULL,
+	FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`opportunity_id`) REFERENCES `opportunities`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`resume_id`) REFERENCES `resumes`(`id`) ON UPDATE no action ON DELETE set null,
+	FOREIGN KEY (`resume_attachment_id`) REFERENCES `attachments`(`id`) ON UPDATE no action ON DELETE set null,
+	FOREIGN KEY (`confirmation_comm_id`) REFERENCES `communications`(`id`) ON UPDATE no action ON DELETE set null,
+	FOREIGN KEY (`submitted_activity_id`) REFERENCES `activities`(`id`) ON UPDATE no action ON DELETE set null,
+	FOREIGN KEY (`confirmation_activity_id`) REFERENCES `activities`(`id`) ON UPDATE no action ON DELETE set null,
+	FOREIGN KEY (`reapply_of`) REFERENCES `application_submissions`(`id`) ON UPDATE no action ON DELETE set null
+);
+--> statement-breakpoint
+CREATE INDEX `application_submissions_user_id_idx` ON `application_submissions` (`user_id`);--> statement-breakpoint
+CREATE INDEX `application_submissions_opportunity_idx` ON `application_submissions` (`opportunity_id`,`created_at`);--> statement-breakpoint
+CREATE UNIQUE INDEX `application_submissions_user_idem_uq` ON `application_submissions` (`user_id`,`idempotency_key`);--> statement-breakpoint
+CREATE UNIQUE INDEX `application_submissions_live_uq` ON `application_submissions` (`user_id`,`opportunity_id`) WHERE "application_submissions"."status" IN ('draft', 'reviewed', 'handed_off');--> statement-breakpoint
+CREATE INDEX `application_submissions_requisition_idx` ON `application_submissions` (`user_id`,`ats_kind`,`ats_ref`,`ats_external_id`);

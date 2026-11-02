@@ -162,6 +162,13 @@
       "when": 1793700000000,
       "tag": "0022_capture_linkedin_verbatim",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793800000000,
+      "tag": "0023_application_submissions",
+      "breakpoints": true
     }
   ]
 }

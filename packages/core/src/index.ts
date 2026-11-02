@@ -3,6 +3,7 @@ export const VERSION = '0.1.0';
 export * from './ids';
 export * from './schemas';
 export * from './stateMachine';
+export * from './submissionStateMachine';
 export * from './dedupe';
 export * from './mailText';
 export * from './mailPattern';

@@ -62,6 +62,8 @@ const USER_TABLES: UserTable[] = [
   schema.taskRuns,
   schema.networkContacts,
   schema.communications,
+  // Assisted apply (#114): the user's own attempts, answers included, like their notes.
+  schema.applicationSubmissions,
   schema.syncState,
   schema.settings,
 ] as UserTable[];

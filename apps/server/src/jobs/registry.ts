@@ -68,6 +68,11 @@ export function unregisterJob(kind: string): void {
   handlers.delete(kind);
 }
 
+/** Every registered job kind, for the route- and job-shape tests (#114). */
+export function registeredJobKinds(): string[] {
+  return [...handlers.keys()].sort();
+}
+
 export function getJobHandler(kind: string): JobHandler<unknown> | undefined {
   return handlers.get(kind);
 }
