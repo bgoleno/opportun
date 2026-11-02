@@ -23,9 +23,9 @@ Gmail uses the same Google OAuth client as resumes (see
 Opportun syncs every 15 minutes on its own. **Sync now** (on the Inbox or the Gmail card)
 runs one immediately.
 
-![The Gmail card showing read-only access granted, 4 messages stored, the lookback window, and the Devices card below it](images/integrations-gmail-devices.png)
+![The Gmail card showing read-only access granted, 4 messages stored and the lookback window, with the Extensions and Connectors card below it reporting Apple Mail connected](images/integrations-gmail-devices.png)
 
-_The Gmail card with its lookback window, and the Devices card that tracks the Apple Mail connector._
+_The Gmail card with its lookback window, and the Extensions and Connectors card that tracks the Apple Mail connector._
 
 ## How classification works
 
@@ -56,7 +56,7 @@ unclassified and are queued automatically when you add one.
 | Spam         | Broadcast outreach. It never creates opportunities. **Not spam** brings one back                                                                                               |
 | Filtered     | Not-a-fit outreach, with the reason it does not fit                                                                                                                            |
 
-![The Linked tab: a targeted Apple Mail message, a Gmail interview request with a suggested move to In process, and a targeted Gmail message](images/inbox-linked.png)
+![The Linked tab: a targeted Apple Mail message, and a Gmail interview request with a suggested move to In process](images/inbox-linked.png)
 
 _Linked mail with its channel badges (Apple Mail, Gmail). The interview request suggests moving Contoso to In process._
 
@@ -94,10 +94,10 @@ never reaches the server, and the token can only push mail in, never read anythi
 2. Build, configure and schedule the connector on your Mac:
    [install guide section 11](../install.md#11-apple-mail-macos) has every command.
 
-The Devices card then reports the connector, for example "Apple Mail: connected, last batch
-4 minutes ago (1 message)", and each token's last use. Messages it pushes show the
-**Apple Mail** badge and go through the same classification as Gmail. Revoke a token from the
-same card and the connector is cut off on its next request.
+The Extensions and Connectors card then reports the connector, for example "Apple Mail:
+connected, last batch 4 minutes ago (1 message)", and each token's last use. Messages it pushes
+show the **Apple Mail** badge and go through the same classification as Gmail. Revoke a token
+from the same card and the connector is cut off on its next request.
 
 <!-- nav:bottom -->
 

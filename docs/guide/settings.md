@@ -141,7 +141,7 @@ under **Settings > Integrations > Extensions and Connectors**:
 - The list shows each token's permissions, when it was created and last used. **Revoke**
   cuts the device off on its next request.
 
-The Devices card is pictured in [Inbox](inbox.md#connect-gmail).
+The Extensions and Connectors card is pictured in [Inbox](inbox.md#connect-gmail).
 
 ## Import and export
 
