@@ -10,6 +10,7 @@ import {
   CONFIRMATION_SKEW_MS,
   CONFIRMATION_WINDOW_MS,
   matchConfirmation,
+  senderDomain,
   type AtsSenderDomains,
   type ConfirmationCandidate,
   type ConfirmationMessage,
@@ -115,6 +116,16 @@ describe('signal B: the sender address, never the display name (criterion 1)', (
       '"Example Corp <careers@examplecorp.example>" <noreply@evil.example>',
     ],
     ['the company name as the display name', 'Example Corp <noreply@evil.example>'],
+    [
+      // qa on #128: the header does not end with the bracket, so the bracket is not the address.
+      'a bracketed company address followed by a bare address',
+      'Careers <careers@examplecorp.example> noreply@evil.example',
+    ],
+    // qa's case on #128, as https://github.com/bgoleno/opportun/issues/132 states it.
+    [
+      'a quoted bracketed company address, then a bare one',
+      '"<careers@examplecorp.example>" x@evil.example',
+    ],
   ])('a spoofed display name is not evidence: %s', (_n, fromAddress) => {
     expect(match({ ...NO_REF, fromAddress })).toEqual({
       kind: 'none',
@@ -126,6 +137,23 @@ describe('signal B: the sender address, never the display name (criterion 1)', (
   it('the same message from the real address matches, so the spoof test is not hollow', () => {
     expect(
       match({ ...NO_REF, fromAddress: 'Example Corp <careers@examplecorp.example>' }).kind,
+    ).toBe('match');
+  });
+
+  it.each([
+    ['"<careers@examplecorp.example>" x@evil.example', null],
+    ['Careers <careers@examplecorp.example> noreply@evil.example', null],
+    ['  Careers <careers@examplecorp.example>  ', 'examplecorp.example'],
+    ['"Jobs <at> Example" <careers@examplecorp.example>', 'examplecorp.example'],
+    ['careers@examplecorp.example', 'examplecorp.example'],
+  ])('senderDomain(%j) is %j: a bracket counts only when it ends the header', (from, domain) => {
+    expect(senderDomain(from)).toBe(domain);
+  });
+
+  it('a "<" inside the display name does not hide the real address after it', () => {
+    // The address is the last bracket pair, not one opened earlier in the display name.
+    expect(
+      match({ ...NO_REF, fromAddress: '"Jobs <at> Example" <careers@examplecorp.example>' }).kind,
     ).toBe('match');
   });
 
