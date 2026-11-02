@@ -20,22 +20,29 @@ import { cn } from '@/lib/utils';
 
 type BadgeVariant = 'default' | 'secondary' | 'outline' | 'success' | 'warning' | 'destructive';
 
-const CHIPS: Record<string, { text: string; variant: BadgeVariant; Icon: typeof Pencil; dashed?: boolean }> = {
-  draft: { text: 'Draft', variant: 'outline', Icon: Pencil },
-  reviewed: { text: 'Reviewed', variant: 'secondary', Icon: ClipboardCheck },
-  handed_off: { text: 'Opened on ATS', variant: 'secondary', Icon: ExternalLink },
-  submitted: { text: 'Submitted', variant: 'default', Icon: Check },
-  confirmed: { text: 'Confirmed', variant: 'success', Icon: CheckCheck },
-  unknown: { text: 'No confirmation seen', variant: 'warning', Icon: CircleHelp },
-  rejected: { text: 'ATS refused', variant: 'destructive', Icon: Ban },
-  failed: { text: 'Failed', variant: 'destructive', Icon: OctagonX },
-  abandoned: { text: 'Abandoned', variant: 'outline', Icon: Archive, dashed: true },
-};
+interface Chip {
+  text: string;
+  variant: BadgeVariant;
+  Icon: typeof Pencil;
+  dashed?: boolean;
+}
+
+const DRAFT_CHIP: Chip = { text: 'Draft', variant: 'outline', Icon: Pencil };
+const CHIPS = new Map<string, Chip>([
+  ['draft', DRAFT_CHIP],
+  ['reviewed', { text: 'Reviewed', variant: 'secondary', Icon: ClipboardCheck }],
+  ['handed_off', { text: 'Opened on ATS', variant: 'secondary', Icon: ExternalLink }],
+  ['submitted', { text: 'Submitted', variant: 'default', Icon: Check }],
+  ['confirmed', { text: 'Confirmed', variant: 'success', Icon: CheckCheck }],
+  ['unknown', { text: 'No confirmation seen', variant: 'warning', Icon: CircleHelp }],
+  ['rejected', { text: 'ATS refused', variant: 'destructive', Icon: Ban }],
+  ['failed', { text: 'Failed', variant: 'destructive', Icon: OctagonX }],
+  ['abandoned', { text: 'Abandoned', variant: 'outline', Icon: Archive, dashed: true }],
+]);
 
 /** Words and an icon for every status, never colour alone (design (d)). */
 export function SubmissionStatusChip({ status }: { status: string }) {
-  const chip = CHIPS[status] ?? CHIPS.draft;
-  if (chip === undefined) return null;
+  const chip = CHIPS.get(status) ?? DRAFT_CHIP;
   const { Icon } = chip;
   return (
     <Badge variant={chip.variant} className={cn('gap-1', chip.dashed && 'border-dashed')}>
