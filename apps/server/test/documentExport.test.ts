@@ -230,6 +230,17 @@ describe('Google Docs store: exportFile errors are classified', () => {
     expect(err).toMatchObject({ retryable: true, code: 'unavailable' });
   });
 
+  it('a plain Error carrying its request config (no status, default name) is transient', async () => {
+    // qa on #127: the name alone decided the case above; this one rests on the config alone.
+    const { store } = googleStore((fake) => {
+      fake.exportFailure = Object.assign(new Error('socket hang up'), {
+        config: { url: 'https://www.googleapis.com/drive/v3/files/x/export' },
+      });
+    });
+    const err = await failure(store);
+    expect(err).toMatchObject({ retryable: true, code: 'unavailable' });
+  });
+
   it('a bug of our own (a TypeError) is not retried', async () => {
     // tl on #127: the no-status fallback is for Google client errors only, so a programming
     // error is not retried as if Google were down.

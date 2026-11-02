@@ -14,14 +14,16 @@ import {
   type Submission,
   type SubmissionAnswer,
   type SubmissionFields,
+  type SubmissionSnapshotState,
   type SubmissionStatus,
 } from '@opportun/core';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
-import { applicationSubmissions, opportunities, resumes } from '../db/schema';
+import { applicationSubmissions, attachments, opportunities, resumes } from '../db/schema';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { submissionDigest } from '../lib/submissionDigest';
+import { enqueueSnapshot } from '../jobs/submissionSnapshot';
 import type { Db, Exec, UserCtx } from './base';
 import { countWhere, type ListOpts, type Page } from './list';
 
@@ -81,6 +83,9 @@ export function view(row: SubmissionRow): Submission {
     resumeSha256: row.resumeSha256,
     resumeTitle: row.resumeTitle,
     resumeStore: row.resumeStore,
+    snapshotState: row.snapshotState,
+    resumeAttachmentId: row.resumeAttachmentId,
+    snapshotError: row.snapshotError,
     fields: row.fields,
     answers: row.answers,
     // The state as it stands now, for the review screen to echo (M1c, design 4.5): computed, not
@@ -138,6 +143,21 @@ async function liveFor(
     .get();
 }
 
+/**
+ * Why review must wait for the snapshot, or null when it need not (#115, tl's answers): a
+ * pending snapshot is not there yet, and a failed one needs the user first (choosing the resume
+ * again retries it). `ready` and `unsupported` may be reviewed: with no PDF from the store the
+ * user attaches a file themselves, and the review shows that, never text in its place. The
+ * review route (M1c, #116) refuses with 409 and this code.
+ */
+export function snapshotBlocksReview(row: {
+  snapshotState: SubmissionSnapshotState;
+}): 'snapshot_pending' | 'snapshot_failed' | null {
+  if (row.snapshotState === 'pending') return 'snapshot_pending';
+  if (row.snapshotState === 'failed') return 'snapshot_failed';
+  return null;
+}
+
 /** 409 naming the opportunity's live attempt, so the client can open it instead. */
 const liveExists = (live: SubmissionRow): HttpError =>
   new HttpError(
@@ -188,6 +208,11 @@ export async function createSubmissionDraft(
     // resume, is a client bug: never answer it silently with the first request's choice.
     if (prior.opportunityId !== opportunityId || prior.resumeId !== input.resumeId) {
       throw new HttpError(409, 'idempotency_key_reused', 'That key was used for another request.');
+    }
+    // A create interrupted between its insert and its enqueue is retried with the same key:
+    // queue the snapshot here too (a no-op while it is queued or running; tl on #131).
+    if (prior.status === 'draft' && prior.snapshotState === 'pending') {
+      await enqueueSnapshot(db, ctx.userId, prior.id, prior.resumeId);
     }
     return { submission: view(prior), replayed: true };
   };
@@ -256,13 +281,17 @@ export async function createSubmissionDraft(
         resumeTitle: resume.title,
         resumeStore: resume.store,
         resumeDocRef: resume.docRef,
+        snapshotState: 'pending',
         fields: {},
         answers: [],
         createdAt: now,
         updatedAt: now,
       })
       .returning();
-    return { submission: view(row as SubmissionRow), replayed: false };
+    const created = row as SubmissionRow;
+    // The payload names the attempt and the resume by id; the job reads both from storage.
+    await enqueueSnapshot(db, ctx.userId, created.id, resume.id);
+    return { submission: view(created), replayed: false };
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
     // Lost a race: either the same key (a double click) or another live attempt.
@@ -336,7 +365,7 @@ export async function updateSubmissionDraft(
   id: string,
   patch: SubmissionPatch,
 ): Promise<Submission> {
-  return await withTransaction(db, async (tx) => {
+  const updated = await withTransaction(db, async (tx) => {
     // The attempt's lock (repos/submissionReview.ts): a review or handoff in flight checks the
     // row after this edit, or this edit waits until it is done.
     await lockScope(tx, `submission:${id}`);
@@ -344,7 +373,7 @@ export async function updateSubmissionDraft(
     if (row.status !== 'draft' && row.status !== 'reviewed') throw notNow(row, 'draft');
     applySubmissionTransition(row, 'draft');
     const resume = patch.resumeId === undefined ? null : await finalResume(tx, ctx, patch.resumeId);
-    const [updated] = await tx
+    const [changed] = await tx
       .update(applicationSubmissions)
       .set({
         ...(resume === null
@@ -354,10 +383,14 @@ export async function updateSubmissionDraft(
               resumeTitle: resume.title,
               resumeStore: resume.store,
               resumeDocRef: resume.docRef,
-              // A different resume invalidates any snapshot of the previous one (M1b).
+              // Choosing a resume, the same one included, takes a new snapshot (#115): that is
+              // also how the user retries a failed one. The old snapshot's attachment row stays
+              // with the opportunity; the attempt no longer points at it.
               resumeAttachmentId: null,
               resumeSha256: null,
               resumeRevision: null,
+              snapshotState: 'pending' as const,
+              snapshotError: null,
             }),
         ...(patch.fields === undefined ? {} : { fields: patch.fields }),
         ...(patch.answers === undefined ? {} : { answers: patch.answers }),
@@ -368,9 +401,14 @@ export async function updateSubmissionDraft(
       })
       .where(and(owned(ctx, id), eq(applicationSubmissions.status, row.status)))
       .returning();
-    if (updated === undefined) throw notNow(await getRow(tx, ctx, id), 'draft');
-    return view(updated);
+    if (changed === undefined) throw notNow(await getRow(tx, ctx, id), 'draft');
+    return changed;
   });
+  // After the commit, so the job never runs ahead of the row it reads.
+  if (patch.resumeId !== undefined) {
+    await enqueueSnapshot(db, ctx.userId, id, updated.resumeId);
+  }
+  return view(updated);
 }
 
 /**
@@ -394,4 +432,31 @@ export async function cancelSubmission(db: Db, ctx: UserCtx, id: string): Promis
     if (updated === undefined) throw notNow(await getRow(tx, ctx, id), 'abandoned');
     return view(updated);
   });
+}
+
+/**
+ * The stored snapshot file of the caller's own attempt, for the download route (#115 criterion
+ * 5). Another user's attempt reads exactly like a missing one; an attempt with no snapshot
+ * (pending, unsupported, failed, or its attachment deleted) is 404 `no_snapshot`.
+ */
+export async function getSnapshotForDownload(
+  db: Db,
+  ctx: UserCtx,
+  id: string,
+): Promise<typeof attachments.$inferSelect> {
+  const row = await getRow(db, ctx, id);
+  const file =
+    row.resumeAttachmentId === null
+      ? undefined
+      : await db
+          .select()
+          .from(attachments)
+          .where(
+            and(eq(attachments.userId, ctx.userId), eq(attachments.id, row.resumeAttachmentId)),
+          )
+          .get();
+  if (file === undefined) {
+    throw new HttpError(404, 'no_snapshot', 'This application has no saved resume file.');
+  }
+  return file;
 }
