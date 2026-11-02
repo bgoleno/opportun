@@ -712,6 +712,32 @@ describe('ReviewQueue bulk triage (#184)', () => {
   const Y = result({ id: 'r-y', aiScore: 80, posting: { company: 'Initech', title: 'Two' } });
   const Z = result({ id: 'r-z', aiScore: 70, posting: { company: 'Initech', title: 'Three' } });
 
+  // Big selections come from "Select all N matching", with only a few rows on screen
+  // (https://github.com/bgoleno/opportun/issues/152). These tests once rendered all 150 to
+  // 200 rows: about 5,600 DOM nodes and 800 buttons, which every role query and re-render
+  // walks. That is CPU work with no wait in it, about 0.85 s on an idle worker but 17.5 s
+  // during a full gate (server and web suites together, load average 26 to 28), past the
+  // 15 s testTimeout. Their subjects need a selection larger than one page or one bulk
+  // request, not that many rows on screen, so the queue shows three rows and the paged fetch
+  // supplies the rest.
+  /** The queue's own query (no `offset`) gets `shown`; the select-all fetch pages `allIds`. */
+  function pendingPages(shown: readonly DiscoveryResult[], allIds: readonly string[]) {
+    return (call: ApiCall) => {
+      const params = new URLSearchParams(call.search);
+      const offset = params.get('offset');
+      if (offset === null) return { items: shown, total: allIds.length };
+      const start = Number(offset);
+      const limit = Number(params.get('limit'));
+      const items = allIds.slice(start, start + limit).map((id) => result({ id }));
+      return { items, total: allIds.length };
+    };
+  }
+  /** The first three ids as queue rows, titled by their id so a test can find one. */
+  const shownRows = (ids: readonly string[]) =>
+    ids
+      .slice(0, 3)
+      .map((id, i) => result({ id, aiScore: 100 - i, posting: { company: 'C', title: id } }));
+
   it('checking a row shows the action bar with a count; Clear empties it', async () => {
     const user = userEvent.setup();
     mockApi({ 'GET /discovery/results': { items: [X, Y], total: 2 } });
@@ -767,18 +793,21 @@ describe('ReviewQueue bulk triage (#184)', () => {
   it('"Select all N matching" appears only when more exist than are loaded, and checks all of it', async () => {
     const user = userEvent.setup();
     const page1 = Array.from({ length: 200 }, (_, i) => result({ id: `p-${i}` }));
-    mockApi({
-      'GET /discovery/results': (call: { search: string }) => {
-        const offset = new URLSearchParams(call.search).get('offset') ?? '0';
-        return offset === '0'
-          ? { items: page1, total: 201 }
-          : { items: [result({ id: 'p-200' })], total: 201 };
-      },
+    const { calls } = mockApi({
+      'GET /discovery/results': pendingPages(page1.slice(0, 3), [
+        ...page1.map((r) => r.id),
+        'p-200',
+      ]),
     });
     renderWithProviders(<ReviewQueue />);
-    await screen.findByText('Select all 200 loaded');
+    await screen.findByText('Select all 3 loaded');
     await user.click(screen.getByRole('button', { name: 'Select all 201 matching' }));
     await waitFor(() => expect(screen.getByText('201 selected')).toBeInTheDocument());
+    // All 201 came from the paged fetch (200, then 1), not from the 3 rows on screen.
+    const paged = calls.filter(
+      (c) => c.path === '/discovery/results' && c.search.includes('offset='),
+    );
+    expect(paged.map((c) => new URLSearchParams(c.search).get('offset'))).toEqual(['0', '200']);
   });
 
   it('space toggles the keyboard cursor row, Escape clears the whole selection', async () => {
@@ -882,11 +911,8 @@ describe('ReviewQueue bulk triage (#184)', () => {
 
   it('a batch over MAX_BULK_SIZE is split into sequential requests', async () => {
     const ids = Array.from({ length: 150 }, (_, i) => `id-${i}`);
-    const items = ids.map((id, i) =>
-      result({ id, aiScore: 100 - i, posting: { company: 'C', title: id } }),
-    );
     const { calls } = mockApi({
-      'GET /discovery/results': { items, total: items.length },
+      'GET /discovery/results': pendingPages(shownRows(ids), ids),
       'POST /discovery/results/bulk-accept': (call: { body: { ids: string[] } }) => ({
         results: call.body.ids.map((id) => ({ id, outcome: 'accepted' })),
       }),
@@ -894,10 +920,11 @@ describe('ReviewQueue bulk triage (#184)', () => {
     const user = userEvent.setup();
     renderWithProviders(<ReviewQueue />);
     await screen.findByText(ids[0]!);
-    await user.click(screen.getByRole('button', { name: `Select all ${items.length} loaded` }));
+    await user.click(screen.getByRole('button', { name: 'Select all 150 matching' }));
+    await screen.findByText('150 selected');
     await user.click(screen.getByRole('button', { name: 'Accept' }));
-    const dialog = await screen.findByRole('dialog', { name: `Accept ${items.length} results?` });
-    await user.click(within(dialog).getByRole('button', { name: `Accept ${items.length}` }));
+    const dialog = await screen.findByRole('dialog', { name: 'Accept 150 results?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Accept 150' }));
     await waitFor(() => {
       const posts = calls.filter((c) => c.path === '/discovery/results/bulk-accept');
       expect(posts).toHaveLength(2);
@@ -909,9 +936,6 @@ describe('ReviewQueue bulk triage (#184)', () => {
 
   it('shows visible progress through a chunked batch, not a silent wait (#184)', async () => {
     const ids = Array.from({ length: 150 }, (_, i) => `id-${i}`);
-    const items = ids.map((id, i) =>
-      result({ id, aiScore: 100 - i, posting: { company: 'C', title: id } }),
-    );
     let releaseFirst: (() => void) | undefined;
     let releaseSecond: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
@@ -922,7 +946,7 @@ describe('ReviewQueue bulk triage (#184)', () => {
     });
     let callCount = 0;
     mockApi({
-      'GET /discovery/results': { items, total: items.length },
+      'GET /discovery/results': pendingPages(shownRows(ids), ids),
       'POST /discovery/results/bulk-accept': async (call: { body: { ids: string[] } }) => {
         callCount += 1;
         if (callCount === 1) await firstGate;
@@ -933,10 +957,11 @@ describe('ReviewQueue bulk triage (#184)', () => {
     const user = userEvent.setup();
     renderWithProviders(<ReviewQueue />);
     await screen.findByText(ids[0]!);
-    await user.click(screen.getByRole('button', { name: `Select all ${items.length} loaded` }));
+    await user.click(screen.getByRole('button', { name: 'Select all 150 matching' }));
+    await screen.findByText('150 selected');
     await user.click(screen.getByRole('button', { name: 'Accept' }));
-    const dialog = await screen.findByRole('dialog', { name: `Accept ${items.length} results?` });
-    await user.click(within(dialog).getByRole('button', { name: `Accept ${items.length}` }));
+    const dialog = await screen.findByRole('dialog', { name: 'Accept 150 results?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Accept 150' }));
     // First chunk (100 ids) not back yet: busy, but nothing to report progress on yet.
     expect(await within(dialog).findByRole('button', { name: 'Accepting…' })).toBeInTheDocument();
     releaseFirst?.();
