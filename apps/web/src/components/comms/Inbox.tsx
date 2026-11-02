@@ -20,7 +20,7 @@ import {
   type InboxFilters,
   type InboxTab,
 } from './api';
-import { BlockedRow } from './BlockedRow';
+import { BlockedRow, STORED_ON_BLOCK } from './BlockedRow';
 import { InboxRow, type RowMode } from './InboxRow';
 import type { RejectionReason } from './RejectForm';
 
@@ -58,7 +58,12 @@ const TABS: { tab: InboxTab; label: string; mode: RowMode; empty: string; note?:
     // Unused: the blocked tab renders BlockedRow, which takes no mode.
     mode: 'filtered',
     empty: 'Nothing has been blocked by your mail filters.',
-    note: 'Kept out by your mail filters before anything read them. Opportun stored the sender and the date, never the subject or the message. Edit the rules in Settings, Mail filters.',
+    // What was read depends on the rule (https://github.com/bgoleno/opportun/issues/104). The
+    // filters run on the user's own server (lib/mailTriage.ts triageMessage: local, no IO); some
+    // of them read the subject and body there, so "nothing read it" would be false (tl on #110).
+    // What is true for every filter rule is that the message went nowhere. The AI check sent its
+    // opening to the user's AI provider, and its own rows say so (BlockedRow).
+    note: `Kept out by your mail filters, which check each message on your own Opportun server and send it nowhere, or by the AI check, whose rows say what it sent to your AI provider. ${STORED_ON_BLOCK} Edit the rules in Settings, Mail filters.`,
   },
 ];
 

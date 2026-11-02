@@ -11,6 +11,7 @@
 //   gateMessage  decides what happens when the model cannot answer. Every failure is a pass.
 //                A gate that drops mail while it is broken swallows recruiter email silently,
 //                which is worse than no gate at all.
+import { GATE_INPUT_CHARS } from '@opportun/core';
 import {
   renderPrompt,
   runStructured,
@@ -26,8 +27,12 @@ import { line } from './promptText';
 
 export type TriageOutput = AiTriageOutput;
 
-/** How much of the body the gate is given. The rest never leaves the machine. */
-export const GATE_INPUT_CHARS = 500;
+/**
+ * How much of the body the gate is given. The rest never leaves the machine. It lives in
+ * @opportun/core because the inbox's Blocked tab tells the user this same figure
+ * (https://github.com/bgoleno/opportun/issues/104); re-exported here for the gate's callers.
+ */
+export { GATE_INPUT_CHARS };
 
 /** Below this the model is not sure enough to overrule Stage 1, so the message passes. */
 export const GATE_MIN_CONFIDENCE = 0.5;

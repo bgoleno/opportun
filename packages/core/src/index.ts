@@ -8,3 +8,4 @@ export * from './mailText';
 export * from './mailPattern';
 export * from './consumerDomains';
 export * from './jobSenders';
+export * from './triageGate';
