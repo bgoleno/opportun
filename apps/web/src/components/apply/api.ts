@@ -97,6 +97,8 @@ export function snapshotErrorText(code: string | null | undefined): string {
 export const ak = {
   submissions: (opportunityId: string) => ['submissions', 'opportunity', opportunityId] as const,
   submission: (id: string) => ['submissions', id] as const,
+  /** The caller's own daily review usage and cap (#130). */
+  reviewUsage: ['submissions', 'review-usage'] as const,
 };
 
 /** The statuses of an attempt that is still in progress: at most one per opportunity. */
@@ -248,6 +250,46 @@ export function useCancelSubmission(opportunityId: string) {
     mutationFn: (id: string) =>
       api<SubmissionView>(`/submissions/${enc(id)}/cancel`, { method: 'POST' }),
     onSuccess: invalidate,
+  });
+}
+
+/** The caller's own daily review usage (GET /submissions/review-usage, #130). */
+export interface ReviewUsage {
+  used: number;
+  cap: number;
+  instanceCap: number;
+  userCap: number | null;
+  /** When a place next frees up, or null when nothing is in the window. */
+  nextFreeAt: number | null;
+}
+
+/**
+ * The caller's daily review usage, or `null` where the feature does not exist (404, the flag off
+ * or the demo): then neither the usage line nor the Settings control shows (#130 criterion 4).
+ */
+export function useReviewUsage() {
+  return useQuery({
+    queryKey: ak.reviewUsage,
+    queryFn: async (): Promise<ReviewUsage | null> => {
+      try {
+        return await api<ReviewUsage>('/submissions/review-usage');
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) return null;
+        throw err;
+      }
+    },
+    retry: false,
+  });
+}
+
+/** Sets the caller's own cap, 1 up to the instance's; null goes back to the instance's. */
+export function useSetReviewCap() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cap: number | null) =>
+      api<ReviewUsage>('/submissions/review-cap', { method: 'PUT', body: { cap } }),
+    onSuccess: (usage) => qc.setQueryData(ak.reviewUsage, usage),
+    onSettled: () => qc.invalidateQueries({ queryKey: ak.reviewUsage }),
   });
 }
 
