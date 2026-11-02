@@ -34,7 +34,7 @@ import { descriptionFingerprint, isSystemWritten } from '../lib/postingFingerpri
 import { mergePostingText } from '../lib/postingMerge';
 import { findPosting, type BoardLookup, type BodyReader } from '../lib/postingSearch';
 import { sanitizePosting } from '../lib/postingSanitize';
-import { siteLabel, siteOfLabel } from '../lib/captureSites';
+import { siteLabel, siteOfLabel, siteOfUrl } from '../lib/captureSites';
 import { sourceLabel } from '../lib/sourceLabels';
 import { createActivity, listActivities, updateActivity } from '../repos/activities';
 import type { UserCtx } from '../repos/base';
@@ -77,13 +77,18 @@ export async function capturedPage(
   // "Captured from LinkedIn" names the site the merge heading has to read, and the site whose
   // extraction re-derive runs over the text (https://github.com/bgoleno/opportun/issues/93).
   // recordCapture writes that title for every capture; a title without it is read as LinkedIn,
-  // as it always was. A label no site claims (siteLabel's fallback to a bare id) has no site.
+  // as it always was. When the label names no site (a site label renamed since, or a title edited
+  // by hand), the site that claims the capture's stored posting URL is used instead
+  // (https://github.com/bgoleno/opportun/issues/96); a label that names a site always wins, since
+  // it records the extraction the capture was made with. Neither gives no site.
   const from = /^Captured from (.+)$/.exec(capture.title)?.[1];
   const label = from ?? siteLabel('linkedin');
+  const site =
+    siteOfLabel(label) ?? (capture.externalUrl == null ? null : siteOfUrl(capture.externalUrl));
   return {
     text: capture.bodyMd as string,
     siteLabel: label,
-    siteId: siteOfLabel(label)?.id ?? null,
+    siteId: site?.id ?? null,
   };
 }
 
