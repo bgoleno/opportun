@@ -101,7 +101,7 @@ function ReviewCapForm({ usage }: { usage: ReviewUsage }) {
         <FormError message={error} />
         <div className="flex flex-wrap gap-2">
           <Button disabled={setCap.isPending} onClick={() => void save(Number(value))}>
-            Save
+            Save limit
           </Button>
           {usage.userCap !== null ? (
             <Button variant="outline" disabled={setCap.isPending} onClick={() => void save(null)}>

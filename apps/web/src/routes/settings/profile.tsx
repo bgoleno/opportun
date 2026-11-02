@@ -68,7 +68,9 @@ function ProfileSettings() {
   }
   // Keyed on load so the form takes fresh defaults if the profile is replaced elsewhere.
   return (
-    <div className="grid gap-6">
+    // grid-cols-1 (minmax(0, 1fr)): an implicit column would not shrink below its widest content,
+    // and the page would scroll sideways at 320 px.
+    <div className="grid grid-cols-1 gap-6">
       <ProfileForm key={profile.data.userId} profile={profile.data} />
       {/* Assisted apply's daily review limit (#130); renders nothing where the feature is off. */}
       <ReviewCapCard />

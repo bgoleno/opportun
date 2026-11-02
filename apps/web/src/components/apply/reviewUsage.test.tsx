@@ -96,7 +96,7 @@ describe('the user’s own limit in Settings', () => {
     const input = await screen.findByLabelText('Reviews allowed per 24 hours');
     await user.clear(input);
     await user.type(input, '3');
-    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await user.click(screen.getByRole('button', { name: 'Save limit' }));
     await waitFor(() => expect(puts(api.calls)).toHaveLength(1));
     expect(puts(api.calls)[0]?.body).toEqual({ dailyReviewCap: 3 });
     expect(await screen.findByText(/3 of 3 reviews used/)).toBeVisible();
@@ -111,7 +111,7 @@ describe('the user’s own limit in Settings', () => {
     const input = await screen.findByLabelText('Reviews allowed per 24 hours');
     await user.clear(input);
     await user.type(input, typed);
-    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await user.click(screen.getByRole('button', { name: 'Save limit' }));
     expect(await screen.findByText('Choose a whole number from 1 to 10.')).toBeVisible();
     expect(puts(api.calls)).toHaveLength(0);
   });
@@ -136,7 +136,7 @@ describe('the user’s own limit in Settings', () => {
       status: 422,
       body: { error: { code: 'cap_out_of_range', max: 10 } },
     }));
-    await user.click(await screen.findByRole('button', { name: 'Save' }));
+    await user.click(await screen.findByRole('button', { name: 'Save limit' }));
     expect(await screen.findByText('Choose a whole number from 1 to 10.')).toBeVisible();
   });
 
