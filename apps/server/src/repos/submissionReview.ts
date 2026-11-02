@@ -231,6 +231,9 @@ export async function reviewSubmission(
       });
       return { kind: 'capped', resetAt };
     }
+    // Inside both locks, every check done, just before the write: a test parks the review here
+    // and requires an edit or a cancel of the same attempt to wait (test/submissionReview.test.ts).
+    await racePoint('submissions.review.locked');
     const [updated] = await tx
       .update(applicationSubmissions)
       .set({
@@ -275,35 +278,62 @@ const handedOff = (row: SubmissionRow): HandoffResult => ({
   expiresAt: (row.handedOffAt ?? 0) + HANDOFF_IDLE_MS,
 });
 
+/** Why a destination may not be opened for this requisition (design 7.2), or null. */
+export type DestinationRefusal =
+  | 'not_a_url'
+  | 'not_https'
+  | 'credentials'
+  | 'prohibited_host'
+  | 'not_ats_board'
+  | 'other_board'
+  | 'not_this_posting';
+
 /**
- * Whether `destination` may be opened for this requisition (design 7.2): https only, no
- * credentials, never a LinkedIn or Indeed host, and a recognised ATS posting URL for this very
- * requisition: the same ATS, the same requisition id, and the same board or tenant where the
- * URL names one (a Workday requisition id is only unique within its tenant). A company career
- * page that embeds an ATS board is not accepted: nothing here can tell the company's own host
- * from a lookalike, which needs the M3 company-domain check.
+ * Why `destination` may not be opened for this requisition, or null when it may (design 7.2):
+ * https only, no credentials, never a LinkedIn or Indeed host, and a recognised ATS posting URL
+ * for this very requisition: the same ATS, the same requisition id, and the same board or tenant
+ * where the attempt names one (a Workday requisition id is only unique within its tenant). A
+ * company career page that embeds an ATS board is not accepted: nothing here can tell the
+ * company's own host from a lookalike, which needs the M3 company-domain check.
+ *
+ * Each guard answers with its own reason so a test can pin it even where another guard would
+ * also refuse (LinkedIn and Indeed are never a recognised board); the route answers them all
+ * alike, 422 destination_not_allowed.
  */
-export function destinationAllowed(
+export function destinationRefusal(
   destination: string,
   sub: Pick<SubmissionRow, 'atsKind' | 'atsExternalId' | 'atsRef'>,
-): boolean {
+): DestinationRefusal | null {
   let url: URL;
   try {
     url = new URL(destination);
   } catch {
-    return false;
+    return 'not_a_url';
   }
-  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') return false;
-  if (isPageFetchProhibited(url.hostname)) return false;
+  if (url.protocol !== 'https:') return 'not_https';
+  if (url.username !== '' || url.password !== '') return 'credentials';
+  if (isPageFetchProhibited(url.hostname)) return 'prohibited_host';
   // A recognised ATS board host, never a page that merely embeds a board: extractAtsJobRefs
   // also reads `gh_jid` on any host, which is how a lookalike could name this requisition.
   const board = boardFromUrl(url.href);
-  if (board === null || board.kind !== sub.atsKind) return false;
+  if (board === null) return 'not_ats_board';
+  if (board.kind !== sub.atsKind) return 'other_board';
   // atsRef is the board the draft was created from (repos/submissions.ts): the same tenant.
-  if (sub.atsRef !== null && board.slug.toLowerCase() !== sub.atsRef.toLowerCase()) return false;
-  return extractAtsJobRefs(url.href).some(
+  if (sub.atsRef !== null && board.slug.toLowerCase() !== sub.atsRef.toLowerCase()) {
+    return 'other_board';
+  }
+  const named = extractAtsJobRefs(url.href).some(
     (r) => r.kind === sub.atsKind && r.externalId === sub.atsExternalId,
   );
+  return named ? null : 'not_this_posting';
+}
+
+/** Whether `destination` may be opened for this requisition (destinationRefusal is null). */
+export function destinationAllowed(
+  destination: string,
+  sub: Pick<SubmissionRow, 'atsKind' | 'atsExternalId' | 'atsRef'>,
+): boolean {
+  return destinationRefusal(destination, sub) === null;
 }
 
 /**
