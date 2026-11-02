@@ -89,7 +89,12 @@ FAKE_SLEEP
 
   local out status
   # ${args[@]+...}: an empty array is "unbound" under set -u in bash before 4.4 (macOS's 3.2).
-  out="$(PATH="${bin}:${PATH}" bash "${TARGET}" ${args[@]+"${args[@]}"} 2>&1)" && status=0 || status=$?
+  # GH_*: run() executes inside $(...), where set -e does not apply, so a failed write or
+  # chmod of the fake above would let the real gh run in its place. Pointed at a host that
+  # cannot resolve, with a token that is no one's, the real gh can then reach no repository,
+  # let alone merge in one.
+  out="$(GH_TOKEN=invalid GH_HOST=invalid.invalid GH_REPO=invalid.invalid/invalid/invalid \
+    PATH="${bin}:${PATH}" bash "${TARGET}" ${args[@]+"${args[@]}"} 2>&1)" && status=0 || status=$?
 
   echo "${out}"
   echo "---calls---"
