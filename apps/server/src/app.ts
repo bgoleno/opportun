@@ -6,7 +6,7 @@ import {
   type ZodTypeProvider,
 } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import type { Config } from './config';
+import { submissionsEnabled, type Config } from './config';
 import { closeDatabase, connectDatabase, pingDatabase, type Db } from './db/client';
 import { configureGateWatchdog } from './db/gate';
 import { SCHEMA_DIALECT } from './db/schema';
@@ -35,6 +35,7 @@ import './jobs/index';
 import type { JobServices } from './jobs/registry';
 import { ATS_REVERIFY_CRON, ATS_REVERIFY_KIND } from './jobs/atsDetect';
 import { ATTACHMENT_SWEEP_CRON, ATTACHMENT_SWEEP_JOB_KIND } from './jobs/attachmentSweep';
+import { SUBMISSION_EXPIRE_CRON, SUBMISSION_EXPIRE_JOB_KIND } from './jobs/submissionExpire';
 import { BACKUP_CRON, BACKUP_JOB_KIND } from './jobs/backup';
 import { DEMO_RESET_CRON, DEMO_RESET_JOB_KIND } from './jobs/demoReset';
 import { JOB_PRUNE_CRON, JOB_PRUNE_JOB_KIND } from './jobs/jobPrune';
@@ -353,6 +354,11 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   // identical on that page, so this must be provably registered when cfg.demo is true, not
   // just correct when called directly.
   if (cfg.demo) await seedSchedule(db, DEMO_RESET_JOB_KIND, DEMO_RESET_CRON);
+  // Only where application submissions exist (issue #116): elsewhere there is nothing to expire,
+  // and Settings > Jobs should not show a schedule the deployment has no use for.
+  if (submissionsEnabled(cfg)) {
+    await seedSchedule(db, SUBMISSION_EXPIRE_JOB_KIND, SUBMISSION_EXPIRE_CRON);
+  }
   await seedSchedule(db, GMAIL_SYNC_ALL_KIND, GMAIL_SYNC_ALL_CRON);
   await seedSchedule(db, REFINE_JOB_KIND, REFINE_CRON);
   await seedSchedule(db, DISCOVERY_REFINE_KIND, DISCOVERY_REFINE_CRON);

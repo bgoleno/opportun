@@ -23,6 +23,7 @@ import { repairAlertLeadsJob } from './repairAlertLeads';
 import { repairDedupeKeysJob } from './repairDedupeKeys';
 import { refineDiscoveryPromptJob } from './refineDiscoveryPrompt';
 import { retryWorkdayCaptureJob } from './retryWorkdayCapture';
+import { submissionExpireJob } from './submissionExpire';
 import { gmailSyncAllJob, gmailSyncJob } from './gmailSync';
 import { registerJob } from './registry';
 
@@ -32,6 +33,7 @@ registerJob(backupJob);
 registerJob(dbIntegrityCheckJob);
 registerJob(attachmentSweepJob);
 registerJob(jobPruneJob);
+registerJob(submissionExpireJob);
 registerJob(demoResetJob);
 registerJob(gmailSyncJob);
 registerJob(gmailSyncAllJob);

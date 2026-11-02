@@ -17,14 +17,15 @@ import {
   type SubmissionStatus,
 } from '@opportun/core';
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import { isUniqueViolation, withTransaction } from '../db/client';
+import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
 import { applicationSubmissions, opportunities, resumes } from '../db/schema';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
+import { submissionDigest } from '../lib/submissionDigest';
 import type { Db, Exec, UserCtx } from './base';
 import { countWhere, type ListOpts, type Page } from './list';
 
-type SubmissionRow = typeof applicationSubmissions.$inferSelect;
+export type SubmissionRow = typeof applicationSubmissions.$inferSelect;
 
 /** An opportunity can start an attempt only at these stages (#114 criterion 1). */
 export const SUBMISSION_ELIGIBLE_STAGES = ['interested', 'preparing', 'applied'] as const;
@@ -66,7 +67,7 @@ const ineligible = (reason: IneligibleReason): HttpError =>
 /** The live statuses, as the partial unique index names them. */
 const LIVE: SubmissionStatus[] = ['draft', 'reviewed', 'handed_off'];
 
-function view(row: SubmissionRow): Submission {
+export function view(row: SubmissionRow): Submission {
   return {
     id: row.id,
     opportunityId: row.opportunityId,
@@ -82,6 +83,9 @@ function view(row: SubmissionRow): Submission {
     resumeStore: row.resumeStore,
     fields: row.fields,
     answers: row.answers,
+    // The state as it stands now, for the review screen to echo (M1c, design 4.5): computed, not
+    // the stored review_digest, which is the state at the moment of the last review.
+    reviewDigest: submissionDigest(row),
     reviewExpiresAt: row.reviewExpiresAt,
     reviewedAt: row.reviewedAt,
     handedOffAt: row.handedOffAt,
@@ -94,10 +98,10 @@ function view(row: SubmissionRow): Submission {
   };
 }
 
-const owned = (ctx: UserCtx, id: string) =>
+export const owned = (ctx: UserCtx, id: string) =>
   and(eq(applicationSubmissions.userId, ctx.userId), eq(applicationSubmissions.id, id));
 
-async function getRow(exec: Exec, ctx: UserCtx, id: string): Promise<SubmissionRow> {
+export async function getRow(exec: Exec, ctx: UserCtx, id: string): Promise<SubmissionRow> {
   const row = await exec.select().from(applicationSubmissions).where(owned(ctx, id)).get();
   if (row === undefined) throw notFound();
   return row;
@@ -305,7 +309,7 @@ export async function getSubmission(db: Db, ctx: UserCtx, id: string): Promise<S
 }
 
 /** 409 naming the row and its current status, so the client can reload it and reconcile. */
-const notNow = (row: SubmissionRow, to: SubmissionStatus): HttpError =>
+export const notNow = (row: SubmissionRow, to: SubmissionStatus): HttpError =>
   new HttpError(
     409,
     'invalid_transition',
@@ -320,9 +324,11 @@ export interface SubmissionPatch {
 }
 
 /**
- * Edits a draft: its resume, fields or answers. M1a allows edits only while it is a draft (a
- * reviewed attempt returning to draft on edit arrives with the review gate, M1c). The update is
- * conditional on the status, so a concurrent change wins cleanly instead of being overwritten.
+ * Edits a draft, or a reviewed attempt: its resume, fields or answers. An edit after review
+ * sends the attempt back to draft and clears the review (M1c, design 4.3), so the next handoff
+ * is refused until it is reviewed again; reviewed_at stays, so the daily cap still counts the
+ * attempt as reviewed (repos/submissionReview.ts). The update is conditional on the status, so
+ * a concurrent change wins cleanly instead of being overwritten.
  */
 export async function updateSubmissionDraft(
   db: Db,
@@ -331,8 +337,11 @@ export async function updateSubmissionDraft(
   patch: SubmissionPatch,
 ): Promise<Submission> {
   return await withTransaction(db, async (tx) => {
+    // The attempt's lock (repos/submissionReview.ts): a review or handoff in flight checks the
+    // row after this edit, or this edit waits until it is done.
+    await lockScope(tx, `submission:${id}`);
     const row = await getRow(tx, ctx, id);
-    if (row.status !== 'draft') throw notNow(row, 'draft');
+    if (row.status !== 'draft' && row.status !== 'reviewed') throw notNow(row, 'draft');
     applySubmissionTransition(row, 'draft');
     const resume = patch.resumeId === undefined ? null : await finalResume(tx, ctx, patch.resumeId);
     const [updated] = await tx
@@ -352,10 +361,12 @@ export async function updateSubmissionDraft(
             }),
         ...(patch.fields === undefined ? {} : { fields: patch.fields }),
         ...(patch.answers === undefined ? {} : { answers: patch.answers }),
+        status: 'draft',
         reviewDigest: null,
+        reviewExpiresAt: null,
         updatedAt: Date.now(),
       })
-      .where(and(owned(ctx, id), eq(applicationSubmissions.status, 'draft')))
+      .where(and(owned(ctx, id), eq(applicationSubmissions.status, row.status)))
       .returning();
     if (updated === undefined) throw notNow(await getRow(tx, ctx, id), 'draft');
     return view(updated);
@@ -369,6 +380,9 @@ export async function updateSubmissionDraft(
  */
 export async function cancelSubmission(db: Db, ctx: UserCtx, id: string): Promise<Submission> {
   return await withTransaction(db, async (tx) => {
+    // The attempt's lock (repos/submissionReview.ts): a review or handoff in flight checks the
+    // row after this edit, or this edit waits until it is done.
+    await lockScope(tx, `submission:${id}`);
     const row = await getRow(tx, ctx, id);
     if (row.status === 'abandoned' && row.failureReason === 'cancelled_by_user') return view(row);
     if (!canSubmissionTransition(row.status, 'abandoned')) throw notNow(row, 'abandoned');
