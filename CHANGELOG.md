@@ -13,8 +13,14 @@ milestone's work was merged. Each links the implementation plan it was built fro
   rather than the model's rewrite of it. So a figure, a link or a location the posting never
   showed can no longer end up on the opportunity. The LinkedIn prompt now asks for location and
   pay copied exactly, updated by an automatic upgrade step; a prompt version you made yourself is
-  left as it is. Captures without an AI key, profile captures and Indeed captures are unchanged
-  ([#88](https://github.com/bgoleno/opportun/issues/88)).
+  left as it is. If you use your own version of the LinkedIn capture prompt, it does not ask for
+  exact copies, so expect more locations and pay lines to come back empty: a value the model
+  reworded is now dropped. To use the shipped prompt again, open **Settings > AI > Advanced:
+  prompts**, choose the `capture.linkedin` task and press **Reset to default**; or add the
+  instruction to copy location and pay exactly as the page states them to your own version.
+  Captures without an AI key, profile captures and Indeed captures are unchanged
+  ([#88](https://github.com/bgoleno/opportun/issues/88),
+  [#102](https://github.com/bgoleno/opportun/issues/102)).
 - **Indeed captures get their location and pay.** With an AI key, a job captured from Indeed now
   gets the location and the pay the posting states, read by a new site-neutral prompt
   (`capture.job`, added to the prompt list by an automatic upgrade step). A value is kept only

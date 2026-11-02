@@ -420,7 +420,10 @@ describe('POST /connector/capture: jobs', () => {
     expect(fetched).toEqual([]);
   });
 
-  it('AI refinement adds location, pay and a clean description; title and company stay the page’s', async () => {
+  // Renamed for https://github.com/bgoleno/opportun/issues/102: since #88 the model's description
+  // is never stored, so this proves location and pay from the model, and the page's own title,
+  // company and description.
+  it('AI refinement adds the location and pay the page states; title, company and description stay the page’s', async () => {
     const { app, a } = await boot();
     vi.mocked(runStructured).mockResolvedValue({
       ...NO_FIELDS,
@@ -441,7 +444,9 @@ describe('POST /connector/capture: jobs', () => {
       location: 'Austin, TX',
       compNote: '$200K/yr - $240K/yr',
     });
-    expect(posting.descriptionMd).toContain('Responsibilities');
+    // The page's own "About the job" text, not the model's Markdown.
+    expect(posting.descriptionMd).toContain('Initech is modernizing its TPS reporting platform');
+    expect(posting.descriptionMd).not.toContain('## Responsibilities');
   });
 });
 
