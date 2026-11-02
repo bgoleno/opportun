@@ -11,6 +11,8 @@ import {
   INDEED_JOB,
   INDEED_JOB_DASH_TITLE,
   INDEED_JOB_MINIMAL,
+  INDEED_JOB_SIGN_IN_TITLE,
+  INDEED_JOB_SIGN_IN_WORDS,
   INDEED_JOB_SPLIT_VIEW,
   INDEED_JOB_UPPERCASE_KEY,
   INDEED_JOB_URL,
@@ -86,6 +88,24 @@ describe('recognizeIndeedPage', () => {
       title: 'Security Check Analyst',
       company: 'Example Corp',
     });
+  });
+
+  it('reads a "Sign In Coordinator" job as a job', () => {
+    expect(recognizeIndeedPage(INDEED_JOB_SIGN_IN_TITLE)).toMatchObject({
+      kind: 'job',
+      title: 'Sign In Coordinator',
+    });
+  });
+
+  it("reads a job whose description uses the sign-in prompt's words as a job", () => {
+    expect(recognizeIndeedPage(INDEED_JOB_SIGN_IN_WORDS)).toMatchObject({
+      kind: 'job',
+      title: 'Senior Example Engineer',
+    });
+  });
+
+  it('names a wall only from the page text: a wall tab title on a job is ignored', () => {
+    expect(recognizeIndeedPage({ ...INDEED_JOB, title: 'Just a moment...' })).toEqual(EXPECTED_JOB);
   });
 });
 

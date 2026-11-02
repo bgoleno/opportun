@@ -100,6 +100,23 @@ export const INDEED_JOB_WALL_WORDS: CapturedPage = {
   }),
 };
 
+/** A "Sign In Coordinator" job: its /viewjob tab title starts with "Sign In". */
+export const INDEED_JOB_SIGN_IN_TITLE: CapturedPage = {
+  ...INDEED_JOB,
+  title: 'Sign In Coordinator - Remote - Indeed.com',
+  text: indeedText({ title: 'Sign In Coordinator', company: 'Example Corp', meta: ['Remote'] }),
+};
+
+/** A job whose description says how to apply in the sign-in prompt's own words. */
+export const INDEED_JOB_SIGN_IN_WORDS: CapturedPage = {
+  ...INDEED_JOB,
+  text: indeedText({
+    title: 'Senior Example Engineer',
+    company: 'Example Corp',
+    description: `${INDEED_DESCRIPTION}\nCreate an account or sign in to apply on our portal.`,
+  }),
+};
+
 /** An uppercase job key in the URL; the identity and the stored URL are lowercase. */
 export const INDEED_JOB_UPPERCASE_KEY: CapturedPage = {
   ...INDEED_JOB,
@@ -127,20 +144,23 @@ export const INDEED_COMPANY_PAGE: CapturedPage = {
   text: ['Example Corp', '4.1', 'Snapshot', 'Why join us', 'Reviews', 'Jobs'].join('\n'),
 };
 
-/** A verification interstitial in place of the job. */
+/**
+ * A verification interstitial in place of the job. The tab title is the job's own, so a test of
+ * this fixture pins the text rule alone: the tab title is never read.
+ */
 export const INDEED_VERIFICATION: CapturedPage = {
   url: INDEED_JOB_URL,
-  title: 'Just a moment...',
+  title: INDEED_JOB.title,
   text: [
     'Additional Verification Required',
     'Verify you are human by completing the action below.',
   ].join('\n'),
 };
 
-/** A sign-in prompt in place of the job. */
+/** A sign-in prompt in place of the job; the tab title is the job's own, as above. */
 export const INDEED_SIGN_IN: CapturedPage = {
   url: INDEED_JOB_URL,
-  title: 'Sign In | Indeed Accounts',
+  title: INDEED_JOB.title,
   text: ['Ready to take the next step?', 'Create an account or sign in.', 'Email address'].join(
     '\n',
   ),
