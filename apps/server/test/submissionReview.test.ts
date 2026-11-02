@@ -773,7 +773,9 @@ describe('another user’s submission', () => {
 
 describe('an edit racing the review or the handoff (tl on #129)', () => {
   const UNREVIEWED = {
-    answers: [{ questionKey: 'why_us', label: 'Why us?', value: 'NEVER-REVIEWED', source: 'user' }],
+    answers: [
+      { questionKey: 'why_us', label: 'Why us?', value: 'NEVER-REVIEWED', source: 'user' as const },
+    ],
   };
 
   it('an edit between the review’s start and its write: refused, or the reviewed content stands', async () => {
