@@ -22,6 +22,7 @@ import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { API_BASE, ApiError } from '@/lib/api';
 import { formatDateTime, safeHttpUrl, type OpportunityView } from '@/lib/opportunities';
+import { cn } from '@/lib/utils';
 import { usableResumes } from './ApplyPanel';
 import {
   atsLabel,
@@ -739,7 +740,8 @@ function ReviewStep({
     banner?.kind === 'expired' ? banner.at : reviewedButExpired ? live.reviewExpiresAt : null;
 
   return (
-    <div className="grid gap-4">
+    // min-w-0: a grid item may otherwise not shrink below its widest content (#135, 390 px).
+    <div className="grid min-w-0 grid-cols-1 gap-4">
       <p className="text-sm text-muted-foreground">
         This is what Opportun will help you put on the form. Nothing leaves Opportun from this page.
       </p>
@@ -933,7 +935,8 @@ function ReviewStep({
             onClick={() => void confirm()}
             aria-disabled={confirmDisabled ? 'true' : undefined}
             aria-describedby={hintId}
-            className={confirmDisabled ? 'opacity-50' : undefined}
+            // The label names the host, so it can be wider than a phone: let it wrap (#135).
+            className={cn('h-auto min-h-9 whitespace-normal py-2', confirmDisabled && 'opacity-50')}
           >
             {reviewedAndValid ? `Open ${host}` : `Confirm review and open ${host}`}
           </Button>

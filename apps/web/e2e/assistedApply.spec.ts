@@ -182,3 +182,30 @@ test('apply: choose a resume, add details, review everything, open the form, and
   await page.goto(`/opportunities/${id}`);
   await expect(panel.getByText('Opened on ATS')).toBeVisible();
 });
+
+// Phone widths (#135 criterion 8 asks 390; 320 is the narrowest mobile.spec.ts measures). Each
+// step is measured once it is on screen, never the opportunity page it replaced.
+for (const width of [390, 320] as const) {
+  test(`at ${width} px no apply step scrolls sideways (#135)`, async ({ page, playwright }) => {
+    const { panel } = await readyOpportunity(page, playwright);
+    const sideways = () =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+    await panel.getByRole('link', { name: 'Apply on Greenhouse' }).click();
+    await page.setViewportSize({ width, height: 740 });
+
+    await expect(page.getByRole('button', { name: 'Next: Details' })).toBeVisible();
+    expect(await sideways(), 'resume step').toBe(0);
+
+    await page.getByRole('button', { name: 'Next: Details' }).click();
+    await expect(page.getByLabel('Full name')).toBeVisible();
+    expect(await sideways(), 'details step').toBe(0);
+
+    await page.getByRole('button', { name: 'Next: Review' }).click();
+    await expect(page.getByRole('link', { name: /download the saved copy/i })).toBeVisible({
+      timeout: 30_000,
+    });
+    expect(await sideways(), 'review step').toBe(0);
+  });
+}

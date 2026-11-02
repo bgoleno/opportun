@@ -51,6 +51,10 @@ export function submissionErrorText(err: unknown): string {
       return "This opportunity's posting needs review. Confirm it on the Details tab first.";
     case 'stage_not_eligible':
       return 'Applying is available at Interested, Preparing or Applied.';
+    case 'destination_not_allowed':
+      // At creation (#135): the opportunity's posting address is not the employer's own posting
+      // on a recognised application site, so the handoff could never open it.
+      return "This opportunity's posting address isn't the employer's own posting on a recognised application site, so Opportun can't open it for you. Apply from the posting directly.";
     case 'destination_not_https':
       return "The posting's address is not a secure (https) address, so it cannot be opened from here.";
     case 'idempotency_key_reused':
