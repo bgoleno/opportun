@@ -190,6 +190,19 @@ assert_contains "${out}" "exit:1" "push during the wait exit code"
 assert_contains "${out}" "its head is ${PUSHED_AFTER}, not the reviewed ${REVIEWED}" "push during the wait message names both commits"
 assert_contains "${out}" "pr checks" "push during the wait: the checks were waited for"
 assert_not_contains "${out}" "pr merge" "push during the wait: no merge attempt"
+# The second look at the head comes after the mergeable poll, so it is the last thing before
+# the merge: exactly these calls, in this order.
+expected_calls="pr view 999 --json headRefOid -q .headRefOid
+pr checks 999 --watch --fail-fast
+pr view 999 --json mergeable -q .mergeable
+pr view 999 --json headRefOid -q .headRefOid"
+if [[ "$(calls_of "${out}")" != "${expected_calls}" ]]; then
+  echo "FAIL: push during the wait: expected these gh calls, in order:"
+  echo "${expected_calls}"
+  echo "saw:"
+  calls_of "${out}"
+  fails=$((fails + 1))
+fi
 
 # Each case: a label, then the arguments the script is given.
 usage_case() {
