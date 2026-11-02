@@ -43,6 +43,8 @@ const ReferralInput = vars('contacts_untrusted', 'opportunity_untrusted');
 const CaptureInput = vars('page_url_untrusted', 'page_untrusted');
 /** A LinkedIn page the user visited, pushed by the extension (FR-C5): URL, tab title and text. */
 const LinkedInCaptureInput = vars('page_url_untrusted', 'page_title_untrusted', 'page_untrusted');
+/** A job page from a site without its own prompt (Indeed, #76): the same three fenced inputs. */
+const JobCaptureInput = vars('page_url_untrusted', 'page_title_untrusted', 'page_untrusted');
 const PostingMergeInput = vars('ats_untrusted', 'capture_untrusted');
 const SuggestInput = vars('role_targets', 'pipeline_untrusted', 'denied_companies_untrusted');
 /** An error message the user pasted from Google's console or consent screen. */
@@ -183,6 +185,18 @@ export const LinkedInCaptureOutputSchema = z.object({
   descriptionMd: z.string().max(50_000).nullable(),
 });
 
+/**
+ * The site-neutral job refine (https://github.com/bgoleno/opportun/issues/76): only what a
+ * site's deterministic recognizer does not read. Title, company and description stay the
+ * recognizer's, and the server keeps each value only when the page text contains it.
+ */
+export const JobCaptureOutputSchema = z.object({
+  /** The job's location as the page states it. */
+  location: z.string().max(300).nullable(),
+  /** The pay as the page states it. */
+  compNote: z.string().max(500).nullable(),
+});
+
 /** Companies worth following (FR-D8); capped so one run cannot flood the queue. */
 export const SuggestOutputSchema = z.object({
   suggestions: z
@@ -282,6 +296,12 @@ export const TASKS: Record<TaskKey, TaskDef<any, any>> = {
     'Reads a LinkedIn profile or job page the user captured with the browser extension.',
     LinkedInCaptureInput,
     LinkedInCaptureOutputSchema,
+  ),
+  'capture.job': def(
+    'capture.job',
+    'Reads the location and pay of a job posting the user captured on a site with no prompt of its own.',
+    JobCaptureInput,
+    JobCaptureOutputSchema,
   ),
   'posting.merge': def(
     'posting.merge',

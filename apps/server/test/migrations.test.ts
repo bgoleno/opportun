@@ -52,10 +52,11 @@ describe.runIf(sqliteOnly)('migration journal', () => {
   // out at 30 s in a full local run at load average about 52, though the file passed in 4.4 s
   // alone. Measured at 39 migrations on the 10-core host, the loop took 1.4 to 1.8 s run alone at
   // load 23 to 49 (5.3 and 6.4 s on the first run of a batch), and 5.9 s inside a full server run
-  // at load 65. Split, the slowest prefix took 63 to 143 ms run alone at load 42 to 79, and each
-  // one grows only linearly with the journal. Each test keeps the suite's 30 s default
-  // (vitest.config.ts): about 200 times the slowest measured prefix, and still about 38 times the
-  // share each prefix had of the failing run's 30 s. A failure also names its prefix.
+  // at load 65. Split, the slowest prefix took 63 to 143 ms run alone at load 42 to 79 (and 417 ms
+  // in qa's run at load 60), and each one grows only linearly with the journal. Each test keeps
+  // the suite's 30 s default (vitest.config.ts): about 200 times the slowest prefix measured
+  // alone, about 70 times qa's 417 ms, and still about 38 times the share each prefix had of the
+  // failing run's 30 s. A failure also names its prefix.
   //
   // Each prefix's folder holds only what drizzle's migrator reads: meta/_journal.json and one
   // <tag>.sql per journal entry (readMigrationFiles in drizzle-orm/migrator). Copying the whole
@@ -670,6 +671,62 @@ describe.runIf(sqliteOnly)('migration journal', () => {
       sqlite.close();
     }
   });
+  // https://github.com/bgoleno/opportun/issues/76: the site-neutral job refine prompt.
+  it('0039 seeds the capture.job default on the upgrade path, idempotently', async () => {
+    const { entries } = await readJournal(MIGRATIONS_DIR);
+    const at = entries.findIndex((e) => e.tag === '0039_capture_job_prompt');
+    expect(at).toBe(39);
+    const partial = await tempDir();
+    await cp(MIGRATIONS_DIR, partial, { recursive: true });
+    const journal = await readJournal(partial);
+    journal.entries = journal.entries.slice(0, at);
+    await writeFile(join(partial, 'meta', '_journal.json'), JSON.stringify(journal));
+
+    const dataDir = await tempDir();
+    const old = new Database(join(dataDir, 'opportun.db'));
+    migrate(drizzle(old), { migrationsFolder: partial });
+    const seeds = (db: Database.Database) =>
+      db
+        .prepare(
+          `SELECT body, version, is_active AS active FROM prompts
+            WHERE user_id IS NULL AND task_key = 'capture.job'`,
+        )
+        .all() as { body: string; version: number; active: number }[];
+    const linkedin = (db: Database.Database) =>
+      db
+        .prepare(`SELECT id, body FROM prompts WHERE task_key = 'capture.linkedin' ORDER BY id`)
+        .all();
+    expect(seeds(old)).toEqual([]);
+    const linkedinBefore = linkedin(old);
+    old.close();
+
+    const { sqlite } = openDatabase(dataDir);
+    try {
+      const rows = seeds(sqlite);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ version: 1, active: 1 });
+      const body = rows[0]!.body;
+      expect(promptVariables(body)).toEqual([...TASK_PROMPT_VARS['capture.job']]);
+      expect(body).toContain('<untrusted> tags as');
+      // The server keeps a value only when the page contains it, so the prompt asks for copies.
+      expect(body).toMatch(/exactly as it appears/);
+      expect(body).not.toContain(String.fromCharCode(0x2014));
+      const rendered = renderPrompt(
+        body,
+        Object.fromEntries(TASK_PROMPT_VARS['capture.job'].map((v) => [v, 'x'])),
+      );
+      expect(rendered.split('<untrusted>\n').length - 1).toBe(3);
+      // The LinkedIn prompt is untouched (AC3).
+      expect(linkedin(sqlite)).toEqual(linkedinBefore);
+      // Re-running the migration adds nothing.
+      const sql = await readFile(join(MIGRATIONS_DIR, '0039_capture_job_prompt.sql'), 'utf8');
+      for (const stmt of sql.split('--> statement-breakpoint')) sqlite.exec(stmt);
+      expect(seeds(sqlite)).toHaveLength(1);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it('0018 seeds the capture.linkedin default on the upgrade path, idempotently', async () => {
     const { entries } = await readJournal(MIGRATIONS_DIR);
     expect(entries.find((e) => e.tag === '0018_capture_linkedin_prompt')).toMatchObject({

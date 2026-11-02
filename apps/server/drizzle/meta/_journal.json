@@ -274,6 +274,13 @@
       "when": 1793518476560,
       "tag": "0038_network_contacts",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1793600000000,
+      "tag": "0039_capture_job_prompt",
+      "breakpoints": true
     }
   ]
 }

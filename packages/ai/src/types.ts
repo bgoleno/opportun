@@ -13,6 +13,7 @@ export const TASK_KEYS = [
   'referral.rationale',
   'capture.extract',
   'capture.linkedin',
+  'capture.job',
   'posting.merge',
   'company.suggest',
   'integration.diagnose',
