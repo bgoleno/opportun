@@ -13,7 +13,7 @@
 // `https://<tenant>.<dc>.myworkdayjobs.com[/<locale>]/<site>/job/<location>/<title>_<reqId>[/apply]`.
 // Requisition ids are not all digits (`1000001`, `1000002-1`, `JR-000001`): the id is whatever
 // follows the last underscore. Reading one needs no network at all.
-import { boardFromUrl, type AtsKind } from '../jobs/atsDetect';
+import { boardFromUrl, type AtsBoard, type AtsKind } from '../jobs/atsDetect';
 
 export interface AtsJobRef {
   kind: AtsKind;
@@ -94,6 +94,19 @@ function fromGreenhouseJid(url: URL): Omit<AtsJobRef, 'url'> | null {
   };
 }
 
+/** The job a board URL's own path names (board host and path, never a query parameter). */
+function fromBoardPath(board: AtsBoard, url: URL): Omit<AtsJobRef, 'url'> | null {
+  const externalId = idFromPath(board.kind, url);
+  if (externalId === null) return null;
+  return {
+    kind: board.kind,
+    org: board.slug,
+    ...(board.host === undefined ? {} : { host: board.host }),
+    ...(board.kind === 'ats_workday' ? { externalPath: workdayPosting(url)?.externalPath } : {}),
+    externalId,
+  };
+}
+
 /**
  * The ATS job references in `text`, deduplicated by board and job id, in first-seen order.
  * A link that names a board but no single job is not a reference: nothing can be fetched by it.
@@ -113,19 +126,7 @@ export function extractAtsJobRefs(text: string, max: number = DEFAULT_MAX): AtsJ
     let ref: Omit<AtsJobRef, 'url'> | null = fromGreenhouseJid(url);
     if (ref === null) {
       const board = boardFromUrl(raw);
-      const externalId = board === null ? null : idFromPath(board.kind, url);
-      ref =
-        board === null || externalId === null
-          ? null
-          : {
-              kind: board.kind,
-              org: board.slug,
-              ...(board.host === undefined ? {} : { host: board.host }),
-              ...(board.kind === 'ats_workday'
-                ? { externalPath: workdayPosting(url)?.externalPath }
-                : {}),
-              externalId,
-            };
+      ref = board === null ? null : fromBoardPath(board, url);
     }
     if (ref === null) continue;
     const key = `${ref.kind}:${ref.org ?? ''}:${ref.externalId}`;
@@ -151,7 +152,20 @@ export function postingAtsJobRef(postingUrl: string | null | undefined): AtsJobR
   if (postingUrl == null) return null;
   const board = boardFromUrl(postingUrl);
   if (board === null) return null;
-  const ref = extractAtsJobRefs(postingUrl, 1)[0];
-  if (ref === undefined || ref.kind !== board.kind) return null;
-  return { ...ref, org: board.slug };
+  const raw = postingUrl.replace(/&amp;/g, '&');
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  // The board's own path first (tl on #143): on a board URL a stray `gh_jid` names another
+  // requisition than the path does, or (on Lever, Ashby, Workday) none of this board's at all.
+  const fromPath = fromBoardPath(board, url);
+  if (fromPath !== null) return { ...fromPath, org: board.slug, url: raw };
+  // No job in the path: a Greenhouse board URL may still name one by `gh_jid`. Only one of this
+  // board's own kind counts.
+  const fromJid = fromGreenhouseJid(url);
+  if (fromJid === null || fromJid.kind !== board.kind) return null;
+  return { ...fromJid, org: board.slug, url: raw };
 }

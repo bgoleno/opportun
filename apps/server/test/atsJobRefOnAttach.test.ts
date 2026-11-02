@@ -474,3 +474,72 @@ describe('readers of the identity: starting assisted apply (the EM on #140)', ()
     expect(res.json()).toMatchObject({ error: { code: 'no_ats_identity' } });
   });
 });
+
+describe("#143: the board path's own job id comes before a stray gh_jid", () => {
+  /** The same posting without the stray parameter: the identity the board path names. */
+  const clean = (url: string) => {
+    const u = new URL(url);
+    u.searchParams.delete('gh_jid');
+    return postingAtsJobRef(u.href);
+  };
+
+  it.each([
+    ['Greenhouse', 'https://boards.greenhouse.io/acme/jobs/4140005?gh_jid=4140999'],
+    ['Lever', 'https://jobs.lever.co/acme/5a6b7c8d-1111-2222-3333-444455556666?gh_jid=4140999'],
+    ['Ashby', 'https://jobs.ashbyhq.com/acme/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b?gh_jid=4140999'],
+    [
+      'Workday',
+      'https://acme.wd5.myworkdayjobs.com/en-US/External/job/Remote/Platform-Engineer_JR-000123?gh_jid=4140999',
+    ],
+  ])('%s: the path id, not the gh_jid', (_kind, url) => {
+    const expected = clean(url);
+    expect(expected).not.toBeNull(); // the board path itself names a job
+    expect(postingAtsJobRef(url)).toEqual({ ...expected, url });
+    expect(postingAtsJobRef(url)?.externalId).not.toBe('4140999');
+  });
+
+  it('a gh_jid on a Greenhouse board URL with no job in its path still names the job', () => {
+    expect(postingAtsJobRef('https://job-boards.greenhouse.io/acme?gh_jid=4140999')).toMatchObject({
+      kind: 'ats_greenhouse',
+      org: 'acme',
+      externalId: '4140999',
+    });
+  });
+
+  it('a gh_jid on another kind of board with no job in its path names nothing (the kind check)', () => {
+    expect(postingAtsJobRef('https://jobs.lever.co/acme?gh_jid=4140999')).toBeNull();
+  });
+
+  it('a gh_jid on a company career page still names nothing', () => {
+    expect(postingAtsJobRef(CAREER_PAGE_URL)).toBeNull();
+  });
+});
+
+describe('#143: lines no test pinned before', () => {
+  it("reconcile with a posting that has no URL of its own takes the stored URL's identity", async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const id = await newOpportunity(app, a);
+    await app.db
+      .update(opportunities)
+      .set({ postingUrl: BOARD_URL })
+      .where(eq(opportunities.id, id))
+      .run();
+    await confirm(app.db, ctx, await getOpportunity(app.db, ctx, id), posting(null));
+    expect(await refOf(app, a, id)).toEqual(BOARD_REF);
+  });
+
+  it('the backfill is queued once per deployment, even after its jobs have finished', async () => {
+    const { app } = await boot();
+    await app.db.delete(settings).where(eq(settings.key, BACKFILL_ATS_JOB_REFS_MARKER_KEY)).run();
+    expect(await enqueueBackfillAtsJobRefsOnce(app.db)).toBe(2);
+    await app.jobs.drain(); // finished: no unfinished job left to dedupe a second queueing
+    const marker = await app.db
+      .select()
+      .from(settings)
+      .where(eq(settings.key, BACKFILL_ATS_JOB_REFS_MARKER_KEY))
+      .get();
+    expect(marker).toBeDefined();
+    expect(await enqueueBackfillAtsJobRefsOnce(app.db)).toBe(0);
+  });
+});
