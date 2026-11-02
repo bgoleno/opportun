@@ -1,0 +1,597 @@
+# Assisted apply: technical design
+
+Part A of the assisted apply design: the tech lead's technical design, written 2026-10-27 outside
+the repository and moved here under #122. The UX design is Part B. Status, decisions and how the
+two parts relate are in [README.md](README.md).
+
+Where the code on `main` and this document disagree, the code wins: this records the design as
+agreed, and the milestone issues (section 9) record what each PR builds.
+
+Numbers such as #79 or #124 in this folder are issues and pull requests in this repository,
+https://github.com/bgoleno/opportun, not the retired private tracker.
+
+Author: tech lead. Date of vendor-documentation reads: 2026-10-27. Repo read: local clone `opportun-public` (not the retired `opportun`). Paths below are relative to `apps/server/src` unless they start with `docs/`, `packages/` or `apps/`. The references the Tech Lead listed on #79 were updated against main at 70289cf on 2026-11-02 (see [README.md](README.md)); other line numbers are as read on 2026-10-27 and drift, so search for the named symbol.
+
+Conventions for evidence: **OBSERVED** means I read it in the repo or on the vendor page named. **INFERRED** means my reading of what observed facts imply. **UNVERIFIED** means I could not confirm it from an official source and nothing here depends on it being true without a spike.
+
+---
+
+## 1. Summary and recommendation
+
+**Direct server-side submission is not available to a candidate, and building it would be non-compliant. Recommend "assisted apply": Opportun prepares and tracks the submission, the user's own browser fills the real ATS form, the user presses the ATS's own submit button, and Opportun records the outcome and any confirmation.**
+
+What I found (details in section 2):
+
+- **Greenhouse** (OBSERVED, docs.greenhouse.io/job-board.html): the application POST requires HTTP Basic Auth where the username is "your API key (found on the API Credentials page)". That key is the employer organisation's credential, and the page says form posts "should be proxied by your own servers" so the key never reaches a browser. A candidate has no such key.
+- **Lever** (OBSERVED, github.com/lever/postings-api): the application POST needs `?key=APIKEY`, "which a Super Admin of your account can generate". Employer credential again.
+- **Ashby** (OBSERVED, developers.ashbyhq.com): `applicationForm.submit` "Requires the `candidatesWrite` permission" under Basic Auth API keys. The public job posting API is a read-only GET. Who issues the key is not stated on the pages I read (INFERRED: the employer, since "An Ashby Admin can manage permissions for existing API keys").
+- **Workday**: I found no official public candidate submission API. This is a negative from a search plus vendor pages, and Workday's own developer documentation is mostly login-gated, so I mark it "none found, absence not proven". Workday's public CXS endpoints that Opportun already uses (`adapters/sources/workday.ts`) are read-only. Owner decision, 2026-11-02 (#113): those server-side Workday reads (the career-site job list and job detail on a company's own myworkdayjobs.com host, for discovery, ATS detection and enrichment) stay as they are.
+
+So your understanding is confirmed for Greenhouse, Lever and Ashby (employer-issued keys), and plausible but not provable for Workday. The only ways to submit server-side without an employer key would be to replay the hosted apply form (form scraping or browser automation). That violates C-2 (official APIs, feeds, or user-driven capture only), would ignore bot protections, and is exactly the "anti-bot evasion" lineage rejected in `docs/requirements.md` section 11.1 (line 595) and 11.3 (line 626). It is out of the question.
+
+### Options (three)
+
+| #   | Option                                                                                                                                                                                                                                                                                                       | Compliance                                                                                                                                                                        | Effort                               | Verdict                                                                             |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------- |
+| 1   | **Direct API submit from the server** using a key                                                                                                                                                                                                                                                            | Needs an employer key the candidate cannot get. Anything without a key is scraping or automation: violates C-2, NG-2 spirit, vendor terms.                                        | n/a                                  | **Rejected. Not buildable compliantly.**                                            |
+| 2   | **Tracked handoff** ("Apply tracker"): Opportun snapshots the resume, runs a mandatory review, opens the real posting, the user applies on the ATS site by hand, then records "I submitted" and Opportun matches the confirmation email. No extension changes.                                               | Clean. Opportun transmits nothing.                                                                                                                                                | Medium (M1 + M2 below)               | **Recommended first.** Delivers the timeline value with no new third-party contact. |
+| 3   | **Assisted apply**: Option 2 plus the existing browser extension (`packages/extension`) prefilling the ATS form in the tab the user is looking at (one click, `activeTab` + `scripting`, no content script) and capturing the confirmation page on a second click. User presses the ATS's own submit button. | Same class as the extension's existing user-driven capture (C-1 pattern, `packages/extension/README.md` lines 8–26). Prefill into a third-party form is autofill, not submission. | Medium-high (M3 + M4), needs a spike | **Recommended end state**, shipped after Option 2, gated on the spike in M3.        |
+
+Reasons for the recommendation: it is the only path that honours NG-3 without a caveat (Opportun never sends anything), it matches C-2 and the extension's existing compliance model, and it delivers the whole tracking story (snapshot, review, timeline, confirmation matching, no-confirmation follow-up) which is the durable value. Prefill is a convenience layered on top and can be dropped per ATS if it proves fragile without losing the rest.
+
+Two honest limits to carry into the product conversation:
+
+1. In Option 2 and 3 the "ATS response" is not an HTTP response Opportun sees. It is (a) what the user observes and attests, (b) the confirmation page if they capture it, (c) a confirmation email if one arrives. The state machine (section 4) is built around that.
+2. There is currently no resume file export in the server. `DocumentStore` only offers `readText` (`adapters/documentStore.ts` line 58, interface `DocumentStore`), and the `local_file` store is plain text only (`adapters/localFile.ts` line 33, `const MIME = 'text/plain'`). ATS forms expect pdf/doc/docx (Greenhouse lists pdf, doc, docx, txt, rtf). An export capability is a prerequisite (section 4.4, open question Q2).
+
+---
+
+## 2. ATS capability matrix
+
+The ATS kinds Opportun recognises: `AtsKind = 'ats_greenhouse' | 'ats_lever' | 'ats_ashby' | 'ats_workday'` (`jobs/atsDetect.ts` line 72), matching the `ats_*` entries of `DISCOVERY_SOURCE_KINDS` (`packages/core/src/schemas/discovery.ts` lines 26–36) and the adapters registered in `adapters/sources/index.ts`. OBSERVED side note: `ATS_ALLOW_HOSTS` in `lib/safeFetch.ts` (line 131) also lists `api.smartrecruiters.com` and `apply.workable.com`, but there is no adapter and no `AtsKind` for them, so they are not "recognised ATSs" for this feature.
+
+|                                                    | Greenhouse                                                                                                                                                                                                                                                                                                                  | Lever                                                                                                                                                           | Ashby                                                                                                                                                                                                                                                                     | Workday                                                                                                                         |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **Official candidate-side programmatic submit**    | **None found.** Submit endpoint exists but is employer-keyed. A candidate-facing autofill product exists (MyGreenhouse "Autofill with Greenhouse", employer-enabled).                                                                                                                                                       | **None found.** Submit endpoint is employer-keyed.                                                                                                              | **None found.** `applicationForm.submit` is employer-keyed.                                                                                                                                                                                                               | **None found.** Absence not proven (see notes).                                                                                 |
+| **Employer-side submit mechanism**                 | `POST https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs/{id}`                                                                                                                                                                                                                                                   | `POST https://api.lever.co/v0/postings/SITE/POSTING-ID?key=APIKEY` (EU: `api.eu.lever.co`)                                                                      | `POST https://api.ashbyhq.com/applicationForm.submit` (JSON or multipart)                                                                                                                                                                                                 | Tenant web services (SOAP/REST) with an integration system user. UNVERIFIED from Workday's own docs.                            |
+| **Auth required**                                  | HTTP Basic, username = organisation API key, no password.                                                                                                                                                                                                                                                                   | `key` query param; "a Super Admin of your account can generate" it.                                                                                             | Basic Auth API key with `candidatesWrite`.                                                                                                                                                                                                                                | WS-Security `user@tenant` or OAuth for an integration system user (third-party vendor description only, UNVERIFIED).            |
+| **Required fields**                                | `first_name`, `last_name`, `email` (255 chars each; no URL in names or phone). Job `questions` from the job record. Location, latitude, longitude must come together. Greenhouse "will not reject applications that are missing required fields" via API. Optional `demographic_answers`, `data_compliance` (GDPR consent). | `name`, `email`; admins may require more.                                                                                                                       | Per-job form definition from `jobPosting.info`: each field has `path`, `type`, `isRequired`.                                                                                                                                                                              | UNVERIFIED. Candidate web flow requires an account per employer site (third-party reports).                                     |
+| **Resume / file limits**                           | Types: pdf, doc, docx, txt, rtf. File must be over 0 bytes. No maximum stated. Four ways: multipart, base64 JSON, external URL, `resume_text`.                                                                                                                                                                              | Resume only via `multipart/form-data`. No size or type limit stated.                                                                                            | File fields use presigned upload (`file.createFileUploadHandle`), URL expires after 10 minutes. No size or type limit stated.                                                                                                                                             | UNVERIFIED.                                                                                                                     |
+| **Response contents**                              | Not documented on the page (no body, status codes, or confirmation format).                                                                                                                                                                                                                                                 | `200 {ok:true, applicationId}`; error `{ok:false, error}`.                                                                                                      | `success:true` with `submittedFormInstance` (`id`, `formDefinition`, `submittedValues`) and `formMessages`/`blocked`; `success:false` with `errors[]`. A `blocked:true` response must not be disclosed to the candidate unless `blockMessageForCandidateHtml` is present. | n/a                                                                                                                             |
+| **Rate / ToS limits**                              | No rate limit documented. Docs advise the embedded form over custom forms. ToS on automated applications: UNVERIFIED (not retrieved).                                                                                                                                                                                       | 429 above 2 application POSTs per second per custom job site; "may also be changed without warning". Recommends captchas and IP/session limits on custom forms. | No rate limit found on the pages read.                                                                                                                                                                                                                                    | UNVERIFIED. Workday website terms URL returned 404 (not read).                                                                  |
+| **Bot protection on the hosted apply form**        | Support centre lists an "Invisible reCAPTCHA" article (title only, text not read). A third-party page (browserless.io) claims the submit handler checks a reCAPTCHA Enterprise token, a fingerprint and a `securityCode` generated in the live page. Secondary source, UNVERIFIED.                                          | UNVERIFIED.                                                                                                                                                     | UNVERIFIED.                                                                                                                                                                                                                                                               | UNVERIFIED.                                                                                                                     |
+| **Where the confirmation comes from**              | Configurable applicant auto-reply email from an employer no-reply address (Greenhouse lists email verification and no-reply senders). Exact application-received template wording UNVERIFIED.                                                                                                                               | Employer-configured. UNVERIFIED.                                                                                                                                | Employer-configured. UNVERIFIED.                                                                                                                                                                                                                                          | Employer-configured. UNVERIFIED.                                                                                                |
+| **Candidate-side autofill that exists officially** | MyGreenhouse "Autofill with Greenhouse" button on Greenhouse-hosted applications; page does not say whether the candidate still presses submit.                                                                                                                                                                             | none found                                                                                                                                                      | none found                                                                                                                                                                                                                                                                | Workday "Quick Apply"/resume parsing exists (admin guide describes parsing; candidate UX from a university guide, third-party). |
+
+Sources (all read 2026-10-27):
+
+- Greenhouse Job Board API, submit application: https://docs.greenhouse.io/job-board.html (redirect from developers.greenhouse.io/job-board.html).
+- Greenhouse MyGreenhouse quick apply: https://support.greenhouse.io/hc/en-us/articles/35746094035099-MyGreenhouse-job-alerts-and-quick-apply
+- Greenhouse sender addresses: https://support.greenhouse.io/hc/en-us/articles/17675865619099 (search result snippet only, page not opened).
+- Lever Postings API README: https://github.com/lever/postings-api
+- Ashby `applicationForm.submit`: https://developers.ashbyhq.com/reference/applicationformsubmit
+- Ashby custom careers page flow: https://developers.ashbyhq.com/docs/creating-a-custom-careers-page
+- Ashby public job posting API (read-only): https://developers.ashbyhq.com/docs/public-job-posting-api
+- Ashby authentication: https://developers.ashbyhq.com/docs/authentication
+- Workday: web search only, no Workday-authored candidate API page found. Third-party material: apis.io Workday Recruiting listing, Merge help article, criteria.helpdocs.io integration guide, Kean University applicant guide (https://www.kean.edu/media/wd-applying-job-external-candidate). Workday admin guide (doc.workday.com, recruiting/candidates) covers recruiter-side resume parsing only.
+
+What I did **not** verify, stated plainly:
+
+- Greenhouse, Lever, Ashby and Workday terms of service on automated or assisted applications. I did not retrieve any of them. Prefill by a browser extension running on the user's own page is common autofill behaviour, but I have no vendor statement permitting or forbidding it (open question Q4). Update, 2026-11-02: the terms were collected and quoted for M0 item 3 on #113, with tl and sec reviews there. Whether prefill ships for each ATS is still the owner's decision (decision 4).
+- Whether each hosted apply form uses a captcha, and whether DOM prefill (including setting a file input) works against each form. Needs the M3 spike.
+- Whether Ashby or Lever expose application question definitions without an employer key. Greenhouse does: the Retrieve a job endpoint returns `questions` (OBSERVED on the same page), and Opportun's adapter already reads the same unauthenticated host (`adapters/sources/greenhouse.ts` line 10).
+- Workday's absence of a candidate API (negative from a non-exhaustive search; per `docs/engineering-principles.md` lines 15–25 I am not asserting a universal negative). Compliance does not depend on it: even if one existed it would need tenant credentials.
+- What the Greenhouse submit response contains: undocumented on the page.
+
+---
+
+## 3. User flow, and how NG-3 is enforced structurally
+
+### 3.1 Requirement text I am honouring (OBSERVED, `docs/requirements.md`)
+
+- **NG-3** (lines 50–55): "No fully automated or mass outreach... there is no apply-to-all flow, and the product never optimizes for submission volume. Each opportunity is individually assessed, and every submission is customized and pre-reviewed by the user before it goes out. The application never sends an email, message, or application without the user pressing send. Features that would mainly enable application spam are rejected even when technically easy."
+- **C-2** (lines 532–534): sources integrate through official APIs, published feeds, licensed aggregators, or user-configured MCP connectors; per-source limits and terms respected and documented in each adapter.
+- **C-4** (line 544): the user approves every artifact before it leaves the system; the app never fabricates resume facts.
+- **C-1** (line 515 onward) and NG-2 (lines 47–49): no credentialed automation of sites that prohibit it; the browser extension only reads pages the user personally visits.
+- **NFR-SEC2** (line 404: CSRF on all state-changing requests), **NFR-SEC4** (line 408: secrets encrypted at rest), **NFR-SEC6** (line 413: outbound fetchers SSRF-hardened), **NFR-SEC7** (line 416: audit log), **NFR-PRV5** (line 453: a message's full text is never persisted), **FR-S5** (line 380: per-user isolation at the data layer), **FR-M7** (line 291: ingestion read-only, sending always in the user's own client), **FR-R3** (line 106: record where and when a resume was submitted).
+- `docs/design.md` line 521: "no task output can trigger an outbound action without a user click (NG-3 is the backstop)."
+
+### 3.2 How each is honoured
+
+| Constraint                                         | How this design honours it                                                                                                                                                                                                                                        |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| NG-3, "never sends without the user pressing send" | **Opportun never transmits an application.** No server code, job, adapter, extension code or AI task contacts an ATS submit endpoint. The user presses the ATS's own submit control. This is stronger than a UI rule: there is no code path to guard.             |
+| NG-3, no apply-to-all / no mass                    | One opportunity per request; no batch or list-and-submit endpoint; no job kind that iterates opportunities; a hard per-day ceiling on reviews (3.4).                                                                                                              |
+| NG-3, "customized and pre-reviewed"                | A server-recorded review gate (3.3) must pass before the handoff payload is released and before the extension can prefill.                                                                                                                                        |
+| C-2                                                | No new outbound host is added to `ATS_ALLOW_HOSTS` (`lib/safeFetch.ts` line 131). The only server fetch is the existing read-only posting lookup. No scraping of apply forms by the server, ever. The extension reads and fills only the tab the user clicked on. |
+| C-4                                                | The resume snapshot is exactly the file the user reviewed; AI may suggest answers to screening questions but they are inert drafts until the user edits and confirms each one.                                                                                    |
+
+### 3.3 Step-by-step flow
+
+Eligibility: the opportunity has a confirmed ATS identity, i.e. `opportunities.ats_job_ref` is set (`db/schema.sqlite.ts` line 379) or the company has `ats_kind` and `ats_ref` (lines 320–321), the stage is `interested`, `preparing` or `applied` (applied allowed for an explicit re-apply), and a resume is attached that is `final` (`RESUME_STATUSES`, `packages/core/src/schemas/common.ts` line 12). Otherwise the button is disabled with the reason shown. An opportunity captured from Indeed has no ATS identity until the posting reconcile finds the company's own posting, so it is not eligible until then. Indeed's own apply flow is out of scope, and `indeed.com` can never be a destination (`PAGE_FETCH_PROHIBITED_HOSTS`, `lib/safeFetch.ts` line 111).
+
+1. **Start.** On the opportunity page the user opens "Apply on <ATS>". `POST /api/v1/opportunities/:id/submissions` creates a `draft` (idempotent: returns the existing live draft if one exists).
+2. **Choose the resume.** The user picks a resume from those linked to this opportunity (tailored variants, FR-R1/FR-O6) or a base resume. The server snapshots it now (4.4) and shows the snapshot's name, size, hash prefix and a preview of its text. Changing the choice replaces the snapshot and discards any review.
+3. **Fields.** The server assembles the "what will be filled" list from the user's profile (`profiles` table, `db/schema.sqlite.ts` lines 250–262: full name, email, phone, location, work authorisation, links) and, for Greenhouse where the public job record exposes `questions`, the posting's known questions. For ATSs whose questions the server cannot read without a key (Lever, Ashby, Workday: UNVERIFIED), the screen says "The form will ask its own questions; you will answer them on the ATS page before you press its Submit button." The user can edit every prefilled value for this submission only (not the profile).
+4. **Review screen (the pre-review gate).** The page shows, together and non-collapsed:
+   - destination: ATS name, company, role title, requisition id, and the exact apply URL host and path;
+   - the resume snapshot (name, hash prefix, preview);
+   - every field value that will be prefilled, and every screening answer the user has written;
+   - a plain statement: "Opportun will not submit this. You will press the submit button on <host>."
+   - two required, unticked-by-default controls: "I have read the resume and the answers" and a button "Confirm review and open <host>".
+     Also shown: a duplicate warning if this requisition was already submitted, and the count of submissions confirmed in the last 24 hours (3.4).
+5. **Confirm review.** `POST /api/v1/submissions/:id/review` with the `reviewDigest` the server rendered. The server recomputes the digest from current database state; mismatch returns `409 review_stale` and the screen reloads. On success it stores `reviewed_at`, `review_digest`, `review_expires_at` (now + 30 minutes) and moves to `reviewed`. Session cookie plus CSRF only (device tokens cannot call this).
+6. **Handoff.** `POST /api/v1/submissions/:id/handoff` (session + CSRF; requires `reviewed` and unexpired) moves to `handed_off`, writes the audit event, and returns the destination URL to open in a new tab. The server also marks that the extension may now fetch the prefill payload for this one submission (7.4).
+7. **Fill (Option 3 only).** The user opens the extension popup on the ATS tab and presses "Prefill from Opportun". The extension fetches the payload for the one `handed_off` submission, checks the tab URL against the pinned destination (origin and path; see 7.7), refuses on mismatch, and injects the filler once. It does not click anything (7.7). The user completes remaining questions and presses the ATS's own Submit.
+8. **Attest.** Back in Opportun (or via the popup button "I submitted this"), the user clicks "I submitted it". `POST /api/v1/submissions/:id/attest` (session + CSRF, or device token with the narrow scope) moves to `submitted`. The dialog shows what will be recorded: an `application` timeline entry, resume `status=submitted` with `submittedTo` (FR-R3, existing `updateResume` in `repos/resumes.ts` line 246), and a pre-ticked option "Move this opportunity to Applied" (stage changes only by this explicit click, consistent with FR-M2 "stages never change silently").
+9. **Confirmation.** (a) The user may press "Record confirmation page" in the popup while on the ATS's thank-you page. (b) An inbound confirmation email is matched automatically (section 5). Either moves `submitted` to `confirmed`.
+10. **No confirmation.** After the follow-up window (default 3 days) a scheduled job moves `submitted` to `unknown` and creates a user-visible next step. Nothing is retried or resubmitted automatically (5.5).
+11. **Abandon.** At any point before `submitted` the user can "Cancel"; the snapshot is retained for the retention period, then swept.
+
+### 3.4 Structural enforcement of NG-3 (not only UI)
+
+These are server-enforced, each with a test (section 8):
+
+1. **No outbound submit exists.** A static test (extending the pattern of `test/safeFetch.test.ts` line 672, which already checks allowlists for linkedin) asserts that no module in `adapters/`, `jobs/`, `routes/` or `lib/` references an ATS submit URL or `POST`s to any ATS host, and that `ATS_ALLOW_HOSTS` contains only the existing read hosts. The extension has an equivalent test (7.7).
+2. **One opportunity per request.** Every submission route is `/opportunities/:id/submissions` or `/submissions/:id/...` with a single id. Zod schemas are `.strict()` and reject arrays of ids. There is deliberately no `GET /submissions/ready`, no bulk endpoint, and no `jobs` kind that iterates opportunities (a test enumerates registered job kinds and routes).
+3. **Review token binding.** `handoff` and the extension payload both require `status='reviewed'`, `review_expires_at > now`, and a recomputed digest equal to `review_digest`. The digest covers `{userId, opportunityId, resumeId, snapshotSha256, destination origin+path, atsKind, canonical hash of fields and answers}`. Editing the resume, the answers or the destination after review invalidates it (the snapshot is immutable, so a later resume edit cannot change what was reviewed; a changed fields or answers hash fails the digest).
+4. **Review is session-only.** `review`, `handoff` and `cancel` accept the browser session with CSRF only. A device token (bearer, no CSRF, `lib/deviceTokens.ts` `deviceRoute`) cannot create, review or hand off a submission. A leaked extension token can therefore at most read the payload of the one already-reviewed submission and record an outcome. It cannot start an application. Optional hardening: require password re-entry (`lib/reauth.ts`, used by `routes/deviceTokens.ts` line 53) for the first review of the day; I recommend not doing it by default (friction without a clear threat).
+5. **Sanity ceilings.** (i) In-process burst limit on review and handoff using `rateLimit()` (`lib/rateLimit.ts` line 26), per user. (ii) A database-counted rolling-24-hour cap on `reviewed_at` rows per user: default 10, instance ceiling 25 set by config (`config.ts`), the user can lower but not exceed it. Counting the database rather than a bucket survives restarts. Hitting the cap returns `429 daily_review_cap` with the reset time and writes an audit event. (iii) One live (non-terminal) submission per opportunity, enforced by a partial unique index (4.2).
+6. **Duplicate-application guard.** A second submission for the same requisition (`ats_kind`, `ats_ref`, `ats_external_id`) is refused with `409 already_submitted` while a `submitted` or `confirmed` one exists, unless the request carries `reapply: true` with the user's typed reason. This guards against both double-clicks and spam-shaped re-applies.
+7. **No AI actor.** None of these routes is reachable from an AI task or an MCP source. Task outputs remain suggestions (C-4, `docs/design.md` line 521). Screening-answer drafts from AI are written to the review screen as unconfirmed text and are excluded from the digest until the user edits or accepts each one (accepting is a click per answer).
+8. **No optimisation for volume.** No "queue", no "next opportunity" button, no counters framed as goals. The daily count appears only as a limit notice.
+
+Honest limit: a determined user could script the session API themselves. NG-3 cannot defend against the user; it governs what the product does and enables. The structural measures above ensure the product offers no automation path, no bulk path, and no unattended path.
+
+---
+
+## 4. Data model
+
+Conventions OBSERVED: ids are UUIDv7 text, times epoch ms integers, JSON as text (`db/schema.sqlite.ts` lines 1–5, 62–72); every user-data table carries `user_id NOT NULL` with an index (FR-S5); twin schemas `schema.sqlite.ts` and `schema.pg.ts` must match, pinned by `test/schemaConformance.test.ts`; enums and JSON payload types live in `db/schema.shared.ts` and are re-exported by `db/schema.ts`; every table must be added to `TABLE_EXPORTS` (`db/schema.shared.ts`, list starting near line 95) and the matching export in `db/schema.ts`. Migrations are generated into `apps/server/drizzle/` (SQLite) and `apps/server/drizzle-pg/`. At 70289cf the latest are `0041_application_submissions.sql` and `0023_application_submissions.sql`, added by M1a (#124). Enum columns are `text` with a TypeScript enum, no database CHECK (design.md line 348 notes a text column needs no migration).
+
+### 4.1 New shared enums (`db/schema.shared.ts`, values also exported from `packages/core` if the web app needs them)
+
+```
+SUBMISSION_STATUSES = ['draft','reviewed','handed_off','submitted','confirmed',
+                       'rejected','failed','unknown','abandoned']
+SUBMISSION_CONFIRMATION_KINDS = ['email','page','user']
+SUBMISSION_FAILURE_REASONS = ['snapshot_failed','prefill_unsupported','destination_mismatch',
+                              'review_expired','cancelled_by_user','other']
+```
+
+### 4.2 Table `application_submissions`
+
+One row per application attempt for one opportunity. Both twins, all columns `text`/`integer` per the helper aliases (`id()`, `userRef()`, `createdAt()`, `updatedAt()`, `json<T>()`).
+
+| Column                                                                              | Type                                         | Notes                                                                                                                                                  |
+| ----------------------------------------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                | id                                           | UUIDv7                                                                                                                                                 |
+| `user_id`                                                                           | userRef, cascade                             | FR-S5                                                                                                                                                  |
+| `opportunity_id`                                                                    | text NOT NULL, FK `opportunities.id` cascade | deleting an opportunity deletes its submissions (NFR-PRV4 actual removal)                                                                              |
+| `resume_id`                                                                         | text, FK `resumes.id` set null               | which resume was chosen; may later be deleted or edited                                                                                                |
+| `ats_kind`                                                                          | text enum `AtsKind` NOT NULL                 | from `jobs/atsDetect.ts` line 72                                                                                                                       |
+| `ats_ref`                                                                           | text                                         | board org or Workday `<tenant>/<site>`                                                                                                                 |
+| `ats_external_id`                                                                   | text NOT NULL                                | requisition or job id (`lib/atsJobRef.ts` `AtsJobRef.externalId`, lines 18–31)                                                                         |
+| `destination_url`                                                                   | text NOT NULL                                | https only, host validated through `boardFromUrl`-style check and pinned                                                                               |
+| `status`                                                                            | text enum NOT NULL default `draft`           | 4.3                                                                                                                                                    |
+| `idempotency_key`                                                                   | text NOT NULL                                | client-generated UUID per attempt                                                                                                                      |
+| `resume_attachment_id`                                                              | text, FK `attachments.id` set null           | the immutable snapshot bytes (4.4)                                                                                                                     |
+| `resume_sha256`                                                                     | text                                         | hash of the snapshot as reviewed (denormalised so the record survives the attachment being swept or deleted)                                           |
+| `resume_title`, `resume_store`, `resume_doc_ref`, `resume_revision`                 | text                                         | what the resume was, as text, at review time; `resume_revision` is the Google Doc revision id when available (UNVERIFIED: depends on the export spike) |
+| `fields`                                                                            | json `SubmissionFields`                      | the prefilled profile values the user approved                                                                                                         |
+| `answers`                                                                           | json `SubmissionAnswer[]`                    | `{questionKey,label,value,source:'user'                                                                                                                | 'ai_draft_accepted'}`; user-authored, treated like notes |
+| `review_digest`                                                                     | text                                         | hex SHA-256, 4.5                                                                                                                                       |
+| `review_expires_at`, `reviewed_at`, `handed_off_at`, `submitted_at`, `confirmed_at` | integer nullable                             |                                                                                                                                                        |
+| `submitted_basis`                                                                   | text nullable                                | `'user_attested'` (only value in v1)                                                                                                                   |
+| `confirmation_kind`                                                                 | text enum nullable                           | `email`, `page`, `user` (user-asserted with no evidence)                                                                                               |
+| `confirmation_comm_id`                                                              | text FK `communications.id` set null         | the matched email                                                                                                                                      |
+| `confirmation_basis`                                                                | json nullable                                | which signals matched, e.g. `{signals:['sender_domain','ats_ref','role_title']}`, never message content                                                |
+| `failure_reason`                                                                    | text enum nullable                           |                                                                                                                                                        |
+| `submitted_activity_id`, `confirmation_activity_id`                                 | text FK `activities.id` set null             | timeline rows (section 5)                                                                                                                              |
+| `created_at`, `updated_at`                                                          | integer                                      |                                                                                                                                                        |
+
+Indexes:
+
+- `application_submissions_user_id_idx` on `user_id`.
+- `application_submissions_opportunity_idx` on `(opportunity_id, created_at)`.
+- Idempotency: `uniqueIndex('application_submissions_user_idem_uq').on(user_id, idempotency_key)`.
+- One live attempt per opportunity: partial `uniqueIndex('application_submissions_live_uq').on(user_id, opportunity_id).where(status IN ('draft','reviewed','handed_off'))`. Pattern follows `jobs_unfinished_dedupe_uq` (`db/schema.sqlite.ts`, `jobs` table).
+- Duplicate application to the same requisition: enforced in the repo inside a transaction (look for a `submitted` or `confirmed` row with the same `(user_id, ats_kind, ats_ref, ats_external_id)`; refuse with `409 already_submitted` unless the request carries `reapply: true`, which records `reapply_of` as a nullable self-referencing FK). Only a non-unique index `(user_id, ats_kind, ats_ref, ats_external_id)` backs the lookup, because a legitimate re-apply must be insertable.
+
+### 4.3 State machine
+
+States and who or what causes each transition. "User" means a session-authenticated request with CSRF, except where a device token is noted.
+
+| From                              | To                                            | Cause                                                                                                                                                                                       |
+| --------------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| (none)                            | `draft`                                       | User starts "Apply on <ATS>" (idempotent on `idempotency_key`).                                                                                                                             |
+| `draft`                           | `draft`                                       | User changes resume, fields or answers (snapshot regenerated, digest cleared).                                                                                                              |
+| `draft`                           | `reviewed`                                    | User confirms the review screen; server digest matches.                                                                                                                                     |
+| `reviewed`                        | `draft`                                       | Any edit to resume, fields, answers or destination after review (digest cleared).                                                                                                           |
+| `reviewed`                        | `abandoned` (failure_reason `review_expired`) | Sweeper job: `review_expires_at` passed.                                                                                                                                                    |
+| `reviewed`                        | `handed_off`                                  | User presses "Confirm and open".                                                                                                                                                            |
+| `handed_off`                      | `submitted`                                   | User attests "I submitted it" (session, or device token with `apply:assist` scope from the popup). Only the user's click causes this.                                                       |
+| `handed_off`                      | `failed`                                      | User or extension reports a non-submission problem: prefill unsupported, destination mismatch, snapshot unreadable. Terminal; user can start a new draft.                                   |
+| `handed_off`                      | `abandoned`                                   | User cancels, or handoff idle for 14 days (sweeper).                                                                                                                                        |
+| `submitted`                       | `confirmed`                                   | Confirmation evidence arrives: matched email (job), captured confirmation page (user click in popup), or user asserts "I saw the confirmation" (`confirmation_kind='user'`).                |
+| `submitted`                       | `rejected`                                    | The user reports the ATS refused the form (validation failure, blocked, "already applied" message), attested as "ATS rejected it". This is a form-level refusal, not an employer rejection. |
+| `submitted`                       | `unknown`                                     | Follow-up window passes with no evidence (scheduled job, 5.5).                                                                                                                              |
+| `unknown`                         | `confirmed` or `rejected`                     | Late evidence or the user's report.                                                                                                                                                         |
+| `rejected`, `failed`, `abandoned` | none                                          | Terminal. A new attempt is a new row.                                                                                                                                                       |
+
+Note on "rejected": an employer's later rejection of the candidate is **not** this state. It stays in the existing opportunity lifecycle (`closed` with reason, FR-M2 proposals, `communications.proposed_transition`). Keeping the two apart is deliberate: conflating them would make a submission-level status answer the wrong question on the timeline.
+
+Transition logic lives in one pure module `packages/core/src/submissionStateMachine.ts` modelled on `packages/core/src/stateMachine.ts` (`canTransition`, `applyTransition`, typed error), so server, tests and UI share it.
+
+### 4.4 Resume snapshot
+
+Goal: the timeline stays truthful after the Google Doc (or Reactive Resume document) is edited later.
+
+- At draft creation and on every resume change the server exports the chosen resume to a **file** and stores it as an `attachments` row with `opportunity_id` set (the table is already the place for content-hash-named, immutable bytes: `db/schema.sqlite.ts` lines 505–535, `repos/attachments.ts`), recording `sha256`, `bytes`, `mime`, `filename`.
+- The submission row copies `resume_sha256`, `resume_title`, `resume_store`, `resume_doc_ref`, `resume_revision`. The hash and text metadata survive even if the attachment is later deleted.
+- **Attachment sweep must learn the new reference.** `jobs/attachmentSweep.ts` (`referencedPaths`, line 50) treats only `attachments` and `communications.bodyRef` as references; the snapshot is itself an attachments row so it is protected while the row exists. The row is only removed with its opportunity or by an explicit user delete. The user-facing attachments list must mark it "Resume as submitted" and make delete require a confirm if a submission references it. Deleting it nulls the submission's attachment reference and keeps the hash and title (Tech Lead, on #115), so UI copy must not call the snapshot unconditionally immutable: it cannot change, and deleting it removes the file but keeps its fingerprint (sec, on #131; noted on #117). (Add a test; this is exactly the "unreachable data" failure mode in `docs/engineering-principles.md` lines 227–234.)
+- **Export capability (built in #127).** At 70289cf `DocumentStore` has an `exportFile` that returns a PDF from the Google Docs store, or says `export_unsupported` for a store that cannot export (`adapters/documentStore.ts`). The rest of this paragraph is the gap as it stood on 2026-10-27. `DocumentStore` then had `registerExisting`, `copyFrom`, `readText`, `applyEdits` only (`adapters/documentStore.ts`). Add `exportFile(ctx, ref): Promise<{bytes: Buffer; mime: string; filename: string}>`. Feasibility per store, all UNVERIFIED until a spike: Google Docs can export PDF through Drive (the connection already holds the `drive` scope, `lib/google.ts` line 26, so no new scope is expected, but I did not verify the export call); `local_file` is plain text only (`adapters/localFile.ts` `MIME = 'text/plain'`), so it exports `.txt` (Greenhouse accepts txt; Lever and Ashby limits unknown); `reactive_resume` has a PDF render in the product but I did not read `adapters/reactiveResume.ts` for an export call. If a store cannot export, the review screen says so and the user attaches a file manually at upload time; the submission then records `resume_sha256` as null with the reason shown. Do not silently submit text in place of a PDF.
+- **Timeline truthfulness rule:** timeline entries (5.2) store the snapshot hash, title and a link to the attachment, never a pointer to the live document alone.
+
+### 4.5 Review digest and idempotency
+
+- Digest: `sha256(canonicalJson({v:1,userId,opportunityId,resumeSha256,destination:origin+path,atsKind,atsExternalId,fieldsHash,answersHash}))`. Use `packages/core/src/sha256.ts`. Canonical JSON means sorted keys, no whitespace.
+- `GET /submissions/:id` returns `reviewDigest` (the digest of current state) so the review screen can echo it; `POST .../review` recomputes and compares. The echo proves the client rendered the state the server holds, not that a human read it (stated limit).
+- **Double-click:** `idempotency_key` unique per user; a repeated create returns the same row (200 with `Idempotent-Replayed: true`). Every state-changing route is conditional on the current status (`UPDATE ... WHERE status = ?` and check changes), so two concurrent `handoff` or `attest` calls produce one transition and the loser gets the current row back, not an error and not a second timeline entry. Timeline rows are created in the same transaction as the transition and only by the winner, so no duplicates.
+- **Retry:** all submission routes are safe to retry. Server-side work (snapshot export) is a job (6.3) with `dedupeKey` `submission.snapshot:<id>` (`jobs/runner.ts` `EnqueueOptions.dedupeKey`, lines 64–71).
+- **Duplicate application to the same posting:** 3.4 item 6.
+
+### 4.6 Other schema touches
+
+- `device_tokens` scopes: add `'apply:assist'` to `DEVICE_TOKEN_SCOPES` (`db/schema.shared.ts`; the column is text so no migration, but `routes/deviceTokens.ts` and the settings UI list must show it). The scope grants only the device routes in 6.2. On main the token card is **Extensions and Connectors**, the scope labels are "Apple Mail connector" and "Browser capture", and the extension's own Set up flow (`apps/web/src/routes/settings/-extensionSetup.tsx`) creates `capture:push` tokens: `apply:assist` needs adding both to the create-token form and to that Set up flow.
+- `COMM_CLASSIFICATIONS` (`packages/core/src/schemas/communication.ts` lines 4–12) is **not** extended in v1: confirmation matching is deterministic and sets the link without involving the AI classifier (5.3). Adding an `application_receipt` class later means changing the AI output schema and prompt in `packages/ai`, which is out of scope.
+- No new `ACTIVITY_KINDS` (5.2 reuses `application`, `capture`, `note`).
+- `lib/exporter.ts` and the SQLite-to-Postgres copy plan (`db/copyPlan.ts`) enumerate tables; both must include `application_submissions` (the conformance and copy-plan tests will fail if forgotten, which is the intended safety net). The contacts table is now `network_contacts`; use that name in both.
+
+---
+
+## 5. Timeline integration
+
+### 5.1 What the timeline is (OBSERVED)
+
+`repos/activities.ts` lines 404–560: the opportunity timeline is a `UNION ALL` of three sources: `activities` rows, `stage_history` rows, and `communications` rows linked to the opportunity (excluding `broadcast_spam` and `irrelevant`). So a confirmation email appears on the timeline for free once `communications.opportunity_id` is set. Activity kinds are `ACTIVITY_KINDS` in `packages/core/src/schemas/opportunity.ts` lines 180–190. Activities are created with `createActivity` (`repos/activities.ts` line 107), which also indexes them for search (FR-O9, `indexActivity`, line 128).
+
+### 5.2 Records created, exactly
+
+| Event                                      | Record                                                                                                  | Detail                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Handoff (`handed_off`)                     | none on the timeline                                                                                    | Intent is not an event the user needs to see. Audit log only. Avoids a timeline full of abandoned attempts.                                                                                                                                                                                                            |
+| User attests submitted                     | `activities` row, kind `application`, `occurredAt` = attested time (or user-supplied time)              | Title `Applied via Greenhouse: <role>`. `bodyMd`: resume title and hash prefix, "snapshot attached", the field list (names only, not values), the answered question labels, "Basis: you reported submitting this". `externalUrl`: destination URL. Participants empty. Stored id in `submitted_activity_id`.           |
+| Same click                                 | `resumes` update                                                                                        | `updateResume(... status:'submitted', submittedTo:'<ATS> / <company>', submittedAt)` (`repos/resumes.ts` line 246) so FR-R3 stays one source of truth. A resume already `submitted` elsewhere stays so; the per-submission fact lives on the submission row.                                                           |
+| Same click, if ticked                      | `stage_history` row                                                                                     | `transitionOpportunity` to `applied` (`repos/opportunities.ts` line 589, rules in `packages/core/src/stateMachine.ts`). Note text `Applied via assisted submission`.                                                                                                                                                   |
+| Confirmation email matched                 | the `communications` row itself appears (link set), plus an `activities` row kind `message_ref`?        | **No extra activity.** The communication is already a timeline item. Instead set `application_submissions.confirmation_comm_id`, status `confirmed`. The submission detail panel shows "Confirmation email received <date>". Avoids a duplicate entry.                                                                 |
+| Confirmation page captured                 | `activities` row, kind `capture`                                                                        | Title `Confirmation page recorded (<host>)`, `bodyMd` the captured text capped at 20,000 characters, `externalUrl` the page URL. The `capture` kind exists for exactly "page text the browser extension captured, kept whole" (`packages/core/src/schemas/opportunity.ts` line 188). Id in `confirmation_activity_id`. |
+| User asserts confirmation without evidence | `activities` row, kind `note`                                                                           | `Marked confirmed by you (no evidence attached)`. Visibly weaker than the other two.                                                                                                                                                                                                                                   |
+| ATS refused the form (`rejected`)          | `activities` row kind `note`                                                                            | `ATS refused the form: <user note>`. Opportunity stage unchanged.                                                                                                                                                                                                                                                      |
+| `failed`                                   | no timeline entry (audit only) unless the user had attested                                             | A technical failure before submission is not an application event.                                                                                                                                                                                                                                                     |
+| `unknown`                                  | `next_steps` row (`db/schema.sqlite.ts` lines 484–503; `createNextStep` `repos/activities.ts` line 361) | Action `Check whether your application to <company> was received`, due now, owner `you`. A note-kind activity is not added.                                                                                                                                                                                            |
+
+Truthfulness: timeline `bodyMd` is written once from the snapshot data, so later resume edits cannot rewrite history. Timeline entries are immutable except through the user's normal activity edit.
+
+### 5.3 Matching a confirmation email to a submission
+
+OBSERVED path at 70289cf: Gmail sync or the Apple Mail connector calls `ingestInbound` (`jobs/mailIngest.ts` line 167). It runs Stage 1 triage, `triageMessage` (`lib/mailTriage.ts` lines 213 to 273): the allow list, the deny and consumer-domain vetoes, then the private-content vetoes, then job sender, job wording and linked thread, then `no_signal`. Then, for a message passed by job sender, job wording or linked thread only (`GATED_RULES`, `lib/triageGate.ts` line 49), the Stage 2 AI gate. Then it stores a snippet and `ats_job_refs` (not the body, NFR-PRV5), then enqueues `comms.classify`. Classification links to an opportunity via `applyClassification` (`repos/communications.ts` line 726): existing link, then thread continuity, then company/title match.
+
+Design: a deterministic **submission matcher** runs inside `ingestInbound` after Stage 1 and before routing, because the body is available there and nowhere later.
+
+1. **Pending-submission pass.** Add a Stage 1 positive signal `submission_window` to `TriageRule` (`lib/mailTriage.ts`), placed below the private-content vetoes and above `no_signal`, so it cannot let medical or financial mail through: if the user has a submission in `submitted` or `unknown` within the last 14 days and the sender domain matches that ATS's known sender domains or the company's domain, the message passes. Rationale: an automated confirmation from `no-reply@...` can otherwise be dropped by rule 7 (`no_signal`) or hit a consumer-domain veto, and a dropped message is never stored. This is the same shape as rule 6 `thread` (`threadLinked`). The signal is read-only against `application_submissions` (one indexed query, cached like `triageContext` in `jobs/mailIngest.ts`). M2b must also decide whether a `submission_window` pass goes to the Stage 2 AI gate, which today sees only `job_sender`, `vocabulary` and `thread`. The Tech Lead recommends that it skips the gate, because the pass is already narrow (an expected sender within 14 days of a submission).
+2. **Score the match** (pure function `matchConfirmation(message, candidates)` in `lib/submissionMatch.ts`, unit-testable with no I/O; built in #128, not yet wired into ingest at 70289cf). Signals:
+   - **A (strong):** `message.atsJobRefs` (extracted at ingest by `lib/atsJobRef.ts` `extractAtsJobRefs`, line 101) contains the submission's `ats_kind` and `ats_external_id` or `org`.
+   - **B:** sender domain is the company's known domain (`jobs/companyDomainResolve.ts`) or an allowlisted ATS sender domain (config list, per ATS, UNVERIFIED which senders each ATS uses; start with an observed-in-the-wild list the maintainers curate and let the user's own allow rules extend it).
+   - **C:** subject or body contains the role title (normalised as in `packages/core/src/dedupe.ts`) and the company name.
+   - **D:** `sentAt` is after `submitted_at` minus 5 minutes (clock skew) and within 14 days.
+   - Match requires D and (A, or B and C). Ties across several candidate submissions: no automatic link, surfaced for review.
+   - Decisions from the review of #128 (recorded on #119), for the wiring PR:
+     - Signal B is unauthenticated however the From header is parsed (there is no SPF or DKIM check), so a confirmation matched on B and C must stay visible to the user and be undoable (Unlink). Signal A is the stronger signal.
+     - An org-only signal A (the ATS board but no job id) matches any job on that board, so it does not confirm on its own: require the external id, or the org plus B, or show it as a possible match for the user to accept.
+     - The sender domain parse takes the bracketed address only when the trimmed header ends with `>` (as `senderDomain` in `jobs/opportunityEnrich.ts` does); that fix lands before or with the wiring, tested with the exact header shape ingest passes.
+     - Punctuation that joins words in signal C only causes misses, and is left as it is.
+3. **On match:** in the same transaction as `upsertInbound`, written into `ingestInbound`'s own transaction directly. (The `alongside` parameter is the caller's own hook, Gmail's sync cursor, not an extension point.) There: set `communications.opportunity_id`, set `application_submissions.confirmation_comm_id`, `confirmation_kind='email'`, `confirmation_basis={signals:[...]}`, status `confirmed`, `confirmed_at`. It never changes the opportunity stage. A user can **Unlink** (existing reclassify path, `repos/communications.ts` line 867; also reverts the submission to `submitted`).
+4. **Body is not persisted.** Matching reads `message.bodyText` transiently; the row keeps the snippet and `confirmation_basis` (signal names only), per NFR-PRV5.
+5. **Spoofing.** A forged "confirmation" can only mark a state that has no side effect beyond a label and the link; it does not change the stage. The UI shows the basis ("matched on sender domain, role title") so the user can judge. Do not treat the sender display name as evidence (the repo already ignores it for the gate; see the comment above `gateMessage` in `jobs/mailIngest.ts`).
+6. **Apple Mail and other channels** go through the same `ingestInbound`, so the matcher applies uniformly (`COMM_CHANNELS`, `packages/core/src/schemas/communication.ts` line 18).
+
+### 5.4 Responses other than confirmation
+
+Later emails from the employer (interview invite, rejection, offer) continue through the existing classifier and proposal flow (FR-M2, `repos/communications.ts` `acceptProposal` line 981). The submission record is not involved, except that a linked rejection can show on the submission detail as context.
+
+### 5.5 When no confirmation arrives
+
+Scheduled job `submissions.followup` (registered like other kinds in `jobs/registry.ts`; schedule rows as in `runner.ts` line 520 onward): daily; for each `submitted` row older than `OPPORTUN_SUBMISSION_FOLLOWUP_DAYS` (default 3) set `unknown` and create the next step (5.2). It never emails, resubmits, or contacts the ATS. The submission detail then shows "No confirmation seen" with actions: "Mark confirmed (I saw it)", "Record confirmation page", "ATS refused it", "Dismiss".
+
+---
+
+## 6. API surface, jobs, errors
+
+All under `/api/v1`, registered in `app.ts` next to the other route modules (lines 448–464 region) as `submissionRoutes` in `routes/submissions.ts`. Zod patterns follow `routes/resumes.ts` lines 95–131 (`.strict()`, `.trim().max()`, `Id`) and `routes/connectorCapture.ts` lines 41–56. Errors use `HttpError(status, code, message?, details?)` (`lib/errors.ts` lines 1–17). Ownership checks use the existing `assertOpportunityOwned` (`repos/activities.ts` line 52); every repo function takes `UserCtx` (`repos/base.ts` line 9), so FR-S5 is structural.
+
+### 6.1 Session routes (cookie + CSRF, NFR-SEC2)
+
+| Route                                 | Body                                                   | Response                                                                                           | Notes                                                                                                                                          |
+| ------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /opportunities/:id/submissions` | `{idempotencyKey: uuid, resumeId: Id}` strict          | `201 Submission` (or `200` on replay)                                                              | creates `draft`, enqueues snapshot job. Refuses: opportunity not eligible, no ATS identity, `already_submitted`, daily cap not consulted here. |
+| `GET /opportunities/:id/submissions`  | query `limit`,`offset`                                 | `Page<Submission>`                                                                                 | history for the opportunity only. No cross-opportunity list endpoint.                                                                          |
+| `GET /submissions/:id`                |                                                        | `SubmissionDetail` (includes `reviewDigest`, snapshot meta, review summary, confirmation evidence) |                                                                                                                                                |
+| `PATCH /submissions/:id`              | `{resumeId?, fields?, answers?}` strict, partial       | `SubmissionDetail`                                                                                 | only in `draft` or `reviewed`; clears review.                                                                                                  |
+| `POST /submissions/:id/review`        | `{reviewDigest: sha256hex, acknowledged: true}` strict | `SubmissionDetail`                                                                                 | `409 review_stale`, `429 daily_review_cap`, `409 snapshot_pending`.                                                                            |
+| `POST /submissions/:id/handoff`       | `{}`                                                   | `{destinationUrl, expiresAt}`                                                                      | requires `reviewed` and unexpired and digest still valid.                                                                                      |
+| `POST /submissions/:id/attest`        | `{submittedAt?: ms, moveToApplied: boolean}` strict    | `SubmissionDetail`                                                                                 | `handed_off` to `submitted`; creates the timeline/resume/stage effects in one transaction.                                                     |
+| `POST /submissions/:id/outcome`       | `{outcome:'confirmed_by_user'                          | 'ats_refused'                                                                                      | 'failed', note?: string<=1000}`                                                                                                                | `SubmissionDetail` | allowed from `submitted`, `unknown`, `handed_off` per state machine. |
+| `POST /submissions/:id/cancel`        | `{}`                                                   | `SubmissionDetail`                                                                                 | to `abandoned` from non-terminal.                                                                                                              |
+| `GET /submissions/:id/snapshot`       |                                                        | file stream                                                                                        | owner only; same streaming mechanism as attachment download (`routes/attachments.ts`).                                                         |
+
+### 6.2 Device-token routes (bearer, no session, no CSRF; scope `apply:assist`; modelled on `routes/connectorCapture.ts` line 177 `deviceRoute('capture:push')`, with `onRequest` authentication before body parsing and a per-token `rateLimit`)
+
+| Route                                    | Purpose                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /connector/apply/current`           | Returns the single `handed_off` submission for this user whose digest still validates (the most recent; if more than one exists, none, and the popup says "open Opportun and choose which one"). Payload: destination pin, ATS kind, fields, answers, snapshot meta and a snapshot URL. Returns no list of opportunities. |
+| `GET /connector/apply/:id/snapshot`      | Streams the snapshot bytes for that one submission.                                                                                                                                                                                                                                                                       |
+| `POST /connector/apply/:id/attest`       | Same effect as session `attest`, optional `moveToApplied` is **ignored** (stage changes only from the session UI).                                                                                                                                                                                                        |
+| `POST /connector/apply/:id/confirmation` | `{url, title, text<=20000}` strict. Validates `url` origin equals the pinned destination origin or a known ATS confirmation host; refuses otherwise (`422 wrong_site`). Creates the `capture` activity and confirms.                                                                                                      |
+
+### 6.3 Jobs (existing runner, `jobs/runner.ts`, `jobs/registry.ts`)
+
+- `submission.snapshot` (payload `{submissionId}`, `dedupeKey` `submission.snapshot:<id>`, `maxAttempts` 3): exports the resume file, writes the attachment, sets `resume_*` fields, flips `snapshot_ready`. Uses the document store like the other resume jobs (`JobServices.documentStore`, `jobs/registry.ts`). Failure after attempts: `failed` with `snapshot_failed`, surfaced on the review screen.
+- `submissions.followup` (scheduled daily, 5.5).
+- `submissions.expire` (can share the same schedule): `reviewed` past `review_expires_at` to `abandoned`; `handed_off` idle 14 days to `abandoned`.
+- No job ever contacts an ATS. Their payloads hold ids only, never resume text (the runner clears `transientPayloadKeys` for content-carrying payloads, `jobs/registry.ts` lines 55–58; we avoid carrying content at all).
+
+### 6.4 Failure classification
+
+| Class                                | Where                              | Handling                                                                                                                                                                                    |
+| ------------------------------------ | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Not eligible, bad input              | route                              | `422` with a stable `code` (`no_ats_identity`, `resume_not_final`, `destination_not_ats`). Not retried.                                                                                     |
+| Stale or conflicting state           | route                              | `409` (`review_stale`, `snapshot_pending`, `already_submitted`, `invalid_transition`) with the current row returned so the UI can reconcile.                                                |
+| Rate or cap                          | route                              | `429` with `retry-after` (`lib/rateLimit.ts`) or `daily_review_cap` with reset time.                                                                                                        |
+| Snapshot export failure              | job                                | Transient (Drive 5xx, timeout): retried with backoff. Permanent (document deleted, no access): `failed/snapshot_failed`, message shown.                                                     |
+| Wrong site in the extension          | extension and `confirmation` route | `destination_mismatch`, the extension fills nothing.                                                                                                                                        |
+| Prefill unsupported (layout changed) | extension                          | The popup says which fields it could not fill; the user finishes by hand; no state change. User can mark `failed/prefill_unsupported` to help the maintainers (a counter, never a payload). |
+| ATS-side refusal                     | user-reported                      | `rejected`.                                                                                                                                                                                 |
+| Absence of evidence                  | scheduler                          | `unknown`, never "failed".                                                                                                                                                                  |
+
+Reporting rule from `docs/engineering-principles.md` lines 190–193: the UI and API distinguish "not checked yet" (`submitted`, window open), "could not be checked" (`unknown`), and "failed/rejected".
+
+---
+
+## 7. Security and privacy
+
+### 7.1 Secrets
+
+No ATS credentials are stored: there is nothing to store because there is no employer key and no ATS login. This is a feature: `secrets` (kinds `ai_api_key`, `oauth_token`, `device_token`, `db/schema.shared.ts` line 10) gets **no new kind**. Device tokens for the extension are hashed (`lib/deviceTokens.ts` `hashDeviceToken`, line 54) and shown once. If a future milestone wanted a user's own Greenhouse or Lever board key (the user is an employer testing their own board), it would use `putSecret` (`lib/secretBox.ts` line 128), AES-256-GCM under the master key (NFR-SEC4), but that is a non-goal here.
+
+### 7.2 SSRF and outbound fetch
+
+The server adds **no** new outbound fetch for submission. The one read that may be useful (Greenhouse job `questions`) reuses `sctx.fetch`/`safeFetch` with `allowHosts: ['boards-api.greenhouse.io']` exactly as the adapter does (`adapters/sources/atsCommon.ts`, `ATS_ALLOW_HOSTS` at `lib/safeFetch.ts` line 131, SSRF hardening NFR-SEC6, `MAX_REDIRECTS` line 87, `PROHIBITED_HOSTS` line 94, `PAGE_FETCH_PROHIBITED_HOSTS` line 111). `destination_url` is stored and returned, never fetched by the server. It is validated: `https` only, host must satisfy the same ATS host recognition used by `lib/atsJobRef.ts`/`jobs/atsDetect.ts` `boardFromUrl` (rejecting lookalike hosts), or be a company career-site host with a matching `gh_jid`. LinkedIn and Indeed are never destinations (`PROHIBITED_HOSTS`, `PAGE_FETCH_PROHIBITED_HOSTS`). M1c (#129, in review at the time of writing) drops career-page destinations entirely, so a handoff destination is always a recognised ATS host; if career-page destinations come back, they are handoff-only by default (Tech Lead, 2026-11-02, on #120), because a `gh_jid` link on any host would otherwise receive the user's fields and resume once prefill exists.
+
+### 7.3 PII in resumes, answers and logs
+
+- The snapshot is stored in `attachments` under a content-hash path (NFR-SEC11 confinement, `lib/storage.ts`); filename is metadata only.
+- Answers and fields are user data like notes; they are not copied into logs, audit detail, job payloads or task_run rows.
+- Audit `detail` carries ids, `atsKind`, host, status transition and counts only. `redactDetail` (`lib/audit.ts` lines 7–27) already masks keys matching token/secret/etc.; add `answers`, `fields`, `resume`, `text` to the sensitive key pattern at `lib/audit.ts` line 9 so a careless caller cannot leak them. Add a test that fails if an audit call for any submission event contains a field value.
+- Pino request logging must not log bodies for the new routes (confirm the existing redact paths cover `body.answers`, `body.text`; add if not, UNVERIFIED which paths exist today).
+- Confirmation page text is stored whole as an activity (kind `capture`); the review screen warns that the page may contain personal data and the user can delete the activity. Cap 20,000 characters.
+- No data leaves the deployment to AI for this feature unless the user explicitly asks for an answer draft, which uses the existing AI path and policy (NFR-PRV3); no new provider call is made by default.
+
+### 7.4 Authorisation and isolation (FR-S5)
+
+- Every table has `user_id`; every repo function takes `UserCtx` and filters on it; cross-user access returns `404` (not `403`), as the isolation harness asserts (`test/isolation.ts` lines 1–3: "each user creates, the other must get 404"). Add `assertIsolated` blocks for each new resource.
+- Device-token routes derive the user from the token (`requireDevice(req)`, `lib/deviceTokens.ts` line 219) and then use the same repo functions. A token cannot name a user.
+- The `apply:assist` token is separate from `capture:push` and `mail:push`; scope separation is enforced by `requireDeviceToken(scope)` (`lib/deviceTokens.ts` line 193). A test confirms `capture:push` tokens get `403` on the new routes and vice versa.
+
+### 7.5 CSRF
+
+Session routes sit behind the existing double-submit CSRF check (`plugins/security.ts` lines 34–35, 60–66, 124–126); none is added to `CSRF_EXEMPT`. Device routes are bearer-only by design and are explicitly narrow (6.2).
+
+### 7.6 Audit events (NFR-SEC7)
+
+New event names, same dotted style as the existing ones (`auth.login`, `device_token.created`, `data.export`): `submission.created`, `submission.reviewed`, `submission.handed_off`, `submission.attested`, `submission.confirmed` (detail `kind: email|page|user`), `submission.refused_by_ats`, `submission.failed`, `submission.abandoned`, `submission.unknown`, `submission.review_cap_hit`, `submission.duplicate_blocked`, `submission.snapshot_downloaded`, `submission.unlinked_confirmation`. These are product-integrity events rather than strictly security ones, but they are exactly the evidence needed to demonstrate NG-3 and cost almost nothing.
+
+### 7.7 Extension security (Option 3)
+
+Current extension guarantees, OBSERVED at 70289cf in `packages/extension/README.md` and `packages/extension/src/manifest.ts`: no background worker, no content scripts, `activeTab` + `scripting`, host access only to the two capture sites (`https://www.linkedin.com/*` and `https://www.indeed.com/*`) plus the user's own server origin granted at runtime, default CSP, and a unit test (`packages/extension/test/manifest.test.ts`) enforcing the manifest. Capture goes through a per-site registry (`packages/extension/src/canonical.ts`; server `lib/captureSites.ts` and `lib/captureRecognizers.ts`). Keep all of it:
+
+- **No new host permissions.** `activeTab` grants access to the current tab after the user's click, so the manifest does not need ATS hosts: `host_permissions` stays LinkedIn plus Indeed. The test that pins `host_permissions` and the absence of content scripts stays and must keep passing.
+- **Injected function is a pure filler** (like `src/extract.ts`, whose comment at lines 1–17 explains that `executeScript` serialises the function with `toString()`). A new unit test asserts that the injected source contains no `click(`, `submit(`, `requestSubmit`, `dispatchEvent(new Event('submit'`, `form.submit`, `fetch(`, `XMLHttpRequest`, `sendBeacon`, `WebSocket`. Same style as the mail connector's "fails if the script grows a write" test (`apps/connector/README.md`, Read-only section).
+- **Destination pinning.** The popup refuses to fill unless the tab URL's origin and path match the `destination_url` pinned on the submission. This stops prefilling PII into a lookalike site if the user lands on the wrong tab. (The `gh_jid` alternative goes with career-page destinations; see 7.2.)
+- **No human imitation** (sec, on the M0 terms findings; recorded on #120). The extension never synthesizes human-like input (no simulated typing or pointer events to keep a bot score up), never touches or answers a captcha, and never submits. It sets field values the user can see, on an explicit click, and stops.
+- **File inputs.** Setting a file input from bytes uses `DataTransfer` in the page context. Feasibility across the four ATS forms is UNVERIFIED; if it fails, the fallback is the "Download resume snapshot" button and the user picks the file in the ATS's own dialog.
+- **Truthful claims.** Update the Firefox `data_collection_permissions` (`manifest.ts` line 94) and the README "What is sent" to include the new read of the snapshot and fields from the user's own server. No new third-party destination.
+- Extension code touching `apps/connector` is **not** involved: `apps/connector` is the Apple Mail CLI (ADR-10). The browser extension is `packages/extension`. (The brief referred to "apps/connector" for the browser connector; I am flagging that the browser piece lives in `packages/extension`.)
+- Capture site list: `lib/captureSites.ts` `CAPTURE_SITES` (line 51) holds `linkedin` and `indeed`, and the popup's capture gate (`captureSiteOf` in `packages/extension/src/canonical.ts`) refuses any other tab, so prefill needs a separate popup path for an ATS tab and cannot reuse it. The confirmation route uses its own origin pin and does **not** extend `CAPTURE_SITES`, so the capture path is not widened.
+
+### 7.8 Demo deployment (`OPPORTUN_DEMO=1`)
+
+Recommendation: **disable the submission feature entirely when `cfg.demo` is true** (`config.ts` lines 80–84, 433; `app.ts` line 354 shows how demo-only behaviour is gated). Reasons: the demo is invitation-only with pinned shared accounts and a nightly reset (`jobs/demoReset.ts`, issue #280); stored resumes are fictional; a demo visitor must never be able to open or prefill a real employer's application form with a fixture identity, and the demo should not accumulate real PII in a snapshot. Implementation: routes return `404 feature_unavailable` (not `403`, to avoid advertising), the UI hides the button, the `GET /onboarding` or settings feature-flag response (`routes/onboarding.ts` line 146 already returns `demo`) includes `submissionsEnabled:false`, and demo seeds (`cli/seedDemoFixture.ts`) contain no submission rows. The demo can show a **read-only illustrative timeline** built from seeded `application` and `capture` activities (kinds already used at `cli/seedDemoFixture.ts` line 390). Add the feature to the demo acceptance list `docs/demo-acceptance.md` as "not present".
+
+---
+
+## 8. Testing strategy
+
+Principles applied from `docs/engineering-principles.md`: prove the absence of damage, not the presence of an error (lines 89–97); red-green by hand (98–102); construct what production cannot (103–110); test the boundary (111–115); no hollow fixtures (116–123); verify config by what stopped working (124–134); run every gate (292–297). Server tests run on SQLite and Postgres (`CONTRIBUTING.md`, "Running the server tests on Postgres").
+
+1. **NG-3 cannot be bypassed (the headline test).**
+   - _No outbound submit:_ with a recording fake for `sourceFetch` and `globalThis.fetch`, drive the entire flow (create, review, handoff, attest, confirmation) and assert **zero** requests to any ATS host and zero `POST`s at all. Assert the fake's call log is byte-identical empty, not merely that no exception occurred.
+   - _Review gate:_ for each of the states `draft`, `reviewed` (expired), `reviewed` (digest mismatch after a PATCH), call `handoff`, the device payload route, and `attest`; each must be refused **and** the before/after row, `resumes`, `activities`, `stage_history` and `audit_log` counts are identical (state before, state after, surrounding counts).
+   - _Bypass attempts:_ a device token with `apply:assist` calling `review` or `handoff` gets `403/404` and changes nothing; a `capture:push` token gets `403` on every new route; a body with an array of ids or an unknown key is `422`.
+   - _No bulk surface:_ enumerate Fastify's registered routes and job kinds and fail on any submission route that does not contain exactly one `:id`, on any `GET` that lists submissions across opportunities, and on any job kind that names a submit.
+   - _Static scan:_ assert `ATS_ALLOW_HOSTS` is unchanged and that no source file under `adapters/`, `jobs/`, `routes/`, `lib/` contains an ATS submit path (`/v1/boards/` with `POST`, `/v0/postings/` with `POST`, `applicationForm.submit`). This mirrors the compliance grep at `test/safeFetch.test.ts` line 672.
+   - _Cap:_ insert 10 `reviewed_at` rows within 24 hours via the repo; the 11th `review` is refused and writes `submission.review_cap_hit`; at exactly the boundary (24h minus 1 ms vs plus 1 ms) behaviour flips as specified.
+2. **Red-green by hand** for each guard: revert the digest comparison, the status precondition, the daily cap, the scope check, and the one-live-per-opportunity index in turn and watch the matching test fail, then restore. Record this in the PR description.
+3. **Fixtures production cannot construct.** A submission row in `reviewed` whose `review_digest` does not match its snapshot (impossible through the routes); a `submitted` row with no `submitted_activity_id`; two `handed_off` rows for one user (the partial unique index should make the second insert fail; the `GET /connector/apply/current` route must still return none rather than guess if the data is somehow corrupted); a confirmation `communications` row whose `sent_at` precedes `submitted_at`.
+4. **State machine unit tests** in `packages/core` (like `packages/core/src/stateMachine.test.ts`): every allowed transition, every disallowed pair, terminal states, and idempotent repeat.
+5. **Idempotency/concurrency:** two concurrent `attest` calls (use `racePoint` from `lib/racePoints.ts` as `jobs/mailIngest.ts` does at line 215) produce one transition, one `application` activity and one `resumes` update.
+6. **Email matching (pure function + integration):** table-driven cases for signals A to D; boundaries at 14 days and the 5-minute skew; two candidate submissions for one company (no auto-link); a spoofed display name; a message already filtered by Stage 1 for another reason; Apple Mail and Gmail channels. Integration: ingest via `ingestInbound` and assert the body is **not** persisted anywhere (NFR-PRV5) and that stage did not change.
+7. **Snapshot truthfulness:** create a submission, then edit the resume through `applyEdits`; assert the submission's `resume_sha256`, attachment bytes, and the `application` activity body are unchanged. Delete the resume; assert the record still reads. Run the attachment sweep after the grace period; assert the snapshot survives while the submission exists.
+8. **Isolation:** `assertIsolated` for submissions, snapshots and device routes (`test/isolation.ts`).
+9. **Schema conformance and copy plan:** `test/schemaConformance.test.ts` and `test/copyPlan.test.ts` fail if the twin schemas or the copy list disagree.
+10. **Extension tests** (`packages/extension/test`): manifest unchanged except version (guard test already exists, `manifest.test.ts`); injected filler source scan for forbidden tokens; destination-pinning refusal; fill against saved HTML fixtures of each ATS form (static fixtures, never live fetches). Note: real-form behaviour (captcha, file input) is only checked in the M3 spike and manual QA, and the QA checklist (`packages/extension/README.md` line 116 onward) gains rows for each ATS.
+11. **Demo gating:** with `OPPORTUN_DEMO=1`, every new route returns `404` and the seeded demo has no submissions.
+12. **Redaction:** a test that submits an answer containing a sentinel string and asserts it appears in no `audit_log.detail`, no `jobs.payload`, and no captured log output.
+13. Run all gates (`lint`, `typecheck`, `format:check`, `test`) per `CONTRIBUTING.md`, "Before pushing".
+
+---
+
+## 9. Rollout: small, independently shippable milestones
+
+Each milestone is behind a per-instance config flag `OPPORTUN_SUBMISSIONS=1`, default off, off in demo, until M2a is accepted.
+
+The Tech Lead re-cut these milestones against main on 2026-11-02 (https://github.com/bgoleno/opportun/issues/79#issuecomment-6572248522), and each has its own issue. The original M0 to M4 shape stands; M1 is now four PRs and M2 two.
+
+| #   | Milestone                                       | Issue | Notes                                                                                                                                                                                                                                          |
+| --- | ----------------------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M0  | Spike and per-ATS terms check (no product code) | #113  | Google Doc to PDF export check, real apply forms (without pressing submit), the terms check per ATS, and confirmation senders. Items 1, 2 and 4 need the owner's accounts and inbox. Blocks M3, and the sender list in M2b. Does not block M1. |
+| M1a | Data and draft lifecycle                        | #114  | `application_submissions`, shared enums, the submission state machine, session routes for draft, cancel and read, the flag and demo gating.                                                                                                    |
+| M1b | Resume snapshot                                 | #115  | `exportFile` for the Google store only, the `submission.snapshot` job, sweep protection, owner-only snapshot download.                                                                                                                         |
+| M1c | Review gate and handoff                         | #116  | The review digest, handoff, the daily review cap, burst limits, audit events and redaction, the expiry sweeper.                                                                                                                                |
+| M1d | Apply UI                                        | #117  | Part B screens S1 to S5, including the static "valid until" time on the review step.                                                                                                                                                           |
+| M2a | Attest, timeline, follow-up                     | #118  | Attest and outcome, the `application` activity, the resume's submitted record, the optional move to Applied, the follow-up job, the re-apply guard, and the requirements and ADR text (9.1).                                                   |
+| M2b | Confirmation email matching                     | #119  | The `submission_window` pass, `matchConfirmation`, linking in the ingest transaction, Unlink.                                                                                                                                                  |
+| M3  | Extension prefill, Greenhouse first             | #120  | The `apply:assist` scope, device routes, a separate popup path, the filler and destination pinning. Blocked by M0 items 2 and 3 for that ATS and the owner's go-ahead per ATS. Lever and Ashby follow as small PRs.                            |
+| M4  | Confirmation page capture                       | #121  | The confirmation route, the popup button and the `capture` activity. After M3.                                                                                                                                                                 |
+
+Rules for every milestone: Opportun never transmits an application; everything sits behind `OPPORTUN_SUBMISSIONS=1` (default off, always off on the demo) until M2a is accepted, and M1 alone is never switched on for users; one opportunity per request, with no batch or list-and-act route.
+
+Each milestone is releasable alone; M1 without M2 is already useful as "resume I sent" bookkeeping, but I would not release M1 to users without M2's follow-up job (a submitted row that silently stays `submitted` forever is a false "never" in the sense of `docs/engineering-principles.md` lines 215–226).
+
+### 9.1 `docs/requirements.md` additions (NG-3 is not weakened)
+
+Add under 5.3 or a new 5.11 "Assisted application (FR-X)":
+
+- **FR-X1 (P1):** Opportunity can record an application attempt (a _submission_) for an opportunity whose company's ATS is one Opportun recognises, carrying the exact resume as reviewed. Opportun never transmits an application itself.
+- **FR-X2 (P1):** Pre-review gate: a submission cannot be handed off until the user has reviewed destination, resume snapshot, fields and answers on one screen; the review is invalidated by any change; one opportunity per action; no batch; a server-enforced daily review ceiling.
+- **FR-X3 (P1):** The submission's outcome and confirmation evidence (user-attested submission, captured confirmation page, matched confirmation email) are recorded on the opportunity timeline and in the resume's submitted record (FR-R3), and the absence of confirmation is surfaced as a next step, never as a failure and never acted on automatically.
+- **FR-X4 (P2):** The browser extension may prefill the ATS form in the tab the user is viewing on an explicit click; it never presses the form's submit control.
+- **FR-X5 (P1):** Feature unavailable on the demo deployment.
+
+Clarifying note to append to **NG-3** (additive, does not relax any clause): "Assisted application (FR-X) is permitted because Opportun itself transmits nothing: it prepares and records, the user's browser fills a form the user is viewing, and the user presses the destination's own submit control. No code path in the server, the connector or the extension may invoke an application submit. A direct submission API integration remains out of scope because candidate access to such APIs does not exist (they require an employer-issued key) and doing it without one would violate C-2."
+
+Add under section 8 a new constraint **C-6:** "ATS submission. No employer-issued ATS key is ever requested, stored or used, and no apply form is fetched or driven server-side. The extension may fill, but never submit, a form in the user's active tab."
+
+Add to **NFR-SEC7** audit list: submission lifecycle events. Add to the decision log (`docs/design.md`, section 13, line 689 onward; ADR-15 is free at 70289cf): **ADR-15:** "Assisted apply instead of direct ATS submission", with this document's section 2 as the evidence. Update `docs/design.md` section 4.4 (line 190) with the new table and `ACTIVITY` use, and section 6.2 with a per-ATS note on submission mechanism (each adapter section already documents terms and limits, per C-2).
+
+---
+
+## 10. Risks, open questions for Brian, non-goals
+
+### 10.1 Risks
+
+| Risk                                                                                      | Mitigation                                                                                                                                                              |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Prefill breaks when an ATS changes its form                                               | Per-ATS fillers are small, fixture-tested, and degrade to "nothing filled, tell the user"; core value (tracking) does not depend on them.                               |
+| ATS or employer treats extension fill as a bot                                            | Not verified either way (Q4). Mitigation: only user-clicked, single tab, no navigation, no submit; spike M0(c) records vendor wording; ship per ATS only if acceptable. |
+| Confirmation email mismatches (false link)                                                | Deterministic signals, basis shown, one-click unlink, no stage side effect.                                                                                             |
+| Resume export gap (PDF fidelity)                                                          | M0 spike; manual attach fallback; never substitute text silently.                                                                                                       |
+| Users read "Submit to ATS" as an auto-apply promise                                       | Name the feature "Apply on <ATS>" or "Assisted apply", not "Submit", throughout UI copy; the review screen states Opportun does not submit.                             |
+| Scope creep toward "apply to all my shortlisted roles"                                    | Structural absence of batch surfaces (3.4), daily ceiling, requirement text FR-X2.                                                                                      |
+| `application_submissions` data present but unreachable (snapshot swept, activity deleted) | Denormalised hashes and titles on the row; sweep protection tests (section 8 item 7).                                                                                   |
+| False "never": user sees `unknown` and believes the application was lost                  | Copy says "No confirmation seen", not "failed"; `unknown` is a distinct state with distinct next step.                                                                  |
+
+### 10.2 Open questions for the product owner
+
+All eight were answered by the owner on 2026-10-27 and 2026-10-28; the answers are listed in [README.md](README.md). They stay here as the record of what was asked.
+
+1. **Q1: Is Option 2 alone (tracked handoff, no extension prefill) acceptable as the first public release, with prefill gated on the spike?** I recommend yes.
+2. **Q2: Resume file formats.** Which file do you actually upload today (PDF export of the Google Doc?). If Google export to PDF is acceptable, I will add `exportFile` to the Google store only in M1 and leave `reactive_resume` and `local_file` manual.
+3. **Q3: Should "I submitted it" also move the stage to Applied by default, or only propose it?** Design has it pre-ticked in the dialog (explicit click). Alternative is proposal-only like FR-M2.
+4. **Q4: Vendor terms.** Are you comfortable shipping prefill without an explicit statement of permission from each ATS vendor? I did not retrieve any vendor ToS. Options: ship only for ATSs where M0(c) finds nothing prohibiting user-side autofill, or ship none and keep Option 2.
+5. **Q5: Daily review ceiling.** Defaults of 10 per rolling 24 hours (instance ceiling 25). Do you want lower, and should the user be able to raise it at all?
+6. **Q6: Reapply policy.** Allow re-applying to the same requisition with a typed reason (design), or refuse outright?
+7. **Q7: Naming.** "Apply on Greenhouse" / "Assisted apply" over "Submit to ATS". Agree?
+8. **Q8: Demo.** Hidden entirely (design) or a read-only sample?
+
+### 10.3 Explicit non-goals
+
+- Server-side submission to any ATS by any means, with or without a key. No employer-key entry field exists.
+- Scraping, driving, or headless-browsing an apply form from the server; solving or bypassing captchas, security codes or fingerprints.
+- Any batch, queue, schedule, "apply to all shortlisted", auto-retry or auto-resubmit.
+- Extension background activity, content scripts, or reading any tab the user has not clicked on.
+- Auto-answering screening questions or auto-confirming on the user's behalf. AI drafts are inert until the user accepts each.
+- Automatically creating or sending cover letters or follow-up emails (FR-M7, FR-R9 unaffected).
+- Workday prefill in v1; ATSs other than the four recognised; SmartRecruiters and Workable.
+- Parsing employer ATS candidate portals or reading status pages for application progress.
+- Changing the AI classifier output schema (`COMM_CLASSIFICATIONS`).
+- Weakening NG-3, C-1 or C-2.
+
+---
+
+## 11. UX hand-off
+
+Every screen, state and component the designer needs, with the data each shows. Design for keyboard and phone widths (NFR-QLT3, QLT4, `docs/requirements.md` lines 482–484). Tone: plain, never "submit for me" language; use "Assisted apply" and "Apply on <ATS>".
+
+### 11.1 Entry point on the opportunity page
+
+- **Component: Apply panel** (in the opportunity detail, near resumes and stage).
+  - Data: ATS name and logo-free label; company; role title; requisition id; apply host.
+  - States: **Not eligible** (disabled button with the reason: no ATS identified yet / no final resume linked / stage dismissed or closed / feature off), **Ready**, **In progress** (shows the status chip and the next action), **Done** (status chip and date), **Daily limit reached** (reset time).
+  - Link: "How this works" opening a short explainer (what Opportun does and does not do).
+- **Component: Status chip.** Values: Draft, Reviewed, Opened on ATS, Submitted, Confirmed, ATS refused, Failed, No confirmation seen, Abandoned. Each with distinct icon plus text (not colour alone). Tooltips explain "No confirmation seen" is not a failure.
+
+### 11.2 Apply flow (stepper or single page with sections; mobile: stacked)
+
+1. **Resume step.** Data: list of linked resumes (title, kind base/tailored, status, last updated, store); chosen resume's **snapshot card**: file name, type, size, hash prefix, "Exported <time>", text preview (scrollable), state **Preparing snapshot** (progress), **Ready**, **Could not export** (reason, and the "attach manually" fallback). A warning when the chosen resume is not `final`.
+2. **Details step.** Data: prefilled fields from profile (name, email, phone, location, work authorisation, links), each editable for this application only, with a "differs from profile" marker; known screening questions (label, type, required) with answer inputs; AI draft button per answer shows draft text clearly labelled "Draft, not used until you accept"; states **Questions known** (Greenhouse) vs **Questions appear on the ATS form** (others); answer source badge (typed by you / AI draft accepted).
+3. **Review step (the gate).** One screen, nothing collapsed. Data: destination block (ATS, company, role, requisition id, full apply URL host and path shown prominently so the user sees exactly which site will receive the application (sec, on #129), "Opens in a new tab"); resume block (name, hash prefix, preview link); fields list with values; answers list; duplicate warning (previous submission date and status, with a "Re-apply" reason field); daily count notice ("n of 10 reviews used in the last 24 hours"); statement "Opportun will not submit this. You press the submit button on <host>."; the acknowledgment checkbox; primary button "Confirm review and open <host>"; secondary "Back" and "Cancel". States: **Stale** (something changed: banner "This changed since you started, please review again", highlight the change), **Expired** ("Review again"; while the review is valid, the screen shows a static "valid until <time>" clock time, never a countdown: owner decision, 2026-11-01, matching Part B S4 and WCAG 2.2.1), **Cap reached**, **Snapshot pending** (button disabled).
+4. **Handoff step.** Data: confirmation that the ATS tab opened; instruction text for Option 3 ("Open the Opportun extension on that page and choose Prefill") and Option 2 ("Fill the form on the ATS site, then come back"); download button for the resume snapshot; a persistent "I submitted it" action and "I did not submit" action; a countdown-free reminder of the handoff age.
+5. **Attest dialog.** Data: summary of what will be recorded (timeline entry text preview, resume marked submitted with "<ATS> / <company>", optional pre-ticked "Move opportunity to Applied"), a date/time field defaulting to now ("When did you submit?"), confirm and cancel.
+
+### 11.3 Outcome and evidence
+
+- **Submission detail panel** (inside the opportunity, also reachable from the timeline entry). Data: status chip and history of transitions with timestamps and who/what caused each (you / extension / email match / scheduler); resume snapshot (download, preview); fields and answers as submitted; destination; evidence block: **Confirmation email** (sender, subject, snippet, received date, match basis chips such as "sender domain", "role title", "Unlink"), **Confirmation page** (URL, captured time, text preview, delete), **User-asserted** (note, no evidence).
+- **Outcome actions:** "Mark confirmed (I saw it)", "Record confirmation page" (explains it needs the extension), "ATS refused it" with note, "Dismiss".
+- **Empty/negative states:** _Waiting for confirmation_ (window open: "Most employers send an email within minutes to a few days"), _No confirmation seen_ (after the window; next step created; actions above), _ATS refused_ (what the user wrote), _Abandoned_, _Failed_ (reason and "Start again").
+
+### 11.4 Timeline rendering
+
+- **Application entry** (existing `application` activity style, `web/src/lib/opportunities.ts` line 151 labels it "Application"): title, ATS badge, resume name with hash prefix and "snapshot attached" link, answered question labels, basis line "You reported submitting this".
+- **Confirmation email entry** (existing communication item) gains a small "Confirms your application" tag when it is the submission's `confirmation_comm_id`.
+- **Confirmation page entry** (existing `capture` activity style) titled "Confirmation page recorded".
+- **Next step entry** "Check whether your application to <company> was received".
+
+### 11.5 Extension popup states (Option 3), `packages/extension/src/popup*.ts`, `render.ts`
+
+Data and states the popup shows: not configured (existing); **No application ready** ("Start Assisted apply in Opportun first"); **Ready on this page** (company, role, ATS, resume name, number of fields it will fill, destination matched check mark); **Wrong page** (expected host vs current host, nothing is filled); **Prefilled** (fields filled, fields skipped with reason, resume attached or "attach manually" with download button, reminder "Review the form, then press the site's Submit button"); **Unsupported layout** (what it could not fill); **I submitted this** button (clearly separate from the page); **Record confirmation page** button with the same page-match check and a text-length counter; **Token missing scope** (links to Settings > Integrations to create an `apply:assist` token); network and revoked-token errors reusing the existing ones.
+
+### 11.6 Settings screens
+
+- **Settings > Integrations > Extensions and Connectors:** add scope option "Assisted apply" to the device token creation form (alongside "Browser capture") and to the extension's Set up flow, with plain-language text on what it can read and write (the one reviewed application and its snapshot; it cannot start or review an application).
+- **Settings > Applications:** feature toggle (if instance-enabled), daily review ceiling (lowerable only, shows the instance ceiling), follow-up window days (default 3), list of recognised ATS sender domains for matching confirmation emails (read-only seed plus user additions, reusing the mail allow/deny rules UI pattern).
+- **Demo:** the Apply panel absent; no settings section.
+
+### 11.7 Cross-cutting UX requirements
+
+- Copy must never say "submit for you", "auto apply", "one click apply" or imply Opportun sends anything.
+- No bulk affordance anywhere: no checkboxes on lists that lead to Apply, no "apply to selected".
+- Every irreversible-looking action has a plain consequence line; every state has a non-colour cue.
+- Accessibility: stepper and review gate fully keyboard operable; the acknowledgment and primary action in a logical focus order; status changes announced to screen readers; WCAG 2.1 AA.
+- Mobile: review screen is one scrolling column; the primary button stays reachable but never auto-focused.
+
+---
+
+## Appendix A: Evidence index (repo, observed)
+
+- NG-3, NG-2, NG-5: `docs/requirements.md` lines 43–59. C-1/C-2/C-4: lines 515–541. NFR-SEC2/4/6/7/11: lines 404–424. NFR-PRV4/5: lines 444–462. FR-R3: line 106. FR-M2/M7: lines 276, 291. FR-D10 Workday: lines 225–249. Prior art (auto-apply rejected): lines 595, 626.
+- Design: `docs/design.md` resumes (190–204), security (481–520), background processing (522–536), "NG-3 is the backstop" (521), decision log (689 onward). Line numbers here as of 2026-10-27 except the backstop and decision log (70289cf).
+- Adapters: `adapters/sources/index.ts` (registration), `greenhouse.ts` (host line 10), `lever.ts`, `ashby.ts`, `workday.ts`, `atsCommon.ts`. `adapters/documentStore.ts` (interface), `adapters/localFile.ts`.
+- Schema: `db/schema.sqlite.ts` `users` 75, `secrets` 171, `auditLog` 192, `profiles` 250, `companies` 309–322, `opportunities` 340 (`ats_job_ref` 379), `stageHistory` 440, `activities` 460, `nextSteps` 484, `attachments` 505, `resumes` 538, `communications` 828 (`ats_job_refs` 871), `jobs` 902. Twin: `db/schema.pg.ts` (same tables), shared `db/schema.shared.ts`, dispatcher `db/schema.ts`.
+- Core: `packages/core/src/schemas/opportunity.ts` (`ACTIVITY_KINDS` 180), `common.ts` (`RESUME_STATUSES` 12), `resume.ts`, `communication.ts`, `discovery.ts` (`DISCOVERY_SOURCE_KINDS` 26), `stateMachine.ts`.
+- Mail: `jobs/mailIngest.ts` (`ingestInbound`), `lib/mailTriage.ts` (rules 73–86, thread 267), `repos/communications.ts` (`applyClassification` 726, `reclassify` 867, `acceptProposal` 981), `lib/atsJobRef.ts`.
+- Timeline: `repos/activities.ts` 404–560 (union), `createActivity` 107, `createNextStep` 361.
+- Resumes: `repos/resumes.ts` `updateResume` 246; `routes/resumes.ts` 95–131 (schemas), 256 (PATCH).
+- Jobs: `jobs/runner.ts` (`enqueue` 140, `EnqueueOptions` 64, schedules 520+), `jobs/registry.ts`, `jobs/attachmentSweep.ts` (50).
+- Security: `lib/safeFetch.ts` (`PROHIBITED_HOSTS` 94, `PAGE_FETCH_PROHIBITED_HOSTS` 111, `ATS_ALLOW_HOSTS` 131), `lib/secretBox.ts` (`putSecret` 128), `lib/audit.ts` (redaction 7–27), `plugins/security.ts` (CSRF 34, 60–66, 124), `lib/deviceTokens.ts` (`requireDeviceToken` 193, `deviceRoute` 211), `lib/rateLimit.ts` (26), `lib/reauth.ts`, `routes/connectorCapture.ts` (177), `lib/captureSites.ts` (51), `config.ts` (80–84, 433), `app.ts` (354, 448–464).
+- Extension: `packages/extension/README.md`, `src/manifest.ts`, `src/extract.ts`, `test/manifest.test.ts`. Apple Mail connector (not the browser extension): `apps/connector/README.md`.
+- Tests to extend: `apps/server/test/isolation.ts`, `schemaConformance.test.ts`, `copyPlan.test.ts`, `safeFetch.test.ts` (672), `connectorCapture.test.ts`.
+
+## Appendix B: What I did not do or verify
+
+- Did not run or modify any code, tests or the database.
+- Did not read `adapters/reactiveResume.ts`, `adapters/googleDocs.ts` export capabilities, `routes/attachments.ts`, `lib/storage.ts`, `jobs/companyDomainResolve.ts` or `repos/opportunities.ts` `transitionOpportunity` in full; references to them are by name and role.
+- Did not verify that pino redaction covers new body fields (UNVERIFIED).
+- Did not retrieve any vendor terms of service, nor Workday's authoritative developer documentation (login-gated or 404).
+- Did not exercise any live ATS form; captcha and file-input behaviour are unknown until M0.
+- Line numbers were read on 2026-10-27 from the working tree and may shift. On 2026-11-02 the references the Tech Lead listed on #79 were re-checked and updated against main at 70289cf; the rest were not.
