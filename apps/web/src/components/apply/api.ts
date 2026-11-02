@@ -242,6 +242,38 @@ export function useAttestSubmission(opportunityId: string) {
   });
 }
 
+/** What the user reports after submitting (design S7; the server's SUBMISSION_OUTCOMES). */
+export type ReportedOutcome = 'confirmed_by_user' | 'ats_refused';
+
+/**
+ * "I saw a confirmation" or "The site refused it" (#148). The server records it, adds the
+ * timeline note, and closes the follow-up's next step if it is still open; the stage is left
+ * alone.
+ */
+export function useRecordOutcome(opportunityId: string) {
+  const qc = useQueryClient();
+  const invalidate = useInvalidate(opportunityId);
+  return useMutation({
+    mutationFn: ({ id, outcome, note }: { id: string; outcome: ReportedOutcome; note?: string }) =>
+      api<SubmissionView>(`/submissions/${enc(id)}/outcome`, {
+        method: 'POST',
+        body: {
+          outcome,
+          ...(note === undefined || note.trim() === '' ? {} : { note: note.trim() }),
+        },
+      }),
+    onSettled: async () => {
+      await invalidate();
+      // The timeline gains a note and the follow-up step closes (qk.opportunity covers both);
+      // the dashboard lists open next steps.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: qk.opportunity(opportunityId) }),
+        qc.invalidateQueries({ queryKey: qk.dashboard }),
+      ]);
+    },
+  });
+}
+
 export function useCancelSubmission(opportunityId: string) {
   const invalidate = useInvalidate(opportunityId);
   return useMutation({
