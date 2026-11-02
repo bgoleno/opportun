@@ -164,7 +164,7 @@ The Extensions and Connectors card is pictured in [Inbox](inbox.md#connect-gmail
 
 ![The Import/Export page after a LinkedIn export import finished with 9 of 9 rows](images/settings-import-export.png)
 
-_The import cards. The LinkedIn import reports how many rows were created, updated or unchanged._
+_The LinkedIn export import once it finished: how many rows were created, updated or unchanged._
 
 Back up the data directory (or at least the backups and attachments) somewhere other than the
 server itself; a snapshot on the same disk does not survive losing that disk.

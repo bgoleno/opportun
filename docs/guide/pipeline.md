@@ -39,9 +39,9 @@ stage. **Table** switches to a sortable table of the same opportunities.
 - A card Opportun thinks is a duplicate of one you already track carries a **Possible
   duplicate** badge. Open either card to resolve it.
 
-![The pipeline board with New and Interested collapsed, and Preparing, Applied and In process expanded](images/pipeline-kanban.png)
+![The pipeline board with the sidebar collapsed: Applied and In process expanded, and New, Interested, Preparing, Offer, Dismissed and Closed collapsed to strips](images/pipeline-kanban.png)
 
-_The board with two columns collapsed to strips. Each card's stage button opens the move menu._
+_The board with every column but Applied and In process collapsed to a strip. Each card's stage button opens the move menu._
 
 ## Create an opportunity
 

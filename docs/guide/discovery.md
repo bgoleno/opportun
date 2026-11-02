@@ -79,7 +79,7 @@ reason, the start of the description, the pay if listed, and a link to the posti
   Stale, Other) and an optional note.
 - Keyboard: `j`/`k` select, `i` accepts, `x` dismisses, `Enter` opens.
 
-![The review queue with three ranked Vandelay Industries postings, the top one selected with a score of 92](images/discovery-review-queue.png)
+![The review queue with three Vandelay Industries postings to review: the top two shown, scored 92 and 70, the first one selected](images/discovery-review-queue.png)
 
 _The review queue, ranked against the "Staff platform" role target. The selected result has a blue outline._
 
