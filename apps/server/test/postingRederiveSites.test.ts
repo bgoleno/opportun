@@ -206,3 +206,94 @@ describe('rederivePosting: the extraction is chosen by the capture site', () => 
     expect((await getOpportunity(app.db, ctx, opp.id)).descriptionMd).toBe(NOISE);
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/96: a capture's site is found from its title's label
+// whatever its case or surrounding spaces, and from its stored posting URL when the label names no
+// site (a label renamed since, or edited by hand).
+describe('rederivePosting: finding the site when the label does not name one', () => {
+  async function expectIndeedDerived(app: FastifyInstance, ctx: UserCtx, id: string) {
+    expect((await rederive(app, ctx, id)).kind).toBe('capture_only');
+    const out = await getOpportunity(app.db, ctx, id);
+    expect(out.descriptionMd).toBe(INDEED_DESCRIPTION);
+    expect(out.descriptionFingerprint).toBe(descriptionFingerprint(INDEED_DESCRIPTION));
+  }
+
+  it('AC1: a renamed label falls back to the site of the stored posting URL (Indeed)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const opp = await seed(app, ctx, {
+      title: 'Captured from Indeed Jobs (old name)',
+      text: INDEED_JOB.text,
+      url: INDEED_JOB_URL,
+    });
+    await expectIndeedDerived(app, ctx, opp.id);
+  });
+
+  it('AC1: a renamed label falls back to the site of the stored posting URL (LinkedIn)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const opp = await seed(app, ctx, {
+      title: 'Captured from LinkedIn Jobs',
+      text: LINKEDIN_SHAPED,
+      url: 'https://www.linkedin.com/jobs/view/1000000001',
+    });
+    expect((await rederive(app, ctx, opp.id)).kind).toBe('capture_only');
+    expect((await getOpportunity(app.db, ctx, opp.id)).descriptionMd).toBe(
+      'Lorem ipsum dolor sit amet, an example posting body.',
+    );
+  });
+
+  it.each(['Captured from indeed', 'Captured from INDEED', 'Captured from  Indeed  '])(
+    'AC2: "%s" finds Indeed by its label alone',
+    async (title) => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      // A URL no site claims, so only the label can name the site here.
+      const opp = await seed(app, ctx, {
+        title,
+        text: INDEED_JOB.text,
+        url: 'https://jobs.example.org/1',
+      });
+      await expectIndeedDerived(app, ctx, opp.id);
+    },
+  );
+
+  it('a label that names a site wins over the URL', async () => {
+    // The label is what recordCapture wrote for the extraction it chose; the URL is only the
+    // fallback. LinkedIn-shaped text under a LinkedIn label with an Indeed URL is read as LinkedIn.
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const opp = await seed(app, ctx, {
+      title: 'Captured from LinkedIn',
+      text: LINKEDIN_SHAPED,
+      url: INDEED_JOB_URL,
+    });
+    expect((await rederive(app, ctx, opp.id)).kind).toBe('capture_only');
+    expect((await getOpportunity(app.db, ctx, opp.id)).descriptionMd).toBe(
+      'Lorem ipsum dolor sit amet, an example posting body.',
+    );
+  });
+
+  it.each([
+    ['a URL no site claims', 'https://wellfound.com/jobs/1000000001'],
+    ['a look-alike host', `https://notindeed.com/viewjob?jk=0000000000000a01`],
+    ['an http URL', 'http://www.indeed.com/viewjob?jk=0000000000000a01'],
+    ['no URL at all', null],
+  ])(
+    'AC3: an unknown label with %s answers no_description_found and changes nothing',
+    async (_name, url) => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const opp = await seed(app, ctx, {
+        title: 'Captured from Something Else',
+        text: INDEED_JOB.text,
+        url: url as string,
+      });
+      expect(await rederive(app, ctx, opp.id)).toEqual({ kind: 'no_description_found' });
+      const out = await getOpportunity(app.db, ctx, opp.id);
+      expect(out.descriptionMd).toBe(NOISE);
+      expect(out.descriptionFingerprint).toBe(descriptionFingerprint(NOISE));
+      expect(await notes(app, ctx, opp.id)).toEqual([]);
+    },
+  );
+});

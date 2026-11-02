@@ -11,6 +11,7 @@ import {
   CAPTURE_SITES,
   postingIdentity,
   siteLabel,
+  siteOfLabel,
   siteOfUrl,
   type CaptureSite,
 } from '../src/lib/captureSites';
@@ -108,6 +109,28 @@ describe('siteLabel', () => {
 
   it('ships LinkedIn and Indeed, in that order, so adding a site is additive', () => {
     expect(CAPTURE_SITES.map((s) => s.id)).toEqual(['linkedin', 'indeed']);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/96: a stored capture names its site by label.
+describe('siteOfLabel', () => {
+  it('finds each site by its label', () => {
+    expect(siteOfLabel('LinkedIn')?.id).toBe('linkedin');
+    expect(siteOfLabel('Indeed')?.id).toBe('indeed');
+  });
+
+  it('ignores case and surrounding spaces', () => {
+    expect(siteOfLabel('linkedin')?.id).toBe('linkedin');
+    expect(siteOfLabel('  INDEED ')?.id).toBe('indeed');
+    expect(siteOfLabel('\tIndeed\n')?.id).toBe('indeed');
+  });
+
+  it('finds nothing for a label no site has, or an empty one', () => {
+    expect(siteOfLabel('wellfound')).toBeNull();
+    expect(siteOfLabel('Indeed Jobs')).toBeNull();
+    expect(siteOfLabel('In deed')).toBeNull();
+    expect(siteOfLabel('')).toBeNull();
+    expect(siteOfLabel('   ')).toBeNull();
   });
 });
 
