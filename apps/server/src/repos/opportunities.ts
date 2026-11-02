@@ -33,6 +33,7 @@ import {
   stageHistory,
 } from '../db/schema';
 import { postingAtsJobRef } from '../lib/atsJobRef';
+import { markPostingChanged } from './submissions';
 import { duplicate, HttpError, notFound } from '../lib/errors';
 import { isSystemWritten } from '../lib/postingFingerprint';
 import { lastActivityAt } from './activities';
@@ -503,6 +504,8 @@ export async function updateOpportunity(
       })
       .where(owned(ctx, id))
       .run();
+    // A new posting URL under a live attempt (#144): the attempt says so and its review lapses.
+    if (urlChanged) await markPostingChanged(tx, ctx, id, now);
     if (companyName !== undefined || fields.title !== undefined) {
       await detectDedupeCandidates(
         tx,
@@ -554,6 +557,19 @@ export async function reorderOpportunities(
   });
 }
 
+/** The same requisition: the same ATS, board (without case) and job id, or both none. */
+function sameRequisition(
+  a: AtsJobRef | null | undefined,
+  b: AtsJobRef | null | undefined,
+): boolean {
+  if (a == null || b == null) return (a ?? null) === (b ?? null);
+  return (
+    a.kind === b.kind &&
+    (a.org ?? '').toLowerCase() === (b.org ?? '').toLowerCase() &&
+    a.externalId === b.externalId
+  );
+}
+
 /**
  * Records how far the search for this opportunity's posting on the company's own ATS board
  * got (design D17), and which req it found (D16). Separate from updateOpportunity because
@@ -574,7 +590,8 @@ export async function setPostingState(
   },
 ): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
-    await getViewSync(tx, ctx, id);
+    const before = await getViewSync(tx, ctx, id);
+    const now = Date.now();
     await tx
       .update(opportunities)
       .set({
@@ -584,10 +601,14 @@ export async function setPostingState(
         ...(patch.descriptionFingerprint === undefined
           ? {}
           : { descriptionFingerprint: patch.descriptionFingerprint }),
-        updatedAt: Date.now(),
+        updatedAt: now,
       })
       .where(owned(ctx, id))
       .run();
+    // Another ATS identity under a live attempt (#144): it says so and its review lapses.
+    if (patch.atsJobRef !== undefined && !sameRequisition(before.atsJobRef, patch.atsJobRef)) {
+      await markPostingChanged(tx, ctx, id, now);
+    }
     return await getViewSync(tx, ctx, id);
   });
 }

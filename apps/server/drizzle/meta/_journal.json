@@ -309,6 +309,13 @@
       "when": 1794000000000,
       "tag": "0043_submission_reapply_reason",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1794100000000,
+      "tag": "0044_submission_posting_changed",
+      "breakpoints": true
     }
   ]
 }

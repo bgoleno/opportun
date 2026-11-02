@@ -17,6 +17,8 @@ import {
 import type { ReactNode } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import type { OpportunityView } from '@/lib/opportunities';
+import { hostOf, type SubmissionView } from './api';
 
 type BadgeVariant = 'default' | 'secondary' | 'outline' | 'success' | 'warning' | 'destructive';
 
@@ -126,5 +128,54 @@ export function Notice({
       <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
       <div className="grid gap-1">{children}</div>
     </div>
+  );
+}
+
+/**
+ * Whether the opportunity's posting changed under this attempt (#144) so that it now names
+ * another job than the one the attempt was started for. The attempt keeps its pinned
+ * destination; this is what the screens tell the user about.
+ */
+export function postingMoved(
+  live: Pick<SubmissionView, 'postingChangedAt' | 'atsKind' | 'atsRef' | 'atsExternalId'>,
+  opp: Pick<OpportunityView, 'atsJobRef'>,
+): boolean {
+  if (live.postingChangedAt == null) return false;
+  const ref = opp.atsJobRef;
+  return !(
+    ref != null &&
+    ref.kind === live.atsKind &&
+    (ref.org ?? '').toLowerCase() === (live.atsRef ?? '').toLowerCase() &&
+    ref.externalId === live.atsExternalId
+  );
+}
+
+/**
+ * "Started for <old host>, REQ <old id>; the posting is now <new>; cancel and start again to use
+ * it" (#144, the owner's option A). Nothing is cancelled for the user, and their answers stay.
+ */
+export function PostingChangedNotice({
+  live,
+  opp,
+}: {
+  live: SubmissionView;
+  opp: Pick<OpportunityView, 'atsJobRef' | 'postingUrl'>;
+}) {
+  const ref = opp.atsJobRef;
+  const now =
+    ref != null
+      ? `${hostOf(ref.url)}, REQ ${ref.externalId}`
+      : opp.postingUrl != null
+        ? `${hostOf(opp.postingUrl)}, which is not an application site Opportun recognises`
+        : 'no longer set';
+  return (
+    <Notice>
+      <span>
+        <strong>The posting changed after you started.</strong> This application was started for{' '}
+        {hostOf(live.destinationUrl)}, REQ {live.atsExternalId}, and still goes there. The posting
+        is now {now}. Your answers are kept. To apply to the new posting, cancel this application
+        and start again.
+      </span>
+    </Notice>
   );
 }

@@ -496,6 +496,62 @@ describe('S5: open the form', () => {
   });
 });
 
+describe('#144: a posting change under the attempt is shown, and nothing is cancelled', () => {
+  const NEW = 'https://boards.greenhouse.io/examplecorp/jobs/2000002';
+  const moved = {
+    ...OPP,
+    postingUrl: NEW,
+    atsJobRef: { kind: 'ats_greenhouse', org: 'examplecorp', externalId: '2000002', url: NEW },
+  } as unknown as OpportunityView;
+  const changed = (over: Partial<SubmissionView> = {}) =>
+    submission({ postingChangedAt: NOW - MIN, ...over });
+
+  it('the review says which job it was started for, what the posting is now, and how to use it', async () => {
+    mockApi({ ...routes(changed()), 'GET /opportunities/opp-1': moved });
+    renderStep('review');
+    const notice = await screen.findByText(/The posting changed after you started/);
+    const text = notice.closest('[role="status"]')?.textContent ?? '';
+    expect(text).toContain('started for boards.greenhouse.io, REQ 1000001, and still goes there');
+    expect(text).toContain('The posting is now boards.greenhouse.io, REQ 2000002');
+    expect(text).toContain('Your answers are kept');
+    expect(text).toContain('cancel this application and start again');
+    // The pinned destination is still shown in full, as the review always shows it.
+    expect(screen.getByText(DEST)).toBeVisible();
+  });
+
+  it('the panel says so too, and offers nothing that cancels by itself', async () => {
+    const api = mockApi({ ...routes(changed()), 'GET /opportunities/opp-1': moved });
+    renderWithProviders(<ApplyPanel opp={moved} />);
+    expect(await screen.findByText(/The posting changed after you started/)).toBeVisible();
+    expect(api.calls.filter((c) => c.method !== 'GET')).toHaveLength(0);
+  });
+
+  it('a posting that is no longer on a recognised site says so', async () => {
+    const page = {
+      ...OPP,
+      atsJobRef: null,
+      postingUrl: 'https://www.examplecorp.example/careers?gh_jid=2000002',
+    } as unknown as OpportunityView;
+    mockApi({ ...routes(changed()), 'GET /opportunities/opp-1': page });
+    renderWithProviders(<ApplyPanel opp={page} />);
+    expect(
+      await screen.findByText(/www\.examplecorp\.example, which is not an application site/),
+    ).toBeVisible();
+  });
+
+  it('no notice when the posting never changed, or changed back to the same job', async () => {
+    mockApi(routes(submission()));
+    renderStep('review');
+    expect(await screen.findByText(DEST)).toBeVisible();
+    expect(screen.queryByText(/The posting changed after you started/)).toBeNull();
+
+    mockApi(routes(changed()));
+    renderWithProviders(<ApplyPanel opp={OPP} />);
+    expect(await screen.findAllByText('Submission status:', { exact: false })).not.toHaveLength(0);
+    expect(screen.queryByText(/The posting changed after you started/)).toBeNull();
+  });
+});
+
 describe('the route', () => {
   it('starts at the resume step for a missing or unknown step, and only takes blocked from the open step', () => {
     expect(parseApplySearch({})).toEqual({ step: 'resume' });

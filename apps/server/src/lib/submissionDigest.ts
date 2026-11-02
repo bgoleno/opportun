@@ -31,6 +31,8 @@ export interface DigestInput {
   atsExternalId: string;
   fields: SubmissionFields;
   answers: SubmissionAnswer[];
+  /** When the opportunity's posting last changed under the attempt (#144), or null. */
+  postingChangedAt?: number | null;
 }
 
 const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
@@ -49,6 +51,9 @@ export function submissionDigest(s: DigestInput): string {
       atsExternalId: s.atsExternalId,
       fieldsHash: sha256(canonicalJson(s.fields)),
       answersHash: sha256(canonicalJson(s.answers)),
+      // A posting change (#144) makes any review shown before it stale. Absent when there was
+      // none, so the digest of an attempt whose posting never changed is what it always was.
+      ...(s.postingChangedAt == null ? {} : { postingChangedAt: s.postingChangedAt }),
     }),
   );
 }
