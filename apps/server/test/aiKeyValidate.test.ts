@@ -11,7 +11,7 @@ import { queryAll, queryOne } from './db';
 
 /** A fixed public address (matching safeFetch.test.ts's own PUBLIC_IP convention): every
  *  RFC 2606 fixture host in this file (llm.example.com) is chosen specifically so it never
- *  resolves for real (docs/pre-publication-checklist.md's own note on that convention), so
+ *  resolves for real (RFC 2606 sets these names aside for documentation and testing), so
  *  aiProviderFetch's real DNS check needs this override rather than depending on the network. */
 const resolvePublic = async (): Promise<string[]> => ['93.184.216.34'];
 

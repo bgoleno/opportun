@@ -64,7 +64,7 @@ const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
  */
 /** Resolves a hostname to every address it answers with; injected so tests never depend on
  *  real DNS (an RFC 2606 fixture host such as llm.example.com never resolves for real, by
- *  design -- see docs/pre-publication-checklist.md's own note on that convention). */
+ *  design: RFC 2606 sets these names aside for documentation and testing). */
 export type ResolveHost = (host: string) => Promise<string[]>;
 
 const realResolve: ResolveHost = async (host) =>

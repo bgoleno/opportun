@@ -2,10 +2,11 @@
 #
 # Merge a pull request, but only once every check has passed.
 #
-# `main`'s branch protection is the real gate: eleven checks are required and administrators
-# are included, so a premature merge is refused by GitHub rather than by this script. What
-# this adds is the waiting and the reporting in one place, which `gh pr merge --auto` does
-# silently and out of band.
+# `main`'s branch protection is the real gate: every check its ruleset requires (listed in
+# CONTRIBUTING.md, Merging) must pass and administrators are included, so a premature merge is
+# refused by GitHub rather than by this script. What this adds is the waiting and the
+# reporting in one place, and the pin to the reviewed head commit described below. GitHub's
+# auto-merge is turned off in the repository settings.
 #
 # It was written when protection was unavailable on a private repository's plan, after #43
 # merged with sixteen checks still queued. That gap is closed; the convenience is not.

@@ -267,8 +267,8 @@ inspect the process, which is why this repository has `OPPORTUN_MASTER_KEY_FILE`
 
 ### Nothing credential-shaped goes in the tree
 
-This repository publishes as a fresh snapshot (`docs/pre-publication-checklist.md`). A committed
-demo password would be published alongside a live instance that accepts it.
+This repository is public. A committed demo password would be published alongside a live
+instance that accepts it.
 
 ---
 
