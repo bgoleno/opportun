@@ -60,9 +60,10 @@ Opportunities also arrive from other places: accepted discovery results
 
 Opportun matches a new opportunity against your live ones (any stage but Dismissed) by
 company, title and location. The title match ignores seniority words such as Senior, Staff
-and Principal, so "Staff Platform Engineer" and "Principal Platform Engineer" at one company
-and location match. Creating one by hand that matches one you already track asks you to
-confirm: **View the existing opportunity**, or **Create anyway**. Accepting a matching
+and Principal at the start or end of a title, so "Staff Platform Engineer" and "Principal
+Platform Engineer" at one company and location match. Creating one by hand that matches one
+you already track asks you to confirm: **View the existing opportunity**, or **Create
+anyway**. Accepting a matching
 discovery result asks the same, and also offers **Attach to existing** (links the posting to
 that opportunity instead of creating a new one).
 
@@ -83,7 +84,8 @@ example two LinkedIn jobs with different job ids. The capture then gets an oppor
 own, and its timeline gets an entry, **Kept apart from a different LinkedIn posting**, naming
 the other job and, if it has a posting link, linking to it. An opportunity that came from
 none of these, such as one you created by hand, is filled in as usual, even if you gave it a
-posting link. If the matching opportunity is dismissed, the capture still gets its own
+posting link. A dismissed opportunity that a capture fills in comes back to Interested. If
+the opportunity a capture is kept apart from is dismissed, the capture still gets its own
 opportunity and the timeline entry, but no flag.
 
 On the board, both flagged opportunities carry a **Possible duplicate** badge. Opening either
