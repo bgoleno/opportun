@@ -18,14 +18,16 @@ describe('buildManifest', () => {
     expect(m.manifest_version).toBe(3);
     expect(m.version).toBe('1.2.3');
     expect(m.permissions).toEqual(['activeTab', 'scripting', 'storage']);
-    expect(m.host_permissions).toEqual(['https://www.linkedin.com/*']);
+    // The two capture sites (C-1 LinkedIn; Indeed, https://github.com/bgoleno/opportun/issues/74)
+    // and nothing else: www hosts only, https only.
+    expect(m.host_permissions).toEqual(['https://www.linkedin.com/*', 'https://www.indeed.com/*']);
     // The user's own server is asked for at runtime, for its origin only.
     // Broader than the rule the code enforces, deliberately: Chrome match patterns cannot
     // express "a private host", so settings.ts narrows it (design D17, ADR-14). Granting still
     // happens one origin at a time, at runtime, with the user's approval.
     expect(m.optional_host_permissions).toEqual(['https://*/*', 'http://*/*']);
     // C-1: widening the optional list must never widen what is granted at install time.
-    expect(m.host_permissions).toEqual(['https://www.linkedin.com/*']);
+    expect(m.host_permissions).toEqual(['https://www.linkedin.com/*', 'https://www.indeed.com/*']);
     const icons = {
       16: 'icons/icon-16.png',
       32: 'icons/icon-32.png',

@@ -7,6 +7,20 @@ milestone's work was merged. Each links the implementation plan it was built fro
 
 ## Unreleased
 
+- **The browser extension captures Indeed jobs.** On an Indeed job page
+  (`indeed.com/viewjob?jk=...`), or an Indeed search with a job open on the right, **Capture
+  this page** turns the job into an opportunity at Interested, exactly as a LinkedIn job does.
+  Both views of one job send the same thing: the job's title, company, details and
+  description, under the link `https://www.indeed.com/viewjob?jk=...`, and nothing from the
+  site's navigation, the search results or the recommended jobs. A pending lead from an Indeed
+  job alert email for the same job is completed rather than duplicated. A search with no job
+  open or a company page is refused in the popup without reading the tab, and if Indeed changes
+  its page so that the job cannot be found, the popup says the layout was not recognized and
+  sends nothing. The extension now asks for access to `www.indeed.com` as well as
+  `www.linkedin.com`, and still reads a tab only when you click. Indeed's country sites are
+  not supported ([#72](https://github.com/bgoleno/opportun/issues/72),
+  [#73](https://github.com/bgoleno/opportun/issues/73),
+  [#74](https://github.com/bgoleno/opportun/issues/74)).
 - **Contacts is now called Network.** The section that holds the people you know is
   **Network** in the menu and on its page, and it lives at `/network`; one person in it is
   still a contact. The API moved to `/api/v1/network`, the import pack's `contacts.csv` is now

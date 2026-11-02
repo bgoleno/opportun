@@ -1,8 +1,8 @@
 // The popup's behavior, with every browser API injected (popup.ts wires the real ones), so it
 // runs under happy-dom in tests. The page is read only inside the Capture click handler (C-1).
 import { postCapture, testConnection, type FetchLike, type Outcome } from './api';
-import { isLinkedInUrl } from './canonical';
-import type { RawPage } from './extract';
+import { captureSiteOf, indeedJobKey, type CaptureSiteId } from './canonical';
+import type { ExtractResult } from './extract';
 import { normalizeCapture } from './normalize';
 import { renderOutcome, type Rendered } from './render';
 import {
@@ -22,8 +22,12 @@ export interface PopupDeps {
   fetch: FetchLike;
   /** The tab the popup was opened over (tabs.query active + currentWindow). */
   activeTab(): Promise<{ id: number; url: string | undefined } | null>;
-  /** Runs extractPage once in that tab (scripting.executeScript); null on failure. */
-  runExtract(tabId: number): Promise<RawPage | null>;
+  /**
+   * Runs the site's reader once in that tab (scripting.executeScript): extractPage on LinkedIn,
+   * extractIndeedJob on Indeed. `site` comes from the tab's URL alone, never from page content.
+   * Null when the injection itself failed.
+   */
+  runExtract(tabId: number, site: CaptureSiteId): Promise<ExtractResult | null>;
   /** permissions.request for one origin pattern; must be called inside the click gesture. */
   requestOrigin(pattern: string): Promise<boolean>;
   /** permissions.contains for one origin pattern. */
@@ -92,7 +96,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     status.dataset.tone = tone;
     status.textContent = text;
   };
-  const showOutcome = (o: Outcome): void => show(renderOutcome(o));
+  const showOutcome = (o: Outcome, site?: CaptureSiteId): void => show(renderOutcome(o, site));
 
   /** Disables the buttons while `work` runs; a thrown error is shown, never swallowed. */
   const busy = async (work: () => Promise<void>): Promise<void> => {
@@ -223,22 +227,41 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         return;
       }
       const tab = await deps.activeTab();
-      // Only LinkedIn tabs are read: any other page stays untouched and unsent.
-      if (tab === null || tab.url === undefined || !isLinkedInUrl(tab.url)) {
-        showOutcome({ kind: 'not_linkedin' });
+      // Only LinkedIn and Indeed tabs are read, decided from the tab's URL: any other page stays
+      // untouched and unsent.
+      const site = tab?.url === undefined ? null : captureSiteOf(tab.url);
+      if (tab === null || tab.url === undefined || site === null) {
+        showOutcome({ kind: 'unsupported_tab' });
         return;
       }
-      const raw = await deps.runExtract(tab.id);
-      if (raw === null) {
-        showOutcome({ kind: 'inject_failed' });
+      // An Indeed tab is read only when its URL names one posting (issue #74): there is no
+      // canonical URL to send otherwise, so the page is left alone.
+      if (site === 'indeed' && indeedJobKey(tab.url) === null) {
+        showOutcome({ kind: 'not_a_posting' }, site);
         return;
       }
-      const normalized = normalizeCapture(raw);
+      const read = await deps.runExtract(tab.id, site);
+      if (read === null) {
+        showOutcome({ kind: 'inject_failed' }, site);
+        return;
+      }
+      if (!read.ok) {
+        showOutcome({ kind: read.reason }, site);
+        return;
+      }
+      // An Indeed page may have moved on since the click (a link followed in the tab): what is
+      // sent must still be one posting, since its URL is what the server keys the job by.
+      // LinkedIn keeps its behaviour from before Indeed (the server refuses what it cannot read).
+      if (site === 'indeed' && indeedJobKey(read.page.url) === null) {
+        showOutcome({ kind: 'not_a_posting' }, site);
+        return;
+      }
+      const normalized = normalizeCapture(read.page);
       if (!normalized.ok) {
-        showOutcome({ kind: normalized.error });
+        showOutcome({ kind: normalized.error }, site);
         return;
       }
-      showOutcome(await postCapture(deps.fetch, s, normalized.payload));
+      showOutcome(await postCapture(deps.fetch, s, normalized.payload), site);
     });
   });
 

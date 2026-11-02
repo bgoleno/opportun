@@ -2,7 +2,10 @@ import { readFileSync } from 'node:fs';
 import { Window } from 'happy-dom';
 import { describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from '../src/api';
-import type { RawPage } from '../src/extract';
+import type { CaptureSiteId } from '../src/canonical';
+import { extractIndeedJob, type ExtractResult, type RawPage } from '../src/extract';
+import { COMPANY, JK, NEVER_SENT, splitView, TITLE, viewjobPage } from './fixtures/indeedPages';
+import { load, type FixturePage } from './fixtures/pages';
 import { mountPopup, type PopupDeps } from '../src/popupController';
 import type { SettingsStorage } from '../src/settings';
 
@@ -22,6 +25,8 @@ function setup(
     stored?: Record<string, unknown>;
     tabUrl?: string;
     raw?: RawPage | null;
+    /** What the injected function returns, when a test needs more than a RawPage. */
+    extract?: (site: CaptureSiteId) => ExtractResult | null;
     status?: number;
     body?: unknown;
     granted?: boolean;
@@ -62,7 +67,11 @@ function setup(
     storage,
     fetch,
     activeTab: vi.fn(async () => ({ id: 7, url: opts.tabUrl ?? JOB_TAB })),
-    runExtract: vi.fn(async () => (opts.raw === undefined ? JOB_RAW : opts.raw)),
+    runExtract: vi.fn(async (_tabId: number, site: CaptureSiteId) => {
+      if (opts.extract !== undefined) return opts.extract(site);
+      const raw = opts.raw === undefined ? JOB_RAW : opts.raw;
+      return raw === null ? null : { ok: true as const, page: raw };
+    }),
     requestOrigin: vi.fn(async () => opts.granted ?? true),
     hasOrigin: vi.fn(async () => opts.granted ?? true),
     bakedServerUrl: vi.fn(async () => opts.baked ?? ''),
@@ -221,7 +230,7 @@ describe('popup capture', () => {
     await mountPopup(doc, deps);
     expect(deps.runExtract).not.toHaveBeenCalled();
     await click($('capture'), () => status(doc).textContent !== '');
-    expect(deps.runExtract).toHaveBeenCalledWith(7);
+    expect(deps.runExtract).toHaveBeenCalledWith(7, 'linkedin');
     const body = JSON.parse(fetch.mock.calls[0]![1].body);
     expect(body.url).toBe('https://www.linkedin.com/jobs/view/3901234567/');
     expect(status(doc).textContent).toBe('Added to your pipeline as Interested.');
@@ -277,6 +286,133 @@ describe('popup capture', () => {
     await click($('capture'), () => status(doc).textContent !== '');
     expect(status(doc).textContent).toMatch(/rejected the token/);
     expect(doc.body.innerHTML).not.toContain(TOKEN);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/74. runExtract runs the real extractIndeedJob over a
+// synthetic fixture, so these cover the popup and the page reading together.
+describe('popup capture on Indeed', () => {
+  const realIndeed =
+    (fixture: FixturePage) =>
+    (site: CaptureSiteId): ExtractResult | null =>
+      site === 'indeed' ? extractIndeedJob(load(fixture)) : null;
+  const sent = (fetch: ReturnType<typeof setup>['fetch']) =>
+    JSON.parse(fetch.mock.calls[0]![1].body) as { url: string; title: string; text: string };
+
+  it('a /viewjob page sends the job with its canonical URL and shows the result', async () => {
+    const fixture = viewjobPage();
+    const { doc, deps, fetch, $ } = setup({
+      stored: SAVED,
+      tabUrl: fixture.url,
+      extract: realIndeed(fixture),
+    });
+    await mountPopup(doc, deps);
+    expect(deps.runExtract).not.toHaveBeenCalled();
+    await click($('capture'), () => status(doc).textContent !== '');
+    expect(deps.runExtract).toHaveBeenCalledWith(7, 'indeed');
+    const body = sent(fetch);
+    expect(body.url).toBe(`https://www.indeed.com/viewjob?jk=${JK}`);
+    expect(body.title).toBe(TITLE);
+    expect(body.text.split('\n').slice(0, 2)).toEqual([TITLE, COMPANY]);
+    expect(status(doc).textContent).toBe('Added to your pipeline as Interested.');
+  });
+
+  it('the split view sends exactly what /viewjob sends, and the job title, not the search', async () => {
+    const bodies = [];
+    for (const fixture of [viewjobPage(), splitView({ compactHeaderShowing: true })]) {
+      const { doc, deps, fetch, $ } = setup({
+        stored: SAVED,
+        tabUrl: fixture.url,
+        extract: realIndeed(fixture),
+      });
+      await mountPopup(doc, deps);
+      await click($('capture'), () => status(doc).textContent !== '');
+      bodies.push(sent(fetch));
+    }
+    expect(bodies[1]).toEqual(bodies[0]);
+    expect(bodies[1]!.title).toBe(TITLE);
+    expect(bodies[1]!.title).not.toMatch(/Now Hiring|Jobs in/);
+    for (const never of NEVER_SENT) expect(JSON.stringify(bodies[1])).not.toContain(never);
+  });
+
+  it('a missing job pane is refused visibly and nothing is sent', async () => {
+    const fixture = splitView({}, false);
+    const { doc, deps, fetch, $ } = setup({
+      stored: SAVED,
+      tabUrl: fixture.url,
+      extract: realIndeed(fixture),
+    });
+    await mountPopup(doc, deps);
+    await click($('capture'), () => status(doc).textContent !== '');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(status(doc).textContent).toMatch(/Indeed’s layout was not recognized/);
+    expect(status(doc).dataset.tone).toBe('error');
+  });
+
+  it.each([
+    ['search results with no job open', 'https://www.indeed.com/jobs?q=placeholder&l=x'],
+    ['a company page', 'https://www.indeed.com/cmp/Example-Corp'],
+    ['a malformed job key', 'https://www.indeed.com/viewjob?jk=not-a-key'],
+  ])('%s is refused in the popup without reading the tab', async (_name, tabUrl) => {
+    const { doc, deps, fetch, $ } = setup({ stored: SAVED, tabUrl });
+    await mountPopup(doc, deps);
+    await click($('capture'), () => status(doc).textContent !== '');
+    expect(deps.runExtract).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(status(doc).textContent).toMatch(/open a single Indeed job/i);
+  });
+
+  it.each([
+    ['verification_wall', /Indeed is showing a sign-in or verification page/],
+    ['unsupported_path', /single Indeed job/],
+    ['no_title_company', /finished loading/],
+    ['no_description', /finished loading/],
+    ['unsupported_site', /not a site Opportun captures from/],
+  ])('shows the server’s %s refusal, naming Indeed', async (reason, pattern) => {
+    const fixture = viewjobPage();
+    const { doc, deps, $ } = setup({
+      stored: SAVED,
+      tabUrl: fixture.url,
+      extract: realIndeed(fixture),
+      status: 422,
+      body: { error: { code: 'unrecognized_page', reason } },
+    });
+    await mountPopup(doc, deps);
+    await click($('capture'), () => status(doc).textContent !== '');
+    expect(status(doc).textContent).toMatch(/^Not captured: /);
+    expect(status(doc).textContent).toMatch(pattern);
+    expect(status(doc).textContent).not.toMatch(/LinkedIn/);
+  });
+
+  it('look-alike hosts and Indeed country sites are not read at all', async () => {
+    for (const tabUrl of [
+      `https://notindeed.com/viewjob?jk=${JK}`,
+      `https://uk.indeed.com/viewjob?jk=${JK}`,
+    ]) {
+      const { doc, deps, fetch, $ } = setup({ stored: SAVED, tabUrl });
+      await mountPopup(doc, deps);
+      await click($('capture'), () => status(doc).textContent !== '');
+      expect(deps.runExtract).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(status(doc).textContent).toMatch(
+        /Open a LinkedIn profile or job page, or an Indeed job/,
+      );
+    }
+  });
+
+  it('a page that navigated off its job between the click and the read is not sent', async () => {
+    const { doc, deps, fetch, $ } = setup({
+      stored: SAVED,
+      tabUrl: viewjobPage().url,
+      extract: () => ({
+        ok: true,
+        page: { url: 'https://www.indeed.com/jobs?q=x', title: TITLE, text: 'x\ny' },
+      }),
+    });
+    await mountPopup(doc, deps);
+    await click($('capture'), () => status(doc).textContent !== '');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(status(doc).textContent).toMatch(/open a single Indeed job/i);
   });
 });
 

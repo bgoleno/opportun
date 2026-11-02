@@ -78,7 +78,7 @@ Four ways in, each covered in [docs/install.md](docs/install.md):
 - **Docker** (recommended): one compose file with Caddy for HTTPS, quick start below and in [section 2](docs/install.md#2-quick-start-docker-compose).
 - **From source**: Node.js 22 and pnpm 9, for development or a bare-metal run, in [section 5](docs/install.md#5-running-from-source-development).
 - **Apple Mail connector**: the `opportun-connector` CLI on your Mac, in [section 11](docs/install.md#11-apple-mail-macos).
-- **Capture extension**: the Opportun Capture extension for Chrome or Firefox, in [section 10](docs/install.md#10-capture-extension-linkedin).
+- **Capture extension**: the Opportun Capture extension for Chrome or Firefox, in [section 10](docs/install.md#10-capture-extension-linkedin-indeed).
 
 With Docker and Docker Compose v2:
 
