@@ -19,7 +19,7 @@
 //   the write it guards.
 //
 // Opportun never transmits an application: nothing here contacts an employer or an ATS.
-import { and, eq, gt, lte, max, or } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lte, max, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Submission } from '@opportun/core';
 import { DEFAULT_DAILY_REVIEW_CAP, MAX_DAILY_REVIEW_CAP, type Config } from '../config';
@@ -125,6 +125,46 @@ const reviewStale = (): HttpError =>
 
 export interface ReviewInput {
   reviewDigest: string;
+  /** Why the user applies again to a requisition they already applied to (owner decision 6). */
+  reapplyReason?: string | undefined;
+}
+
+/**
+ * Attempts that count as another application to the requisition: one the user said they
+ * submitted, and one still on its way there on another opportunity, reviewed or opened on the
+ * ATS (tl on #145: two in flight at once must not both pass without a reason). A draft is not
+ * yet an application, and a form the ATS refused, or an attempt stopped or failed, never was.
+ */
+const APPLIED_STATUSES = ['reviewed', 'handed_off', 'submitted', 'confirmed', 'unknown'] as const;
+
+/**
+ * The user's latest other application to the same requisition (the same ATS, board or tenant,
+ * and requisition id), on any opportunity. The board compares without case, as
+ * destinationAllowed does: a Workday site keeps the case its tenant gave it.
+ */
+async function earlierApplication(
+  exec: Exec,
+  ctx: UserCtx,
+  row: SubmissionRow,
+): Promise<SubmissionRow | undefined> {
+  return await exec
+    .select()
+    .from(applicationSubmissions)
+    .where(
+      and(
+        eq(applicationSubmissions.userId, ctx.userId),
+        ne(applicationSubmissions.id, row.id),
+        eq(applicationSubmissions.atsKind, row.atsKind),
+        row.atsRef === null
+          ? isNull(applicationSubmissions.atsRef)
+          : sql`lower(${applicationSubmissions.atsRef}) = ${row.atsRef.toLowerCase()}`,
+        eq(applicationSubmissions.atsExternalId, row.atsExternalId),
+        inArray(applicationSubmissions.status, [...APPLIED_STATUSES]),
+      ),
+    )
+    .orderBy(desc(applicationSubmissions.updatedAt), desc(applicationSubmissions.id))
+    .limit(1)
+    .get();
 }
 
 type ReviewOutcome = { kind: 'reviewed'; row: SubmissionRow } | { kind: 'capped'; resetAt: number };
@@ -171,7 +211,25 @@ export async function reviewSubmission(
     }
     if (submissionDigest(row) !== input.reviewDigest) throw reviewStale();
 
+    // The user's lock from here on: the daily cap counts every review of theirs, and the
+    // re-apply check reads their other attempts. Under the attempt's own lock alone, two reviews
+    // of two attempts at one requisition, at the same moment, each saw the other still a draft
+    // and both passed without a reason (qa on #145, on Postgres). Same order as before: the
+    // attempt's lock, then the user's, so no two reviews wait on each other in a circle.
     await lockScope(tx, userScope(ctx));
+    // Applying again to the same requisition is allowed, with a typed reason (owner decision 6,
+    // #118). The review is where the user sees the earlier application, so it is asked here.
+    const earlier = await earlierApplication(tx, ctx, row);
+    const reason = input.reapplyReason?.trim() ?? '';
+    if (earlier !== undefined && reason === '') {
+      throw new HttpError(
+        422,
+        'reapply_reason_required',
+        'You already applied for this job, or have an application to it on the way. Say why you are applying again.',
+        { submissionId: earlier.id },
+      );
+    }
+
     const cap = await dailyCap(tx, ctx, cfg);
     const used = await reviewsInWindow(tx, ctx, now, id);
     if (used.length >= cap) {
@@ -192,6 +250,9 @@ export async function reviewSubmission(
       .set({
         status: 'reviewed',
         reviewDigest: input.reviewDigest,
+        // Kept only for a re-application; a first application stores no reason.
+        reapplyOf: earlier?.id ?? null,
+        reapplyReason: earlier === undefined ? null : reason,
         reviewedAt: now,
         reviewExpiresAt: now + REVIEW_TTL_MS,
         updatedAt: now,

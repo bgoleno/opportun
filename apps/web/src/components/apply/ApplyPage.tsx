@@ -9,6 +9,15 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { ArrowLeft, Check, Copy, Download, Loader2 } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { toast } from '@/components/ui/toast';
 import { FormError } from '@/components/FormError';
 import { useOpportunity } from '@/components/opportunity/api';
 import { useResumes, type Resume } from '@/components/resume/api';
@@ -31,6 +40,7 @@ import {
   isLive,
   snapshotErrorText,
   submissionErrorText,
+  useAttestSubmission,
   useCancelSubmission,
   useCreateSubmission,
   useHandoffSubmission,
@@ -603,6 +613,14 @@ function ReviewStep({
   // Set in the click itself: two clicks in one tick both see `busy` still false (tl on #138).
   const inFlight = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Applying again to a requisition already applied to needs a typed reason (owner decision 6,
+  // M2a #118): asked when this opportunity shows an earlier application, or when the server
+  // finds one elsewhere (422 reapply_reason_required).
+  const [reason, setReason] = useState('');
+  const [serverAsksReason, setServerAsksReason] = useState(false);
+  const reasonId = useId();
+  const reasonHelpId = useId();
+  const reasonField = useRef<HTMLTextAreaElement>(null);
 
   const now = Date.now();
   const reviewedAndValid =
@@ -613,6 +631,8 @@ function ReviewStep({
     (s) => s.id !== live.id && ['submitted', 'confirmed', 'unknown'].includes(s.status),
   );
   const digestReady = live.reviewDigest !== undefined;
+  const asksReason = !reviewedAndValid && (earlier !== undefined || serverAsksReason);
+  const reasonMissing = asksReason && reason.trim() === '';
   // The server refuses a review while the saved copy is being made or could not be made (#115:
   // 409 snapshot_pending, snapshot_failed); `ready` and `unsupported` may be reviewed.
   const snapshotBlock =
@@ -630,7 +650,7 @@ function ReviewStep({
   const confirmDisabled =
     busy ||
     capUntil !== null ||
-    (!reviewedAndValid && (!ticked || !digestReady || snapshotBlock !== null));
+    (!reviewedAndValid && (!ticked || !digestReady || snapshotBlock !== null || reasonMissing));
 
   useEffect(() => {
     if (banner !== null) bannerRef.current?.focus();
@@ -668,6 +688,9 @@ function ReviewStep({
         setHint(SNAPSHOT_FAILED_HINT);
       } else if (capUntil !== null) {
         setHint(`Review limit reached. You can confirm another after ${formatDateTime(capUntil)}.`);
+      } else if (reasonMissing) {
+        setHint('Say why you are applying again.');
+        reasonField.current?.focus();
       } else {
         setHint('Tick the box to continue.');
         checkbox.current?.focus();
@@ -682,7 +705,11 @@ function ReviewStep({
     const tab = window.open('about:blank', '_blank');
     try {
       if (!reviewedAndValid) {
-        await review.mutateAsync({ id: live.id, reviewDigest: live.reviewDigest as string });
+        await review.mutateAsync({
+          id: live.id,
+          reviewDigest: live.reviewDigest as string,
+          ...(asksReason ? { reapplyReason: reason.trim() } : {}),
+        });
       }
       const out = await handoff.mutateAsync(live.id);
       // The blank tab shares Opportun's origin: never point it at anything but http(s), even
@@ -713,6 +740,13 @@ function ReviewStep({
         const resetAt = err instanceof ApiError ? Number(err.details.resetAt) : NaN;
         setBanner({ kind: 'cap', resetAt: Number.isFinite(resetAt) ? resetAt : null });
       } else if (code === 'destination_not_allowed') setBanner({ kind: 'destination' });
+      else if (code === 'reapply_reason_required') {
+        // An earlier application this screen did not know of (another opportunity): ask now.
+        setBanner(null);
+        setServerAsksReason(true);
+        setHint('You have another application for this job. Say why you are applying again.');
+        requestAnimationFrame(() => reasonField.current?.focus());
+      }
       // The saved copy changed state under the screen: the refreshed row shows which (below).
       else if (code === 'snapshot_pending' || code === 'snapshot_failed') setBanner(null);
       // The attempt moved on elsewhere (another tab, or the sweep closed an expired review):
@@ -756,6 +790,36 @@ function ReviewStep({
               ). Applying twice can look like a mistake to the employer.
             </span>
           </Notice>
+        ) : null}
+        {earlier === undefined && asksReason ? (
+          <Notice>
+            <span>
+              <strong>You have another application for this job</strong>, from another opportunity,
+              submitted or on its way. Applying twice can look like a mistake to the employer.
+            </span>
+          </Notice>
+        ) : null}
+        {asksReason ? (
+          <div className="grid gap-1.5">
+            <Label htmlFor={reasonId}>Why are you applying again?</Label>
+            <Textarea
+              id={reasonId}
+              ref={reasonField}
+              value={reason}
+              maxLength={500}
+              rows={2}
+              aria-describedby={reasonHelpId}
+              aria-required="true"
+              onChange={(e) => {
+                setReason(e.target.value);
+                setHint(null);
+              }}
+            />
+            <p id={reasonHelpId} className="text-xs text-muted-foreground">
+              Required. It is kept with this application, so you can see later why you applied
+              twice.
+            </p>
+          </div>
         ) : null}
         {banner?.kind === 'stale' ? (
           <Notice role="alert">
@@ -1019,6 +1083,7 @@ function OpenStep({
   const navigate = useNavigate();
   const cancel = useCancelSubmission(opp.id);
   const [stopping, setStopping] = useState(false);
+  const [attesting, setAttesting] = useState(false);
 
   if (live.status !== 'handed_off') {
     return (
@@ -1090,9 +1155,14 @@ function OpenStep({
           </CardHeader>
           <CardContent className="grid gap-3 text-sm">
             <p>Opportun cannot tell whether you submitted. It only records what you tell it.</p>
-            <Button variant="outline" className="w-fit" onClick={() => setStopping(true)}>
-              I did not submit it
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button className="w-fit" onClick={() => setAttesting(true)}>
+                I submitted it
+              </Button>
+              <Button variant="outline" className="w-fit" onClick={() => setStopping(true)}>
+                I did not submit it
+              </Button>
+            </div>
             {live.handedOffAt !== null ? (
               <p className="text-xs text-muted-foreground">
                 Opened {formatDateTime(live.handedOffAt)}. There is no deadline here: come back
@@ -1103,6 +1173,13 @@ function OpenStep({
         </Card>
       </div>
       <CopyDetails live={live} />
+      <AttestDialog
+        open={attesting}
+        onOpenChange={setAttesting}
+        opp={opp}
+        live={live}
+        host={host}
+      />
       <ConfirmDialog
         open={stopping}
         onOpenChange={setStopping}
@@ -1115,6 +1192,144 @@ function OpenStep({
         }}
       />
     </div>
+  );
+}
+
+/** A local `datetime-local` value for a time (the input has no time zone of its own). */
+function localInputValue(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** The stages "Move to Applied" can move from: earlier in the pipeline than Applied. */
+const BEFORE_APPLIED: readonly string[] = ['interested', 'preparing'];
+
+/**
+ * "Record that you submitted this application?" (design S6, M2a #118). The user's word: Opportun
+ * cannot see the application site. "Move this opportunity to Applied" is pre-ticked and only
+ * moves the stage if left ticked (owner decision 3); a stage already past Applied is not shown
+ * the option. The primary button is the user's first-person claim on purpose.
+ */
+function AttestDialog({
+  open,
+  onOpenChange,
+  opp,
+  live,
+  host,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  opp: OpportunityView;
+  live: SubmissionView;
+  host: string;
+}) {
+  const navigate = useNavigate();
+  const attest = useAttestSubmission(opp.id);
+  // "Now" is when the dialog opens, not when the page loaded (tl on #145): set on each open.
+  const [defaultWhen, setDefaultWhen] = useState(() => localInputValue(Date.now()));
+  const [when, setWhen] = useState(defaultWhen);
+  const canMove = BEFORE_APPLIED.includes(opp.stage);
+  const [moveToApplied, setMoveToApplied] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const whenId = useId();
+  const moveId = useId();
+  const whenField = useRef<HTMLInputElement>(null);
+  // The date field takes focus when the dialog opens, so the primary button is never the first
+  // stop (design S6). Done here rather than with autoFocus: the content is mounted before it opens.
+  useEffect(() => {
+    if (!open) return;
+    const now = localInputValue(Date.now());
+    setDefaultWhen(now);
+    setWhen(now);
+    requestAnimationFrame(() => whenField.current?.focus());
+  }, [open]);
+
+  async function record() {
+    setError(null);
+    // Unchanged, the server takes "now"; changed, the time the user typed (never the future).
+    const typed = when === defaultWhen ? undefined : new Date(when).getTime();
+    if (typed !== undefined && !Number.isFinite(typed)) {
+      setError('Enter when you pressed Submit.');
+      return;
+    }
+    try {
+      await attest.mutateAsync({
+        id: live.id,
+        moveToApplied: canMove && moveToApplied,
+        ...(typed === undefined ? {} : { submittedAt: typed }),
+      });
+      onOpenChange(false);
+      toast({ title: 'Application recorded', variant: 'success' });
+      await navigate({ to: '/opportunities/$id', params: { id: opp.id } });
+    } catch (err) {
+      setError(submissionErrorText(err));
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) setError(null);
+        onOpenChange(o);
+      }}
+    >
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Record that you submitted this application?</DialogTitle>
+          <DialogDescription>
+            Opportun cannot see {host}, so this is your word. Only continue if you pressed Submit
+            and the site accepted the form.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 text-sm">
+          <div className="grid gap-1.5">
+            <Label htmlFor={whenId}>When did you submit?</Label>
+            <Input
+              id={whenId}
+              ref={whenField}
+              type="datetime-local"
+              value={when}
+              max={localInputValue(Date.now())}
+              onChange={(e) => setWhen(e.target.value)}
+            />
+          </div>
+          <div className="grid gap-1">
+            <p className="font-medium">This will add:</p>
+            <ul className="grid list-disc gap-1 pl-5 text-muted-foreground">
+              <li>
+                An Application entry on the timeline, naming the resume and the questions you
+                answered, not your answers.
+              </li>
+              <li>
+                &ldquo;Submitted to {atsLabel(live.atsKind)} / {opp.companyName}&rdquo; on the
+                resume.
+              </li>
+            </ul>
+          </div>
+          {canMove ? (
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id={moveId}
+                checked={moveToApplied}
+                onCheckedChange={(v) => setMoveToApplied(v === true)}
+              />
+              <Label htmlFor={moveId}>Move this opportunity to Applied</Label>
+            </div>
+          ) : null}
+        </div>
+        {error === null ? null : <FormError message={error} />}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Not yet
+          </Button>
+          <Button disabled={attest.isPending} onClick={() => void record()}>
+            Yes, I submitted it
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

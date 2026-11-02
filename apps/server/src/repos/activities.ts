@@ -105,7 +105,7 @@ export async function getActivity(db: Db, ctx: UserCtx, id: string): Promise<Act
 }
 
 export async function createActivity(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   opportunityId: string,
   input: ActivityInput,
@@ -359,7 +359,7 @@ export async function listNextSteps(
 }
 
 export async function createNextStep(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   opportunityId: string,
   input: NextStepInput,

@@ -924,6 +924,207 @@ describe('tl on #138', () => {
   });
 });
 
+describe('M2a (#118): "I submitted it" on the open step', () => {
+  const handedOff = () => submission({ status: 'handed_off', handedOffAt: NOW });
+
+  it('records with "Move to Applied" pre-ticked and the time left as now, then returns to the opportunity', async () => {
+    const api = mockApi(
+      routes(handedOff(), {
+        'POST /submissions/sub-1/attest': submission({ status: 'submitted', submittedAt: NOW }),
+      }),
+    );
+    const { user, router } = renderStep('open');
+    await user.click(await screen.findByRole('button', { name: 'I submitted it' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Record that you submitted this application?',
+    });
+    expect(within(dialog).getByText(/this is your word/i)).toBeVisible();
+    // The date field takes focus, so the primary button is never the first stop.
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText('When did you submit?')).toHaveFocus(),
+    );
+    expect(
+      within(dialog).getByRole('checkbox', { name: 'Move this opportunity to Applied' }),
+    ).toBeChecked();
+    // Field values never reach the timeline: the summary says so.
+    expect(within(dialog).getByText(/not your answers/)).toBeVisible();
+    await user.click(within(dialog).getByRole('button', { name: 'Yes, I submitted it' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/opportunities/opp-1'));
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/attest')).toEqual([
+      expect.objectContaining({ body: { moveToApplied: true } }),
+    ]);
+  });
+
+  it('unticked, the stage is left alone; a changed time is sent as the user typed it', async () => {
+    const api = mockApi(
+      routes(handedOff(), {
+        'POST /submissions/sub-1/attest': submission({ status: 'submitted', submittedAt: NOW }),
+      }),
+    );
+    const { user } = renderStep('open');
+    await user.click(await screen.findByRole('button', { name: 'I submitted it' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(
+      within(dialog).getByRole('checkbox', { name: 'Move this opportunity to Applied' }),
+    );
+    const when = within(dialog).getByLabelText('When did you submit?');
+    fireEvent.change(when, { target: { value: '2026-10-30T09:15' } });
+    await user.click(within(dialog).getByRole('button', { name: 'Yes, I submitted it' }));
+    await waitFor(() =>
+      expect(calls(api.calls, 'POST', '/submissions/sub-1/attest')).toHaveLength(1),
+    );
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/attest')[0]?.body).toEqual({
+      moveToApplied: false,
+      submittedAt: new Date('2026-10-30T09:15').getTime(),
+    });
+  });
+
+  it('"Not yet" records nothing, and a refusal stays in the dialog in words', async () => {
+    const api = mockApi(
+      routes(handedOff(), {
+        'POST /submissions/sub-1/attest': () => ({
+          status: 422,
+          body: { error: { code: 'submitted_at_in_future' } },
+        }),
+      }),
+    );
+    const { user } = renderStep('open');
+    await user.click(await screen.findByRole('button', { name: 'I submitted it' }));
+    await user.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Not yet' }),
+    );
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/attest')).toHaveLength(0);
+
+    await user.click(screen.getByRole('button', { name: 'I submitted it' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Yes, I submitted it' }));
+    expect(await within(dialog).findByText(/That time has not happened yet/)).toBeVisible();
+    expect(within(dialog).queryByText('submitted_at_in_future')).toBeNull();
+  });
+
+  it('"now" is when the dialog opens, not when the page loaded (tl on #145)', async () => {
+    mockApi(routes(handedOff()));
+    const local = (ms: number) => {
+      const d = new Date(ms);
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+    const { user } = renderStep('open');
+    await user.click(await screen.findByRole('button', { name: 'I submitted it' }));
+    let dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Not yet' }));
+    // Two hours later, the same page: the dialog opens with the time it opens at.
+    const later = Date.now() + 2 * 60 * MIN;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(later);
+    try {
+      await user.click(screen.getByRole('button', { name: 'I submitted it' }));
+      dialog = await screen.findByRole('dialog');
+      await waitFor(() =>
+        expect(within(dialog).getByLabelText('When did you submit?')).toHaveValue(local(later)),
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('a stage already past Applied is not offered the move', async () => {
+    mockApi({
+      ...routes(handedOff()),
+      'GET /opportunities/opp-1': { ...OPP, stage: 'in_process' },
+    });
+    const { user } = renderStep('open');
+    await user.click(await screen.findByRole('button', { name: 'I submitted it' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByRole('checkbox')).toBeNull();
+  });
+});
+
+describe('M2a (#118): applying again needs a typed reason', () => {
+  const earlier = submission({
+    id: 'sub-0',
+    status: 'submitted',
+    submittedAt: NOW - 10 * 24 * 60 * MIN,
+  });
+  const withEarlier = (extra: Record<string, unknown> = {}) => ({
+    ...routes(submission()),
+    'GET /opportunities/opp-1/submissions': { items: [submission(), earlier], total: 2 },
+    ...extra,
+  });
+  const confirmButton = () =>
+    screen.getByRole('button', { name: 'Confirm review and open boards.greenhouse.io' });
+
+  it('with an earlier application here, the confirm waits for a reason, then sends it', async () => {
+    const reviewed = submission({ status: 'reviewed', reviewExpiresAt: NOW + 30 * MIN });
+    const api = mockApi(
+      withEarlier({
+        'POST /submissions/sub-1/review': reviewed,
+        'POST /submissions/sub-1/handoff': { destinationUrl: DEST, expiresAt: NOW },
+      }),
+    );
+    fakeWindowOpen();
+    const { user, router } = renderStep('review');
+    const field = await screen.findByLabelText('Why are you applying again?');
+    await user.click(screen.getByRole('checkbox'));
+    expect(confirmButton()).toHaveAttribute('aria-disabled', 'true');
+    await user.click(confirmButton());
+    expect(field).toHaveFocus();
+    expect(confirmButton()).toHaveAccessibleDescription('Say why you are applying again.');
+    expect(api.calls.filter((c) => c.method === 'POST')).toHaveLength(0);
+
+    await user.type(field, '  The recruiter asked me to.  ');
+    await user.click(confirmButton());
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'open' }));
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/review')[0]?.body).toEqual({
+      reviewDigest: DIGEST,
+      acknowledged: true,
+      reapplyReason: 'The recruiter asked me to.',
+    });
+  });
+
+  it('a first application sends no reason and shows no field', async () => {
+    const api = mockApi(
+      routes(submission(), {
+        'POST /submissions/sub-1/review': submission({
+          status: 'reviewed',
+          reviewExpiresAt: NOW + 30 * MIN,
+        }),
+        'POST /submissions/sub-1/handoff': { destinationUrl: DEST, expiresAt: NOW },
+      }),
+    );
+    fakeWindowOpen();
+    const { user, router } = renderStep('review');
+    await user.click(await screen.findByRole('checkbox'));
+    expect(screen.queryByLabelText('Why are you applying again?')).toBeNull();
+    await user.click(confirmButton());
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'open' }));
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/review')[0]?.body).toEqual({
+      reviewDigest: DIGEST,
+      acknowledged: true,
+    });
+  });
+
+  it('an earlier application the server knows of (another opportunity) asks for the reason there', async () => {
+    const api = mockApi(
+      routes(submission(), {
+        'POST /submissions/sub-1/review': () => ({
+          status: 422,
+          body: { error: { code: 'reapply_reason_required', submissionId: 'sub-elsewhere' } },
+        }),
+      }),
+    );
+    const { tab } = fakeWindowOpen();
+    const { user } = renderStep('review');
+    await user.click(await screen.findByRole('checkbox'));
+    await user.click(confirmButton());
+    const field = await screen.findByLabelText('Why are you applying again?');
+    await waitFor(() => expect(field).toHaveFocus());
+    expect(screen.getByText(/from another opportunity/)).toBeVisible();
+    // The blank tab opened inside the click is closed again: nothing was handed off.
+    expect(tab.close).toHaveBeenCalled();
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/handoff')).toHaveLength(0);
+  });
+});
+
 describe('a draft refused at creation for its destination (#135)', () => {
   it('says so in words, never the code, and stays on the resume step', async () => {
     mockApi(

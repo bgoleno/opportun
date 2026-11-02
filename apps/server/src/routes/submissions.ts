@@ -28,6 +28,11 @@ import {
   listSubmissionsForOpportunity,
   updateSubmissionDraft,
 } from '../repos/submissions';
+import {
+  attestSubmission,
+  recordSubmissionOutcome,
+  SUBMISSION_OUTCOMES,
+} from '../repos/submissionOutcome';
 import { handoffSubmission, reviewSubmission } from '../repos/submissionReview';
 import { contentDisposition } from './attachments';
 import { DEFAULT_LIMIT, IdParams, MAX_LIMIT, pageOf } from './common';
@@ -66,6 +71,30 @@ const ReviewBody = z
   .object({
     reviewDigest: z.string().regex(/^[0-9a-f]{64}$/),
     acknowledged: z.literal(true),
+    /**
+     * Required when the user already applied to this requisition (422 reapply_reason_required
+     * otherwise); user-authored, kept with the attempt (owner decision 6, #118).
+     */
+    reapplyReason: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+
+/**
+ * "I submitted it" (M2a, #118). `moveToApplied` has no default: the screen sends the tick the
+ * user left (pre-ticked, owner decision 3), so the stage never changes on an omitted field.
+ */
+const AttestBody = z
+  .object({
+    moveToApplied: z.boolean(),
+    submittedAt: z.number().int().positive().optional(),
+  })
+  .strict();
+
+/** What the user reports after the handoff; the note is theirs, like a timeline note. */
+const OutcomeBody = z
+  .object({
+    outcome: z.enum(SUBMISSION_OUTCOMES),
+    note: z.string().trim().max(1_000).optional(),
   })
   .strict();
 
@@ -230,6 +259,30 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       if (answeredInvalid(req, reply)) return reply;
       return cancelSubmission(db, app.requireUser(req), req.params.id);
+    },
+  );
+
+  api.post(
+    '/submissions/:id/attest',
+    {
+      attachValidation: true,
+      schema: { params: IdParams, body: AttestBody, response: { 200: SubmissionSchema } },
+    },
+    async (req, reply) => {
+      if (answeredInvalid(req, reply)) return reply;
+      return attestSubmission(db, app.requireUser(req), req.params.id, req.body);
+    },
+  );
+
+  api.post(
+    '/submissions/:id/outcome',
+    {
+      attachValidation: true,
+      schema: { params: IdParams, body: OutcomeBody, response: { 200: SubmissionSchema } },
+    },
+    async (req, reply) => {
+      if (answeredInvalid(req, reply)) return reply;
+      return recordSubmissionOutcome(db, app.requireUser(req), req.params.id, req.body);
     },
   );
 

@@ -603,63 +603,81 @@ export async function transitionOpportunity(
   id: string,
   change: StageChange,
 ): Promise<OpportunityView> {
-  const view = await withTransaction(db, async (tx) => {
-    const current = await getViewSync(tx, ctx, id);
-    if (TERMINAL.has(current.stage) && !TERMINAL.has(change.to) && change.reopen !== true) {
-      throw new InvalidTransitionError(current.stage, change.to, 'reopen required');
-    }
-    const result = applyTransition(current, change.to, {
-      ...(change.closedReason === undefined ? {} : { closedReason: change.closedReason }),
-      ...(change.dismissedReason === undefined ? {} : { dismissedReason: change.dismissedReason }),
-      ...(change.note === undefined ? {} : { note: change.note }),
-    });
-    const { historyEntry } = result;
-    // Issue #240: a card never inherits a rank from the stage it left, and self-transitions
-    // are invalid (see applyTransition), so this always runs on a real stage change.
-    const sortOrder = await nextSortOrder(tx, ctx, result.stage);
-    await tx
-      .update(opportunities)
-      .set({
-        stage: result.stage,
-        closedReason: result.closedReason,
-        dismissedReason: result.dismissedReason,
-        sortOrder,
-        updatedAt: historyEntry.at,
-      })
-      .where(owned(ctx, id))
-      .run();
-    await tx
-      .insert(stageHistory)
-      .values({ id: newId(), userId: ctx.userId, opportunityId: id, ...historyEntry })
-      .run();
-    if (result.stage === 'dismissed') {
-      // Dismissal feedback feeds discovery prompt refinement (FR-D6).
-      await tx
-        .insert(dismissalFeedback)
-        .values({
-          id: newId(),
-          userId: ctx.userId,
-          kind: 'dismissal',
-          opportunityId: id,
-          reason: result.dismissedReason,
-          note: change.note ?? null,
-          at: historyEntry.at,
-        })
-        .run();
-    }
-    return await getViewSync(tx, ctx, id);
+  const view = await withTransaction(db, (tx) => transitionOpportunityIn(tx, ctx, id, change));
+  await afterStageChange(db, ctx, view);
+  return view;
+}
+
+/**
+ * The stage change itself, inside the caller's transaction (assisted apply's attest, #118, moves
+ * the stage in the same transaction as its timeline entry). The caller runs afterStageChange
+ * once the transaction has committed.
+ */
+export async function transitionOpportunityIn(
+  tx: Exec,
+  ctx: UserCtx,
+  id: string,
+  change: StageChange,
+): Promise<OpportunityView> {
+  const current = await getViewSync(tx, ctx, id);
+  if (TERMINAL.has(current.stage) && !TERMINAL.has(change.to) && change.reopen !== true) {
+    throw new InvalidTransitionError(current.stage, change.to, 'reopen required');
+  }
+  const result = applyTransition(current, change.to, {
+    ...(change.closedReason === undefined ? {} : { closedReason: change.closedReason }),
+    ...(change.dismissedReason === undefined ? {} : { dismissedReason: change.dismissedReason }),
+    ...(change.note === undefined ? {} : { note: change.note }),
   });
-  // Outside the transaction, same shape as classify.ts's enqueueEnrich-after-create: the opp
-  // has just entered an active pipeline stage (issue #239) and its company has no homepage yet,
-  // so resolve one. Deduped per company, so moving several opportunities of the same company
-  // through the pipeline costs one job, not one per move.
+  const { historyEntry } = result;
+  // Issue #240: a card never inherits a rank from the stage it left, and self-transitions
+  // are invalid (see applyTransition), so this always runs on a real stage change.
+  const sortOrder = await nextSortOrder(tx, ctx, result.stage);
+  await tx
+    .update(opportunities)
+    .set({
+      stage: result.stage,
+      closedReason: result.closedReason,
+      dismissedReason: result.dismissedReason,
+      sortOrder,
+      updatedAt: historyEntry.at,
+    })
+    .where(owned(ctx, id))
+    .run();
+  await tx
+    .insert(stageHistory)
+    .values({ id: newId(), userId: ctx.userId, opportunityId: id, ...historyEntry })
+    .run();
+  if (result.stage === 'dismissed') {
+    // Dismissal feedback feeds discovery prompt refinement (FR-D6).
+    await tx
+      .insert(dismissalFeedback)
+      .values({
+        id: newId(),
+        userId: ctx.userId,
+        kind: 'dismissal',
+        opportunityId: id,
+        reason: result.dismissedReason,
+        note: change.note ?? null,
+        at: historyEntry.at,
+      })
+      .run();
+  }
+  return await getViewSync(tx, ctx, id);
+}
+
+/**
+ * After a stage change has committed. Same shape as classify.ts's enqueueEnrich-after-create:
+ * the opp has just entered an active pipeline stage (issue #239) and its company has no homepage
+ * yet, so resolve one. Deduped per company, so moving several opportunities of the same company
+ * through the pipeline costs one job, not one per move.
+ */
+export async function afterStageChange(db: Db, ctx: UserCtx, view: OpportunityView): Promise<void> {
   if (
     (ACTIVE_PIPELINE_STAGES as readonly string[]).includes(view.stage) &&
     view.companyDomain === null
   ) {
     await enqueueCompanyDomainResolve(db, ctx.userId, view.companyId);
   }
-  return view;
 }
 
 export async function deleteOpportunity(db: Db, ctx: UserCtx, id: string): Promise<void> {

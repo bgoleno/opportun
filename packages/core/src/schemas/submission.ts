@@ -130,6 +130,14 @@ export const SubmissionSchema = z.object({
   confirmedAt: TimestampSchema.nullable(),
   confirmationKind: z.enum(SUBMISSION_CONFIRMATION_KINDS).nullable(),
   failureReason: z.enum(SUBMISSION_FAILURE_REASONS).nullable(),
+  /**
+   * A re-application (owner decision 6, #118): the earlier attempt at the same requisition, and
+   * the reason the user typed at review. Both null for a first application.
+   */
+  reapplyOf: IdSchema.nullable(),
+  reapplyReason: z.string().nullable(),
+  /** The timeline entry the user's "I submitted it" created (M2a, #118). */
+  submittedActivityId: IdSchema.nullable(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 });
