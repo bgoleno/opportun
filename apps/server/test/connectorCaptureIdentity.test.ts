@@ -54,26 +54,26 @@ const MODEL_FIELDS: Refined = {
   descriptionMd: null,
 };
 
-/** Each site's page, and the lead a source with its own ids would have stored for it. */
-const SITES = {
-  indeed: {
-    page: INDEED_JOB,
-    lead: {
-      company: 'Example Corp',
-      title: 'Senior Example Engineer',
-      postingUrl: INDEED_JOB_URL,
-    },
+/** A site's page, and the lead a source with its own ids would have stored for it. */
+interface Site {
+  page: object;
+  lead: Pick<NormalizedPosting, 'company' | 'title' | 'postingUrl'>;
+}
+
+const INDEED: Site = {
+  page: INDEED_JOB,
+  lead: { company: 'Example Corp', title: 'Senior Example Engineer', postingUrl: INDEED_JOB_URL },
+};
+
+const LINKEDIN: Site = {
+  page: LINKEDIN_JOB,
+  lead: {
+    company: 'Initech',
+    title: 'Staff Platform Engineer',
+    // Not the canonical URL the capture stores: the identity is the job id, not the string.
+    postingUrl: 'https://www.linkedin.com/jobs/view/3901234567/?trk=example',
   },
-  linkedin: {
-    page: LINKEDIN_JOB,
-    lead: {
-      company: 'Initech',
-      title: 'Staff Platform Engineer',
-      // Not the canonical URL the capture stores: the identity is the job id, not the string.
-      postingUrl: 'https://www.linkedin.com/jobs/view/3901234567/?trk=example',
-    },
-  },
-} as const;
+};
 
 beforeEach(() => {
   vi.mocked(runStructured).mockReset();
@@ -103,13 +103,13 @@ function push(app: FastifyInstance, bearer: string, page: object) {
 async function seedOpaqueLead(
   app: FastifyInstance,
   c: TestClient,
-  site: keyof typeof SITES,
+  site: Site,
 ): Promise<DiscoveryResultView> {
   const ctx = ctxOf(c);
   const source = await ensureChannelSource(app.db, ctx, 'manual');
   const run = await createRun(app.db, ctx, { sourceId: source.id });
   const posting: NormalizedPosting = {
-    ...SITES[site].lead,
+    ...site.lead,
     location: LEAD_LOCATION,
     externalId: 'mcp-job-123',
   };
@@ -128,17 +128,17 @@ const opportunityIds = async (app: FastifyInstance, c: TestClient) =>
 
 describe('POST /connector/capture: a lead with an opaque id beside the posting URL', () => {
   it.each([
-    ['indeed', 'without an AI key', false],
-    ['indeed', 'with AI available', true],
-    ['linkedin', 'without an AI key', false],
-    ['linkedin', 'with AI available', true],
-  ] as const)('%s, %s: the capture completes the lead in place', async (site, _name, ai) => {
+    ['Indeed', 'without an AI key', INDEED, false],
+    ['Indeed', 'with AI available', INDEED, true],
+    ['LinkedIn', 'without an AI key', LINKEDIN, false],
+    ['LinkedIn', 'with AI available', LINKEDIN, true],
+  ] as const)('%s, %s: the capture completes the lead in place', async (_s, _n, site, ai) => {
     const { app, a } = await boot();
     if (ai) vi.mocked(runStructured).mockResolvedValue(MODEL_FIELDS);
     const lead = await seedOpaqueLead(app, a, site);
     const bearer = await token(a);
 
-    const res = await push(app, bearer, SITES[site].page);
+    const res = await push(app, bearer, site.page);
 
     expect(res.statusCode, res.body).toBe(201);
     expect(res.json().resultId).toBe(lead.id);
@@ -157,7 +157,7 @@ describe('POST /connector/capture: a lead with an opaque id beside the posting U
     expect(pending.items).toEqual([]);
 
     // Capturing it again finds the same opportunity and adds nothing.
-    const again = await push(app, bearer, SITES[site].page);
+    const again = await push(app, bearer, site.page);
     expect(again.statusCode, again.body).toBe(200);
     expect(again.json()).toMatchObject({ opportunityId: res.json().opportunityId });
     expect(await opportunityIds(app, a)).toEqual([res.json().opportunityId]);
