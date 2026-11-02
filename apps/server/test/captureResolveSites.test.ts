@@ -85,12 +85,8 @@ const linkedInCapture = (): NormalizedPosting => ({
   externalId: 'linkedin:1000000001',
 });
 
-const resolve = (
-  app: FastifyInstance,
-  ctx: UserCtx,
-  posting: NormalizedPosting,
-  siteId: string,
-) => resolveCapture(app.db, ctx, { posting, captureText: PAGE, siteId });
+const resolve = (app: FastifyInstance, ctx: UserCtx, posting: NormalizedPosting, siteId: string) =>
+  resolveCapture(app.db, ctx, { posting, captureText: PAGE, siteId });
 
 const pendingCount = async (app: FastifyInstance, ctx: UserCtx): Promise<number> =>
   (await listResults(app.db, ctx, { disposition: 'pending', limit: 50, offset: 0 })).items.length;
@@ -100,7 +96,11 @@ const resultCount = async (app: FastifyInstance, ctx: UserCtx): Promise<number> 
 
 const opportunityCount = async (app: FastifyInstance, ctx: UserCtx): Promise<number> =>
   (
-    await queryAll<{ id: string }>(app, 'SELECT id FROM opportunities WHERE user_id = ?', ctx.userId)
+    await queryAll<{ id: string }>(
+      app,
+      'SELECT id FROM opportunities WHERE user_id = ?',
+      ctx.userId,
+    )
   ).length;
 
 describe('resolveCapture: Indeed', () => {

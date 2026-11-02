@@ -126,7 +126,9 @@ describe('postingIdentity: Indeed', () => {
 
   it('reads the job key from a /viewjob URL when there is no externalId', () => {
     expect(
-      postingIdentity(posting({ postingUrl: 'https://www.indeed.com/viewjob?jk=0000000000000A01' })),
+      postingIdentity(
+        posting({ postingUrl: 'https://www.indeed.com/viewjob?jk=0000000000000A01' }),
+      ),
     ).toBe('indeed:0000000000000a01');
   });
 
