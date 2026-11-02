@@ -3,8 +3,17 @@
 // fails whenever the AI refine step did not run (no key, budget spent, provider error): the
 // capture then carries no location at all. Identity is exact and needs no AI.
 import type { NormalizedPosting } from '@opportun/core';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CAPTURE_SITES, postingIdentity, siteLabel } from '../src/lib/captureSites';
+import { INDEED_JOB_KEY, parseIndeedAlert } from '../src/lib/alertParsers/indeed';
+import {
+  CAPTURE_SITES,
+  postingIdentity,
+  siteLabel,
+  siteOfUrl,
+  type CaptureSite,
+} from '../src/lib/captureSites';
 
 const posting = (over: Partial<NormalizedPosting>): NormalizedPosting => ({
   company: 'Initech',
@@ -93,7 +102,80 @@ describe('siteLabel', () => {
     expect(siteLabel('wellfound')).toBe('wellfound');
   });
 
-  it('ships exactly one site today, so adding one is additive', () => {
-    expect(CAPTURE_SITES.map((s) => s.id)).toEqual(['linkedin']);
+  it('names Indeed', () => {
+    expect(siteLabel('indeed')).toBe('Indeed');
+  });
+
+  it('ships LinkedIn and Indeed, in that order, so adding a site is additive', () => {
+    expect(CAPTURE_SITES.map((s) => s.id)).toEqual(['linkedin', 'indeed']);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/73. Job keys here are obviously fake hex.
+describe('postingIdentity: Indeed', () => {
+  const indeed = CAPTURE_SITES.find((s) => s.id === 'indeed') as CaptureSite;
+
+  it('gives every lead the Indeed alert parser makes an identity of indeed:<jk>', async () => {
+    const text = await readFile(join(__dirname, 'fixtures/alerts/indeed-alert.txt'), 'utf8');
+    const leads = parseIndeedAlert(text);
+    expect(leads.length).toBeGreaterThan(0);
+    for (const lead of leads) {
+      expect(postingIdentity(lead)).toBe(`indeed:${lead.externalId}`);
+    }
+  });
+
+  it('reads the job key from a /viewjob URL when there is no externalId', () => {
+    expect(
+      postingIdentity(posting({ postingUrl: 'https://www.indeed.com/viewjob?jk=0000000000000A01' })),
+    ).toBe('indeed:0000000000000a01');
+  });
+
+  it('agrees with the alert parser on what a job key is', () => {
+    const url = (jk: string) => new URL(`https://www.indeed.com/viewjob?jk=${jk}`);
+    for (const jk of ['0000000a', '0000000000000a01', '0'.repeat(32), '00000000000000AF']) {
+      expect(INDEED_JOB_KEY.test(jk), jk).toBe(true);
+      expect(indeed.jobIdFromUrl(url(jk)), jk).toBe(jk.toLowerCase());
+    }
+    for (const jk of ['000000a', '0'.repeat(33), '000000000000000g', '']) {
+      expect(INDEED_JOB_KEY.test(jk), jk).toBe(false);
+      expect(indeed.jobIdFromUrl(url(jk)), jk).toBeNull();
+    }
+  });
+
+  it('reads a job key only from a single-posting URL', () => {
+    for (const href of [
+      'https://www.indeed.com/jobs?q=example&vjk=0000000000000a01',
+      'https://www.indeed.com/?vjk=0000000000000a01',
+      'https://www.indeed.com/viewjob/?jk=0000000000000a01',
+      'https://www.indeed.com/cmp/Example-Corp',
+      'https://www.indeed.com/viewjob',
+    ]) {
+      expect(indeed.jobIdFromUrl(new URL(href)), href).toBeNull();
+    }
+  });
+
+  it('claims indeed.com and www.indeed.com only', () => {
+    expect(siteOfUrl('https://indeed.com/viewjob?jk=0000000000000a01')?.id).toBe('indeed');
+    expect(siteOfUrl('https://WWW.Indeed.COM/viewjob?jk=0000000000000a01')?.id).toBe('indeed');
+    for (const href of [
+      'https://uk.indeed.com/viewjob?jk=0000000000000a01',
+      'https://www.indeed.co.uk/viewjob?jk=0000000000000a01',
+      'https://indeed.com.evil.test/viewjob?jk=0000000000000a01',
+      'https://notindeed.com/viewjob?jk=0000000000000a01',
+      'http://www.indeed.com/viewjob?jk=0000000000000a01',
+    ]) {
+      expect(siteOfUrl(href), href).toBeNull();
+    }
+  });
+
+  it('is still null for a bare externalId on a URL no site claims', () => {
+    expect(
+      postingIdentity(
+        posting({
+          externalId: '0000000000000a01',
+          postingUrl: 'https://boards.example.test/jobs/0000000000000a01',
+        }),
+      ),
+    ).toBeNull();
   });
 });
