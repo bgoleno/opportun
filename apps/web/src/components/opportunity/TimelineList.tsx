@@ -158,10 +158,12 @@ export function TimelineList({ opportunityId }: { opportunityId: string }) {
                     href={safeHttpUrl(item.externalUrl) ?? undefined}
                     target="_blank"
                     rel="noopener noreferrer nofollow"
-                    className="inline-flex w-fit items-center gap-1 text-sm text-primary underline underline-offset-2"
+                    // max-w-full and a breakable URL: a long address (a captured job page with its
+                    // tracking query) must wrap inside the column, never widen the page (#146).
+                    className="inline-flex w-fit max-w-full items-start gap-1 text-sm text-primary underline underline-offset-2"
                   >
-                    {item.externalUrl}
-                    <ExternalLink className="size-3.5" aria-hidden="true" />
+                    <span className="min-w-0 [overflow-wrap:anywhere]">{item.externalUrl}</span>
+                    <ExternalLink className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
                   </a>
                 ) : null}
               </>
