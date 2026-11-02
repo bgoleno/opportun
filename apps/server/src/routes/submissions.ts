@@ -16,7 +16,7 @@ import { SubmissionAnswersSchema, SubmissionFieldsSchema, SubmissionSchema } fro
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { submissionsEnabled } from '../config';
+import { MAX_DAILY_REVIEW_CAP, submissionsEnabled } from '../config';
 import { HttpError } from '../lib/errors';
 import { rateLimit } from '../lib/rateLimit';
 import type { ValidationIssue } from '../plugins/security';
@@ -33,7 +33,12 @@ import {
   recordSubmissionOutcome,
   SUBMISSION_OUTCOMES,
 } from '../repos/submissionOutcome';
-import { handoffSubmission, reviewSubmission } from '../repos/submissionReview';
+import {
+  handoffSubmission,
+  reviewSubmission,
+  reviewUsage,
+  setUserReviewCap,
+} from '../repos/submissionReview';
 import { contentDisposition } from './attachments';
 import { DEFAULT_LIMIT, IdParams, MAX_LIMIT, pageOf } from './common';
 
@@ -110,6 +115,19 @@ const HandoffResponse = z.object({
  * database-counted daily cap. Generous for a person, too tight for a script.
  */
 const BURST = { limit: 10, windowMs: 60 * 1000 } as const;
+
+/** The user's own daily review cap; null goes back to the instance's (#130). */
+const ReviewCapBody = z
+  .object({ cap: z.number().int().min(1).max(MAX_DAILY_REVIEW_CAP).nullable() })
+  .strict();
+
+const ReviewUsageSchema = z.object({
+  used: z.number().int(),
+  cap: z.number().int(),
+  instanceCap: z.number().int(),
+  userCap: z.number().int().nullable(),
+  nextFreeAt: z.number().int().nullable(),
+});
 
 const PageQuery = z
   .object({
@@ -211,6 +229,26 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       if (answeredInvalid(req, reply)) return reply;
       return updateSubmissionDraft(db, app.requireUser(req), req.params.id, req.body);
+    },
+  );
+
+  // The caller's own daily review usage and cap (#130). Static paths, so they win over
+  // /submissions/:id; both are behind the flag hook above like every route here.
+  api.get(
+    '/submissions/review-usage',
+    { schema: { response: { 200: ReviewUsageSchema } } },
+    async (req) => reviewUsage(db, app.requireUser(req), app.config),
+  );
+
+  api.put(
+    '/submissions/review-cap',
+    {
+      attachValidation: true,
+      schema: { body: ReviewCapBody, response: { 200: ReviewUsageSchema } },
+    },
+    async (req, reply) => {
+      if (answeredInvalid(req, reply)) return reply;
+      return setUserReviewCap(db, app.requireUser(req), app.config, req.body.cap);
     },
   );
 
