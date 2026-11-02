@@ -672,6 +672,80 @@ describe.runIf(sqliteOnly)('migration journal', () => {
     }
   });
   // https://github.com/bgoleno/opportun/issues/76: the site-neutral job refine prompt.
+  // https://github.com/bgoleno/opportun/issues/88: capture.linkedin's job fields are grounded in
+  // the page, so its system default asks for verbatim copies, and no longer for a description.
+  it('0040 updates the capture.linkedin system default in place, and nothing else', async () => {
+    const { entries } = await readJournal(MIGRATIONS_DIR);
+    const at = entries.findIndex((e) => e.tag === '0040_capture_linkedin_verbatim');
+    expect(at).toBe(40);
+    const partial = await tempDir();
+    await cp(MIGRATIONS_DIR, partial, { recursive: true });
+    const journal = await readJournal(partial);
+    journal.entries = journal.entries.slice(0, at);
+    await writeFile(join(partial, 'meta', '_journal.json'), JSON.stringify(journal));
+
+    const dataDir = await tempDir();
+    const old = new Database(join(dataDir, 'opportun.db'));
+    migrate(drizzle(old), { migrationsFolder: partial });
+    const system = (db: Database.Database) =>
+      db
+        .prepare(
+          `SELECT id, body, version, is_active AS active FROM prompts
+            WHERE user_id IS NULL AND task_key = 'capture.linkedin'`,
+        )
+        .all() as { id: string; body: string; version: number; active: number }[];
+    const others = (db: Database.Database) =>
+      db
+        .prepare(`SELECT id, body FROM prompts WHERE task_key <> 'capture.linkedin' ORDER BY id`)
+        .all();
+    // A user's own version of the prompt, made from the old default, is theirs: left alone.
+    const userId = newId();
+    old
+      .prepare(
+        `INSERT INTO users (id, email, display_name, password_hash, created_at, updated_at)
+         VALUES (?, ?, 'U', 'x', 1, 1)`,
+      )
+      .run(userId, `${userId}@example.com`);
+    const [before] = system(old);
+    old
+      .prepare(
+        `INSERT INTO prompts (id, user_id, task_key, name, body, version, is_active, created_at, updated_at)
+         VALUES (?, ?, 'capture.linkedin', 'mine', ?, 2, 1, 1, 1)`,
+      )
+      .run(newId(), userId, before!.body);
+    const othersBefore = others(old);
+    expect(before!.body).toContain('- location: the city, region, or country as stated.');
+    old.close();
+
+    const { sqlite } = openDatabase(dataDir);
+    try {
+      const [after] = system(sqlite);
+      expect(after).toMatchObject({ id: before!.id, version: 1, active: 1 });
+      const body = after!.body;
+      expect(body).toMatch(/location: on a job, the location copied exactly as the page states it/);
+      expect(body).toMatch(/compNote: on a job, the pay copied exactly as the page states it/);
+      expect(body).toMatch(/descriptionMd: always null/);
+      expect(body).not.toContain('clean Markdown');
+      expect(promptVariables(body)).toEqual([...TASK_PROMPT_VARS['capture.linkedin']]);
+      expect(body).not.toContain(String.fromCharCode(0x2014));
+      // Everything else is untouched, including the user's own version.
+      expect(others(sqlite)).toEqual(othersBefore);
+      const mine = sqlite
+        .prepare(`SELECT body FROM prompts WHERE user_id = ? AND task_key = 'capture.linkedin'`)
+        .get(userId) as { body: string };
+      expect(mine.body).toBe(before!.body);
+      // Re-running it changes nothing.
+      const sql = await readFile(
+        join(MIGRATIONS_DIR, '0040_capture_linkedin_verbatim.sql'),
+        'utf8',
+      );
+      for (const stmt of sql.split('--> statement-breakpoint')) sqlite.exec(stmt);
+      expect(system(sqlite)[0]!.body).toBe(body);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it('0039 seeds the capture.job default on the upgrade path, idempotently', async () => {
     const { entries } = await readJournal(MIGRATIONS_DIR);
     const at = entries.findIndex((e) => e.tag === '0039_capture_job_prompt');
@@ -716,12 +790,17 @@ describe.runIf(sqliteOnly)('migration journal', () => {
         Object.fromEntries(TASK_PROMPT_VARS['capture.job'].map((v) => [v, 'x'])),
       );
       expect(rendered.split('<untrusted>\n').length - 1).toBe(3);
-      // The LinkedIn prompt is untouched (AC3).
-      expect(linkedin(sqlite)).toEqual(linkedinBefore);
-      // Re-running the migration adds nothing.
+      // 0039 adds no capture.linkedin row. (The upgrade also runs 0040, which edits that
+      // prompt's text in place for #88, so only its rows are compared here, and 0039 itself is
+      // shown below to leave the text alone.)
+      const idsOf = (rows: unknown[]) => (rows as { id: string }[]).map((r) => r.id);
+      expect(idsOf(linkedin(sqlite))).toEqual(idsOf(linkedinBefore));
+      const linkedinAfterUpgrade = linkedin(sqlite);
+      // Re-running the migration adds nothing, and does not touch capture.linkedin.
       const sql = await readFile(join(MIGRATIONS_DIR, '0039_capture_job_prompt.sql'), 'utf8');
       for (const stmt of sql.split('--> statement-breakpoint')) sqlite.exec(stmt);
       expect(seeds(sqlite)).toHaveLength(1);
+      expect(linkedin(sqlite)).toEqual(linkedinAfterUpgrade);
     } finally {
       sqlite.close();
     }

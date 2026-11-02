@@ -171,8 +171,8 @@ describe('AC2: without an AI key, captures behave as before', () => {
   });
 });
 
-describe('AC3: LinkedIn refine is unchanged', () => {
-  it('a LinkedIn job still runs capture.linkedin, never capture.job, and keeps its fields as before', async () => {
+describe('AC3: LinkedIn still runs its own prompt', () => {
+  it('a LinkedIn job runs capture.linkedin, never capture.job, and is grounded the same way (#88)', async () => {
     const { app, a } = await boot();
     vi.mocked(runStructured).mockResolvedValue({
       kind: 'job',
@@ -180,8 +180,8 @@ describe('AC3: LinkedIn refine is unchanged', () => {
       headline: null,
       company: null,
       title: null,
-      // Not on the LinkedIn page. LinkedIn job fields are not grounded today; whether they
-      // should be is an open owner question, deliberately not changed here (#76 is Indeed only).
+      // Not on the LinkedIn page. Since https://github.com/bgoleno/opportun/issues/88 (the owner
+      // decided LinkedIn job fields get #76's check too) neither is kept.
       location: 'Not On The Page, ZZ',
       compNote: '$1 a year',
       descriptionMd: '## Responsibilities\n- Own the payments platform end to end',
@@ -190,8 +190,9 @@ describe('AC3: LinkedIn refine is unchanged', () => {
     expect(body.refined).toBe(true);
     expect(runStructured).toHaveBeenCalledTimes(1);
     expect(vi.mocked(runStructured).mock.calls[0]![1]).toBe('capture.linkedin');
-    expect(posting).toMatchObject({ location: 'Not On The Page, ZZ', compNote: '$1 a year' });
-    expect(posting.descriptionMd).toContain('Responsibilities');
+    expect(posting).toMatchObject({ location: null, compNote: null });
+    // The page's own description, not the model's.
+    expect(posting.descriptionMd).toContain('Initech is modernizing its TPS reporting platform');
   });
 });
 

@@ -445,6 +445,93 @@ describe('POST /connector/capture: jobs', () => {
   });
 });
 
+// https://github.com/bgoleno/opportun/issues/88: a LinkedIn job's refine output gets the same
+// check as an Indeed job's (#76): location and pay only when the page states them, and the
+// description always the page's own, never the model's.
+describe('POST /connector/capture: LinkedIn job fields are grounded in the page (#88)', () => {
+  const jobRefine = (fields: Partial<Refined>): Refined => ({
+    ...NO_FIELDS,
+    kind: 'job',
+    ...fields,
+  });
+
+  async function capturedJob(app: FastifyInstance, c: TestClient, page: CapturedPage = JOB) {
+    const res = await push(app, await token(c), page);
+    expect(res.statusCode, res.body).toBe(201);
+    const body = res.json() as { resultId: string; opportunityId: string; refined: boolean };
+    const { posting } = await getResult(app.db, ctxOf(c), body.resultId);
+    const opportunity = await getOpportunity(app.db, ctxOf(c), body.opportunityId);
+    return { body, posting, opportunity };
+  }
+
+  it('AC1: a location or pay the page does not state stays null', async () => {
+    const { app, a } = await boot();
+    vi.mocked(runStructured).mockResolvedValue(
+      jobRefine({ location: 'Somewhere Else, ZZ', compNote: '$9,999,999/yr' }),
+    );
+    const { body, posting, opportunity } = await capturedJob(app, a);
+    expect(body.refined).toBe(true);
+    expect(posting).toMatchObject({ location: null, compNote: null });
+    expect(opportunity).toMatchObject({ location: null, compNote: null });
+  });
+
+  it('AC1: each field on its own; a reformatted pay is dropped, a stated location kept', async () => {
+    const { app, a } = await boot();
+    vi.mocked(runStructured).mockResolvedValue(
+      jobRefine({ location: 'Austin, TX', compNote: '$200,000 - $240,000 per year' }),
+    );
+    const { posting } = await capturedJob(app, a);
+    expect(posting).toMatchObject({ location: 'Austin, TX', compNote: null });
+  });
+
+  it('AC2: a fabricated link or figure in the model description never reaches the description', async () => {
+    const { app, a } = await boot();
+    vi.mocked(runStructured).mockResolvedValue(
+      jobRefine({
+        location: 'Austin, TX',
+        compNote: '$200K/yr - $240K/yr',
+        descriptionMd:
+          '## Responsibilities\n- Own the payments platform end to end\n- Sign-on bonus of $90,000\n\n[Apply on our partner site](https://apply.example.net/initech)',
+      }),
+    );
+    const { posting } = await capturedJob(app, a);
+    expect(posting.descriptionMd).not.toContain('apply.example.net');
+    expect(posting.descriptionMd).not.toContain('$90,000');
+    // The page's own description, as the recognizer reads it without AI.
+    expect(posting.descriptionMd).toContain('Initech is modernizing its TPS reporting platform');
+    expect(posting.descriptionMd).toContain('Own the payments platform end to end');
+  });
+
+  it('AC2: the description is the same with and without AI', async () => {
+    const { app, a } = await boot();
+    const withoutAi = (await capturedJob(app, a)).posting.descriptionMd;
+    const { app: app2, a: b } = await boot();
+    vi.mocked(runStructured).mockResolvedValue(
+      jobRefine({ descriptionMd: 'A rewritten description the page never says.' }),
+    );
+    const withAi = (await capturedJob(app2, b)).posting.descriptionMd;
+    expect(withAi).toBe(withoutAi);
+  });
+
+  it('AC3: values the page states are kept as stated', async () => {
+    const { app, a } = await boot();
+    vi.mocked(runStructured).mockResolvedValue(
+      jobRefine({ location: 'Austin, TX', compNote: '$200K/yr - $240K/yr' }),
+    );
+    const { posting, opportunity } = await capturedJob(app, a);
+    expect(posting).toMatchObject({ location: 'Austin, TX', compNote: '$200K/yr - $240K/yr' });
+    expect(opportunity).toMatchObject({ location: 'Austin, TX', compNote: '$200K/yr - $240K/yr' });
+  });
+
+  it('AC4: without an AI key nothing changes: no location, no pay, the page description', async () => {
+    const { app, a } = await boot();
+    const { body, posting } = await capturedJob(app, a);
+    expect(body.refined).toBe(false);
+    expect(posting).toMatchObject({ location: null, compNote: null });
+    expect(posting.descriptionMd).toContain('Initech is modernizing its TPS reporting platform');
+  });
+});
+
 describe('POST /connector/capture: refusals (Review Focus 5)', () => {
   it.each(Object.entries(REFUSED))(
     '%s is refused with 422 unrecognized_page and creates nothing',
