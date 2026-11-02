@@ -10,8 +10,8 @@
     <main>
       <h1>Opportun Capture</h1>
       <p class="hint">
-        Sends the LinkedIn profile or job in this tab to your own Opportun server. Nothing is read
-        until you click Capture.
+        Sends the LinkedIn profile or job, or the Indeed job, in this tab to your own Opportun
+        server. Nothing is read until you click Capture.
       </p>
       <button id="capture" type="button" class="primary">Capture this page</button>
       <p id="status" role="status" aria-live="polite"></p>
@@ -37,7 +37,10 @@
             autocomplete="off"
             spellcheck="false"
           />
-          <p class="hint">Create one in Opportun under Settings &gt; Integrations &gt; Devices.</p>
+          <p class="hint">
+            Create one in Opportun under Settings &gt; Integrations &gt; Extensions and Connectors:
+            Set up, on the Browser extension row.
+          </p>
           <div class="row">
             <button id="save" type="submit">Save</button>
             <button id="test" type="button">Test connection</button>
