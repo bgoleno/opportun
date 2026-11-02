@@ -80,6 +80,7 @@ import { opportunityRoutes } from './routes/opportunities';
 import { opportunityPostingRoutes } from './routes/opportunityPosting';
 import { profileRoutes } from './routes/profile';
 import { referralRoutes } from './routes/referrals';
+import { submissionRoutes } from './routes/submissions';
 import { reactiveResumeRoutes } from './routes/reactiveResume';
 import { resumeRoutes } from './routes/resumes';
 import { tailoringRoutes } from './routes/tailoring';
@@ -477,6 +478,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       await api.register(connectorCaptureRoutes);
       await api.register(networkRoutes);
       await api.register(referralRoutes);
+      // Assisted apply (#114): every route 404s unless OPPORTUN_SUBMISSIONS=1, never on the demo.
+      await api.register(submissionRoutes);
     },
     { prefix: '/api/v1' },
   );

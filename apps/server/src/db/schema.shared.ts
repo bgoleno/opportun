@@ -121,6 +121,7 @@ export const TABLE_EXPORTS = [
   'taskRuns',
   'networkContacts',
   'communications',
+  'applicationSubmissions',
   'syncState',
   'jobs',
   'settings',

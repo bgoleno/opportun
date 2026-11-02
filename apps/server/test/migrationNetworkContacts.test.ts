@@ -48,6 +48,15 @@ async function chainBefore(dir: string, tag: string): Promise<string> {
 
 type Row = Record<string, string | number | null>;
 
+/**
+ * Row counts after the upgrade, limited to the tables that existed before it. The upgrade runs
+ * the whole chain, so a table a later migration creates (application_submissions, #114) appears
+ * only after; it is left out only while it is empty, so a later table that somehow received
+ * rows still fails the comparison.
+ */
+const onlyEarlierTables = (after: Record<string, number>, before: Record<string, number>) =>
+  Object.fromEntries(Object.entries(after).filter(([table, n]) => table in before || n !== 0));
+
 const T = 1_790_000_000_000;
 const U1 = 'u-1';
 const U2 = 'u-2';
@@ -298,7 +307,9 @@ describe.runIf(sqliteOnly)('0038 network_contacts on SQLite', () => {
     const { sqlite } = openDatabase(dataDir);
     try {
       expect(tableNames(sqlite)).not.toContain('contacts');
-      expect(countsLessLaterSeeds(sqlite, promptIdsBefore)).toEqual(countsBefore);
+      expect(
+        onlyEarlierTables(countsLessLaterSeeds(sqlite, promptIdsBefore), countsBefore),
+      ).toEqual(countsBefore);
       expect(contents(sqlite, renamed)).toEqual(rowsBefore);
       expect(searchRows(sqlite)).toEqual(searchBefore);
       expect(sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
@@ -445,7 +456,9 @@ describe.runIf(livePgUrl !== undefined)('0020 network_contacts on Postgres (live
         await migrateLockedPg(pool);
 
         expect(await tableNames(pool)).not.toContain('contacts');
-        expect(await countsLessLaterSeeds(pool, promptIdsBefore)).toEqual(countsBefore);
+        expect(
+          onlyEarlierTables(await countsLessLaterSeeds(pool, promptIdsBefore), countsBefore),
+        ).toEqual(countsBefore);
         expect(await contents(pool, renamed)).toEqual(rowsBefore);
         expect(await searchRows(pool)).toEqual(searchBefore);
         // Postgres's own foreign_key_check: no row points at a parent that is not there.

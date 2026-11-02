@@ -10,6 +10,7 @@ const FOREIGN_KEY = /FOREIGN KEY constraint failed|violates foreign key constrai
 
 const EXPECTED_TABLES = [
   'activities',
+  'application_submissions',
   'attachments',
   'audit_log',
   'communications',

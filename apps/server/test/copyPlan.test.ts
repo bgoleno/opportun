@@ -75,6 +75,8 @@ describe('copy plan', () => {
       'communications',
       'discovery_results',
       'dismissal_feedback',
+      // After communications and activities, which it references (#114).
+      'application_submissions',
       'sync_state',
       'jobs',
       'settings',

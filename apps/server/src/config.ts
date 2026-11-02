@@ -83,6 +83,14 @@ export interface Config {
    *  check are), so this flag being set by mistake does not arm anything destructive. */
   demo: boolean;
   /**
+   * OPPORTUN_SUBMISSIONS=1 (assisted apply, https://github.com/bgoleno/opportun/issues/79): turns
+   * on the application submission routes. Off by default, and absent counts as off. The demo
+   * never has them, whatever this says (submissionsEnabled). They stay off for users until the
+   * outcome milestone (M2a) is accepted: before it, a submission marked "submitted" would never
+   * be followed up, which the timeline must not claim.
+   */
+  submissions?: boolean;
+  /**
    * OPPORTUN_AI_ALLOW_LOOPBACK_HTTP=1 (issue #334): whether an openai_compatible model policy's
    * baseUrl may use plain http to localhost/127.0.0.1/[::1] at all on this deployment. Off by
    * default. The allowance exists for an operator pointing this server at their own local model
@@ -417,6 +425,14 @@ export function loadDbConfig(env: NodeJS.ProcessEnv = process.env): DbConfig {
 }
 
 /** Reads and validates configuration. Throws a ConfigError naming the offending variable. */
+/**
+ * Whether the application submission routes exist on this deployment: OPPORTUN_SUBMISSIONS=1,
+ * and never on the demo, which holds shared fixture accounts (design Part A section 7.8).
+ */
+export function submissionsEnabled(cfg: Pick<Config, 'submissions' | 'demo'>): boolean {
+  return cfg.submissions === true && !cfg.demo;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const masterKey = loadMasterKey(env);
   const baseUrl = loadBaseUrl(env);
@@ -434,6 +450,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: loadLogLevel(env),
     db: loadDbConfig(env),
     demo: env.OPPORTUN_DEMO === '1',
+    submissions: env.OPPORTUN_SUBMISSIONS === '1',
     aiAllowLoopbackHttp: env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1',
     trustedProxies: loadTrustedProxies(env),
     webDir: resolve(

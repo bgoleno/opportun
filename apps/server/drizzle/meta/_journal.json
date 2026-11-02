@@ -288,6 +288,13 @@
       "when": 1793700000000,
       "tag": "0040_capture_linkedin_verbatim",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1793800000000,
+      "tag": "0041_application_submissions",
+      "breakpoints": true
     }
   ]
 }

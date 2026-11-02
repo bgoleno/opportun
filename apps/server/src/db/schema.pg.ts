@@ -63,8 +63,14 @@ import {
   RESUME_STATUSES,
   RESUME_STORES,
   SOURCE_KINDS,
+  SUBMISSION_CONFIRMATION_KINDS,
+  SUBMISSION_FAILURE_REASONS,
+  SUBMISSION_STATUSES,
+  ATS_REF_KINDS,
   type AtsJobRef,
   type Participant,
+  type SubmissionAnswer,
+  type SubmissionFields,
 } from '@opportun/core';
 import {
   type AtsJobRefRecord,
@@ -827,6 +833,93 @@ export const communications = pgTable(
     uniqueIndex('communications_user_channel_external_uq').on(t.userId, t.channel, t.externalId),
     index('communications_user_thread_idx').on(t.userId, t.threadKey),
     index('communications_opportunity_idx').on(t.opportunityId),
+  ],
+);
+
+// ---------------------------------------------------------------------------
+// Assisted apply (https://github.com/bgoleno/opportun/issues/79, design Part A section 4.2)
+
+/**
+ * One attempt to apply to one opportunity. Opportun never transmits an application: this
+ * records what the user prepared, reviewed and later says they submitted themselves, so the
+ * timeline can tell the truth about it. Status rules: @opportun/core submissionStateMachine.
+ */
+export const applicationSubmissions = pgTable(
+  'application_submissions',
+  {
+    id: id(),
+    userId: userRef(),
+    opportunityId: text('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    /** The resume chosen; it may later be edited or deleted, so its facts are copied below. */
+    resumeId: text('resume_id').references(() => resumes.id, { onDelete: 'set null' }),
+    /** The opportunity's ATS identity when the attempt began (opportunities.ats_job_ref). */
+    atsKind: text('ats_kind', { enum: ATS_REF_KINDS }).notNull(),
+    /** Board org, or Workday `<tenant>/<site>`. */
+    atsRef: text('ats_ref'),
+    atsExternalId: text('ats_external_id').notNull(),
+    /** The employer's posting, https only; the server never fetches it. */
+    destinationUrl: text('destination_url').notNull(),
+    status: text('status', { enum: SUBMISSION_STATUSES }).notNull().default('draft'),
+    /** Client-generated per attempt: a repeated create returns the same row. */
+    idempotencyKey: text('idempotency_key').notNull(),
+    /** The immutable resume snapshot, and what it was, kept even if the attachment goes. */
+    resumeAttachmentId: text('resume_attachment_id').references(() => attachments.id, {
+      onDelete: 'set null',
+    }),
+    resumeSha256: text('resume_sha256'),
+    resumeTitle: text('resume_title'),
+    resumeStore: text('resume_store', { enum: RESUME_STORES }),
+    resumeDocRef: text('resume_doc_ref'),
+    resumeRevision: text('resume_revision'),
+    /** The profile values the user approved, by field name. */
+    fields: json<SubmissionFields>('fields').notNull(),
+    /** The user's answers to the form's questions; user-authored, treated like notes. */
+    answers: json<SubmissionAnswer[]>('answers').notNull(),
+    reviewDigest: text('review_digest'),
+    reviewExpiresAt: int('review_expires_at'),
+    reviewedAt: int('reviewed_at'),
+    handedOffAt: int('handed_off_at'),
+    submittedAt: int('submitted_at'),
+    confirmedAt: int('confirmed_at'),
+    /** 'user_attested' is the only basis: only the user's word makes an attempt submitted. */
+    submittedBasis: text('submitted_basis'),
+    confirmationKind: text('confirmation_kind', { enum: SUBMISSION_CONFIRMATION_KINDS }),
+    confirmationCommId: text('confirmation_comm_id').references(() => communications.id, {
+      onDelete: 'set null',
+    }),
+    /** Which signals matched, never message content. */
+    confirmationBasis: json<unknown>('confirmation_basis'),
+    failureReason: text('failure_reason', { enum: SUBMISSION_FAILURE_REASONS }),
+    submittedActivityId: text('submitted_activity_id').references(() => activities.id, {
+      onDelete: 'set null',
+    }),
+    confirmationActivityId: text('confirmation_activity_id').references(() => activities.id, {
+      onDelete: 'set null',
+    }),
+    /** A re-application to the same requisition names the attempt it repeats. */
+    reapplyOf: text('reapply_of').references((): AnyPgColumn => applicationSubmissions.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index('application_submissions_user_id_idx').on(t.userId),
+    index('application_submissions_opportunity_idx').on(t.opportunityId, t.createdAt),
+    uniqueIndex('application_submissions_user_idem_uq').on(t.userId, t.idempotencyKey),
+    // One live attempt per opportunity (draft, reviewed or handed_off).
+    uniqueIndex('application_submissions_live_uq')
+      .on(t.userId, t.opportunityId)
+      .where(sql`${t.status} IN ('draft', 'reviewed', 'handed_off')`),
+    // Not unique: a re-application to the same requisition must be insertable.
+    index('application_submissions_requisition_idx').on(
+      t.userId,
+      t.atsKind,
+      t.atsRef,
+      t.atsExternalId,
+    ),
   ],
 );
 

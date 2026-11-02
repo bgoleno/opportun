@@ -4,6 +4,7 @@ import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { expect, it } from 'vitest';
 import { settings } from '../src/db/schema';
 import { REGISTRATION_OPEN_KEY } from '../src/lib/registration';
+import type { Config } from '../src/config';
 import { testApp, type TestAppOptions } from './helpers';
 
 export type Response = LightMyRequestResponse;
@@ -91,27 +92,30 @@ export interface IsolationCase {
   setup?: (app: FastifyInstance) => void | Promise<void>;
   /** Fakes passed to buildApp (e.g. the Google client). */
   build?: TestAppOptions['build'];
-  /** Creates the resource as `c` and returns its id. */
-  create: (c: TestClient) => Promise<string>;
+  /** Config overrides for the app, e.g. a feature flag the resource needs (#114). */
+  config?: Partial<Config>;
+  /** Creates the resource as `c` and returns its id. `app` is there for fixtures that need it. */
+  create: (c: TestClient, app: FastifyInstance) => Promise<string>;
   /** Reads (or otherwise targets) the resource by id as `c`. */
-  read: (c: TestClient, id: string) => Promise<Response>;
+  read: (c: TestClient, id: string, app: FastifyInstance) => Promise<Response>;
 }
 
 async function checkOneWay(
+  app: FastifyInstance,
   opts: IsolationCase,
   owner: TestClient,
   other: TestClient,
   ownerName: string,
   otherName: string,
 ): Promise<void> {
-  const id = await opts.create(owner);
+  const id = await opts.create(owner, app);
   expect(typeof id === 'string' && id.length > 0, 'create must return the new id').toBe(true);
-  const asOther = await opts.read(other, id);
+  const asOther = await opts.read(other, id, app);
   expect(
     asOther.statusCode,
     `user ${otherName} reached user ${ownerName}'s resource: ${asOther.body}`,
   ).toBe(404);
-  const asOwner = await opts.read(owner, id);
+  const asOwner = await opts.read(owner, id, app);
   expect(
     asOwner.statusCode >= 200 && asOwner.statusCode < 300,
     `owner read must succeed for the 404 to mean anything (user ${ownerName} got ${asOwner.statusCode})`,
@@ -126,20 +130,17 @@ async function checkOneWay(
  */
 export async function checkIsolation(app: FastifyInstance, opts: IsolationCase): Promise<void> {
   const { a, b } = await registerTwoUsers(app);
-  await checkOneWay(opts, a, b, 'A', 'B');
-  await checkOneWay(opts, b, a, 'B', 'A');
+  await checkOneWay(app, opts, a, b, 'A', 'B');
+  await checkOneWay(app, opts, b, a, 'B', 'A');
 }
 
 /** Registers a vitest test running checkIsolation (both directions) on a fresh app. */
 export function assertIsolated(opts: IsolationCase): void {
   it(`isolates ${opts.name ?? 'the resource'} between users`, async () => {
-    const { app } = await testApp(
-      {},
-      {
-        ...(opts.setup === undefined ? {} : { setup: opts.setup }),
-        ...(opts.build === undefined ? {} : { build: opts.build }),
-      },
-    );
+    const { app } = await testApp(opts.config ?? {}, {
+      ...(opts.setup === undefined ? {} : { setup: opts.setup }),
+      ...(opts.build === undefined ? {} : { build: opts.build }),
+    });
     try {
       await checkIsolation(app, opts);
     } finally {
