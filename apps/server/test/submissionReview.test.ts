@@ -108,6 +108,9 @@ async function draft(app: FastifyInstance, c: TestClient, ats: AtsJobRef = ATS_R
   });
   expect(created.statusCode, created.body).toBe(201);
   const id = (created.json() as SubmissionJson).id;
+  // The resume snapshot settles first (#115): a local file has no PDF, so `unsupported`, which
+  // review allows. Review while it is pending is refused (see the snapshot tests below).
+  await app.jobs.drain();
   const edited = await api(c, 'PATCH', `/submissions/${id}`, {
     fields: { email: 'jane@example.com' },
     answers: [{ questionKey: 'why_us', label: 'Why us?', value: SENTINEL, source: 'user' }],

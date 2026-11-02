@@ -38,6 +38,8 @@ import {
   SOURCE_KINDS,
   SUBMISSION_CONFIRMATION_KINDS,
   SUBMISSION_FAILURE_REASONS,
+  SUBMISSION_SNAPSHOT_ERRORS,
+  SUBMISSION_SNAPSHOT_STATES,
   SUBMISSION_STATUSES,
   ATS_REF_KINDS,
   type AtsJobRef,
@@ -926,6 +928,15 @@ export const applicationSubmissions = sqliteTable(
     resumeStore: text('resume_store', { enum: RESUME_STORES }),
     resumeDocRef: text('resume_doc_ref'),
     resumeRevision: text('resume_revision'),
+    /**
+     * Where the snapshot stands (#115): pending until the export job writes it, then ready,
+     * unsupported (the store has no PDF) or failed. A failed export leaves the draft a draft.
+     */
+    snapshotState: text('snapshot_state', { enum: SUBMISSION_SNAPSHOT_STATES })
+      .notNull()
+      .default('pending'),
+    /** Why there is no snapshot (unsupported or failed): the store's code, never its message. */
+    snapshotError: text('snapshot_error', { enum: SUBMISSION_SNAPSHOT_ERRORS }),
     /** The profile values the user approved, by field name. */
     fields: json<SubmissionFields>('fields').notNull(),
     /** The user's answers to the form's questions; user-authored, treated like notes. */

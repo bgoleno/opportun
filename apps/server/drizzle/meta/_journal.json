@@ -295,6 +295,13 @@
       "when": 1793800000000,
       "tag": "0041_application_submissions",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1793900000000,
+      "tag": "0042_submission_snapshot_state",
+      "breakpoints": true
     }
   ]
 }

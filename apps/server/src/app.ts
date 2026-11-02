@@ -58,7 +58,15 @@ import { enqueueRepairCompanyMatchKeysOnce } from './jobs/companyMatchKeyRepair'
 import { enqueueCompanyDomainBackfillOnce } from './jobs/companyDomainResolve';
 import { OPPORTUNITY_DEDUPE_AI_CRON, OPPORTUNITY_DEDUPE_AI_KIND } from './jobs/opportunityDedupeAi';
 import { RETRY_WORKDAY_CAPTURE_CRON, RETRY_WORKDAY_CAPTURE_KIND } from './jobs/retryWorkdayCapture';
-import { queueLagMs, runDueJobs, seedSchedule, startRunner, type Runner } from './jobs/runner';
+import {
+  queueLagMs,
+  removeSchedule,
+  runDueJobs,
+  seedSchedule,
+  startRunner,
+  type Runner,
+} from './jobs/runner';
+import { SNAPSHOT_RECONCILE_CRON, SNAPSHOT_RECONCILE_JOB_KIND } from './jobs/submissionSnapshot';
 import { activityRoutes } from './routes/activities';
 import { aiRoutes } from './routes/ai';
 import { attachmentRoutes } from './routes/attachments';
@@ -365,6 +373,14 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   await seedSchedule(db, DISCOVERY_REFINE_KIND, DISCOVERY_REFINE_CRON);
   await seedSchedule(db, ATS_REVERIFY_KIND, ATS_REVERIFY_CRON);
   await seedSchedule(db, COMPANY_SUGGEST_KIND, COMPANY_SUGGEST_CRON);
+  // Assisted apply (#115): settle any draft whose resume snapshot was left pending with no job.
+  // Only while the feature is on; with it off nothing may export a resume, so the schedule (and
+  // any run it queued) goes.
+  if (submissionsEnabled(cfg)) {
+    await seedSchedule(db, SNAPSHOT_RECONCILE_JOB_KIND, SNAPSHOT_RECONCILE_CRON);
+  } else {
+    await removeSchedule(db, SNAPSHOT_RECONCILE_JOB_KIND);
+  }
   // Daily: retry a Workday posting left bare by a failed detail fetch (issue #101).
   await seedSchedule(db, RETRY_WORKDAY_CAPTURE_KIND, RETRY_WORKDAY_CAPTURE_CRON);
   // Daily: resolve a near-miss duplicate pair the heuristic left pending (issue #94).
@@ -389,6 +405,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     storage: app.storage,
     documentStore: app.documentStore,
     reactiveResumeStore: app.reactiveResumeStore,
+    localFileStore: app.localFileStore,
     mailProvider: createGmailProvider(opts.google ?? realGoogleApi, googleConn),
     sourceFetch: opts.sourceFetch ?? safeFetch,
     log: app.log,

@@ -34,7 +34,14 @@ import { racePoint } from '../lib/racePoints';
 import { isPageFetchProhibited } from '../lib/safeFetch';
 import { submissionDigest } from '../lib/submissionDigest';
 import type { Db, Exec, UserCtx } from './base';
-import { getRow, notNow, owned, view, type SubmissionRow } from './submissions';
+import {
+  getRow,
+  notNow,
+  owned,
+  snapshotBlocksReview,
+  view,
+  type SubmissionRow,
+} from './submissions';
 import { readUserSetting } from './userSettings';
 
 /** How long a review may be handed off: a fixed "valid until", never a countdown. */
@@ -54,6 +61,11 @@ const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
  * this scope, then the user's.
  */
 export const submissionScope = (id: string): string => `submission:${id}`;
+
+const SNAPSHOT_BLOCK_MESSAGES = new Map([
+  ['snapshot_pending', 'The saved copy of your resume is still being prepared.'],
+  ['snapshot_failed', 'Opportun could not save a copy of your resume. Choose it again to retry.'],
+] as const);
 
 /** The cap that applies to this user: their own value if lower, else the instance's. */
 async function dailyCap(
@@ -148,6 +160,15 @@ export async function reviewSubmission(
     }
     const refresh = row.status === 'reviewed' && sameDigest;
     if (row.status !== 'draft' && !refresh) throw notNow(row, 'reviewed');
+    // The resume snapshot (#115): review waits while it is pending, and refuses a failed one
+    // until the user chooses the resume again. Ready, or unsupported (the user attaches a file
+    // themselves, and the review shows that), may go ahead. Under the lock, like every check.
+    const blocked = snapshotBlocksReview(row);
+    if (blocked !== null) {
+      throw new HttpError(409, blocked, SNAPSHOT_BLOCK_MESSAGES.get(blocked), {
+        submissionId: row.id,
+      });
+    }
     if (submissionDigest(row) !== input.reviewDigest) throw reviewStale();
 
     await lockScope(tx, userScope(ctx));

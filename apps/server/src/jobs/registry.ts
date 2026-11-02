@@ -16,6 +16,9 @@ export interface JobServices {
    * existing document resolves which one to use per user (readDocumentStorePref), the same
    * way POST /resumes does, rather than always registering through Google. */
   reactiveResumeStore: DocumentStore;
+  /** Resumes stored on this server (store local_file, #284). The snapshot job (#115) asks every
+   * store for its export, this one included, rather than deciding itself which can give one. */
+  localFileStore: DocumentStore;
   /** Gmail (or a fake in tests); read-only. */
   mailProvider: MailProvider;
   /** The SSRF-safe fetch discovery adapters use (tests substitute a recording fake). */
