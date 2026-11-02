@@ -1,12 +1,14 @@
 // Capture ingest, the browser extension's server half (FR-C5, plan Task 13). The extension
-// posts the LinkedIn tab the user is looking at as { url, title, text } under a capture:push
+// posts the tab the user is looking at (LinkedIn, or an Indeed job since
+// https://github.com/bgoleno/opportun/issues/73) as { url, title, text } under a capture:push
 // device token (bearer only: deviceRoute, no session, no CSRF).
 //
-// Order of work: the deterministic shape check (lib/linkedinCapture) runs first, so a feed,
+// Order of work: the deterministic shape check (lib/captureRecognizers) runs first, so a feed,
 // search page or sign-in wall is refused (422 unrecognized_page) before any AI or database
 // work. A profile then upserts a contact (repos/contacts upsertCapturedProfile); a job
-// resolves to an opportunity through lib/captureResolve. capture.linkedin refines the fields when AI is available; without
-// it (no key, budget, provider error) the deterministic reading is stored as is.
+// resolves to an opportunity through lib/captureResolve. capture.linkedin refines a LinkedIn
+// page's fields when AI is available; without it (no key, budget, provider error), and on a
+// site with no refine prompt, the deterministic reading is stored as is.
 //
 // Since 2026-10-19 a job capture no longer lands in the review queue: it resolves to an
 // opportunity at `interested`, completing any pending lead for the same req instead of storing
@@ -96,8 +98,19 @@ const pageUrlOf = (page: RecognizedPage): string =>
   page.kind === 'profile' ? page.profileUrl : page.jobUrl;
 
 /**
- * capture.linkedin over the page, or null when AI is unavailable (no prompt, no key, budget,
- * provider error) or the model reads the page as a different kind than the shape check did.
+ * The refine prompt for each capture site that has one. `capture.linkedin` is written for
+ * LinkedIn pages, so it never runs on another site's page: a site with no entry here is stored
+ * as its recognizer read it, as if AI were unavailable. Indeed has none until there is a
+ * site-neutral prompt (https://github.com/bgoleno/opportun/issues/73, out of scope there).
+ */
+const REFINE_PROMPTS: ReadonlyMap<string, 'capture.linkedin'> = new Map([
+  ['linkedin', 'capture.linkedin'],
+]);
+
+/**
+ * The site's refine prompt over the page, or null when the site has none, AI is unavailable (no
+ * prompt, no key, budget, provider error) or the model reads the page as a different kind than
+ * the shape check did.
  */
 async function refine(
   db: Db,
@@ -106,13 +119,15 @@ async function refine(
   title: string,
   text: string,
 ): Promise<Refined | null> {
-  const prompt = await getActivePrompt(db, ctx, 'capture.linkedin');
+  const promptName = REFINE_PROMPTS.get(page.siteId);
+  if (promptName === undefined) return null;
+  const prompt = await getActivePrompt(db, ctx, promptName);
   if (prompt === undefined) return null;
   const body =
     text.length > CAPTURE_MAX_TEXT ? `${text.slice(0, CAPTURE_MAX_TEXT)}\n[truncated]` : text;
   let out: Refined;
   try {
-    out = await runStructured(await buildAiDeps(db, ctx), 'capture.linkedin', {
+    out = await runStructured(await buildAiDeps(db, ctx), promptName, {
       system: renderPrompt(prompt.body, {
         page_url_untrusted: pageUrlOf(page),
         page_title_untrusted: title,
@@ -197,7 +212,8 @@ export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void
         compNote: field(refined?.compNote ?? null, 500),
         descriptionMd: refined?.descriptionMd?.trim() || page.descriptionMd,
         postingUrl: page.jobUrl,
-        externalId: `linkedin:${page.jobId}`,
+        // `<site>:<jobId>`, the identity lib/captureSites reads back (design D20).
+        externalId: `${page.siteId}:${page.jobId}`,
       };
       // Capturing a job is an act of interest, so it resolves to an opportunity at
       // `interested` rather than to a review-queue card (design D1). A capture is therefore
