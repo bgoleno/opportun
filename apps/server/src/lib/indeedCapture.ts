@@ -5,16 +5,21 @@
 // (search results, company pages, the sign-in and verification interstitials, half-rendered
 // pages): a refusal is better than a wrong opportunity.
 //
-// What it relies on, and why:
-// - The URL is `/viewjob?jk=<jk>`. The extension canonicalizes the split view's `vjk=` to that
-//   form, so the server sees one shape for both layouts.
-// - `text` is the job container, starting at the job's own header: the title line, then the
-//   company line. The extension never sends the site header or the results list.
-// - "Full job description" starts the description.
-// - The tab title is never read: in the split view it names the search, not the job.
-// When an anchor is missing the page is refused with a reason, never guessed at. Location and
-// pay are not read: no line in the fixtures states them in a way that is stable enough, and an
-// Indeed capture gets no AI refine until there is a site-neutral prompt.
+// It reads the Indeed capture text contract
+// (https://github.com/bgoleno/opportun/issues/73#issuecomment-6568000179). The extension composes
+// that text from named parts of the job, the same for the split view and /viewjob:
+//   1 title, 2 company, 3 meta lines (optional), 4 "Job details" block (optional),
+//   5 the literal line "Full job description", 6 the description lines, and nothing after.
+// The URL is always the canonical `https://www.indeed.com/viewjob?jk=<jk>`.
+//
+// So: line 1 is the title and line 2 the company, exactly as sent (nothing is stripped, the
+// rating is its own line); everything after "Full job description" is the description. The tab
+// title is never read, for the job or for anything else: in the split view it names the search,
+// and on /viewjob it starts with the job title, which can contain " - " or words like "Security
+// Check". When an anchor is missing the page is refused with a reason, never guessed at.
+//
+// Location and pay are not read (a follow-up could read the location from the meta lines), and
+// an Indeed capture gets no AI refine until there is a site-neutral prompt.
 //
 // Jobs only. Profile capture stays LinkedIn.
 //
@@ -26,21 +31,19 @@ import { linesOf, MAX_DESCRIPTION, type Recognition } from './linkedinCapture';
 
 const MAX_JOB_FIELD = 300;
 
-/** Where the posting's own description starts. */
+/** The contract's line 5, where the posting's own description starts. */
 const DESCRIPTION_START = 'full job description';
 
 /**
- * The sign-in and verification interstitials Indeed serves in place of a page. They are short,
- * so only the top of the text is searched: a description that happens to quote one of these
- * phrases further down is not a wall.
+ * Phrases of the sign-in and verification interstitials Indeed can serve in place of a job. They
+ * only name a refusal for text that is not a job already: a posting that quotes one of them is
+ * still a posting.
  */
-const WALL_TITLE = /^(?:just a moment|sign in|security check)\b/i;
 const WALL_TEXT = [
   'additional verification required',
   'verify you are human',
   'create an account or sign in',
 ];
-const WALL_SCAN_LINES = 40;
 
 /** The job key of a canonical single-posting URL, or null. */
 function jobKeyOf(raw: string): string | null {
@@ -51,21 +54,36 @@ function jobKeyOf(raw: string): string | null {
   return site.jobIdFromUrl(url);
 }
 
-export function isVerificationWall(title: string, lines: string[]): boolean {
-  if (WALL_TITLE.test(title.trim())) return true;
-  const top = lines.slice(0, WALL_SCAN_LINES).join('\n').toLowerCase();
-  return WALL_TEXT.some((marker) => top.includes(marker));
+function looksLikeWall(lines: string[]): boolean {
+  const text = lines.join('\n').toLowerCase();
+  return WALL_TEXT.some((marker) => text.includes(marker));
 }
 
-/**
- * The company line without what Indeed appends to it: a rating (" · 4.1") and a parent-company
- * note (" (part of Example Holdings, Co., Ltd.)").
- */
-function companyOf(line: string): string {
-  return line
-    .replace(/\s*·\s*\d(?:\.\d)?\s*$/, '')
-    .replace(/\s*\(part of [^)]*\)\s*$/i, '')
+/** The contract's shape, or the reason the text does not have it. */
+function readJob(
+  lines: string[],
+):
+  | { ok: true; title: string; company: string; descriptionMd: string }
+  | { ok: false; reason: 'no_title_company' | 'no_description' } {
+  const start = lines.findIndex((l) => l.toLowerCase() === DESCRIPTION_START);
+  const header = start === -1 ? lines : lines.slice(0, start);
+  const [title, company] = header;
+  if (
+    title === undefined ||
+    company === undefined ||
+    title.length > MAX_JOB_FIELD ||
+    company.length > MAX_JOB_FIELD
+  ) {
+    return { ok: false, reason: 'no_title_company' };
+  }
+  if (start === -1) return { ok: false, reason: 'no_description' };
+  const descriptionMd = lines
+    .slice(start + 1)
+    .join('\n')
+    .slice(0, MAX_DESCRIPTION)
     .trim();
+  if (descriptionMd === '') return { ok: false, reason: 'no_description' };
+  return { ok: true, title, company, descriptionMd };
 }
 
 /** Decides what a captured Indeed tab is. Never throws; never touches the network. */
@@ -74,40 +92,23 @@ export function recognizeIndeedPage(input: {
   title: string;
   text: string;
 }): Recognition {
-  const lines = linesOf(input.text);
-  if (isVerificationWall(input.title, lines)) {
-    return { kind: 'unrecognized', reason: 'verification_wall' };
-  }
   const jk = jobKeyOf(input.url);
   if (jk === null) return { kind: 'unrecognized', reason: 'unsupported_path' };
-
-  const start = lines.findIndex((l) => l.toLowerCase() === DESCRIPTION_START);
-  const header = start === -1 ? lines : lines.slice(0, start);
-  const [title, companyLine] = header;
-  const company = companyLine === undefined ? '' : companyOf(companyLine);
-  if (
-    title === undefined ||
-    company === '' ||
-    title.length > MAX_JOB_FIELD ||
-    company.length > MAX_JOB_FIELD
-  ) {
-    return { kind: 'unrecognized', reason: 'no_title_company' };
+  const lines = linesOf(input.text);
+  const job = readJob(lines);
+  if (!job.ok) {
+    return {
+      kind: 'unrecognized',
+      reason: looksLikeWall(lines) ? 'verification_wall' : job.reason,
+    };
   }
-  if (start === -1) return { kind: 'unrecognized', reason: 'no_description' };
-  const descriptionMd = lines
-    .slice(start + 1)
-    .join('\n')
-    .slice(0, MAX_DESCRIPTION)
-    .trim();
-  if (descriptionMd === '') return { kind: 'unrecognized', reason: 'no_description' };
-
   return {
     kind: 'job',
     jobId: jk,
     // The alert parser stores this exact form, so a capture and an alert lead share a URL.
     jobUrl: `https://www.indeed.com/viewjob?jk=${jk}`,
-    title,
-    company,
-    descriptionMd,
+    title: job.title,
+    company: job.company,
+    descriptionMd: job.descriptionMd,
   };
 }

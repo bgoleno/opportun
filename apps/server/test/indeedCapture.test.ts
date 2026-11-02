@@ -1,6 +1,7 @@
 // The Indeed capture shape check (https://github.com/bgoleno/opportun/issues/73). A single
-// posting is read deterministically; everything else is refused with a named reason, and a
-// missing anchor is a refusal, never a guess. Fixtures are synthetic (fixtures/capture/indeedPages).
+// posting in the capture text contract's shape is read deterministically; everything else is
+// refused with a named reason, and a missing anchor is a refusal, never a guess. Fixtures are
+// synthetic (fixtures/capture/indeedPages).
 import { describe, expect, it } from 'vitest';
 import { recognizeCapturedPage } from '../src/lib/captureRecognizers';
 import { recognizeIndeedPage } from '../src/lib/indeedCapture';
@@ -8,33 +9,57 @@ import {
   INDEED_DESCRIPTION,
   INDEED_JK,
   INDEED_JOB,
-  INDEED_JOB_PARENT_COMPANY,
+  INDEED_JOB_DASH_TITLE,
+  INDEED_JOB_MINIMAL,
   INDEED_JOB_SPLIT_VIEW,
   INDEED_JOB_UPPERCASE_KEY,
   INDEED_JOB_URL,
+  INDEED_JOB_WALL_WORDS,
   INDEED_REFUSED,
+  indeedText,
 } from './fixtures/capture/indeedPages';
 
+const EXPECTED_JOB = {
+  kind: 'job',
+  jobId: INDEED_JK,
+  jobUrl: INDEED_JOB_URL,
+  title: 'Senior Example Engineer',
+  company: 'Example Corp',
+  descriptionMd: INDEED_DESCRIPTION,
+};
+
 describe('recognizeIndeedPage', () => {
-  it('reads a single posting: job key, canonical URL, title, company, description', () => {
-    expect(recognizeIndeedPage(INDEED_JOB)).toEqual({
-      kind: 'job',
-      jobId: INDEED_JK,
-      jobUrl: INDEED_JOB_URL,
-      title: 'Senior Example Engineer',
-      company: 'Example Corp',
-      descriptionMd: INDEED_DESCRIPTION,
-    });
+  it('reads a posting with every optional line: job key, canonical URL, title, company, description', () => {
+    expect(recognizeIndeedPage(INDEED_JOB)).toEqual(EXPECTED_JOB);
+  });
+
+  it('reads a posting with no optional lines the same way', () => {
+    expect(recognizeIndeedPage(INDEED_JOB_MINIMAL)).toEqual(EXPECTED_JOB);
   });
 
   it('reads the split view the same way: the tab title is never used', () => {
-    expect(recognizeIndeedPage(INDEED_JOB_SPLIT_VIEW)).toEqual(recognizeIndeedPage(INDEED_JOB));
+    expect(recognizeIndeedPage(INDEED_JOB_SPLIT_VIEW)).toEqual(EXPECTED_JOB);
   });
 
-  it('drops a parent-company note and the rating from the company line', () => {
-    expect(recognizeIndeedPage(INDEED_JOB_PARENT_COMPANY)).toMatchObject({
+  it('keeps a title that contains " - " whole', () => {
+    expect(recognizeIndeedPage(INDEED_JOB_DASH_TITLE)).toMatchObject({
       kind: 'job',
+      title: 'Senior Example Engineer - Platform',
       company: 'Example Corp',
+    });
+  });
+
+  it('takes the company exactly as line 2 reads, and never the rating line', () => {
+    const page = {
+      ...INDEED_JOB,
+      text: indeedText({
+        title: 'Senior Example Engineer',
+        company: 'Example Corp (part of Example Holdings)',
+        meta: ['4.1'],
+      }),
+    };
+    expect(recognizeIndeedPage(page)).toMatchObject({
+      company: 'Example Corp (part of Example Holdings)',
     });
   });
 
@@ -46,17 +71,21 @@ describe('recognizeIndeedPage', () => {
     });
   });
 
-  it('keeps the page header and job details out of the description', () => {
+  it('keeps the meta lines and the job details block out of the description', () => {
     const page = recognizeIndeedPage(INDEED_JOB);
     expect(page.kind).toBe('job');
     const description = (page as { descriptionMd: string }).descriptionMd;
-    expect(description).not.toMatch(/Apply now|Job details|Example Corp · 4\.1/);
+    expect(description).not.toMatch(/Job details|\$100,000|Example City|4\.1/);
   });
 
-  it('does not take a wall phrase deep inside a description for a wall', () => {
-    const filler = Array.from({ length: 60 }, (_, i) => `Lorem ipsum line ${i}.`);
-    const text = `${INDEED_JOB.text}\n${filler.join('\n')}\nVerify you are human, says the example.`;
-    expect(recognizeIndeedPage({ ...INDEED_JOB, text })).toMatchObject({ kind: 'job' });
+  it('reads a job whose title and description use wall words as a job', () => {
+    // "Security Check Analyst": the tab title starts with "Security Check" and the description
+    // quotes verification phrases. A title, a company and a description make it a job.
+    expect(recognizeIndeedPage(INDEED_JOB_WALL_WORDS)).toMatchObject({
+      kind: 'job',
+      title: 'Security Check Analyst',
+      company: 'Example Corp',
+    });
   });
 });
 
