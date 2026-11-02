@@ -18,7 +18,12 @@ function isPayLine(line: string): boolean {
     / (?:a|an|per) (?:year|hour|month|week|day)\b/i.test(line)
   );
 }
-const JOB_KEY = /^[0-9a-f]{8,32}$/i;
+/**
+ * An Indeed job key (`jk`): hex, 8 to 32 characters. The one rule for what a job key is, shared
+ * with the Indeed capture site (lib/captureSites.ts), so an alert lead and a capture of the same
+ * posting always agree on whether there is a job key at all.
+ */
+export const INDEED_JOB_KEY = /^[0-9a-f]{8,32}$/i;
 
 function jobLink(line: string): { url: string; key: string } | null {
   if (!/^https:\/\/\S{1,4000}$/i.test(line)) return null;
@@ -30,7 +35,7 @@ function jobLink(line: string): { url: string; key: string } | null {
   }
   if (!onDomain(url.hostname, BOARD_DOMAIN)) return null;
   const key = url.searchParams.get('jk');
-  if (key === null || !JOB_KEY.test(key)) return null;
+  if (key === null || !INDEED_JOB_KEY.test(key)) return null;
   const jk = key.toLowerCase();
   return { url: `https://www.${BOARD_DOMAIN}/viewjob?jk=${jk}`, key: jk };
 }

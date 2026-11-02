@@ -302,6 +302,26 @@ describe('POST /opportunities/:id/posting', () => {
     expect(res.json().error).toEqual({ code: 'prohibited_host', hint: PASTE_TEXT_HINT });
   });
 
+  it('refuses a pasted Indeed URL the same way, before any fetch (issue #75)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Staff Product Manager' });
+    const requested: string[] = [];
+    app.jobs.services.sourceFetch = (async (url: string) => {
+      requested.push(url);
+      throw new Error(`unexpected fetch ${url}`);
+    }) as unknown as typeof app.jobs.services.sourceFetch;
+
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/posting`,
+      payload: { url: 'https://www.indeed.com/viewjob?jk=00000000deadbeef' },
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toEqual({ code: 'prohibited_host', hint: PASTE_TEXT_HINT });
+    expect(requested).toEqual([]);
+  });
+
   it('rejects a body naming more than one source', async () => {
     const { app, a } = await boot();
     const id = await seed(app, a, { title: 'Staff Product Manager' });

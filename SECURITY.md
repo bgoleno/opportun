@@ -44,10 +44,15 @@ The full security design is [docs/design.md](docs/design.md), section 7. In shor
   AI prompts, including model output derived from it (the tailoring match report is fenced
   as `match_report_untrusted` before it reenters a later prompt), with no AI output
   able to send an application, email or message without your click; an SSRF-safe fetch
-  layer (`lib/safeFetch.ts`) for adapter HTTP to job sites, ATS APIs and captured links; the
+  layer (`lib/safeFetch.ts`) for adapter HTTP to job sites, ATS APIs and captured links,
+  which refuses two lists of hosts whatever a caller asks: LinkedIn (`PROHIBITED_HOSTS`,
+  C-1: no automated retrieval at all) and Indeed (`PAGE_FETCH_PROHIBITED_HOSTS`, C-2:
+  its pages come only from the user's browser or pasted text); the
   AI provider's `openai_compatible` base URL path goes through its own guarded fetch
-  (`lib/aiProviderFetch.ts`) instead, checking the same prohibited-host (C-1) and
-  private-range rules `safeFetch` enforces, but without connection pinning -- the same
+  (`lib/aiProviderFetch.ts`) instead, checking the same C-1 prohibited-host and
+  private-range rules `safeFetch` enforces (not the Indeed list, which covers only the
+  server fetching pages, so an MCP connector or AI endpoint the user configures on an
+  Indeed host stays their choice), but without connection pinning -- the same
   documented residual as the MCP DNS-rebinding case covered separately below; filesystem
   access confined to the data directory; rate limits on sign-in, password re-confirmation
   and device-token routes, and a per-user AI budget.
@@ -87,7 +92,7 @@ since it was not a deliberate choice.)
   over https (`apps/server/src/lib/mcpClient.ts`'s `checkMcpUrl`), and an
   `openai_compatible` AI provider policy's `baseUrl` reached over https
   (`apps/server/src/lib/aiProviderFetch.ts`'s `checkProviderUrl`), each check the same
-  two things before fetching: the host is not on the prohibited list (`isProhibitedHost`,
+  two things before fetching: the host is not on the C-1 prohibited list (`isProhibitedHost`,
   which is what keeps the LinkedIn carve-out above intact on both paths), and every
   address its hostname resolves to is public (`isPrivateAddress`). Neither check is
   pinned to the connection, so DNS rebinding past that point is not fully prevented on

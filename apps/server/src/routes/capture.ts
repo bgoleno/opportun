@@ -24,7 +24,7 @@ import { enqueue } from '../jobs/runner';
 import { buildAiDeps, expiredKeyHint } from '../lib/ai';
 import { HttpError } from '../lib/errors';
 import { sanitizeDescriptionText, sanitizePosting } from '../lib/postingSanitize';
-import { FetchBlockedError, isProhibitedHost, type safeFetch } from '../lib/safeFetch';
+import { FetchBlockedError, isPageFetchProhibited, type safeFetch } from '../lib/safeFetch';
 import type { UserCtx } from '../repos/base';
 import {
   ensureChannelSource,
@@ -65,7 +65,7 @@ const CaptureResponse = z.object({
 type CaptureOutput = z.infer<typeof CaptureOutputSchema>;
 
 export async function fetchPageText(fetch: typeof safeFetch, url: string): Promise<string> {
-  if (isProhibitedHost(new URL(url).hostname)) {
+  if (isPageFetchProhibited(new URL(url).hostname)) {
     throw new HttpError(422, 'prohibited_host', undefined, { hint: PASTE_TEXT_HINT });
   }
   let res;

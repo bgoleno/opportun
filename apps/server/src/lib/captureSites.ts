@@ -11,6 +11,7 @@
 // extension's own LinkedIn-specific gates (manifest host permissions, the popup's URL check)
 // are a separate piece of work, deliberately not in this seam.
 import type { NormalizedPosting } from '@opportun/core';
+import { INDEED_JOB_KEY } from './alertParsers/indeed';
 
 export interface CaptureSite {
   /** Stable, lowercase, and the prefix stored in a posting's externalId. */
@@ -20,12 +21,32 @@ export interface CaptureSite {
   matchesHost(host: string): boolean;
   /** The site's own job id for a posting URL on it, or null. */
   jobIdFromUrl(url: URL): string | null;
+  /** True when a bare id has the shape of this site's job ids. */
+  isJobId(id: string): boolean;
 }
 
 /** The LinkedIn apex, its www host, or a two-letter country subdomain (uk., de.). */
 const LINKEDIN_HOST = /^(?:www\.|[a-z][a-z]\.)?linkedin\.com$/;
 /** `/jobs/view/<id>` with an optional trailing slash; ids are digits. */
 const LINKEDIN_JOB_PATH = /^\/jobs\/view\/(\d{1,20})\/?$/;
+const LINKEDIN_JOB_ID = /^\d{1,20}$/;
+
+/**
+ * indeed.com and its www host only. Country sites (uk.indeed.com, indeed.co.uk) are out of scope
+ * for https://github.com/bgoleno/opportun/issues/73 and stay unclaimed.
+ */
+const INDEED_HOST = /^(?:www\.)?indeed\.com$/;
+
+/**
+ * The job key of an Indeed single-posting URL, `/viewjob?jk=<jk>`. The key rule is the alert
+ * parser's own constant, not a second regex: an alert lead stores the same `jk` bare, and the
+ * two must agree on what a job key is for the identity match to hold.
+ */
+function indeedJobKey(url: URL): string | null {
+  if (url.pathname !== '/viewjob') return null;
+  const jk = url.searchParams.get('jk');
+  return jk !== null && INDEED_JOB_KEY.test(jk) ? jk.toLowerCase() : null;
+}
 
 export const CAPTURE_SITES: readonly CaptureSite[] = [
   {
@@ -33,6 +54,14 @@ export const CAPTURE_SITES: readonly CaptureSite[] = [
     label: 'LinkedIn',
     matchesHost: (host) => LINKEDIN_HOST.test(host),
     jobIdFromUrl: (url) => LINKEDIN_JOB_PATH.exec(url.pathname)?.[1] ?? null,
+    isJobId: (id) => LINKEDIN_JOB_ID.test(id),
+  },
+  {
+    id: 'indeed',
+    label: 'Indeed',
+    matchesHost: (host) => INDEED_HOST.test(host),
+    jobIdFromUrl: indeedJobKey,
+    isJobId: (id) => INDEED_JOB_KEY.test(id),
   },
 ];
 
@@ -68,8 +97,14 @@ export function postingIdentity(posting: NormalizedPosting): string | null {
   }
   const site = posting.postingUrl == null ? null : siteOfUrl(posting.postingUrl);
   if (site === null) return null;
-  // A bare externalId means the site's own id when the URL says which site that is.
-  if (externalId !== '') return `${site.id}:${externalId.toLowerCase()}`;
+  // The URL's own job id wins over a bare externalId: a source other than the site's alert
+  // parser (a user-mapped MCP connector, say) can store its own opaque id beside a site URL, and
+  // reading that as the site's id would make it contradict a capture of the very same posting
+  // (https://github.com/bgoleno/opportun/issues/73).
   const fromUrl = site.jobIdFromUrl(new URL(posting.postingUrl as string));
-  return fromUrl === null ? null : `${site.id}:${fromUrl.toLowerCase()}`;
+  if (fromUrl !== null) return `${site.id}:${fromUrl.toLowerCase()}`;
+  // Otherwise a bare externalId is the site's own id only when it has that id's shape.
+  return externalId !== '' && site.isJobId(externalId)
+    ? `${site.id}:${externalId.toLowerCase()}`
+    : null;
 }

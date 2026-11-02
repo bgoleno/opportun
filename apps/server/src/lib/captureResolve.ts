@@ -131,10 +131,29 @@ async function opportunityWithKey(
 
 interface Match {
   opportunity: OpportunityView | null;
+  /**
+   * The live opportunity holding the capture's dedupe key that it must not attach to, because
+   * every lead behind it is a different posting on the same site. The capture then gets its own
+   * opportunity, flagged as a possible duplicate of this one.
+   */
+  keptApartFrom: OpportunityView | null;
   /** Pending leads this capture consumes, best first. */
   leads: DiscoveryResultView[];
   /** Leads for this req already accepted, so a re-capture reuses one instead of adding noise. */
   accepted: DiscoveryResultView[];
+}
+
+/** The site part of a `<site>:<id>` identity. */
+const siteOfIdentity = (identity: string): string => identity.slice(0, identity.indexOf(':'));
+
+/**
+ * True when two posting identities say the postings are different reqs. Only ids on the same
+ * site can say that: a LinkedIn job id and an Indeed job key say nothing about each other, so a
+ * LinkedIn capture of the req behind a pending Indeed alert lead still key-matches it, as it did
+ * before Indeed was a capture site (https://github.com/bgoleno/opportun/issues/73).
+ */
+function identitiesContradict(a: string | null, b: string | null): boolean {
+  return a !== null && b !== null && a !== b && siteOfIdentity(a) === siteOfIdentity(b);
 }
 
 /**
@@ -150,10 +169,9 @@ async function findMatch(db: Db, ctx: UserCtx, posting: NormalizedPosting): Prom
   // The dedupe key is the weaker signal, so a key match only counts when it does not contradict
   // an identity: stripSeniority makes "Staff PM" and "Principal PM" at one company share a key,
   // and those are different reqs the user decides about, not this capture.
-  const byKey = (await resultsWithKey(db, ctx, key)).filter((r) => {
-    const other = postingIdentity(r.posting);
-    return other === null || other === identity;
-  });
+  const byKey = (await resultsWithKey(db, ctx, key)).filter(
+    (r) => !identitiesContradict(identity, postingIdentity(r.posting)),
+  );
 
   const seen = new Set<string>();
   const candidates = [...byIdentity, ...byKey].filter((r) =>
@@ -167,19 +185,62 @@ async function findMatch(db: Db, ctx: UserCtx, posting: NormalizedPosting): Prom
     if (decided.opportunityId !== null) {
       const opp = await getOpportunity(db, ctx, decided.opportunityId).catch(() => null);
       if (opp !== null) {
-        return { opportunity: opp, leads: pendingOf(candidates), accepted };
+        return { opportunity: opp, keptApartFrom: null, leads: pendingOf(candidates), accepted };
       }
     }
   }
-  // An opportunity carries no identity of its own, so the key is all there is to go on, and
-  // the unique index means a second opportunity under that key could not be created anyway.
+  // An opportunity carries no identity of its own, so the key is all there is to go on.
   // D20's residual case: a key collision with nothing to contradict it attaches, visibly and
   // reversibly, rather than failing the capture.
-  return {
-    opportunity: await opportunityWithKey(db, ctx, key),
-    leads: pendingOf(candidates),
-    accepted,
-  };
+  const holder = await keyHolder(db, ctx, key, identity);
+  return { ...holder, leads: pendingOf(candidates), accepted };
+}
+
+/** Accepted leads recorded against an opportunity. */
+async function leadsBehind(
+  db: Db,
+  ctx: UserCtx,
+  opportunityId: string,
+): Promise<DiscoveryResultView[]> {
+  const rows = await db
+    .select({ id: discoveryResults.id })
+    .from(discoveryResults)
+    .where(
+      and(
+        eq(discoveryResults.userId, ctx.userId),
+        eq(discoveryResults.opportunityId, opportunityId),
+        eq(discoveryResults.disposition, 'accepted'),
+      ),
+    )
+    .all();
+  return await Promise.all(rows.map((r) => getResult(db, ctx, r.id)));
+}
+
+/**
+ * The opportunity holding `key`, split by whether this capture may attach to it.
+ *
+ * The opportunity has no identity of its own, but the leads accepted against it do. When every
+ * one of them is a different posting on the capture's site, the key match is the same
+ * contradiction findMatch already drops for leads: for Indeed, whose capture carries no
+ * location, "Senior" and "Principal" at one company, or one title in two cities, share a key on
+ * every capture after the first (https://github.com/bgoleno/opportun/issues/73). An opportunity
+ * with no leads, or with any lead that does not contradict, keeps D20's attach.
+ */
+async function keyHolder(
+  db: Db,
+  ctx: UserCtx,
+  key: string,
+  identity: string | null,
+): Promise<Pick<Match, 'opportunity' | 'keptApartFrom'>> {
+  const opp = await opportunityWithKey(db, ctx, key);
+  if (opp === null || identity === null) return { opportunity: opp, keptApartFrom: null };
+  const behind = await leadsBehind(db, ctx, opp.id);
+  const contradicted =
+    behind.length > 0 &&
+    behind.every((r) => identitiesContradict(identity, postingIdentity(r.posting)));
+  return contradicted
+    ? { opportunity: null, keptApartFrom: opp }
+    : { opportunity: opp, keptApartFrom: null };
 }
 
 /** Pending leads, the one to complete first: the sole `needs_capture`, else the oldest. */
@@ -264,6 +325,35 @@ async function fillOpportunity(
   if (Object.keys(patch).length > 0) await updateOpportunity(db, ctx, opp.id, patch);
 }
 
+/**
+ * createOpportunity's override, only when this capture was kept apart from the key's holder. The
+ * new opportunity then has no dedupe key and records the holder as a possible duplicate (#9), so
+ * the user still sees the two side by side. Without a kept-apart holder the unique key stays the
+ * guard against two captures racing into two opportunities.
+ */
+const forceIfKeptApart = (keptApartFrom: OpportunityView | null): { force?: boolean } =>
+  keptApartFrom === null ? {} : { force: true };
+
+/** Says on the new opportunity's timeline which similar one it was kept apart from, and why. */
+async function recordKeptApart(
+  db: Db,
+  ctx: UserCtx,
+  opportunityId: string,
+  other: OpportunityView,
+  siteId: string,
+): Promise<void> {
+  await createActivity(db, ctx, opportunityId, {
+    kind: 'link',
+    title: `Kept apart from a different ${siteLabel(siteId)} posting`,
+    bodyMd: [`${other.companyName}: ${other.title}`, other.location ?? null]
+      .filter((l): l is string => l !== null)
+      .join('\n'),
+    occurredAt: Date.now(),
+    participants: [],
+    externalUrl: other.postingUrl ?? null,
+  });
+}
+
 /** Advances `discovered` and `dismissed` to `interested`; leaves every other stage alone (D3). */
 async function advance(
   db: Db,
@@ -312,10 +402,12 @@ export async function resolveCapture(
   input: CaptureInput,
 ): Promise<CaptureResolution> {
   const posting = sanitizePosting(input.posting);
+  const identity = postingIdentity(posting);
   const match = await findMatch(db, ctx, posting);
   const [primary, ...rest] = match.leads;
 
   let opportunity = match.opportunity;
+  let keptApartFrom = match.keptApartFrom;
   let resultId: string;
   let createdOpportunity = false;
 
@@ -340,21 +432,28 @@ export async function resolveCapture(
     // tracked already, and creating a second one would throw 409 after the lead has already
     // been flipped to `full`: a half-landed capture with no reconcile queued.
     if (opportunity === null && filled.dedupeKey !== null) {
-      opportunity = await opportunityWithKey(db, ctx, filled.dedupeKey);
+      const holder = await keyHolder(db, ctx, filled.dedupeKey, identity);
+      opportunity = holder.opportunity;
+      keptApartFrom ??= holder.keptApartFrom;
     }
     if (opportunity === null) {
-      opportunity = await createOpportunity(db, ctx, {
-        companyName: filled.posting.company,
-        title: filled.posting.title,
-        descriptionMd: filled.posting.descriptionMd ?? null,
-        postingUrl: filled.posting.postingUrl ?? null,
-        location: filled.posting.location ?? null,
-        remote: filled.posting.remote ?? null,
-        compNote: filled.posting.compNote ?? null,
-        roleTargetId: filled.roleTargetId,
-        sourceKind: 'discovery',
-        sourceRef: filled.id,
-      });
+      opportunity = await createOpportunity(
+        db,
+        ctx,
+        {
+          companyName: filled.posting.company,
+          title: filled.posting.title,
+          descriptionMd: filled.posting.descriptionMd ?? null,
+          postingUrl: filled.posting.postingUrl ?? null,
+          location: filled.posting.location ?? null,
+          remote: filled.posting.remote ?? null,
+          compNote: filled.posting.compNote ?? null,
+          roleTargetId: filled.roleTargetId,
+          sourceKind: 'discovery',
+          sourceRef: filled.id,
+        },
+        forceIfKeptApart(keptApartFrom),
+      );
       createdOpportunity = true;
     }
     await setDisposition(db, ctx, filled.id, 'accepted', opportunity.id);
@@ -362,18 +461,23 @@ export async function resolveCapture(
   } else if (opportunity === null) {
     const lead = await createLead(db, ctx, posting);
     resultId = lead.id;
-    opportunity = await createOpportunity(db, ctx, {
-      companyName: lead.posting.company,
-      title: lead.posting.title,
-      descriptionMd: lead.posting.descriptionMd ?? null,
-      postingUrl: lead.posting.postingUrl ?? null,
-      location: lead.posting.location ?? null,
-      remote: lead.posting.remote ?? null,
-      compNote: lead.posting.compNote ?? null,
-      roleTargetId: lead.roleTargetId,
-      sourceKind: 'discovery',
-      sourceRef: lead.id,
-    });
+    opportunity = await createOpportunity(
+      db,
+      ctx,
+      {
+        companyName: lead.posting.company,
+        title: lead.posting.title,
+        descriptionMd: lead.posting.descriptionMd ?? null,
+        postingUrl: lead.posting.postingUrl ?? null,
+        location: lead.posting.location ?? null,
+        remote: lead.posting.remote ?? null,
+        compNote: lead.posting.compNote ?? null,
+        roleTargetId: lead.roleTargetId,
+        sourceKind: 'discovery',
+        sourceRef: lead.id,
+      },
+      forceIfKeptApart(keptApartFrom),
+    );
     createdOpportunity = true;
     await setDisposition(db, ctx, lead.id, 'accepted', opportunity.id);
   } else {
@@ -390,6 +494,9 @@ export async function resolveCapture(
   }
 
   await recordCapture(db, ctx, opportunity.id, { ...input, posting });
+  if (createdOpportunity && keptApartFrom !== null) {
+    await recordKeptApart(db, ctx, opportunity.id, keptApartFrom, input.siteId);
+  }
 
   if (createdOpportunity) {
     // The create path already stored the description; record that the system wrote it.
