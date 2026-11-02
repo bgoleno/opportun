@@ -137,6 +137,19 @@ interface Match {
   accepted: DiscoveryResultView[];
 }
 
+/** The site part of a `<site>:<id>` identity. */
+const siteOfIdentity = (identity: string): string => identity.slice(0, identity.indexOf(':'));
+
+/**
+ * True when two posting identities say the postings are different reqs. Only ids on the same
+ * site can say that: a LinkedIn job id and an Indeed job key say nothing about each other, so a
+ * LinkedIn capture of the req behind a pending Indeed alert lead still key-matches it, as it did
+ * before Indeed was a capture site (https://github.com/bgoleno/opportun/issues/73).
+ */
+function identitiesContradict(a: string | null, b: string | null): boolean {
+  return a !== null && b !== null && a !== b && siteOfIdentity(a) === siteOfIdentity(b);
+}
+
 /**
  * What this capture already corresponds to. Posting identity first, dedupe key second (D20):
  * the key carries a location, and a capture only has one when the optional `capture.linkedin`
@@ -150,10 +163,9 @@ async function findMatch(db: Db, ctx: UserCtx, posting: NormalizedPosting): Prom
   // The dedupe key is the weaker signal, so a key match only counts when it does not contradict
   // an identity: stripSeniority makes "Staff PM" and "Principal PM" at one company share a key,
   // and those are different reqs the user decides about, not this capture.
-  const byKey = (await resultsWithKey(db, ctx, key)).filter((r) => {
-    const other = postingIdentity(r.posting);
-    return other === null || other === identity;
-  });
+  const byKey = (await resultsWithKey(db, ctx, key)).filter(
+    (r) => !identitiesContradict(identity, postingIdentity(r.posting)),
+  );
 
   const seen = new Set<string>();
   const candidates = [...byIdentity, ...byKey].filter((r) =>
