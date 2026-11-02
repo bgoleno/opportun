@@ -10,19 +10,52 @@
 # It was written when protection was unavailable on a private repository's plan, after #43
 # merged with sixteen checks still queued. That gap is closed; the convenience is not.
 #
-# Usage: scripts/merge-when-green.sh <pr-number>
+# Usage: scripts/merge-when-green.sh <pr-number> <head-sha>
+#
+# <head-sha> is the full 40-character commit the pull request was reviewed and verified at.
+# The script merges exactly that commit or nothing (issue #82): a commit pushed after the
+# review must not ride into `main` on the strength of a review of its parent. So it refuses
+# when the pull request's head is not <head-sha>, both before waiting for the checks (a stale
+# head fails at once, not after the wait) and again just before merging, and the merge itself
+# is pinned with --match-head-commit, so a push in the moment between that last look and the
+# merge is refused by GitHub rather than merged.
 #
 # Exits non-zero without merging if any check fails, or if the pull request reports no
 # checks at all, which is itself a reason not to merge.
 set -euo pipefail
 
-pr="${1:-}"
-if [[ -z "$pr" ]]; then
-  echo "usage: scripts/merge-when-green.sh <pr-number>" >&2
+usage() {
+  echo "usage: scripts/merge-when-green.sh <pr-number> <head-sha>" >&2
+  echo "  <head-sha>: the full 40-character SHA of the head commit that was reviewed" >&2
   exit 64
-fi
+}
 
-echo "Waiting for checks on #${pr}..."
+# Both arguments go into gh commands, so each must be exactly what it claims to be: a PR
+# number (not, say, a flag like --admin) and a full SHA (an abbreviated one cannot be compared
+# with the head GitHub reports, and --match-head-commit needs the full SHA).
+if [[ $# -ne 2 ]]; then
+  usage
+fi
+pr="$1"
+head="$2"
+if [[ ! "$pr" =~ ^[1-9][0-9]*$ || ! "$head" =~ ^[0-9a-fA-F]{40}$ ]]; then
+  usage
+fi
+head="$(printf '%s' "$head" | tr 'A-F' 'a-f')"
+
+# Refuses, without merging, when the pull request's head is not the reviewed commit.
+require_reviewed_head() {
+  local found
+  found="$(gh pr view "$pr" --json headRefOid -q .headRefOid)"
+  if [[ "$found" != "$head" ]]; then
+    echo "Not merging #${pr}: its head is ${found}, not the reviewed ${head}. Review ${found}, then run this again with it." >&2
+    exit 1
+  fi
+}
+
+require_reviewed_head
+
+echo "Waiting for checks on #${pr} at ${head}..."
 gh pr checks "$pr" --watch --fail-fast
 
 echo "All checks passed."
@@ -59,9 +92,11 @@ if [[ "$mergeable" != "MERGEABLE" ]]; then
   exit 1
 fi
 
-echo "Squash-merging #${pr}..."
+require_reviewed_head
+
+echo "Squash-merging #${pr} at ${head}..."
 # No --delete-branch: the repository already deletes the merged branch on the remote, and the
 # flag also tries to delete the LOCAL branch, which fails whenever the author merges from a
 # worktree that still has it checked out. That failure reads like the merge failed, when the
 # merge has in fact succeeded.
-gh pr merge "$pr" --squash
+gh pr merge "$pr" --squash --match-head-commit "$head"
