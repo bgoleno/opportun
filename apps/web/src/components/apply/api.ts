@@ -120,7 +120,9 @@ export function useReviewSubmission(opportunityId: string) {
         method: 'POST',
         body: { reviewDigest, acknowledged: true },
       }),
-    onSuccess: invalidate,
+    // Settled, not only on success: a refusal (stale, expired) must refresh the digest the
+    // screen holds, or the next attempt would send the same stale one.
+    onSettled: invalidate,
   });
 }
 
@@ -134,7 +136,7 @@ export function useHandoffSubmission(opportunityId: string) {
   return useMutation({
     mutationFn: (id: string) =>
       api<HandoffResult>(`/submissions/${enc(id)}/handoff`, { method: 'POST', body: {} }),
-    onSuccess: invalidate,
+    onSettled: invalidate,
   });
 }
 

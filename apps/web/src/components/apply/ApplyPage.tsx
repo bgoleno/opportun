@@ -20,8 +20,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { ApiError } from '@/lib/api';
-import { formatDateTime, type OpportunityView } from '@/lib/opportunities';
+import { API_BASE, ApiError } from '@/lib/api';
+import { formatDateTime, safeHttpUrl, type OpportunityView } from '@/lib/opportunities';
 import { usableResumes } from './ApplyPanel';
 import {
   atsLabel,
@@ -292,12 +292,20 @@ function SavedCopy({ live }: { live: SubmissionView | undefined }) {
             </span>
           ) : null}
         </div>
-        <Button variant="outline" size="sm" asChild className="w-fit">
-          <a href={`/api/v1/submissions/${encodeURIComponent(live.id)}/snapshot`} download>
-            <Download className="size-4" aria-hidden="true" />
-            Download copy
-          </a>
-        </Button>
+        {live.resumeAttachmentId === null ? (
+          // The user deleted the file from Attachments; the server keeps its fingerprint.
+          <p className="text-muted-foreground">
+            The saved file was deleted. Its fingerprint is kept, so this application still records
+            which resume it used.
+          </p>
+        ) : (
+          <Button variant="outline" size="sm" asChild className="w-fit">
+            <a href={`${API_BASE}/submissions/${encodeURIComponent(live.id)}/snapshot`} download>
+              <Download className="size-4" aria-hidden="true" />
+              Download copy
+            </a>
+          </Button>
+        )}
       </div>
     );
   }
@@ -339,6 +347,10 @@ interface AnswerRow {
   value: string;
 }
 
+function sortedEntries(o: Record<string, string>): [string, string][] {
+  return Object.entries(o).sort(([a], [b]) => a.localeCompare(b));
+}
+
 function DetailsStep({ opp, live }: { opp: OpportunityView; live: SubmissionView }) {
   const navigate = useNavigate();
   const patch = usePatchSubmission(opp.id);
@@ -366,10 +378,15 @@ function DetailsStep({ opp, live }: { opp: OpportunityView; live: SubmissionView
         source: 'user' as const,
       }));
     const body: SubmissionPatch = { fields: cleanFields, answers: cleanAnswers };
+    // Nothing changed: no write, so stepping back and forward keeps a valid review.
+    const unchanged =
+      JSON.stringify(sortedEntries(cleanFields)) === JSON.stringify(sortedEntries(live.fields)) &&
+      JSON.stringify(cleanAnswers.map((a) => [a.label, a.value])) ===
+        JSON.stringify(live.answers.map((a) => [a.label, a.value]));
     try {
       // Any edit after a review sends the attempt back to draft: the user reviews again
       // (#117 criterion 2).
-      await patch.mutateAsync({ id: live.id, patch: body });
+      if (!unchanged) await patch.mutateAsync({ id: live.id, patch: body });
       await navigate({
         to: '/opportunities/$id/apply',
         params: { id: opp.id },
@@ -623,8 +640,19 @@ function ReviewStep({
           <Notice role="alert">
             <span>
               <strong>Something changed while you were reviewing.</strong> Your earlier review no
-              longer counts. Check everything below, then confirm again.
+              longer counts. Check everything below, then review again.
             </span>
+            {live.status === 'reviewed' ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-fit"
+                onClick={() => void reviewAgain()}
+                disabled={busy}
+              >
+                Review again
+              </Button>
+            ) : null}
           </Notice>
         ) : null}
         {expiredAt !== null ? (
@@ -867,17 +895,22 @@ function OpenStep({
     );
   }
 
-  const link = (
-    <a
-      href={live.destinationUrl}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="font-mono text-primary underline-offset-4 [overflow-wrap:anywhere] hover:underline"
-    >
-      Open {host}
-      <span className="sr-only"> (opens in a new tab)</span>
-    </a>
-  );
+  // The server hands off only an https address it checked; never trust it into an href blindly.
+  const href = safeHttpUrl(live.destinationUrl);
+  const link =
+    href === null ? (
+      <span className="font-mono [overflow-wrap:anywhere]">{live.destinationUrl}</span>
+    ) : (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="font-mono text-primary underline-offset-4 [overflow-wrap:anywhere] hover:underline"
+      >
+        Open {host}
+        <span className="sr-only"> (opens in a new tab)</span>
+      </a>
+    );
 
   return (
     <div className="grid gap-4">
