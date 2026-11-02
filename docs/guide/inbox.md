@@ -29,7 +29,14 @@ _The Gmail card with its lookback window, and the Devices card that tracks the A
 
 ## How classification works
 
-Each new message goes to the `comms.classify` AI task, which decides:
+Before a message is classified, your mail filters (under **Settings > Mail filters**) decide
+whether it is about your job search at all, and for some messages a short AI check, the
+`comms.triage` task, reads the sender, the subject and the first 500 characters of the message
+to decide the same. A message either one keeps out is stored without its subject or text: only
+the sender, the date and the rule that decided. It appears in the **Blocked** tab, so you can
+spot a sender kept out by mistake and change the rule.
+
+Each message that gets through goes to the `comms.classify` AI task, which decides:
 
 - **What it is**: Outreach, Scheduling, Follow-up, Rejection, Offer, Networking or Other.
 - **For outreach, what kind**: **Targeted** (written to you about a real role),
@@ -47,7 +54,7 @@ daily budget stops calls once it is spent, until the next UTC day (see
 [Settings](settings.md#models-and-budgets)). Messages synced before you added an AI key stay
 unclassified and are queued automatically when you add one.
 
-## The four tabs
+## The five tabs
 
 | Tab          | What it holds                                                                                                                                                                  |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -55,6 +62,7 @@ unclassified and are queued automatically when you add one.
 | Linked       | Messages linked to an opportunity                                                                                                                                              |
 | Spam         | Broadcast outreach. It never creates opportunities. **Not spam** brings one back                                                                                               |
 | Filtered     | Not-a-fit outreach, with the reason it does not fit                                                                                                                            |
+| Blocked      | Messages kept out before classification (see above): only the sender, the date and the rule that decided, with a link to the original where there is one                       |
 
 ![The Linked tab: a targeted Apple Mail message, a Gmail interview request with a suggested move to In process, and a targeted Gmail message](images/inbox-linked.png)
 

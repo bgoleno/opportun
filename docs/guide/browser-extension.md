@@ -54,6 +54,13 @@ whatever the opportunity was missing. An opportunity you had dismissed comes bac
 Interested, because capturing it means you changed your mind. One you have already applied to,
 or are interviewing for, keeps its stage and only gains the details.
 
+A different job that only looks like one you track is kept apart instead: for example a
+Principal role on the same site as the Staff role you track at that company, whose titles match
+once the seniority word is set aside. It gets its own opportunity, flagged as a possible
+duplicate, with a **Kept apart** entry on its timeline. See
+[Possible duplicates](pipeline.md#possible-duplicates) for exactly when that happens and what
+you can do about it.
+
 ## What happens after a capture
 
 Opportun then looks for the same job on the **company's own job board**, which is the version

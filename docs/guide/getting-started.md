@@ -49,6 +49,21 @@ The dashboard is the home page. It shows:
 - **Recent activity**: stage changes, notes, interviews, attached postings and referral asks.
 - A button at the top right when messages in the inbox need triage.
 
+Until you are set up, a **Get set up** card sits above the stage counts. It lists three steps
+and how many of them are done:
+
+- **Add your AI key**: done once a key you added authenticates. **Add key** opens
+  **Settings > AI**.
+- **Connect your mail**: Gmail or the Apple Mail connector. **Connect** opens
+  **Settings > Integrations**.
+- **Get your first opportunity**: done once you track any opportunity. **Add one** opens the
+  New opportunity dialog.
+
+**Take the tour** starts the first-run tour. **Hide** appears once at least one step is done,
+and hides the card for good. When all three steps are done, the card says **You're set up** for
+that visit, suggests adding a role target and registering a base resume, and then stays
+hidden, even if you later remove your key.
+
 ![The dashboard with stage counts, two due next steps and a recent activity list](images/dashboard.png)
 
 _The dashboard: stage counts across the top, next steps on the left, recent activity on the right._
