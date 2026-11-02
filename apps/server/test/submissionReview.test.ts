@@ -33,7 +33,7 @@ import {
 import { useApi } from './api';
 import { captureLogs } from './helpers';
 import type { TestClient } from './isolation';
-import { holdAt } from './race';
+import { heldApart, holdAt } from './race';
 
 const logs = captureLogs();
 const boot = useApi(() => ({ logStream: logs }));
@@ -906,5 +906,86 @@ describe('concurrency', () => {
     expect(one.json()).toEqual(two.json());
     expect((await rowOf(app, r.id))?.status).toBe('handed_off');
     expect(await auditEvents(app, a, 'submission.handed_off')).toHaveLength(1);
+  });
+});
+
+describe('the attempt lock on edit and cancel (#136)', () => {
+  // The review parks inside its transaction, holding the attempt's lock, just before its write
+  // (`submissions.review.locked`). The edit or cancel must be seen waiting on that lock, not run
+  // past it: without its lock, an edit could land between the review's checks and its write,
+  // and leave "reviewed" on content nobody reviewed (qa on #129: 19 of 60 jittered rounds).
+  // On Postgres only the advisory lock keeps them apart; on SQLite the write gate does too.
+  const EDIT = {
+    answers: [
+      { questionKey: 'why_us', label: 'Why us?', value: 'NEVER-REVIEWED', source: 'user' as const },
+    ],
+  };
+
+  it('an edit waits while a review holds the attempt, then sends it back to draft', async () => {
+    const { app, a } = await boot(ON);
+    const d = await draft(app, a);
+    const [r, e] = await heldApart(
+      app,
+      'submissions.review.locked',
+      () => review(a, d.id, d.submission.reviewDigest),
+      () => api(a, 'PATCH', `/submissions/${d.id}`, EDIT),
+    );
+    expect(r.statusCode, r.body).toBe(200);
+    expect(e.statusCode, e.body).toBe(200);
+    const row = await rowOf(app, d.id);
+    expect(row?.status).toBe('draft');
+    expect(row?.reviewDigest).toBeNull();
+    expect(JSON.stringify(row?.answers)).toContain('NEVER-REVIEWED');
+  });
+
+  it('a cancel waits while a review holds the attempt, then abandons the reviewed attempt', async () => {
+    const { app, a } = await boot(ON);
+    const d = await draft(app, a);
+    const [r, c] = await heldApart(
+      app,
+      'submissions.review.locked',
+      () => review(a, d.id, d.submission.reviewDigest),
+      () => api(a, 'POST', `/submissions/${d.id}/cancel`, {}),
+    );
+    // Without the cancel's lock it would abandon first and the review would answer 409.
+    expect(r.statusCode, r.body).toBe(200);
+    expect(c.statusCode, c.body).toBe(200);
+    expect(await rowOf(app, d.id)).toMatchObject({
+      status: 'abandoned',
+      failureReason: 'cancelled_by_user',
+    });
+    expect(await auditEvents(app, a, 'submission.reviewed')).toHaveLength(1);
+  });
+});
+
+describe('the burst limits (#136)', () => {
+  it('an 11th review inside a minute is 429 rate_limited, per user', async () => {
+    const { app, a, b } = await boot(ON);
+    const r = await reviewed(app, a);
+    const digest = (await rowOf(app, r.id))?.reviewDigest as string;
+    // reviewed() spent one; nine idempotent repeats spend the rest of the 10.
+    for (let i = 0; i < 9; i += 1) {
+      expect((await review(a, r.id, digest)).statusCode).toBe(200);
+    }
+    const over = await review(a, r.id, digest);
+    expect(over.statusCode, over.body).toBe(429);
+    expect(over.json().error.code).toBe('rate_limited');
+    expect(over.headers['retry-after']).toBeDefined();
+    // Another user's bucket is their own.
+    const other = await draft(app, b);
+    expect((await review(b, other.id, other.submission.reviewDigest)).statusCode).toBe(200);
+  });
+
+  it('an 11th handoff inside a minute is 429 rate_limited, per user', async () => {
+    const { app, a, b } = await boot(ON);
+    const r = await reviewed(app, a);
+    for (let i = 0; i < 10; i += 1) {
+      expect((await handoff(a, r.id)).statusCode).toBe(200);
+    }
+    const over = await handoff(a, r.id);
+    expect(over.statusCode, over.body).toBe(429);
+    expect(over.json().error.code).toBe('rate_limited');
+    const other = await reviewed(app, b);
+    expect((await handoff(b, other.id)).statusCode).toBe(200);
   });
 });

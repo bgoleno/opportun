@@ -243,3 +243,28 @@ describe('loadConfig: trusted proxies (issue #333)', () => {
     ).toEqual(['10.0.0.1', '10.0.0.2']);
   });
 });
+
+describe('loadConfig: OPPORTUN_DAILY_REVIEW_CAP (#136)', () => {
+  it('defaults to 10 when unset or empty', () => {
+    expect(loadConfig(base).dailyReviewCap).toBe(10);
+    expect(loadConfig({ ...base, OPPORTUN_DAILY_REVIEW_CAP: '' }).dailyReviewCap).toBe(10);
+  });
+
+  it.each([
+    ['1', 1],
+    ['7', 7],
+    ['25', 25],
+    ['05', 5],
+  ])('accepts the plain decimal %j', (raw, cap) => {
+    expect(loadConfig({ ...base, OPPORTUN_DAILY_REVIEW_CAP: raw }).dailyReviewCap).toBe(cap);
+  });
+
+  it.each(['0x5', '1e1', '5.0', ' 5', '5 ', '+5', '0', '26', '-3', 'ten', '0b101', '1_0'])(
+    'refuses %j at startup, naming the variable and the range',
+    (raw) => {
+      const err = errorOf(() => loadConfig({ ...base, OPPORTUN_DAILY_REVIEW_CAP: raw }));
+      expect(err.message).toMatch(/OPPORTUN_DAILY_REVIEW_CAP/);
+      expect(err.message).toMatch(/whole number from 1 to 25/);
+    },
+  );
+});
