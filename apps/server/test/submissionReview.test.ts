@@ -240,6 +240,23 @@ describe('POST /submissions/:id/review', () => {
     expect(await auditEvents(app, a, 'submission.reviewed')).toHaveLength(1);
   });
 
+  it('an expired review can be reviewed again with the same digest: a fresh valid-until time (tl on #129)', async () => {
+    const { app, a } = await boot(ON);
+    const r = await reviewed(app, a);
+    const past = Date.now() - 1;
+    await app.db
+      .update(applicationSubmissions)
+      .set({ reviewExpiresAt: past })
+      .where(eq(applicationSubmissions.id, r.id))
+      .run();
+    const again = await review(a, r.id, r.submission.reviewDigest);
+    expect(again.statusCode, again.body).toBe(200);
+    const s = again.json() as SubmissionJson;
+    expect(s.status).toBe('reviewed');
+    expect(s.reviewExpiresAt).toBeGreaterThan(Date.now());
+    expect((await handoff(a, r.id)).statusCode).toBe(200);
+  });
+
   it('anything but a draft, or that replay, is 409 with its status', async () => {
     const { app, a } = await boot(ON);
     const r = await reviewed(app, a);
@@ -361,13 +378,23 @@ describe('handoff', () => {
 
 describe('AC2: the daily review cap', () => {
   /** `n` other submissions reviewed at `at`, for the same user (seeded through the table). */
+  /**
+   * `n` other attempts reviewed at `at`, for the same user. The cap counts the
+   * submission.reviewed audit entries (tl on #129: they outlive the rows, which an opportunity's
+   * deletion removes), so that is what is seeded.
+   */
   async function seedReviews(app: FastifyInstance, c: TestClient, n: number, at: number) {
     for (let i = 0; i < n; i += 1) {
-      const d = await draft(app, c);
       await app.db
-        .update(applicationSubmissions)
-        .set({ status: 'abandoned', failureReason: 'cancelled_by_user', reviewedAt: at })
-        .where(eq(applicationSubmissions.id, d.id))
+        .insert(auditLog)
+        .values({
+          id: newId(),
+          userId: c.userId,
+          event: 'submission.reviewed',
+          detail: { submissionId: newId(), opportunityId: newId(), atsKind: 'ats_greenhouse' },
+          ip: null,
+          createdAt: at,
+        })
         .run();
     }
   }
@@ -400,20 +427,51 @@ describe('AC2: the daily review cap', () => {
 
       // The same ten, with the oldest now 1 ms past the window: room for one more.
       await app.db
-        .update(applicationSubmissions)
-        .set({ reviewedAt: now - DAY - 1 })
-        .where(
-          and(
-            eq(applicationSubmissions.userId, a.userId),
-            eq(applicationSubmissions.reviewedAt, now - DAY + 1),
-          ),
-        )
+        .update(auditLog)
+        .set({ createdAt: now - DAY - 1 })
+        .where(and(eq(auditLog.userId, a.userId), eq(auditLog.createdAt, now - DAY + 1)))
         .run();
       const outside = await review(a, inside.id, inside.submission.reviewDigest);
       expect(outside.statusCode, outside.body).toBe(200);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('deleting an opportunity does not free a slot (tl on #129)', async () => {
+    const { app, a } = await boot({ ...ON, dailyReviewCap: 2 });
+    const one = await reviewed(app, a);
+    await reviewed(app, a);
+    const third = await draft(app, a);
+    expect((await review(a, third.id, third.submission.reviewDigest)).statusCode).toBe(429);
+    const del = await a.request({ method: 'DELETE', url: `/api/v1/opportunities/${one.oppId}` });
+    expect(del.statusCode, del.body).toBeLessThan(300);
+    expect((await rowOf(app, one.id)) ?? null).toBeNull();
+    const again = await review(a, third.id, third.submission.reviewDigest);
+    expect(again.statusCode, again.body).toBe(429);
+  });
+
+  it('one attempt reviewed twice counts once', async () => {
+    const { app, a } = await boot({ ...ON, dailyReviewCap: 2 });
+    const r = await reviewed(app, a);
+    await api(a, 'PATCH', `/submissions/${r.id}`, { fields: { email: 'other@example.com' } });
+    const edited = (await api(a, 'GET', `/submissions/${r.id}`)).json() as SubmissionJson;
+    expect((await review(a, r.id, edited.reviewDigest)).statusCode).toBe(200);
+    const second = await draft(app, a);
+    expect((await review(a, second.id, second.submission.reviewDigest)).statusCode).toBe(200);
+  });
+
+  it('resetAt is when enough reviews leave the window, not the oldest (tl on #129)', async () => {
+    // Five reviews in the window and a cap lowered to 2: another is allowed only when four have
+    // left it, so the reset is the fourth oldest plus 24 hours.
+    const { app, a } = await boot(ON);
+    const base = Date.now() - 10 * 60_000;
+    for (let i = 0; i < 5; i += 1) await seedReviews(app, a, 1, base + i * 60_000);
+    await writeUserSetting(app.db, ctxOf(a), DAILY_REVIEW_CAP_SETTING, 2);
+    const d = await draft(app, a);
+    const res = await review(a, d.id, d.submission.reviewDigest);
+    expect(res.statusCode, res.body).toBe(429);
+    expect(res.json().error.resetAt).toBe(base + 3 * 60_000 + 24 * 60 * 60 * 1000);
   });
 
   it('counts per user: another user’s reviews do not use this user’s cap', async () => {
@@ -604,6 +662,41 @@ describe('AC6: the destination', () => {
     expect(await counts(app, a)).toEqual(before);
   });
 
+  it('accepts the requisition on its own Workday tenant', async () => {
+    const workday: AtsJobRef = {
+      kind: 'ats_workday',
+      org: 'acme/External',
+      externalId: 'JR-000001',
+      url: 'https://acme.wd1.myworkdayjobs.com/en-US/External/job/X/Engineer_JR-000001',
+    };
+    const { app, a } = await boot(ON);
+    const r = await reviewed(app, a, workday);
+    const res = await handoff(a, r.id);
+    expect(res.statusCode, res.body).toBe(200);
+  });
+
+  it('refuses another company’s Workday posting with the same requisition id (tl on #129)', async () => {
+    const workday: AtsJobRef = {
+      kind: 'ats_workday',
+      org: 'acme/External',
+      externalId: 'JR-000001',
+      url: 'https://acme.wd1.myworkdayjobs.com/en-US/External/job/X/Engineer_JR-000001',
+    };
+    const { app, a } = await boot(ON);
+    const r = await reviewed(app, a, workday);
+    const other = 'https://globex.wd1.myworkdayjobs.com/en-US/External/job/X/Engineer_JR-000001';
+    const current = await rowOf(app, r.id);
+    const changed = { ...(current as NonNullable<typeof current>), destinationUrl: other };
+    await app.db
+      .update(applicationSubmissions)
+      .set({ destinationUrl: other, reviewDigest: submissionDigest(changed) })
+      .where(eq(applicationSubmissions.id, r.id))
+      .run();
+    const res = await handoff(a, r.id);
+    expect(res.statusCode, res.body).toBe(422);
+    expect(res.json().error.code).toBe('destination_not_allowed');
+  });
+
   it.each([
     ['a recognised ATS posting URL', 'https://boards.greenhouse.io/examplecorp/jobs/1000001'],
     [
@@ -667,6 +760,73 @@ describe('another user’s submission', () => {
     expect((await handoff(b, r.id)).statusCode).toBe(404);
     expect((await rowOf(app, d.id))?.status).toBe('draft');
     expect((await rowOf(app, r.id))?.status).toBe('reviewed');
+  });
+});
+
+describe('an edit racing the review or the handoff (tl on #129)', () => {
+  const UNREVIEWED = {
+    answers: [{ questionKey: 'why_us', label: 'Why us?', value: 'NEVER-REVIEWED', source: 'user' }],
+  };
+
+  it('an edit between the review’s start and its write: refused, or the reviewed content stands', async () => {
+    const { app, a } = await boot(ON);
+    const d = await draft(app, a);
+    let fired = false;
+    setRaceHook(async (point) => {
+      if (point === 'submissions.review' && !fired) {
+        fired = true;
+        expect((await api(a, 'PATCH', `/submissions/${d.id}`, UNREVIEWED)).statusCode).toBe(200);
+      }
+    });
+    const res = await review(a, d.id, d.submission.reviewDigest);
+    setRaceHook(undefined);
+    expect(fired).toBe(true);
+    const row = await rowOf(app, d.id);
+    // Never a reviewed row whose content is not what was reviewed.
+    if (row?.status === 'reviewed') expect(row.reviewDigest).toBe(submissionDigest(row));
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json().error.code).toBe('review_stale');
+    expect(row?.status).toBe('draft');
+  });
+
+  it('a handoff in flight while the attempt is edited and re-reviewed: never hands off unreviewed answers', async () => {
+    const { app, a } = await boot(ON);
+    const d = await reviewed(app, a);
+    const reviewedAnswers = d.submission;
+    let releaseHandoff!: () => void;
+    const handoffHeld = new Promise<void>((r) => (releaseHandoff = r));
+    let handoffArrived!: () => void;
+    const handoffHere = new Promise<void>((r) => (handoffArrived = r));
+    let editDuringReview = false;
+    setRaceHook(async (point) => {
+      if (point === 'submissions.handoff') {
+        handoffArrived();
+        await handoffHeld;
+      }
+      if (point === 'submissions.review' && !editDuringReview) {
+        editDuringReview = true;
+        expect((await api(a, 'PATCH', `/submissions/${d.id}`, UNREVIEWED)).statusCode).toBe(200);
+      }
+    });
+    const inFlight = handoff(a, d.id);
+    await handoffHere;
+    // An edit that changes nothing sends it back to draft; a review with the same digest then
+    // starts, and the unreviewed edit lands between that review's start and its write.
+    expect(
+      (
+        await api(a, 'PATCH', `/submissions/${d.id}`, {
+          answers: [{ questionKey: 'why_us', label: 'Why us?', value: SENTINEL, source: 'user' }],
+        })
+      ).statusCode,
+    ).toBe(200);
+    await review(a, d.id, reviewedAnswers.reviewDigest);
+    releaseHandoff();
+    const h = await inFlight;
+    setRaceHook(undefined);
+    const row = await rowOf(app, d.id);
+    expect(JSON.stringify(row?.answers)).toContain('NEVER-REVIEWED');
+    expect(row?.status).not.toBe('handed_off');
+    expect(h.statusCode, h.body).toBe(409);
   });
 });
 
