@@ -772,9 +772,13 @@ test.describe('keyboard focus indicators', () => {
  * indicator's reach outside the border box comes from computed style: an outline's width plus its
  * offset (negative when it is drawn inside), and the spread, blur and offset of each box-shadow
  * that is not inset (an inset one stays inside). Each ancestor whose overflow is not visible
- * clips at its padding box. A side counts only where the element's own edge is inside that clip
- * box: a table row wider than its scroller on a phone has that side scrolled out of view, not
- * clipped, and no indicator could show it.
+ * clips at its padding box, and keyboard focus must have left the element and its whole indicator
+ * inside it: a side the element itself is scrolled past fails too. The one exemption is an axis
+ * the element cannot fit in at all, such as a table row wider than its scroller on a phone. No
+ * scroll position shows both of its ends, so on that axis only an end that is in view is judged.
+ * (That exemption used to cover any side scrolled out of view, which hid a Settings link left
+ * 8.8px short of the end of the list at 375: qa's report on
+ * https://github.com/bgoleno/opportun/pull/71.)
  */
 async function focusClipping(page: Page) {
   return page.evaluate(() => {
@@ -824,25 +828,48 @@ async function focusClipping(page: Page) {
       if (acs.overflowX === 'visible' && acs.overflowY === 'visible') continue;
       const r = a.getBoundingClientRect();
       const name = `<${a.tagName.toLowerCase()} class="${a.className.toString().slice(0, 50)}">`;
-      // [side, the element's edge, the clip box's edge, which way is outward]
-      const edges: [string, number, number, number][] = [
-        ['left', box.left, r.left + parseFloat(acs.borderLeftWidth), -1],
-        ['right', box.right, r.right - parseFloat(acs.borderRightWidth), 1],
-        ['top', box.top, r.top + parseFloat(acs.borderTopWidth), -1],
-        ['bottom', box.bottom, r.bottom - parseFloat(acs.borderBottomWidth), 1],
+      const clipLeft = r.left + parseFloat(acs.borderLeftWidth);
+      const clipRight = r.right - parseFloat(acs.borderRightWidth);
+      const clipTop = r.top + parseFloat(acs.borderTopWidth);
+      const clipBottom = r.bottom - parseFloat(acs.borderBottomWidth);
+      // Whether the element fits in this clip box on each axis at all.
+      const fitsAcross = box.width <= clipRight - clipLeft + 0.5;
+      const fitsDown = box.height <= clipBottom - clipTop + 0.5;
+      // [side, the element's edge, the clip box's edge, which way is outward, fits on that axis]
+      const edges: [string, number, number, number, boolean][] = [
+        ['left', box.left, clipLeft, -1, fitsAcross],
+        ['right', box.right, clipRight, 1, fitsAcross],
+        ['top', box.top, clipTop, -1, fitsDown],
+        ['bottom', box.bottom, clipBottom, 1, fitsDown],
       ];
-      for (const [side, edge, clipEdge, outward] of edges) {
+      for (const [side, edge, clipEdge, outward, fits] of edges) {
         const inside = (v: number) => (v - clipEdge) * outward <= 0.5;
-        if (inside(edge) && !inside(edge + outward * reach)) clipped.push(`${side} by ${name}`);
+        if (!inside(edge)) {
+          if (fits) clipped.push(`${side}: the element itself is scrolled out of ${name}`);
+        } else if (!inside(edge + outward * reach)) {
+          clipped.push(`${side} by ${name}`);
+        }
       }
     }
     return { indicator, clipped };
   });
 }
 
-/** Tabs to `target` and expects its focus indicator to show, cut on no side. */
-async function expectIndicatorWhole(page: Page, what: string, target: Locator) {
-  await tabTo(page, target, what);
+/** Presses Shift+Tab until `target` has focus: the keyboard path back through a list. */
+async function shiftTabTo(page: Page, target: Locator, what: string) {
+  for (let i = 0; i < 150; i += 1) {
+    if (await target.evaluate((el) => el === document.activeElement)) return;
+    await page.keyboard.press('Shift+Tab');
+  }
+  throw new Error(`Shift+Tab never reached ${what}`);
+}
+
+/**
+ * Moves focus to `target` with the keyboard (Tab, or Shift+Tab when `back`) and expects it, and
+ * its whole focus indicator, on screen in every scroll container it is in.
+ */
+async function expectIndicatorWhole(page: Page, what: string, target: Locator, back = false) {
+  await (back ? shiftTabTo : tabTo)(page, target, what);
   const { indicator, clipped } = await focusClipping(page);
   // Soft, so one run names every view and side that is cut, not only the first.
   expect.soft(indicator, `${what} shows a focus indicator`).not.toBe('none');
@@ -869,11 +896,18 @@ test.describe('focus indicators are not cut off by scroll containers', () => {
           const row = page.locator(`tr[data-opportunity-id="${id}"]`);
           await expect(row).toBeVisible();
           await expectIndicatorWhole(page, 'the pipeline table row', row);
+        } finally {
+          await close();
+        }
 
-          // The Settings navigation, and its layout guard: padding the nav list's scroller (#70)
-          // must not move a link or add page scroll. So the first link still starts exactly where
-          // the navigation does, as it does without that padding, and the page is no wider than
-          // the window.
+        // The Settings navigation, as the admin, whose list is longest (Users and Jobs are
+        // admin-only), so it scrolls furthest on a phone. And its layout guard: padding the nav
+        // list's scroller (#70) must not move a link or add page scroll. So the first link still
+        // starts exactly where the navigation does, as it does without that padding, and the page
+        // is no wider than the window.
+        const admin = await pageAt(browser, width, accounts.admin, look);
+        try {
+          const page = admin.page;
           await page.goto('/settings/account');
           const nav = page.getByRole('navigation', { name: 'Settings sections' });
           const links = nav.getByRole('link');
@@ -889,8 +923,15 @@ test.describe('focus indicators are not cut off by scroll containers', () => {
           ).toBeLessThanOrEqual(width);
           await expectIndicatorWhole(page, 'the first Settings link', links.first());
           await expectIndicatorWhole(page, 'the last Settings link', links.last());
+          // Back again: on a phone the list is scrolled to its end by now.
+          await expectIndicatorWhole(
+            page,
+            'the first Settings link, reached with Shift+Tab',
+            links.first(),
+            true,
+          );
         } finally {
-          await close();
+          await admin.close();
         }
 
         // A button inside the conversation's own scroll container (overflow-y: auto). Its own tag:
