@@ -254,9 +254,13 @@ describe('resolveCapture: Indeed, once the first job is an opportunity', () => {
 });
 
 describe('resolveCapture: Indeed leads from other sources', () => {
-  it('completes a lead that stored its own id beside the Indeed URL', async () => {
-    // Review point 4. A user-mapped MCP source stores its own opaque externalId; the URL's job
-    // key is the identity, so the capture of that job key completes the lead.
+  it('completes a lead that stored its own id beside the Indeed URL, through the dedupe key', async () => {
+    // Review point 4 on https://github.com/bgoleno/opportun/pull/77. A user-mapped MCP source
+    // stores its own opaque externalId. This lead has no location, so its dedupe key is the
+    // capture's and the key alone finds it: what this test proves is that the opaque id does
+    // not contradict the capture (the URL's job key is the identity). The identity match
+    // itself, with keys that differ, is "resolveCapture: a lead found by the job id in its
+    // URL" below (https://github.com/bgoleno/opportun/issues/80).
     const { app, a } = await boot();
     const ctx = ctxOf(a);
     const lead = await seedIndeedAlertLead(
@@ -265,11 +269,101 @@ describe('resolveCapture: Indeed leads from other sources', () => {
       { externalId: 'mcp-job-123', location: null },
       'manual',
     );
+    expect(lead.dedupeKey).toBe(dedupeKey(COMPANY, TITLE, null));
 
     const out = await resolve(app, ctx, indeedCapture(), 'indeed');
 
     expect(out.resultId).toBe(lead.id);
     expect(await pendingCount(app, ctx)).toBe(0);
+    expect(await opportunityCount(app, ctx)).toBe(1);
+  });
+});
+
+describe('resolveCapture: a lead found by its identity, however it stored the job id', () => {
+  // https://github.com/bgoleno/opportun/issues/80. Every lead here has the location "Remote"
+  // and every capture has none, so the dedupe keys differ and only the identity can match.
+  const LINKEDIN_ID = '1000000001';
+  const linkedInUrl = (id: string) => `https://www.linkedin.com/jobs/view/${id}/`;
+  const linkedInCaptureNoLocation = (): NormalizedPosting => ({
+    ...linkedInCapture(),
+    location: null,
+  });
+
+  const completes = async (
+    lead: Partial<NormalizedPosting>,
+    capture: NormalizedPosting,
+    siteId: string,
+  ) => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const seeded = await seedIndeedAlertLead(app, ctx, lead, 'manual');
+    expect(seeded.dedupeKey).not.toBe(dedupeKey(capture.company, capture.title, capture.location));
+    const out = await resolve(app, ctx, capture, siteId);
+    return { app, ctx, seeded, out };
+  };
+
+  it.each([
+    ['an opaque id beside the Indeed URL', { externalId: 'mcp-job-123' }],
+    ['no externalId, only the Indeed URL', { externalId: undefined }],
+    ['the bare job key in upper case', { externalId: JK.toUpperCase() }],
+    [
+      'the prefixed job key in another case, with no URL',
+      { externalId: `Indeed:${JK.toUpperCase()}`, postingUrl: null },
+    ],
+  ])('Indeed: %s', async (_name, over) => {
+    const { app, ctx, seeded, out } = await completes(over, indeedCapture(), 'indeed');
+    expect(out.resultId).toBe(seeded.id);
+    expect(await pendingCount(app, ctx)).toBe(0);
+    expect(await opportunityCount(app, ctx)).toBe(1);
+  });
+
+  it.each([
+    [
+      'an opaque id beside the LinkedIn URL',
+      { externalId: 'mcp-job-123', postingUrl: linkedInUrl(LINKEDIN_ID) },
+    ],
+    [
+      'no externalId, only the LinkedIn URL',
+      { externalId: undefined, postingUrl: linkedInUrl(LINKEDIN_ID) },
+    ],
+    [
+      'the prefixed id in another case, with no URL',
+      { externalId: `LinkedIn:${LINKEDIN_ID}`, postingUrl: null },
+    ],
+  ])('LinkedIn: %s', async (_name, over) => {
+    const { app, ctx, seeded, out } = await completes(
+      over,
+      linkedInCaptureNoLocation(),
+      'linkedin',
+    );
+    expect(out.resultId).toBe(seeded.id);
+    expect(await pendingCount(app, ctx)).toBe(0);
+    expect(await opportunityCount(app, ctx)).toBe(1);
+  });
+
+  it.each([
+    [
+      'a longer LinkedIn id that contains the captured one',
+      { externalId: 'mcp-job-123', postingUrl: linkedInUrl(`1${LINKEDIN_ID}`) },
+    ],
+    [
+      'an Indeed job key with the same digits as the LinkedIn id',
+      { externalId: 'mcp-job-123', postingUrl: indeedUrl(LINKEDIN_ID) },
+    ],
+    [
+      'an opaque id equal to the job id, on a site with no capture',
+      { externalId: LINKEDIN_ID, postingUrl: `https://jobs.example.com/${LINKEDIN_ID}` },
+    ],
+  ])('does not match %s', async (_name, over) => {
+    // The URL and id lookup is only a prefilter: the posting identity decides, so another job
+    // on the same site, or the same digits on another site, is not this capture's lead.
+    const { app, ctx, seeded, out } = await completes(
+      over,
+      linkedInCaptureNoLocation(),
+      'linkedin',
+    );
+    expect(out.resultId).not.toBe(seeded.id);
+    expect((await getResult(app.db, ctx, seeded.id)).disposition).toBe('pending');
     expect(await opportunityCount(app, ctx)).toBe(1);
   });
 });

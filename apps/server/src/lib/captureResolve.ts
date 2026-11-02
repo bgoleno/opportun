@@ -17,9 +17,9 @@
 //
 // C-1: nothing here fetches anything. The posting URL is provenance metadata.
 import { dedupeKey, type NormalizedPosting, type OpportunityStage } from '@opportun/core';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { Db } from '../db/client';
-import { jsonText } from '../db/dialect';
+import { ilike, jsonText } from '../db/dialect';
 import { discoveryResults, opportunities } from '../db/schema';
 import { POSTING_RECONCILE_KIND } from '../jobs/discoveryKinds';
 import { enqueue } from '../jobs/runner';
@@ -70,14 +70,23 @@ export interface CaptureResolution {
 const ADVANCES_FROM: ReadonlySet<OpportunityStage> = new Set(['discovered', 'dismissed']);
 
 /**
- * Every literal `externalId` that could hold this capture's identity, so the candidate scan is
- * an indexed-ish equality test rather than a full table read: `<site>:<id>` as the extension
- * stores it, and the bare `<id>` as an alert-email lead stores it.
+ * The rows of this user that might carry `identity`, as SQL. postingIdentity decides; this only
+ * has to let through every way a lead can store the job id, so the decision runs on a handful
+ * of rows rather than on all of the user's results (https://github.com/bgoleno/opportun/issues/80):
+ * - `externalId` as `<site>:<id>` (the extension) or the bare `<id>` (an alert parser), in any
+ *   case, since postingIdentity lowercases both;
+ * - the id only in the posting URL, beside another source's opaque `externalId` or none. A
+ *   substring is enough here: a longer id that contains this one, or the same characters on
+ *   another site, is let through and then rejected by postingIdentity.
+ * `identity` is already lowercase (postingIdentity), and so is every candidate.
  */
-function externalIdCandidates(identity: string): string[] {
-  const at = identity.indexOf(':');
-  const bare = identity.slice(at + 1);
-  return [identity, bare];
+function mayCarryIdentity(identity: string): SQL {
+  const bare = identity.slice(identity.indexOf(':') + 1);
+  const externalId = jsonText(discoveryResults.posting, 'externalId');
+  return or(
+    inArray(sql`lower(trim(${externalId}))`, [identity, bare]),
+    ilike(jsonText(discoveryResults.posting, 'postingUrl'), bare),
+  ) as SQL;
 }
 
 /** Results of this user whose posting is the same req as `posting`. */
@@ -89,18 +98,13 @@ async function resultsWithIdentity(
   const rows = await db
     .select({ id: discoveryResults.id })
     .from(discoveryResults)
-    .where(
-      and(
-        eq(discoveryResults.userId, ctx.userId),
-        inArray(jsonText(discoveryResults.posting, 'externalId'), externalIdCandidates(identity)),
-      ),
-    )
+    .where(and(eq(discoveryResults.userId, ctx.userId), mayCarryIdentity(identity)))
     .all();
   const found: DiscoveryResultView[] = [];
   for (const row of rows) {
     const result = await getResult(db, ctx, row.id);
-    // The literal scan is a prefilter: identity is what decides, so a Greenhouse lead whose
-    // opaque id happens to be the same digits is not a match.
+    // The scan is a prefilter: identity is what decides, so a Greenhouse lead whose opaque id
+    // happens to be the same digits, or a URL that merely contains them, is not a match.
     if (postingIdentity(result.posting) === identity) found.push(result);
   }
   return found;
