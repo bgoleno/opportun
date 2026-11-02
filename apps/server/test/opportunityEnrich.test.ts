@@ -492,7 +492,11 @@ describe('enrichOpportunity', () => {
     });
     const outcome = await enrichOpportunity(app.db, ctxOf(a), fetch, id);
     expect(outcome).toEqual({ outcome: 'no_match', careersUrl: 'https://initechlabs.com/careers' });
-    expect(requested.filter((u) => new URL(u).hostname.endsWith('indeed.com'))).toEqual([]);
+    // Only the company's own host was contacted: nothing went to Indeed.
+    expect(new Set(requested.map((u) => new URL(u).hostname))).toEqual(
+      new Set(['initechlabs.com']),
+    );
+    expect(requested).not.toContain(indeedPosting);
     const opp = await oppRow(app, id);
     expect(opp.descriptionMd).toBeNull();
     expect((await notesOf(app, id))[0]).toMatchObject({
