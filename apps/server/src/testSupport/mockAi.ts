@@ -199,6 +199,9 @@ function structured(task: string, promptText: string): Record<string, unknown> {
         compNote: null,
         descriptionMd: null,
       };
+    case 'capture.job':
+      // Nothing stated: the recognizer's reading stands, as without AI.
+      return { location: null, compNote: null };
     case 'company.suggest':
       return { suggestions: [SUGGESTED_COMPANY] };
     case 'integration.diagnose':

@@ -104,6 +104,7 @@ describe('TASKS registry', () => {
       'comms.classify',
       'capture.extract',
       'capture.linkedin',
+      'capture.job',
       'opportunity.dedupe',
       'integration.diagnose',
     ] as const) {
@@ -141,6 +142,22 @@ describe('TASKS registry', () => {
     ).toBe(true);
     expect(schema.safeParse({ explanation: 'x'.repeat(601), fix: 'y' }).success).toBe(false);
     expect(schema.safeParse({ explanation: 'x' }).success).toBe(false);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/76: the site-neutral job refine reads only what the
+  // site's deterministic recognizer does not (location and pay); title, company and description
+  // stay the recognizer's.
+  it('capture.job output is location and pay only, both nullable, never optional', () => {
+    const schema = TASKS['capture.job'].outputSchema;
+    expect(schema.safeParse({ location: 'Example City, EX', compNote: '$1 a year' }).success).toBe(
+      true,
+    );
+    expect(schema.safeParse({ location: null, compNote: null }).success).toBe(true);
+    expect(schema.safeParse({ location: null }).success).toBe(false);
+    expect(schema.safeParse({ location: 'x'.repeat(301), compNote: null }).success).toBe(false);
+    expect(schema.safeParse({ location: null, compNote: 'x'.repeat(501) }).success).toBe(false);
+    const parsed = schema.parse({ location: null, compNote: null, title: 'not read' });
+    expect(Object.keys(parsed).sort()).toEqual(['compNote', 'location']);
   });
 
   it('capture.linkedin output names the page kind; every field is nullable, never optional', () => {
@@ -285,6 +302,11 @@ describe('TASKS registry', () => {
 
   it('third-party and model-derived variables are fenced in all eleven tasks', () => {
     expect(TASK_PROMPT_VARS['capture.linkedin']).toEqual([
+      'page_url_untrusted',
+      'page_title_untrusted',
+      'page_untrusted',
+    ]);
+    expect(TASK_PROMPT_VARS['capture.job']).toEqual([
       'page_url_untrusted',
       'page_title_untrusted',
       'page_untrusted',

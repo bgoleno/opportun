@@ -41,9 +41,10 @@ Open a LinkedIn profile or job posting, or an Indeed job, click the Opportun ico
   selected) becomes an **opportunity at Interested**.
 - An **Indeed job** (`indeed.com/viewjob?jk=...`, or an Indeed search with a job open on the
   right) becomes an **opportunity at Interested** too, with the job's title, company and
-  description and the link `https://www.indeed.com/viewjob?jk=...`. Both views of one job give
-  the same result, and nothing from the search results beside it is sent. Indeed's country
-  sites are not supported yet.
+  description and the link `https://www.indeed.com/viewjob?jk=...`. With an AI key, the
+  location and pay the posting states are filled in too; anything the posting does not show is
+  left empty. Both views of one job give the same result, and nothing from the search results
+  beside it is sent. Indeed's country sites are not supported yet.
 
 Capturing a job is treated as a decision, not as filing something to look at later: you are
 reading the posting and you want it. So a captured job never lands in the review queue. If the
