@@ -30,7 +30,13 @@ function SettingsLayout() {
       />
       <div className="flex flex-col gap-6 lg:flex-row">
         <nav aria-label="Settings sections" className="lg:w-48 lg:shrink-0">
-          <ul className="flex gap-1 overflow-x-auto lg:flex-col">
+          {/* -m-1 p-1: padding inside the scroller, so a link's focus ring (2px out) and its
+              forced-colors outline (2px, 2px out: 4px) are inside the list's clip box, and the
+              same negative margin, so no link moves (issue
+              https://github.com/bgoleno/opportun/issues/70). All four sides, not only the scroll
+              axis: overflow-x-auto makes overflow-y compute to auto too, which is why a link's
+              top was cut as well. */}
+          <ul className="-m-1 flex gap-1 overflow-x-auto p-1 lg:flex-col">
             {sections.map((s) => (
               <li key={s.to}>
                 <Link
