@@ -1,5 +1,5 @@
-// Static demo dataset (issue #280): invented, on RFC 2606 reserved domains, per the fixture
-// rule in docs/pre-publication-checklist.md section 4. Never a real company, posting id or
+// Static demo dataset (issue #280): invented, on RFC 2606 reserved domains (names set aside
+// for documentation and testing). Never a real company, posting id or
 // person. IDs are pinned, literal UUIDv7 strings generated once offline with newId() and
 // hardcoded here, not generated at seed time: a delete-and-reseed nightly reset only keeps a
 // bookmarked opportunity URL stable if the seeder gives it the same id every time, and every

@@ -278,8 +278,7 @@ or back to an old one.
 On the checkout route, `docker login ghcr.io -u bgoleno` comes first and prompts for a
 password; use a GitHub personal access token with the `write:packages` scope, never the account
 password. The workflow route needs none of this. The image is built from `main`, so it
-carries the clean tree and none of the history concern that keeps this repository private
-(`docs/pre-publication-checklist.md`) — nothing here needs the host, or anyone pulling the
+carries only the tree at that commit, and nothing here needs the host, or anyone pulling the
 image, to have the repository itself.
 
 **The package is public, by the owner's decision on 2026-10-24.** An earlier version of this
@@ -490,10 +489,10 @@ re-seed the old passwords.
 
 **No credentials, keys or passwords in this repository, including in a template.** Variable
 names and placeholders only, here and in any future edit to this file or
-`.env.demo.example` — this tree ships into a public snapshot
-(`docs/pre-publication-checklist.md`), and a real value committed here would be published
-alongside a live instance that accepts it.
+`.env.demo.example`. This repository is public, and a real value committed here would be
+published alongside a live instance that accepts it.
 
-**No real hostnames, machine names or personal paths**, per that same checklist's identifier
-sweep. `opportun.app` and `demo.opportun.app` are already public and are fine to reference
+**No real hostnames, machine names or personal paths**, for the same reason; the `guard`
+check (`.github/workflows/identifier-guard.yml`) fails a pull request when a withheld
+identifier appears in the tree. `opportun.app` and `demo.opportun.app` are already public and are fine to reference
 directly.
