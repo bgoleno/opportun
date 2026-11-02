@@ -19,7 +19,12 @@ import {
 const MAX_LINES = 5_000;
 const MAX_HEADLINE = 300;
 const MAX_NAME = 200;
-const MAX_JOB_FIELD = 300;
+/**
+ * A job title or company longer than this is not read. It is NormalizedPosting's own limit
+ * (`title` and `company`, max 300, packages/core/src/schemas/discovery.ts): a longer one could not
+ * be stored as a posting. Indeed's recognizer (lib/indeedCapture.ts) uses the same limit.
+ */
+export const MAX_JOB_FIELD = 300;
 /** Description characters kept from the page (NormalizedPosting.descriptionMd allows 50k). */
 export const MAX_DESCRIPTION = 50_000;
 
@@ -46,6 +51,12 @@ export type UnrecognizedReason =
   | 'no_headline'
   | 'not_a_profile'
   | 'no_title_company'
+  /**
+   * A job page whose company and description were found, but whose title is longer than a
+   * posting can store (MAX_JOB_FIELD). Before https://github.com/bgoleno/opportun/issues/92 this was `no_title_company`, which the
+   * extension words as "the page had not finished loading".
+   */
+  | 'title_too_long'
   | 'no_description';
 
 export type Recognition = LinkedInPage | { kind: 'unrecognized'; reason: UnrecognizedReason };
@@ -276,16 +287,28 @@ function recognizeJob(host: string, id: string, title: string, lines: string[]):
   const parts = titleParts(title);
   const [jobTitle, company] = parts;
   const onPage = new Set(lines);
+  const titleTooLong = jobTitle !== undefined && jobTitle.length > MAX_JOB_FIELD;
   if (
     parts.length !== 2 ||
     jobTitle === undefined ||
     company === undefined ||
-    jobTitle.length > MAX_JOB_FIELD ||
+    titleTooLong ||
     company.length > MAX_JOB_FIELD ||
     !onPage.has(jobTitle) ||
     !onPage.has(company)
   ) {
-    return { kind: 'unrecognized', reason: 'no_title_company' };
+    // Named only when the page is a job but for its title: both parts on the page, the company
+    // within the limit, a description found (https://github.com/bgoleno/opportun/issues/92).
+    // Anything else keeps the reason it always had.
+    const onlyTheTitle =
+      titleTooLong &&
+      parts.length === 2 &&
+      company !== undefined &&
+      company.length <= MAX_JOB_FIELD &&
+      onPage.has(jobTitle) &&
+      onPage.has(company) &&
+      descriptionOf(lines) !== null;
+    return { kind: 'unrecognized', reason: onlyTheTitle ? 'title_too_long' : 'no_title_company' };
   }
   const descriptionMd = descriptionOf(lines);
   if (descriptionMd === null) return { kind: 'unrecognized', reason: 'no_description' };

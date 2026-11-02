@@ -27,9 +27,7 @@
 //
 // Pure functions only (no IO), exported for tests.
 import { siteOfUrl } from './captureSites';
-import { linesOf, MAX_DESCRIPTION, type Recognition } from './linkedinCapture';
-
-const MAX_JOB_FIELD = 300;
+import { linesOf, MAX_DESCRIPTION, MAX_JOB_FIELD, type Recognition } from './linkedinCapture';
 
 /** The contract's line 5, where the posting's own description starts. */
 const DESCRIPTION_START = 'full job description';
@@ -64,24 +62,35 @@ function readJob(
   lines: string[],
 ):
   | { ok: true; title: string; company: string; descriptionMd: string }
-  | { ok: false; reason: 'no_title_company' | 'no_description' } {
+  | { ok: false; reason: 'no_title_company' | 'title_too_long' | 'no_description' } {
   const start = lines.findIndex((l) => l.toLowerCase() === DESCRIPTION_START);
   const header = start === -1 ? lines : lines.slice(0, start);
   const [title, company] = header;
+  const descriptionMd =
+    start === -1
+      ? ''
+      : lines
+          .slice(start + 1)
+          .join('\n')
+          .slice(0, MAX_DESCRIPTION)
+          .trim();
   if (
     title === undefined ||
     company === undefined ||
     title.length > MAX_JOB_FIELD ||
     company.length > MAX_JOB_FIELD
   ) {
-    return { ok: false, reason: 'no_title_company' };
+    // Named only when the text is a job but for its title: a company within the limit and a
+    // description (https://github.com/bgoleno/opportun/issues/92). Anything else keeps the
+    // reason it always had.
+    const onlyTheTitle =
+      title !== undefined &&
+      title.length > MAX_JOB_FIELD &&
+      company !== undefined &&
+      company.length <= MAX_JOB_FIELD &&
+      descriptionMd !== '';
+    return { ok: false, reason: onlyTheTitle ? 'title_too_long' : 'no_title_company' };
   }
-  if (start === -1) return { ok: false, reason: 'no_description' };
-  const descriptionMd = lines
-    .slice(start + 1)
-    .join('\n')
-    .slice(0, MAX_DESCRIPTION)
-    .trim();
   if (descriptionMd === '') return { ok: false, reason: 'no_description' };
   return { ok: true, title, company, descriptionMd };
 }
@@ -97,10 +106,9 @@ export function recognizeIndeedPage(input: {
   const lines = linesOf(input.text);
   const job = readJob(lines);
   if (!job.ok) {
-    return {
-      kind: 'unrecognized',
-      reason: looksLikeWall(lines) ? 'verification_wall' : job.reason,
-    };
+    // A wall is only named for text that is not a job; a job refused for its title alone is one.
+    const wall = job.reason !== 'title_too_long' && looksLikeWall(lines);
+    return { kind: 'unrecognized', reason: wall ? 'verification_wall' : job.reason };
   }
   return {
     kind: 'job',

@@ -13,6 +13,14 @@ const NOT_LOADED =
 
 const siteLabel = (site: CaptureSiteId): string => (site === 'indeed' ? 'Indeed' : 'LinkedIn');
 
+/**
+ * A job whose title is longer than the server can store as a posting (300 characters, its
+ * `title_too_long` reason, https://github.com/bgoleno/opportun/issues/92). Waiting and retrying
+ * cannot help, so this says what can.
+ */
+const TITLE_TOO_LONG =
+  'the job title is longer than 300 characters, which is more than Opportun stores, so nothing was saved. You can add this job in Opportun by hand with a shorter title.';
+
 /** An unclaimed host: `unsupported_site`, or `not_linkedin` from a server older than Indeed. */
 const NOT_A_SITE = 'this is not a site Opportun captures from.';
 
@@ -53,6 +61,7 @@ function refusalText(reason: string, site: CaptureSiteId): string | undefined {
   const own = (site === 'indeed' ? INDEED_REASONS : LINKEDIN_REASONS).get(reason);
   if (own !== undefined) return own;
   if (reason === 'unsupported_site') return NOT_A_SITE;
+  if (reason === 'title_too_long') return TITLE_TOO_LONG;
   if (reason === 'verification_wall') {
     return `${siteLabel(site)} is showing a sign-in or verification page. Complete it in this tab, then try again.`;
   }
