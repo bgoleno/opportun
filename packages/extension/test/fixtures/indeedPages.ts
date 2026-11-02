@@ -33,8 +33,12 @@ const GNAV = `<div id="m-gnav-header">
 
 const FOOTER = `<div id="m-gnav-footer"><div>Footer Placeholder Line</div></div>`;
 
-/** Results list card: must never reach the server. */
-const resultCard = (jk: string, n: number): string => `<li>
+/**
+ * Results list card: must never reach the server. The card of the job open in the pane carries
+ * `job_<jk>` and `vjs-highlight` on its outer div, as the split view marks it.
+ */
+const resultCard = (jk: string, n: number, highlighted: boolean): string => `<li>
+  <div class="${highlighted ? `cardOutline tapItem result job_${jk} vjs-highlight` : `cardOutline tapItem result job_${jk}`}">
   <div class="slider_container" data-testid="slider_container">
     <div class="slider_item" data-testid="slider_item">
       <table class="mainContentTable" role="presentation"><tbody><tr><td>
@@ -46,6 +50,7 @@ const resultCard = (jk: string, n: number): string => `<li>
         <ul class="metadataContainer"><li>Results List Pay ${n}</li><li>Full-time</li></ul>
       </td></tr></tbody></table>
     </div>
+  </div>
   </div>
 </li>`;
 
@@ -72,6 +77,8 @@ export interface JobRootOptions {
   omit?: ('title' | 'company' | 'heading' | 'description')[];
   /** The description body's HTML (default DESCRIPTION_HTML). */
   descriptionHtml?: string;
+  /** Extra elements placed directly in the description container, after the heading. */
+  descriptionContainerExtras?: string;
   withSummary?: boolean;
 }
 
@@ -161,6 +168,7 @@ export function jobRoot(o: JobRootOptions): string {
     <div>
       ${omit.has('heading') ? '' : '<h4 data-testid="vj-job-description-heading" role="heading">Full job description</h4>'}
       <div data-testid="vj-rcv-flag-sentinel-jobDescriptionTitleSeen">Sentinel Title Seen</div>
+      ${o.descriptionContainerExtras ?? ''}
       <div>${omit.has('description') ? '' : (o.descriptionHtml ?? DESCRIPTION_HTML)}</div>
       <div data-testid="vj-rcv-flag-sentinel-jobDescriptionSeen">Sentinel Description Seen</div>
       <div></div><div></div>
@@ -172,8 +180,14 @@ export function jobRoot(o: JobRootOptions): string {
 </div>`;
 }
 
+export type SplitViewOptions = Omit<JobRootOptions, 'layout'> & {
+  /** The key of the highlighted results card (default JK, the job in the URL); null for none. */
+  highlightedKey?: string | null;
+};
+
 /** The split view: results list on the left, the job pane on the right, one <main> around both. */
-export function splitView(o: Omit<JobRootOptions, 'layout'> = {}, pane = true): FixturePage {
+export function splitView(o: SplitViewOptions = {}, pane = true): FixturePage {
+  const highlighted = o.highlightedKey === undefined ? JK : o.highlightedKey;
   return {
     url: `https://www.indeed.com/jobs?q=placeholder+query&l=Springfield%2C+ST&vjk=${JK}`,
     html: doc(
@@ -183,7 +197,7 @@ export function splitView(o: Omit<JobRootOptions, 'layout'> = {}, pane = true): 
     <div id="jobsearch-Main"><div><div id="jobsearch-JapanPage"><div class="jobsearch-JapanPageLayout"><div><div>
       <div class="jobsearch-LeftPane">
         <div id="mosaic-jobResults" class="mosaic-zone"><div id="mosaic-provider-jobcards"><ul>
-          ${[JK, ...OTHER_KEYS].map((jk, i) => resultCard(jk, i + 1)).join('\n')}
+          ${[JK, ...OTHER_KEYS].map((jk, i) => resultCard(jk, i + 1, jk === highlighted)).join('\n')}
         </ul></div></div>
       </div>
       <div class="jobsearch-RightPane">
@@ -216,6 +230,12 @@ export function viewjobPage(o: Omit<JobRootOptions, 'layout'> = {}, root = true)
     ),
   };
 }
+
+/** Children a browser never renders as text, placed in the description container. */
+export const NON_TEXT_CHILDREN = `<style>.desc-container-style { color: red; }</style>
+      <script>window.__descScript = 'Script Placeholder';</script>
+      <noscript>Noscript Placeholder</noscript>
+      <template><div>Template Placeholder</div></template>`;
 
 /** Text that must never appear in what the extension sends. */
 export const NEVER_SENT = [

@@ -35,7 +35,8 @@ const INDEED_HOST = /^(?:www\.)?indeed\.com$/;
 
 /**
  * An Indeed job key. The same rule as the server's `INDEED_JOB_KEY` (the alert parser's): the
- * extension cannot import server code, so it keeps this copy, and a test pins the two equal.
+ * extension cannot import server code, so it keeps this copy. The server constant arrives with
+ * https://github.com/bgoleno/opportun/pull/77; once that merges, a test pins the two equal.
  */
 export const INDEED_JOB_KEY = /^[0-9a-f]{8,32}$/i;
 

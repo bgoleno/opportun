@@ -111,15 +111,16 @@ export type ExtractResult =
  *   4 the structured job summary, if any (innerText);
  *   5 the literal line "Full job description";
  *   6 innerText of each element after the description heading in its container, except the
- *     page's visibility sentinels. The recommended jobs are a sibling of that container, so they
- *     are never reached.
+ *     page's visibility sentinels and style, script, noscript and template elements. The
+ *     recommended jobs are a sibling of that container, so they are never reached.
  * Each part is trimmed and empty parts are left out. When the root or a required part (title,
  * company link, description heading, a non-empty description) is missing, Indeed's layout has
  * changed: the capture is refused, never guessed at, and never taken from <main>, <body> or the
  * tab title.
  *
  * The title it reports is the job title (part 1), not document.title: in the split view the tab
- * title names the search, which has no business leaving the browser.
+ * title names the search, which has no business leaving the browser. In the split view it also
+ * refuses when the highlighted results card names a different job than the URL's vjk.
  */
 export function extractIndeedJob(doc: Document = document): ExtractResult {
   const refuse: ExtractResult = { ok: false, reason: 'layout_unrecognized' };
@@ -134,6 +135,19 @@ export function extractIndeedJob(doc: Document = document): ExtractResult {
 
   const root = doc.querySelector('[data-testid="viewjob-main-content"]');
   if (root === null) return refuse;
+
+  // In the split view the URL's vjk names the job, and the pane should be showing it. If the
+  // highlighted results card says another job, the pane and the URL disagree (a click still
+  // loading): refuse rather than send one job's text under another job's key. Only a class name
+  // is read from the list here; nothing from it is sent.
+  const vjk = new URL(doc.location.href).searchParams.get('vjk');
+  const highlighted = doc.querySelector('.vjs-highlight');
+  if (vjk !== null && highlighted !== null) {
+    const card = Array.from(highlighted.classList)
+      .map((c) => /^job_([0-9a-f]+)$/i.exec(c)?.[1])
+      .find((k) => k !== undefined);
+    if (card !== undefined && card.toLowerCase() !== vjk.toLowerCase()) return refuse;
+  }
 
   const titleEl = root.querySelector('[data-testid="vj-job-title"]');
   const title = collapse(titleEl?.textContent);
@@ -167,6 +181,8 @@ export function extractIndeedJob(doc: Document = document): ExtractResult {
       continue;
     }
     if ((child.getAttribute('data-testid') ?? '').startsWith('vj-rcv-flag-sentinel')) continue;
+    // Never text in a browser, whatever an innerText implementation returns for them.
+    if (['STYLE', 'SCRIPT', 'NOSCRIPT', 'TEMPLATE'].includes(child.tagName.toUpperCase())) continue;
     const text = visible(child);
     if (text !== '') description.push(text);
   }

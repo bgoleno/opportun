@@ -6,7 +6,15 @@ import { describe, expect, it } from 'vitest';
 import { canonicalCaptureUrl, captureSiteOf, indeedJobKey } from '../src/canonical';
 import { extractIndeedJob, type ExtractResult } from '../src/extract';
 import { normalizeCapture } from '../src/normalize';
-import { COMPANY, JK, NEVER_SENT, splitView, TITLE, viewjobPage } from './fixtures/indeedPages';
+import {
+  COMPANY,
+  JK,
+  NEVER_SENT,
+  NON_TEXT_CHILDREN,
+  splitView,
+  TITLE,
+  viewjobPage,
+} from './fixtures/indeedPages';
 import { load } from './fixtures/pages';
 
 const CANONICAL = `https://www.indeed.com/viewjob?jk=${JK}`;
@@ -174,6 +182,50 @@ describe('extractIndeedJob', () => {
     const result = extractIndeedJob(load(fixture));
     // A refusal carries no page text at all: nothing falls back to <main> or <body>.
     expect(result).toEqual({ ok: false, reason: 'layout_unrecognized' });
+  });
+
+  // tl review of https://github.com/bgoleno/opportun/pull/81 (optional points).
+  it('refuses the split view when the highlighted card is a different job than the URL names', () => {
+    expect(extractIndeedJob(load(splitView({ highlightedKey: '00000000000000a1' })))).toEqual({
+      ok: false,
+      reason: 'layout_unrecognized',
+    });
+    // The highlighted card matching the URL, or no highlighted card at all, reads as usual.
+    expect(ok(extractIndeedJob(load(splitView({ highlightedKey: JK })))).text).toBe(EXPECTED_TEXT);
+    expect(ok(extractIndeedJob(load(splitView({ highlightedKey: null })))).text).toBe(
+      EXPECTED_TEXT,
+    );
+  });
+
+  it('skips style, script, noscript and template children of the description container', () => {
+    for (const fixture of [
+      viewjobPage({ descriptionContainerExtras: NON_TEXT_CHILDREN }),
+      splitView({ descriptionContainerExtras: NON_TEXT_CHILDREN }),
+    ]) {
+      const text = ok(extractIndeedJob(load(fixture))).text;
+      expect(text).toBe(EXPECTED_TEXT);
+      for (const never of ['desc-container-style', 'Script Placeholder', 'Noscript', 'Template']) {
+        expect(text).not.toContain(never);
+      }
+    }
+  });
+
+  it('reads the title and company from textContent, so a hidden full header still gives them', () => {
+    // happy-dom ignores visibility for innerText, so the hidden state a browser shows (the full
+    // header visibility: hidden, the compact copy showing) is modelled here: innerText of the
+    // full header's nodes is empty, as Chrome reports it. Reading it would lose the title.
+    const doc = load(splitView({ compactHeaderShowing: true }));
+    for (const selector of [
+      '[data-testid="company-info-title-row"]',
+      '[data-testid="vj-job-title"]',
+      '[data-testid="company-info-metadata"]',
+      '[data-testid="company-info-metadata"] > *',
+    ]) {
+      for (const el of Array.from(doc.querySelectorAll(selector))) {
+        Object.defineProperty(el, 'innerText', { get: () => '' });
+      }
+    }
+    expect(ok(extractIndeedJob(doc)).text).toBe(EXPECTED_TEXT);
   });
 
   it('is self-contained: it can be serialized and injected (no outer references)', () => {
