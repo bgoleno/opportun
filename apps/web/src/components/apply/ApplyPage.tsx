@@ -744,7 +744,7 @@ function ReviewStep({
         // An earlier application this screen did not know of (another opportunity): ask now.
         setBanner(null);
         setServerAsksReason(true);
-        setHint('You already applied for this job. Say why you are applying again.');
+        setHint('You have another application for this job. Say why you are applying again.');
         requestAnimationFrame(() => reasonField.current?.focus());
       }
       // The saved copy changed state under the screen: the refreshed row shows which (below).
@@ -794,8 +794,8 @@ function ReviewStep({
         {earlier === undefined && asksReason ? (
           <Notice>
             <span>
-              <strong>You already applied for this job</strong>, from another opportunity. Applying
-              twice can look like a mistake to the employer.
+              <strong>You have another application for this job</strong>, from another opportunity,
+              submitted or on its way. Applying twice can look like a mistake to the employer.
             </span>
           </Notice>
         ) : null}
@@ -1226,8 +1226,8 @@ function AttestDialog({
 }) {
   const navigate = useNavigate();
   const attest = useAttestSubmission(opp.id);
-  const [openedAt] = useState(() => Date.now());
-  const defaultWhen = localInputValue(openedAt);
+  // "Now" is when the dialog opens, not when the page loaded (tl on #145): set on each open.
+  const [defaultWhen, setDefaultWhen] = useState(() => localInputValue(Date.now()));
   const [when, setWhen] = useState(defaultWhen);
   const canMove = BEFORE_APPLIED.includes(opp.stage);
   const [moveToApplied, setMoveToApplied] = useState(true);
@@ -1238,7 +1238,11 @@ function AttestDialog({
   // The date field takes focus when the dialog opens, so the primary button is never the first
   // stop (design S6). Done here rather than with autoFocus: the content is mounted before it opens.
   useEffect(() => {
-    if (open) requestAnimationFrame(() => whenField.current?.focus());
+    if (!open) return;
+    const now = localInputValue(Date.now());
+    setDefaultWhen(now);
+    setWhen(now);
+    requestAnimationFrame(() => whenField.current?.focus());
   }, [open]);
 
   async function record() {

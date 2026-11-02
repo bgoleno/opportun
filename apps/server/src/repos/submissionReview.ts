@@ -19,7 +19,7 @@
 //   the write it guards.
 //
 // Opportun never transmits an application: nothing here contacts an employer or an ATS.
-import { and, desc, eq, gt, inArray, isNull, lte, max, ne, or } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lte, max, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Submission } from '@opportun/core';
 import { DEFAULT_DAILY_REVIEW_CAP, MAX_DAILY_REVIEW_CAP, type Config } from '../config';
@@ -129,13 +129,18 @@ export interface ReviewInput {
   reapplyReason?: string | undefined;
 }
 
-/** Attempts that count as an application made: the user said they submitted it. */
-const APPLIED_STATUSES = ['submitted', 'confirmed', 'unknown'] as const;
+/**
+ * Attempts that count as another application to the requisition: one the user said they
+ * submitted, and one still on its way there on another opportunity, reviewed or opened on the
+ * ATS (tl on #145: two in flight at once must not both pass without a reason). A draft is not
+ * yet an application, and a form the ATS refused, or an attempt stopped or failed, never was.
+ */
+const APPLIED_STATUSES = ['reviewed', 'handed_off', 'submitted', 'confirmed', 'unknown'] as const;
 
 /**
- * The user's latest earlier application to the same requisition (the same ATS, board or
- * tenant, and requisition id), on any opportunity: an attempt they said they submitted. A form
- * the ATS refused, or an attempt that never got that far, is not one.
+ * The user's latest other application to the same requisition (the same ATS, board or tenant,
+ * and requisition id), on any opportunity. The board compares without case, as
+ * destinationAllowed does: a Workday site keeps the case its tenant gave it.
  */
 async function earlierApplication(
   exec: Exec,
@@ -152,12 +157,12 @@ async function earlierApplication(
         eq(applicationSubmissions.atsKind, row.atsKind),
         row.atsRef === null
           ? isNull(applicationSubmissions.atsRef)
-          : eq(applicationSubmissions.atsRef, row.atsRef),
+          : sql`lower(${applicationSubmissions.atsRef}) = ${row.atsRef.toLowerCase()}`,
         eq(applicationSubmissions.atsExternalId, row.atsExternalId),
         inArray(applicationSubmissions.status, [...APPLIED_STATUSES]),
       ),
     )
-    .orderBy(desc(applicationSubmissions.submittedAt), desc(applicationSubmissions.id))
+    .orderBy(desc(applicationSubmissions.updatedAt), desc(applicationSubmissions.id))
     .limit(1)
     .get();
 }
@@ -213,7 +218,7 @@ export async function reviewSubmission(
       throw new HttpError(
         422,
         'reapply_reason_required',
-        'You already applied for this job. Say why you are applying again.',
+        'You already applied for this job, or have an application to it on the way. Say why you are applying again.',
         { submissionId: earlier.id },
       );
     }

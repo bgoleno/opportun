@@ -117,6 +117,14 @@ export async function attestSubmission(
       return { row, moved: null as OpportunityView | null };
     }
     if (row.status !== 'handed_off') throw notNow(row, 'submitted');
+    // Not before the form was opened (tl on #145): the browser's clock may run a little behind.
+    if (row.handedOffAt !== null && submittedAt < row.handedOffAt - CLOCK_SKEW_MS) {
+      throw new HttpError(
+        422,
+        'submitted_at_before_handoff',
+        'That is before you opened the form. Choose when you pressed Submit.',
+      );
+    }
     const opp = await opportunityFacts(tx, ctx, row.opportunityId);
     const entry = await createActivity(tx, ctx, row.opportunityId, {
       kind: 'application',

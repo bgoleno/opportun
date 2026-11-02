@@ -47,6 +47,20 @@ const ATS_REF: AtsJobRef = {
   url: 'https://boards.greenhouse.io/examplecorp/jobs/1000001',
 };
 
+/**
+ * A requisition of its own: drafts on different opportunities at one requisition are
+ * re-applications, which review asks a reason for (M2a, #118). Tests here are about the review
+ * and its cap, so each draft gets its own unless a test passes one.
+ */
+function freshRef(): AtsJobRef {
+  const externalId = String(Math.floor(2_000_000 + Math.random() * 7_999_999));
+  return {
+    ...ATS_REF,
+    externalId,
+    url: `https://boards.greenhouse.io/examplecorp/jobs/${externalId}`,
+  };
+}
+
 /** A value that must never leave the submission row (criterion 5). */
 const SENTINEL = 'SENTINEL-answer-7f3a9c';
 
@@ -99,7 +113,7 @@ const api = (
 ) => c.request({ method, url: `/api/v1${url}`, ...(payload === undefined ? {} : { payload }) });
 
 /** A draft for a fresh eligible opportunity, with an answer carrying the sentinel. */
-async function draft(app: FastifyInstance, c: TestClient, ats: AtsJobRef = ATS_REF) {
+async function draft(app: FastifyInstance, c: TestClient, ats: AtsJobRef = freshRef()) {
   const oppId = await seedOpportunity(app, c, ats);
   const resumeId = await seedResume(app, c);
   const created = await api(c, 'POST', `/opportunities/${oppId}/submissions`, {
@@ -116,7 +130,7 @@ async function draft(app: FastifyInstance, c: TestClient, ats: AtsJobRef = ATS_R
     answers: [{ questionKey: 'why_us', label: 'Why us?', value: SENTINEL, source: 'user' }],
   });
   expect(edited.statusCode, edited.body).toBe(200);
-  return { oppId, resumeId, id, submission: edited.json() as SubmissionJson };
+  return { oppId, resumeId, id, ats, submission: edited.json() as SubmissionJson };
 }
 
 const review = (
@@ -128,7 +142,7 @@ const review = (
 
 const handoff = (c: TestClient, id: string) => api(c, 'POST', `/submissions/${id}/handoff`, {});
 
-async function reviewed(app: FastifyInstance, c: TestClient, ats: AtsJobRef = ATS_REF) {
+async function reviewed(app: FastifyInstance, c: TestClient, ats: AtsJobRef = freshRef()) {
   const d = await draft(app, c, ats);
   const res = await review(c, d.id, d.submission.reviewDigest);
   expect(res.statusCode, res.body).toBe(200);
@@ -356,7 +370,7 @@ describe('handoff', () => {
 
     expect(res.statusCode, res.body).toBe(200);
     const body = res.json() as { destinationUrl: string; expiresAt: number };
-    expect(body.destinationUrl).toBe(ATS_REF.url);
+    expect(body.destinationUrl).toBe(r.ats.url);
     const row = await rowOf(app, r.id);
     expect(row?.status).toBe('handed_off');
     expect(body.expiresAt).toBe((row?.handedOffAt as number) + HANDOFF_IDLE_MS);

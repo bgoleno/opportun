@@ -60,7 +60,9 @@ export function submissionErrorText(err: unknown): string {
     case 'idempotency_key_reused':
       return 'Something went wrong starting this application. Reload the page and try again.';
     case 'reapply_reason_required':
-      return 'You already applied for this job. Say why you are applying again.';
+      return 'You already applied for this job, or have an application to it on the way. Say why you are applying again.';
+    case 'submitted_at_before_handoff':
+      return 'That is before you opened the form. Choose when you pressed Submit.';
     case 'submitted_at_in_future':
       return 'That time has not happened yet. Choose when you pressed Submit.';
     case null:

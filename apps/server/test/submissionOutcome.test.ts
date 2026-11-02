@@ -277,10 +277,12 @@ describe('criterion 1: "I submitted it" records one timeline entry and one resum
     const { app, a } = await boot(ON);
     const d = await handedOff(app, a);
     const before = await countsFor(app, d.oppId);
+    // Two different times, so a second write to the resume would show (tl on #145).
+    const handedOffAt = (await rowOf(app, d.id))?.handedOffAt as number;
     const barrier = holdAt('submissions.attest', 2);
     const [one, two] = await Promise.all([
-      attest(a, d.id, { moveToApplied: true }),
-      attest(a, d.id, { moveToApplied: true }),
+      attest(a, d.id, { moveToApplied: true, submittedAt: handedOffAt }),
+      attest(a, d.id, { moveToApplied: true, submittedAt: handedOffAt + 1 }),
     ]);
     expect(barrier.arrived()).toBe(2);
     expect([one.statusCode, two.statusCode]).toEqual([200, 200]);
@@ -296,6 +298,32 @@ describe('criterion 1: "I submitted it" records one timeline entry and one resum
       .where(eq(auditLog.event, 'submission.attested'))
       .get();
     expect(attested?.n).toBe(1);
+    // One resume update: it carries the winner's time, the same the attempt and its entry carry.
+    const row = await rowOf(app, d.id);
+    const resume = await app.db.select().from(resumes).where(eq(resumes.id, d.resumeId)).get();
+    const entry = await app.db
+      .select()
+      .from(activities)
+      .where(eq(activities.id, row?.submittedActivityId as string))
+      .get();
+    expect(resume?.submittedAt).toBe(row?.submittedAt);
+    expect(entry?.occurredAt).toBe(row?.submittedAt);
+  });
+
+  it('a stage moved by the attest gets the usual follow-on (afterStageChange): the company homepage is looked up', async () => {
+    const { app, a } = await boot(ON);
+    const domainJobs = async () =>
+      (await app.db.select().from(jobs).where(eq(jobs.kind, 'company.domain_resolve')).all())
+        .length;
+    const unticked = await handedOff(app, a);
+    const before = await domainJobs();
+    await attest(a, unticked.id, { moveToApplied: false });
+    expect(await domainJobs()).toBe(before);
+    const ticked = await handedOff(app, a);
+    await app.db.delete(jobs).where(eq(jobs.kind, 'company.domain_resolve')).run();
+    await attest(a, ticked.id, { moveToApplied: true });
+    expect(await stageOf(app, ticked.oppId)).toBe('applied');
+    expect(await domainJobs()).toBe(1);
   });
 
   it('a repeat answers the same attempt and creates nothing', async () => {
@@ -322,7 +350,7 @@ describe('criterion 1: "I submitted it" records one timeline entry and one resum
     expect(resume).toMatchObject({ submittedTo: 'Elsewhere', submittedAt: 1 });
   });
 
-  it('takes the time the user gives, and refuses one in the future', async () => {
+  it('takes the time the user gives, and refuses one in the future or before the handoff', async () => {
     const { app, a } = await boot(ON);
     const d = await handedOff(app, a);
     const future = await attest(a, d.id, {
@@ -333,7 +361,18 @@ describe('criterion 1: "I submitted it" records one timeline entry and one resum
     expect(future.json()).toMatchObject({ error: { code: 'submitted_at_in_future' } });
     expect((await rowOf(app, d.id))?.status).toBe('handed_off');
 
-    const at = Date.now() - 3_600_000;
+    // Before the form was opened (beyond the clock skew) is refused too (tl on #145).
+    const handedOffAt = (await rowOf(app, d.id))?.handedOffAt as number;
+    const early = await attest(a, d.id, {
+      moveToApplied: false,
+      submittedAt: handedOffAt - 61_000,
+    });
+    expect(early.statusCode).toBe(422);
+    expect(early.json()).toMatchObject({ error: { code: 'submitted_at_before_handoff' } });
+    expect((await rowOf(app, d.id))?.status).toBe('handed_off');
+
+    // Within the skew of the handoff is accepted, as the user gave it.
+    const at = handedOffAt - 30_000;
     const res = await attest(a, d.id, { moveToApplied: false, submittedAt: at });
     expect(res.json()).toMatchObject({ submittedAt: at });
     const entry = await app.db
@@ -552,6 +591,68 @@ describe('criterion 3: applying again to the same requisition needs a typed reas
     const res = await review(a, again.id, again.digest);
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toMatchObject({ reapplyOf: null, reapplyReason: null });
+  });
+
+  it.each([
+    [
+      'reviewed',
+      async (app: FastifyInstance, c: TestClient, ats: AtsJobRef) => {
+        const d = await draftFor(app, c, 'interested', ats);
+        expect((await review(c, d.id, d.digest)).statusCode).toBe(200);
+      },
+    ],
+    [
+      'opened on the ATS (handed off)',
+      async (app: FastifyInstance, c: TestClient, ats: AtsJobRef) => {
+        await handedOff(app, c, 'interested', ats);
+      },
+    ],
+    [
+      'with no confirmation seen (unknown)',
+      async (app: FastifyInstance, c: TestClient, ats: AtsJobRef) => {
+        const d = await handedOff(app, c, 'interested', ats);
+        const at = (await rowOf(app, d.id))?.handedOffAt as number;
+        await attest(c, d.id, { moveToApplied: false, submittedAt: at });
+        expect(await followUpSubmissions(app.db, at + FOLLOWUP_MS)).toBe(1);
+      },
+    ],
+    [
+      'confirmed',
+      async (app: FastifyInstance, c: TestClient, ats: AtsJobRef) => {
+        const d = await handedOff(app, c, 'interested', ats);
+        await attest(c, d.id, { moveToApplied: false });
+        expect((await outcome(c, d.id, { outcome: 'confirmed_by_user' })).statusCode).toBe(200);
+      },
+    ],
+  ] as const)(
+    'an attempt at the same requisition on another opportunity that is %s needs a reason too (tl on #145)',
+    async (_n, earlier) => {
+      const { app, a } = await boot(ON);
+      const ats = freshRef();
+      await earlier(app, a, ats);
+      const again = await draftFor(app, a, 'interested', ats);
+      const res = await review(a, again.id, again.digest);
+      expect(res.statusCode, res.body).toBe(422);
+      expect(res.json()).toMatchObject({ error: { code: 'reapply_reason_required' } });
+    },
+  );
+
+  it('a draft elsewhere is not yet an application: no reason needed', async () => {
+    const { app, a } = await boot(ON);
+    const ats = freshRef();
+    await draftFor(app, a, 'interested', ats);
+    const again = await draftFor(app, a, 'interested', ats);
+    expect((await review(a, again.id, again.digest)).statusCode).toBe(200);
+  });
+
+  it('the board name compares without case (a Workday site keeps its tenant case)', async () => {
+    const { app, a } = await boot(ON);
+    const ats = freshRef();
+    await handedOff(app, a, 'interested', { ...ats, org: 'ExampleCorp' });
+    const again = await draftFor(app, a, 'interested', { ...ats, org: 'examplecorp' });
+    const res = await review(a, again.id, again.digest);
+    expect(res.statusCode, res.body).toBe(422);
+    expect(res.json()).toMatchObject({ error: { code: 'reapply_reason_required' } });
   });
 
   it('a reason typed for a first application is not kept', async () => {

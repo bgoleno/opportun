@@ -1002,6 +1002,31 @@ describe('M2a (#118): "I submitted it" on the open step', () => {
     expect(within(dialog).queryByText('submitted_at_in_future')).toBeNull();
   });
 
+  it('"now" is when the dialog opens, not when the page loaded (tl on #145)', async () => {
+    mockApi(routes(handedOff()));
+    const local = (ms: number) => {
+      const d = new Date(ms);
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+    const { user } = renderStep('open');
+    await user.click(await screen.findByRole('button', { name: 'I submitted it' }));
+    let dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Not yet' }));
+    // Two hours later, the same page: the dialog opens with the time it opens at.
+    const later = Date.now() + 2 * 60 * MIN;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(later);
+    try {
+      await user.click(screen.getByRole('button', { name: 'I submitted it' }));
+      dialog = await screen.findByRole('dialog');
+      await waitFor(() =>
+        expect(within(dialog).getByLabelText('When did you submit?')).toHaveValue(local(later)),
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('a stage already past Applied is not offered the move', async () => {
     mockApi({
       ...routes(handedOff()),
