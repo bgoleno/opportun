@@ -8,7 +8,7 @@
 import type { Submission, SubmissionAnswer, SubmissionFields } from '@opportun/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, errorMessage } from '@/lib/api';
-import type { Page } from '@/lib/opportunities';
+import { qk, type Page } from '@/lib/opportunities';
 
 const enc = encodeURIComponent;
 
@@ -55,6 +55,10 @@ export function submissionErrorText(err: unknown): string {
       return "The posting's address is not a secure (https) address, so it cannot be opened from here.";
     case 'idempotency_key_reused':
       return 'Something went wrong starting this application. Reload the page and try again.';
+    case 'reapply_reason_required':
+      return 'You already applied for this job. Say why you are applying again.';
+    case 'submitted_at_in_future':
+      return 'That time has not happened yet. Choose when you pressed Submit.';
     case null:
       return 'Could not reach Opportun. Check your connection and try again.';
     default:
@@ -160,10 +164,23 @@ export function usePatchSubmission(opportunityId: string) {
 export function useReviewSubmission(opportunityId: string) {
   const invalidate = useInvalidate(opportunityId);
   return useMutation({
-    mutationFn: ({ id, reviewDigest }: { id: string; reviewDigest: string }) =>
+    mutationFn: ({
+      id,
+      reviewDigest,
+      reapplyReason,
+    }: {
+      id: string;
+      reviewDigest: string;
+      /** Why the user applies again to a requisition they already applied to (M2a, #118). */
+      reapplyReason?: string;
+    }) =>
       api<SubmissionView>(`/submissions/${enc(id)}/review`, {
         method: 'POST',
-        body: { reviewDigest, acknowledged: true },
+        body: {
+          reviewDigest,
+          acknowledged: true,
+          ...(reapplyReason === undefined ? {} : { reapplyReason }),
+        },
       }),
     // Settled, not only on success: a refusal (stale, expired) must refresh the digest the
     // screen holds, or the next attempt would send the same stale one.
@@ -182,6 +199,40 @@ export function useHandoffSubmission(opportunityId: string) {
     mutationFn: (id: string) =>
       api<HandoffResult>(`/submissions/${enc(id)}/handoff`, { method: 'POST', body: {} }),
     onSettled: invalidate,
+  });
+}
+
+/**
+ * "I submitted it" (M2a, #118): the user's word, recorded once. `moveToApplied` is the tick the
+ * user left (pre-ticked, owner decision 3); `submittedAt` only when they changed the time.
+ */
+export function useAttestSubmission(opportunityId: string) {
+  const qc = useQueryClient();
+  const invalidate = useInvalidate(opportunityId);
+  return useMutation({
+    mutationFn: ({
+      id,
+      moveToApplied,
+      submittedAt,
+    }: {
+      id: string;
+      moveToApplied: boolean;
+      submittedAt?: number;
+    }) =>
+      api<SubmissionView>(`/submissions/${enc(id)}/attest`, {
+        method: 'POST',
+        body: { moveToApplied, ...(submittedAt === undefined ? {} : { submittedAt }) },
+      }),
+    onSettled: async () => {
+      await invalidate();
+      // The stage, the timeline and the resume record changed: the pages that show them read
+      // again (qk.opportunity covers its timeline and next steps).
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: qk.opportunity(opportunityId) }),
+        qc.invalidateQueries({ queryKey: qk.opportunities }),
+        qc.invalidateQueries({ queryKey: qk.dashboard }),
+      ]);
+    },
   });
 }
 

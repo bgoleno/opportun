@@ -181,4 +181,14 @@ test('apply: choose a resume, add details, review everything, open the form, and
   await expect(page.getByText(/Opportun has not submitted anything/)).toBeVisible();
   await page.goto(`/opportunities/${id}`);
   await expect(panel.getByText('Opened on ATS')).toBeVisible();
+
+  // M2a (#118): the user says they submitted it, and Opportun records it once.
+  await page.goto(`/opportunities/${id}/apply?step=open`);
+  await page.getByRole('button', { name: 'I submitted it' }).click();
+  const attest = page.getByRole('dialog', { name: 'Record that you submitted this application?' });
+  await expect(attest.getByLabel('When did you submit?')).toBeVisible();
+  await attest.getByRole('button', { name: 'Yes, I submitted it' }).click();
+  await page.waitForURL(`**/opportunities/${id}`);
+  await expect(panel.getByText('Submitted', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Applied via Greenhouse:/).first()).toBeVisible();
 });
