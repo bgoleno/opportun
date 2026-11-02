@@ -1,6 +1,6 @@
 # Discovery
 
-[Guide home](README.md) · Previous: [Inbox](inbox.md) · Next: [Network](network.md)
+[Guide home](README.md) · Previous: [Mail filters](mail-filters.md) · Next: [Browser extension](browser-extension.md)
 
 Discovery finds new postings, ranks each one against your role targets with AI, and puts
 them in a review queue. Nothing reaches your pipeline until you accept it.
@@ -169,5 +169,5 @@ without your accept.
 
 ---
 
-| [← Inbox](inbox.md) | [Guide home](README.md) | [Browser extension →](browser-extension.md) |
-| :------------------ | :---------------------: | ------------------------------------------: |
+| [← Mail filters](mail-filters.md) | [Guide home](README.md) | [Browser extension →](browser-extension.md) |
+| :-------------------------------- | :---------------------: | ------------------------------------------: |

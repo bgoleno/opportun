@@ -1,6 +1,6 @@
 # Inbox
 
-[Guide home](README.md) · Previous: [Resumes](resumes.md) · Next: [Discovery](discovery.md)
+[Guide home](README.md) · Previous: [Resumes](resumes.md) · Next: [Mail filters](mail-filters.md)
 
 The inbox collects recruiter mail, classifies it with AI, links it to the opportunities it is
 about, and suggests stage changes. It never sends, labels, moves or deletes mail.
@@ -20,6 +20,10 @@ Gmail uses the same Google OAuth client as resumes (see
    reads that far back, outside spam and trash. Changing it later makes the next sync re-read
    the whole window: widening pulls older mail in, narrowing keeps what is already there.
 
+Which messages Opportun reads at all is up to your [mail filters](mail-filters.md): a Gmail
+label to watch, allow and deny lists, and the checks every message passes before it is
+classified.
+
 Opportun syncs every 15 minutes on its own. **Sync now** (on the Inbox or the Gmail card)
 runs one immediately.
 
@@ -30,11 +34,14 @@ _The Gmail card with its lookback window, and the Extensions and Connectors card
 ## How classification works
 
 Before a message is classified, your mail filters (under **Settings > Mail filters**) decide
-whether it is about your job search at all, and for some messages a short AI check, the
-`comms.triage` task, reads the sender, the subject and the first 500 characters of the message
-to decide the same. A message either one keeps out is stored without its subject or text: only
-the sender, the date and the rule that decided. It appears in the **Blocked** tab, so you can
-spot a sender kept out by mistake and change the rule.
+whether it is about your job search at all. They run on your own Opportun server: they read the
+sender and, for some checks, the subject and text, and send nothing anywhere. For some
+messages a short AI check, the `comms.triage` task, then sends the sender's address, the
+subject and the first 500 characters to your AI provider to decide the same. A message either
+one keeps out is stored without its subject or text;
+[Mail filters](mail-filters.md#what-happens-to-a-message-that-is-kept-out) lists what is kept.
+It appears in the **Blocked** tab, so you can spot a sender kept out by mistake and change the
+rule.
 
 Each message that gets through goes to the `comms.classify` AI task, which decides:
 
@@ -62,7 +69,7 @@ unclassified and are queued automatically when you add one.
 | Linked       | Messages linked to an opportunity                                                                                                                                              |
 | Spam         | Broadcast outreach. It never creates opportunities. **Not spam** brings one back                                                                                               |
 | Filtered     | Not-a-fit outreach, with the reason it does not fit                                                                                                                            |
-| Blocked      | Messages kept out before classification (see above): only the sender, the date and the rule that decided, with a link to the original where there is one                       |
+| Blocked      | Messages kept out before classification (see above), each shown with its sender, its date and the rule that decided, and a link to the original where there is one             |
 
 ![The Linked tab: a targeted Apple Mail message, and a Gmail interview request with a suggested move to In process](images/inbox-linked.png)
 
@@ -111,5 +118,5 @@ from the same card and the connector is cut off on its next request.
 
 ---
 
-| [← Resumes](resumes.md) | [Guide home](README.md) | [Discovery →](discovery.md) |
-| :---------------------- | :---------------------: | --------------------------: |
+| [← Resumes](resumes.md) | [Guide home](README.md) | [Mail filters →](mail-filters.md) |
+| :---------------------- | :---------------------: | --------------------------------: |
