@@ -99,6 +99,9 @@ const enc = encodeURIComponent;
 export const DECIDED_TABS = ['dismissed', 'accepted'] as const;
 export type DecidedTab = (typeof DECIDED_TABS)[number];
 
+/** The prefix of both decided-results tabs, for invalidating them together. */
+const DECIDED_PREFIX = ['discovery', 'results', 'decided'] as const;
+
 export const discoveryKeys = {
   queue: ['discovery', 'results', 'pending'] as const,
   decided: (tab: DecidedTab) => ['discovery', 'results', 'decided', tab] as const,
@@ -312,6 +315,10 @@ function useQueueMutation<TVars extends { id: string }>(
     onSettled: async () => {
       await Promise.all([
         qc.invalidateQueries({ queryKey: discoveryKeys.queue }),
+        // Both decided tabs (#139): the Decided view may be open already, or cached from an
+        // earlier visit. These are the mutation's own options, so they run after the queue
+        // that started it unmounts.
+        qc.invalidateQueries({ queryKey: DECIDED_PREFIX }),
         qc.invalidateQueries({ queryKey: qk.opportunities }),
       ]);
     },
@@ -417,6 +424,10 @@ function useBulkMutation<TVars>(mutationFn: (vars: TVars) => Promise<BulkItemRes
     onSettled: async () => {
       await Promise.all([
         qc.invalidateQueries({ queryKey: discoveryKeys.queue }),
+        // Both decided tabs (#139): the Decided view may be open already, or cached from an
+        // earlier visit. These are the mutation's own options, so they run after the queue
+        // that started it unmounts.
+        qc.invalidateQueries({ queryKey: DECIDED_PREFIX }),
         qc.invalidateQueries({ queryKey: qk.opportunities }),
       ]);
     },
