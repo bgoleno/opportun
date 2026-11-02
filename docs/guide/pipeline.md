@@ -137,7 +137,8 @@ tab, **Find posting** looks for one:
 One confident match is attached straight away. Several are listed for you to pick from, with
 a search box over the whole board. If no board is reachable, paste the posting link or the
 description text instead. LinkedIn links are never fetched: paste the text, or use the
-[capture extension](discovery.md#capture-a-posting-yourself).
+[capture extension](discovery.md#capture-a-posting-yourself). Indeed links are never fetched
+either: paste the text.
 
 A large Workday board (see [install guide section
 8](../install.md#8-attaching-a-posting-to-an-opportunity)) is read only in part: a note says

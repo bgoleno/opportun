@@ -277,6 +277,17 @@ describe('MCP http transport', () => {
     expect(d.fetched).toEqual(['https://mcp.example.com/mcp']);
   });
 
+  // Issue #75 keeps indeed.com off server page fetches only. An MCP connector the user points at
+  // an Indeed host stays their choice under C-2, so the MCP guard must not refuse it. Nothing
+  // leaves the process: the transport is the stub above.
+  it('does not refuse an MCP server on an indeed.com host (C-2, issue #75)', async () => {
+    const d = deps({ 'mcp.indeed.com': ['93.184.216.34'], 'indeed.com': ['93.184.216.34'] });
+    const guarded = guardedMcpFetch(d);
+    expect((await guarded('https://mcp.indeed.com/mcp', { method: 'POST' })).status).toBe(200);
+    expect((await guarded('https://indeed.com/mcp', { method: 'POST' })).status).toBe(200);
+    expect(d.fetched).toEqual(['https://mcp.indeed.com/mcp', 'https://indeed.com/mcp']);
+  });
+
   it('creating a source with an http:// MCP URL is a 422', async () => {
     const { a } = await boot();
     const config = { ...stdioConfig('jobs'), transport: 'http', url: 'http://mcp.example.com/' };

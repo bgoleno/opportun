@@ -2,7 +2,8 @@
 // author (discovery, ATS APIs, careers pages, link snapshots) goes through safeFetch:
 //   - https only, no embedded credentials;
 //   - the host must be on the caller's allowlist (an entry also covers its subdomains), and
-//     prohibited hosts are refused whatever the allowlist says (the compliance boundary, C-1);
+//     prohibited hosts are refused whatever the allowlist says (the compliance boundary: C-1's
+//     PROHIBITED_HOSTS and C-2's PAGE_FETCH_PROHIBITED_HOSTS);
 //   - allowPublic mode (a user-entered URL such as a company careers page) drops the allowlist
 //     only: any public https host may be fetched, except prohibited hosts, and every other rule
 //     below (public addresses on every hop, redirect limit, caps) still applies;
@@ -91,6 +92,23 @@ const BUCKET_INTERVAL_MS = 1000;
  * exports only). Matched like allowlist entries, so subdomains are covered.
  */
 export const PROHIBITED_HOSTS: readonly string[] = ['linkedin.com', 'lnkd.in'];
+
+/**
+ * Hosts the server never page-fetches (C-2, https://github.com/bgoleno/opportun/issues/75):
+ * safeFetch refuses them in every mode, whatever the allowlist, on every redirect hop, and with
+ * no official-API carve-out. Their pages reach Opportun only from the user's own browser (the
+ * capture extension) or as pasted text.
+ *
+ * Deliberately a separate list from PROHIBITED_HOSTS; do not merge them. PROHIBITED_HOSTS is
+ * C-1 (LinkedIn: no automated retrieval at all), and the MCP guard (mcpClient.ts) and the AI
+ * provider guard (aiProviderFetch.ts) refuse it too. This list only covers the server fetching
+ * pages itself. A user-configured MCP connector to an Indeed host stays the user's choice under
+ * C-2 (and ADR-12), so those two guards must keep accepting these hosts. The owner approved
+ * blocking page fetches only (2026-11-01). Indeed's official MCP server (docs.indeed.com/mcp)
+ * is offered today only as a Claude connector, so Opportun does not use it, but keeping the
+ * lists apart leaves that path open if it is revisited.
+ */
+export const PAGE_FETCH_PROHIBITED_HOSTS: readonly string[] = ['indeed.com'];
 
 /**
  * The C-1 carve-out. C-1 lists "any official API the user has access to" as a supported path,
@@ -271,9 +289,23 @@ function hostMatches(host: string, entries: readonly string[]): boolean {
   });
 }
 
-/** True for a prohibited host or any subdomain of one (a trailing dot is ignored). */
+/**
+ * True for a C-1 prohibited host or any subdomain of one (a trailing dot is ignored). The check
+ * for MCP and AI provider URLs; a server page fetch uses isPageFetchProhibited.
+ */
 export function isProhibitedHost(host: string): boolean {
   return hostMatches(host.toLowerCase().replace(/\.$/, ''), PROHIBITED_HOSTS);
+}
+
+/**
+ * True when the server must never fetch a page from this host: a C-1 prohibited host or a
+ * PAGE_FETCH_PROHIBITED_HOSTS entry, or a subdomain of either (a trailing dot is ignored).
+ * Every page-fetch caller that answers a refusal before fetching (capture's prohibited_host)
+ * uses this, so the two lists are never copied elsewhere.
+ */
+export function isPageFetchProhibited(host: string): boolean {
+  const h = host.toLowerCase().replace(/\.$/, '');
+  return hostMatches(h, PROHIBITED_HOSTS) || hostMatches(h, PAGE_FETCH_PROHIBITED_HOSTS);
 }
 
 function parseTarget(raw: string | URL): URL {
@@ -345,6 +377,10 @@ export function createSafeFetch(deps: SafeFetchDeps) {
   ): Promise<FetchTarget> {
     const host = url.hostname.toLowerCase().replace(/\.$/, '');
     if (isProhibitedHost(host) && (officialApiUrl === undefined || url.href !== officialApiUrl)) {
+      throw new FetchBlockedError('host_not_allowed', host);
+    }
+    // No officialApiUrl exception here: the carve-out above is C-1's alone.
+    if (hostMatches(host, PAGE_FETCH_PROHIBITED_HOSTS)) {
       throw new FetchBlockedError('host_not_allowed', host);
     }
     if (!allowPublic && !hostMatches(host, allowHosts)) {

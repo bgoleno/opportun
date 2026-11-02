@@ -531,7 +531,12 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
   trade-offs honestly.
 - C-2: **Job boards.** Sources integrate through official APIs, published feeds,
   licensed aggregators, or user-configured MCP connectors. Per-source rate limits
-  and terms are respected and documented in each adapter.
+  and terms are respected and documented in each adapter. **Indeed:** the server
+  never fetches indeed.com pages (Capture posting links, careers-page links,
+  matched posting links); Indeed postings arrive from Indeed's own job alert
+  emails, pasted text, or a page the user captures in their own browser. This
+  covers server page fetches only: an MCP connector the user configures stays
+  their choice, as for any board.
 - C-3: **Google.** Access through the user's own OAuth consent with minimal scopes;
   the app is registered as the user's own OAuth client (documented setup) so no
   third party sits in the token path.

@@ -103,6 +103,16 @@ describe('createProviderFetch: PROHIBITED_HOSTS compliance (issue #334)', () => 
   });
 });
 
+describe('createProviderFetch: the C-1 list only (issue #75)', () => {
+  // indeed.com is refused for server page fetches (safeFetch), not here: this check stays on
+  // the C-1 list, like the MCP guard. The real fetch is the stub above, so nothing leaves.
+  it('does not refuse an indeed.com host', async () => {
+    const providerFetch = createProviderFetch({ allowLoopbackHttp: false }, resolvePublic);
+    await providerFetch('https://api.indeed.com/v1/models');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('createProviderFetch: private-address rejection (issue #334)', () => {
   it('refuses an IP-literal private address: zero outbound attempts', async () => {
     const providerFetch = createProviderFetch({ allowLoopbackHttp: false }, neverResolve);

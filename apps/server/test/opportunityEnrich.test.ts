@@ -18,6 +18,7 @@ import {
   careersLink,
   dollarAmounts,
   enrichOpportunity,
+  getPage,
   OPPORTUNITY_ENRICH_KIND,
   pageNamesCompany,
   senderDomain,
@@ -135,6 +136,9 @@ describe('helpers', () => {
   it('senderDomain keeps a company domain, drops platforms, reads the LAST address', () => {
     expect(senderDomain('"Dana" <recruiter@northwind.example>')).toBe('northwind.example');
     expect(senderDomain('"Dana" <inmail-hit-reply@linkedin.com>')).toBeNull();
+    // Indeed comes from PAGE_FETCH_PROHIBITED_HOSTS now, not a literal here (issue #75).
+    expect(senderDomain('Indeed <alert@indeed.com>')).toBeNull();
+    expect(senderDomain('Indeed <alert@match.indeed.com>')).toBeNull();
     expect(senderDomain('"spoof@real.com" <blast@hire.lever.co>')).toBeNull();
     expect(senderDomain('"a@fake.com" <real@initech.com>')).toBe('initech.com');
     expect(senderDomain('no address at all')).toBeNull();
@@ -473,6 +477,40 @@ describe('enrichOpportunity', () => {
     expect(outcome).toMatchObject({ outcome: 'no_match' });
     expect((await oppRow(app, id)).descriptionMd).toBeNull();
     expect((await notesOf(app, id))[0]?.title).toBe('Posting found but not readable');
+  });
+
+  it('a posting link to indeed.com is never fetched: the job leaves its usual note (issue #75)', async () => {
+    const { app, a } = await boot();
+    const id = await outreachOpportunity(app, a, 'Initech Labs', 'Staff Platform Engineer');
+    const indeedPosting = 'https://www.indeed.com/viewjob?jk=00000000deadbeef';
+    // The Indeed URL is routed and answers with a readable posting, so only the rule can stop it.
+    const { fetch, requested } = net({
+      'https://initechlabs.com/': HOME,
+      'https://initechlabs.com/careers': `<html><body><h1>Open positions</h1>
+        <a href="${indeedPosting}">Staff Platform Engineer</a></body></html>`,
+      [indeedPosting]: POSTING,
+    });
+    const outcome = await enrichOpportunity(app.db, ctxOf(a), fetch, id);
+    expect(outcome).toEqual({ outcome: 'no_match', careersUrl: 'https://initechlabs.com/careers' });
+    expect(requested.filter((u) => new URL(u).hostname.endsWith('indeed.com'))).toEqual([]);
+    const opp = await oppRow(app, id);
+    expect(opp.descriptionMd).toBeNull();
+    expect((await notesOf(app, id))[0]).toMatchObject({
+      title: 'Posting found but not readable',
+    });
+  });
+
+  it('getPage returns null for indeed.com without a request, and still reads look-alikes (issue #75)', async () => {
+    const { fetch, requested } = net({
+      'https://www.indeed.com/viewjob?jk=00000000deadbeef': POSTING,
+      'https://indeed.com/': POSTING,
+      'https://notindeed.com/careers': CAREERS,
+    });
+    expect(await getPage(fetch, 'https://www.indeed.com/viewjob?jk=00000000deadbeef')).toBeNull();
+    expect(await getPage(fetch, 'https://indeed.com/')).toBeNull();
+    expect(requested).toEqual([]);
+    expect((await getPage(fetch, 'https://notindeed.com/careers'))?.html).toBe(CAREERS);
+    expect(requested).toEqual(['https://notindeed.com/careers']);
   });
 
   it('a careers page without the posting still persists (issue #260): no_match concedes the role may be unlisted, not that the page is wrong', async () => {

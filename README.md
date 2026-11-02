@@ -67,7 +67,7 @@ in AI prompts, and no AI output sends an application, email or message without y
 The Apple Mail connector and the capture extension use scoped device tokens: they submit
 data and cannot enumerate or fetch stored records, their responses only acknowledge what
 was submitted and whether it matched an existing record, and they stop working the moment
-you revoke them. The server never fetches LinkedIn pages. The
+you revoke them. The server never fetches LinkedIn or Indeed pages. The
 [security policy](SECURITY.md) covers the threat model, how to report a vulnerability, and
 the few deliberate deviations (such as the full Google Drive scope).
 

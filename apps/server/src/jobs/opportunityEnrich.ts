@@ -26,7 +26,12 @@ import { fetchWorkdayDetail, workdayBoard } from '../adapters/sources/workday';
 import type { Db } from '../db/client';
 import { activities, communications, companies, opportunities, roleTargets } from '../db/schema';
 import { buildAiDeps } from '../lib/ai';
-import { FetchBlockedError, PROHIBITED_HOSTS, type safeFetch } from '../lib/safeFetch';
+import {
+  FetchBlockedError,
+  PAGE_FETCH_PROHIBITED_HOSTS,
+  PROHIBITED_HOSTS,
+  type safeFetch,
+} from '../lib/safeFetch';
 import type { UserCtx } from '../repos/base';
 import { getActivePrompt } from '../repos/prompts';
 import { updateOpportunity } from '../repos/opportunities';
@@ -54,10 +59,11 @@ const DESCRIPTION_MAX = 50_000;
 const MAX_DOMAIN_PROBES = 5;
 
 /** Mail platforms and ATS mail hosts whose sender domain says nothing about the employer.
- *  Seeded from PROHIBITED_HOSTS (the C-1 list) so those hosts are never named here. */
+ *  Seeded from PROHIBITED_HOSTS (C-1) and PAGE_FETCH_PROHIBITED_HOSTS (C-2) so those hosts are
+ *  never named here. */
 const PLATFORM_MAIL_DOMAINS: ReadonlySet<string> = new Set([
   ...PROHIBITED_HOSTS,
-  'indeed.com',
+  ...PAGE_FETCH_PROHIBITED_HOSTS,
   'ziprecruiter.com',
   'glassdoor.com',
   'wellfound.com',

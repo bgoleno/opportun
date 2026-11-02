@@ -268,7 +268,7 @@ export function FindPostingDialog({
           {mode === 'url' ? (
             <FormField
               label="Posting link"
-              hint="An https link to the job posting. LinkedIn links cannot be read; paste the text instead."
+              hint="An https link to the job posting. LinkedIn and Indeed links cannot be read; paste the text instead."
               error={fieldError}
             >
               {(c) => (
