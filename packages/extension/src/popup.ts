@@ -5,7 +5,13 @@ import {
   MIN_KEPT_FRACTION,
   TRAILING_NOISE_MARKER_PATTERNS,
 } from '@opportun/core/linkedinMarkers';
-import { extractPage, type ExtractMarkers, type RawPage } from './extract';
+import {
+  extractIndeedJob,
+  extractPage,
+  type ExtractMarkers,
+  type ExtractResult,
+  type RawPage,
+} from './extract';
 import { mountPopup } from './popupController';
 import { bakedServerUrl, type SettingsStorage } from './settings';
 
@@ -16,13 +22,13 @@ interface ExtensionApi {
     query(q: { active: true; currentWindow: true }): Promise<{ id?: number; url?: string }[]>;
   };
   scripting: {
-    executeScript(injection: {
+    executeScript<A extends unknown[]>(injection: {
       target: { tabId: number };
-      func: (markers: ExtractMarkers, doc?: Document) => RawPage;
+      func: (...args: A) => unknown;
       // Serialized separately from `func` (JSON-serializable, not structured-clone: see
       // ExtractMarkers' own comment in extract.ts) and passed positionally, so order must
       // match `func`'s own parameter order exactly.
-      args: [ExtractMarkers];
+      args: A;
     }): Promise<{ result?: unknown }[]>;
   };
   permissions: {
@@ -41,6 +47,14 @@ const isRawPage = (v: unknown): v is RawPage =>
   typeof (v as RawPage).title === 'string' &&
   typeof (v as RawPage).text === 'string';
 
+/** What extractIndeedJob may return; anything else from the tab is treated as a failure. */
+const isExtractResult = (v: unknown): v is ExtractResult =>
+  typeof v === 'object' &&
+  v !== null &&
+  (((v as { ok?: unknown }).ok === true && isRawPage((v as { page?: unknown }).page)) ||
+    ((v as { ok?: unknown }).ok === false &&
+      (v as { reason?: unknown }).reason === 'layout_unrecognized'));
+
 void mountPopup(document, {
   storage: chrome.storage.local,
   fetch: (url, init) => fetch(url, init),
@@ -51,8 +65,19 @@ void mountPopup(document, {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     return tab?.id === undefined ? null : { id: tab.id, url: tab.url };
   },
-  runExtract: async (tabId) => {
+  runExtract: async (tabId, site) => {
     try {
+      if (site === 'indeed') {
+        // Indeed's reader composes the job from named parts and needs no data from here
+        // (https://github.com/bgoleno/opportun/issues/74). No args: `doc` defaults to the page's
+        // own document, as for extractPage.
+        const [frame] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: extractIndeedJob,
+          args: [],
+        });
+        return isExtractResult(frame?.result) ? frame.result : null;
+      }
       // One injection, in the tab the user clicked on. The function itself is serialized
       // (not a wrapper: a wrapper's reference to extractPage would not exist in the page), and
       // the marker data travels separately through `args` (issue #275): extractPage's body
@@ -69,7 +94,7 @@ void mountPopup(document, {
         func: extractPage,
         args: [markers],
       });
-      return isRawPage(frame?.result) ? frame.result : null;
+      return isRawPage(frame?.result) ? { ok: true, page: frame.result } : null;
     } catch {
       return null;
     }

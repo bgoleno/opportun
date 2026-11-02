@@ -68,6 +68,44 @@ describe('renderOutcome', () => {
     expect(r.text).toMatch(pattern);
   });
 
+  // https://github.com/bgoleno/opportun/issues/74: the same reasons, worded for the site of the tab.
+  it.each([
+    ['unsupported_path', /open a single Indeed job/],
+    ['verification_wall', /Indeed is showing a sign-in or verification page/],
+    ['unsupported_site', /not a site Opportun captures from/],
+    ['not_linkedin', /not a site Opportun captures from/],
+    ['no_title_company', /finished loading/],
+    ['no_description', /finished loading/],
+  ])('an Indeed %s refusal names Indeed, never LinkedIn', (reason, pattern) => {
+    const r = renderOutcome({ kind: 'refused', reason }, 'indeed');
+    expect(r.tone).toBe('error');
+    expect(r.text).toMatch(/^Not captured: /);
+    expect(r.text).toMatch(pattern);
+    expect(r.text).not.toMatch(/LinkedIn/);
+  });
+
+  it('a LinkedIn tab still gets the LinkedIn wording, and understands the new reasons', () => {
+    expect(renderOutcome({ kind: 'refused', reason: 'not_linkedin' }, 'linkedin').text).toMatch(
+      /not a LinkedIn page/,
+    );
+    expect(renderOutcome({ kind: 'refused', reason: 'unsupported_site' }).text).toMatch(
+      /not a site Opportun captures from/,
+    );
+    expect(renderOutcome({ kind: 'refused', reason: 'verification_wall' }).text).toMatch(
+      /LinkedIn is showing a sign-in or verification page/,
+    );
+  });
+
+  it('the Indeed refusals made in the popup, before anything is sent', () => {
+    expect(renderOutcome({ kind: 'layout_unrecognized' }, 'indeed')).toEqual({
+      tone: 'error',
+      text: 'Not captured: Indeed’s layout was not recognized, so nothing was sent. Reload the job and try again; if it keeps happening, the extension needs an update.',
+    });
+    expect(renderOutcome({ kind: 'not_a_posting' }, 'indeed').text).toMatch(
+      /^Open a single Indeed job/,
+    );
+  });
+
   it('an unknown refusal reason is shown as the server sent it', () => {
     expect(renderOutcome({ kind: 'refused', reason: 'something_new' })).toEqual({
       tone: 'error',
@@ -117,7 +155,7 @@ describe('renderOutcome', () => {
       ],
       [{ kind: 'too_large' }, /too large/],
       [{ kind: 'empty_page' }, /no text yet/],
-      [{ kind: 'not_linkedin' }, /Open a LinkedIn profile or job page/],
+      [{ kind: 'unsupported_tab' }, /Open a LinkedIn profile or job page, or an Indeed job/],
       [{ kind: 'no_settings' }, /Save your server address and token first/],
       [{ kind: 'permission_denied' }, /permission to contact your server/],
       [{ kind: 'inject_failed' }, /could not read this tab/],
