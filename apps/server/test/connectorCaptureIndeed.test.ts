@@ -2,7 +2,9 @@
 // The LinkedIn behaviour of this route is specified by connectorCapture.test.ts, unchanged; this
 // file covers what Indeed adds: a job becomes an opportunity at `interested`, a page that is not
 // one posting is refused with a named reason, a pending Indeed alert lead for the same job key
-// is completed rather than twinned, and the LinkedIn refine prompt never runs on an Indeed page.
+// is completed rather than twinned, and the LinkedIn refine prompt never runs on an Indeed page
+// (the site-neutral capture.job does, https://github.com/bgoleno/opportun/issues/76; its own
+// tests are in connectorCaptureJobRefine.test.ts).
 // Every page and lead here is synthetic. Nothing fetches indeed.com (C-1).
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -45,7 +47,10 @@ const URL_ = '/api/v1/connector/capture';
 const boot = useApi();
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
 
-/** What a model would add if it were asked: none of it may reach an Indeed capture. */
+/**
+ * What a model might answer, in the LinkedIn shape. On an Indeed page only a location or pay the
+ * page states may come from it (#76): here the location is on the page, the pay is not.
+ */
 const MODEL_FIELDS: Refined = {
   kind: 'job',
   name: null,
@@ -208,25 +213,26 @@ describe('POST /connector/capture: Indeed alert leads', () => {
 });
 
 describe('POST /connector/capture: no LinkedIn prompt on an Indeed page', () => {
-  it('skips the refine step on Indeed even when AI is available, and runs it on LinkedIn', async () => {
+  it('runs capture.job on Indeed, never capture.linkedin, and capture.linkedin on LinkedIn', async () => {
     const { app, a } = await boot();
     vi.mocked(runStructured).mockResolvedValue(MODEL_FIELDS);
     const bearer = await token(a);
 
     const res = await push(app, bearer, INDEED_JOB);
     expect(res.statusCode, res.body).toBe(201);
-    expect(res.json().refined).toBe(false);
-    expect(runStructured).not.toHaveBeenCalled();
+    expect(res.json().refined).toBe(true);
+    expect(runStructured).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runStructured).mock.calls[0]?.[1]).toBe('capture.job');
     const { posting } = await getResult(app.db, ctxOf(a), res.json().resultId);
-    expect(posting).toMatchObject({ location: null, compNote: null });
+    // The page states the location, not the model's pay; the description is the page's own.
+    expect(posting).toMatchObject({ location: 'Example City, EX', compNote: null });
     expect(posting.descriptionMd).not.toContain('model rewrite');
 
-    // The control: the same setup does run the refine step on a LinkedIn page, so the skip
-    // above is the site rule, not a missing prompt or key.
+    // The same setup runs the LinkedIn prompt on a LinkedIn page, and only there.
     const linkedIn = await push(app, bearer, LINKEDIN_JOB);
     expect(linkedIn.statusCode, linkedIn.body).toBe(201);
-    expect(runStructured).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(runStructured).mock.calls[0]?.[1]).toBe('capture.linkedin');
+    expect(runStructured).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runStructured).mock.calls[1]?.[1]).toBe('capture.linkedin');
   });
 });
 

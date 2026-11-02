@@ -19,6 +19,8 @@ export const DEFAULT_POLICIES: Readonly<Record<TaskKey, Readonly<ModelPolicy>>> 
   'referral.rationale': { provider: 'anthropic', model: SONNET, maxOutputTokens: 2_000 },
   'capture.extract': { provider: 'anthropic', model: HAIKU, maxOutputTokens: 4_000 },
   'capture.linkedin': { provider: 'anthropic', model: HAIKU, maxOutputTokens: 4_000 },
+  // Two short fields: a location and a pay line.
+  'capture.job': { provider: 'anthropic', model: HAIKU, maxOutputTokens: 500 },
   'posting.merge': { provider: 'anthropic', model: HAIKU, maxOutputTokens: 4_000 },
   'company.suggest': { provider: 'anthropic', model: SONNET, maxOutputTokens: 4_000 },
   'integration.diagnose': { provider: 'anthropic', model: HAIKU, maxOutputTokens: 1_000 },
