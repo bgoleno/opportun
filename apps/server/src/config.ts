@@ -91,6 +91,14 @@ export interface Config {
    */
   submissions?: boolean;
   /**
+   * OPPORTUN_DAILY_REVIEW_CAP (assisted apply M1c, https://github.com/bgoleno/opportun/issues/116):
+   * the most application reviews one user may make in a rolling 24 hours on this deployment.
+   * Default 10; refused above MAX_DAILY_REVIEW_CAP (25), the instance ceiling. A user can lower
+   * their own cap below this, never raise it (repos/submissionReview.ts). A sanity ceiling, not a
+   * quota: Opportun prepares applications one at a time and never sends them.
+   */
+  dailyReviewCap?: number;
+  /**
    * OPPORTUN_AI_ALLOW_LOOPBACK_HTTP=1 (issue #334): whether an openai_compatible model policy's
    * baseUrl may use plain http to localhost/127.0.0.1/[::1] at all on this deployment. Off by
    * default. The allowance exists for an operator pointing this server at their own local model
@@ -196,6 +204,22 @@ function loadPort(env: NodeJS.ProcessEnv): number {
     throw new ConfigError(`PORT must be an integer between 0 and 65535, got: ${raw}`);
   }
   return port;
+}
+
+/** The instance ceiling on OPPORTUN_DAILY_REVIEW_CAP. */
+export const MAX_DAILY_REVIEW_CAP = 25;
+export const DEFAULT_DAILY_REVIEW_CAP = 10;
+
+function loadDailyReviewCap(env: NodeJS.ProcessEnv): number {
+  const raw = env.OPPORTUN_DAILY_REVIEW_CAP;
+  if (raw === undefined || raw === '') return DEFAULT_DAILY_REVIEW_CAP;
+  const cap = Number(raw);
+  if (!Number.isInteger(cap) || cap < 1 || cap > MAX_DAILY_REVIEW_CAP) {
+    throw new ConfigError(
+      `OPPORTUN_DAILY_REVIEW_CAP must be an integer between 1 and ${MAX_DAILY_REVIEW_CAP}, got: ${raw}`,
+    );
+  }
+  return cap;
 }
 
 function loadHost(env: NodeJS.ProcessEnv): string {
@@ -451,6 +475,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     db: loadDbConfig(env),
     demo: env.OPPORTUN_DEMO === '1',
     submissions: env.OPPORTUN_SUBMISSIONS === '1',
+    dailyReviewCap: loadDailyReviewCap(env),
     aiAllowLoopbackHttp: env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1',
     trustedProxies: loadTrustedProxies(env),
     webDir: resolve(

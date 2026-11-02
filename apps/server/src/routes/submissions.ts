@@ -18,6 +18,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { submissionsEnabled } from '../config';
 import { HttpError } from '../lib/errors';
+import { rateLimit } from '../lib/rateLimit';
 import type { ValidationIssue } from '../plugins/security';
 import {
   cancelSubmission,
@@ -26,6 +27,7 @@ import {
   listSubmissionsForOpportunity,
   updateSubmissionDraft,
 } from '../repos/submissions';
+import { handoffSubmission, reviewSubmission } from '../repos/submissionReview';
 import { DEFAULT_LIMIT, IdParams, MAX_LIMIT, pageOf } from './common';
 
 const CreateBody = z
@@ -53,6 +55,30 @@ const PatchBody = z
  * same note as routes/opportunityPosting.ts's rederive), so absent and null both pass.
  */
 const EmptyBody = z.object({}).strict().nullish();
+
+/**
+ * The review: the digest of the state the screen showed (GET /submissions/:id's reviewDigest),
+ * and the user's explicit acknowledgment that Opportun will not submit it (design 6.1).
+ */
+const ReviewBody = z
+  .object({
+    reviewDigest: z.string().regex(/^[0-9a-f]{64}$/),
+    acknowledged: z.literal(true),
+  })
+  .strict();
+
+const HandoffResponse = z.object({
+  /** The employer's posting, for the browser to open. The server never fetches it. */
+  destinationUrl: z.string(),
+  /** When the handoff lapses if no outcome is recorded: a fixed time. */
+  expiresAt: z.number().int(),
+});
+
+/**
+ * In-process burst limit per user on review and handoff (design 3.4 item 5 (i)), on top of the
+ * database-counted daily cap. Generous for a person, too tight for a script.
+ */
+const BURST = { limit: 10, windowMs: 60 * 1000 } as const;
 
 const PageQuery = z
   .object({
@@ -154,6 +180,42 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       if (answeredInvalid(req, reply)) return reply;
       return updateSubmissionDraft(db, app.requireUser(req), req.params.id, req.body);
+    },
+  );
+
+  const reviewBurst = rateLimit({
+    ...BURST,
+    keyFn: (req) => `submission-review|${app.requireUser(req).userId}`,
+  });
+  const handoffBurst = rateLimit({
+    ...BURST,
+    keyFn: (req) => `submission-handoff|${app.requireUser(req).userId}`,
+  });
+
+  // Session and CSRF only, like every route here: a device token cannot review or hand off.
+  api.post(
+    '/submissions/:id/review',
+    {
+      attachValidation: true,
+      preHandler: reviewBurst,
+      schema: { params: IdParams, body: ReviewBody, response: { 200: SubmissionSchema } },
+    },
+    async (req, reply) => {
+      if (answeredInvalid(req, reply)) return reply;
+      return reviewSubmission(db, app.requireUser(req), app.config, req.params.id, req.body);
+    },
+  );
+
+  api.post(
+    '/submissions/:id/handoff',
+    {
+      attachValidation: true,
+      preHandler: handoffBurst,
+      schema: { params: IdParams, body: EmptyBody, response: { 200: HandoffResponse } },
+    },
+    async (req, reply) => {
+      if (answeredInvalid(req, reply)) return reply;
+      return handoffSubmission(db, app.requireUser(req), req.params.id);
     },
   );
 
