@@ -282,30 +282,41 @@ const realDeps: SafeFetchDeps = {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * The one form every host-list check compares: trimmed, lowercased, and with EVERY trailing dot
+ * removed. A URL parser keeps a hostname's trailing dots as written, so removing only one let a
+ * name with more of them miss every list (PR https://github.com/bgoleno/opportun/pull/78
+ * review). Used for list matching only; the name resolved and connected to is the caller's.
+ */
+function normalizeHost(host: string): string {
+  return host.trim().toLowerCase().replace(/\.+$/, '');
+}
+
+/** True when `host` is an entry of `entries` or a subdomain of one, both sides normalized. */
 function hostMatches(host: string, entries: readonly string[]): boolean {
+  const h = normalizeHost(host);
   return entries.some((raw) => {
-    const entry = raw.trim().toLowerCase().replace(/\.$/, '');
-    return entry.length > 0 && (host === entry || host.endsWith(`.${entry}`));
+    const entry = normalizeHost(raw);
+    return entry.length > 0 && (h === entry || h.endsWith(`.${entry}`));
   });
 }
 
 /**
- * True for a C-1 prohibited host or any subdomain of one (a trailing dot is ignored). The check
+ * True for a C-1 prohibited host or any subdomain of one (trailing dots are ignored). The check
  * for MCP and AI provider URLs; a server page fetch uses isPageFetchProhibited.
  */
 export function isProhibitedHost(host: string): boolean {
-  return hostMatches(host.toLowerCase().replace(/\.$/, ''), PROHIBITED_HOSTS);
+  return hostMatches(host, PROHIBITED_HOSTS);
 }
 
 /**
  * True when the server must never fetch a page from this host: a C-1 prohibited host or a
- * PAGE_FETCH_PROHIBITED_HOSTS entry, or a subdomain of either (a trailing dot is ignored).
+ * PAGE_FETCH_PROHIBITED_HOSTS entry, or a subdomain of either (trailing dots are ignored).
  * Every page-fetch caller that answers a refusal before fetching (capture's prohibited_host)
  * uses this, so the two lists are never copied elsewhere.
  */
 export function isPageFetchProhibited(host: string): boolean {
-  const h = host.toLowerCase().replace(/\.$/, '');
-  return hostMatches(h, PROHIBITED_HOSTS) || hostMatches(h, PAGE_FETCH_PROHIBITED_HOSTS);
+  return hostMatches(host, PROHIBITED_HOSTS) || hostMatches(host, PAGE_FETCH_PROHIBITED_HOSTS);
 }
 
 function parseTarget(raw: string | URL): URL {
@@ -375,6 +386,8 @@ export function createSafeFetch(deps: SafeFetchDeps) {
     allowPublic: boolean,
     officialApiUrl: string | undefined,
   ): Promise<FetchTarget> {
+    // The lists below compare hostMatches' normalized form (every trailing dot removed); `host`
+    // itself keeps its one-dot strip because it is also the name resolved further down.
     const host = url.hostname.toLowerCase().replace(/\.$/, '');
     if (isProhibitedHost(host) && (officialApiUrl === undefined || url.href !== officialApiUrl)) {
       throw new FetchBlockedError('host_not_allowed', host);

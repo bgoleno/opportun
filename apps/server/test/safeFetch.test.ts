@@ -470,6 +470,53 @@ describe('safeFetch never fetches indeed.com (C-2)', () => {
   });
 });
 
+// sec review of https://github.com/bgoleno/opportun/pull/78: only one trailing dot used to be
+// removed before the host-list checks. Every list now compares one normalized form.
+describe('a hostname with extra trailing dots is treated as the same host by every host-list check', () => {
+  const DOTTED = {
+    'www.indeed.com..': [PUBLIC_IP],
+    'www.indeed.com.': [PUBLIC_IP],
+    'www.linkedin.com...': [PUBLIC_IP],
+    'www.linkedin.com..': [PUBLIC_IP],
+    'lnkd.in..': [PUBLIC_IP],
+    'lnkd.in.': [PUBLIC_IP],
+  };
+  const URLS = [
+    'https://www.indeed.com../viewjob?jk=00000000deadbeef',
+    'https://www.linkedin.com.../jobs/view/1/',
+    'https://lnkd.in../abc',
+  ];
+
+  it('the predicates: both lists, isProhibitedHost still C-1 only', () => {
+    expect(isPageFetchProhibited('www.indeed.com..')).toBe(true);
+    expect(isPageFetchProhibited('WWW.INDEED.COM...')).toBe(true);
+    expect(isPageFetchProhibited('www.linkedin.com..')).toBe(true);
+    expect(isProhibitedHost('www.linkedin.com..')).toBe(true);
+    expect(isProhibitedHost('lnkd.in...')).toBe(true);
+    expect(isProhibitedHost('www.indeed.com..')).toBe(false);
+    expect(isPageFetchProhibited('notindeed.com..')).toBe(false);
+  });
+
+  it('safeFetch refuses them in allowPublic mode, without a request', async () => {
+    const h = harness(DOTTED, URLS.map(() => ok()));
+    const fetch = createSafeFetch(h);
+    for (const url of URLS) {
+      expect(await reason(fetch(url, { allowHosts: [], allowPublic: true })), url).toBe(
+        'host_not_allowed',
+      );
+    }
+    expect(h.requests).toEqual([]);
+  });
+
+  it('safeFetch refuses them with an allowlist naming the host, without a request', async () => {
+    const h = harness(DOTTED, URLS.map(() => ok()));
+    const fetch = createSafeFetch(h);
+    const opts = { allowHosts: ['indeed.com', 'linkedin.com', 'lnkd.in'] };
+    for (const url of URLS) expect(await reason(fetch(url, opts)), url).toBe('host_not_allowed');
+    expect(h.requests).toEqual([]);
+  });
+});
+
 describe('isPrivateAddress', () => {
   it.each([
     '0.0.0.0',

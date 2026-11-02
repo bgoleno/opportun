@@ -174,6 +174,21 @@ describe('POST /capture', () => {
     expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
   });
 
+  it('a hostname with extra trailing dots gets the same 422 as the plain host (PR #78 review)', async () => {
+    const { app, a } = await boot();
+    const { urls, fetch } = noFetch();
+    app.jobs.services.sourceFetch = fetch;
+    for (const url of [
+      'https://www.indeed.com../viewjob?jk=00000000deadbeef',
+      'https://www.linkedin.com.../jobs/view/1/',
+    ]) {
+      const res = await a.request({ method: 'POST', url: '/api/v1/capture', payload: { url } });
+      expect(res.statusCode, url).toBe(422);
+      expect(res.json().error).toEqual({ code: 'prohibited_host', hint: PASTE_TEXT_HINT });
+    }
+    expect(urls).toEqual([]);
+  });
+
   it('a host that only resembles indeed.com is fetched as usual (issue #75)', async () => {
     const { app, a } = await boot();
     const requested: string[] = [];

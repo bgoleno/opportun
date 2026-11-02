@@ -288,6 +288,20 @@ describe('MCP http transport', () => {
     expect(d.fetched).toEqual(['https://mcp.indeed.com/mcp', 'https://indeed.com/mcp']);
   });
 
+  it('a hostname with extra trailing dots is treated as the same host (PR #78 review)', async () => {
+    const d = deps({ 'www.linkedin.com..': ['93.184.216.34'], 'mcp.indeed.com..': ['93.184.216.34'] });
+    const guarded = guardedMcpFetch(d);
+    // C-1 is refused however many trailing dots the name carries.
+    const err = await guarded('https://www.linkedin.com../mcp', { method: 'POST' }).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(FetchBlockedError);
+    expect((err as FetchBlockedError).reason).toBe('host_not_allowed');
+    expect(d.fetched).toEqual([]);
+    // Indeed stays open on this path, dotted or not (option (b), issue #75).
+    expect((await guarded('https://mcp.indeed.com../mcp', { method: 'POST' })).status).toBe(200);
+  });
+
   it('creating a source with an http:// MCP URL is a 422', async () => {
     const { a } = await boot();
     const config = { ...stdioConfig('jobs'), transport: 'http', url: 'http://mcp.example.com/' };
