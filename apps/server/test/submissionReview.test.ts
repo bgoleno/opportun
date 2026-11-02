@@ -1032,3 +1032,131 @@ describe('a draft refused at creation for its destination (#135)', () => {
     expect(await auditEvents(app, a, 'submission.reviewed')).toHaveLength(1);
   });
 });
+
+describe('review usage and the user’s own cap (#130)', () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const usage = (c: TestClient) => api(c, 'GET', '/submissions/review-usage');
+  const setCap = (c: TestClient, cap: number | null) =>
+    api(c, 'PUT', '/submissions/review-cap', { cap });
+
+  async function seed(app: FastifyInstance, c: TestClient, times: number[]) {
+    for (const at of times) {
+      await app.db
+        .insert(auditLog)
+        .values({
+          id: newId(),
+          userId: c.userId,
+          event: 'submission.reviewed',
+          detail: { submissionId: newId(), opportunityId: newId(), atsKind: 'ats_greenhouse' },
+          ip: null,
+          createdAt: at,
+        })
+        .run();
+    }
+  }
+
+  it('counts what the cap counts: distinct attempts in the last 24 hours, and when one frees up', async () => {
+    const { app, a } = await boot({ ...ON, dailyReviewCap: 10 });
+    const now = Date.now();
+    // Two in the window, one just outside it.
+    await seed(app, a, [now - 5 * 60_000, now - 60_000, now - DAY_MS - 60_000]);
+    const res = await usage(a);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({
+      used: 2,
+      cap: 10,
+      instanceCap: 10,
+      userCap: null,
+      // Under the cap, the next place frees when the oldest review in the window leaves it.
+      nextFreeAt: now - 5 * 60_000 + DAY_MS,
+    });
+    // One attempt reviewed twice counts once, as the cap does.
+    const r = await reviewed(app, a);
+    await api(a, 'PATCH', `/submissions/${r.id}`, { fields: { email: 'x@example.com' } });
+    const again = await rowOf(app, r.id);
+    expect(
+      (await review(a, r.id, submissionDigest(again as NonNullable<typeof again>))).statusCode,
+    ).toBe(200);
+    expect((await usage(a)).json().used).toBe(3);
+  });
+
+  it('at the cap, "next free" is the same reset time the 429 gives', async () => {
+    const { app, a } = await boot({ ...ON, dailyReviewCap: 2 });
+    const base = Date.now() - 10 * 60_000;
+    await seed(app, a, [base, base + 60_000, base + 120_000]);
+    const u = (await usage(a)).json();
+    expect(u).toMatchObject({ used: 3, cap: 2 });
+    const d = await draft(app, a);
+    const refused = await review(a, d.id, d.submission.reviewDigest);
+    expect(refused.statusCode).toBe(429);
+    expect(u.nextFreeAt).toBe(refused.json().error.resetAt);
+  });
+
+  it('nothing used: no next-free time', async () => {
+    const { a } = await boot(ON);
+    expect((await usage(a)).json()).toMatchObject({ used: 0, nextFreeAt: null });
+  });
+
+  it('a user can lower their own cap, and the server enforces it', async () => {
+    const { app, a } = await boot({ ...ON, dailyReviewCap: 10 });
+    const res = await setCap(a, 1);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ cap: 1, userCap: 1, instanceCap: 10 });
+    await reviewed(app, a);
+    const d = await draft(app, a);
+    const second = await review(a, d.id, d.submission.reviewDigest);
+    expect(second.statusCode).toBe(429);
+    expect(second.json().error.code).toBe('daily_review_cap');
+    // Clearing it goes back to the instance's value.
+    expect((await setCap(a, null)).json()).toMatchObject({ cap: 10, userCap: null });
+    expect((await review(a, d.id, d.submission.reviewDigest)).statusCode).toBe(200);
+  });
+
+  it.each([
+    ['above the instance cap', 11],
+    ['zero', 0],
+    ['negative', -1],
+    ['not a whole number', 2.5],
+    ['above the ceiling', 26],
+  ])('refuses a cap %s, and changes nothing', async (_n, cap) => {
+    const { a } = await boot({ ...ON, dailyReviewCap: 10 });
+    const res = await setCap(a, cap);
+    expect(res.statusCode, res.body).toBe(422);
+    expect((await usage(a)).json()).toMatchObject({ cap: 10, userCap: null });
+  });
+
+  it('refuses a body that is not exactly { cap }', async () => {
+    const { a } = await boot(ON);
+    expect(
+      (await api(a, 'PUT', '/submissions/review-cap', { cap: 3, userId: 'x' })).statusCode,
+    ).toBe(422);
+    expect((await api(a, 'PUT', '/submissions/review-cap', {})).statusCode).toBe(422);
+  });
+
+  it('one user never sees or changes another’s usage or cap (isolation)', async () => {
+    const { app, a, b } = await boot({ ...ON, dailyReviewCap: 10 });
+    await seed(app, a, [Date.now() - 60_000, Date.now() - 30_000]);
+    expect((await setCap(a, 3)).statusCode).toBe(200);
+    expect((await usage(b)).json()).toEqual({
+      used: 0,
+      cap: 10,
+      instanceCap: 10,
+      userCap: null,
+      nextFreeAt: null,
+    });
+    // b lowering theirs leaves a's alone.
+    expect((await setCap(b, 5)).statusCode).toBe(200);
+    expect((await usage(a)).json()).toMatchObject({ used: 2, cap: 3, userCap: 3 });
+  });
+
+  it.each([
+    ['the flag off', { submissions: false }],
+    ['the demo, flag on', { submissions: true, demo: true }],
+  ] as const)('with %s, neither route exists', async (_n, cfg) => {
+    const { a } = await boot(cfg);
+    for (const res of [await usage(a), await setCap(a, 3)]) {
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('feature_unavailable');
+    }
+  });
+});
