@@ -47,8 +47,12 @@ function recording(api: GoogleApi): { api: GoogleApi; calls: string[] } {
   return { api: proxied, calls };
 }
 
+/** The Drive file for DOC: its name is the title the export is named after. */
+const driveFile = (name: string) => ({ id: DOC, name, modifiedTime: '', parentId: null });
+
 function googleStore(over: (fake: FakeGoogle) => void = () => {}) {
   const fake = fakeGoogle({ [DOC]: { title: 'Jane Example Resume', text: TEXT } });
+  fake.drive.set(DOC, driveFile('Jane Example Resume'));
   fake.exportBytes.set(DOC, PDF);
   over(fake);
   const { api, calls } = recording(fake);
@@ -93,7 +97,8 @@ describe('Google Docs store: exportFile', () => {
 
     await store.exportFile(ctx, DOC);
 
-    expect(calls).toEqual(['getDocument', 'exportFile']);
+    // files.get for the name (tl on #127: not a whole docs.get), files.export for the bytes.
+    expect(calls).toEqual(['getFile', 'exportFile']);
     expect(fake.copies).toEqual([]);
     expect(fake.batchUpdates).toEqual([]);
     expect(fake.docs.get(DOC)).toEqual({ title: 'Jane Example Resume', text: TEXT });
@@ -101,7 +106,7 @@ describe('Google Docs store: exportFile', () => {
 
   it('makes the title safe as a filename', async () => {
     const { store } = googleStore((fake) => {
-      fake.docs.set(DOC, { title: ' ../Resume: Jane / v2\n\u0000 ', text: TEXT });
+      fake.drive.set(DOC, driveFile(' ../Resume: Jane / v2\n\u0000 '));
     });
     const out = await store.exportFile(ctx, DOC);
     expect(out).toMatchObject({ ok: true, filename: '.._Resume_ Jane _ v2.pdf' });
@@ -109,7 +114,7 @@ describe('Google Docs store: exportFile', () => {
 
   it('names an untitled document "Resume.pdf"', async () => {
     const { store } = googleStore((fake) => {
-      fake.docs.set(DOC, { title: '', text: TEXT });
+      fake.drive.set(DOC, driveFile(''));
     });
     expect(await store.exportFile(ctx, DOC)).toMatchObject({ filename: 'Resume.pdf' });
   });
@@ -180,10 +185,31 @@ describe('Google Docs store: exportFile errors are classified', () => {
     expect(err).toMatchObject({ retryable: false, code });
   });
 
-  it('a document the account cannot read at all is permanent (docs.get 404)', async () => {
+  it('a document the account cannot read at all is permanent (files.get 404)', async () => {
     const { store } = googleStore();
     const err = await failure(store, 'MissingDoc_00000001');
     expect(err).toMatchObject({ retryable: false, code: 'not_found' });
+  });
+
+  it('a client error with no status (gaxios-shaped: no answer came back) is transient', async () => {
+    const { store } = googleStore((fake) => {
+      fake.exportFailure = Object.assign(new Error('request aborted'), {
+        name: 'GaxiosError',
+        config: { url: 'https://www.googleapis.com/drive/v3/files/x/export' },
+      });
+    });
+    const err = await failure(store);
+    expect(err).toMatchObject({ retryable: true, code: 'unavailable' });
+  });
+
+  it('a bug of our own (a TypeError) is not retried', async () => {
+    // tl on #127: the no-status fallback is for Google client errors only, so a programming
+    // error is not retried as if Google were down.
+    const { store } = googleStore((fake) => {
+      fake.exportFailure = new TypeError('cannot read properties of undefined');
+    });
+    const err = await failure(store);
+    expect(err).toMatchObject({ retryable: false, code: 'rejected' });
   });
 
   it('no Google connection is permanent, and makes no Drive call', async () => {

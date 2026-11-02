@@ -128,9 +128,20 @@ function exportFailureOf(err: unknown): DocumentExportFailure {
   if (status !== undefined) return status >= 500 ? 'unavailable' : 'rejected';
   const code = (err as { code?: unknown } | null)?.code;
   if (typeof code === 'string' && NETWORK_CODES.has(code)) return 'unavailable';
-  // No status and no known network code: an aborted or otherwise unanswered request. Treated
-  // as transient, so the snapshot job retries it within its own bound rather than giving up.
-  return 'unavailable';
+  // No status and no known network code. A Google client error of that kind (gaxios: it carries
+  // its request config) is a request that got no answer, aborted or timed out: transient, so the
+  // snapshot job retries it within its own bound. Anything else is not Google at all but a bug
+  // of ours (a TypeError, say), which retrying cannot fix (tl on #127): permanent.
+  return isClientError(err) ? 'unavailable' : 'rejected';
+}
+
+/** A Google API client (gaxios) error: named so, or carrying the request it made. */
+function isClientError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === 'GaxiosError' || err.name === 'AbortError' || err.name === 'TimeoutError') {
+    return true;
+  }
+  return typeof (err as { config?: unknown }).config === 'object';
 }
 
 /** The document's title as a safe attachment filename (no path or control characters). */
@@ -253,19 +264,20 @@ export function createGoogleDocsStore(db: Db, conn: GoogleConn, api: GoogleApi):
       return { docRef: ref, results };
     },
 
-    // Two reads only, docs.get for the title and drive.files.export for the bytes: nothing here
-    // can change the document (issue #125, criterion 1).
+    // Two reads only, drive.files.get for the name (not a whole docs.get, tl on #127) and
+    // drive.files.export for the bytes: nothing here can change the document (issue #125,
+    // criterion 1).
     async exportFile(ctx, ref) {
       try {
         const id = parseDocRef(ref);
         const c = await client(ctx);
-        const doc = await api.getDocument(c, id);
+        const file = await api.getFile(c, id);
         const bytes = await api.exportFile(c, id, PDF_MIME);
         if (bytes.length > MAX_EXPORT_BYTES) throw new DocumentExportError('too_large');
         if (!bytes.subarray(0, PDF_MAGIC.length).equals(PDF_MAGIC)) {
           throw new DocumentExportError('not_pdf');
         }
-        return { ok: true, bytes, mime: PDF_MIME, filename: pdfFilename(doc.title) };
+        return { ok: true, bytes, mime: PDF_MIME, filename: pdfFilename(file.name) };
       } catch (err) {
         if (err instanceof DocumentExportError) throw err;
         throw new DocumentExportError(exportFailureOf(err));
