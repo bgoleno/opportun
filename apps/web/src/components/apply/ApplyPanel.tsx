@@ -77,14 +77,17 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
 
   let body: React.ReactNode;
   if (live !== undefined) {
-    body = <InProgress live={live} opportunityId={opp.id} ats={ats} onStop={() => setStopping(true)} />;
+    body = (
+      <InProgress live={live} opportunityId={opp.id} ats={ats} onStop={() => setStopping(true)} />
+    );
   } else {
     const reason = notEligible(opp, resumes.data?.items ?? []);
     body = (
       <div className="grid gap-3">
         {latest !== undefined ? <LastAttempt latest={latest} /> : null}
         <p className="text-sm text-muted-foreground">
-          {reason ?? 'You will review everything, then fill in and submit the form on the ATS yourself.'}
+          {reason ??
+            'You will review everything, then fill in and submit the form on the ATS yourself.'}
         </p>
         {reason === null ? (
           <Button asChild className="w-full">
@@ -95,7 +98,12 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
         ) : (
           // aria-disabled, not disabled: still reachable by keyboard, with the reason announced
           // (design (g)).
-          <Button className="w-full" aria-disabled="true" aria-describedby={reasonId} onClick={(e) => e.preventDefault()}>
+          <Button
+            className="w-full"
+            aria-disabled="true"
+            aria-describedby={reasonId}
+            onClick={(e) => e.preventDefault()}
+          >
             {opp.atsJobRef ? `Apply on ${ats}` : 'Apply on an ATS'}
           </Button>
         )}

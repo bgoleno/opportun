@@ -38,7 +38,13 @@ import {
   type SubmissionPatch,
   type SubmissionView,
 } from './api';
-import { ApplyStepper, Notice, SubmissionStatusChip, WillNotSubmitCallout, type StepId } from './parts';
+import {
+  ApplyStepper,
+  Notice,
+  SubmissionStatusChip,
+  WillNotSubmitCallout,
+  type StepId,
+} from './parts';
 
 export function ApplyPage({
   opportunityId,
@@ -176,7 +182,10 @@ function ResumeStep({
     try {
       if (live === undefined) {
         const draft = await create.mutateAsync({ idempotencyKey, resumeId });
-        if (expired !== undefined && (expired.answers.length > 0 || Object.keys(expired.fields).length > 0)) {
+        if (
+          expired !== undefined &&
+          (expired.answers.length > 0 || Object.keys(expired.fields).length > 0)
+        ) {
           await patch.mutateAsync({
             id: draft.id,
             patch: { fields: expired.fields, answers: expired.answers },
@@ -202,8 +211,8 @@ function ResumeStep({
       </CardHeader>
       <CardContent className="grid gap-4">
         <p className="text-sm text-muted-foreground">
-          Only resumes marked Final can be used. The copy is saved when you continue, so later
-          edits will not change it.
+          Only resumes marked Final can be used. The copy is saved when you continue, so later edits
+          will not change it.
         </p>
         {usable.length === 0 ? (
           <Notice>
@@ -248,12 +257,16 @@ function ResumeStep({
 function SavedCopy({ live }: { live: SubmissionView | undefined }) {
   const patch = usePatchSubmission(live?.opportunityId ?? '');
   if (live === undefined) {
-    return <p className="text-sm text-muted-foreground">The saved copy is made when you continue.</p>;
+    return (
+      <p className="text-sm text-muted-foreground">The saved copy is made when you continue.</p>
+    );
   }
   const state = live.snapshotState;
   if (state === undefined) {
     return (
-      <p className="text-sm text-muted-foreground">The saved copy of this resume is not available yet.</p>
+      <p className="text-sm text-muted-foreground">
+        The saved copy of this resume is not available yet.
+      </p>
     );
   }
   if (state === 'pending') {
@@ -413,7 +426,9 @@ function DetailsStep({ opp, live }: { opp: OpportunityView; live: SubmissionView
                   value={a.label}
                   disabled={!canEdit}
                   onChange={(e) =>
-                    setAnswers((prev) => prev.map((p, j) => (j === i ? { ...p, label: e.target.value } : p)))
+                    setAnswers((prev) =>
+                      prev.map((p, j) => (j === i ? { ...p, label: e.target.value } : p)),
+                    )
                   }
                 />
               </div>
@@ -424,7 +439,9 @@ function DetailsStep({ opp, live }: { opp: OpportunityView; live: SubmissionView
                   value={a.value}
                   disabled={!canEdit}
                   onChange={(e) =>
-                    setAnswers((prev) => prev.map((p, j) => (j === i ? { ...p, value: e.target.value } : p)))
+                    setAnswers((prev) =>
+                      prev.map((p, j) => (j === i ? { ...p, value: e.target.value } : p)),
+                    )
                   }
                 />
               </div>
@@ -565,7 +582,8 @@ function ReviewStep({
       setTicked(false);
       const code = errorCode(err);
       if (code === 'review_stale') setBanner({ kind: 'stale' });
-      else if (code === 'review_expired') setBanner({ kind: 'expired', at: live.reviewExpiresAt ?? now });
+      else if (code === 'review_expired')
+        setBanner({ kind: 'expired', at: live.reviewExpiresAt ?? now });
       else if (code === 'daily_review_cap') {
         const resetAt = err instanceof ApiError ? Number(err.details.resetAt) : NaN;
         setBanner({ kind: 'cap', resetAt: Number.isFinite(resetAt) ? resetAt : null });
@@ -581,7 +599,8 @@ function ReviewStep({
     setTicked(false);
   }
 
-  const expiredAt = banner?.kind === 'expired' ? banner.at : reviewedButExpired ? live.reviewExpiresAt : null;
+  const expiredAt =
+    banner?.kind === 'expired' ? banner.at : reviewedButExpired ? live.reviewExpiresAt : null;
 
   return (
     <div className="grid gap-4">
@@ -614,7 +633,13 @@ function ReviewStep({
               <strong>Your review expired at {clockTime(expiredAt)}.</strong> Review again so what
               you checked is what you use. Nothing was lost.
             </span>
-            <Button size="sm" variant="outline" className="w-fit" onClick={() => void reviewAgain()} disabled={busy}>
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-fit"
+              onClick={() => void reviewAgain()}
+              disabled={busy}
+            >
               Review again
             </Button>
           </Notice>
@@ -677,11 +702,17 @@ function ReviewStep({
 
       <ReviewSection title="Your details">
         {Object.keys(live.fields).length === 0 ? (
-          <p className="text-sm text-muted-foreground">No details entered. You fill them in on the form.</p>
+          <p className="text-sm text-muted-foreground">
+            No details entered. You fill them in on the form.
+          </p>
         ) : (
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
             {Object.entries(live.fields).map(([key, value]) => (
-              <DetailRow key={key} label={DETAIL_FIELDS.find((f) => f.key === key)?.label ?? key} value={value} />
+              <DetailRow
+                key={key}
+                label={DETAIL_FIELDS.find((f) => f.key === key)?.label ?? key}
+                value={value}
+              />
             ))}
           </dl>
         )}
@@ -700,10 +731,15 @@ function ReviewStep({
             ))}
           </dl>
         )}
-        <p className="text-xs text-muted-foreground">Anything else the site asks, you answer on the form.</p>
+        <p className="text-xs text-muted-foreground">
+          Anything else the site asks, you answer on the form.
+        </p>
       </ReviewSection>
 
-      <section aria-labelledby="gate-title" className="grid gap-3 rounded-xl border-2 border-primary bg-card p-4">
+      <section
+        aria-labelledby="gate-title"
+        className="grid gap-3 rounded-xl border-2 border-primary bg-card p-4"
+      >
         <h2 id="gate-title" className="text-base font-semibold">
           Ready to open the form?
         </h2>
@@ -739,7 +775,11 @@ function ReviewStep({
             {reviewedAndValid ? `Open ${host}` : `Confirm review and open ${host}`}
           </Button>
           <Button variant="outline" asChild>
-            <Link to="/opportunities/$id/apply" params={{ id: opp.id }} search={{ step: 'details' }}>
+            <Link
+              to="/opportunities/$id/apply"
+              params={{ id: opp.id }}
+              search={{ step: 'details' }}
+            >
               Back
             </Link>
           </Button>
@@ -843,16 +883,15 @@ function OpenStep({
     <div className="grid gap-4">
       {blocked ? (
         <Notice role="alert">
-          <span>
-            Your browser blocked the new tab. {link} yourself.
-          </span>
+          <span>Your browser blocked the new tab. {link} yourself.</span>
         </Notice>
       ) : (
         <p
           role="status"
           className="rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground"
         >
-          The form opened in a new tab. Opportun has not submitted anything and cannot see that page.
+          The form opened in a new tab. Opportun has not submitted anything and cannot see that
+          page.
         </p>
       )}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -913,7 +952,11 @@ function CopyDetails({ live }: { live: SubmissionView }) {
       label: DETAIL_FIELDS.find((f) => f.key === k)?.label ?? k,
       value: v,
     })),
-    ...live.answers.map((a) => ({ key: `answer-${a.questionKey}`, label: a.label, value: a.value })),
+    ...live.answers.map((a) => ({
+      key: `answer-${a.questionKey}`,
+      label: a.label,
+      value: a.value,
+    })),
   ];
   if (rows.length === 0) return null;
   return (
