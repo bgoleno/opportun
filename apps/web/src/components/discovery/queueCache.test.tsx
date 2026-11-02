@@ -8,7 +8,13 @@ import type { ReactNode } from 'react';
 import { describe, expect, it } from 'vitest';
 import type { Page } from '@/lib/opportunities';
 import { mockApi } from '@/test/render';
-import { discoveryKeys, useAcceptResult, useDismissResult, type DiscoveryResult } from './api';
+import {
+  discoveryKeys,
+  useAcceptResult,
+  useBulkDismiss,
+  useDismissResult,
+  type DiscoveryResult,
+} from './api';
 
 const T0 = Date.parse('2026-10-20T12:00:00Z');
 const RELEVANCE = [...discoveryKeys.queue, '-ai_score'];
@@ -102,5 +108,59 @@ describe('queue mutations across cached sort orders (#26)', () => {
     await waitFor(() => expect(hook.current.isError).toBe(true));
     expect(qc.getQueryData(RELEVANCE)).toEqual(before.relevance);
     expect(qc.getQueryData(NEWEST)).toEqual(before.newest);
+  });
+});
+
+describe('a queue decision refreshes the decided lists, even after the queue has gone (#139)', () => {
+  // The Decided view may already be open (qa's in-app case on #139) or cached from an earlier
+  // visit: when a dismiss or accept lands, both of its tabs must be read again. The mutation's
+  // own options do this, so it still happens after the queue that started it has unmounted.
+  const DECIDED = {
+    dismissed: discoveryKeys.decided('dismissed'),
+    accepted: discoveryKeys.decided('accepted'),
+  };
+
+  function seededWithDecided() {
+    const seed = seeded();
+    seed.qc.setQueryData<Page<DiscoveryResult>>(DECIDED.dismissed, { items: [], total: 0 });
+    seed.qc.setQueryData<Page<DiscoveryResult>>(DECIDED.accepted, { items: [], total: 0 });
+    return seed;
+  }
+
+  const invalidated = (qc: QueryClient, key: readonly unknown[]) =>
+    qc.getQueryState(key)?.isInvalidated === true;
+
+  it.each([
+    ['a dismiss', 'dismiss', () => useDismissResult()],
+    ['an accept', 'accept', () => useAcceptResult()],
+  ] as const)('%s that settles after the queue unmounted', async (_n, verb, useHook) => {
+    const held1 = held(() => ({
+      ...TARGET,
+      disposition: verb === 'dismiss' ? 'dismissed' : 'accepted',
+    }));
+    mockApi({ [`POST /discovery/results/r-target/${verb}`]: held1.handler });
+    const { qc, wrapper } = seededWithDecided();
+    const { result: hook, unmount } = renderHook(useHook, { wrapper });
+
+    act(() => hook.current.mutate({ id: TARGET.id }));
+    await waitFor(() => expect(qc.getQueryData(RELEVANCE)).toEqual({ items: [OTHER], total: 6 }));
+    unmount();
+    expect(invalidated(qc, DECIDED.dismissed)).toBe(false);
+    held1.release();
+    await waitFor(() => expect(invalidated(qc, DECIDED.dismissed)).toBe(true));
+    expect(invalidated(qc, DECIDED.accepted)).toBe(true);
+  });
+
+  it('a bulk dismiss that settles after the queue unmounted', async () => {
+    const bulk = held(() => ({ results: [{ id: TARGET.id, outcome: 'dismissed' }] }));
+    mockApi({ 'POST /discovery/results/bulk-dismiss': bulk.handler });
+    const { qc, wrapper } = seededWithDecided();
+    const { result: hook, unmount } = renderHook(() => useBulkDismiss(), { wrapper });
+
+    act(() => hook.current.mutate({ ids: [TARGET.id], reason: 'industry' }));
+    unmount();
+    bulk.release();
+    await waitFor(() => expect(invalidated(qc, DECIDED.dismissed)).toBe(true));
+    expect(invalidated(qc, DECIDED.accepted)).toBe(true);
   });
 });
