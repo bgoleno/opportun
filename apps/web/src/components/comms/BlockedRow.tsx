@@ -5,6 +5,7 @@
 // What it shows is the whole point: who it was from, when, and which rule decided, plus a link
 // to the original where it still lives. That is enough to recognize a sender filtered by
 // mistake and go fix the rule, without Opportun storing what the message said.
+import { GATE_INPUT_CHARS } from '@opportun/core';
 import type { CommunicationView } from './api';
 import { OpenOriginal } from './OpenOriginal';
 
@@ -27,6 +28,15 @@ const RULE_LABELS: Record<string, string> = {
   none: 'no rule',
 };
 
+/**
+ * What was read before an `ai_gate` block (https://github.com/bgoleno/opportun/issues/104). A mail
+ * filter rule decides from the sender and headers and reads nothing, which the Blocked tab's note
+ * says. The AI check (lib/triageGate.ts on the server) is different: the user's AI provider was
+ * given the sender, the subject and the first GATE_INPUT_CHARS characters to decide. The row says
+ * so in the user guide's words; what was stored is the same for both.
+ */
+const AI_GATE_READ = `Your AI provider read the sender, the subject and the first ${GATE_INPUT_CHARS} characters to decide. Opportun stored only the sender, the date and the rule that decided.`;
+
 const when = (ms: number): string =>
   new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 
@@ -41,6 +51,9 @@ export function BlockedRow({ comm }: { comm: CommunicationView }) {
       <span className="text-xs text-muted-foreground">blocked by {reason}</span>
       {/* The one place a blocked message can be read is where it already is. */}
       <OpenOriginal comm={comm} />
+      {comm.triageRule === 'ai_gate' ? (
+        <p className="basis-full text-xs text-muted-foreground">{AI_GATE_READ}</p>
+      ) : null}
     </li>
   );
 }

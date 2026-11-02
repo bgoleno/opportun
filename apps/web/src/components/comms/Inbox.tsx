@@ -58,7 +58,9 @@ const TABS: { tab: InboxTab; label: string; mode: RowMode; empty: string; note?:
     // Unused: the blocked tab renders BlockedRow, which takes no mode.
     mode: 'filtered',
     empty: 'Nothing has been blocked by your mail filters.',
-    note: 'Kept out by your mail filters before anything read them. Opportun stored the sender and the date, never the subject or the message. Edit the rules in Settings, Mail filters.',
+    // What was read depends on the rule (https://github.com/bgoleno/opportun/issues/104): the
+    // filters read nothing; the AI check read the opening, and its own rows say so (BlockedRow).
+    note: 'Kept out by your mail filters before anything read them, or by the AI check, whose rows say what it read. Opportun stored only the sender, the date and the rule that decided, never the subject or the message. Edit the rules in Settings, Mail filters.',
   },
 ];
 
