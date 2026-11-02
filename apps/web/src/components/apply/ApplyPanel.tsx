@@ -27,6 +27,7 @@ import {
   useOpportunitySubmissions,
   type SubmissionView,
 } from './api';
+import { OutcomeActions, REPORTABLE } from './OutcomeActions';
 import { PostingChangedNotice, postingMoved, SubmissionStatusChip } from './parts';
 
 /** The stages an attempt may start at (the server's SUBMISSION_ELIGIBLE_STAGES). */
@@ -74,6 +75,11 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const live = items.find(isLive);
   const latest = items[0];
   const ats = atsLabel(live?.atsKind ?? opp.atsJobRef?.kind ?? '');
+  // The newest attempt the user can still report on (#148, tl's review): not only the newest
+  // attempt. A re-application in progress, or a newer one cancelled or expired, must not leave
+  // an earlier submission's follow-up unanswerable.
+  const reportable = items.find((s) => REPORTABLE.includes(s.status));
+  const reportableIsLast = live === undefined && reportable !== undefined && reportable === latest;
 
   let body: React.ReactNode;
   if (live !== undefined) {
@@ -82,7 +88,9 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
     const reason = notEligible(opp, resumes.data?.items ?? []);
     body = (
       <div className="grid gap-3">
-        {latest !== undefined ? <LastAttempt latest={latest} /> : null}
+        {latest !== undefined ? (
+          <LastAttempt latest={latest} companyName={opp.companyName} />
+        ) : null}
         <p className="text-sm text-muted-foreground">
           {reason ??
             'You will review everything, then fill in and submit the form on the ATS yourself.'}
@@ -114,6 +122,11 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
     );
   }
 
+  const earlierReport =
+    reportable !== undefined && !reportableIsLast ? (
+      <EarlierAttempt attempt={reportable} companyName={opp.companyName} />
+    ) : null;
+
   return (
     <Card role="region" aria-labelledby="assisted-apply-title">
       <CardHeader>
@@ -123,6 +136,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
       </CardHeader>
       <CardContent className="grid gap-3">
         {body}
+        {earlierReport}
         <button
           type="button"
           className="w-fit text-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -208,7 +222,7 @@ function InProgress({
 }
 
 /** The most recent finished attempt, so a new one starts knowing about it. */
-function LastAttempt({ latest }: { latest: SubmissionView }) {
+function LastAttempt({ latest, companyName }: { latest: SubmissionView; companyName: string }) {
   if (latest.status === 'abandoned' && latest.failureReason === 'review_expired') {
     return (
       <p className="text-sm text-muted-foreground">
@@ -217,17 +231,47 @@ function LastAttempt({ latest }: { latest: SubmissionView }) {
       </p>
     );
   }
-  if (['submitted', 'confirmed', 'unknown'].includes(latest.status)) {
+  if (['submitted', 'confirmed', 'unknown', 'rejected'].includes(latest.status)) {
     return (
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <SubmissionStatusChip status={latest.status} />
-        {latest.submittedAt !== null ? (
-          <span className="text-muted-foreground">{formatDateTime(latest.submittedAt)}</span>
-        ) : null}
+      <div className="grid gap-3">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <SubmissionStatusChip status={latest.status} />
+          {latest.submittedAt !== null ? (
+            <span className="text-muted-foreground">{formatDateTime(latest.submittedAt)}</span>
+          ) : null}
+        </div>
+        {/* What happened after submitting (#148): for submitted or no confirmation seen. */}
+        <OutcomeActions attempt={latest} companyName={companyName} />
       </div>
     );
   }
   return null;
+}
+
+/**
+ * A submitted attempt the user can still report on, when it is not the newest one (a
+ * re-application is in progress, or a newer attempt was cancelled or expired): named by when it
+ * was submitted, so it is clear which application the answer is about.
+ */
+function EarlierAttempt({
+  attempt,
+  companyName,
+}: {
+  attempt: SubmissionView;
+  companyName: string;
+}) {
+  return (
+    <section aria-label="Earlier application" className="grid gap-3 border-t pt-3">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="font-medium">
+          Earlier application
+          {attempt.submittedAt !== null ? `, submitted ${formatDateTime(attempt.submittedAt)}` : ''}
+        </span>
+        <SubmissionStatusChip status={attempt.status} />
+      </div>
+      <OutcomeActions attempt={attempt} companyName={companyName} />
+    </section>
+  );
 }
 
 /** "How Assisted apply works" (design S1b). */

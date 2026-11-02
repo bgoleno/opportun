@@ -20,6 +20,7 @@ import { readSchedules } from '../src/jobs/runner';
 import { SUBMISSION_FOLLOWUP_JOB_KIND } from '../src/jobs/submissionFollowup';
 import type { safeFetch } from '../src/lib/safeFetch';
 import type { UserCtx } from '../src/repos/base';
+import { createNextStep } from '../src/repos/activities';
 import { createOpportunity } from '../src/repos/opportunities';
 import { insertResume } from '../src/repos/resumes';
 import { FOLLOWUP_MS, followUpSubmissions } from '../src/repos/submissionOutcome';
@@ -728,5 +729,93 @@ describe('criterion 4: behind the flag', () => {
       expect(res.statusCode).toBe(404);
       expect(res.json()).toMatchObject({ error: { code: 'feature_unavailable' } });
     }
+  });
+});
+
+describe('an outcome closes the follow-up next step (#148)', () => {
+  /** An attempt the follow-up marked `unknown`, its linked next step, and one of the user's own. */
+  async function unknownWithStep(app: FastifyInstance, c: TestClient) {
+    const d = await handedOff(app, c);
+    const submittedAt = Date.now() - 1000;
+    expect((await attest(c, d.id, { moveToApplied: false, submittedAt })).statusCode).toBe(200);
+    expect(await followUpSubmissions(app.db, submittedAt + FOLLOWUP_MS)).toBe(1);
+    const stepId = (await rowOf(app, d.id))?.followupNextStepId as string;
+    expect(stepId).toBeTruthy();
+    const own = await createNextStep(app.db, ctxOf(c), d.oppId, {
+      action: 'Send the portfolio link',
+      dueAt: null,
+      owner: 'you',
+    });
+    return { d, stepId, ownId: own.id };
+  }
+
+  const stepRow = async (app: FastifyInstance, id: string) =>
+    await app.db.select().from(nextSteps).where(eq(nextSteps.id, id)).get();
+
+  it.each([
+    ['"I saw a confirmation"', { outcome: 'confirmed_by_user' }, 'confirmed'],
+    [
+      '"The site refused it"',
+      { outcome: 'ats_refused', note: 'It said the form had errors.' },
+      'rejected',
+    ],
+  ] as const)('%s marks the follow-up step done, and only that step', async (_n, body, status) => {
+    const { app, a } = await boot(ON);
+    const { d, stepId, ownId } = await unknownWithStep(app, a);
+    const stage = await stageOf(app, d.oppId);
+    const res = await outcome(a, d.id, body);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ status });
+    expect((await stepRow(app, stepId))?.doneAt).toEqual(expect.any(Number));
+    // The user's own step, and the stage, are left as they were (criterion 3).
+    expect((await stepRow(app, ownId))?.doneAt).toBeNull();
+    expect(await stageOf(app, d.oppId)).toBe(stage);
+  });
+
+  it('a follow-up step the user already completed is left alone', async () => {
+    const { app, a } = await boot(ON);
+    const { d, stepId } = await unknownWithStep(app, a);
+    const doneAt = Date.now() - 60_000;
+    await app.db
+      .update(nextSteps)
+      .set({ doneAt, updatedAt: doneAt })
+      .where(eq(nextSteps.id, stepId))
+      .run();
+    const before = await stepRow(app, stepId);
+    expect((await outcome(a, d.id, { outcome: 'confirmed_by_user' })).statusCode).toBe(200);
+    expect(await stepRow(app, stepId)).toEqual(before);
+  });
+
+  it('a follow-up step the user deleted stays deleted, and the outcome still records', async () => {
+    const { app, a } = await boot(ON);
+    const { d, stepId, ownId } = await unknownWithStep(app, a);
+    await app.db.delete(nextSteps).where(eq(nextSteps.id, stepId)).run();
+    const res = await outcome(a, d.id, { outcome: 'ats_refused' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await stepRow(app, stepId)).toBeUndefined();
+    expect((await stepRow(app, ownId))?.doneAt).toBeNull();
+  });
+
+  it('a submitted attempt with no follow-up yet touches no next step', async () => {
+    const { app, a } = await boot(ON);
+    const d = await handedOff(app, a);
+    expect((await attest(a, d.id, { moveToApplied: false })).statusCode).toBe(200);
+    const own = await createNextStep(app.db, ctxOf(a), d.oppId, {
+      action: 'Prepare',
+      dueAt: null,
+      owner: 'you',
+    });
+    expect((await outcome(a, d.id, { outcome: 'confirmed_by_user' })).statusCode).toBe(200);
+    expect((await stepRow(app, own.id))?.doneAt).toBeNull();
+  });
+
+  it("another user's attempt is 404, and its follow-up step stays open", async () => {
+    const { app, a, b } = await boot(ON);
+    const { d, stepId } = await unknownWithStep(app, a);
+    for (const body of [{ outcome: 'confirmed_by_user' }, { outcome: 'ats_refused' }]) {
+      expect((await outcome(b, d.id, body)).statusCode).toBe(404);
+    }
+    expect((await stepRow(app, stepId))?.doneAt).toBeNull();
+    expect((await rowOf(app, d.id))?.status).toBe('unknown');
   });
 });

@@ -18,9 +18,9 @@ import {
   type Submission,
   type SubmissionStatus,
 } from '@opportun/core';
-import { and, eq, lte } from 'drizzle-orm';
+import { and, eq, isNull, lte } from 'drizzle-orm';
 import { lockScope, withTransaction } from '../db/client';
-import { applicationSubmissions, companies, opportunities, resumes } from '../db/schema';
+import { applicationSubmissions, companies, nextSteps, opportunities, resumes } from '../db/schema';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
@@ -269,6 +269,25 @@ export async function recordSubmissionOutcome(
       .where(and(owned(ctx, id), eq(applicationSubmissions.status, current.status)))
       .returning();
     if (updated === undefined) throw notNow(await getRow(tx, ctx, id), to);
+    // The follow-up's "Check whether…" step has its answer now (#148, tl's design): mark it done,
+    // in this transaction. Only if it is still there and still open: a step the user completed
+    // keeps its own time, and a deleted one cleared the link (ON DELETE SET NULL).
+    if (
+      (input.outcome === 'confirmed_by_user' || input.outcome === 'ats_refused') &&
+      current.followupNextStepId !== null
+    ) {
+      await tx
+        .update(nextSteps)
+        .set({ doneAt: now, updatedAt: now })
+        .where(
+          and(
+            eq(nextSteps.id, current.followupNextStepId),
+            eq(nextSteps.userId, ctx.userId),
+            isNull(nextSteps.doneAt),
+          ),
+        )
+        .run();
+    }
     await audit(tx, `submission.${input.outcome === 'ats_refused' ? 'refused_by_ats' : to}`, {
       userId: ctx.userId,
       detail: {

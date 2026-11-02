@@ -7,7 +7,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DetailsPanel } from '@/components/opportunity/DetailsPanel';
 import { OpportunityDetail } from '@/components/opportunity/OpportunityDetail';
-import type { OpportunityView } from '@/lib/opportunities';
+import { formatDateTime, type OpportunityView } from '@/lib/opportunities';
 import { parseApplySearch } from '@/routes/opportunities.$id_.apply';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { ApplyPage } from './ApplyPage';
@@ -1207,5 +1207,201 @@ describe('a draft refused at creation for its destination (#135)', () => {
     ).toBeVisible();
     expect(document.body.textContent).not.toContain('destination_not_allowed');
     expect(router.state.location.search).toEqual({ step: 'resume' });
+  });
+});
+
+describe('what happened after submitting (#148)', () => {
+  const SUBMITTED = { status: 'submitted', submittedAt: NOW - 60 * MIN } as const;
+
+  function panel(sub: SubmissionView, extra: Record<string, unknown> = {}) {
+    const api = mockApi(routes(sub, extra));
+    const user = userEvent.setup();
+    renderWithProviders(<ApplyPanel opp={OPP} />);
+    return { api, user };
+  }
+
+  it.each([
+    ['submitted', SUBMITTED, false],
+    ['no confirmation seen', { status: 'unknown', submittedAt: NOW - 4 * 24 * 60 * MIN }, true],
+  ] as const)('a %s attempt offers both actions', async (_n, over, explains) => {
+    panel(submission(over as Partial<SubmissionView>));
+    expect(await screen.findByText('What happened?')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'I saw a confirmation' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'The site refused it' })).toBeVisible();
+    expect(screen.queryAllByText(/This is not a failure/).length > 0).toBe(explains);
+  });
+
+  it.each(['confirmed', 'rejected', 'abandoned', 'draft', 'reviewed', 'handed_off'] as const)(
+    'a %s attempt offers neither',
+    async (status) => {
+      panel(submission({ status, reviewExpiresAt: NOW + 30 * MIN }));
+      await screen.findByRole('region', { name: 'Assisted apply' });
+      expect(
+        screen.queryByRole('button', { name: 'I saw a confirmation' }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'The site refused it' })).not.toBeInTheDocument();
+    },
+  );
+
+  it('"I saw a confirmation" says what it records, then records it and closes', async () => {
+    const unknown = submission({ status: 'unknown', submittedAt: NOW - 4 * 24 * 60 * MIN });
+    const { api, user } = panel(unknown, {
+      'POST /submissions/sub-1/outcome': () => ({
+        status: 200,
+        body: submission({ status: 'confirmed', confirmationKind: 'user' }),
+      }),
+    });
+    await user.click(await screen.findByRole('button', { name: 'I saw a confirmation' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Mark as confirmed?' });
+    expect(dialog).toHaveTextContent('No evidence will be attached.');
+    expect(dialog).toHaveTextContent('Marked confirmed by you (no evidence attached)');
+    expect(dialog).toHaveTextContent(
+      'Check whether your application to Acme was received” as done, if it is still open.',
+    );
+    expect(dialog).toHaveTextContent('Leave this opportunity’s stage as it is.');
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/outcome')).toHaveLength(0);
+
+    const reads = calls(api.calls, 'GET', '/opportunities/opp-1/submissions').length;
+    await user.click(within(dialog).getByRole('button', { name: 'Mark confirmed' }));
+    // A native <dialog>: closed, it stays in the DOM but is no longer a dialog.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/outcome')[0]?.body).toEqual({
+      outcome: 'confirmed_by_user',
+    });
+    // The attempt (and the opportunity, with its next steps) are read again.
+    await waitFor(() =>
+      expect(calls(api.calls, 'GET', '/opportunities/opp-1/submissions').length).toBeGreaterThan(
+        reads,
+      ),
+    );
+    expect(await screen.findByText('Confirmation recorded')).toBeVisible();
+  });
+
+  it('"The site refused it" takes the user\'s note and records it', async () => {
+    const { api, user } = panel(submission(SUBMITTED), {
+      'POST /submissions/sub-1/outcome': () => ({
+        status: 200,
+        body: submission({ status: 'rejected' }),
+      }),
+    });
+    await user.click(await screen.findByRole('button', { name: 'The site refused it' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Record that the site refused it?' });
+    expect(dialog).toHaveTextContent('The application site refused the form');
+    expect(dialog).toHaveTextContent('Leave this opportunity’s stage as it is.');
+    // A submitted attempt has no follow-up step yet, so none is promised.
+    expect(dialog).not.toHaveTextContent('Check whether');
+    await user.type(within(dialog).getByLabelText(/What did the site say/), '  Already applied.  ');
+    await user.click(within(dialog).getByRole('button', { name: 'Record refusal' }));
+    // A native <dialog>: closed, it stays in the DOM but is no longer a dialog.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/outcome')[0]?.body).toEqual({
+      outcome: 'ats_refused',
+      note: 'Already applied.',
+    });
+  });
+
+  it('a refusal with no note sends none', async () => {
+    const { api, user } = panel(submission(SUBMITTED), {
+      'POST /submissions/sub-1/outcome': () => ({
+        status: 200,
+        body: submission({ status: 'rejected' }),
+      }),
+    });
+    await user.click(await screen.findByRole('button', { name: 'The site refused it' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Record refusal' }));
+    // A native <dialog>: closed, it stays in the DOM but is no longer a dialog.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/outcome')[0]?.body).toEqual({
+      outcome: 'ats_refused',
+    });
+  });
+
+  it('Not now records nothing', async () => {
+    const { api, user } = panel(submission(SUBMITTED));
+    await user.click(await screen.findByRole('button', { name: 'I saw a confirmation' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Not now' }));
+    // A native <dialog>: closed, it stays in the DOM but is no longer a dialog.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/outcome')).toHaveLength(0);
+  });
+
+  it('a refused report stays open and says why in words', async () => {
+    const { user } = panel(submission(SUBMITTED), {
+      'POST /submissions/sub-1/outcome': () => ({
+        status: 409,
+        body: { error: { code: 'invalid_transition' } },
+      }),
+    });
+    await user.click(await screen.findByRole('button', { name: 'I saw a confirmation' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Mark confirmed' }));
+    expect(await within(dialog).findByText(/changed in another tab or window/i)).toBeVisible();
+    expect(dialog).not.toHaveTextContent('invalid_transition');
+  });
+});
+
+describe('an earlier submission can still be reported on (#148, tl)', () => {
+  const EARLIER_AT = NOW - 5 * 24 * 60 * MIN;
+  const earlier = submission({
+    id: 'sub-old',
+    status: 'unknown',
+    submittedAt: EARLIER_AT,
+    createdAt: NOW - 6 * 24 * 60 * MIN,
+  });
+
+  function panelWith(items: SubmissionView[]) {
+    const api = mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items, total: items.length },
+      'POST /submissions/sub-old/outcome': () => ({
+        status: 200,
+        body: { ...earlier, status: 'confirmed', confirmationKind: 'user' },
+      }),
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<ApplyPanel opp={OPP} />);
+    return { api, user };
+  }
+
+  it.each([
+    ['while a re-application is in progress', submission({ id: 'sub-new', status: 'draft' })],
+    [
+      'after a newer attempt was cancelled',
+      submission({ id: 'sub-new', status: 'abandoned', failureReason: 'cancelled_by_user' }),
+    ],
+    [
+      'after a newer attempt’s review expired',
+      submission({ id: 'sub-new', status: 'abandoned', failureReason: 'review_expired' }),
+    ],
+  ])('%s, named by when it was submitted', async (_n, newer) => {
+    const { api, user } = panelWith([newer, earlier]);
+    const block = await screen.findByRole('region', { name: 'Earlier application' });
+    expect(block).toHaveTextContent(`Earlier application, submitted ${formatDateTime(EARLIER_AT)}`);
+    expect(block).toHaveTextContent('No confirmation seen');
+    await user.click(within(block).getByRole('button', { name: 'I saw a confirmation' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Mark as confirmed?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Mark confirmed' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // The report is about the earlier attempt, never the newer one.
+    expect(calls(api.calls, 'POST', '/submissions/sub-old/outcome')).toHaveLength(1);
+    expect(api.calls.filter((c) => c.path === '/submissions/sub-new/outcome')).toHaveLength(0);
+  });
+
+  it('the newest submission shows its actions once, with no "earlier" block', async () => {
+    panelWith([earlier]);
+    expect(await screen.findByRole('button', { name: 'I saw a confirmation' })).toBeVisible();
+    expect(screen.queryByRole('region', { name: 'Earlier application' })).not.toBeInTheDocument();
+  });
+
+  it('nothing reportable: no block', async () => {
+    panelWith([
+      submission({ id: 'sub-new', status: 'draft' }),
+      { ...earlier, status: 'confirmed' },
+    ]);
+    await screen.findByRole('region', { name: 'Assisted apply' });
+    expect(screen.queryByRole('region', { name: 'Earlier application' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'I saw a confirmation' })).not.toBeInTheDocument();
   });
 });
