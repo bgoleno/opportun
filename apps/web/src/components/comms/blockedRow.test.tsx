@@ -47,6 +47,14 @@ const blocked = (over: Partial<CommunicationView> = {}): CommunicationView =>
     ...over,
   }) as CommunicationView;
 
+/**
+ * What a blocked row keeps, in words (sec's review on https://github.com/bgoleno/opportun/pull/110).
+ * Spelled out here rather than imported, so the test pins the sentence itself; the fields it names
+ * are pinned on the server (mailIngest.test.ts, "what a blocked row keeps").
+ */
+const STORED_TEXT =
+  'Opportun stored who sent it and to whom, when, the rule that decided and the ids that link back to the original, never the subject or the message.';
+
 describe('BlockedRow', () => {
   beforeEach(() => {
     mockApi({ 'GET /integrations/gmail': CONNECTED });
@@ -117,7 +125,7 @@ describe('BlockedRow', () => {
     expect(text).toContain(
       `Your AI provider read the sender, the subject and the first ${GATE_INPUT_CHARS} characters to decide.`,
     );
-    expect(text).toContain('Opportun stored only the sender, the date and the rule that decided.');
+    expect(text).toContain(STORED_TEXT);
   });
 
   it('says nothing was read, on no row a mail filter kept out', async () => {
@@ -153,9 +161,9 @@ describe('Inbox: the Blocked tab note (#104)', () => {
     // The filters' sentence is today's, now about the filters only.
     expect(text).toContain('Kept out by your mail filters before anything read them,');
     expect(text).toContain('or by the AI check, whose rows say what it read.');
-    expect(text).toContain(
-      'Opportun stored only the sender, the date and the rule that decided, never the subject or the message.',
-    );
+    expect(text).toContain(STORED_TEXT);
+    // sec on #110: a blocked row keeps the recipients and the ids too, not only the sender.
+    expect(text).not.toMatch(/stored only the sender/);
     expect(text).toContain('Edit the rules in Settings, Mail filters.');
   });
 });

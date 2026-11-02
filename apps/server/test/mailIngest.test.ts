@@ -677,6 +677,49 @@ describe('Stage 2 at ingest', () => {
 // Plan 3 Task 1: the body is not kept. It travels to the classifier in the job payload, which is
 // cleared when the job finishes, so the only lasting copy of a message is the one in the user's
 // own mail system.
+// What a blocked row keeps. The inbox's Blocked tab tells the user this, in words
+// (apps/web/src/components/comms/BlockedRow.tsx STORED_ON_BLOCK: "who sent it and to whom, when,
+// the rule that decided and the ids that link back to the original, never the subject or the
+// message"), so a change to what upsertInbound keeps for a filtered row has to change that sentence
+// too (https://github.com/bgoleno/opportun/issues/104, sec's review on #110). Both kinds of block
+// write the same row: a mail filter rule, and the Stage 2 AI check.
+describe('what a blocked row keeps', () => {
+  it.each([
+    ['a mail filter rule', 'deny_list'],
+    ['the AI check', 'ai_gate'],
+  ] as const)('%s: the sender, recipients, date, rule and ids; no content', async (_name, rule) => {
+    const { app, a } = await boot();
+    if (rule === 'deny_list') {
+      await createRule(app.db, ctxOf(a.userId), { pattern: '*@blocked.example', effect: 'deny' });
+    } else {
+      gateReturns({ jobRelated: false, confidence: 0.92, reason: 'not job mail' });
+    }
+
+    const id = await ingest(app, a.userId, 'talent@blocked.example', {
+      subject: 'Secret subject',
+      bodyText: `${HIRING} https://job-boards.greenhouse.io/example/jobs/1000000001`,
+      externalId: 'kept-ext-1',
+      threadKey: 'kept-thread-1',
+    });
+
+    const row = await rowById(app, a.userId, id);
+    expect(row.triageDecision).toBe('filtered');
+    expect(row.triageRule).toBe(rule);
+    // Who sent it and to whom, when, the rule, and the ids that link back to the original.
+    expect(row).toMatchObject({
+      from: 'talent@blocked.example',
+      to: ['me@user.example'],
+      channel: 'gmail',
+      externalId: 'kept-ext-1',
+      threadKey: 'kept-thread-1',
+    });
+    expect(row.sentAt).toEqual(expect.any(Number));
+    // Never the subject or the message.
+    expect(row).toMatchObject({ subject: null, snippet: null, bodyRef: null, atsJobRefs: null });
+    expect(JSON.stringify(row)).not.toMatch(/Secret subject|staff engineer|greenhouse/);
+  });
+});
+
 describe('message bodies are not persisted', () => {
   const classifyJobFor = async (app: FastifyInstance, id: string) =>
     (await classifyJobs(app)).find(

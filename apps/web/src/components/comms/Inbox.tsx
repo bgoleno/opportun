@@ -20,7 +20,7 @@ import {
   type InboxFilters,
   type InboxTab,
 } from './api';
-import { BlockedRow } from './BlockedRow';
+import { BlockedRow, STORED_ON_BLOCK } from './BlockedRow';
 import { InboxRow, type RowMode } from './InboxRow';
 import type { RejectionReason } from './RejectForm';
 
@@ -60,7 +60,7 @@ const TABS: { tab: InboxTab; label: string; mode: RowMode; empty: string; note?:
     empty: 'Nothing has been blocked by your mail filters.',
     // What was read depends on the rule (https://github.com/bgoleno/opportun/issues/104): the
     // filters read nothing; the AI check read the opening, and its own rows say so (BlockedRow).
-    note: 'Kept out by your mail filters before anything read them, or by the AI check, whose rows say what it read. Opportun stored only the sender, the date and the rule that decided, never the subject or the message. Edit the rules in Settings, Mail filters.',
+    note: `Kept out by your mail filters before anything read them, or by the AI check, whose rows say what it read. ${STORED_ON_BLOCK} Edit the rules in Settings, Mail filters.`,
   },
 ];
 
