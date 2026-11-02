@@ -58,18 +58,40 @@ Opportunities also arrive from other places: accepted discovery results
 
 ## Possible duplicates
 
-Opportun matches a new opportunity against your live ones by company, title and location.
-Creating one by hand that matches one you already track asks you to confirm: **View the
-existing opportunity**, or **Create anyway**. Accepting a matching discovery result offers
-**Attach to existing** (links the posting to that opportunity instead of creating a new one)
-in place of Create anyway.
+Opportun matches a new opportunity against your live ones (any stage but Dismissed) by
+company, title and location. The title match ignores seniority words such as Senior, Staff
+and Principal, so "Staff Platform Engineer" and "Principal Platform Engineer" at one company
+and location match. Creating one by hand that matches one you already track asks you to
+confirm: **View the existing opportunity**, or **Create anyway**. Accepting a matching
+discovery result asks the same, and also offers **Attach to existing** (links the posting to
+that opportunity instead of creating a new one).
 
-Creating anyway flags both opportunities as possible duplicates of each other. On the board,
-the new one carries a **Possible duplicate** badge; opening either one shows a banner at the
-top naming the other, with **Merge** (the same merge the `...` menu offers, already pointed
-at it) and **Not a duplicate**. **Not a duplicate** is remembered for that pair: it will not
-come back even if a later edit to either opportunity would otherwise trigger the same match
-again.
+Two opportunities are flagged as possible duplicates of each other when:
+
+- You press **Create anyway**.
+- You capture a job with the [browser extension](browser-extension.md) and it is kept apart
+  from a matching opportunity (see below).
+- An opportunity is created, or its company or title is edited, and it has the same company
+  as one you track (allowing for variants such as "Inc.") and nearly the same title.
+- A daily AI check decides that a less certain pair (same company, similar titles) is the
+  same role. This needs AI to be set up.
+
+Capturing a job that matches an opportunity you already track usually fills that opportunity
+in. It is kept apart instead when everything that opportunity came from (job alert leads,
+accepted discovery results, earlier captures) is a different job on the same site, for
+example two LinkedIn jobs with different job ids. The capture then gets an opportunity of its
+own, and its timeline gets an entry, **Kept apart from a different LinkedIn posting**, naming
+the other job and, if it has a posting link, linking to it. An opportunity that came from
+none of these, such as one you created by hand, is filled in as usual, even if you gave it a
+posting link. If the matching opportunity is dismissed, the capture still gets its own
+opportunity and the timeline entry, but no flag.
+
+On the board, both flagged opportunities carry a **Possible duplicate** badge. Opening either
+one shows a banner at the top naming the other, with **Merge** (the same merge the `...` menu
+offers, already pointed at it) and **Not a duplicate**. Use **Merge** when they are the same
+job, and **Not a duplicate** when they are two jobs you want to track separately. **Not a
+duplicate** is remembered for that pair: it will not come back even if a later edit to either
+opportunity would otherwise trigger the same match again.
 
 ## Stage moves that need a reason
 

@@ -178,10 +178,18 @@ Three mechanisms catch duplicate opportunities at different points, and the
 boundary between them matters because all three can end up describing the same
 pair: discovery_results.dedupe_key (§4.5) is checked within one discovery run,
 before an opportunity even exists, on an exact match of normalized company, title
-and location. possible_duplicate_of is set only when a user explicitly forces a
-create past an exact dedupe_key collision; the new opportunity keeps a record of
-which existing one it was forced past. opportunity_dedupe_candidates is a
-heuristic pass over opportunities that already exist, for near-misses neither of
+and location. possible_duplicate_of names the existing opportunity a new one may
+duplicate, and is written in three ways. A forced create past an exact dedupe_key
+collision with a live opportunity records the one it was forced past: the user's
+Create anyway, or a browser capture kept apart from the opportunity holding its
+dedupe_key because every lead accepted against that opportunity is a different
+posting on the capture's own site (posting identities only contradict on the same
+site; `keyHolder` in captureResolve.ts). The kept-apart capture also adds a `link`
+activity naming the other opportunity. A confirmed opportunity_dedupe_candidates
+pair writes it on an opportunity that has none yet, whether the heuristic was
+confident or the daily AI pass confirmed a pending pair.
+opportunity_dedupe_candidates is a heuristic pass over opportunities that already
+exist, for near-misses neither of
 the others would catch (a renamed company, a reworded title). Dismissing a
 possible-duplicate flag, however it was set, always records a `rejected` decision
 in opportunity_dedupe_candidates, so a later heuristic run triggered by an edit to
