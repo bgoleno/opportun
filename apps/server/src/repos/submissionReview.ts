@@ -166,9 +166,20 @@ const handedOff = (row: SubmissionRow): HandoffResult => ({
 });
 
 /**
- * Whether `destination` may be opened for this requisition (design 7.2): https only, never a
- * LinkedIn or Indeed host, and either a recognised ATS posting URL for this very requisition
- * or a company career page carrying its posting id (a path segment or a query value).
+ * The query parameter an ATS's embedded job board puts on a company career page to name one
+ * posting: Greenhouse's `gh_jid`, Ashby's `ashby_jid`. Lever and Workday postings live on their
+ * own hosts, which the recognised-URL branch covers.
+ */
+const CAREER_PAGE_JOB_PARAM: Readonly<Record<string, string>> = {
+  ats_greenhouse: 'gh_jid',
+  ats_ashby: 'ashby_jid',
+};
+
+/**
+ * Whether `destination` may be opened for this requisition (design 7.2): https only, no
+ * credentials, never a LinkedIn or Indeed host, and either a recognised ATS posting URL for this
+ * very requisition, or a company career page whose ATS job parameter (`gh_jid`, `ashby_jid`)
+ * names it. An id merely appearing in a path is not enough: a lookalike host can carry one.
  */
 export function destinationAllowed(
   destination: string,
@@ -184,11 +195,10 @@ export function destinationAllowed(
   if (isPageFetchProhibited(url.hostname)) return false;
   const refs = extractAtsJobRefs(url.href);
   if (refs.some((r) => r.kind === sub.atsKind && r.externalId === sub.atsExternalId)) return true;
-  // A recognised ATS URL for another requisition, or a lookalike: not this posting.
+  // A recognised ATS URL for another requisition: not this posting.
   if (refs.length > 0) return false;
-  const id = sub.atsExternalId;
-  const segments = url.pathname.split('/').map((p) => decodeURIComponent(p));
-  return segments.includes(id) || [...url.searchParams.values()].includes(id);
+  const param = CAREER_PAGE_JOB_PARAM[sub.atsKind];
+  return param !== undefined && url.searchParams.get(param) === sub.atsExternalId;
 }
 
 /**

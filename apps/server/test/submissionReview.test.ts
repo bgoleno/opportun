@@ -19,6 +19,7 @@ import {
 import { enqueue, runDueJobs } from '../src/jobs/runner';
 import { setRaceHook } from '../src/lib/racePoints';
 import type { safeFetch } from '../src/lib/safeFetch';
+import { submissionDigest } from '../src/lib/submissionDigest';
 import type { UserCtx } from '../src/repos/base';
 import { createOpportunity } from '../src/repos/opportunities';
 import { insertResume } from '../src/repos/resumes';
@@ -568,20 +569,39 @@ describe('AC6: the destination', () => {
       'a lookalike ATS host',
       { ...ATS_REF, url: 'https://boards.greenhouse.io.example.com/x/jobs/1000001' },
     ],
+    [
+      'a host with the posting id only in its path',
+      { ...ATS_REF, url: 'https://careers.example.com/jobs/1000001' },
+    ],
+    [
+      'a career page naming another posting',
+      { ...ATS_REF, url: 'https://careers.example.com/open-roles?gh_jid=1000002' },
+    ],
+    [
+      'the ATS board for another requisition',
+      { ...ATS_REF, url: 'https://boards.greenhouse.io/examplecorp/jobs/1000002' },
+    ],
   ])('refuses %s at handoff, and changes nothing', async (_name, ats) => {
     const { app, a } = await boot(ON);
     const r = await reviewed(app, a);
     // The destination was taken from the opportunity's ATS identity at create; here it is
-    // replaced behind the API, so the handoff's own check is what is tested.
+    // replaced behind the API, with the review digest recomputed to match, so the only guard
+    // left is the handoff's own destination rule (a mutation run showed the digest re-check
+    // otherwise answered first).
+    const current = await rowOf(app, r.id);
+    const changed = { ...(current as NonNullable<typeof current>), destinationUrl: ats.url };
     await app.db
       .update(applicationSubmissions)
-      .set({ destinationUrl: ats.url })
+      .set({ destinationUrl: ats.url, reviewDigest: submissionDigest(changed) })
       .where(eq(applicationSubmissions.id, r.id))
       .run();
     const rowBefore = await rowOf(app, r.id);
+    const before = await counts(app, a);
     const res = await handoff(a, r.id);
-    expect([409, 422], res.body).toContain(res.statusCode);
-    expect((await rowOf(app, r.id))?.status).toBe(rowBefore?.status);
+    expect(res.statusCode, res.body).toBe(422);
+    expect(res.json().error.code).toBe('destination_not_allowed');
+    expect(await rowOf(app, r.id)).toEqual(rowBefore);
+    expect(await counts(app, a)).toEqual(before);
   });
 
   it.each([
@@ -589,6 +609,10 @@ describe('AC6: the destination', () => {
     [
       'a career page carrying the posting id',
       'https://careers.example.com/open-roles?gh_jid=1000001',
+    ],
+    [
+      'a recognised URL with tracking parameters',
+      'https://boards.greenhouse.io/examplecorp/jobs/1000001?utm_source=example',
     ],
   ])('accepts %s', async (_name, url) => {
     const { app, a } = await boot(ON);
