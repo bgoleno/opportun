@@ -1,66 +1,61 @@
 # Contributing to Opportun
 
-Thanks for your interest. The project is currently in its design phase (milestone
-M0), which shapes what contributions are useful right now.
+Thanks for your interest. Opportun is in beta: it has no tagged releases yet, and `main` is
+the only supported version (see [SECURITY.md](SECURITY.md)).
 
-## Now (design phase)
-
-- **Review the docs.** [docs/requirements.md](docs/requirements.md) and
-  [docs/design.md](docs/design.md) are the product. Open an issue for anything that
-  seems wrong, missing, unclear, or over-engineered. Reference requirement IDs
-  (FR-xx, NFR-xx) or decision log entries (ADR-x) where possible.
-- **Integration knowledge welcome.** Practical experience with ATS posting APIs,
-  Gmail API quotas, LinkedIn data exports, or MCP servers is especially valuable;
-  the adapter designs will be revised against real-world constraints.
-
-## Later (once M1 lands)
+## How to contribute
 
 - Standard flow: issue first for anything non-trivial, then a focused PR.
 - TypeScript, strict mode; tests accompany behavior changes; CI must be green
   (tests, typecheck, lint, security scans).
 - Security-sensitive areas (auth, crypto, adapters, fetchers) get extra review;
   see [SECURITY.md](SECURITY.md) for how to report vulnerabilities privately.
+- **Review the docs.** [docs/requirements.md](docs/requirements.md) and
+  [docs/design.md](docs/design.md) describe what Opportun is meant to do. Open an issue for
+  anything that seems wrong, missing, unclear, or over-engineered. Reference requirement IDs
+  (FR-xx, NFR-xx) or decision log entries (ADR-x) where possible.
+- **Integration knowledge welcome.** Practical experience with ATS posting APIs, Gmail API
+  quotas, LinkedIn data exports, or MCP servers is especially valuable.
 
 ## Merging
 
 `main` is protected, and these are enforced by GitHub rather than being conventions you
 have to remember:
 
-- **Every check must pass before a merge.** Eleven checks are required: `check` and `e2e`
+- **Every check must pass before a merge.** Thirteen checks are required: `check` and `e2e`
   on sqlite and postgres, `docker` on sqlite, postgres and sqlite-to-postgres, plus
-  `Repository visibility`, `OSV vulnerability scan` and both CodeQL legs. Administrators
-  are included, so there is no bypass.
+  `Repository visibility`, `OSV vulnerability scan`, both CodeQL legs, `Dependency review`
+  and `guard` (the identifier guard, `.github/workflows/identifier-guard.yml`). There are no
+  bypass actors, so administrators are included.
 - **Squash merges only.** Merge commits and rebase merges are disabled, and linear history
   is required. This is not a style preference: a feature branch's own commits can carry
   content that the branch tip no longer has, and a squash merge keeps those commits from
-  ever becoming ancestors of `main`. See
-  [docs/pre-publication-checklist.md](docs/pre-publication-checklist.md).
+  ever becoming ancestors of `main`.
 - **Branches are deleted on merge**, for the same reason: a merged branch's ref is the only
   thing keeping its own history reachable.
 - **No force pushes and no deletion of `main`.**
 
-`Dependency review` is deliberately _not_ required, because its job only runs when the
-repository is public (`needs.visibility.outputs.public == 'true'`) and a required check that
-never reports would make every pull request unmergeable. It is worth requiring on the day
-the public repository exists.
+A pull request does not have to be up to date with `main` to merge: the required checks are
+not strict, so a branch that is behind but passes still merges.
 
-Two ways to merge, both of which respect the required checks:
+`Dependency review` runs only when the repository is public
+(`needs.visibility.outputs.public == 'true'` in `.github/workflows/security.yml`). It is
+required now that the repository is public; a fork or a private copy that made it required
+would have a check that never reports, and every pull request there would be unmergeable.
+
+Merge with the script, which respects the required checks:
 
 ```sh
 scripts/merge-when-green.sh <pr-number> <head-sha>   # waits for the checks, then squash merges
-gh pr merge <pr-number> --squash --auto   # lets GitHub merge it when they pass
 ```
 
 `<head-sha>` is the full SHA of the head commit that was reviewed. The script merges that
 commit or nothing: it refuses when the pull request's head is any other, including a commit
-pushed after the review. `--auto` gives no such guarantee, so use the script when the merge
-must be the reviewed commit.
+pushed after the review. GitHub's auto-merge (`gh pr merge --auto`) is turned off in the
+repository settings, and would give no such guarantee anyway.
 
-Either way the merged branch is deleted on the remote by a repository setting, and your local
-branch is left alone, since it is usually still checked out in the worktree you worked in.
-
-Prefer the script when you want to know the outcome in the terminal, and `--auto` when you
-are leaving it unattended.
+The merged branch is deleted on the remote by a repository setting, and your local branch is
+left alone, since it is usually still checked out in the worktree you worked in.
 
 ## Before pushing
 
