@@ -45,6 +45,10 @@ export default defineConfig({
       OPPORTUN_GMAIL_MOCK: '1',
       OPPORTUN_SOURCE_MOCK: '1',
       OPPORTUN_OAUTH_MOCK: '1',
+      // Assisted apply (#79) is off by default and on the demo; on here so e2e/assistedApply.spec.ts
+      // can walk it. Its feature-off view is checked there by answering the route as the
+      // server does with the flag off.
+      OPPORTUN_SUBMISSIONS: '1',
       // The e2e suite runs on either engine: CI's e2e (postgres) variant passes these
       // through; locally they are unset and the server stays on SQLite in DATA_DIR.
       // An empty value counts as unset: the CI sqlite leg defines these as '' via the

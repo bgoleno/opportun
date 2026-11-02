@@ -32,6 +32,7 @@ import {
   roleTargets,
   stageHistory,
 } from '../db/schema';
+import { postingAtsJobRef } from '../lib/atsJobRef';
 import { duplicate, HttpError, notFound } from '../lib/errors';
 import { isSystemWritten } from '../lib/postingFingerprint';
 import { lastActivityAt } from './activities';
@@ -487,9 +488,19 @@ export async function updateOpportunity(
       if (key !== current.dedupeKey) await claimDedupeKey(tx, ctx, key, id);
     }
     const now = Date.now();
+    // A new posting URL brings its own ATS identity, or none (issue #137): a ref kept from the
+    // old URL would name another requisition while the posting still reads confirmed (a URL
+    // edit through PATCH leaves postingState as it is).
+    const urlChanged = fields.postingUrl !== undefined && fields.postingUrl !== current.postingUrl;
     await tx
       .update(opportunities)
-      .set({ ...fields, companyId, dedupeKey: key, updatedAt: now })
+      .set({
+        ...fields,
+        ...(urlChanged ? { atsJobRef: postingAtsJobRef(fields.postingUrl) } : {}),
+        companyId,
+        dedupeKey: key,
+        updatedAt: now,
+      })
       .where(owned(ctx, id))
       .run();
     if (companyName !== undefined || fields.title !== undefined) {

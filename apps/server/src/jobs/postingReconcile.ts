@@ -27,7 +27,7 @@ import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
 import { buildAiDeps } from '../lib/ai';
 import { HttpError } from '../lib/errors';
-import { extractAtsJobRefs } from '../lib/atsJobRef';
+import { postingAtsJobRef } from '../lib/atsJobRef';
 import { boardFromUrl } from './atsDetect';
 import { CAPTURE_MAX_TEXT } from '../routes/capture';
 import { descriptionFingerprint, isSystemWritten } from '../lib/postingFingerprint';
@@ -120,12 +120,6 @@ async function selectPassages(
     if (err instanceof AiUnavailableError) return [];
     throw err;
   }
-}
-
-/** The req identity of an ATS posting, when its URL carries one (D25: often it does not). */
-function refOf(posting: NormalizedPosting): ReturnType<typeof extractAtsJobRefs>[number] | null {
-  if (posting.postingUrl == null) return null;
-  return extractAtsJobRefs(posting.postingUrl, 1)[0] ?? null;
 }
 
 /**
@@ -283,11 +277,12 @@ export async function confirm(
     descriptionNote +
     extraNote;
 
-  const ref = refOf(posting);
+  // The req identity of the URL now stored (D25: often there is none), by the one rule every
+  // posting writer shares (lib/atsJobRef postingAtsJobRef, issue #137): a board host only.
   await setPostingState(db, ctx, opp.id, {
     postingState: 'confirmed',
     postingStateDetail: null,
-    atsJobRef: ref === null ? null : { ...ref, org: ref.org ?? null },
+    atsJobRef: postingAtsJobRef(posting.postingUrl ?? opp.postingUrl),
   });
   await writeReconcileNote(db, ctx, opp.id, 'confirmed', body);
   return { status: 'confirmed', detail: null };
