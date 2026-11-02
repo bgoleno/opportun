@@ -379,6 +379,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     storage: app.storage,
     documentStore: app.documentStore,
     reactiveResumeStore: app.reactiveResumeStore,
+    localFileStore: app.localFileStore,
     mailProvider: createGmailProvider(opts.google ?? realGoogleApi, googleConn),
     sourceFetch: opts.sourceFetch ?? safeFetch,
     log: app.log,

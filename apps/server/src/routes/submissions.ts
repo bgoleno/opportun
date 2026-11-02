@@ -22,10 +22,12 @@ import type { ValidationIssue } from '../plugins/security';
 import {
   cancelSubmission,
   createSubmissionDraft,
+  getSnapshotForDownload,
   getSubmission,
   listSubmissionsForOpportunity,
   updateSubmissionDraft,
 } from '../repos/submissions';
+import { contentDisposition } from './attachments';
 import { DEFAULT_LIMIT, IdParams, MAX_LIMIT, pageOf } from './common';
 
 const CreateBody = z
@@ -168,4 +170,19 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
       return cancelSubmission(db, app.requireUser(req), req.params.id);
     },
   );
+
+  // The snapshot file (#115 criterion 5): the owner's own attempt only, streamed the way an
+  // attachment download is (routes/attachments.ts). Always a PDF: the job stores nothing else
+  // (exportFile refuses bytes that are not one), and the header says so rather than echoing the
+  // stored mime. nosniff and the other security headers come from plugins/security.ts.
+  api.get('/submissions/:id/snapshot', { schema: { params: IdParams } }, async (req, reply) => {
+    const file = await getSnapshotForDownload(db, app.requireUser(req), req.params.id);
+    const stream = await app.storage.openAttachment(file.storedPath);
+    return reply
+      .header('content-type', 'application/pdf')
+      .header('content-length', file.bytes)
+      .header('content-disposition', contentDisposition(file.filename))
+      .header('cache-control', 'private, no-store')
+      .send(stream);
+  });
 }

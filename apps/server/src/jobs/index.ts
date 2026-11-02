@@ -25,6 +25,7 @@ import { refineDiscoveryPromptJob } from './refineDiscoveryPrompt';
 import { retryWorkdayCaptureJob } from './retryWorkdayCapture';
 import { gmailSyncAllJob, gmailSyncJob } from './gmailSync';
 import { registerJob } from './registry';
+import { submissionSnapshotJob } from './submissionSnapshot';
 
 registerJob(importJob);
 registerJob(linkedInImportJob);
@@ -54,3 +55,4 @@ registerJob(companyDomainResolveJob);
 registerJob(companyDomainBackfillJob);
 registerJob(retryWorkdayCaptureJob);
 registerJob(opportunityDedupeAiJob);
+registerJob(submissionSnapshotJob);
