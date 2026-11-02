@@ -2,7 +2,7 @@
 // review gate and the handoff, against a stubbed API. Criteria: 1 the review shows everything,
 // unticked; 2 any edit goes back to review; 3 a clock time, not a countdown; 4 keyboard and
 // screen-reader paths; 5 nothing of the feature where it is off.
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DetailsPanel } from '@/components/opportunity/DetailsPanel';
@@ -691,6 +691,58 @@ describe('tl on #138', () => {
     await user.click(await screen.findByRole('checkbox'));
     const button = screen.getByRole('button', { name: /confirm review/i });
     await user.dblClick(button);
+    release();
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'open' }));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/review')).toHaveLength(1);
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/handoff')).toHaveLength(1);
+  });
+
+  // Two clicks in one tick (tl and qa on #138): the second lands before React has re-rendered
+  // with `busy`, so only the in-flight ref set inside the first click can stop it.
+  it('(1) two clicks in the same tick on a valid review: one tab, one handoff', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const api = mockApi(
+      routes(submission({ status: 'reviewed', reviewExpiresAt: NOW + 30 * MIN }), {
+        'POST /submissions/sub-1/handoff': async () => {
+          await held;
+          return { destinationUrl: DEST, expiresAt: NOW };
+        },
+      }),
+    );
+    const { open } = fakeWindowOpen();
+    const { router } = renderStep('review');
+    const button = await screen.findByRole('button', { name: 'Open boards.greenhouse.io' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    release();
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'open' }));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/handoff')).toHaveLength(1);
+  });
+
+  it('(1) two clicks in the same tick on a first confirm: one review, one handoff, one tab', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const api = mockApi(
+      routes(submission(), {
+        'POST /submissions/sub-1/review': async () => {
+          await held;
+          return {
+            status: 200,
+            body: submission({ status: 'reviewed', reviewExpiresAt: NOW + 30 * MIN }),
+          };
+        },
+        'POST /submissions/sub-1/handoff': { destinationUrl: DEST, expiresAt: NOW },
+      }),
+    );
+    const { open } = fakeWindowOpen();
+    const { user, router } = renderStep('review');
+    await user.click(await screen.findByRole('checkbox'));
+    const button = screen.getByRole('button', { name: /confirm review/i });
+    fireEvent.click(button);
+    fireEvent.click(button);
     release();
     await waitFor(() => expect(router.state.location.search).toEqual({ step: 'open' }));
     expect(open).toHaveBeenCalledTimes(1);
