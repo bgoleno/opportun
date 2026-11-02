@@ -6,6 +6,7 @@ import type { Db } from '../db/client';
 import { HttpError } from '../lib/errors';
 import {
   DOCS_SCOPES,
+  googleErrorReason,
   googleErrorStatus,
   googleHttpError,
   isGoogleRateLimit,
@@ -121,6 +122,13 @@ function exportFailureOf(err: unknown): DocumentExportFailure {
   }
   if (isGoogleRateLimit(err)) return 'rate_limited';
   const status = googleErrorStatus(err);
+  const reason = googleErrorReason(err);
+  // Drive's own reasons, ahead of the bare status (qa on #127): its refusal of a large export is
+  // a 403 that is about size, not access, and a daily quota resets, so it is worth a retry.
+  if (reason === 'exportSizeLimitExceeded') return 'too_large';
+  if (reason === 'dailyLimitExceeded') return 'rate_limited';
+  // 408 is a timeout reported as a status: the request may well succeed on a later try.
+  if (status === 408) return 'unavailable';
   const message = err instanceof Error ? err.message : '';
   if (status === 401 || /invalid_grant/i.test(message)) return 'reauth_required';
   if (status === 404) return 'not_found';
@@ -144,13 +152,23 @@ function isClientError(err: unknown): boolean {
   return typeof (err as { config?: unknown }).config === 'object';
 }
 
-/** The document's title as a safe attachment filename (no path or control characters). */
+/**
+ * Characters a filename must not carry: control characters, and the bidirectional and
+ * zero-width formatting characters that make a name display as something it is not (U+202E
+ * turns "Resume\u202Efdp.exe" into "Resumeexe.pdf" on screen; qa on #127).
+ */
+const UNSAFE_IN_NAME =
+  // eslint-disable-next-line no-control-regex -- control characters are what this strips
+  /[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+
+/** The document's title as a safe attachment filename, ending in exactly one ".pdf". */
 function pdfFilename(title: string | null | undefined): string {
   const safe = (title ?? '')
-    // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(UNSAFE_IN_NAME, '')
     .replace(/[/\\:*?"<>|]/g, '_')
     .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\.pdf$/i, '')
     .trim()
     .slice(0, 150);
   return `${safe === '' ? 'Resume' : safe}.pdf`;

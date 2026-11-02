@@ -112,6 +112,21 @@ describe('Google Docs store: exportFile', () => {
     expect(out).toMatchObject({ ok: true, filename: '.._Resume_ Jane _ v2.pdf' });
   });
 
+  it('drops bidirectional and invisible formatting characters from the name', async () => {
+    // qa on #127: U+202E would make "Resume\u202Efdp.exe" display as something else.
+    const { store } = googleStore((fake) => {
+      fake.drive.set(DOC, driveFile('Resume\u202Efdp.exe\u200B\u2066x'));
+    });
+    expect(await store.exportFile(ctx, DOC)).toMatchObject({ filename: 'Resumefdp.exex.pdf' });
+  });
+
+  it('does not double the extension of a name that already ends in .pdf', async () => {
+    const { store } = googleStore((fake) => {
+      fake.drive.set(DOC, driveFile('Jane Resume.PDF'));
+    });
+    expect(await store.exportFile(ctx, DOC)).toMatchObject({ filename: 'Jane Resume.pdf' });
+  });
+
   it('names an untitled document "Resume.pdf"', async () => {
     const { store } = googleStore((fake) => {
       fake.drive.set(DOC, driveFile(''));
@@ -163,6 +178,13 @@ describe('Google Docs store: exportFile errors are classified', () => {
       Object.assign(new Error('reset'), { code: 'ECONNRESET' }),
       'unavailable',
     ],
+    // qa on #127: a 408 is a timeout, and the daily quota resets.
+    ['408', googleError(408), 'unavailable'],
+    [
+      '403 dailyLimitExceeded',
+      googleError(403, { errors: [{ reason: 'dailyLimitExceeded' }] }),
+      'rate_limited',
+    ],
   ])('%s is transient: retryable', async (_name, thrown, code) => {
     const { store } = googleStore((fake) => {
       fake.exportFailure = thrown;
@@ -177,6 +199,12 @@ describe('Google Docs store: exportFile errors are classified', () => {
     ['401', googleError(401), 'reauth_required'],
     ['invalid_grant', new Error('invalid_grant'), 'reauth_required'],
     ['400', googleError(400), 'rejected'],
+    // qa on #127: Drive's own refusal of a large export is the size, not access.
+    [
+      '403 exportSizeLimitExceeded',
+      googleError(403, { errors: [{ reason: 'exportSizeLimitExceeded' }] }),
+      'too_large',
+    ],
   ])('%s is permanent: not retryable', async (_name, thrown, code) => {
     const { store } = googleStore((fake) => {
       fake.exportFailure = thrown;
