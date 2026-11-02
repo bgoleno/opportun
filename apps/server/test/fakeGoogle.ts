@@ -65,7 +65,16 @@ export interface FakeGoogle extends GoogleApi {
   drive: Map<string, FakeDriveFile>;
   /** Every `q` searchDriveFiles was called with, in order. */
   driveQueries: string[];
+  /** Every files.export call, in order (issue #125). */
+  exports: { fileId: string; mimeType: string }[];
+  /** The bytes files.export answers for a doc id; a minimal PDF when unset. */
+  exportBytes: Map<string, Buffer>;
+  /** When set, files.export rejects with this (a status-carrying error, a timeout, ...). */
+  exportFailure: unknown;
 }
+
+/** The smallest bytes a PDF export starts with; what exportFile answers by default. */
+export const FAKE_PDF = Buffer.from('%PDF-1.4\n% fake export\n%%EOF\n');
 
 class FakeHttpError extends Error {
   constructor(readonly status: number) {
@@ -168,6 +177,9 @@ export function fakeGoogle(seed: Record<string, FakeDoc> = {}): FakeGoogle {
     batchUpdates: [],
     drive: new Map(),
     driveQueries: [],
+    exports: [],
+    exportBytes: new Map(),
+    exportFailure: undefined,
     async exchangeCode(_client, code) {
       fake.exchanged.push(code);
       return { ...fake.nextTokens };
@@ -209,6 +221,12 @@ export function fakeGoogle(seed: Record<string, FakeDoc> = {}): FakeGoogle {
       fake.docs.set(newId, { title: name, text: doc.text });
       fake.copies.push({ fileId, name, newId });
       return { id: newId, name };
+    },
+    async exportFile(_client, fileId, mimeType) {
+      fake.exports.push({ fileId, mimeType });
+      if (fake.exportFailure !== undefined) throw fake.exportFailure;
+      if (!fake.docs.has(fileId)) throw new FakeHttpError(404);
+      return fake.exportBytes.get(fileId) ?? FAKE_PDF;
     },
     async getFile(_client, fileId) {
       const file = fake.drive.get(fileId);

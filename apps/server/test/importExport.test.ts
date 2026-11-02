@@ -50,6 +50,7 @@ function fakeDocumentStore(): DocumentStore & { registered: string[] } {
     copyFrom: fail,
     readText: fail,
     applyEdits: fail,
+    exportFile: fail,
   };
 }
 

@@ -114,6 +114,12 @@ export function createLocalFileStore(deps: LocalFileDeps): DocumentStore {
       return await readStoredText(deps.storage, row.storedPath);
     },
 
+    // A local file is plain text (MIME above), and owner decision 2 keeps it manual: there is no
+    // PDF to give, and text is never handed on in place of one (issue #125). Nothing is read.
+    async exportFile() {
+      return { ok: false, reason: 'export_unsupported' } as const;
+    },
+
     async applyEdits(ctx, ref, edits: ResumeEdit[]): Promise<ResumeEditOutcomeResult> {
       const row = await currentRow(deps.db, ctx, ref);
       const text = await readStoredText(deps.storage, row.storedPath);

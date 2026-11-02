@@ -1,11 +1,28 @@
 // Google Docs document store. Reads go through docs.get (documents scope), copies through
-// drive.files.copy (drive scope), and edits through a replaceAllText batchUpdate.
+// drive.files.copy (drive scope), edits through a replaceAllText batchUpdate, and the PDF
+// export through drive.files.export (drive scope, read-only; issue #125).
 import type { docs_v1 } from '@googleapis/docs';
 import type { Db } from '../db/client';
 import { HttpError } from '../lib/errors';
-import { DOCS_SCOPES, googleHttpError, type GoogleApi, type GoogleConn } from '../lib/google';
+import {
+  DOCS_SCOPES,
+  googleErrorReason,
+  googleErrorStatus,
+  googleHttpError,
+  isGoogleRateLimit,
+  type GoogleApi,
+  type GoogleConn,
+} from '../lib/google';
 import type { UserCtx } from '../repos/base';
-import type { DocumentStore, ResumeDocMeta, ResumeEdit, ResumeEditResult } from './documentStore';
+import {
+  DocumentExportError,
+  MAX_EXPORT_BYTES,
+  type DocumentExportFailure,
+  type DocumentStore,
+  type ResumeDocMeta,
+  type ResumeEdit,
+  type ResumeEditResult,
+} from './documentStore';
 
 /** One Google Doc found by the Drive search picker (issue #136). */
 export interface DriveSearchHit {
@@ -75,6 +92,86 @@ export function flattenDocument(doc: docs_v1.Schema$Document): {
   const paragraphs: FlatParagraph[] = [];
   collect(doc.body?.content, paragraphs);
   return { text: paragraphs.map((p) => p.text).join('\n'), paragraphs };
+}
+
+const PDF_MIME = 'application/pdf';
+/** Every PDF starts with this header; anything else is not handed on as one. */
+const PDF_MAGIC = Buffer.from('%PDF-');
+
+/** Network failures with no HTTP status: the request never got an answer, so try again later. */
+const NETWORK_CODES = new Set([
+  'ETIMEDOUT',
+  'ESOCKETTIMEDOUT',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ECONNABORTED',
+  'EAI_AGAIN',
+  'EPIPE',
+]);
+
+/**
+ * Classifies a failed export (issue #125): transient (Google answered 5xx or rate-limited the
+ * call, or the request timed out or was cut) or permanent (the document is gone or unshared,
+ * Google must be reconnected, the request was refused). Only the code survives, never `err`.
+ */
+function exportFailureOf(err: unknown): DocumentExportFailure {
+  if (err instanceof HttpError) {
+    // Raised before any Drive call: a bad ref, or no usable Google connection.
+    if (err.code === 'google_reauth_required') return 'reauth_required';
+    return err.statusCode === 400 ? 'rejected' : 'no_access';
+  }
+  if (isGoogleRateLimit(err)) return 'rate_limited';
+  const status = googleErrorStatus(err);
+  const reason = googleErrorReason(err);
+  // Drive's own reasons, ahead of the bare status (qa on #127): its refusal of a large export is
+  // a 403 that is about size, not access, and a daily quota resets, so it is worth a retry.
+  if (reason === 'exportSizeLimitExceeded') return 'too_large';
+  if (reason === 'dailyLimitExceeded') return 'rate_limited';
+  // 408 is a timeout reported as a status: the request may well succeed on a later try.
+  if (status === 408) return 'unavailable';
+  const message = err instanceof Error ? err.message : '';
+  if (status === 401 || /invalid_grant/i.test(message)) return 'reauth_required';
+  if (status === 404) return 'not_found';
+  if (status === 403) return 'no_access';
+  if (status !== undefined) return status >= 500 ? 'unavailable' : 'rejected';
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && NETWORK_CODES.has(code)) return 'unavailable';
+  // No status and no known network code. A Google client error of that kind (gaxios: it carries
+  // its request config) is a request that got no answer, aborted or timed out: transient, so the
+  // snapshot job retries it within its own bound. Anything else is not Google at all but a bug
+  // of ours (a TypeError, say), which retrying cannot fix (tl on #127): permanent.
+  return isClientError(err) ? 'unavailable' : 'rejected';
+}
+
+/** A Google API client (gaxios) error: named so, or carrying the request it made. */
+function isClientError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === 'GaxiosError' || err.name === 'AbortError' || err.name === 'TimeoutError') {
+    return true;
+  }
+  return typeof (err as { config?: unknown }).config === 'object';
+}
+
+/**
+ * Characters a filename must not carry: control characters, and the bidirectional and
+ * zero-width formatting characters that make a name display as something it is not (U+202E
+ * turns "Resume\u202Efdp.exe" into "Resumeexe.pdf" on screen; qa on #127).
+ */
+const UNSAFE_IN_NAME =
+  // eslint-disable-next-line no-control-regex -- control characters are what this strips
+  /[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+
+/** The document's title as a safe attachment filename, ending in exactly one ".pdf". */
+function pdfFilename(title: string | null | undefined): string {
+  const safe = (title ?? '')
+    .replace(UNSAFE_IN_NAME, '')
+    .replace(/[/\\:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\.pdf$/i, '')
+    .trim()
+    .slice(0, 150);
+  return `${safe === '' ? 'Resume' : safe}.pdf`;
 }
 
 async function guarded<T>(fn: () => Promise<T>): Promise<T> {
@@ -183,6 +280,26 @@ export function createGoogleDocsStore(db: Db, conn: GoogleConn, api: GoogleApi):
       }));
       // Mutated in place: the same Google Doc, same ref, as before.
       return { docRef: ref, results };
+    },
+
+    // Two reads only, drive.files.get for the name (not a whole docs.get, tl on #127) and
+    // drive.files.export for the bytes: nothing here can change the document (issue #125,
+    // criterion 1).
+    async exportFile(ctx, ref) {
+      try {
+        const id = parseDocRef(ref);
+        const c = await client(ctx);
+        const file = await api.getFile(c, id);
+        const bytes = await api.exportFile(c, id, PDF_MIME);
+        if (bytes.length > MAX_EXPORT_BYTES) throw new DocumentExportError('too_large');
+        if (!bytes.subarray(0, PDF_MAGIC.length).equals(PDF_MAGIC)) {
+          throw new DocumentExportError('not_pdf');
+        }
+        return { ok: true, bytes, mime: PDF_MIME, filename: pdfFilename(file.name) };
+      } catch (err) {
+        if (err instanceof DocumentExportError) throw err;
+        throw new DocumentExportError(exportFailureOf(err));
+      }
     },
   };
 }

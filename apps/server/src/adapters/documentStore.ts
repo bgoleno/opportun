@@ -55,6 +55,53 @@ export interface ResumeEditOutcomeResult {
   results: ResumeEditResult[];
 }
 
+/**
+ * The largest resume export accepted, in bytes. Drive refuses to export more than 10 MB itself,
+ * so this is the same bound stated on our side: a bigger file is not a resume to attach to an
+ * application (https://github.com/bgoleno/opportun/issues/125).
+ */
+export const MAX_EXPORT_BYTES = 10 * 1024 * 1024;
+
+/**
+ * exportFile's answer. A store either hands back the file to attach, or says plainly that it
+ * cannot export at all, so no caller guesses and nothing ever sends text in place of a PDF
+ * (design Part A 4.4). Failures of a store that can export are thrown as DocumentExportError.
+ */
+export type DocumentExportResult =
+  | { ok: true; bytes: Buffer; mime: 'application/pdf'; filename: string }
+  | { ok: false; reason: 'export_unsupported' };
+
+/**
+ * Why an export failed, for the snapshot job that will call exportFile (#115): `retryable`
+ * failures (Google unavailable, rate limited, a timeout or dropped connection) are worth
+ * another try later; the rest need the user (the document is gone or unshared, Google must be
+ * reconnected, the file is too large or not a PDF) and are recorded as failed.
+ */
+export type DocumentExportFailure =
+  | 'unavailable'
+  | 'rate_limited'
+  | 'not_found'
+  | 'no_access'
+  | 'reauth_required'
+  | 'too_large'
+  | 'not_pdf'
+  | 'rejected';
+
+const RETRYABLE: ReadonlySet<DocumentExportFailure> = new Set(['unavailable', 'rate_limited']);
+
+/**
+ * A classified export failure. It carries only the code: never the underlying client error,
+ * whose request can include tokens (the same rule as googleHttpError in lib/google.ts).
+ */
+export class DocumentExportError extends Error {
+  readonly retryable: boolean;
+  constructor(readonly code: DocumentExportFailure) {
+    super(`resume export failed: ${code}`);
+    this.name = 'DocumentExportError';
+    this.retryable = RETRYABLE.has(code);
+  }
+}
+
 export interface DocumentStore {
   /** Validates access and returns the canonical title. */
   registerExisting(ctx: UserCtx, ref: string): Promise<ResumeDocMeta>;
@@ -70,4 +117,11 @@ export interface DocumentStore {
    * check -- see ResumeEditOutcome. See ResumeEditOutcomeResult for `docRef`.
    */
   applyEdits(ctx: UserCtx, ref: string, edits: ResumeEdit[]): Promise<ResumeEditOutcomeResult>;
+  /**
+   * The document as a PDF file to attach to an application, or `export_unsupported` from a
+   * store that has no PDF to give (https://github.com/bgoleno/opportun/issues/125). Read-only:
+   * it never modifies the document. A store that can export throws DocumentExportError when it
+   * fails.
+   */
+  exportFile(ctx: UserCtx, ref: string): Promise<DocumentExportResult>;
 }
