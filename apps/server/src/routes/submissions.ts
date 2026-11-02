@@ -3,18 +3,22 @@
 //
 // Rules every route here keeps, for this milestone and the ones after it:
 // - Opportun never transmits an application. Nothing here contacts an employer or an ATS.
-// - One opportunity per request. Every route names exactly one id in its path, there is no
-//   route that lists or acts on submissions across opportunities, and a body never carries ids
-//   (test/submissionRouteShape.test.ts enforces all three).
+// - One opportunity per request. Every route names exactly one id in its path and there is no
+//   route that lists or acts on submissions across opportunities (both enforced by
+//   test/submissionRouteShape.test.ts, which reads the registered paths). A body names no
+//   opportunity or submission: the only id it may carry is the chosen resume's, and an id array
+//   or any other key is refused by the strict schemas (test/submissions.test.ts).
 // - The whole feature is behind OPPORTUN_SUBMISSIONS=1 and never on the demo: otherwise every
-//   route answers 404 feature_unavailable, before anything else is read.
+//   route answers 404 feature_unavailable from its own first hook. The app-wide session and
+//   CSRF hooks run before it, as for every route; nothing of a submission is read before it.
 // - A body with an unknown key, or a value of the wrong shape (an id array included), is 422.
 import { SubmissionAnswersSchema, SubmissionFieldsSchema, SubmissionSchema } from '@opportun/core';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { submissionsEnabled } from '../config';
 import { HttpError } from '../lib/errors';
+import type { ValidationIssue } from '../plugins/security';
 import {
   cancelSubmission,
   createSubmissionDraft,
@@ -60,22 +64,26 @@ const PageQuery = z
 /**
  * The app answers schema validation with 400 elsewhere (plugins/security.ts). These routes
  * attach the validation error instead and answer 422, as #114 criterion 3 asks, with the same
- * issue list a 400 would carry.
+ * body a 400 carries: `{ error: { code: 'validation', issues } }`, every issue with its path.
+ * Returns true when it answered; the handler then returns at once.
  */
-function rejectInvalid(req: FastifyRequest): void {
+function answeredInvalid(req: FastifyRequest, reply: FastifyReply): boolean {
   const err = req.validationError;
-  if (err === undefined || err === null) return;
+  if (err === undefined || err === null) return false;
   const context = (err as { validationContext?: string }).validationContext;
-  const validation = (err as { validation?: { instancePath?: string; message?: string }[] })
-    .validation;
-  const first = validation?.[0];
-  const path = [
-    ...(context === undefined ? [] : [context]),
-    ...(first?.instancePath ?? '').split('/').filter((s) => s.length > 0),
-  ].join('.');
-  throw new HttpError(422, 'validation', first?.message ?? 'Invalid input', {
-    ...(path === '' ? {} : { path }),
-  });
+  const validation =
+    (err as { validation?: { instancePath?: string; keyword?: string; message?: string }[] })
+      .validation ?? [];
+  const issues: ValidationIssue[] = validation.map((v) => ({
+    path: [
+      ...(context === undefined ? [] : [context]),
+      ...(v.instancePath ?? '').split('/').filter((s) => s.length > 0),
+    ],
+    code: v.keyword ?? 'invalid',
+    message: v.message ?? 'Invalid input',
+  }));
+  void reply.code(422).send({ error: { code: 'validation', issues } });
+  return true;
 }
 
 export async function submissionRoutes(app: FastifyInstance): Promise<void> {
@@ -100,7 +108,7 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
       },
     },
     async (req, reply) => {
-      rejectInvalid(req);
+      if (answeredInvalid(req, reply)) return reply;
       const { submission, replayed } = await createSubmissionDraft(
         db,
         app.requireUser(req),
@@ -122,8 +130,8 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
         response: { 200: pageOf(SubmissionSchema) },
       },
     },
-    async (req) => {
-      rejectInvalid(req);
+    async (req, reply) => {
+      if (answeredInvalid(req, reply)) return reply;
       return listSubmissionsForOpportunity(db, app.requireUser(req), req.params.id, req.query);
     },
   );
@@ -131,8 +139,8 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
   api.get(
     '/submissions/:id',
     { attachValidation: true, schema: { params: IdParams, response: { 200: SubmissionSchema } } },
-    async (req) => {
-      rejectInvalid(req);
+    async (req, reply) => {
+      if (answeredInvalid(req, reply)) return reply;
       return getSubmission(db, app.requireUser(req), req.params.id);
     },
   );
@@ -143,8 +151,8 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
       attachValidation: true,
       schema: { params: IdParams, body: PatchBody, response: { 200: SubmissionSchema } },
     },
-    async (req) => {
-      rejectInvalid(req);
+    async (req, reply) => {
+      if (answeredInvalid(req, reply)) return reply;
       return updateSubmissionDraft(db, app.requireUser(req), req.params.id, req.body);
     },
   );
@@ -155,8 +163,8 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
       attachValidation: true,
       schema: { params: IdParams, body: EmptyBody, response: { 200: SubmissionSchema } },
     },
-    async (req) => {
-      rejectInvalid(req);
+    async (req, reply) => {
+      if (answeredInvalid(req, reply)) return reply;
       return cancelSubmission(db, app.requireUser(req), req.params.id);
     },
   );

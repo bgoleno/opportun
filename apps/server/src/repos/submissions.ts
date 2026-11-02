@@ -20,6 +20,7 @@ import { and, desc, eq, inArray } from 'drizzle-orm';
 import { isUniqueViolation, withTransaction } from '../db/client';
 import { applicationSubmissions, opportunities, resumes } from '../db/schema';
 import { HttpError, notFound } from '../lib/errors';
+import { racePoint } from '../lib/racePoints';
 import type { Db, Exec, UserCtx } from './base';
 import { countWhere, type ListOpts, type Page } from './list';
 
@@ -31,6 +32,7 @@ export const SUBMISSION_ELIGIBLE_STAGES = ['interested', 'preparing', 'applied']
 /** Why an opportunity, or the chosen resume, cannot start an attempt: the 422 codes. */
 export type IneligibleReason =
   | 'no_ats_identity'
+  | 'posting_not_confirmed'
   | 'stage_not_eligible'
   | 'destination_not_https'
   | 'resume_not_found'
@@ -41,11 +43,21 @@ const INELIGIBLE_MESSAGES = new Map<IneligibleReason, string>([
     'no_ats_identity',
     "This opportunity is not linked to a posting on the company's own job board yet.",
   ],
+  [
+    'posting_not_confirmed',
+    "This opportunity's posting needs review: confirm it on the opportunity before applying.",
+  ],
   ['stage_not_eligible', 'Applying is available at Interested, Preparing or Applied.'],
   ['destination_not_https', "The posting's address is not https."],
   ['resume_not_found', 'That resume was not found.'],
-  ['resume_not_final', 'Choose a resume marked final.'],
+  ['resume_not_final', 'Choose a finished resume: one marked final, or already submitted.'],
 ]);
+
+/**
+ * A finished resume may be used: `final`, or `submitted` (already sent with another
+ * application, since one base resume serves many). A draft, or one still in review, may not.
+ */
+const USABLE_RESUME_STATUSES: readonly string[] = ['final', 'submitted'];
 
 /** 422 with the reason as its code (the message is server-side context; clients map codes). */
 const ineligible = (reason: IneligibleReason): HttpError =>
@@ -142,7 +154,7 @@ async function finalResume(exec: Exec, ctx: UserCtx, resumeId: string) {
     .get();
   // Another user's resume reads exactly like a missing one.
   if (resume === undefined || resume.archivedAt !== null) throw ineligible('resume_not_found');
-  if (resume.status !== 'final') throw ineligible('resume_not_final');
+  if (!USABLE_RESUME_STATUSES.includes(resume.status)) throw ineligible('resume_not_final');
   return resume;
 }
 
@@ -153,10 +165,11 @@ export interface CreateDraftInput {
 
 /**
  * Starts a draft for one opportunity, or returns the one this key already created
- * (`replayed`). Eligible (#114 criterion 1): the opportunity has an ATS identity (a confirmed
- * posting on the company's own board), is at Interested, Preparing or Applied, and the resume is
- * the caller's and marked final. One live attempt per opportunity: the partial unique index
- * enforces it, and the check here only turns it into a readable 409.
+ * (`replayed`). Eligible (#114 criterion 1): the opportunity has an ATS identity whose posting
+ * is confirmed (on the company's own board), is at Interested, Preparing or Applied, and the
+ * resume is the caller's, not archived, and finished (final or submitted). One live attempt per
+ * opportunity: the partial unique index enforces it, and the check here only turns it into a
+ * readable 409.
  */
 export async function createSubmissionDraft(
   db: Db,
@@ -167,19 +180,19 @@ export async function createSubmissionDraft(
   const replay = async (): Promise<{ submission: Submission; replayed: boolean } | null> => {
     const prior = await byKey(db, ctx, input.idempotencyKey);
     if (prior === undefined) return null;
-    // A key belongs to one attempt; reusing it for another opportunity is a client bug.
-    if (prior.opportunityId !== opportunityId) {
-      throw new HttpError(
-        409,
-        'idempotency_key_reused',
-        'That key was used for another application.',
-      );
+    // A key belongs to one attempt. Reusing it for another opportunity, or with another
+    // resume, is a client bug: never answer it silently with the first request's choice.
+    if (prior.opportunityId !== opportunityId || prior.resumeId !== input.resumeId) {
+      throw new HttpError(409, 'idempotency_key_reused', 'That key was used for another request.');
     }
     return { submission: view(prior), replayed: true };
   };
 
   const prior = await replay();
   if (prior !== null) return prior;
+  // Between the key check and the live check another request with the same key can insert its
+  // draft (qa's Postgres race on #124): the live check below must still recognise it as ours.
+  await racePoint('submissions.create.keyChecked');
 
   const opp = await db
     .select()
@@ -189,6 +202,10 @@ export async function createSubmissionDraft(
   if (opp === undefined) throw notFound();
   const ref = opp.atsJobRef;
   if (ref === null || ref === undefined) throw ineligible('no_ats_identity');
+  // The ref stays in place when reconcile or an unconfirm moves the posting to needs_review
+  // (jobs/postingReconcile.ts, lib/postingConfirm.ts), so the ref alone is not a confirmed
+  // identity: the posting state must say so too.
+  if (opp.postingState !== 'confirmed') throw ineligible('posting_not_confirmed');
   if (!(SUBMISSION_ELIGIBLE_STAGES as readonly string[]).includes(opp.stage)) {
     throw ineligible('stage_not_eligible');
   }
@@ -204,7 +221,18 @@ export async function createSubmissionDraft(
   const resume = await finalResume(db, ctx, input.resumeId);
 
   const live = await liveFor(db, ctx, opportunityId);
-  if (live !== undefined) throw liveExists(live);
+  if (live !== undefined) {
+    // The live draft may be this key's own, inserted by a concurrent request after the key
+    // check above (qa's Postgres race on #124): that is a replay, not a conflict. replay()
+    // re-reads by key and still refuses a reused key with a different body.
+    if (live.idempotencyKey === input.idempotencyKey) {
+      const own = await replay();
+      if (own !== null) return own;
+    }
+    throw liveExists(live);
+  }
+  // Two creates can both pass the checks above; the unique indexes then decide (test/races).
+  await racePoint('submissions.create');
 
   const now = Date.now();
   try {
@@ -238,7 +266,9 @@ export async function createSubmissionDraft(
     if (raced !== null) return raced;
     const winner = await liveFor(db, ctx, opportunityId);
     if (winner !== undefined) throw liveExists(winner);
-    throw err;
+    // The row that won was finished in between (cancelled, say). The race is over: the client
+    // retries as for any conflict, rather than seeing the raw driver error as a 500.
+    throw new HttpError(409, 'conflict', 'Another request changed this application. Try again.');
   }
 }
 

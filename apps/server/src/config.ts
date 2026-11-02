@@ -424,7 +424,6 @@ export function loadDbConfig(env: NodeJS.ProcessEnv = process.env): DbConfig {
   return dialect === 'sqlite' ? { dialect } : loadPostgres(env);
 }
 
-/** Reads and validates configuration. Throws a ConfigError naming the offending variable. */
 /**
  * Whether the application submission routes exist on this deployment: OPPORTUN_SUBMISSIONS=1,
  * and never on the demo, which holds shared fixture accounts (design Part A section 7.8).
@@ -433,6 +432,7 @@ export function submissionsEnabled(cfg: Pick<Config, 'submissions' | 'demo'>): b
   return cfg.submissions === true && !cfg.demo;
 }
 
+/** Reads and validates configuration. Throws a ConfigError naming the offending variable. */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const masterKey = loadMasterKey(env);
   const baseUrl = loadBaseUrl(env);
