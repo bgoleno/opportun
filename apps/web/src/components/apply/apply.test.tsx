@@ -572,3 +572,77 @@ describe('deleting the resume snapshot (tl on #115, sec on #131)', () => {
     expect(within(dialog).getByText('Delete this file?')).toBeVisible();
   });
 });
+
+describe('the saved copy at the review gate (#115: 409 snapshot_pending, snapshot_failed)', () => {
+  it('pending: says so, keeps confirm off even ticked, and turns it on once the copy is ready', async () => {
+    let reads = 0;
+    const api = mockApi({
+      ...routes(null),
+      'GET /opportunities/opp-1/submissions': () => {
+        reads += 1;
+        const sub = submission({ snapshotState: reads < 2 ? 'pending' : 'ready' });
+        return { items: [sub], total: 1 };
+      },
+    });
+    const { open } = fakeWindowOpen();
+    const { user } = renderStep('review');
+    const status = await screen.findByText(
+      'Still preparing your resume file. The Confirm button turns on when it is ready.',
+      { selector: '[role="status"]' },
+    );
+    expect(status).toBeVisible();
+    await user.click(screen.getByRole('checkbox'));
+    const confirm = screen.getByRole('button', { name: /confirm review/i });
+    expect(confirm).toHaveAttribute('aria-disabled', 'true');
+    await user.click(confirm);
+    expect(open).not.toHaveBeenCalled();
+    expect(api.calls.filter((c) => c.method === 'POST')).toHaveLength(0);
+    // The list is read again while the copy is pending; once ready, confirm turns on.
+    await waitFor(() => expect(confirm).not.toHaveAttribute('aria-disabled'), { timeout: 6000 });
+    expect(screen.queryByText(/still preparing your resume file/i)).not.toBeInTheDocument();
+  });
+
+  it('failed: an alert with the reason and the way back to the resume step', async () => {
+    mockApi(routes(submission({ snapshotState: 'failed', snapshotError: 'no_access' })));
+    const { user } = renderStep('review');
+    const alert = (
+      await screen.findByText('Opportun could not save a PDF of this resume.')
+    ).closest('[role="alert"]') as HTMLElement;
+    expect(alert).toHaveTextContent(/can no longer open this document/i);
+    expect(within(alert).getByRole('link', { name: 'Go to the resume step' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1/apply?step=resume',
+    );
+    await user.click(screen.getByRole('checkbox'));
+    const confirm = screen.getByRole('button', { name: /confirm review/i });
+    expect(confirm).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('refused by the server as pending: no error banner, the refreshed state says why', async () => {
+    let reads = 0;
+    mockApi({
+      ...routes(null),
+      'GET /opportunities/opp-1/submissions': () => {
+        reads += 1;
+        // The screen read `ready`; the server has since gone back to preparing the copy.
+        const sub = submission({ snapshotState: reads < 2 ? 'ready' : 'pending' });
+        return { items: [sub], total: 1 };
+      },
+      'POST /submissions/sub-1/review': () => ({
+        status: 409,
+        body: { error: { code: 'snapshot_pending' } },
+      }),
+    });
+    const { tab } = fakeWindowOpen();
+    const { user } = renderStep('review');
+    await user.click(await screen.findByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: /confirm review/i }));
+    await waitFor(() => expect(tab.close).toHaveBeenCalled());
+    expect(
+      await screen.findByText(/still preparing your resume file/i, {
+        selector: '[role="status"]',
+      }),
+    ).toBeVisible();
+    expect(screen.queryByText(/could not save your review/i)).not.toBeInTheDocument();
+  });
+});

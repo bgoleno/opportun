@@ -12,6 +12,9 @@ import type { Page } from '@/lib/opportunities';
 
 const enc = encodeURIComponent;
 
+/** How often a pending saved copy is checked. */
+export const SNAPSHOT_POLL_MS = 3000;
+
 /**
  * A submission as the API returns it. `reviewDigest` arrives with the review gate (M1c, #129)
  * and the snapshot fields with the resume snapshot (#115); until each lands it is absent, and
@@ -76,6 +79,12 @@ export function useOpportunitySubmissions(opportunityId: string) {
       }
     },
     retry: false,
+    // A saved copy being prepared (#115) usually takes seconds: read again until it settles, so
+    // the review's confirm turns on by itself. Nothing polls otherwise.
+    refetchInterval: (q) =>
+      q.state.data?.items.some((s) => s.snapshotState === 'pending') === true
+        ? SNAPSHOT_POLL_MS
+        : false,
   });
 }
 

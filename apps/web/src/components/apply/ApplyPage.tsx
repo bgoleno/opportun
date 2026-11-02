@@ -504,6 +504,12 @@ function DetailsStep({ opp, live }: { opp: OpportunityView; live: SubmissionView
 // ---------------------------------------------------------------------------------------------
 // S4: Review (the gate)
 
+/** Design Part B, S4 "Snapshot pending". */
+const SNAPSHOT_PENDING_TEXT =
+  'Still preparing your resume file. The Confirm button turns on when it is ready.';
+const SNAPSHOT_FAILED_HINT =
+  'Your resume file could not be saved. Go to the resume step to try again.';
+
 type Banner =
   | { kind: 'stale' }
   | { kind: 'expired'; at: number }
@@ -548,11 +554,24 @@ function ReviewStep({
     (s) => s.id !== live.id && ['submitted', 'confirmed', 'unknown'].includes(s.status),
   );
   const digestReady = live.reviewDigest !== undefined;
-  const confirmDisabled = !reviewedAndValid && (!ticked || !digestReady || busy);
+  // The server refuses a review while the saved copy is being made or could not be made (#115:
+  // 409 snapshot_pending, snapshot_failed); `ready` and `unsupported` may be reviewed.
+  const snapshotBlock =
+    live.snapshotState === 'pending'
+      ? 'pending'
+      : live.snapshotState === 'failed'
+        ? 'failed'
+        : null;
+  const confirmDisabled =
+    !reviewedAndValid && (!ticked || !digestReady || busy || snapshotBlock !== null);
 
   useEffect(() => {
     if (banner !== null) bannerRef.current?.focus();
   }, [banner]);
+  // A hint about the saved copy stops applying once its state changes (it polls to ready).
+  useEffect(() => {
+    setHint(null);
+  }, [snapshotBlock]);
 
   if (live.status === 'handed_off') {
     return (
@@ -574,8 +593,14 @@ function ReviewStep({
   async function confirm() {
     if (confirmDisabled) {
       // aria-disabled, not disabled: say why and move to what unlocks it (design S4).
-      setHint('Tick the box to continue.');
-      checkbox.current?.focus();
+      if (snapshotBlock === 'pending') {
+        setHint(SNAPSHOT_PENDING_TEXT);
+      } else if (snapshotBlock === 'failed') {
+        setHint(SNAPSHOT_FAILED_HINT);
+      } else {
+        setHint('Tick the box to continue.');
+        checkbox.current?.focus();
+      }
       return;
     }
     setBanner(null);
@@ -607,6 +632,8 @@ function ReviewStep({
         const resetAt = err instanceof ApiError ? Number(err.details.resetAt) : NaN;
         setBanner({ kind: 'cap', resetAt: Number.isFinite(resetAt) ? resetAt : null });
       } else if (code === 'destination_not_allowed') setBanner({ kind: 'destination' });
+      // The saved copy changed state under the screen: the refreshed row shows which (below).
+      else if (code === 'snapshot_pending' || code === 'snapshot_failed') setBanner(null);
       else setBanner({ kind: 'error' });
     }
   }
@@ -672,6 +699,29 @@ function ReviewStep({
             >
               Review again
             </Button>
+          </Notice>
+        ) : null}
+        {!reviewedAndValid && snapshotBlock === 'pending' ? (
+          <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 shrink-0 motion-safe:animate-spin" aria-hidden="true" />
+            {SNAPSHOT_PENDING_TEXT}
+          </p>
+        ) : null}
+        {!reviewedAndValid && snapshotBlock === 'failed' ? (
+          <Notice role="alert">
+            <span>
+              <strong>Opportun could not save a PDF of this resume.</strong>{' '}
+              {snapshotErrorText(live.snapshotError)}{' '}
+              <Link
+                to="/opportunities/$id/apply"
+                params={{ id: opp.id }}
+                search={{ step: 'resume' }}
+                className="text-primary underline-offset-4 hover:underline"
+              >
+                Go to the resume step
+              </Link>{' '}
+              to try again. Nothing was lost.
+            </span>
           </Notice>
         ) : null}
         {banner?.kind === 'cap' ? (
@@ -823,7 +873,11 @@ function ReviewStep({
               ? 'The form opens in a new tab.'
               : !digestReady
                 ? 'The review step is not available on this server yet.'
-                : 'Tick the box to continue. Once you confirm, your review stays valid for 30 minutes, until a time shown here.')}
+                : snapshotBlock === 'pending'
+                  ? SNAPSHOT_PENDING_TEXT
+                  : snapshotBlock === 'failed'
+                    ? SNAPSHOT_FAILED_HINT
+                    : 'Tick the box to continue. Once you confirm, your review stays valid for 30 minutes, until a time shown here.')}
         </p>
       </section>
       <ConfirmDialog
