@@ -499,9 +499,63 @@ describe('enrichOpportunity', () => {
     expect(requested).not.toContain(indeedPosting);
     const opp = await oppRow(app, id);
     expect(opp.descriptionMd).toBeNull();
+    // The Indeed link is not a candidate at all, so the page lists no match for the title.
     expect((await notesOf(app, id))[0]).toMatchObject({
-      title: 'Posting found but not readable',
+      title: 'Posting not matched on the careers page',
     });
+  });
+
+  it('an Indeed posting link is not a candidate: a board listing the same title wins (issue #75)', async () => {
+    const { app, a } = await boot();
+    const id = await outreachOpportunity(app, a, 'Initech Labs', 'Staff Platform Engineer');
+    const indeedPosting = 'https://www.indeed.com/viewjob?jk=00000000deadbeef';
+    const board = JSON.stringify({
+      jobs: [
+        {
+          title: 'Staff Platform Engineer',
+          absolute_url: 'https://boards.greenhouse.io/initech/jobs/123',
+        },
+      ],
+    });
+    // The page's own link for the title points to Indeed and comes first, so with equal scores it
+    // would be the match; the board embedded on the same page lists the same role.
+    const { fetch, requested } = net({
+      'https://initechlabs.com/': HOME,
+      'https://initechlabs.com/careers': `<html><body><h1>Open positions</h1>
+        <a href="${indeedPosting}">Staff Platform Engineer</a>
+        <a href="https://boards.greenhouse.io/initech">All jobs</a></body></html>`,
+      'https://boards-api.greenhouse.io/v1/boards/initech/jobs': board,
+      'https://boards.greenhouse.io/initech/jobs/123': POSTING,
+      [indeedPosting]: POSTING,
+    });
+    const outcome = await enrichOpportunity(app.db, ctxOf(a), fetch, id);
+    expect(outcome).toEqual({
+      outcome: 'enriched',
+      postingUrl: 'https://boards.greenhouse.io/initech/jobs/123',
+    });
+    expect(requested).not.toContain(indeedPosting);
+    expect((await oppRow(app, id)).descriptionMd).toContain('Build the billing platform');
+  });
+
+  it('an Indeed "Jobs" link on the homepage is not taken for the careers page (issue #75)', async () => {
+    const { app, a } = await boot();
+    const id = await outreachOpportunity(app, a, 'Initech Labs', 'Staff Platform Engineer');
+    const indeedCompany = 'https://www.indeed.com/cmp/Initech-Labs/jobs';
+    const home = `<html><body>Initech Labs.
+      <a href="${indeedCompany}">Jobs</a>
+      <a href="/team/openings">Join the team</a></body></html>`;
+    const { fetch, requested } = net({
+      'https://initechlabs.com/': home,
+      'https://initechlabs.com/team/openings': CAREERS,
+      'https://initechlabs.com/job/staff-platform-engineer/': POSTING,
+      [indeedCompany]: CAREERS,
+    });
+    const outcome = await enrichOpportunity(app.db, ctxOf(a), fetch, id);
+    expect(outcome).toEqual({
+      outcome: 'enriched',
+      postingUrl: 'https://initechlabs.com/job/staff-platform-engineer/',
+    });
+    expect(requested).not.toContain(indeedCompany);
   });
 
   it('getPage returns null for indeed.com without a request, and still reads look-alikes (issue #75)', async () => {

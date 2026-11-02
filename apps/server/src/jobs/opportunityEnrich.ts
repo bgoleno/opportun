@@ -28,6 +28,7 @@ import { activities, communications, companies, opportunities, roleTargets } fro
 import { buildAiDeps } from '../lib/ai';
 import {
   FetchBlockedError,
+  isPageFetchProhibited,
   PAGE_FETCH_PROHIBITED_HOSTS,
   PROHIBITED_HOSTS,
   type safeFetch,
@@ -270,6 +271,25 @@ export function anchorsOf(html: string, baseUrl: string): PageAnchor[] {
     out.push({ url, text });
   }
   return out;
+}
+
+/**
+ * The anchors this job may follow: a link to a host the server never page-fetches (LinkedIn,
+ * Indeed: isPageFetchProhibited) is not a candidate at all. Leaving it in would let it win a tie
+ * (careersLink takes the first match, bestTitleMatch the first top score) over a readable link
+ * to the same thing, and then dead-end on getPage's refusal
+ * (https://github.com/bgoleno/opportun/issues/75).
+ */
+function fetchableAnchors(anchors: PageAnchor[]): PageAnchor[] {
+  return anchors.filter((a) => {
+    try {
+      return !isPageFetchProhibited(new URL(a.url).hostname);
+    } catch {
+      // Not parseable on its own (a protocol-relative link from a board API): kept as before.
+      // It names no host to judge here, and every fetch still goes through safeFetch.
+      return true;
+    }
+  });
 }
 
 /** The most careers-looking link on a page, by link text first, then by path. */
@@ -555,7 +575,7 @@ async function findCareersPage(
       }
     }
     if (found === null) {
-      const link = careersLink(anchorsOf(home.html, home.url));
+      const link = careersLink(fetchableAnchors(anchorsOf(home.html, home.url)));
       if (link !== null) {
         const page = await getPage(fetch, link);
         if (page !== null && looksLikeCareersPage(page.html)) found = page;
@@ -689,7 +709,7 @@ export async function enrichOpportunity(
   for (const board of scanCareersHtml(page.html).slice(0, 3)) {
     anchors.push(...(await boardAnchors(fetch, board)));
   }
-  const best = bestTitleMatch(anchors, opp.title);
+  const best = bestTitleMatch(fetchableAnchors(anchors), opp.title);
   if (best === null) {
     await addNote(
       db,

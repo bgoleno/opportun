@@ -534,7 +534,8 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
   and terms are respected and documented in each adapter. **Indeed:** the server
   never fetches indeed.com pages (Capture posting links, careers-page links,
   matched posting links); Indeed postings arrive from Indeed's own job alert
-  emails, pasted text, or a page the user captures in their own browser. This
+  emails, pasted text, or a page the user captures in their own browser (with the
+  capture extension, https://github.com/bgoleno/opportun/issues/74). This
   covers server page fetches only: an MCP connector the user configures stays
   their choice, as for any board.
 - C-3: **Google.** Access through the user's own OAuth consent with minimal scopes;
