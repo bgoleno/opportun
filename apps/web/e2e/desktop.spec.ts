@@ -758,3 +758,151 @@ test.describe('keyboard focus indicators', () => {
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Focus indicators cut off by a scroll container (issue https://github.com/bgoleno/opportun/issues/70).
+// An element's focus indicator reaches outside its border box (a 2px ring, or in forced colors a
+// 2px outline 2px out), and an ancestor whose overflow is not visible clips everything outside its
+// padding box. A focused pipeline table row lost its forced-colors outline's sides to the table's
+// scroller, and a Settings navigation link lost three sides of its ring and outline to the nav
+// list's. This measures the clipping itself, against each clipping ancestor, not a screenshot.
+
+/**
+ * The focused element's indicator, and every side of it that a clipping ancestor cuts. The
+ * indicator's reach outside the border box comes from computed style: an outline's width plus its
+ * offset (negative when it is drawn inside), and the spread, blur and offset of each box-shadow
+ * that is not inset (an inset one stays inside). Each ancestor whose overflow is not visible
+ * clips at its padding box. A side counts only where the element's own edge is inside that clip
+ * box: a table row wider than its scroller on a phone has that side scrolled out of view, not
+ * clipped, and no indicator could show it.
+ */
+async function focusClipping(page: Page) {
+  return page.evaluate(() => {
+    const el = document.activeElement;
+    if (!(el instanceof HTMLElement)) return { indicator: 'none', clipped: ['nothing has focus'] };
+    const cs = getComputedStyle(el);
+    const outlineWidth = cs.outlineStyle === 'none' ? 0 : parseFloat(cs.outlineWidth);
+    const outlineReach = outlineWidth > 0 ? outlineWidth + parseFloat(cs.outlineOffset) : 0;
+    // Shadows are separated by commas outside parentheses (colours have commas inside them).
+    const shadows: string[] = [];
+    let depth = 0;
+    let start = 0;
+    const text = cs.boxShadow === 'none' ? '' : cs.boxShadow;
+    for (let i = 0; i < text.length; i += 1) {
+      const c = text.charAt(i);
+      if (c === '(') depth += 1;
+      else if (c === ')') depth -= 1;
+      else if (c === ',' && depth === 0) {
+        shadows.push(text.slice(start, i));
+        start = i + 1;
+      }
+    }
+    if (text !== '') shadows.push(text.slice(start));
+    let shadowReach = 0;
+    let ring = false;
+    for (const shadow of shadows) {
+      const lengths = (shadow.replace(/\w+\([^)]*\)/g, '').match(/-?[\d.]+px/g) ?? []).map(
+        parseFloat,
+      );
+      const [x = 0, y = 0, blur = 0, spread = 0] = lengths;
+      if (spread <= 0 && blur <= 0) continue;
+      ring = true;
+      if (/\binset\b/.test(shadow)) continue;
+      shadowReach = Math.max(shadowReach, spread + blur + Math.max(Math.abs(x), Math.abs(y)));
+    }
+    const indicator =
+      outlineWidth > 0
+        ? `outline ${outlineWidth}px, reaching ${outlineReach}px out`
+        : ring
+          ? `ring, reaching ${shadowReach}px out`
+          : 'none';
+    const reach = Math.max(outlineReach, shadowReach, 0);
+    const box = el.getBoundingClientRect();
+    const clipped: string[] = [];
+    for (let a = el.parentElement; a && a !== document.documentElement; a = a.parentElement) {
+      const acs = getComputedStyle(a);
+      if (acs.overflowX === 'visible' && acs.overflowY === 'visible') continue;
+      const r = a.getBoundingClientRect();
+      const name = `<${a.tagName.toLowerCase()} class="${a.className.toString().slice(0, 50)}">`;
+      // [side, the element's edge, the clip box's edge, which way is outward]
+      const edges: [string, number, number, number][] = [
+        ['left', box.left, r.left + parseFloat(acs.borderLeftWidth), -1],
+        ['right', box.right, r.right - parseFloat(acs.borderRightWidth), 1],
+        ['top', box.top, r.top + parseFloat(acs.borderTopWidth), -1],
+        ['bottom', box.bottom, r.bottom - parseFloat(acs.borderBottomWidth), 1],
+      ];
+      for (const [side, edge, clipEdge, outward] of edges) {
+        const inside = (v: number) => (v - clipEdge) * outward <= 0.5;
+        if (inside(edge) && !inside(edge + outward * reach)) clipped.push(`${side} by ${name}`);
+      }
+    }
+    return { indicator, clipped };
+  });
+}
+
+/** Tabs to `target` and expects its focus indicator to show, cut on no side. */
+async function expectIndicatorWhole(page: Page, what: string, target: Locator) {
+  await tabTo(page, target, what);
+  const { indicator, clipped } = await focusClipping(page);
+  // Soft, so one run names every view and side that is cut, not only the first.
+  expect.soft(indicator, `${what} shows a focus indicator`).not.toBe('none');
+  expect.soft(clipped, `${what}'s focus indicator (${indicator}) is cut`).toEqual([]);
+}
+
+const FOCUS_LOOKS: [string, Look][] = [
+  ['light', { colorScheme: 'light' }],
+  ['dark', { colorScheme: 'dark' }],
+  ['forced colors', { forcedColors: 'active' }],
+];
+
+test.describe('focus indicators are not cut off by scroll containers', () => {
+  for (const width of [375, 1280, 1920]) {
+    for (const [lookName, look] of FOCUS_LOOKS) {
+      test(`${width}px, ${lookName}: pipeline row, Settings navigation, suggestion Apply`, async ({
+        browser,
+      }) => {
+        const tag = `focus clip ${lookName} ${width}`;
+        const { page, close } = await pageAt(browser, width, accounts.seed, look);
+        try {
+          const id = await seededOpportunity(page, tag);
+          await page.goto('/pipeline?view=table');
+          const row = page.locator(`tr[data-opportunity-id="${id}"]`);
+          await expect(row).toBeVisible();
+          await expectIndicatorWhole(page, 'the pipeline table row', row);
+
+          // The Settings navigation, and its layout guard: padding the nav list's scroller (#70)
+          // must not move a link or add page scroll. So the first link still starts exactly where
+          // the navigation does, as it does without that padding, and the page is no wider than
+          // the window.
+          await page.goto('/settings/account');
+          const nav = page.getByRole('navigation', { name: 'Settings sections' });
+          const links = nav.getByRole('link');
+          await expect(links.first()).toBeVisible();
+          const navBox = await nav.boundingBox();
+          const firstBox = await links.first().boundingBox();
+          const where = 'the first Settings link starts where the navigation does';
+          expect(firstBox?.x, where).toBeCloseTo(navBox?.x ?? Number.NaN, 1);
+          expect(firstBox?.y, where).toBeCloseTo(navBox?.y ?? Number.NaN, 1);
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth),
+            'the page does not scroll sideways',
+          ).toBeLessThanOrEqual(width);
+          await expectIndicatorWhole(page, 'the first Settings link', links.first());
+          await expectIndicatorWhole(page, 'the last Settings link', links.last());
+        } finally {
+          await close();
+        }
+
+        // A button inside the conversation's own scroll container (overflow-y: auto). Its own tag:
+        // the server refuses a second opportunity with the same company and title.
+        const workspace = await openWorkspace(browser, width, `${tag} workspace`, look);
+        try {
+          const apply = workspace.page.getByRole('button', { name: 'Apply' }).first();
+          await expectIndicatorWhole(workspace.page, 'the suggestion Apply button', apply);
+        } finally {
+          await workspace.close();
+        }
+      });
+    }
+  }
+});
