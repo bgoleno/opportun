@@ -45,7 +45,12 @@ export type Outcome =
   | { kind: 'network' }
   // Stopped in the popup before anything was sent.
   | { kind: 'no_settings' }
-  | { kind: 'not_linkedin' }
+  /** The tab is not on a capture site: it was not read. */
+  | { kind: 'unsupported_tab' }
+  /** An Indeed tab that shows no single posting (no valid job key): not read, nothing sent. */
+  | { kind: 'not_a_posting' }
+  /** The Indeed job's markup was not recognized: refused in the tab, nothing sent. */
+  | { kind: 'layout_unrecognized' }
   | { kind: 'empty_page' }
   | { kind: 'permission_denied' }
   | { kind: 'inject_failed' };

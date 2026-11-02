@@ -32,13 +32,19 @@ available, and each browser gets its own token you can revoke on its own.
 
 ## Using it
 
-Open a LinkedIn profile or job posting, click the Opportun icon, and press **Capture this
-page**.
+Open a LinkedIn profile or job posting, or an Indeed job, click the Opportun icon, and press
+**Capture this page**.
 
 - A **profile** (`linkedin.com/in/...`) becomes a contact, with company and position. Capturing
   the same person again updates them.
 - A **job posting** (`linkedin.com/jobs/view/...`, or the jobs search view with a posting
   selected) becomes an **opportunity at Interested**.
+- An **Indeed job** (`indeed.com/viewjob?jk=...`, or an Indeed search with a job open on the
+  right) becomes an **opportunity at Interested** too, with the job's title, company and
+  description and the link `https://www.indeed.com/viewjob?jk=...`. With an AI key, the
+  location and pay the posting states are filled in too; anything the posting does not show is
+  left empty. Both views of one job give the same result, and nothing from the search results
+  beside it is sent. Indeed's country sites are not supported yet.
 
 Capturing a job is treated as a decision, not as filing something to look at later: you are
 reading the posting and you want it. So a captured job never lands in the review queue. If the
@@ -68,7 +74,8 @@ looks the posting up so you can take the company's version if you want it. Nothi
 your own writing unless you ask for it.
 
 Feeds, search result lists, company pages and the signed-out page are refused, and the popup
-says why. Pages on other sites are not read at all.
+says why. On Indeed, a search with no job open and a company page are refused in the popup
+before anything is read. Pages on other sites are not read at all.
 
 There is a limit of 30 captures every 15 minutes per token, which is far above normal use and
 exists so a mistake cannot turn into a flood.
@@ -76,7 +83,8 @@ exists so a mistake cannot turn into a flood.
 ## Why it works this way
 
 LinkedIn's User Agreement prohibits automated retrieval of its pages, and Opportun takes that
-seriously rather than working around it. The extension is built so it **cannot** be used as a
+seriously rather than working around it. Opportun treats Indeed the same way: the server never
+fetches an Indeed page, so the extension is how an Indeed job you are reading gets in. The extension is built so it **cannot** be used as a
 scraper, and the project's tests enforce it:
 
 - **Nothing runs until you click.** There is no background process, no code injected into
@@ -100,6 +108,13 @@ is not.
   is not in the review queue. An extension built before this change says "review queue"
   instead; update it from Settings > Integrations > Extensions and Connectors.
 - **"Open a supported page"**: the tab is not a profile or posting the server recognizes.
+- **"Open a single Indeed job"**: the Indeed tab is a search with no job open, a company page,
+  or another page that is not one job. Open the job (or click it in the search list), then
+  capture.
+- **"Indeed's layout was not recognized"**: the extension could not find the job's title,
+  company or description on the page, so it sent nothing rather than guess. Reload the job and
+  try again. If it keeps happening, Indeed has changed its page and the extension needs an
+  update.
 - **The token was rejected**: it was revoked, or mistyped. Create another under Settings >
   Integrations > Extensions and Connectors.
 - **"Could not reach the server"**: the address is wrong, the server is down, or your device
@@ -112,6 +127,10 @@ is not.
   anything back. Run **Set up** again to get a new token. From this release on the id is
   pinned, so later upgrades keep the address and token; after re-downloading an upgrade,
   press the reload icon on its card in `chrome://extensions`.
+- **Indeed is not captured after upgrading**: the release that added Indeed also asks for
+  access to `www.indeed.com`. If the browser asks when you reload or first use the extension
+  on Indeed, allow it. Firefox may grant site access only on request: open the Extensions
+  menu (puzzle icon) and allow Opportun Capture on indeed.com.
 
 <!-- nav:bottom -->
 
