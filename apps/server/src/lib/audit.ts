@@ -4,8 +4,12 @@ import { newId } from '@opportun/core';
 import type { Exec } from '../db/client';
 import { auditLog } from '../db/schema';
 
+// `answers`, `fields`, `resume` and `text` (assisted apply M1c, issue #116; design Part A 7.3):
+// a submission's answers and profile values are the user's own words, like notes, so a careless
+// caller passing them in audit detail stores the redaction instead. Exact keys only, so ids
+// such as `resumeId` stay readable.
 const SENSITIVE_KEY =
-  /pass(word)?|token|secret|api_?key|ciphertext|cookie|authorization|^value$|^current$|^next$/i;
+  /pass(word)?|token|secret|api_?key|ciphertext|cookie|authorization|^value$|^current$|^next$|^answers$|^fields$|^resume$|^text$/i;
 export const REDACTED = '[redacted]';
 const MAX_DEPTH = 5;
 

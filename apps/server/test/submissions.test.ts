@@ -467,10 +467,12 @@ describe('editing and cancelling a draft', () => {
     expect((await rowsFor(app, a))[0]!.resumeId).toBe(resumeId);
   });
 
-  it('only a draft can be edited in M1a: anything else is 409 with its status, unchanged', async () => {
+  it('only a draft or a reviewed attempt can be edited: anything else is 409 with its status, unchanged', async () => {
+    // Since M1c (https://github.com/bgoleno/opportun/issues/116) an edit after review is allowed
+    // and sends the attempt back to draft (test/submissionReview.test.ts); later states are not.
     const { app, a } = await boot(ON);
     const { submission } = await draft(app, a);
-    for (const status of ['reviewed', 'handed_off', 'submitted', 'abandoned'] as const) {
+    for (const status of ['handed_off', 'submitted', 'abandoned'] as const) {
       await app.db
         .update(applicationSubmissions)
         .set({ status })

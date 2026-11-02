@@ -31,6 +31,7 @@ export const SUBMISSION_FAILURE_REASONS = [
   'destination_mismatch',
   'review_expired',
   'cancelled_by_user',
+  'handoff_idle',
   'other',
 ] as const;
 export type SubmissionFailureReason = (typeof SUBMISSION_FAILURE_REASONS)[number];
@@ -116,6 +117,12 @@ export const SubmissionSchema = z.object({
   snapshotError: z.enum(SUBMISSION_SNAPSHOT_ERRORS).nullable(),
   fields: SubmissionFieldsSchema,
   answers: SubmissionAnswersSchema,
+  /**
+   * The digest of the attempt as it stands now (design Part A 4.5). The review screen sends it
+   * back with POST /submissions/:id/review, proving it showed the state the server holds.
+   */
+  reviewDigest: z.string(),
+  /** Until when a review may be handed off: a fixed time, never a countdown (owner's decision). */
   reviewExpiresAt: TimestampSchema.nullable(),
   reviewedAt: TimestampSchema.nullable(),
   handedOffAt: TimestampSchema.nullable(),
