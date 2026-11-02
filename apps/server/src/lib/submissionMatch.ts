@@ -62,14 +62,16 @@ const lower = (s: string): string => s.trim().toLowerCase();
 const bareDomain = (d: string): string => lower(d).replace(/\.+$/, '');
 
 /**
- * The sender's domain from a From header: the address in the last `<...>`, or the whole value
- * when there are no brackets. A display name is never read, so `"careers@example" <x@evil>` is
- * evil's mail. Null when there is no single plain address.
+ * The sender's domain from a From header: the address in the last `<...>` when the header ends
+ * with it, or else the whole value. A display name is never read, so `"careers@example" <x@evil>`
+ * is evil's mail, and `Careers <careers@example> x@evil` is no address at all (qa on #128): a
+ * bracket that does not end the header is not the address. Null when there is no single plain
+ * address.
  */
 export function senderDomain(from: string): string | null {
-  const open = from.lastIndexOf('<');
-  const close = from.lastIndexOf('>');
-  const address = open !== -1 && close > open ? from.slice(open + 1, close) : from;
+  const header = from.trim();
+  const open = header.lastIndexOf('<');
+  const address = header.endsWith('>') && open !== -1 ? header.slice(open + 1, -1) : header;
   const trimmed = address.trim();
   if (trimmed === '' || /\s/.test(trimmed)) return null;
   const at = trimmed.lastIndexOf('@');
