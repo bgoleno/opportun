@@ -674,9 +674,6 @@ describe('Stage 2 at ingest', () => {
   });
 });
 
-// Plan 3 Task 1: the body is not kept. It travels to the classifier in the job payload, which is
-// cleared when the job finishes, so the only lasting copy of a message is the one in the user's
-// own mail system.
 // What a blocked row keeps. The inbox's Blocked tab tells the user this, in words
 // (apps/web/src/components/comms/BlockedRow.tsx STORED_ON_BLOCK: "who sent it and to whom, when,
 // the rule that decided and the ids that link back to the original, never the subject or the
@@ -720,6 +717,9 @@ describe('what a blocked row keeps', () => {
   });
 });
 
+// Plan 3 Task 1: the body is not kept. It travels to the classifier in the job payload, which is
+// cleared when the job finishes, so the only lasting copy of a message is the one in the user's
+// own mail system.
 describe('message bodies are not persisted', () => {
   const classifyJobFor = async (app: FastifyInstance, id: string) =>
     (await classifyJobs(app)).find(
