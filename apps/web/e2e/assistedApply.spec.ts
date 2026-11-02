@@ -6,7 +6,7 @@
 // submits; the e2e never even visits).
 import { expect, test, type Page, type PlaywrightWorkerArgs } from '@playwright/test';
 import { BASE_URL } from '../playwright.config';
-import { card, choose, createOpportunity, PASSWORD, registerUser } from './helpers';
+import { card, choose, createCaptureToken, createOpportunity, registerUser } from './helpers';
 
 const STUB = '<!doctype html><title>Stub ATS</title><h1>Stub application form</h1>';
 
@@ -16,21 +16,6 @@ test.beforeEach(async ({ context }) => {
     (route) => route.fulfill({ status: 200, contentType: 'text/html', body: STUB }),
   );
 });
-
-/** Creates a device token through Settings, as devices.spec.ts does, for the capture call. */
-async function captureToken(page: Page): Promise<string> {
-  await page.goto('/settings/integrations');
-  await page.getByRole('button', { name: 'Create token' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Create a device token' });
-  await dialog.getByLabel('Name').fill('Chrome extension');
-  await dialog.getByRole('checkbox', { name: /^Browser capture/ }).setChecked(true);
-  await dialog.getByLabel('Current password').fill(PASSWORD);
-  await dialog.getByRole('button', { name: 'Create' }).click();
-  const shown = page.getByRole('dialog', { name: 'Copy your device token' });
-  const token = await shown.getByLabel('Device token').inputValue();
-  await shown.getByRole('button', { name: 'I saved it' }).click();
-  return token;
-}
 
 /**
  * An opportunity whose posting the server confirmed on a recognised Greenhouse board, and a
@@ -55,7 +40,7 @@ async function readyOpportunity(page: Page, playwright: PlaywrightWorkerArgs['pl
   await choose(page, 'Status', 'Final');
   await saved;
 
-  const token = await captureToken(page);
+  const token = await createCaptureToken(page);
   const extension = await playwright.request.newContext({ baseURL: BASE_URL });
   let opportunityId: string;
   try {

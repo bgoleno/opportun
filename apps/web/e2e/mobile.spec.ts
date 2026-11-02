@@ -3,7 +3,7 @@
 // that is wider than the viewport clips its right edge on a phone with no way to reach it.
 import { expect, test, type Page } from '@playwright/test';
 import { ADMIN } from './global-setup';
-import { createOpportunity, registerUser } from './helpers';
+import { createCaptureToken, createOpportunity, registerUser } from './helpers';
 import { ADMIN_ROUTES, USER_ROUTES } from './routes';
 
 const WIDTHS = [390, 320] as const;
@@ -62,6 +62,10 @@ async function expectFits(page: Page, where: string): Promise<void> {
     `${where} is ${extra}px wider than the screen:\n${culprits.join('\n')}`,
   ).toBeLessThanOrEqual(0);
 }
+
+/** A captured LinkedIn job page's address with its tracking query, as the browser sends it. */
+const LONG_CAPTURE_URL =
+  'https://www.linkedin.com/jobs/view/3901234599/?alternateChannel=search&refId=Zm9vYmFyYmF6cXV4&trackingId=c3RhZmYtcGxhdGZvcm0tZW5naW5lZXI%3D&trk=d_flagship3_search_srp_jobs';
 
 const LONG_SENDER = `Recruiting Coordinator With A Very Long Display Name <hit-reply-9f8e7d6c5b4a39281706f5e4d3c2b1a0@recruiting-notifications.example-staffing-agency.com>`;
 const LONG_SUBJECT =
@@ -195,6 +199,52 @@ for (const width of WIDTHS) {
         if (extra > 0) failures.push(`${path}: ${extra}px wider\n  ${culprits.join('\n  ')}`);
       }
       expect(failures, failures.join('\n')).toEqual([]);
+    });
+
+    // A data-bearing route (#146): the opportunity page of a captured job, whose timeline links
+    // the captured page's address. USER_ROUTES need no data, so they never showed it.
+    test('an opportunity with a captured posting and a long link fits', async ({
+      page,
+      playwright,
+      baseURL,
+    }) => {
+      await registerUser(page);
+      const token = await createCaptureToken(page);
+      const extension = await playwright.request.newContext({ baseURL });
+      let opportunityId: string;
+      try {
+        const res = await extension.post('/api/v1/connector/capture', {
+          headers: { authorization: `Bearer ${token}` },
+          data: {
+            url: LONG_CAPTURE_URL,
+            title: 'Principal Platform Intelligence Engineer | Initrode Global | LinkedIn',
+            text: [
+              'Initrode Global',
+              'Principal Platform Intelligence Engineer',
+              'Remote · 2 days ago',
+              'About the job',
+              'Own the platform intelligence roadmap end to end.',
+              'About the company',
+              'Initrode Global',
+            ].join('\n'),
+          },
+        });
+        expect(res.status(), await res.text()).toBe(201);
+        opportunityId = ((await res.json()) as { opportunityId: string }).opportunityId;
+      } finally {
+        await extension.dispose();
+      }
+      await page.goto(`/opportunities/${opportunityId}`);
+      const link = page.getByRole('link', { name: /linkedin\.com\/jobs\/view/ }).first();
+      await expect(link).toBeVisible();
+      await expectFits(page, 'the opportunity page');
+      // The link still opens the captured address, safely, and its name is the whole URL.
+      const href = await link.getAttribute('href');
+      expect(href).toMatch(/^https:\/\/www\.linkedin\.com\/jobs\/view\//);
+      await expect(link).toHaveAccessibleName(href ?? '');
+      await expect(link).toHaveAttribute('target', '_blank');
+      await expect(link).toHaveAttribute('rel', /noopener/);
+      await expect(link).toHaveAttribute('rel', /noreferrer/);
     });
 
     test('inbox rows with long senders, subjects and links fit on every tab', async ({ page }) => {

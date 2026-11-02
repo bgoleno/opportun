@@ -110,3 +110,21 @@ export async function connectGoogle(page: Page, button: string): Promise<void> {
 export async function choose(scope: Page | Locator, label: string, option: string) {
   await scope.getByLabel(label, { exact: true }).selectOption({ label: option });
 }
+
+/**
+ * Creates a device token with the browser-capture scope through Settings, as a user setting up
+ * the extension does, so a test can post a captured page the way the extension would.
+ */
+export async function createCaptureToken(page: Page): Promise<string> {
+  await page.goto('/settings/integrations');
+  await page.getByRole('button', { name: 'Create token' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Create a device token' });
+  await dialog.getByLabel('Name').fill('Chrome extension');
+  await dialog.getByRole('checkbox', { name: /^Browser capture/ }).setChecked(true);
+  await dialog.getByLabel('Current password').fill(PASSWORD);
+  await dialog.getByRole('button', { name: 'Create' }).click();
+  const shown = page.getByRole('dialog', { name: 'Copy your device token' });
+  const token = await shown.getByLabel('Device token').inputValue();
+  await shown.getByRole('button', { name: 'I saved it' }).click();
+  return token;
+}
