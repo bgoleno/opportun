@@ -134,7 +134,7 @@ Programs on your own devices (the [Apple Mail connector](inbox.md#apple-mail) an
 [capture extension](discovery.md#the-capture-extension)) authenticate with device tokens,
 under **Settings > Integrations > Extensions and Connectors**:
 
-- **Create token**: a name, the permissions (**Apple Mail connector (mail:push)**, **LinkedIn
+- **Create token**: a name, the permissions (**Apple Mail connector (mail:push)**, **Browser
   capture (capture:push)**), and your current password. The token is shown once; the server
   keeps only a hash.
 - A token can only push data in, for the permissions it has. It cannot read anything back.
