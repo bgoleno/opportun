@@ -1,11 +1,13 @@
 // C2: the blocked view is the escape hatch the consumer-domain veto ships enabled on top of.
 // If a recruiter is filtered by mistake, this row is the only way to find out, so it has to
 // name the sender, the date and the rule, and reach the original without Opportun storing it.
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { mockApi, renderWithProviders } from '@/test/render';
 import type { CommunicationView } from './api';
+import { GATE_INPUT_CHARS } from '@opportun/core';
 import { BlockedRow } from './BlockedRow';
+import { Inbox } from './Inbox';
 import { mailLink, mailLinkMissingReason } from './mailLink';
 
 /** The row asks for the Gmail status, to address its link at the synced mailbox. */
@@ -101,12 +103,60 @@ describe('BlockedRow', () => {
     }
   });
 
+  // https://github.com/bgoleno/opportun/issues/104: what was read before the block depends on
+  // the rule. A filter rule reads nothing; the AI check (`ai_gate`) gave the user's AI provider
+  // the sender, the subject and the opening of the message. The figure is the server's own
+  // constant (GATE_INPUT_CHARS), shared through @opportun/core.
+  it('says what the AI check read, on a row it kept out', async () => {
+    const { container } = renderWithProviders(
+      <BlockedRow comm={blocked({ triageRule: 'ai_gate' })} />,
+    );
+    await screen.findByText('someone@gmail.com');
+    const text = container.textContent?.replace(/\s+/g, ' ') ?? '';
+    expect(GATE_INPUT_CHARS).toBeGreaterThan(0);
+    expect(text).toContain(
+      `Your AI provider read the sender, the subject and the first ${GATE_INPUT_CHARS} characters to decide.`,
+    );
+    expect(text).toContain('Opportun stored only the sender, the date and the rule that decided.');
+  });
+
+  it('says nothing was read, on no row a mail filter kept out', async () => {
+    for (const rule of ['consumer_domain', 'deny_list', 'private_content', 'no_signal'] as const) {
+      const { container, unmount } = renderWithProviders(
+        <BlockedRow comm={blocked({ triageRule: rule })} />,
+      );
+      await screen.findByText('someone@gmail.com');
+      expect(container.textContent, rule).not.toMatch(/AI provider read/);
+      unmount();
+    }
+  });
+
   it('offers no link when the connector could not identify the message', async () => {
     renderWithProviders(
       <BlockedRow comm={blocked({ channel: 'apple_mail', externalId: 'apple-mail:mail-42' })} />,
     );
     await screen.findByText('someone@gmail.com');
     expect(screen.queryByRole('link')).toBeNull();
+  });
+});
+
+describe('Inbox: the Blocked tab note (#104)', () => {
+  it("says filters read nothing, and that the AI check's rows say what it read", async () => {
+    mockApi({
+      'GET /integrations/gmail': CONNECTED,
+      'GET /communications': { items: [], total: 0 },
+    });
+    renderWithProviders(<Inbox initialTab="blocked" />);
+    const panel = await screen.findByRole('tabpanel');
+    const note = within(panel).getByText(/Kept out by your mail filters/);
+    const text = note.textContent?.replace(/\s+/g, ' ') ?? '';
+    // The filters' sentence is today's, now about the filters only.
+    expect(text).toContain('Kept out by your mail filters before anything read them,');
+    expect(text).toContain('or by the AI check, whose rows say what it read.');
+    expect(text).toContain(
+      'Opportun stored only the sender, the date and the rule that decided, never the subject or the message.',
+    );
+    expect(text).toContain('Edit the rules in Settings, Mail filters.');
   });
 });
 
