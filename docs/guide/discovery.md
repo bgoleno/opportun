@@ -124,8 +124,8 @@ _A LinkedIn link is refused before anything is fetched; paste the text or use th
 ### The capture extension
 
 The **Opportun Capture** extension (Chrome, Chromium browsers and Firefox 128+) sends the
-LinkedIn profile or job page you are looking at to your server, only when you click
-**Capture this page**. A captured job becomes an opportunity at **Interested** and does not
+LinkedIn profile or job, or the Indeed job, you are looking at to your server, only when you
+click **Capture this page**. A captured job becomes an opportunity at **Interested** and does not
 pass through this queue: capturing one is how you say you want it. If the job is already
 sitting here as a lead from an alert email, that lead is completed and accepted rather than
 duplicated. Profiles become contacts (see [Network](network.md)). The
