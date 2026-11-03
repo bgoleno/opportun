@@ -11,6 +11,15 @@ import { auditLog } from '../db/schema';
 const SENSITIVE_KEY =
   /pass(word)?|token|secret|api_?key|ciphertext|cookie|authorization|^value$|^current$|^next$|^answers$|^fields$|^resume$|^text$/i;
 export const REDACTED = '[redacted]';
+/**
+ * A key naming which token acted, not the token itself (`deviceTokenId`, #182): kept when its
+ * value has the shape of a row id (newId, a UUID), so the owner can tell which device to revoke.
+ * Any other value under such a key, a credential included, is redacted as before.
+ */
+const TOKEN_ID_KEY = /tokenId$/i;
+const ROW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const keptTokenId = (key: string, value: unknown): boolean =>
+  TOKEN_ID_KEY.test(key) && typeof value === 'string' && ROW_ID.test(value);
 const MAX_DEPTH = 5;
 
 function redact(value: unknown, depth: number): unknown {
@@ -27,7 +36,8 @@ export function redactDetail(detail: Record<string, unknown>, depth = 0): Record
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(detail)) {
     // eslint-disable-next-line security/detect-object-injection -- out is a fresh local object
-    out[key] = SENSITIVE_KEY.test(key) ? REDACTED : redact(value, depth);
+    out[key] =
+      SENSITIVE_KEY.test(key) && !keptTokenId(key, value) ? REDACTED : redact(value, depth);
   }
   return out;
 }

@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
@@ -364,5 +364,76 @@ describe('DevicesCard', () => {
       await screen.findByRole('listitem', { name: 'Old laptop' });
       expect(row()).toHaveTextContent(/not set up/i);
     });
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/182: the assisted apply permission, alone and with
+// its plain wording, only where the feature exists (sec: least privilege for any other client).
+describe('DevicesCard: the assisted apply permission', () => {
+  const USAGE = { used: 0, cap: 10, instanceCap: 10, userCap: null, nextFreeAt: null };
+
+  it('mints apply:assist alone, with wording on what it reads', async () => {
+    const user = userEvent.setup();
+    const { calls } = mockApi({
+      'GET /device-tokens': { items: [] },
+      'GET /integrations/apple-mail': NOT_CONNECTED,
+      'GET /settings/applications': USAGE,
+      'POST /device-tokens': (call: ApiCall) => ({
+        status: 201,
+        body: {
+          ...LAPTOP,
+          id: 't9',
+          scopes: (call.body as { scopes: string[] }).scopes,
+          token: TOKEN,
+        },
+      }),
+    });
+    renderWithProviders(<DevicesCard />);
+    await user.click(await screen.findByRole('button', { name: 'Create token' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Create a device token' });
+    await user.type(within(dialog).getByLabelText('Name'), 'Chrome');
+    await user.click(within(dialog).getByRole('checkbox', { name: /Apple Mail connector/ }));
+    await user.click(await within(dialog).findByRole('checkbox', { name: /Assisted apply/ }));
+    expect(
+      within(dialog).getByText(/cannot start, review or submit an application/),
+    ).toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText('Current password'), PW);
+    await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+    await waitFor(() =>
+      expect(
+        (
+          calls.find((c) => c.method === 'POST' && c.path === '/device-tokens')?.body as {
+            scopes: string[];
+          }
+        )?.scopes,
+      ).toEqual(['apply:assist']),
+    );
+  });
+
+  it('is not offered where assisted apply does not exist', async () => {
+    const user = userEvent.setup();
+    const { calls } = mockApi({
+      'GET /device-tokens': { items: [] },
+      'GET /integrations/apple-mail': NOT_CONNECTED,
+    });
+    renderWithProviders(<DevicesCard />);
+    await user.click(await screen.findByRole('button', { name: 'Create token' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Create a device token' });
+    await within(dialog).findByRole('checkbox', { name: /Browser capture/ });
+    // After the availability check has answered (404 here), not only before it (tl on #185).
+    await waitFor(() => expect(calls.some((c) => c.path === '/settings/applications')).toBe(true));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(within(dialog).queryByRole('checkbox', { name: /Assisted apply/ })).toBeNull();
+  });
+
+  it('lists a token with it under its own name', async () => {
+    mockApi({
+      'GET /device-tokens': { items: [{ ...LAPTOP, scopes: ['capture:push', 'apply:assist'] }] },
+      'GET /integrations/apple-mail': NOT_CONNECTED,
+    });
+    renderWithProviders(<DevicesCard />);
+    expect(await screen.findByText('Assisted apply (apply:assist)')).toBeInTheDocument();
   });
 });
