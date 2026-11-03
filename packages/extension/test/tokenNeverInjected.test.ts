@@ -127,8 +127,9 @@ describe('the device token never goes into the page', () => {
   it('every injection passes literal args with nothing token-like in them', async () => {
     const { injections } = await parse();
     const withArgs = injections.filter((i) => i.args !== undefined);
-    // Not hollow: the LinkedIn and Indeed readers are both injected with args.
-    expect(withArgs.length).toBeGreaterThanOrEqual(2);
+    // Not hollow (sec on #187): the LinkedIn and Indeed readers and the prefill filler are all
+    // found and checked; a parser that stopped finding calls would fail here.
+    expect(withArgs.length).toBeGreaterThanOrEqual(3);
     for (const { file, args, source } of withArgs) {
       expect(ts.isArrayLiteralExpression(args!), `${file}: args must be a literal array`).toBe(
         true,
@@ -177,6 +178,91 @@ describe('the scan fails what it cannot read (sec on #185, taken in #183)', () =
       );
       expect(i?.unreadable, func).toMatch(/func must be a bare identifier/);
     }
+  });
+
+  // tl's point 8(a) on #187 and sec's planted call: every way of writing a call that the scan
+  // cannot read must fail, never pass by being skipped.
+  const BAD: [string, string][] = [
+    [
+      "sec's plant: args by shorthand, carrying a token",
+      'const args = [plan, "SENTINEL-token"];\nchrome.scripting.executeScript({ target: { tabId }, func: fill, args });',
+    ],
+    [
+      'func by shorthand',
+      'chrome.scripting.executeScript({ target: { tabId }, func, args: [plan] });',
+    ],
+    ['options spread in', 'chrome.scripting.executeScript({ ...opts, func: fill, args: [plan] });'],
+    [
+      'a quoted key',
+      "chrome.scripting.executeScript({ target: { tabId }, 'func': fill, args: [plan] });",
+    ],
+    [
+      'a computed key',
+      "chrome.scripting.executeScript({ target: { tabId }, ['args']: [plan], func: fill });",
+    ],
+    [
+      'element access',
+      "chrome.scripting['executeScript']({ target: { tabId }, func: fill, args: [plan] });",
+    ],
+    [
+      'an alias',
+      'const run = chrome.scripting.executeScript;\nrun({ target: { tabId }, func: fill, args: [plan] });',
+    ],
+    [
+      'a destructured alias',
+      'const { executeScript } = chrome.scripting;\nexecuteScript({ target: { tabId }, func: fill, args: [plan] });',
+    ],
+    [
+      '.call',
+      'chrome.scripting.executeScript.call(chrome.scripting, { target: { tabId }, func: fill, args: [plan] });',
+    ],
+    [
+      'Reflect.apply',
+      'Reflect.apply(chrome.scripting.executeScript, chrome.scripting, [{ target: { tabId }, func: fill, args: [plan] }]);',
+    ],
+    ['no args at all', 'chrome.scripting.executeScript({ target: { tabId }, func: fill });'],
+    [
+      'args spread from elsewhere',
+      'chrome.scripting.executeScript({ target: { tabId }, func: fill, args: [...more] });',
+    ],
+    [
+      'a file injected instead of a function',
+      "chrome.scripting.executeScript({ target: { tabId }, files: ['x.js'], args: [] });",
+    ],
+    [
+      'a world option',
+      'chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", func: fill, args: [plan] });',
+    ],
+    [
+      'every frame',
+      'chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: fill, args: [plan] });',
+    ],
+    [
+      'named frames',
+      'chrome.scripting.executeScript({ target: { tabId, frameIds: [3] }, func: fill, args: [plan] });',
+    ],
+    [
+      'a second options argument',
+      'chrome.scripting.executeScript({ target: { tabId }, func: fill, args: [plan] }, extra);',
+    ],
+  ];
+
+  for (const [what, source] of BAD) {
+    it(`fails ${what}`, () => {
+      const found = bad(source);
+      expect(found.length, what).toBeGreaterThan(0);
+      expect(
+        found.some((i) => i.unreadable !== undefined),
+        `${what}: ${JSON.stringify(found.map((i) => i.unreadable ?? i.func))}`,
+      ).toBe(true);
+    });
+  }
+
+  it('the type signature of executeScript is the one other place the name may appear', () => {
+    const found = bad(
+      'interface Api { scripting: { executeScript<A>(injection: { func: () => void; args: A }): Promise<void> } }',
+    );
+    expect(found).toEqual([]);
   });
 
   it('a readable call is not flagged', () => {
