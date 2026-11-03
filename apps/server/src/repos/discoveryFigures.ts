@@ -37,9 +37,9 @@ export interface RankWindow {
 export interface SourceVolume {
   sourceId: string;
   kind: string;
-  /** The job count the last run that counted them saw; null before any. */
+  /** The job count the newest run that succeeded saw; null before any succeeded. */
   openJobs: number | null;
-  /** Stored new postings a day; null with no run after the source's first ("no data yet"). */
+  /** Stored new postings a day; null with no run after its first success ("no data yet"). */
   newPerDay: number | null;
   /** The days the rate is averaged over: 14, fewer for a newer source, 0 with no rate. */
   days: number;
@@ -134,6 +134,7 @@ export async function discoveryCostFigures(
       sourceId: discoveryRuns.sourceId,
       startedAt: discoveryRuns.startedAt,
       stats: discoveryRuns.stats,
+      error: discoveryRuns.error,
     })
     .from(discoveryRuns)
     .where(
@@ -153,12 +154,16 @@ export async function discoveryCostFigures(
     rank,
     sources: sources.map((s): SourceVolume => {
       const own = runs.filter((r) => r.sourceId === s.id); // newest first
-      const counted = own.find((r) => statNumber(r.stats, 'fetched') !== null);
-      const openJobs = counted === undefined ? null : statNumber(counted.stats, 'fetched');
-      const first = own.at(-1);
-      // tl's ruling: a source's first run stores the whole board, so it is left out; the
-      // window runs from the later of 14 days ago and that first run, to now.
-      const later = own.slice(0, -1);
+      // A failed run still finishes with the stats it reached, and an error (discoveryRun.ts's
+      // catch block): open jobs and the backfill come only from runs that succeeded (tl on #212).
+      const succeeded = own.filter((r) => r.error === null);
+      const openJobs = statNumber(succeeded.at(0)?.stats ?? null, 'fetched');
+      // tl's ruling: the first run that succeeded stored the whole board, so it, and any failed
+      // run before it, are left out; the window runs from the later of 14 days ago and that
+      // run, to now. A later run counts even if it failed: the postings it stored are real.
+      const backfill = succeeded.at(-1);
+      const later =
+        backfill === undefined ? [] : own.filter((r) => r.startedAt > backfill.startedAt);
       const none = {
         sourceId: s.id,
         kind: s.kind,
@@ -168,8 +173,8 @@ export async function discoveryCostFigures(
         rankCallsPerDay: null,
         costPerDayUsd: null,
       };
-      if (first === undefined || later.length === 0) return none;
-      const start = Math.max(now - VOLUME_DAYS * DAY_MS, first.startedAt);
+      if (backfill === undefined || later.length === 0) return none;
+      const start = Math.max(now - VOLUME_DAYS * DAY_MS, backfill.startedAt);
       const inWindow = later.filter((r) => r.startedAt >= start);
       if (inWindow.length === 0) return none;
       const days = Math.min(VOLUME_DAYS, Math.max(1, Math.ceil((now - start) / DAY_MS)));
