@@ -107,13 +107,26 @@ export type SubmissionFieldRefusal = (typeof SUBMISSION_FIELD_REFUSALS)[number];
 /** Control characters, and the line and paragraph separators that also break a line. */
 const NOT_ONE_LINE = /[\p{Cc}\u2028\u2029]/u;
 
+/**
+ * A joiner or non-joiner (U+200C, U+200D) between two letters or marks: some scripts need one in
+ * a name (Devanagari conjuncts, Persian), so it is the one format character a name may hold
+ * (tl's ruling on https://github.com/bgoleno/opportun/issues/186).
+ */
+const JOINER_IN_A_WORD = /(?<=[\p{L}\p{M}])[\u200C\u200D](?=[\p{L}\p{M}])/gu;
+/**
+ * Format characters: bidi controls, zero-width spaces, a byte order mark, a soft hyphen. Each is
+ * invisible, so the review would not show what is filled (#186).
+ */
+const FORMAT = /\p{Cf}/u;
+
 function isPlainName(value: string): boolean {
   const length = [...value].length;
   return (
     value === value.trim() &&
     length >= 1 &&
     length <= SUBMISSION_NAME_MAX_LENGTH &&
-    !NOT_ONE_LINE.test(value)
+    !NOT_ONE_LINE.test(value) &&
+    !FORMAT.test(value.replace(JOINER_IN_A_WORD, ''))
   );
 }
 
@@ -123,10 +136,18 @@ const HttpUrlSchema = z.url({ protocol: /^https?$/ });
 /**
  * An absolute http or https address with a host, exactly as typed: no surrounding or inner
  * whitespace, which the URL parser would otherwise trim or encode into something the user
- * never saw on the review.
+ * never saw on the review, no format character, and no username or password (#186).
  */
 function isWebAddress(value: string): boolean {
-  return !/\s/u.test(value) && HttpUrlSchema.safeParse(value).success;
+  if (/\s/u.test(value) || FORMAT.test(value)) return false;
+  if (!HttpUrlSchema.safeParse(value).success) return false;
+  // No username or password (#186), as destinationAllowed refuses them: an @ before the host
+  // makes the address show one site and open another. Read from the text as typed: the part
+  // after the scheme, up to the first / ? # or backslash. An @ in a path is fine.
+  const scheme = /^https?:\/\//i.exec(value);
+  if (scheme === null) return false;
+  const authority = value.slice(scheme[0].length).split(/[/?#\\]/)[0] ?? '';
+  return !authority.includes('@');
 }
 
 /**
