@@ -39,12 +39,13 @@ Open a LinkedIn profile or job posting, or an Indeed job, click the Opportun ico
   the same person again updates them.
 - A **job posting** (`linkedin.com/jobs/view/...`, or the jobs search view with a posting
   selected) becomes an **opportunity at Interested**.
-- An **Indeed job** (`indeed.com/viewjob?jk=...`, or an Indeed search with a job open on the
-  right) becomes an **opportunity at Interested** too, with the job's title, company and
+- An **Indeed job** (`indeed.com/viewjob?jk=...`, or an Indeed search or the Indeed home page
+  with a job open on the right) becomes an **opportunity at Interested** too, with the job's title, company and
   description and the link `https://www.indeed.com/viewjob?jk=...`. With an AI key, the
   location and pay the posting states are filled in too; anything the posting does not show is
-  left empty. Both views of one job give the same result, and nothing from the search results
-  beside it is sent. Indeed's country sites are not supported yet.
+  left empty. Every view of one job gives the same result, and nothing from the lists beside it
+  is sent. On the home page, click the job you want first: it shows a job as it loads, but
+  only clicking one puts it in the page's address. Indeed's country sites are not supported yet.
 
 Capturing a job is treated as a decision, not as filing something to look at later: you are
 reading the posting and you want it. So a captured job never lands in the review queue. If the
@@ -81,7 +82,7 @@ looks the posting up so you can take the company's version if you want it. Nothi
 your own writing unless you ask for it.
 
 Feeds, search result lists, company pages and the signed-out page are refused, and the popup
-says why. On Indeed, a search with no job open and a company page are refused in the popup
+says why. On Indeed, a search or the home page with no job opened and a company page are refused in the popup
 before anything is read. Pages on other sites are not read at all.
 
 There is a limit of 30 captures every 15 minutes per token, which is far above normal use and
@@ -115,9 +116,9 @@ is not.
   is not in the review queue. An extension built before this change says "review queue"
   instead; update it from Settings > Integrations > Extensions and Connectors.
 - **"Open a supported page"**: the tab is not a profile or posting the server recognizes.
-- **"Open a single Indeed job"**: the Indeed tab is a search with no job open, a company page,
-  or another page that is not one job. Open the job (or click it in the search list), then
-  capture.
+- **"Open a single Indeed job"**: the Indeed tab is a search or the home page with no job
+  opened, a company page, or another page that is not one job. Open the job (or click it in the
+  list), then capture.
 - **"Indeed's layout was not recognized"**: the extension could not find the job's title,
   company or description on the page, so it sent nothing rather than guess. Reload the job and
   try again. If it keeps happening, Indeed has changed its page and the extension needs an

@@ -68,7 +68,8 @@ const RECOMMENDED = `<div>
 </div>`;
 
 export interface JobRootOptions {
-  layout: 'split' | 'viewjob';
+  /** `home`: the home page's pane (#156), the /viewjob header state without its search form or tabs. */
+  layout: 'split' | 'viewjob' | 'home';
   /** Split view: the full header hidden and the sticky compact copy showing (structure 1.4). */
   compactHeaderShowing?: boolean;
   title?: string;
@@ -99,13 +100,15 @@ export function jobRoot(o: JobRootOptions): string {
   const title = o.title ?? TITLE;
   const company = o.company ?? COMPANY;
   const split = o.layout === 'split';
+  // The search form and the tab list are /viewjob's own; the split view and the home page lack them.
+  const standalone = o.layout === 'viewjob';
   const hidden = split && o.compactHeaderShowing === true ? ' style="visibility: hidden"' : '';
   const compactText = split && o.compactHeaderShowing === true;
   const metaSeparator = split ? '<div>•</div>' : '';
   return `<div data-testid="viewjob-main-content">
   <style>.css-placeholder { display: flex; }</style>
   ${
-    split
+    !standalone
       ? ''
       : `<div data-testid="standalone-desktop-search-page"><div data-testid="standalone-desktop-search-form">
       <div data-testid="standalone-desktop-search-shell">
@@ -146,7 +149,7 @@ export function jobRoot(o: JobRootOptions): string {
     </div>
   </div>
   ${
-    split
+    !standalone
       ? ''
       : `<div role="tablist">
     <div role="tab">Job details Tab Placeholder</div>
@@ -211,6 +214,64 @@ export function splitView(o: SplitViewOptions = {}, pane = true): FixturePage {
       </div>
     </div></div></div></div></div></div>
   </main>
+  ${FOOTER}`,
+    ),
+  };
+}
+
+/** Keys for the home page's other lists, apart from the split view's. */
+const HOME_KEYS = [
+  ['00000000000000b1', '00000000000000b2'],
+  ['00000000000000c1', '00000000000000c2'],
+  ['00000000000000d1', '00000000000000d2'],
+];
+
+export interface HomePageOptions {
+  /** The URL's vjk (default JK); null for the home page as it loads, with no vjk. */
+  vjk?: string | null;
+  /** Which list (0 to 3) holds the URL's job and highlights it (default 1, the second list). */
+  openedFrom?: number | null;
+}
+
+/**
+ * The home page with a job open in the right pane (https://github.com/bgoleno/opportun/issues/156):
+ * no <main> (one [role=main] holds the lists and the pane), several card lists, and each list
+ * keeps a highlighted card of its own, so several `.vjs-highlight` cards are on the page at once.
+ * Only the list the job was opened from highlights the URL's job. Placeholders only.
+ */
+export function homePage(o: HomePageOptions = {}): FixturePage {
+  const vjk = o.vjk === undefined ? JK : o.vjk;
+  const openedFrom = o.openedFrom === undefined ? 1 : o.openedFrom;
+  // List i holds its own two cards, and the opened list holds the URL's job too.
+  const lists = [0, 1, 2, 3].map((i) => {
+    const own = i === 0 ? OTHER_KEYS.slice(0, 2) : (HOME_KEYS[i - 1] as string[]);
+    const keys = i === openedFrom ? [JK, ...own] : own;
+    // Each list highlights one card: the opened list its job, every other list its first card.
+    const highlight = i === openedFrom ? JK : keys[0];
+    return `<div id="mosaic-provider-jobcards-${i + 1}"><ul>
+      ${keys.map((jk, n) => resultCard(jk, i * 10 + n + 1, jk === highlight)).join('\n')}
+    </ul></div>`;
+  });
+  const query = vjk === null ? '' : `?from=placeholder&vjk=${vjk}`;
+  return {
+    url: `https://www.indeed.com/${query}`,
+    html: doc(
+      'Job Search | Indeed',
+      `${GNAV}
+  <div id="jobsearch-Main" class="hydrated-jobsearch-Main"><div><div id="jobsearch-HomePage">
+    <span id="jobsearch-HomepageBody">
+      <div data-testid="jobsearch-Content" role="main">
+        <div class="jobsearch-RecentSearches-background is-desktop is-twoPaneWidth"><div><div>
+          ${lists.join('\n')}
+          <div id="jobsearch-ViewjobPaneWrapper" role="region">
+            <div data-testid="rnvj-content-layer"><div id="rnvjContainerDesktop"><div><div>
+              ${jobRoot({ layout: 'home' })}
+            </div></div></div></div>
+          </div>
+        </div></div></div>
+      </div>
+    </span>
+  </div></div></div>
   ${FOOTER}`,
     ),
   };

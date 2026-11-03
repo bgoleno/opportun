@@ -123,6 +123,10 @@ describe('renderOutcome', () => {
     expect(renderOutcome({ kind: 'not_a_posting' }, 'indeed').text).toMatch(
       /^Open a single Indeed job/,
     );
+    // The home page shows a job as it loads, with nothing in its URL naming it (#156).
+    expect(renderOutcome({ kind: 'not_a_posting' }, 'indeed').text).toContain(
+      'on the home page, click the job first',
+    );
   });
 
   it('an unknown refusal reason is shown as the server sent it', () => {

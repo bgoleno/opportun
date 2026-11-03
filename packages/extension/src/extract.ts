@@ -119,8 +119,9 @@ export type ExtractResult =
  * tab title.
  *
  * The title it reports is the job title (part 1), not document.title: in the split view the tab
- * title names the search, which has no business leaving the browser. In the split view it also
- * refuses when the highlighted results card names a different job than the URL's vjk.
+ * title names the search, which has no business leaving the browser. With a job open in a pane
+ * (the split view, the home page) it also refuses when no highlighted results card names the
+ * URL's vjk.
  */
 export function extractIndeedJob(doc: Document = document): ExtractResult {
   const refuse: ExtractResult = { ok: false, reason: 'layout_unrecognized' };
@@ -136,17 +137,21 @@ export function extractIndeedJob(doc: Document = document): ExtractResult {
   const root = doc.querySelector('[data-testid="viewjob-main-content"]');
   if (root === null) return refuse;
 
-  // In the split view the URL's vjk names the job, and the pane should be showing it. If the
-  // highlighted results card says another job, the pane and the URL disagree (a click still
-  // loading): refuse rather than send one job's text under another job's key. Only a class name
-  // is read from the list here; nothing from it is sent.
+  // With a job open in a pane, the URL's vjk names the job, and the pane should be showing it.
+  // If highlighted results cards name jobs but none of them is the URL's, the pane and the URL
+  // disagree (a click still loading): refuse rather than send one job's text under another job's
+  // key. Any highlighted card will do, not only the first: the home page has several lists, each
+  // keeping a highlighted card of its own, and only the list clicked in names the vjk (#156).
+  // Only class names are read from the lists here; nothing from them is sent.
   const vjk = new URL(doc.location.href).searchParams.get('vjk');
-  const highlighted = doc.querySelector('.vjs-highlight');
-  if (vjk !== null && highlighted !== null) {
-    const card = Array.from(highlighted.classList)
-      .map((c) => /^job_([0-9a-f]+)$/i.exec(c)?.[1])
-      .find((k) => k !== undefined);
-    if (card !== undefined && card.toLowerCase() !== vjk.toLowerCase()) return refuse;
+  if (vjk !== null) {
+    const cards = Array.from(doc.querySelectorAll('.vjs-highlight')).flatMap((card) =>
+      Array.from(card.classList).flatMap((c) => {
+        const key = /^job_([0-9a-f]+)$/i.exec(c)?.[1];
+        return key === undefined ? [] : [key.toLowerCase()];
+      }),
+    );
+    if (cards.length > 0 && !cards.includes(vjk.toLowerCase())) return refuse;
   }
 
   const titleEl = root.querySelector('[data-testid="vj-job-title"]');

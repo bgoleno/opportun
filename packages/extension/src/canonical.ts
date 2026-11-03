@@ -58,8 +58,9 @@ export function captureSiteOf(href: string): CaptureSiteId | null {
 
 /**
  * The job key of an Indeed tab showing one posting, lowercased: `jk` on `/viewjob`, `vjk` on the
- * `/jobs` split view (the job open in the pane). Null for anything else, including a key of the
- * wrong shape: then nothing is sent.
+ * `/jobs` split view and on the home page `/` (the job open in the right pane, #156). Null for
+ * anything else, including a key of the wrong shape: then nothing is sent. The home page with no
+ * `vjk` is refused although it shows a job as it loads: nothing in its URL says which one.
  */
 export function indeedJobKey(href: string): string | null {
   const url = parse(href);
@@ -67,7 +68,7 @@ export function indeedJobKey(href: string): string | null {
   const key =
     url.pathname === '/viewjob'
       ? url.searchParams.get('jk')
-      : url.pathname === '/jobs'
+      : url.pathname === '/jobs' || url.pathname === '/'
         ? url.searchParams.get('vjk')
         : null;
   return key !== null && INDEED_JOB_KEY.test(key) ? key.toLowerCase() : null;
