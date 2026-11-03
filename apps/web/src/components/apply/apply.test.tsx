@@ -1613,3 +1613,102 @@ describe('M3a (#181): the fields prefill reads by name', () => {
     });
   }
 });
+
+describe('#186: starting again from pre-check values, and a review refused by the rate limit', () => {
+  const expired = submission({
+    id: 'sub-old',
+    status: 'abandoned',
+    failureReason: 'review_expired',
+    fields: {
+      firstName: ' Legacy',
+      linkedinUrl: 'linkedin.com/in/legacy',
+      email: 'jane@example.com',
+      fullName: 'Jane Doe',
+    },
+  });
+
+  it('start again carries the details that still pass, drops the others, and names them', async () => {
+    const fresh = submission({ id: 'sub-2', fields: {}, answers: [] });
+    const api = mockApi({
+      ...routes(null),
+      'GET /opportunities/opp-1/submissions': { items: [expired], total: 1 },
+      'POST /opportunities/opp-1/submissions': () => ({ status: 201, body: fresh }),
+      'PATCH /submissions/sub-2': (c: ApiCall) => ({
+        status: 200,
+        body: { ...fresh, ...(c.body as object) },
+      }),
+    });
+    const { user, router } = renderStep('resume');
+    await user.click(await screen.findByRole('button', { name: 'Next: Details' }));
+    await waitFor(() =>
+      expect(router.state.location.search).toEqual({
+        step: 'details',
+        cleared: ['firstName', 'linkedinUrl'],
+      }),
+    );
+    const [copy] = calls(api.calls, 'PATCH', '/submissions/sub-2');
+    // Only what passes today's checks is sent, so the copy is never refused (qa on #184).
+    expect((copy?.body as { fields: unknown }).fields).toEqual({
+      email: 'jane@example.com',
+      fullName: 'Jane Doe',
+    });
+  });
+
+  it('the details step names what was not carried over', async () => {
+    mockApi(routes(submission({ fields: { email: 'jane@example.com' } })));
+    renderWithProviders(
+      <ApplyPage opportunityId="opp-1" step="details" cleared={['firstName', 'linkedinUrl']} />,
+      { path: '/opportunities/opp-1/apply?step=details' },
+    );
+    const notice = await screen.findByRole('status', { name: /not carried over/i });
+    expect(notice).toHaveTextContent(
+      'Not carried over from your earlier application, because they no longer pass the checks: First name, LinkedIn profile. Enter them again if you need them.',
+    );
+  });
+
+  it('no notice when nothing was dropped', async () => {
+    mockApi(routes(submission()));
+    renderStep('details');
+    await screen.findByLabelText('First name');
+    expect(screen.queryByText(/not carried over/i)).toBeNull();
+  });
+
+  it('the route keeps only known field names, and only on the details step', () => {
+    expect(
+      parseApplySearch({ step: 'details', cleared: ['firstName', 'constructor', '<b>', 7] }),
+    ).toEqual({ step: 'details', cleared: ['firstName'] });
+    expect(parseApplySearch({ step: 'details', cleared: 'firstName' })).toEqual({
+      step: 'details',
+    });
+    expect(parseApplySearch({ step: 'review', cleared: ['firstName'] })).toEqual({
+      step: 'review',
+    });
+  });
+
+  it('429 rate_limited on the review: says when to try again, never "check your connection"', async () => {
+    mockApi(
+      routes(submission(), {
+        'POST /submissions/sub-1/review': () => ({
+          status: 429,
+          body: { error: { code: 'rate_limited' } },
+          headers: { 'retry-after': '45' },
+        }),
+      }),
+    );
+    const { tab } = fakeWindowOpen();
+    const { user } = renderStep('review');
+    await user.click(await screen.findByRole('checkbox'));
+    const before = Date.now();
+    await user.click(screen.getByRole('button', { name: /confirm review/i }));
+    await waitFor(() => expect(tab.close).toHaveBeenCalled());
+    const alert = (await screen.findByText(/too many tries in a short time/i)).closest(
+      '[role="alert"]',
+    ) as HTMLElement;
+    // The time it frees up, as a clock time: now plus the server's retry-after.
+    const at = [clockTime(before + 45_000), clockTime(Date.now() + 45_000)];
+    expect(at.some((t) => alert.textContent?.includes(t))).toBe(true);
+    expect(alert).toHaveTextContent(/nothing was opened/i);
+    expect(alert).toHaveTextContent(/your draft is saved/i);
+    expect(screen.queryByText(/check your connection/i)).toBeNull();
+  });
+});

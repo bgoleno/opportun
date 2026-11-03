@@ -102,6 +102,8 @@ describe('acceptance 1: the four fields are saved as typed and read back', () =>
       { firstName: '李', lastName: 'O’Brien' },
       { firstName: 'J'.repeat(100), lastName: 'D'.repeat(100) },
       { linkedinUrl: 'http://linkedin.example/in/jane', websiteUrl: 'HTTPS://JANE.EXAMPLE' },
+      // A backslash ends the host: this @ is in the path (qa on #194).
+      { linkedinUrl: 'https://www.linkedin.com\\@other.example/' },
     ];
     for (const fields of accepted) {
       const res = await patchFields(a, id, fields);
@@ -144,6 +146,15 @@ describe('acceptance 4: refusals are named 422 reasons, and nothing is saved', (
       'https://exa mple.com/jane',
       ' https://jane.example.com',
       'not a url at all',
+      // #186: a username or password, or a format character, is refused too.
+      'https://user:pw@jane.example.com/',
+      'https://www.linkedin.com@jane.example.com/in/jane',
+      // tl and sec on #194: extra slashes or a backslash after the scheme.
+      'https:///user:pw@evil.example/in/jane',
+      'https://\\user:pw@evil.example/',
+      'https:////www.linkedin.com@evil.example/in/jane',
+      'https:///user@evil.example/',
+      'https://jane.example.com/\u202Efdp.exe',
     ]) {
       await refused(app, a, { linkedinUrl: bad }, 'field_url_invalid', 'linkedinUrl');
       await refused(app, a, { websiteUrl: bad }, 'field_url_invalid', 'websiteUrl');
@@ -161,6 +172,10 @@ describe('acceptance 4: refusals are named 422 reasons, and nothing is saved', (
       'Jane-Example\t',
       '',
       '   ',
+      // #186: format and bidi control characters, and a joiner with no letter beside it.
+      'Jane\u202EExample',
+      'Jane\u200BExample',
+      '\u200DJane',
     ]) {
       await refused(app, a, { firstName: bad }, 'field_name_invalid', 'firstName');
       await refused(app, a, { lastName: bad }, 'field_name_invalid', 'lastName');

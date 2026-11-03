@@ -112,16 +112,20 @@ export function Notice({
   role = 'status',
   id,
   tabIndex,
+  label,
 }: {
   children: ReactNode;
   role?: 'status' | 'alert';
   id?: string;
   tabIndex?: number;
+  /** An accessible name, when the notice needs one of its own. */
+  label?: string;
 }) {
   return (
     <div
       role={role}
       id={id}
+      aria-label={label}
       tabIndex={tabIndex}
       className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200"
     >

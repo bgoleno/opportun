@@ -114,7 +114,12 @@ export async function api<T>(path: string, opts?: { method?: string; body?: unkn
 
   if (!res.ok) {
     const envelope = isRecord(data) && isRecord(data.error) ? data.error : {};
-    const { code, message, issues, ...details } = envelope;
+    const { code, message, issues, ...envelopeDetails } = envelope;
+    // A 429's retry-after, in seconds, so a screen can say when to try again (#186).
+    const retryAfter = Number.parseInt(res.headers.get('retry-after') ?? '', 10);
+    const details = Number.isFinite(retryAfter)
+      ? { ...envelopeDetails, retryAfterSec: retryAfter }
+      : envelopeDetails;
     const err = new ApiError(
       res.status,
       typeof code === 'string' ? code : `http_${res.status}`,
