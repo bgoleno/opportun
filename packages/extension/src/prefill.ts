@@ -275,11 +275,8 @@ export const NOT_FILLED_WORDS = new Map<NotFilledReason, string>([
   ['not_in_review', 'not in what you reviewed: answer it on the form'],
   ['no_matching_question', 'no question on this form has exactly this label'],
   ['has_value', 'it already had something in it, so it was left as it was'],
+  ['not_shown', 'the form does not show this field, so it was left alone'],
   ['attach_yourself', 'attach your resume yourself'],
-  [
-    'resume_not_shown',
-    'the form did not show the file: check it, and attach your resume yourself if it is missing',
-  ],
 ]);
 
 /** Always said after a fill: Opportun never submits. */

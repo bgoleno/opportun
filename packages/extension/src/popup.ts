@@ -61,8 +61,8 @@ const NOT_FILLED_REASONS: readonly unknown[] = [
   'not_in_review',
   'no_matching_question',
   'has_value',
+  'not_shown',
   'attach_yourself',
-  'resume_not_shown',
 ];
 
 /** What fillGreenhouseForm may return; anything else from the tab is treated as a failure. */

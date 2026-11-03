@@ -11,7 +11,10 @@
 //   bubbling Event 'input' and Event 'change' on that element, and nothing else: no key,
 //   pointer, mouse, drag or focus events, no InputEvent, no per-character loop, no timers;
 // - attach the resume through DataTransfer on #resume only, the one hidden input it touches,
-//   and report it as attached only when the form then shows the file's name;
+//   and report it as attached only when the form then shows the file's name (absent before,
+//   shown after); otherwise clear it again the same way and say to attach it yourself;
+// - leave alone anything the form does not show: a field that is, or sits in a container that
+//   is, hidden, aria-hidden, inert, display:none or visibility:hidden (sec on #187);
 // - never activate a control, never send the form, never touch another frame, the captcha
 //   or the network, and never mask anything about how it runs.
 // It fills only empty fields (a value the user typed is left alone and reported), and only from
@@ -40,10 +43,13 @@ export type NotFilledReason =
   | 'no_matching_question'
   /** The field already had something in it: left as it was. */
   | 'has_value'
-  /** The resume: no ready copy, or no file input that takes a PDF. */
-  | 'attach_yourself'
-  /** The file was set, but the form did not show its name. */
-  | 'resume_not_shown';
+  /** A field the form does not show (it, or a container of it, is hidden): left alone. */
+  | 'not_shown'
+  /**
+   * The resume: no ready copy, no shown file input that takes a PDF, or the form did not show
+   * the file's name once it was set (then it is cleared again).
+   */
+  | 'attach_yourself';
 
 export type FillReport =
   | {
@@ -94,6 +100,18 @@ export async function fillGreenhouseForm(
       .trim()
       .slice(0, 200);
   const norm = (s: string): string => shown(s).toLowerCase();
+  // Whether the form hides this element: it (when `self`) or any container of it up to the form
+  // is hidden, aria-hidden, inert, display:none or visibility:hidden. Nothing hidden is filled.
+  const concealed = (el: Element, self: boolean): boolean => {
+    for (let n: Element | null = self ? el : el.parentElement; n !== null; n = n.parentElement) {
+      if (n.hasAttribute('hidden') || n.hasAttribute('inert')) return true;
+      if (n.getAttribute('aria-hidden') === 'true') return true;
+      const style = view.getComputedStyle(n);
+      if (style.display === 'none' || style.visibility === 'hidden') return true;
+      if (n === form) break;
+    }
+    return false;
+  };
 
   const STANDARD_IDS = ['first_name', 'last_name', 'email', 'phone'];
   const TEXT_TYPES = ['', 'text', 'tel', 'email', 'url'];
@@ -108,22 +126,32 @@ export async function fillGreenhouseForm(
     if (el === null || !form.contains(el)) continue;
     const type = (el.getAttribute('type') ?? '').toLowerCase();
     // Never a hidden input.
-    if (type === 'hidden' || el.getAttribute('aria-hidden') === 'true') continue;
+    if (type === 'hidden') continue;
     const text = shown(label.textContent ?? '');
     const isText =
       (el.tagName === 'INPUT' &&
         TEXT_TYPES.includes(type) &&
         el.getAttribute('role') !== 'combobox') ||
       el.tagName === 'TEXTAREA';
+    const entry = !isText
+      ? undefined
+      : STANDARD_IDS.includes(id)
+        ? plan.standard.find((s) => s.id === id)
+        : plan.questions.find((q) => q.labels.some((l) => norm(l) === norm(text)));
+    // Nor anything the form does not show: reported only when there was a value for it.
+    if (concealed(el, true)) {
+      if (entry !== undefined) {
+        used.add(entry.name);
+        notFilled.push({ label: text, reason: 'not_shown' });
+      }
+      continue;
+    }
     if (!isText) {
       if (el.tagName === 'INPUT' || el.tagName === 'SELECT') {
         notFilled.push({ label: text, reason: 'choose_on_form' });
       }
       continue;
     }
-    const entry = STANDARD_IDS.includes(id)
-      ? plan.standard.find((s) => s.id === id)
-      : plan.questions.find((q) => q.labels.some((l) => norm(l) === norm(text)));
     if (entry === undefined) {
       notFilled.push({ label: text, reason: 'not_in_review' });
       continue;
@@ -167,11 +195,15 @@ export async function fillGreenhouseForm(
   const accept = (fileInput?.getAttribute('accept') ?? '').toLowerCase();
   const takesPdf =
     accept === '' || accept.split(',').some((a) => ['.pdf', 'application/pdf'].includes(a.trim()));
-  if (plan.resume === null || fileInput === null || !takesPdf) {
+  // The input itself is visually hidden by design; a hidden container of it is not.
+  if (plan.resume === null || fileInput === null || !takesPdf || concealed(fileInput, false)) {
     notFilled.push({ label: 'Resume', reason: 'attach_yourself' });
   } else if ((fileInput.files?.length ?? 0) > 0) {
     notFilled.push({ label: 'Resume', reason: 'has_value' });
   } else {
+    // The name must appear because of the attach: absent before, shown after.
+    const named = (): boolean => (form.textContent ?? '').includes(plan.resume?.filename ?? '');
+    const namedBefore = named();
     const raw = view.atob(plan.resume.base64);
     const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0));
     const pdf = new view.File([bytes], plan.resume.filename, { type: 'application/pdf' });
@@ -183,8 +215,15 @@ export async function fillGreenhouseForm(
     // Let the form render what it did with the file (two microtasks, no clock), then look.
     await Promise.resolve();
     await Promise.resolve();
-    if ((form.textContent ?? '').includes(plan.resume.filename)) filled.push('Resume');
-    else notFilled.push({ label: 'Resume', reason: 'resume_not_shown' });
+    if (!namedBefore && named()) {
+      filled.push('Resume');
+    } else {
+      // Not shown: take the file back out, the same way, and say to attach it yourself.
+      fileInput.files = new view.DataTransfer().files;
+      fire(fileInput, 'input');
+      fire(fileInput, 'change');
+      notFilled.push({ label: 'Resume', reason: 'attach_yourself' });
+    }
   }
 
   return { ok: true, filled, notFilled };

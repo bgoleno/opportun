@@ -98,10 +98,12 @@ On the click, and only then:
      spacing and a trailing `*`.
 
    Each value is written once with the browser's own value setter, followed by a plain `input`
-   and `change` event. A field that already has something in it is left as it was.
+   and `change` event. A field that already has something in it is left as it was, and so is
+   a field the form does not show: one that is hidden, or inside a hidden part of the form.
 
 6. **It attaches the resume** to the form's file input through `DataTransfer`. It counts the
-   resume as attached only when the form then shows the file's name.
+   resume as attached only when the form then shows the file's name, which it did not show
+   before. Otherwise it takes the file back out and says to attach it yourself.
 7. **The popup lists** what was filled in and what was not, with the reason.
 
 It never chooses an option in a dropdown, checkbox or radio button, and never sets a hidden
