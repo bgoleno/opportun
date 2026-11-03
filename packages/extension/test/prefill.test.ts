@@ -585,4 +585,22 @@ describe('buildPlan', () => {
     ]);
     expect(p.resume).toBeNull();
   });
+
+  it('the LinkedIn address matches a question labelled "LinkedIn Profile" or plain "LinkedIn" (qa on #187)', () => {
+    const p = buildPlan(attempt(), { board: BOARD, jobId: JOB_ID }, null);
+    expect(p.questions[0]).toEqual({
+      labels: ['LinkedIn Profile', 'LinkedIn'],
+      name: 'LinkedIn profile',
+      value: 'https://www.linkedin.com/in/jane-doe-example',
+    });
+  });
+
+  it('end to end: a form question labelled plain "LinkedIn" is filled from the reviewed attempt (qa on #187)', async () => {
+    const s = setup({ html: MANY_QUESTIONS.replace('>LinkedIn Profile<', '>LinkedIn<') });
+    await clickFill(s);
+    expect(valueOf(s.page.doc, 'question_9000110')).toBe(
+      'https://www.linkedin.com/in/jane-doe-example',
+    );
+    expect(listed(s, 'Filled in')).toContain('LinkedIn');
+  });
 });
