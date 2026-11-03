@@ -596,7 +596,7 @@ describe('#192 in the popup: a shared label is listed for the user to fill', () 
 });
 
 describe('#196: a field the server withholds is listed for the user, with its own reason', () => {
-  it('a withheld LinkedIn address is not filled, and is listed with why and what to do', async () => {
+  it("a withheld LinkedIn address is not filled, and is listed once, under the form's label (tl on #201)", async () => {
     const fields: Record<string, string> = { ...attempt().fields };
     delete fields.linkedinUrl;
     const s = setup({
@@ -607,14 +607,21 @@ describe('#196: a field the server withholds is listed for the user, with its ow
     });
     await clickFill(s);
     expect(valueOf(s.page.doc, 'question_9000110')).toBe('');
-    expect(listed(s, 'Not filled in')).toContain(
-      "LinkedIn profile: it no longer passes Opportun's checks: correct it in Opportun, or fill it in yourself",
+    const lines = listed(s, 'Not filled in');
+    expect(lines).toContain(
+      "LinkedIn Profile: it no longer passes Opportun's checks: correct it in Opportun, or fill it in yourself",
     );
+    // Once, with that reason only: never also "not in what you reviewed".
+    expect(lines.filter((l) => l.startsWith('LinkedIn'))).toHaveLength(1);
+    // The plan carries the field's name and labels, never a value.
+    expect(s.plans[0]!.withheld).toEqual([
+      { id: null, labels: ['LinkedIn Profile', 'LinkedIn'], name: 'LinkedIn profile' },
+    ]);
     // The rest of the form is filled as usual.
     expect(listed(s, 'Filled in')).toContain('First Name');
   });
 
-  it('every withheld key is listed, by its label, or its key when there is none', async () => {
+  it("each withheld key is listed once: under the form's label, or its own name when the form lacks it", async () => {
     const s = setup({
       current: json(200, {
         attempt: {
@@ -626,11 +633,15 @@ describe('#196: a field the server withholds is listed for the user, with its ow
     });
     await clickFill(s);
     const lines = listed(s, 'Not filled in');
-    for (const label of ['First name', 'Website', 'someOther']) {
+    for (const label of ['First Name', 'Website', 'someOther']) {
       expect(lines).toContain(
         `${label}: it no longer passes Opportun's checks: correct it in Opportun, or fill it in yourself`,
       );
     }
+    for (const label of ['First Name', 'Website']) {
+      expect(lines.filter((l) => l.startsWith(`${label}:`))).toHaveLength(1);
+    }
+    expect(valueOf(s.page.doc, 'first_name')).toBe('');
   });
 
   it('a withheld list that is not a list of names is an unexpected answer: nothing is filled', async () => {
@@ -644,6 +655,20 @@ describe('#196: a field the server withholds is listed for the user, with its ow
 });
 
 describe('buildPlan', () => {
+  it('maps each withheld key to the field it names, with no value (#196, tl on #201)', () => {
+    const p = buildPlan(
+      { ...attempt(), withheld: ['firstName', 'websiteUrl', 'someOther'] },
+      { board: BOARD, jobId: JOB_ID },
+      null,
+    );
+    expect(p.withheld).toEqual([
+      { id: 'first_name', labels: [], name: 'First name' },
+      { id: null, labels: ['Website'], name: 'Website' },
+      { id: null, labels: [], name: 'someOther' },
+    ]);
+    expect(JSON.stringify(p.withheld)).not.toContain('@');
+  });
+
   it('maps the four standard fields by id and the two links and answers by label, leaving out empty values', () => {
     const p = buildPlan(
       {
