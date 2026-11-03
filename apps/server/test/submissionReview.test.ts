@@ -1125,6 +1125,13 @@ describe('review usage and the user’s own cap (#130)', () => {
     expect((await usage(a)).json()).toMatchObject({ cap: 10, userCap: null });
   });
 
+  it('accepts a cap of exactly the instance cap, the boundary (#172; qa on #162)', async () => {
+    const { a } = await boot({ ...ON, dailyReviewCap: 10 });
+    const res = await setCap(a, 10);
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await usage(a)).json()).toMatchObject({ cap: 10, instanceCap: 10, userCap: 10 });
+  });
+
   it('refuses a body that is not exactly { dailyReviewCap }', async () => {
     const { a } = await boot(ON);
     expect(

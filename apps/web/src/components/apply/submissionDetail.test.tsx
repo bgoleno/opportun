@@ -335,3 +335,19 @@ describe('S7 follow-ups (#166; qa and tl on #163)', () => {
     expect(evidence).not.toHaveTextContent('No confirmation yet');
   });
 });
+
+describe('test gaps (#172)', () => {
+  // Only a refused attempt gets the dated refusal line (#166). A failed or stopped one, with no
+  // confirmation, keeps "No confirmation yet.": widening the refusal's condition fails here.
+  it.each([
+    ['failed', { status: 'failed' }],
+    ['stopped', { status: 'abandoned', failureReason: 'cancelled_by_user' }],
+  ] as const)('a %s attempt keeps "No confirmation yet." as its evidence', async (_n, over) => {
+    render(attempt({ ...over, updatedAt: NOW - DAY }));
+    const evidence = (await screen.findByRole('heading', { name: 'Evidence' })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(evidence).toHaveTextContent('No confirmation yet.');
+    expect(evidence).not.toHaveTextContent('refused the form');
+  });
+});

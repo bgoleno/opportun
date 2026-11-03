@@ -294,3 +294,60 @@ describe('ResumeWorkspace: applying a suggested edit', () => {
     expect(await screen.findByText(EDITED, exact)).toBeInTheDocument();
   });
 });
+
+describe('ResumeWorkspace: a resume recorded as sent (#172; qa on #164)', () => {
+  const SENT_AT = Date.parse('2026-10-30T12:00:00');
+
+  function bootSent(resume: Resume) {
+    return mockApi({
+      'GET /resumes/r-1': resume,
+      'GET /resumes/r-1/match': null,
+      'GET /resumes/r-1/text': { text: DOC_TEXT },
+      'GET /resumes/r-1/sends': {
+        items: [
+          {
+            id: 'send-1',
+            opportunityId: 'opp-2',
+            opportunityTitle: 'Staff Engineer',
+            companyName: 'Acme',
+            resumeId: 'r-1',
+            resumeTitle: 'Tailored Resume',
+            resumeKind: 'tailored',
+            sentAt: SENT_AT,
+            sentVia: 'Indeed',
+            submissionId: null,
+            createdAt: 1,
+          },
+        ],
+      },
+    });
+  }
+
+  it('the page shows the "Sent for" card, listing where it was sent', async () => {
+    bootSent({
+      ...RESUME,
+      status: 'submitted',
+      submittedTo: 'Indeed / Acme',
+      submittedAt: SENT_AT,
+    });
+    renderWithProviders(<ResumeWorkspace id="r-1" />);
+    expect(await screen.findByRole('heading', { name: 'Sent for' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Acme: Staff Engineer' })).toBeInTheDocument();
+  });
+
+  // The workflow status stands with a send (tl on #164): a Draft or In review resume that was
+  // sent still says where it went. Showing the line only for Submitted fails here.
+  it.each([
+    ['Draft', 'draft'],
+    ['In review', 'in_review'],
+    ['Submitted', 'submitted'],
+  ] as const)(
+    'a resume with a send, its status %s, still says where it was sent',
+    async (_label, status) => {
+      bootSent({ ...RESUME, status, submittedTo: 'Indeed / Acme', submittedAt: SENT_AT });
+      renderWithProviders(<ResumeWorkspace id="r-1" />);
+      await screen.findByRole('heading', { name: 'Tailored Resume' });
+      expect(await screen.findByText(/Sent to Indeed \/ Acme/)).toBeInTheDocument();
+    },
+  );
+});

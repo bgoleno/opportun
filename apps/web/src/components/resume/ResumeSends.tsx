@@ -116,17 +116,8 @@ export function RemoveSendButton({
       variant="ghost"
       label={`Remove the record that ${send.resumeTitle} was sent`}
       disabled={remove.isPending}
-      onClick={() =>
-        remove.mutate(send.id, {
-          onSuccess: () => toast({ title: 'Sent record removed', variant: 'success' }),
-          onError: (err) =>
-            toast({
-              title: 'Could not remove the record',
-              description: resumeErrorMessage(err) ?? errorMessage(err),
-              variant: 'destructive',
-            }),
-        })
-      }
+      // Its toasts are useRemoveSend's own: this button has gone by the time the list refreshes.
+      onClick={() => remove.mutate(send.id)}
     >
       <Trash2 aria-hidden="true" />
     </IconButton>
