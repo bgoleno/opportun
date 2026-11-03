@@ -6,6 +6,7 @@ import { PolicyEditor } from '@/components/ai/PolicyEditor';
 import { ProposedRefinement } from '@/components/ai/ProposedRefinement';
 import { PromptEditor } from '@/components/ai/promptEditor';
 import { ProviderKeysCard } from '@/components/ai/ProviderKeysCard';
+import { RankCostCard } from '@/components/ai/RankCostCard';
 import { UsageTable } from '@/components/ai/UsageTable';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -40,6 +41,7 @@ function AiSettings() {
           <UsageTable />
         </CardContent>
       </Card>
+      <RankCostCard />
       <PromptsCard />
     </div>
   );
