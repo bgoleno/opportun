@@ -24,7 +24,7 @@ export function RankSkipsLine() {
   const { data } = useRankSkips();
   if (data === undefined) return null;
   return (
-    <p className="text-sm text-muted-foreground" data-testid="rank-skips">
+    <p className="max-w-prose text-sm text-muted-foreground" data-testid="rank-skips">
       Discovery ranking skipped because the daily budget was spent: {postings(data.today)} today,{' '}
       {postings(data.last7Days)} in the last 7 days. Days are UTC, as the budget&apos;s are.
     </p>
