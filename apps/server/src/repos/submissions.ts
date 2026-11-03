@@ -20,6 +20,7 @@ import {
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
 import { applicationSubmissions, attachments, opportunities, resumes } from '../db/schema';
+import { audit } from '../lib/audit';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { submissionDigest } from '../lib/submissionDigest';
@@ -109,6 +110,7 @@ export function view(row: SubmissionRow): Submission {
     reapplyOf: row.reapplyOf,
     reapplyReason: row.reapplyReason,
     submittedActivityId: row.submittedActivityId,
+    postingChangedAt: row.postingChangedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -240,6 +242,20 @@ export async function createSubmissionDraft(
     .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, opportunityId)))
     .get();
   if (opp === undefined) throw notFound();
+  // A live attempt first, ahead of the eligibility checks (#144, from qa on #142): when the
+  // opportunity's posting has changed since it started, the new identity may fail those checks,
+  // and the user must be shown the attempt that exists, not only why a new one cannot start.
+  const live = await liveFor(db, ctx, opportunityId);
+  if (live !== undefined) {
+    // The live draft may be this key's own, inserted by a concurrent request after the key
+    // check above (qa's Postgres race on #124): that is a replay, not a conflict. replay()
+    // re-reads by key and still refuses a reused key with a different body.
+    if (live.idempotencyKey === input.idempotencyKey) {
+      const own = await replay();
+      if (own !== null) return own;
+    }
+    throw liveExists(live);
+  }
   const ref = opp.atsJobRef;
   if (ref === null || ref === undefined) throw ineligible('no_ats_identity');
   // The ref stays in place when reconcile or an unconfirm moves the posting to needs_review
@@ -271,17 +287,6 @@ export async function createSubmissionDraft(
   }
   const resume = await finalResume(db, ctx, input.resumeId);
 
-  const live = await liveFor(db, ctx, opportunityId);
-  if (live !== undefined) {
-    // The live draft may be this key's own, inserted by a concurrent request after the key
-    // check above (qa's Postgres race on #124): that is a replay, not a conflict. replay()
-    // re-reads by key and still refuses a reused key with a different body.
-    if (live.idempotencyKey === input.idempotencyKey) {
-      const own = await replay();
-      if (own !== null) return own;
-    }
-    throw liveExists(live);
-  }
   // Two creates can both pass the checks above; the unique indexes then decide (test/races).
   await racePoint('submissions.create');
 
@@ -481,4 +486,83 @@ export async function getSnapshotForDownload(
     throw new HttpError(404, 'no_snapshot', 'This application has no saved resume file.');
   }
   return file;
+}
+
+/** Attempts a posting change reaches: live and not yet opened on the ATS (#144). */
+const NOT_YET_OPENED_STATUSES = ['draft', 'reviewed'] as const;
+
+/**
+ * Takes the lock of the opportunity's live attempt that a posting change would reach, if it has
+ * one (#144). Called first in an opportunity writer's transaction, before its company lookup and
+ * before it writes the opportunity, so the lock order is the attempt's, then the user's, then
+ * rows, the same as a review's (see submissionScope in repos/submissionReview.ts).
+ */
+export async function lockLiveAttempt(
+  tx: Exec,
+  ctx: UserCtx,
+  opportunityId: string,
+): Promise<void> {
+  const live = await tx
+    .select({ id: applicationSubmissions.id })
+    .from(applicationSubmissions)
+    .where(
+      and(
+        eq(applicationSubmissions.userId, ctx.userId),
+        eq(applicationSubmissions.opportunityId, opportunityId),
+        inArray(applicationSubmissions.status, [...NOT_YET_OPENED_STATUSES]),
+      ),
+    )
+    .get();
+  if (live !== undefined) await lockScope(tx, `submission:${live.id}`);
+}
+
+const NOT_YET_OPENED: SubmissionStatus[] = [...NOT_YET_OPENED_STATUSES];
+
+/**
+ * The opportunity's posting URL or ATS identity changed (#144, owner decision option A): its
+ * live attempt, if one has not been opened on the ATS yet, keeps its pinned destination and
+ * the user's work, but a review goes back to draft and the change is recorded. The review
+ * digest covers `posting_changed_at`, so a review screen shown before the change cannot be
+ * confirmed, and the screens say what changed. A handed-off attempt is left alone: the user is
+ * on the employer's form already. Nothing is cancelled. Runs inside the caller's transaction,
+ * under the attempt's own lock, like every write to an attempt.
+ */
+export async function markPostingChanged(
+  tx: Exec,
+  ctx: UserCtx,
+  opportunityId: string,
+  now: number = Date.now(),
+): Promise<void> {
+  const live = await tx
+    .select({ id: applicationSubmissions.id, status: applicationSubmissions.status })
+    .from(applicationSubmissions)
+    .where(
+      and(
+        eq(applicationSubmissions.userId, ctx.userId),
+        eq(applicationSubmissions.opportunityId, opportunityId),
+        inArray(applicationSubmissions.status, NOT_YET_OPENED),
+      ),
+    )
+    .get();
+  if (live === undefined) return;
+  // The caller took this lock first (lockLiveAttempt); taking it again in the same transaction
+  // is a no-op, and keeps this safe for a caller that did not.
+  await lockScope(tx, `submission:${live.id}`);
+  const [changed] = await tx
+    .update(applicationSubmissions)
+    .set({
+      status: 'draft',
+      reviewDigest: null,
+      reviewExpiresAt: null,
+      postingChangedAt: now,
+      updatedAt: now,
+    })
+    .where(and(owned(ctx, live.id), inArray(applicationSubmissions.status, NOT_YET_OPENED)))
+    .returning({ id: applicationSubmissions.id });
+  // Opened on the ATS in between: that attempt is the user's now, as the docs above say.
+  if (changed === undefined) return;
+  await audit(tx, 'submission.posting_changed', {
+    userId: ctx.userId,
+    detail: { submissionId: live.id, opportunityId, from: live.status },
+  });
 }

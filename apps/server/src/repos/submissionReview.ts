@@ -56,9 +56,17 @@ export const SUBMISSION_EXPIRE_JOB_KIND = 'submission.expire';
 
 const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
 /**
- * One lock per attempt, taken first by every write to it (edit, cancel, review, handoff), so
- * each re-reads the row after the lock and checks the state it is about to change. Lock order is
- * this scope, then the user's.
+ * One lock per attempt, taken first by every write to it (edit, cancel, review, handoff, and an
+ * opportunity writer that marks a posting change, #144), so each re-reads the row after the lock
+ * and checks the state it is about to change.
+ *
+ * Lock order, for every path that takes more than one (tl on #154): the attempt's lock
+ * (`submission:<id>`) first, then the user's (`user:<id>`, taken by the review cap and by
+ * findOrCreateCompanySync), then rows. An opportunity writer that may mark a posting change
+ * takes the live attempt's lock before its company lookup and before writing the opportunity
+ * (repos/submissions.ts lockLiveAttempt); a merge takes the live attempts' locks before it moves
+ * anything. Two paths that each held one lock and waited for the other would deadlock on
+ * Postgres (40P01).
  */
 export const submissionScope = (id: string): string => `submission:${id}`;
 
@@ -192,6 +200,9 @@ export async function reviewSubmission(
 
   const outcome = await withTransaction(db, async (tx): Promise<ReviewOutcome> => {
     await lockScope(tx, submissionScope(id));
+    // Holding the attempt's lock, not yet the user's (test/submissionPostingChange.test.ts parks
+    // here to prove the lock order with an opportunity edit).
+    await racePoint('submissions.review.attemptLocked');
     const row = await getRow(tx, ctx, id);
     const now = Date.now();
     const sameDigest = row.reviewDigest === input.reviewDigest;

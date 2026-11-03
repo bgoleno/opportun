@@ -28,7 +28,7 @@ import {
   type SubmissionView,
 } from './api';
 import { OutcomeActions, REPORTABLE } from './OutcomeActions';
-import { SubmissionStatusChip } from './parts';
+import { PostingChangedNotice, postingMoved, SubmissionStatusChip } from './parts';
 
 /** The stages an attempt may start at (the server's SUBMISSION_ELIGIBLE_STAGES). */
 const ELIGIBLE_STAGES: readonly string[] = ['interested', 'preparing', 'applied'];
@@ -83,9 +83,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
 
   let body: React.ReactNode;
   if (live !== undefined) {
-    body = (
-      <InProgress live={live} opportunityId={opp.id} ats={ats} onStop={() => setStopping(true)} />
-    );
+    body = <InProgress live={live} opp={opp} ats={ats} onStop={() => setStopping(true)} />;
   } else {
     const reason = notEligible(opp, resumes.data?.items ?? []);
     body = (
@@ -166,15 +164,16 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
 
 function InProgress({
   live,
-  opportunityId,
+  opp,
   ats,
   onStop,
 }: {
   live: SubmissionView;
-  opportunityId: string;
+  opp: OpportunityView;
   ats: string;
   onStop: () => void;
 }) {
+  const opportunityId = opp.id;
   const step = live.status === 'draft' ? 'details' : live.status === 'reviewed' ? 'review' : 'open';
   const text =
     live.status === 'draft'
@@ -204,6 +203,8 @@ function InProgress({
         ) : null}
       </div>
       <p className="text-sm text-muted-foreground">{text}</p>
+      {/* The posting changed under the attempt (#144): say so where the user starts from. */}
+      {postingMoved(live, opp) ? <PostingChangedNotice live={live} opp={opp} /> : null}
       <Button asChild className="w-full">
         <Link to="/opportunities/$id/apply" params={{ id: opportunityId }} search={{ step }}>
           {action}

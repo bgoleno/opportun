@@ -1,0 +1,1 @@
+ALTER TABLE `application_submissions` ADD `posting_changed_at` integer;

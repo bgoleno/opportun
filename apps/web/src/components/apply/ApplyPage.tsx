@@ -53,6 +53,8 @@ import {
 import {
   ApplyStepper,
   Notice,
+  PostingChangedNotice,
+  postingMoved,
   SubmissionStatusChip,
   WillNotSubmitCallout,
   type StepId,
@@ -780,6 +782,7 @@ function ReviewStep({
         This is what Opportun will help you put on the form. Nothing leaves Opportun from this page.
       </p>
       <div ref={bannerRef} tabIndex={-1} className="grid gap-2 outline-none">
+        {postingMoved(live, opp) ? <PostingChangedNotice live={live} opp={opp} /> : null}
         {earlier !== undefined ? (
           <Notice>
             <span>

@@ -1,0 +1,1 @@
+ALTER TABLE "application_submissions" ADD COLUMN "posting_changed_at" bigint;

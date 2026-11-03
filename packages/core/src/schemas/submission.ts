@@ -136,6 +136,11 @@ export const SubmissionSchema = z.object({
    */
   reapplyOf: IdSchema.nullable(),
   reapplyReason: z.string().nullable(),
+  /**
+   * When the opportunity's posting changed under this attempt (#144); the attempt still goes to
+   * its pinned destination, and the screens say so. Null when it never did.
+   */
+  postingChangedAt: TimestampSchema.nullable(),
   /** The timeline entry the user's "I submitted it" created (M2a, #118). */
   submittedActivityId: IdSchema.nullable(),
   createdAt: TimestampSchema,

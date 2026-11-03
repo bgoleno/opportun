@@ -921,6 +921,12 @@ export const applicationSubmissions = pgTable(
     followupNextStepId: text('followup_next_step_id').references(() => nextSteps.id, {
       onDelete: 'set null',
     }),
+    /**
+     * When the opportunity's posting URL or ATS identity last changed while this attempt was
+     * live and not yet opened (#144). The attempt keeps its pinned destination; the review digest
+     * covers this, so a review screen shown before the change cannot be confirmed.
+     */
+    postingChangedAt: int('posting_changed_at'),
     /** A re-application to the same requisition names the attempt it repeats. */
     reapplyOf: text('reapply_of').references((): AnyPgColumn => applicationSubmissions.id, {
       onDelete: 'set null',
