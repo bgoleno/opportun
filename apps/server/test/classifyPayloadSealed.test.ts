@@ -183,6 +183,44 @@ describe('the classify job carries the body sealed (#175)', () => {
     }
   });
 
+  // https://github.com/bgoleno/opportun/issues/176 item 3 (qa on #177): the failure names the
+  // problem in its own words; the cipher's message, whatever it is, reaches neither the job row
+  // nor any log line.
+  it("keeps none of the cipher's own error message, in the job row or the log", async () => {
+    const { app, a } = await boot();
+    await pushMessage(app, a, bodyWith(sentinelOf()));
+    const sealed = ((await classifyJob(app))?.payload as { bodySealed: string }).bodySealed;
+    bindVaultKey(app.db, randomBytes(32));
+    // What the cipher itself says about this payload under the wrong key.
+    let cipherMessage = '';
+    try {
+      decryptSecret(app.db, sealed);
+    } catch (err) {
+      cipherMessage = (err as Error).message;
+    }
+    expect(cipherMessage).not.toBe('');
+    const logged: string[] = [];
+    const record =
+      (level: string) =>
+      (...args: unknown[]) =>
+        logged.push(`${level} ${inspect(args, { depth: 8 })}`);
+    const log = { info: record('info'), warn: record('warn'), error: record('error') };
+    let now = Date.now();
+    for (let i = 0; i < 5 && (await classifyJob(app))?.status !== 'dead'; i += 1) {
+      await runDueJobs(app.db, {
+        services: { ...app.jobs.services, log: log as never },
+        now: () => now,
+      });
+      now += 24 * 60 * 60 * 1000; // past any retry's backoff
+    }
+    const job = await classifyJob(app);
+    expect(job?.status).toBe('dead');
+    expect(logged.length).toBeGreaterThan(0);
+    for (const line of [...logged, job?.lastError ?? '', JSON.stringify(job)]) {
+      expect(line).not.toContain(cipherMessage);
+    }
+  });
+
   it('a job queued before this change, with a plaintext body, still runs and is cleared', async () => {
     const { app, a } = await boot();
     const sentinel = sentinelOf();

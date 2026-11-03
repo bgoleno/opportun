@@ -229,9 +229,13 @@ const PayloadSchema = z.object({
 
 /**
  * Opens the payload's body. A key that cannot open it (the master key changed while the job
- * waited, or the payload was altered) fails the job: retrying cannot help, and the run must not
- * go on as if the message had no body. The error says nothing of the body, and keeps none of
- * the cipher's own message, so neither a log line nor jobs.last_error can carry any of it.
+ * waited, or the payload was altered) fails the run, which must not go on as if the message had
+ * no body. The runner treats it like any other failure: it tries again with its backoff, so the
+ * job's three attempts (maxAttempts) take about three minutes, and then gives the job up
+ * (`dead`), its body cleared like any finished job's. Retrying helps only if the key is put back
+ * meanwhile; nothing marks this error as final, because the runner has no such kind
+ * (#176 item 4). The error says nothing of the body, and keeps none of the cipher's own message,
+ * so neither a log line nor jobs.last_error can carry any of it.
  */
 function payloadBody(db: Db, payload: z.infer<typeof PayloadSchema>): string | undefined {
   if (payload.bodySealed === undefined) return payload.body;

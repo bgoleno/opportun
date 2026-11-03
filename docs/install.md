@@ -1183,7 +1183,8 @@ only: `attachments/` and `master.key` stay where they are, in `DATA_DIR`, which 
 Postgres deployment keeps using (the tool checks that the attachment files the rows point
 at are there). A message still waiting to be classified carries its text sealed with the
 master key and is copied as it is: under a different key, its classification job cannot
-open it and fails ([#175](https://github.com/bgoleno/opportun/issues/175)). It also refuses a master key that opens none of the source's vault values,
+open it, fails each of its three attempts (about three minutes, with the job runner's backoff)
+and is then given up ([#175](https://github.com/bgoleno/opportun/issues/175)). It also refuses a master key that opens none of the source's vault values,
 and any single value that does not decrypt, unless you pass `--allow-undecryptable` (those
 values are then copied byte for byte, warned about one by one, and the vault line reads
 NOT VERIFIED). JSON values are compared by Postgres itself (`jsonb` equality), so a number
