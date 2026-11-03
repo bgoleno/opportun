@@ -76,6 +76,7 @@ function setup(
     runResumeCheck: vi.fn(async () => null),
     runResumeClear: vi.fn(async () => null),
     runReadPage: vi.fn(async () => read),
+    checkStore: null,
     wait: vi.fn(async () => undefined),
     requestOrigin: vi.fn(async () => true),
     hasOrigin: vi.fn(async () => true),

@@ -522,6 +522,56 @@ describe('#196: a withheld field is reported once, as withheld (tl on #201)', ()
   });
 });
 
+describe('#204: an answer for a choice control is listed once, as choose it on the form', () => {
+  const withExtra = (extra: string) =>
+    MANY_QUESTIONS.replace(
+      '<h2>Voluntary Self-Identification</h2>',
+      `${extra}<h2>Voluntary Self-Identification</h2>`,
+    );
+  const answering = (label: string) =>
+    plan({ questions: [...plan().questions, { labels: [label], name: label, value: 'Yes' }] });
+  const linesFor = (r: FillReport, label: string) =>
+    ok(r).notFilled.filter((n) => n.label === label);
+
+  it('a react-select (qa on #201: Gender)', async () => {
+    const { report } = await fill(MANY_QUESTIONS, answering('Gender'));
+    expect(linesFor(report, 'Gender')).toEqual([{ label: 'Gender', reason: 'choose_on_form' }]);
+  });
+
+  it('a native select', async () => {
+    const { report } = await fill(
+      withExtra(
+        `<div class="field-wrapper"><label for="q_sel">Placeholder select question</label><select id="q_sel"><option>Yes</option></select></div>`,
+      ),
+      answering('Placeholder select question'),
+    );
+    expect(linesFor(report, 'Placeholder select question')).toEqual([
+      { label: 'Placeholder select question', reason: 'choose_on_form' },
+    ]);
+  });
+
+  it('a radio group, by its legend', async () => {
+    const { doc, report, events } = await fill(
+      withExtra(
+        `<fieldset class="field-wrapper"><legend>Placeholder radio question *</legend><label for="q_r1">Yes</label><input id="q_r1" type="radio" name="q_rg" value="yes" /><label for="q_r2">No</label><input id="q_r2" type="radio" name="q_rg" value="no" /></fieldset>`,
+      ),
+      answering('Placeholder radio question'),
+    );
+    expect(linesFor(report, 'Placeholder radio question')).toEqual([
+      { label: 'Placeholder radio question', reason: 'choose_on_form' },
+    ]);
+    expect((doc.getElementById('q_r1') as HTMLInputElement).checked).toBe(false);
+    expect(events.filter((e) => e.target.startsWith('q_r'))).toEqual([]);
+  });
+
+  it('an answer that matches no question at all still says so (criterion 2)', async () => {
+    const { report } = await fill(MANY_QUESTIONS, answering('A question this form does not ask'));
+    expect(linesFor(report, 'A question this form does not ask')).toEqual([
+      { label: 'A question this form does not ask', reason: 'no_matching_question' },
+    ]);
+  });
+});
+
 describe('acceptance 2: one write per field, input and change only', () => {
   it('uses the native setter: the controlled stand-in ignores every plain assignment', async () => {
     const { doc, ignoredAssignments } = await fill(MANY_QUESTIONS);
@@ -641,6 +691,65 @@ describe('resumeShown: the popup’s read-only look at the form (tl and sec on #
     expect(
       resumeShown(asJson(check), loadForm('<!doctype html><html><body></body></html>').doc),
     ).toBeNull();
+  });
+});
+
+// #191 (sec's point on #187): the name counts only where the user can see it. A copy inside a
+// hidden element, or under one, must not make the popup believe the form took the file.
+const HIDINGS: [string, string][] = [
+  ['the hidden attribute', '<span hidden>NAME</span>'],
+  ['display: none', '<span style="display: none">NAME</span>'],
+  ['visibility: hidden', '<span style="visibility: hidden">NAME</span>'],
+  ['aria-hidden', '<span aria-hidden="true">NAME</span>'],
+  ['inert', '<span inert>NAME</span>'],
+  ['a hidden ancestor', '<div style="display: none"><p><span>NAME</span></p></div>'],
+];
+
+/** The form with `markup` (the name in it) appended inside it. */
+function withHiddenName(markup: string, name: string) {
+  const page = loadForm(FEW_QUESTIONS, { showsFileName: false });
+  const form = page.doc.getElementById('application-form')!;
+  form.insertAdjacentHTML('beforeend', markup.replace('NAME', name));
+  return page;
+}
+
+describe('#191: the name counts only where it is visible', () => {
+  const check = { board: BOARD, jobId: JOB_ID, filename: 'Jane-Doe-Example-Resume.pdf' };
+
+  for (const [how, markup] of HIDINGS) {
+    it(`resumeShown does not count a name hidden by ${how}`, () => {
+      const page = withHiddenName(markup, check.filename);
+      expect(resumeShown(asJson(check), page.doc)).toBe(0);
+      // Shown for real, it counts once.
+      page.doc.querySelector('.file-upload__filename')!.textContent = check.filename;
+      expect(resumeShown(asJson(check), page.doc)).toBe(1);
+    });
+  }
+
+  it('clearResume does not take a hidden name as shown: it clears our file', async () => {
+    for (const [how, markup] of HIDINGS) {
+      const { doc } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
+      doc
+        .getElementById('application-form')!
+        .insertAdjacentHTML('beforeend', markup.replace('NAME', check.filename));
+      expect(clearResume(asJson({ ...check, size: PDF.length, before: 0 }), doc), how).toBe(
+        'cleared',
+      );
+    }
+  });
+
+  it('the fill counts only visible copies as there before, so a later visible one is news', async () => {
+    for (const [how, markup] of HIDINGS) {
+      const page = loadForm(
+        FEW_QUESTIONS.replace(
+          '</form>',
+          `${markup.replace('NAME', 'Jane-Doe-Example-Resume.pdf')}</form>`,
+        ),
+        { showsFileName: false },
+      );
+      const report = ok(await fillGreenhouseForm(asArgs(plan()), page.doc));
+      expect(report.resume?.before, how).toBe(0);
+    }
   });
 });
 
@@ -836,6 +945,19 @@ describe('the source scan of the injected functions (acceptance 2, sec 1 to 6)',
     expect(check).not.toMatch(
       /dispatchEvent|\.files\s*=[^=]|\.call\(|\.value\s*=[^=]|setAttribute|textContent\s*=[^=]/,
     );
+  });
+
+  it('the three copies of the visible-name count are the same code (sec on #202)', () => {
+    // Each injected function carries its own seenIn (it is serialized alone): one rule, three
+    // copies, so a fix to one that misses the others would let the counts disagree.
+    const copies = [fillGreenhouseForm, resumeShown, clearResume].map((f) => {
+      const m = /const seenIn = \(root[\s\S]*?return text\.split\(name\)\.length - 1;\s*\};/.exec(
+        f.toString(),
+      );
+      expect(m, f.name).not.toBeNull();
+      return m![0].replace(/\s+/g, ' ');
+    });
+    expect(new Set(copies).size).toBe(1);
   });
 
   it('every function injected checks the page’s address first', () => {

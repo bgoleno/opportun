@@ -143,6 +143,35 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
     }
     return false;
   };
+  // How often the name is in the form's visible text: text inside an element that is, or sits
+  // in one that is, hidden, aria-hidden, inert, display:none or visibility:hidden does not
+  // count, so a copy the user cannot see never passes for the form showing the file (#191).
+  const seenIn = (root: Element, name: string): number => {
+    const win = root.ownerDocument.defaultView;
+    if (win === null || name === '') return 0;
+    const hiddenByIt = (n: Element): boolean => {
+      if (n.hasAttribute('hidden') || n.hasAttribute('inert')) return true;
+      if (n.getAttribute('aria-hidden') === 'true') return true;
+      const style = win.getComputedStyle(n);
+      return style.display === 'none' || style.visibility === 'hidden';
+    };
+    const verdicts = new Map<Element, boolean>();
+    const hidden = (el: Element): boolean => {
+      const known = verdicts.get(el);
+      if (known !== undefined) return known;
+      const parent = el.parentElement;
+      const result = hiddenByIt(el) || (el !== root && parent !== null && hidden(parent));
+      verdicts.set(el, result);
+      return result;
+    };
+    const walker = root.ownerDocument.createTreeWalker(root, 4);
+    let text = '';
+    for (let t = walker.nextNode(); t !== null; t = walker.nextNode()) {
+      const parent = t.parentElement;
+      if (parent !== null && !hidden(parent)) text += t.nodeValue ?? '';
+    }
+    return text.split(name).length - 1;
+  };
   // A dropdown widget is a choice whatever its markup carries, not only when it has its role:
   // writing into its search box would open and filter its menu.
   const isChoice = (el: Element): boolean =>
@@ -237,6 +266,11 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
         notFilled.push({ label: text, reason: 'attach_file_yourself' });
       } else if (f.el.tagName === 'INPUT' || f.el.tagName === 'SELECT') {
         notFilled.push({ label: text, reason: 'choose_on_form' });
+        // A reviewed answer for this choice is accounted for by that line: it is never also
+        // reported as having no question (#204).
+        plan.questions.forEach((q, i) => {
+          if (q.labels.some((l) => norm(l) === f.key)) used.add(`q${i}`);
+        });
       }
       continue;
     }
@@ -276,6 +310,21 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
     filled.push(text);
   }
 
+  // A radio or checkbox group the form shows, whose legend is a reviewed answer's label: one
+  // "choose it on the form" line under the legend, and the answer is accounted for (#204).
+  for (const group of Array.from(form.querySelectorAll('fieldset'))) {
+    const legend = group.querySelector('legend');
+    const choices = group.querySelector('input[type="radio"], input[type="checkbox"]');
+    if (legend === null || choices === null || concealed(group, true)) continue;
+    const key = norm(legend.textContent ?? '');
+    const answered = plan.questions.flatMap((q, i) =>
+      q.labels.some((l) => norm(l) === key) ? [`q${i}`] : [],
+    );
+    if (answered.length === 0) continue;
+    for (const m of answered) used.add(m);
+    notFilled.push({ label: shown(legend.textContent ?? ''), reason: 'choose_on_form' });
+  }
+
   plan.standard.forEach((s, i) => {
     if (!used.has(`s${i}`)) notFilled.push({ label: s.name, reason: 'no_matching_question' });
   });
@@ -313,8 +362,9 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
   } else if ((fileInput.files?.length ?? 0) > 0) {
     notFilled.push({ label: 'Resume', reason: 'has_value' });
   } else {
-    // How often the name is on the form now: the popup looks for one more.
-    const before = (form.textContent ?? '').split(name).length - 1;
+    // How often the name is on the form now, where the user can see it: the popup looks for
+    // one more.
+    const before = seenIn(form, name);
     const raw = view.atob(plan.resume.base64);
     const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0));
     const pdf = new view.File([bytes], name, { type: 'application/pdf' });
@@ -330,7 +380,8 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
 }
 
 /**
- * How often the resume's name is on the form now, read only: no event, no write. Null when the
+ * How often the resume's name is on the form now, where the user can see it (#191), read only:
+ * no event, no write. Null when the
  * page is no longer the posting, or has no form. The popup calls it at fixed gaps after the fill.
  */
 export function resumeShown(check: ResumeCheck, doc: Document = document): number | null {
@@ -353,7 +404,36 @@ export function resumeShown(check: ResumeCheck, doc: Document = document): numbe
   if (!onPosting || check.filename === '') return null;
   const form = doc.getElementById('application-form');
   if (form === null || form.tagName !== 'FORM') return null;
-  return (form.textContent ?? '').split(check.filename).length - 1;
+  // How often the name is in the form's visible text: text inside an element that is, or sits
+  // in one that is, hidden, aria-hidden, inert, display:none or visibility:hidden does not
+  // count, so a copy the user cannot see never passes for the form showing the file (#191).
+  const seenIn = (root: Element, name: string): number => {
+    const win = root.ownerDocument.defaultView;
+    if (win === null || name === '') return 0;
+    const hiddenByIt = (n: Element): boolean => {
+      if (n.hasAttribute('hidden') || n.hasAttribute('inert')) return true;
+      if (n.getAttribute('aria-hidden') === 'true') return true;
+      const style = win.getComputedStyle(n);
+      return style.display === 'none' || style.visibility === 'hidden';
+    };
+    const verdicts = new Map<Element, boolean>();
+    const hidden = (el: Element): boolean => {
+      const known = verdicts.get(el);
+      if (known !== undefined) return known;
+      const parent = el.parentElement;
+      const result = hiddenByIt(el) || (el !== root && parent !== null && hidden(parent));
+      verdicts.set(el, result);
+      return result;
+    };
+    const walker = root.ownerDocument.createTreeWalker(root, 4);
+    let text = '';
+    for (let t = walker.nextNode(); t !== null; t = walker.nextNode()) {
+      const parent = t.parentElement;
+      if (parent !== null && !hidden(parent)) text += t.nodeValue ?? '';
+    }
+    return text.split(name).length - 1;
+  };
+  return seenIn(form, check.filename);
 }
 
 /**
@@ -397,11 +477,37 @@ export function clearResume(
   ) {
     return 'no_input';
   }
+  // How often the name is in the form's visible text: text inside an element that is, or sits
+  // in one that is, hidden, aria-hidden, inert, display:none or visibility:hidden does not
+  // count, so a copy the user cannot see never passes for the form showing the file (#191).
+  const seenIn = (root: Element, name: string): number => {
+    const win = root.ownerDocument.defaultView;
+    if (win === null || name === '') return 0;
+    const hiddenByIt = (n: Element): boolean => {
+      if (n.hasAttribute('hidden') || n.hasAttribute('inert')) return true;
+      if (n.getAttribute('aria-hidden') === 'true') return true;
+      const style = win.getComputedStyle(n);
+      return style.display === 'none' || style.visibility === 'hidden';
+    };
+    const verdicts = new Map<Element, boolean>();
+    const hidden = (el: Element): boolean => {
+      const known = verdicts.get(el);
+      if (known !== undefined) return known;
+      const parent = el.parentElement;
+      const result = hiddenByIt(el) || (el !== root && parent !== null && hidden(parent));
+      verdicts.set(el, result);
+      return result;
+    };
+    const walker = root.ownerDocument.createTreeWalker(root, 4);
+    let text = '';
+    for (let t = walker.nextNode(); t !== null; t = walker.nextNode()) {
+      const parent = t.parentElement;
+      if (parent !== null && !hidden(parent)) text += t.nodeValue ?? '';
+    }
+    return text.split(name).length - 1;
+  };
   // Look once more first: a name the form has just shown means it took the file (tl on #187).
-  if (
-    check.filename !== '' &&
-    (form.textContent ?? '').split(check.filename).length - 1 > check.before
-  ) {
+  if (check.filename !== '' && seenIn(form, check.filename) > check.before) {
     return 'shown';
   }
   const fileInput = file as HTMLInputElement;

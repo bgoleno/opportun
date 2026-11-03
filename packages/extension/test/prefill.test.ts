@@ -19,7 +19,12 @@ import {
   type GetLike,
   type PrefillAttempt,
 } from '../src/prefill';
-import { mountPopup, type PopupDeps } from '../src/popupController';
+import {
+  mountPopup,
+  RESUME_CHECKING,
+  RESUME_UNCONFIRMED,
+  type PopupDeps,
+} from '../src/popupController';
 import type { SettingsStorage } from '../src/settings';
 import {
   BOARD,
@@ -77,6 +82,18 @@ const pdf = (bytes: Uint8Array = PDF, type = 'application/pdf') =>
     arrayBuffer: async () => bytes.slice().buffer,
   }) as FetchResponse;
 
+/** An in-memory stand-in for storage.session. */
+function memoryStore(): SettingsStorage & { data: Record<string, unknown> } {
+  const data: Record<string, unknown> = {};
+  return {
+    data,
+    get: async (keys) => Object.fromEntries(Object.entries(data).filter(([k]) => keys.includes(k))),
+    set: async (items) => {
+      Object.assign(data, items);
+    },
+  };
+}
+
 function setup(opts: {
   tabUrl?: string;
   current?: FetchResponse | (() => Promise<FetchResponse>);
@@ -87,6 +104,9 @@ function setup(opts: {
   /** Runs inside each of the popup's waits between resume checks, as the user or page might. */
   duringWait?: (page: ReturnType<typeof loadForm>, n: number) => void;
   fill?: 'fixture' | 'fails';
+  /** storage.session, shared between two popups opened one after the other (#191). */
+  checkStore?: SettingsStorage | null;
+  tabId?: number;
 }) {
   const window = new Window({
     url: 'chrome-extension://abc/popup.html',
@@ -125,8 +145,9 @@ function setup(opts: {
       throw new Error('prefill never POSTs');
     }),
     runReadPage: vi.fn(async () => null),
+    checkStore: opts.checkStore === undefined ? memoryStore() : opts.checkStore,
     get,
-    activeTab: vi.fn(async () => ({ id: 7, url: opts.tabUrl ?? TAB_URL })),
+    activeTab: vi.fn(async () => ({ id: opts.tabId ?? 7, url: opts.tabUrl ?? TAB_URL })),
     runExtract: vi.fn(async () => null),
     runFill: vi.fn(async (_tabId: number, plan: FillPlan) => {
       // As executeScript's args travel: JSON only. A plan that did not survive would differ.
@@ -677,6 +698,25 @@ describe('#203 in the popup: a withheld email or phone is listed once', () => {
   });
 });
 
+describe('#204 in the popup: an answer for a dropdown is listed once', () => {
+  it('a reviewed answer for Gender reads "choose it on the form", never also "no question"', async () => {
+    const s = setup({
+      current: json(200, {
+        attempt: attempt({
+          answers: [
+            { label: 'Why us?', value: 'Placeholder answer.' },
+            { label: 'Gender', value: 'Placeholder' },
+          ],
+        }),
+        reason: null,
+      }),
+    });
+    await clickFill(s);
+    const gender = listed(s, 'Not filled in').filter((l) => l.startsWith('Gender:'));
+    expect(gender).toEqual(['Gender: choose it on the form']);
+  });
+});
+
 describe('buildPlan', () => {
   it('maps each withheld key to the field it names, with no value (#196, tl on #201)', () => {
     const p = buildPlan(
@@ -725,5 +765,97 @@ describe('buildPlan', () => {
       'https://www.linkedin.com/in/jane-doe-example',
     );
     expect(listed(s, 'Filled in')).toContain('LinkedIn');
+  });
+});
+
+describe('#191: a popup that closes before the resume check ends', () => {
+  it('says to keep the window open while it checks, and leaves no note once it has its answer', async () => {
+    const store = memoryStore();
+    const seen: string[] = [];
+    const s = setup({
+      showsFileName: false,
+      checkStore: store,
+      duringWait: () => {
+        seen.push(s.$('status').textContent ?? '');
+        seen.push(JSON.stringify(store.data['resumeCheckPending:7']));
+      },
+    });
+    await clickFill(s);
+    expect(seen[0]).toBe(RESUME_CHECKING);
+    // While it checks, the note names this tab and posting (and nothing of the resume).
+    expect(JSON.parse(seen[1]!)).toEqual({
+      tabId: 7,
+      board: BOARD,
+      jobId: JOB_ID,
+      at: expect.any(Number),
+    });
+    expect(store.data['resumeCheckPending:7']).toBeNull();
+  });
+
+  it('the next popup on that tab says the resume was not confirmed, once', async () => {
+    const store = memoryStore();
+    const first = setup({ checkStore: store, showsFileName: false });
+    // The popup is gone mid-check: its next look never comes back.
+    first.deps.runResumeCheck = vi.fn(() => new Promise<number | null>(() => undefined));
+    await mountPopup(first.doc, first.deps);
+    first.$('prefill').click();
+    await vi.waitFor(() => expect(first.$('status').textContent).toBe(RESUME_CHECKING));
+    expect(store.data['resumeCheckPending:7']).not.toBeNull();
+
+    const next = setup({ checkStore: store });
+    await mountPopup(next.doc, next.deps);
+    await vi.waitFor(() => expect(next.$('status').textContent).toBe(RESUME_UNCONFIRMED));
+    expect(store.data['resumeCheckPending:7']).toBeNull();
+    // Nothing was asked of the server or the page to say so.
+    expect(next.get).not.toHaveBeenCalled();
+    expect(next.deps.runResumeCheck).not.toHaveBeenCalled();
+
+    const again = setup({ checkStore: store });
+    await mountPopup(again.doc, again.deps);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(again.$('status').textContent).toBe('');
+  });
+
+  it('a popup on another tab says nothing and leaves the note for its own tab', async () => {
+    const store = memoryStore();
+    store.data['resumeCheckPending:7'] = { tabId: 7, board: BOARD, jobId: JOB_ID, at: Date.now() };
+    const other = setup({ checkStore: store, tabId: 8 });
+    await mountPopup(other.doc, other.deps);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(other.$('status').textContent).toBe('');
+    expect(store.data['resumeCheckPending:7']).not.toBeNull();
+  });
+
+  it("a fill in another tab keeps this tab's unfinished note (tl on #202)", async () => {
+    const store = memoryStore();
+    const pending = { tabId: 7, board: BOARD, jobId: JOB_ID, at: Date.now() };
+    store.data['resumeCheckPending:7'] = pending;
+    const other = setup({ checkStore: store, tabId: 8, showsFileName: false });
+    await clickFill(other);
+    expect(store.data['resumeCheckPending:7']).toEqual(pending);
+    expect(store.data['resumeCheckPending:8']).toBeNull();
+    const back = setup({ checkStore: store, tabId: 7 });
+    await mountPopup(back.doc, back.deps);
+    await vi.waitFor(() => expect(back.$('status').textContent).toBe(RESUME_UNCONFIRMED));
+  });
+
+  it('on that tab but another page, or after an hour, it is dropped without a word', async () => {
+    for (const [note, tabUrl] of [
+      [{ tabId: 7, board: BOARD, jobId: JOB_ID, at: Date.now() }, 'https://example.com/'],
+      [{ tabId: 7, board: BOARD, jobId: JOB_ID, at: Date.now() - 61 * 60 * 1000 }, undefined],
+    ] as const) {
+      const store = memoryStore();
+      store.data['resumeCheckPending:7'] = note;
+      const s = setup({ checkStore: store, ...(tabUrl === undefined ? {} : { tabUrl }) });
+      await mountPopup(s.doc, s.deps);
+      await vi.waitFor(() => expect(store.data['resumeCheckPending:7']).toBeNull());
+      expect(s.$('status').textContent).toBe('');
+    }
+  });
+
+  it('a browser without storage.session still fills and checks, with no note', async () => {
+    const s = setup({ checkStore: null });
+    await clickFill(s);
+    expect(listed(s, 'Filled in')).toContain('Resume');
   });
 });

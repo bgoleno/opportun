@@ -36,6 +36,12 @@ import {
 
 export interface PopupDeps {
   storage: SettingsStorage;
+  /**
+   * The extension's session storage (storage.session: this browser session only, never synced),
+   * or null where the browser has none. It holds one note while the resume check runs, so a
+   * popup that closed before the check ended can be told about by the next one (#191).
+   */
+  checkStore: SettingsStorage | null;
   /** The address this copy was downloaded from, '' for a build made from source (design D9). */
   bakedServerUrl: () => Promise<string>;
   fetch: FetchLike;
@@ -82,6 +88,36 @@ const SERVER_URL_ERRORS = {
 } as const;
 const TOKEN_ERROR = 'Paste a device token (it starts with odt_).';
 const SERVER_CHANGED = 'Server changed: re-enter the token for the new server.';
+
+/**
+ * The note left while the resume check runs (#191): which tab and posting, and since when. One
+ * key per tab (tl on #202), so a fill in another window never overwrites an unfinished note.
+ */
+const checkPendingKey = (tabId: number): string => `resumeCheckPending:${tabId}`;
+/** A note older than this is not about the fill the user remembers: it is dropped silently. */
+const CHECK_PENDING_MAX_AGE_MS = 60 * 60 * 1000;
+export const RESUME_CHECKING =
+  'Checking that the form shows your resume. Keep this window open until it finishes (about 2 seconds).';
+export const RESUME_UNCONFIRMED =
+  'Your resume was not confirmed: this window closed before the check finished. Look at the form, and attach your resume yourself if it is not shown there.';
+
+interface CheckPending {
+  tabId: number;
+  board: string;
+  jobId: string;
+  at: number;
+}
+
+function isCheckPending(v: unknown): v is CheckPending {
+  if (typeof v !== 'object' || v === null) return false;
+  const p = v as Partial<CheckPending>;
+  return (
+    typeof p.tabId === 'number' &&
+    typeof p.board === 'string' &&
+    typeof p.jobId === 'string' &&
+    typeof p.at === 'number'
+  );
+}
 
 /** An https page, the only kind a confirmation page can be (the server's rule too). */
 function isHttpsPage(href: string): boolean {
@@ -389,7 +425,18 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       // bounded number of times; if it never shows, take back exactly our file.
       const report = { ...filled, filled: [...filled.filled], notFilled: [...filled.notFilled] };
       if (filled.resume !== null) {
-        show({ tone: 'info', text: 'Checking that the form shows your resume...' });
+        show({ tone: 'info', text: RESUME_CHECKING });
+        // A popup closes when it loses focus, and this check would end with it, leaving the
+        // file set and unconfirmed (sec on #187). The note says so to the next popup on this
+        // tab, and is cleared once the check has its answer. Popup storage only: nothing new
+        // runs in the page, and there is still no background worker (#191).
+        const note: CheckPending = {
+          tabId: tab.id,
+          board: pinned.board,
+          jobId: pinned.jobId,
+          at: Date.now(),
+        };
+        await deps.checkStore?.set({ [checkPendingKey(tab.id)]: note }).catch(() => undefined);
         const check: ResumeCheck = {
           board: pinned.board,
           jobId: pinned.jobId,
@@ -427,6 +474,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
                   ? 'has_value'
                   : 'resume_unchecked';
         }
+        await deps.checkStore?.set({ [checkPendingKey(tab.id)]: null }).catch(() => undefined);
         if (reason === null) report.filled.push('Resume');
         else report.notFilled.push({ label: 'Resume', reason });
       }
@@ -485,14 +533,37 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     });
   });
 
+  /**
+   * A resume check that a closed popup left unfinished on this tab's posting (#191): said once,
+   * then forgotten. Another tab's note is under its own key, for that tab's popup; one older than
+   * an hour, or for another page now, is dropped without a word.
+   */
+  const tellUnfinishedCheck = async (
+    tabId: number | null,
+    posting: { board: string; jobId: string } | null,
+  ): Promise<void> => {
+    if (deps.checkStore === null || tabId === null) return;
+    const key = checkPendingKey(tabId);
+    // Only this tab's key is asked for, so the one value back is its note, if any.
+    const [note] = Object.values(await deps.checkStore.get([key]));
+    if (!isCheckPending(note)) return;
+    await deps.checkStore.set({ [key]: null });
+    if (note.tabId !== tabId || Date.now() - note.at > CHECK_PENDING_MAX_AGE_MS) return;
+    if (posting !== null && samePosting(posting, note)) {
+      show({ tone: 'error', text: RESUME_UNCONFIRMED });
+    }
+  };
+
   // The Assisted apply section shows only over a Greenhouse posting tab: decided from the tab's
   // address, which the popup already knows; nothing in the page is read for it.
   void (async () => {
     try {
       const tab = await deps.activeTab();
-      assist.hidden = tab?.url === undefined || greenhouseJobOf(tab.url) === null;
+      const posting = tab?.url === undefined ? null : greenhouseJobOf(tab.url);
+      assist.hidden = posting === null;
       // Any https page may be a thank-you page; which one counts is the server's to say.
       confirm.hidden = tab?.url === undefined || !isHttpsPage(tab.url);
+      await tellUnfinishedCheck(tab?.id ?? null, posting);
     } catch {
       assist.hidden = true;
       confirm.hidden = true;
