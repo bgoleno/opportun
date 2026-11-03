@@ -5,6 +5,7 @@
 // Opportun never submits an application. The last step hands off: the server returns the
 // employer's address, the browser opens it in a new tab, and the user fills in and submits the
 // form there themselves.
+import { submissionFieldProblem } from '@opportun/core';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { ArrowLeft, Check, Copy, Download, Loader2 } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
@@ -38,6 +39,7 @@ import {
   clockTime,
   hostOf,
   DETAIL_FIELDS,
+  detailLabel,
   detailRows,
   isLive,
   snapshotErrorText,
@@ -66,11 +68,14 @@ import { ReviewUsageLine } from './ReviewUsage';
 export function ApplyPage({
   opportunityId,
   step,
-  blocked,
+  blocked = false,
+  cleared,
 }: {
   opportunityId: string;
   step: StepId;
-  blocked: boolean;
+  blocked?: boolean;
+  /** Details a start-again did not carry over, named on the details step (#186). */
+  cleared?: string[];
 }) {
   const opp = useOpportunity(opportunityId);
   const submissions = useOpportunitySubmissions(opportunityId);
@@ -151,7 +156,7 @@ export function ApplyPage({
           .
         </p>
       ) : step === 'details' ? (
-        <DetailsStep opp={o} live={live} />
+        <DetailsStep opp={o} live={live} cleared={cleared ?? []} />
       ) : step === 'review' ? (
         <ReviewStep opp={o} live={live} items={items} ats={ats} host={host} />
       ) : (
@@ -216,16 +221,23 @@ function ResumeStep({
   async function next() {
     setError(null);
     try {
+      let cleared: string[] = [];
       if (live === undefined) {
         const draft = await create.mutateAsync({ idempotencyKey, resumeId });
-        if (
-          expired !== undefined &&
-          (expired.answers.length > 0 || Object.keys(expired.fields).length > 0)
-        ) {
-          await patch.mutateAsync({
-            id: draft.id,
-            patch: { fields: expired.fields, answers: expired.answers },
-          });
+        if (expired !== undefined) {
+          // Only what passes today's checks is carried over (#186): a value stored before a
+          // check existed would refuse the whole copy. What is dropped is named on the next step.
+          const entries = Object.entries(expired.fields);
+          const passes = ([k, v]: [string, string]) =>
+            submissionFieldProblem(Object.fromEntries([[k, v]])) === null;
+          const fields = Object.fromEntries(entries.filter(passes));
+          cleared = entries.filter((e) => !passes(e)).map(([k]) => k);
+          if (expired.answers.length > 0 || Object.keys(fields).length > 0) {
+            await patch.mutateAsync({
+              id: draft.id,
+              patch: { fields, answers: expired.answers },
+            });
+          }
         }
       } else if (live.resumeId !== resumeId) {
         await patch.mutateAsync({ id: live.id, patch: { resumeId } });
@@ -233,7 +245,7 @@ function ResumeStep({
       await navigate({
         to: '/opportunities/$id/apply',
         params: { id: opp.id },
-        search: { step: 'details' },
+        search: { step: 'details', ...(cleared.length > 0 ? { cleared } : {}) },
       });
     } catch (err) {
       setError(submissionErrorText(err));
@@ -413,7 +425,15 @@ function sortedEntries(o: Record<string, string>): [string, string][] {
   return Object.entries(o).sort(([a], [b]) => a.localeCompare(b));
 }
 
-function DetailsStep({ opp, live }: { opp: OpportunityView; live: SubmissionView }) {
+function DetailsStep({
+  opp,
+  live,
+  cleared,
+}: {
+  opp: OpportunityView;
+  live: SubmissionView;
+  cleared: string[];
+}) {
   const navigate = useNavigate();
   const patch = usePatchSubmission(opp.id);
   const [fields, setFields] = useState<Record<string, string>>(() => ({ ...live.fields }));
@@ -461,6 +481,14 @@ function DetailsStep({ opp, live }: { opp: OpportunityView; live: SubmissionView
 
   return (
     <div className="grid gap-4">
+      {cleared.length > 0 ? (
+        <Notice label="Details not carried over">
+          <span>
+            Not carried over from your earlier application, because they no longer pass the checks:{' '}
+            {cleared.map(detailLabel).join(', ')}. Enter them again if you need them.
+          </span>
+        </Notice>
+      ) : null}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Your details</CardTitle>
@@ -574,6 +602,7 @@ type Banner =
   | { kind: 'stale' }
   | { kind: 'expired'; at: number }
   | { kind: 'cap'; resetAt: number | null }
+  | { kind: 'rate'; until: number | null }
   | { kind: 'destination' }
   | { kind: 'changed' }
   | { kind: 'error' };
@@ -734,6 +763,10 @@ function ReviewStep({
       else if (code === 'daily_review_cap') {
         const resetAt = err instanceof ApiError ? Number(err.details.resetAt) : NaN;
         setBanner({ kind: 'cap', resetAt: Number.isFinite(resetAt) ? resetAt : null });
+      } else if (code === 'rate_limited') {
+        // Too many reviews or handoffs in a minute (#186): when it frees up, from retry-after.
+        const sec = err instanceof ApiError ? Number(err.details.retryAfterSec) : NaN;
+        setBanner({ kind: 'rate', until: Number.isFinite(sec) ? Date.now() + sec * 1000 : null });
       } else if (code === 'destination_not_allowed') setBanner({ kind: 'destination' });
       else if (code === 'reapply_reason_required') {
         // An earlier application this screen did not know of (another opportunity): ask now.
@@ -884,6 +917,17 @@ function ReviewStep({
                 ? `You can confirm another after ${formatDateTime(banner.resetAt)}.`
                 : 'You can confirm another later.'}{' '}
               Your draft is saved.
+            </span>
+          </Notice>
+        ) : null}
+        {banner?.kind === 'rate' ? (
+          <Notice role="alert">
+            <span>
+              <strong>Too many tries in a short time.</strong>{' '}
+              {banner.until !== null
+                ? `Try again after ${clockTime(banner.until)}.`
+                : 'Try again in a minute.'}{' '}
+              Nothing was opened. Your draft is saved.
             </span>
           </Notice>
         ) : null}

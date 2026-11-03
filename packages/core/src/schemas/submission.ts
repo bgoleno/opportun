@@ -107,13 +107,26 @@ export type SubmissionFieldRefusal = (typeof SUBMISSION_FIELD_REFUSALS)[number];
 /** Control characters, and the line and paragraph separators that also break a line. */
 const NOT_ONE_LINE = /[\p{Cc}\u2028\u2029]/u;
 
+/**
+ * A joiner or non-joiner (U+200C, U+200D) between two letters or marks: some scripts need one in
+ * a name (Devanagari conjuncts, Persian), so it is the one format character a name may hold
+ * (tl's ruling on https://github.com/bgoleno/opportun/issues/186).
+ */
+const JOINER_IN_A_WORD = /(?<=[\p{L}\p{M}])[\u200C\u200D](?=[\p{L}\p{M}])/gu;
+/**
+ * Format characters: bidi controls, zero-width spaces, a byte order mark, a soft hyphen. Each is
+ * invisible, so the review would not show what is filled (#186).
+ */
+const FORMAT = /\p{Cf}/u;
+
 function isPlainName(value: string): boolean {
   const length = [...value].length;
   return (
     value === value.trim() &&
     length >= 1 &&
     length <= SUBMISSION_NAME_MAX_LENGTH &&
-    !NOT_ONE_LINE.test(value)
+    !NOT_ONE_LINE.test(value) &&
+    !FORMAT.test(value.replace(JOINER_IN_A_WORD, ''))
   );
 }
 
@@ -123,10 +136,44 @@ const HttpUrlSchema = z.url({ protocol: /^https?$/ });
 /**
  * An absolute http or https address with a host, exactly as typed: no surrounding or inner
  * whitespace, which the URL parser would otherwise trim or encode into something the user
- * never saw on the review.
+ * never saw on the review, no format character, and no username or password (#186).
  */
 function isWebAddress(value: string): boolean {
-  return !/\s/u.test(value) && HttpUrlSchema.safeParse(value).success;
+  if (/\s/u.test(value) || FORMAT.test(value)) return false;
+  if (!HttpUrlSchema.safeParse(value).success) return false;
+  // No username or password (#186), as destinationAllowed refuses them: an @ before the host
+  // makes the address show one site and open another. Three checks, any one refusing:
+  // - nothing but the host may follow the scheme's //: an extra slash or a backslash there is
+  //   skipped by the URL parser, so the text after it would read as no authority at all
+  //   (tl and sec on #194, https:///user@evil.example/);
+  // - no @ in the authority as typed: after the scheme, up to the first / ? # or backslash
+  //   (an @ in a path is fine);
+  // - the parsed address has no username and no password, whatever the text looked like.
+  const scheme = /^https?:\/\//i.exec(value);
+  if (scheme === null) return false;
+  const rest = value.slice(scheme[0].length);
+  if (/^[/\\]/.test(rest)) return false;
+  const authority = rest.split(/[/?#\\]/)[0] ?? '';
+  if (authority.includes('@')) return false;
+  const parsed = parseUrl(value);
+  return parsed !== null && parsed.username === '' && parsed.password === '';
+}
+
+/**
+ * The platform's URL parser (present in Node, browsers and the extension), reached through
+ * globalThis because this package's types carry no DOM or Node lib. Null when it cannot parse,
+ * or is missing: the caller then refuses, never assumes.
+ */
+function parseUrl(value: string): { username: string; password: string } | null {
+  const Url = (
+    globalThis as { URL?: new (input: string) => { username: string; password: string } }
+  ).URL;
+  if (Url === undefined) return null;
+  try {
+    return new Url(value);
+  } catch {
+    return null;
+  }
 }
 
 /**

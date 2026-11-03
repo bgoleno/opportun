@@ -572,6 +572,23 @@ describe('the report is text, never markup', () => {
   });
 });
 
+describe('#192 in the popup: a shared label is listed for the user to fill', () => {
+  it('a text question and a dropdown both labelled Website: listed as not filled, with why', async () => {
+    const s = setup({
+      html: MANY_QUESTIONS.replace(
+        '<h2>Voluntary Self-Identification</h2>',
+        '<div class="field-wrapper"><label for="q_select">Website</label><select id="q_select"><option>Yes</option></select></div><h2>Voluntary Self-Identification</h2>',
+      ),
+    });
+    await clickFill(s);
+    expect(valueOf(s.page.doc, 'question_9000102')).toBe('');
+    expect(listed(s, 'Filled in')).not.toContain('Website');
+    expect(listed(s, 'Not filled in')).toContain(
+      'Website: more than one question or answer has this label, so it was not filled: answer it on the form',
+    );
+  });
+});
+
 describe('buildPlan', () => {
   it('maps the four standard fields by id and the two links and answers by label, leaving out empty values', () => {
     const p = buildPlan(

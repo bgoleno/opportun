@@ -413,6 +413,83 @@ describe('tl on #187: ambiguity, react-selects by structure, and the edges of ma
   });
 });
 
+describe('#192: a label shared by a text field and a choice control is ambiguous', () => {
+  /** MANY_QUESTIONS with `extra` added just before the self-identification block. */
+  const withExtra = (extra: string) =>
+    MANY_QUESTIONS.replace(
+      '<h2>Voluntary Self-Identification</h2>',
+      `${extra}<h2>Voluntary Self-Identification</h2>`,
+    );
+
+  const cases: [string, string][] = [
+    [
+      'a native select',
+      `<div class="field-wrapper"><label for="q_select">Website</label><select id="q_select"><option value="">Choose</option><option>Yes</option></select></div>`,
+    ],
+    [
+      'a react-select',
+      `<div class="field-wrapper"><div class="select"><div class="select__container"><label for="q_rs">Website</label><input id="q_rs" class="select__input" role="combobox" aria-autocomplete="list" aria-haspopup="true" aria-expanded="false" value="" /></div></div></div>`,
+    ],
+    [
+      'a radio input labelled for it',
+      `<div class="field-wrapper"><label for="q_radio">Website</label><input id="q_radio" type="radio" name="q_radio" value="yes" /></div>`,
+    ],
+    [
+      'a radio group whose legend carries the label',
+      `<fieldset class="field-wrapper"><legend>Website</legend><label for="q_r1">Yes</label><input id="q_r1" type="radio" name="q_rg" value="yes" /><label for="q_r2">No</label><input id="q_r2" type="radio" name="q_rg" value="no" /></fieldset>`,
+    ],
+    [
+      'a checkbox group whose legend carries the label',
+      `<fieldset class="field-wrapper"><legend>Website *</legend><label for="q_c1">Has one</label><input id="q_c1" type="checkbox" value="yes" /></fieldset>`,
+    ],
+  ];
+
+  for (const [what, extra] of cases) {
+    it(`a text question and ${what} with one label: the text field is not filled, and it is reported ambiguous`, async () => {
+      const { doc, report, events } = await fill(withExtra(extra));
+      expect(valueOf(doc, 'question_9000102')).toBe('');
+      expect(events.filter((e) => e.target === 'question_9000102')).toEqual([]);
+      const r = ok(report);
+      expect(r.notFilled).toContainEqual({ label: 'Website', reason: 'ambiguous' });
+      expect(r.filled).not.toContain('Website');
+      // The reviewed Website value is accounted for: not reported again as unmatched.
+      expect(r.notFilled).not.toContainEqual({ label: 'Website', reason: 'no_matching_question' });
+      // Everything else is filled as before.
+      expect(valueOf(doc, 'first_name')).toBe('Jane');
+      expect(valueOf(doc, 'question_9000110')).toBe('https://www.linkedin.com/in/jane-doe-example');
+    });
+  }
+
+  it('a choice control with another label leaves a text question with its own label filled', async () => {
+    const { doc, report } = await fill(
+      withExtra(
+        `<div class="field-wrapper"><label for="q_select">Website type</label><select id="q_select"><option>Personal</option></select></div>`,
+      ),
+    );
+    expect(valueOf(doc, 'question_9000102')).toBe('https://jane.example.com');
+    expect(ok(report).filled).toContain('Website');
+  });
+
+  it('a hidden radio group whose legend shares the label does not make it ambiguous (qa on #197, #198)', async () => {
+    const { doc, report } = await fill(
+      withExtra(
+        `<fieldset class="field-wrapper" hidden><legend>Website</legend><label for="q_r1">Yes</label><input id="q_r1" type="radio" name="q_rg" value="yes" /></fieldset>`,
+      ),
+    );
+    expect(valueOf(doc, 'question_9000102')).toBe('https://jane.example.com');
+    expect(ok(report).filled).toContain('Website');
+  });
+
+  it('a hidden choice control does not make a shown text question ambiguous', async () => {
+    const { doc } = await fill(
+      withExtra(
+        `<div class="field-wrapper" hidden><label for="q_select">Website</label><select id="q_select"><option>Yes</option></select></div>`,
+      ),
+    );
+    expect(valueOf(doc, 'question_9000102')).toBe('https://jane.example.com');
+  });
+});
+
 describe('acceptance 2: one write per field, input and change only', () => {
   it('uses the native setter: the controlled stand-in ignores every plain assignment', async () => {
     const { doc, ignoredAssignments } = await fill(MANY_QUESTIONS);

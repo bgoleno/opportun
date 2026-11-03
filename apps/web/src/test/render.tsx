@@ -63,17 +63,19 @@ export function mockApi(routeTable: Record<string, unknown>) {
     const route = routes.get(key);
     let status = 200;
     let payload: unknown = route;
+    let headers: Record<string, string> = {};
     if (typeof route === 'function') {
       const out = await (route as Handler)(call);
       if (typeof out === 'object' && out !== null && 'status' in out) {
         status = (out as { status: number }).status;
         payload = (out as { body?: unknown }).body;
+        headers = (out as { headers?: Record<string, string> }).headers ?? {};
       } else {
         payload = out;
       }
     }
-    if (status === 204) return new Response(null, { status });
-    return new Response(payload === undefined ? '' : JSON.stringify(payload), { status });
+    if (status === 204) return new Response(null, { status, headers });
+    return new Response(payload === undefined ? '' : JSON.stringify(payload), { status, headers });
   });
   vi.stubGlobal('fetch', fetchMock);
   return { calls, fetchMock };
