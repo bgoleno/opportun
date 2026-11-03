@@ -522,6 +522,56 @@ describe('#196: a withheld field is reported once, as withheld (tl on #201)', ()
   });
 });
 
+describe('#204: an answer for a choice control is listed once, as choose it on the form', () => {
+  const withExtra = (extra: string) =>
+    MANY_QUESTIONS.replace(
+      '<h2>Voluntary Self-Identification</h2>',
+      `${extra}<h2>Voluntary Self-Identification</h2>`,
+    );
+  const answering = (label: string) =>
+    plan({ questions: [...plan().questions, { labels: [label], name: label, value: 'Yes' }] });
+  const linesFor = (r: FillReport, label: string) =>
+    ok(r).notFilled.filter((n) => n.label === label);
+
+  it('a react-select (qa on #201: Gender)', async () => {
+    const { report } = await fill(MANY_QUESTIONS, answering('Gender'));
+    expect(linesFor(report, 'Gender')).toEqual([{ label: 'Gender', reason: 'choose_on_form' }]);
+  });
+
+  it('a native select', async () => {
+    const { report } = await fill(
+      withExtra(
+        `<div class="field-wrapper"><label for="q_sel">Placeholder select question</label><select id="q_sel"><option>Yes</option></select></div>`,
+      ),
+      answering('Placeholder select question'),
+    );
+    expect(linesFor(report, 'Placeholder select question')).toEqual([
+      { label: 'Placeholder select question', reason: 'choose_on_form' },
+    ]);
+  });
+
+  it('a radio group, by its legend', async () => {
+    const { doc, report, events } = await fill(
+      withExtra(
+        `<fieldset class="field-wrapper"><legend>Placeholder radio question *</legend><label for="q_r1">Yes</label><input id="q_r1" type="radio" name="q_rg" value="yes" /><label for="q_r2">No</label><input id="q_r2" type="radio" name="q_rg" value="no" /></fieldset>`,
+      ),
+      answering('Placeholder radio question'),
+    );
+    expect(linesFor(report, 'Placeholder radio question')).toEqual([
+      { label: 'Placeholder radio question', reason: 'choose_on_form' },
+    ]);
+    expect((doc.getElementById('q_r1') as HTMLInputElement).checked).toBe(false);
+    expect(events.filter((e) => e.target.startsWith('q_r'))).toEqual([]);
+  });
+
+  it('an answer that matches no question at all still says so (criterion 2)', async () => {
+    const { report } = await fill(MANY_QUESTIONS, answering('A question this form does not ask'));
+    expect(linesFor(report, 'A question this form does not ask')).toEqual([
+      { label: 'A question this form does not ask', reason: 'no_matching_question' },
+    ]);
+  });
+});
+
 describe('acceptance 2: one write per field, input and change only', () => {
   it('uses the native setter: the controlled stand-in ignores every plain assignment', async () => {
     const { doc, ignoredAssignments } = await fill(MANY_QUESTIONS);

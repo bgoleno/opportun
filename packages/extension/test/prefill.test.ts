@@ -654,6 +654,25 @@ describe('#196: a field the server withholds is listed for the user, with its ow
   });
 });
 
+describe('#204 in the popup: an answer for a dropdown is listed once', () => {
+  it('a reviewed answer for Gender reads "choose it on the form", never also "no question"', async () => {
+    const s = setup({
+      current: json(200, {
+        attempt: attempt({
+          answers: [
+            { label: 'Why us?', value: 'Placeholder answer.' },
+            { label: 'Gender', value: 'Placeholder' },
+          ],
+        }),
+        reason: null,
+      }),
+    });
+    await clickFill(s);
+    const gender = listed(s, 'Not filled in').filter((l) => l.startsWith('Gender:'));
+    expect(gender).toEqual(['Gender: choose it on the form']);
+  });
+});
+
 describe('buildPlan', () => {
   it('maps each withheld key to the field it names, with no value (#196, tl on #201)', () => {
     const p = buildPlan(
