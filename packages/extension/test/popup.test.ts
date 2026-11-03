@@ -89,6 +89,9 @@ function setup(
       throw new Error('no GET in the capture tests');
     }),
     runFill: vi.fn(async () => null),
+    runResumeCheck: vi.fn(async () => null),
+    runResumeClear: vi.fn(async () => 'wrong_page' as const),
+    wait: vi.fn(async () => {}),
   };
   const $ = <T extends HTMLElement>(id: string) => doc.getElementById(id) as T;
   return { doc, data, deps, fetch, $ };

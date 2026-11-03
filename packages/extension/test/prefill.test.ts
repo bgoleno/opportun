@@ -5,8 +5,20 @@ import { readFileSync } from 'node:fs';
 import { Window } from 'happy-dom';
 import { describe, expect, it, vi } from 'vitest';
 import type { FetchResponse } from '../src/api';
-import { fillGreenhouseForm, type FillPlan } from '../src/greenhouseFill';
-import { buildPlan, MAX_RESUME_BYTES, type GetLike, type PrefillAttempt } from '../src/prefill';
+import {
+  clearResume,
+  fillGreenhouseForm,
+  resumeShown,
+  type FillPlan,
+  type ResumeCheck,
+} from '../src/greenhouseFill';
+import {
+  buildPlan,
+  MAX_RESUME_BYTES,
+  RESUME_CHECKS,
+  type GetLike,
+  type PrefillAttempt,
+} from '../src/prefill';
 import { mountPopup, type PopupDeps } from '../src/popupController';
 import type { SettingsStorage } from '../src/settings';
 import {
@@ -63,7 +75,9 @@ function setup(opts: {
   tabUrl?: string;
   current?: FetchResponse | (() => Promise<FetchResponse>);
   snapshot?: FetchResponse;
-  showsFileName?: boolean;
+  showsFileName?: boolean | 'macrotask';
+  /** Runs inside each of the popup's waits between resume checks, as the user or page might. */
+  duringWait?: (page: ReturnType<typeof loadForm>, n: number) => void;
   fill?: 'fixture' | 'fails';
 }) {
   const window = new Window({
@@ -96,6 +110,7 @@ function setup(opts: {
     throw new Error(`unexpected GET ${url}`);
   });
   const plans: FillPlan[] = [];
+  let waits = 0;
   const deps: PopupDeps = {
     storage,
     fetch: vi.fn(async () => {
@@ -110,6 +125,18 @@ function setup(opts: {
       expect(sent).toEqual(plan);
       plans.push(sent);
       return opts.fill === 'fails' ? null : fillGreenhouseForm(sent, page.doc);
+    }),
+    runResumeCheck: vi.fn(async (_tabId: number, check: ResumeCheck) =>
+      resumeShown(JSON.parse(JSON.stringify(check)) as ResumeCheck, page.doc),
+    ),
+    runResumeClear: vi.fn(async (_tabId: number, check: ResumeCheck & { size: number }) =>
+      clearResume(JSON.parse(JSON.stringify(check)) as ResumeCheck & { size: number }, page.doc),
+    ),
+    // The popup's own timer, made deterministic: each wait lets the page's pending timers run.
+    wait: vi.fn(async () => {
+      waits += 1;
+      opts.duringWait?.(page, waits);
+      await new Promise((r) => page.window.setTimeout(r, 1));
     }),
     requestOrigin: vi.fn(async () => true),
     hasOrigin: vi.fn(async () => true),
@@ -296,6 +323,79 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
     await clickFill(s);
     expect(s.get).toHaveBeenCalledTimes(1);
     expect(s.plans[0]!.resume).toBeNull();
+  });
+});
+
+describe('the resume is confirmed by the popup, not the page (tl and sec on #187)', () => {
+  const resumeFiles = (s: ReturnType<typeof setup>) =>
+    (s.page.doc.getElementById('resume') as HTMLInputElement).files;
+
+  it('a name the form shows at once: attached, after one look, with no wait', async () => {
+    const s = setup({});
+    await clickFill(s);
+    expect(s.deps.runResumeCheck).toHaveBeenCalledTimes(1);
+    expect(s.deps.wait).not.toHaveBeenCalled();
+    expect(s.deps.runResumeClear).not.toHaveBeenCalled();
+    expect(listed(s, 'Filled in')).toContain('Resume');
+    expect(resumeFiles(s)).toHaveLength(1);
+  });
+
+  it('a name the form shows after a macrotask, as React 19 does: attached', async () => {
+    const s = setup({ showsFileName: 'macrotask' });
+    await clickFill(s);
+    expect((s.deps.runResumeCheck as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(
+      1,
+    );
+    expect(s.deps.runResumeClear).not.toHaveBeenCalled();
+    expect(listed(s, 'Filled in')).toContain('Resume');
+    expect(resumeFiles(s)).toHaveLength(1);
+  });
+
+  it('a name the form never shows: looked for a bounded number of times, then the file is taken back out', async () => {
+    const s = setup({ showsFileName: false });
+    await clickFill(s);
+    expect(s.deps.runResumeCheck).toHaveBeenCalledTimes(RESUME_CHECKS);
+    expect(s.deps.wait).toHaveBeenCalledTimes(RESUME_CHECKS - 1);
+    expect(s.deps.runResumeClear).toHaveBeenCalledTimes(1);
+    expect(resumeFiles(s)).toHaveLength(0);
+    expect(listed(s, 'Filled in')).not.toContain('Resume');
+    expect(listed(s, 'Not filled in')).toContain('Resume: attach your resume yourself');
+  });
+
+  it('a file the user attached meanwhile is kept, and the report says so', async () => {
+    const s = setup({
+      showsFileName: false,
+      duringWait: (page, n) => {
+        if (n !== 1) return;
+        const theirs = new page.window.DataTransfer();
+        theirs.items.add(
+          new page.window.File(['their own'], 'My-Own-CV.pdf', { type: 'application/pdf' }),
+        );
+        (page.doc.getElementById('resume') as HTMLInputElement).files =
+          theirs.files as unknown as FileList;
+      },
+    });
+    await clickFill(s);
+    expect(resumeFiles(s)?.[0]?.name).toBe('My-Own-CV.pdf');
+    expect(listed(s, 'Not filled in')).toContain(
+      'Resume: it already had something in it, so it was left as it was',
+    );
+  });
+
+  it('the tab moving on between looks stops the checks; nothing is cleared, and the report says to check it', async () => {
+    const s = setup({
+      showsFileName: false,
+      duringWait: (page, n) => {
+        if (n === 1)
+          page.window.happyDOM.setURL(`https://job-boards.greenhouse.io/${BOARD}/jobs/1000002`);
+      },
+    });
+    await clickFill(s);
+    expect(s.deps.runResumeCheck).toHaveBeenCalledTimes(2);
+    expect(s.deps.runResumeClear).not.toHaveBeenCalled();
+    expect(listed(s, 'Not filled in')).toContain(
+      'Resume: it could not be checked: look at the resume on the form, and attach it yourself if it is missing or wrong',
+    );
   });
 });
 

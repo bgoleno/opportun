@@ -151,12 +151,12 @@ const WATCHED = [
  * The page at `url` (the posting by default), with every text input and textarea controlled the
  * way React's value tracker makes it: a plain `.value =` from script is ignored, only the
  * prototype's native setter changes what the form holds. `showsFileName` stands in for the
- * form's own handler on #resume, which renders the chosen file's name (after a microtask, as a
- * React update would); false leaves the name unshown.
+ * form's own handler on #resume, which renders the chosen file's name: after a microtask, or
+ * after a macrotask with 'macrotask' (as React 19 does, qa on #187); false leaves it unshown.
  */
 export function loadForm(
   html: string,
-  opts: { url?: string; showsFileName?: boolean } = {},
+  opts: { url?: string; showsFileName?: boolean | 'macrotask' } = {},
 ): LoadedForm {
   const window = new Window({
     url: opts.url ?? POSTING_URL,
@@ -205,9 +205,12 @@ export function loadForm(
   if (input !== null && (opts.showsFileName ?? true)) {
     input.addEventListener('change', () => {
       const name = input.files?.[0]?.name ?? '';
-      queueMicrotask(() => {
+      const render = () => {
         doc.querySelector('.file-upload__filename')!.textContent = name;
-      });
+      };
+      // React 19 renders it after a macrotask (qa on #187); a microtask otherwise.
+      if (opts.showsFileName === 'macrotask') window.setTimeout(render, 0);
+      else queueMicrotask(render);
     });
   }
   return { window, doc, events, ignoredAssignments };

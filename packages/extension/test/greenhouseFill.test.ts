@@ -2,7 +2,13 @@
 // https://github.com/bgoleno/opportun/issues/120 and sec's six conditions on #183), against the
 // synthetic forms in fixtures/greenhousePages.ts. Every value here is a placeholder.
 import { describe, expect, it } from 'vitest';
-import { fillGreenhouseForm, type FillPlan, type FillReport } from '../src/greenhouseFill';
+import {
+  clearResume,
+  fillGreenhouseForm,
+  resumeShown,
+  type FillPlan,
+  type FillReport,
+} from '../src/greenhouseFill';
 import { greenhouseJobOf, samePosting } from '../src/prefill';
 import {
   BOARD,
@@ -49,6 +55,7 @@ function plan(over: Partial<FillPlan> = {}): FillPlan {
 
 /** Through JSON, as executeScript's args travel: the plan must survive it unchanged. */
 const asArgs = (p: FillPlan): FillPlan => JSON.parse(JSON.stringify(p)) as FillPlan;
+const asJson = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
 async function fill(html: string, p: FillPlan = plan(), opts = {}) {
   const page = loadForm(html, opts);
@@ -82,8 +89,13 @@ describe('acceptance 1: what it fills, and only from the plan', () => {
       'What is your placeholder notice period?',
       'Why us?',
       'LinkedIn Profile',
-      'Resume',
     ]);
+    // The resume is set, and left for the popup to confirm (tl and sec on #187).
+    expect(ok(report).resume).toEqual({
+      filename: 'Jane-Doe-Example-Resume.pdf',
+      size: PDF.length,
+      before: 0,
+    });
   });
 
   it('a near-miss label is not filled, and is reported both ways', async () => {
@@ -368,16 +380,6 @@ describe('tl on #187: ambiguity, react-selects by structure, and the edges of ma
     expect(events.filter((e) => e.target === 'resume')).toEqual([]);
     expect(ok(report).notFilled).toContainEqual({ label: 'Resume', reason: 'attach_yourself' });
   });
-
-  it('a name already elsewhere on the form still counts when the attach shows it once more', async () => {
-    const html = FEW_QUESTIONS.replace(
-      '<h1>Placeholder Engineer</h1>',
-      '<h1>Placeholder Engineer</h1>',
-    ).replace('>Country<', '>Country (Jane-Doe-Example-Resume.pdf)<');
-    const { doc, report } = await fill(html);
-    expect((doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(1);
-    expect(ok(report).filled).toContain('Resume');
-  });
 });
 
 describe('acceptance 2: one write per field, input and change only', () => {
@@ -400,7 +402,8 @@ describe('acceptance 2: one write per field, input and change only', () => {
       'question_9000110',
       'resume',
     ];
-    expect(ok(report).filled).toHaveLength(filledIds.length);
+    // Every field but the resume, which the popup confirms afterwards.
+    expect(ok(report).filled).toHaveLength(filledIds.length - 1);
     for (const id of filledIds) {
       expect(events.filter((e) => e.target === id)).toEqual([
         { type: 'input', target: id, ctor: 'Event', bubbles: true },
@@ -419,40 +422,36 @@ describe('acceptance 2: one write per field, input and change only', () => {
     expect(page.events.length).toBe(before);
     expect(again.filled).toContain('First Name');
     expect(again.notFilled).toContainEqual({ label: 'Resume', reason: 'has_value' });
+    expect(again.resume).toBeNull();
   });
 });
 
 describe('acceptance 3: the resume, through DataTransfer on #resume only', () => {
-  it('attaches one file with the snapshot’s name, type and bytes when the form shows its name', async () => {
-    const { doc, report } = await fill(FEW_QUESTIONS);
+  it('attaches one file with the snapshot’s name, type and bytes, and leaves the judging to the popup', async () => {
+    const { doc, report, events } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
     const files = (doc.getElementById('resume') as HTMLInputElement).files!;
     expect(files).toHaveLength(1);
     expect(files[0]!.name).toBe('Jane-Doe-Example-Resume.pdf');
     expect(files[0]!.type).toBe('application/pdf');
     expect(new Uint8Array(await files[0]!.arrayBuffer())).toEqual(PDF);
-    expect(ok(report).filled).toContain('Resume');
-  });
-
-  it('when the form does not show the file’s name, the file is cleared again: attach it yourself (sec on #187)', async () => {
-    const { doc, report, events } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
-    expect((doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(0);
-    // The set, then the clear: each with one plain input and one change.
     expect(events.filter((e) => e.target === 'resume').map((e) => e.type)).toEqual([
       'input',
       'change',
-      'input',
-      'change',
     ]);
-    expect(ok(report).filled).not.toContain('Resume');
-    expect(ok(report).notFilled).toContainEqual({ label: 'Resume', reason: 'attach_yourself' });
+    const r = ok(report);
+    expect(r.resume).toEqual({
+      filename: 'Jane-Doe-Example-Resume.pdf',
+      size: PDF.length,
+      before: 0,
+    });
+    expect(r.filled).not.toContain('Resume');
+    expect(r.notFilled.map((n) => n.label)).not.toContain('Resume');
   });
 
-  it('a name the form showed before the attach proves nothing: cleared, attach it yourself (sec on #187)', async () => {
-    const page = loadForm(FEW_QUESTIONS);
-    page.doc.querySelector('.file-upload__filename')!.textContent = 'Jane-Doe-Example-Resume.pdf';
-    const report = ok(await fillGreenhouseForm(asArgs(plan()), page.doc));
-    expect((page.doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(0);
-    expect(report.notFilled).toContainEqual({ label: 'Resume', reason: 'attach_yourself' });
+  it('counts the name already on the form before the attach', async () => {
+    const html = FEW_QUESTIONS.replace('>Country<', '>Country (Jane-Doe-Example-Resume.pdf)<');
+    const { report } = await fill(html);
+    expect(ok(report).resume?.before).toBe(1);
   });
 
   it('with no ready copy, #resume is untouched and the report says to attach it yourself', async () => {
@@ -460,12 +459,94 @@ describe('acceptance 3: the resume, through DataTransfer on #resume only', () =>
     expect((doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(0);
     expect(events.filter((e) => e.target === 'resume')).toEqual([]);
     expect(ok(report).notFilled).toContainEqual({ label: 'Resume', reason: 'attach_yourself' });
+    expect(ok(report).resume).toBeNull();
   });
 
   it('a file input that does not take a PDF is left alone', async () => {
     const { doc, report } = await fill(FEW_QUESTIONS.replace('.pdf,.doc,', '.doc,'));
     expect((doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(0);
     expect(ok(report).notFilled).toContainEqual({ label: 'Resume', reason: 'attach_yourself' });
+  });
+
+  it('any other file input, a cover letter, is reported as attach it yourself (tl on #187)', async () => {
+    const html = FEW_QUESTIONS.replace(
+      '<div class="file-upload">',
+      '<div class="field-wrapper"><label for="cover_letter">Cover Letter</label><input id="cover_letter" type="file" class="visually-hidden" /></div><div class="file-upload">',
+    );
+    const { doc, report } = await fill(html);
+    expect((doc.getElementById('cover_letter') as HTMLInputElement).files).toHaveLength(0);
+    expect(ok(report).notFilled).toContainEqual({
+      label: 'Cover Letter',
+      reason: 'attach_yourself',
+    });
+  });
+});
+
+describe('resumeShown: the popup’s read-only look at the form (tl and sec on #187)', () => {
+  const check = { board: BOARD, jobId: JOB_ID, filename: 'Jane-Doe-Example-Resume.pdf' };
+
+  it('counts the name on the form, and nothing changes', async () => {
+    const page = loadForm(FEW_QUESTIONS);
+    expect(resumeShown(asJson(check), page.doc)).toBe(0);
+    page.doc.querySelector('.file-upload__filename')!.textContent = check.filename;
+    expect(resumeShown(asJson(check), page.doc)).toBe(1);
+    expect(page.events).toEqual([]);
+  });
+
+  it('on any other page, or without the form, it reads nothing: null', () => {
+    expect(
+      resumeShown(asJson(check), loadForm(FEW_QUESTIONS, { url: `${POSTING_URL}0` }).doc),
+    ).toBeNull();
+    expect(
+      resumeShown(asJson(check), loadForm('<!doctype html><html><body></body></html>').doc),
+    ).toBeNull();
+  });
+});
+
+describe('clearResume: takes back only the file the filler set (tl and sec on #187)', () => {
+  const check = {
+    board: BOARD,
+    jobId: JOB_ID,
+    filename: 'Jane-Doe-Example-Resume.pdf',
+    size: PDF.length,
+  };
+
+  it('our one file: cleared, with one plain input and one change', async () => {
+    const { doc, events } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
+    const before = events.length;
+    expect(clearResume(asJson(check), doc)).toBe('cleared');
+    expect((doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(0);
+    expect(events.slice(before)).toEqual([
+      { type: 'input', target: 'resume', ctor: 'Event', bubbles: true },
+      { type: 'change', target: 'resume', ctor: 'Event', bubbles: true },
+    ]);
+  });
+
+  it('a file the user attached meanwhile is kept', async () => {
+    const { window, doc, events } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
+    const input = doc.getElementById('resume') as HTMLInputElement;
+    const theirs = new window.DataTransfer();
+    theirs.items.add(new window.File(['their own'], 'My-Own-CV.pdf', { type: 'application/pdf' }));
+    input.files = theirs.files as unknown as FileList;
+    const before = events.length;
+    expect(clearResume(asJson(check), doc)).toBe('kept');
+    expect(input.files?.[0]?.name).toBe('My-Own-CV.pdf');
+    expect(events.length).toBe(before);
+  });
+
+  it('a file of our name but another size is not ours: kept', async () => {
+    const { doc } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
+    expect(clearResume(asJson({ ...check, size: check.size + 1 }), doc)).toBe('kept');
+    expect((doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(1);
+  });
+
+  it('on any other page it touches nothing', async () => {
+    const { window, doc, events } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
+    window.happyDOM.setURL(`https://job-boards.greenhouse.io/${BOARD}/jobs/1000002`);
+    const before = events.length;
+    expect(clearResume(asJson(check), doc)).toBe('wrong_page');
+    expect((doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(1);
+    expect(events.length).toBe(before);
   });
 });
 
@@ -514,8 +595,10 @@ describe('acceptance 4 and sec (5): the page must still be the pinned posting', 
   });
 });
 
-describe('the source scan of the injected filler (acceptance 2, sec 1 to 6)', () => {
-  const source = fillGreenhouseForm.toString();
+describe('the source scan of the injected functions (acceptance 2, sec 1 to 6)', () => {
+  // Each function injected into the page is held to the same rules; the filler and the clear
+  // write, the check only reads.
+  const source = [fillGreenhouseForm, resumeShown, clearResume].map((f) => f.toString()).join('\n');
 
   it('never submits, activates, focuses, types or simulates a pointer', () => {
     for (const banned of [
@@ -533,9 +616,10 @@ describe('the source scan of the injected filler (acceptance 2, sec 1 to 6)', ()
     }
   });
 
-  it('dispatches only plain Event input and change, through one helper', () => {
-    expect(source.match(/dispatchEvent\s*\(/g)).toHaveLength(1);
-    expect(source.match(/new\s+[\w.]*Event\s*\(/g)).toEqual(['new view.Event(']);
+  it('dispatches only plain Event input and change, through one helper in each writer', () => {
+    // One helper in the filler, one in the clear.
+    expect(source.match(/dispatchEvent\s*\(/g)).toHaveLength(2);
+    expect(source.match(/new\s+[\w.]*Event\s*\(/g)).toEqual(['new view.Event(', 'new view.Event(']);
     // Quotes either way: the source as serialized is the transpiled function.
     const fired = [...source.matchAll(/fire\(\s*\w+\s*,\s*['"](\w+)['"]\s*\)/g)].map((m) => m[1]);
     expect(new Set(fired)).toEqual(new Set(['input', 'change']));
@@ -545,11 +629,28 @@ describe('the source scan of the injected filler (acceptance 2, sec 1 to 6)', ()
 
   it('writes values only through the native setter, and files only on #resume', () => {
     expect(source).not.toMatch(/\.value\s*=[^=]/);
-    // Two writes, both on #resume: the attach, and the clear when the form does not show it.
+    // Two writes, both on #resume: the attach in the filler, and the clear.
     expect(source.match(/\.files\s*=[^=]/g)).toHaveLength(2);
     expect(source.match(/fileInput\.files\s*=[^=]/g)).toHaveLength(2);
-    expect(source).toMatch(/fileInput\.files\s*=\s*carrier\.files/);
+    expect(fillGreenhouseForm.toString()).toMatch(/fileInput\.files\s*=\s*carrier\.files/);
+    expect(clearResume.toString()).toMatch(
+      /fileInput\.files\s*=\s*new view\.DataTransfer\(\)\.files/,
+    );
     expect(source).toMatch(/getElementById\(['"]resume['"]\)/);
+  });
+
+  it('the check only reads: no event, no write, no setter', () => {
+    const check = resumeShown.toString();
+    expect(check).not.toMatch(
+      /dispatchEvent|\.files\s*=[^=]|\.call\(|\.value\s*=[^=]|setAttribute|textContent\s*=[^=]/,
+    );
+  });
+
+  it('every function injected checks the page’s address first', () => {
+    for (const f of [fillGreenhouseForm, resumeShown, clearResume]) {
+      expect(f.toString(), f.name).toMatch(/job-boards\.greenhouse\.io/);
+      expect(f.toString(), f.name).toMatch(/\.port\s*===\s*['"]['"]/);
+    }
   });
 
   it('has no network, no other frame, no captcha, no masking and nothing secret', () => {
