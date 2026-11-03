@@ -80,7 +80,8 @@ describe('POST /connector/apply/:id/confirmation (#121)', () => {
     const t = await token(a, ['apply:assist']);
     const url = thanksOn(s.ats);
 
-    const res = await record(app, t, s.id, page(url));
+    // The query and fragment are not kept (sec on #188): they can carry a token.
+    const res = await record(app, t, s.id, page(`${url}?token=app-secret-1#done`));
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toEqual({
       submissionId: s.id,
@@ -100,6 +101,9 @@ describe('POST /connector/apply/:id/confirmation (#121)', () => {
       bodyMd: PAGE_TEXT,
       externalUrl: url,
     });
+    expect(JSON.stringify(await app.db.select().from(activities).all())).not.toContain(
+      'app-secret-1',
+    );
 
     const [entry] = await auditOf(app, 'submission.confirmed');
     expect(entry!.detail).toEqual({
@@ -361,6 +365,25 @@ describe('POST /connector/apply/:id/confirmation (#121)', () => {
     expect(off.statusCode).toBe(404);
     expect(off.json().error.code).toBe('feature_unavailable');
     expect(await pagesOf(app, s.oppId)).toHaveLength(0);
+  });
+
+  it('on the demo, or off, is a 404 before any token is looked at, and stores nothing (#189)', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const t = await token(a, ['apply:assist']);
+    (app.config as { demo: boolean }).demo = true;
+    const demo = await record(app, t, s.id, page(thanksOn(s.ats)));
+    expect(demo.statusCode).toBe(404);
+    expect(demo.json().error.code).toBe('feature_unavailable');
+    (app.config as { demo: boolean }).demo = false;
+    (app.config as { submissions?: boolean }).submissions = false;
+    for (const bearerToken of [null, `odt_${'B'.repeat(43)}`]) {
+      const res = await record(app, bearerToken, s.id, page(thanksOn(s.ats)));
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('feature_unavailable');
+    }
+    expect(await pagesOf(app, s.oppId)).toHaveLength(0);
+    expect((await rowOf(app, s.id)).status).toBe('submitted');
   });
 
   it('takes at most 20,000 characters of page text, and nothing it does not know', async () => {

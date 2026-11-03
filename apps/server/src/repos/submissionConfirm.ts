@@ -208,6 +208,18 @@ export function confirmationPageAllowed(
   return url.origin === destination.origin && WORKDAY_HOST.test(url.hostname);
 }
 
+/**
+ * The page's address as the timeline keeps it: no query or fragment, which on a thank-you page
+ * can carry a session or an application token (sec on https://github.com/bgoleno/opportun/pull/188).
+ * The site check above reads the whole address (Greenhouse's embed names its board in `?for=`).
+ */
+function withoutQuery(pageUrl: string): string {
+  const url = new URL(pageUrl);
+  url.search = '';
+  url.hash = '';
+  return url.href;
+}
+
 /** What the extension sends from the page the user is on (design 6.2). */
 export interface ConfirmationPageInput {
   url: string;
@@ -288,7 +300,7 @@ export async function confirmFromPage(
       bodyMd: input.text,
       occurredAt: now,
       participants: [],
-      externalUrl: input.url,
+      externalUrl: withoutQuery(input.url),
     });
     const [updated] = await tx
       .update(applicationSubmissions)
