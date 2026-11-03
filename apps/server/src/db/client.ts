@@ -223,6 +223,12 @@ export async function migrateLockedPg(
  * Switches to WAL. SQLite answers SQLITE_BUSY to a journal-mode change without consulting
  * the busy handler while another connection (a second booting process) is converting the
  * same new file, so this retries with a short sleep until the deadline.
+ *
+ * `secure_delete` is deliberately left off (https://github.com/bgoleno/opportun/issues/175).
+ * The one value the app clears so that it is not kept, a message body in a classify job's
+ * payload, is sealed before it is written (enqueueClassify), so there is no plaintext for it
+ * to erase. In WAL mode it would not reach older WAL frames anyway, and it costs a write on
+ * every delete. NFR-PRV5 in docs/requirements.md says the same.
  */
 function enableWal(sqlite: Sqlite, deadlineMs: number): void {
   const pause = new Int32Array(new SharedArrayBuffer(4));

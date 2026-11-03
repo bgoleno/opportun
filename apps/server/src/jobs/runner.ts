@@ -241,7 +241,16 @@ async function processJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<vo
       { jobId: job.id, kind: job.kind, err: parsed.error },
       'invalid stored payload; job marked dead',
     );
-    await finish(db, job.id, 'dead', now(), `invalid payload: ${parsed.error.message}`);
+    // Stripped like any finished job's (#175): a payload that does not validate may still
+    // carry a body.
+    await finish(
+      db,
+      job.id,
+      'dead',
+      now(),
+      `invalid payload: ${parsed.error.message}`,
+      withoutTransient(handler, job.payload),
+    );
     return;
   }
   const ctx: JobContext = {

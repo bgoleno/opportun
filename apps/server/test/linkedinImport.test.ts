@@ -21,6 +21,7 @@ import {
 import { upsertInbound } from '../src/repos/communications';
 import { useApi } from './api';
 import { assertIsolated, type TestClient } from './isolation';
+import { queuedBodyOf } from './classifyPayload';
 
 const boot = useApi();
 const FIXTURES = fileURLToPath(new URL('./fixtures/linkedin/', import.meta.url));
@@ -554,7 +555,8 @@ describe('an import keeps no message body (issue #53)', () => {
     const job = (
       await app.db.select().from(jobs).where(eq(jobs.kind, 'comms.classify')).all()
     ).find((j) => (j.payload as { communicationId: string }).communicationId === jane.id);
-    expect((job?.payload as { body?: string }).body).toContain('Happy to refer you');
+    expect(queuedBodyOf(app, job?.payload)).toContain('Happy to refer you');
+    expect(JSON.stringify(job?.payload)).not.toContain('Happy to refer you');
   });
 
   it('leaves nothing on disk once the classify jobs have run', async () => {
@@ -565,7 +567,10 @@ describe('an import keeps no message body (issue #53)', () => {
     expect(await filesUnder(`${dataDir}/attachments`)).toEqual([]);
     const classify = await app.db.select().from(jobs).where(eq(jobs.kind, 'comms.classify')).all();
     expect(classify).toHaveLength(3);
-    for (const job of classify) expect(job.payload).not.toHaveProperty('body');
+    for (const job of classify) {
+      expect(job.payload).not.toHaveProperty('body');
+      expect(job.payload).not.toHaveProperty('bodySealed');
+    }
   });
 
   it('keeps the snippet, so the row still says what the message was', async () => {

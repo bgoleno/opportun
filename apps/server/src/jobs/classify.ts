@@ -15,6 +15,7 @@ import { and, desc, eq, notInArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { isAlertDigest, processAlertDigest } from '../adapters/sources/alertEmail';
 import type { Db } from '../db/client';
+import { decryptSecret } from '../lib/secretBox';
 import { communications, companies, opportunities, roleTargets } from '../db/schema';
 import { buildAiDeps } from '../lib/ai';
 import { line } from '../lib/promptText';
@@ -213,18 +214,41 @@ export async function classifyCommunication(
 const PayloadSchema = z.object({
   communicationId: z.string().min(1).max(64),
   /**
-   * The message body, which is not persisted anywhere else (Plan 3 Task 1). It is in the payload
-   * only until this job finishes: `transientPayloadKeys` has the runner strip it then, so a
-   * finished job row is not the copy of the message that outlives the message.
+   * The message body, which is not persisted anywhere else (Plan 3 Task 1), sealed with the
+   * instance's secretBox key (#175; enqueueClassify). It is in the payload only until this job
+   * finishes: `transientPayloadKeys` has the runner strip it then, so a finished job row is not
+   * the copy of the message that outlives the message.
+   */
+  bodySealed: z.string().optional(),
+  /**
+   * The body in the clear, as versions before #175 queued it. Read only so that a job queued
+   * before an upgrade still runs (and is still stripped); nothing writes it now.
    */
   body: z.string().optional(),
 });
+
+/**
+ * Opens the payload's body. A key that cannot open it (the master key changed while the job
+ * waited, or the payload was altered) fails the job: retrying cannot help, and the run must not
+ * go on as if the message had no body. The error says nothing of the body, and keeps none of
+ * the cipher's own message, so neither a log line nor jobs.last_error can carry any of it.
+ */
+function payloadBody(db: Db, payload: z.infer<typeof PayloadSchema>): string | undefined {
+  if (payload.bodySealed === undefined) return payload.body;
+  try {
+    return decryptSecret(db, payload.bodySealed);
+  } catch {
+    throw new Error(
+      "the message body could not be decrypted with this instance's secrets key (was the key changed?)",
+    );
+  }
+}
 
 export const classifyJob: JobHandler<z.infer<typeof PayloadSchema>> = {
   kind: CLASSIFY_JOB_KIND,
   payloadSchema: PayloadSchema,
   maxAttempts: 3,
-  transientPayloadKeys: ['body'],
+  transientPayloadKeys: ['bodySealed', 'body'],
   async run(db, payload, ctx) {
     if (ctx.userId === null) throw new Error('comms.classify needs a user');
     const user: UserCtx = { userId: ctx.userId, isAdmin: false };
@@ -251,7 +275,7 @@ export const classifyJob: JobHandler<z.infer<typeof PayloadSchema>> = {
       user,
       requireService(ctx, 'storage'),
       payload.communicationId,
-      payload.body,
+      payloadBody(db, payload),
       refetch,
     );
     // Condition 2 (issue #69): a classification run on the ~200-character snippet must be
