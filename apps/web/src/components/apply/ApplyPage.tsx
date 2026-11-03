@@ -977,7 +977,18 @@ function ReviewStep({
         ) : (
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
             {detailRows(live.fields).map((r) => (
-              <DetailRow key={r.key} label={r.label} value={r.value} />
+              <DetailRow
+                key={r.key}
+                label={r.label}
+                value={r.value}
+                // A value stored before today's checks that fails them (#196): the extension will
+                // not fill it. Shown, never blocking: correcting it is an ordinary edit.
+                warning={
+                  submissionFieldProblem(Object.fromEntries([[r.key, r.value]])) === null
+                    ? undefined
+                    : "This will not be filled until you correct it: it no longer passes Opportun's checks."
+                }
+              />
             ))}
           </dl>
         )}
@@ -1095,11 +1106,16 @@ function ReviewSection({ title, children }: { title: string; children: ReactNode
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
+function DetailRow({ label, value, warning }: { label: string; value: string; warning?: string }) {
   return (
     <>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="[overflow-wrap:anywhere]">{value}</dd>
+      <dd className="[overflow-wrap:anywhere]">
+        {value}
+        {warning === undefined ? null : (
+          <span className="block text-xs text-amber-800 dark:text-amber-200">{warning}</span>
+        )}
+      </dd>
     </>
   );
 }

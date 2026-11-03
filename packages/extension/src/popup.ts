@@ -67,6 +67,7 @@ const NOT_FILLED_REASONS: readonly unknown[] = [
   'attach_yourself',
   'attach_file_yourself',
   'resume_unchecked',
+  'withheld',
 ];
 
 /** What readConfirmationPage may return; anything else from the tab is treated as a failure. */

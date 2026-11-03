@@ -49,6 +49,7 @@ function plan(over: Partial<FillPlan> = {}): FillPlan {
       { labels: ['Website link'], name: 'Website link', value: 'never matched' },
     ],
     resume: { filename: 'Jane-Doe-Example-Resume.pdf', base64: PDF_BASE64 },
+    withheld: [],
     ...over,
   };
 }
@@ -487,6 +488,37 @@ describe('#192: a label shared by a text field and a choice control is ambiguous
       ),
     );
     expect(valueOf(doc, 'question_9000102')).toBe('https://jane.example.com');
+  });
+});
+
+describe('#196: a withheld field is reported once, as withheld (tl on #201)', () => {
+  it("a withheld standard field and question are left empty and reported under the form's labels", async () => {
+    const p = plan({
+      standard: plan().standard.filter((x) => x.id !== 'first_name'),
+      questions: plan().questions.filter((q) => q.name !== 'LinkedIn profile'),
+      withheld: [
+        { id: 'first_name', labels: [], name: 'First name' },
+        { id: null, labels: ['LinkedIn Profile', 'LinkedIn'], name: 'LinkedIn profile' },
+      ],
+    });
+    const { doc, report, events } = await fill(MANY_QUESTIONS, p);
+    expect(valueOf(doc, 'first_name')).toBe('');
+    expect(valueOf(doc, 'question_9000110')).toBe('');
+    expect(events.filter((e) => ['first_name', 'question_9000110'].includes(e.target))).toEqual([]);
+    const r = ok(report);
+    expect(r.notFilled).toContainEqual({ label: 'First Name', reason: 'withheld' });
+    expect(r.notFilled).toContainEqual({ label: 'LinkedIn Profile', reason: 'withheld' });
+    for (const label of ['First Name', 'LinkedIn Profile']) {
+      expect(r.notFilled.filter((n) => n.label === label)).toHaveLength(1);
+    }
+  });
+
+  it('a withheld field the form does not ask for is still listed, by its name', async () => {
+    const { report } = await fill(
+      FEW_QUESTIONS,
+      plan({ withheld: [{ id: null, labels: ['Website'], name: 'Website' }] }),
+    );
+    expect(ok(report).notFilled).toContainEqual({ label: 'Website', reason: 'withheld' });
   });
 });
 
