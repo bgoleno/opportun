@@ -516,7 +516,9 @@ opportun-YYYYMMDD-HHmm.dump` (the same `DATABASE_URL` as the server). Same guara
   Restore bullet above (`data/backups/opportun-YYYYMMDD-HHmm.attachments.json`, same
   `jq`/`storedPath` check, same `data/` root: attachments are not a Postgres concept and
   live in the one place regardless of dialect). Then start the
-  server with the same `OPPORTUN_MASTER_KEY` (the vault's secrets are restored encrypted);
+  server with the same `OPPORTUN_MASTER_KEY` (the vault's secrets are restored encrypted,
+  and so is the text of any message still waiting to be classified, which fails to open
+  under any other key; [#175](https://github.com/bgoleno/opportun/issues/175));
   migrations bring an older archive up to date on boot. To restore over the existing
   database instead, run the equivalent steps by hand with `--clean --if-exists`:
 
@@ -551,6 +553,40 @@ you@example.com` in `apps/server`, with the same values as the server). It sets 
   An administrator can do the same from Settings → Users (Reset password), which shows
   the temporary password once; administrators cannot reset their own account this way
   (see [section 12](#12-users-and-registration)).
+
+### Clearing message text left from before encrypted classification
+
+Since [#175](https://github.com/bgoleno/opportun/issues/175), a message's full text waits for classification only in
+encrypted form, sealed with the server's secrets key. A server that ran before that change
+kept the text in the clear in the classification job, and cleared it when the job finished.
+Clearing a value does not erase it from disk, so the text of messages classified before the
+upgrade may remain in unused space inside the database files until that space is reused.
+Opportun's own backups never contain it: they copy live data only. To clear it once, after
+upgrading:
+
+- **SQLite:** stop the server, run `sqlite3 <wherever opportun.db lives>/opportun.db 'VACUUM;'`,
+  then start the server again. `VACUUM` rebuilds the file from its live content, which SQLite
+  documents as removing all traces of deleted content
+  ([VACUUM](https://www.sqlite.org/lang_vacuum.html)). It needs free disk space of up to twice
+  the database's size, and it fails if another process is writing, which is why the server is
+  stopped first.
+- **Postgres:** run `VACUUM FULL jobs;` as the database owner, with the server stopped or at a
+  quiet time. It writes a complete new copy of the `jobs` table with no dead space and releases
+  the old copy when it is done; it locks the table (`ACCESS EXCLUSIVE`) while it runs, and
+  needs extra disk space about the size of the table until it finishes
+  ([VACUUM](https://www.postgresql.org/docs/current/sql-vacuum.html),
+  [routine vacuuming](https://www.postgresql.org/docs/current/routine-vacuuming.html)). A
+  plain `VACUUM` is not enough: Postgres documents it as only marking the space available for
+  reuse, not as rewriting it. Old WAL segments, which also hold copies of changed rows, are
+  removed or recycled after checkpoints (recycled segments are renamed and written over as new
+  WAL is written), so they age out on their own
+  ([WAL configuration](https://www.postgresql.org/docs/current/wal-configuration.html)). A
+  WAL archive or a replica keeps its own copies, which only you can delete.
+
+Either way, a file the database lets go of (an old SQLite `-wal` file, the old copy of the
+Postgres table, a removed WAL segment) goes back to the filesystem without being overwritten.
+Reading anything from there takes access to the raw disk, which is beyond what a database
+command can reach.
 
 ### Deleting everything (teardown)
 
@@ -1145,7 +1181,9 @@ target before writing anything to it, migrations included. Text containing NUL c
 store, is cleaned and reported per column, never dropped silently. It copies the database
 only: `attachments/` and `master.key` stay where they are, in `DATA_DIR`, which the
 Postgres deployment keeps using (the tool checks that the attachment files the rows point
-at are there). It also refuses a master key that opens none of the source's vault values,
+at are there). A message still waiting to be classified carries its text sealed with the
+master key and is copied as it is: under a different key, its classification job cannot
+open it and fails ([#175](https://github.com/bgoleno/opportun/issues/175)). It also refuses a master key that opens none of the source's vault values,
 and any single value that does not decrypt, unless you pass `--allow-undecryptable` (those
 values are then copied byte for byte, warned about one by one, and the vault line reads
 NOT VERIFIED). JSON values are compared by Postgres itself (`jsonb` equality), so a number

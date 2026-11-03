@@ -502,8 +502,12 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
   replica, can likewise hold the ciphertext but not the text.
   SQLite's `secure_delete` is not turned on: with no plaintext to erase it would only
   add a write to every delete, and in WAL mode it does not reach older WAL frames
-  anyway. A job a server queued before that change, still waiting when it is upgraded,
-  carries its body in the clear until it runs. Reading more than the snippet is
+  anyway. The sealing applies from that change on. A job a server queued before it,
+  still waiting when it is upgraded, carries its body in the clear until it runs, and
+  the body of a message classified before it can remain in the clear in unused
+  database space until reused; the install guide (section 6, "Clearing message text
+  left from before encrypted classification") gives the one-time step that clears it
+  on each engine. Reading more than the snippet is
   a deep link back to the message where it already lives in the user's own
   mailbox, not a copy the app keeps; this is what makes aggressive outreach
   filtering (FR-M8) safe, since refusing to keep a filtered message's content costs
