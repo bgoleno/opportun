@@ -21,8 +21,10 @@ function DiscoveryLayout() {
         title="Discovery"
         description="New postings from your sources, ranked against your role targets."
       />
+      {/* The tabs wrap onto a second line on a narrow phone rather than scrolling inside the bar,
+       *  where the last ones were cut off with no sign that there were more (#193). */}
       <nav aria-label="Discovery sections" data-tour="discovery-sections" className="mb-4">
-        <ul className="flex gap-1 overflow-x-auto border-b pb-2">
+        <ul className="flex flex-wrap gap-1 border-b pb-2">
           {SECTIONS.map((s) => (
             <li key={s.to}>
               <Link
