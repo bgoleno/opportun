@@ -170,7 +170,13 @@ export function SubmissionDetail({
             A confirmation {s.confirmationKind === 'email' ? 'email' : 'page'} backs this up.
           </p>
         ) : (
-          <p className="text-sm text-muted-foreground">No confirmation yet.</p>
+          // "Yet" only while one could still come (qa on #163): not for a refused, failed or
+          // stopped attempt.
+          <p className="text-sm text-muted-foreground">
+            {['submitted', 'unknown', 'handed_off'].includes(s.status)
+              ? 'No confirmation yet.'
+              : 'No confirmation.'}
+          </p>
         )}
       </Section>
 

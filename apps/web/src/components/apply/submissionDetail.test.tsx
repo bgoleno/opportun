@@ -267,3 +267,64 @@ describe('S7: where it does not exist', () => {
 function posts(calls: ApiCall[], path: string) {
   return calls.filter((c) => c.method === 'POST' && c.path === path);
 }
+
+describe('S7: qa on #163', () => {
+  it('the history ends with the end state, at its last change', async () => {
+    const sub = attempt({ status: 'unknown', updatedAt: NOW - DAY });
+    render(sub);
+    const steps = within(await screen.findByRole('list', { name: 'History' }))
+      .getAllByRole('listitem')
+      .map((li) => li.textContent);
+    expect(steps.at(-1)).toContain('No confirmation seen');
+    expect(steps.at(-1)).toContain(formatDateTime(NOW - DAY));
+  });
+
+  it('after an outcome, the page reads the attempt again and shows it', async () => {
+    let current = attempt({ status: 'unknown' });
+    const api = mockApi({
+      'GET /opportunities/opp-1': OPP,
+      'GET /submissions/sub-1': () => ({ status: 200, body: current }),
+      'GET /opportunities/opp-1/submissions': () => ({ items: [current], total: 1 }),
+      'POST /submissions/sub-1/outcome': () => {
+        current = { ...current, status: 'confirmed', confirmationKind: 'user', confirmedAt: NOW };
+        return { status: 200, body: current };
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<SubmissionDetail opportunityId="opp-1" submissionId="sub-1" />);
+    await user.click(await screen.findByRole('button', { name: 'I saw a confirmation' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Mark as confirmed?' });
+    const reads = api.calls.filter(
+      (c) => c.method === 'GET' && c.path === '/submissions/sub-1',
+    ).length;
+    await user.click(within(dialog).getByRole('button', { name: 'Mark confirmed' }));
+    await waitFor(() =>
+      expect(
+        api.calls.filter((c) => c.method === 'GET' && c.path === '/submissions/sub-1').length,
+      ).toBeGreaterThan(reads),
+    );
+    expect(await screen.findByText(/You marked this confirmed on/)).toBeVisible();
+  });
+
+  it('a destination that is not http(s) is shown as text, never a link', async () => {
+    render(attempt({ destinationUrl: 'javascript:alert(1)' }));
+    const section = (await screen.findByRole('heading', { name: 'Where it went' })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(section).toHaveTextContent('javascript:alert(1)');
+    expect(within(section).queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['refused', { status: 'rejected' }],
+    ['failed', { status: 'failed', failureReason: 'other' }],
+    ['stopped', { status: 'abandoned', failureReason: 'cancelled_by_user', submittedAt: null }],
+  ] as const)('a %s attempt’s evidence does not promise one is coming', async (_n, over) => {
+    render(attempt(over as Partial<SubmissionView>));
+    const evidence = (await screen.findByRole('heading', { name: 'Evidence' })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(evidence).toHaveTextContent('No confirmation.');
+    expect(evidence).not.toHaveTextContent('yet');
+  });
+});
