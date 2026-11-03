@@ -21,6 +21,16 @@ export const SUBMISSION_STATUSES = [
 ] as const;
 export type SubmissionStatus = (typeof SUBMISSION_STATUSES)[number];
 
+/** The signals a confirmation email can match on (lib/submissionMatch, #119). */
+export const SUBMISSION_CONFIRMATION_SIGNALS = [
+  'ats_job_ref',
+  'ats_board',
+  'sender_domain',
+  'role_and_company',
+  'time_window',
+] as const;
+export type SubmissionConfirmationSignal = (typeof SUBMISSION_CONFIRMATION_SIGNALS)[number];
+
 /** What a confirmation rests on: a matched email, a captured page, or the user's word. */
 export const SUBMISSION_CONFIRMATION_KINDS = ['email', 'page', 'user'] as const;
 export type SubmissionConfirmationKind = (typeof SUBMISSION_CONFIRMATION_KINDS)[number];
@@ -129,6 +139,22 @@ export const SubmissionSchema = z.object({
   submittedAt: TimestampSchema.nullable(),
   confirmedAt: TimestampSchema.nullable(),
   confirmationKind: z.enum(SUBMISSION_CONFIRMATION_KINDS).nullable(),
+  /**
+   * The matched confirmation email (#119), on GET /submissions/:id only, and only while an email
+   * is the confirmation. What the evidence card shows, never the body (NFR-PRV5): the subject,
+   * the sender's address (its display name is the sender's own claim, so it is left out), when
+   * it was sent, and the names of the signals that matched.
+   */
+  confirmationEmail: z
+    .object({
+      communicationId: IdSchema,
+      subject: z.string().nullable(),
+      fromAddress: z.string(),
+      sentAt: TimestampSchema,
+      signals: z.array(z.enum(SUBMISSION_CONFIRMATION_SIGNALS)),
+    })
+    .nullable()
+    .optional(),
   failureReason: z.enum(SUBMISSION_FAILURE_REASONS).nullable(),
   /**
    * A re-application (owner decision 6, #118): the earlier attempt at the same requisition, and

@@ -20,7 +20,12 @@
 // candidate, with every signal
 // that held. Two or more: none, ambiguous, naming them; a person decides. Nothing here changes
 // any state: this only answers the question.
-import { companyMatchKey, matchText, titleMatchKey } from '@opportun/core';
+import {
+  companyMatchKey,
+  matchText,
+  titleMatchKey,
+  type SubmissionConfirmationSignal,
+} from '@opportun/core';
 
 export interface ConfirmationMessage {
   /** The From header as received: a display name may precede the address. */
@@ -49,8 +54,18 @@ export interface ConfirmationCandidate {
 /** Sender domains each ATS sends from, by ATS kind (the caller's list). */
 export type AtsSenderDomains = Readonly<Partial<Record<string, readonly string[]>>>;
 
-export type ConfirmationSignal =
-  'ats_job_ref' | 'ats_board' | 'sender_domain' | 'role_and_company' | 'time_window';
+/**
+ * The ATS sender domains the ingest wiring uses (#119): evidence policy, so a reviewed constant,
+ * never configuration. Empty until the owner supplies the observed list (M0 item 4 of
+ * https://github.com/bgoleno/opportun/issues/79); that change lands as its own PR, reviewed by
+ * sec. Empty, signal B holds only for a sender under the company's own domain, and a
+ * confirmation sent from an ATS's mail domain is matched only by an ATS ref with the job id (A),
+ * or not at all: a missed confirmation, never a false one (tl on #119).
+ */
+export const ATS_SENDER_DOMAINS: AtsSenderDomains = {};
+
+/** One list with the API's (@opportun/core SUBMISSION_CONFIRMATION_SIGNALS), so they cannot drift. */
+export type ConfirmationSignal = SubmissionConfirmationSignal;
 
 export type ConfirmationMatch =
   | { kind: 'match'; submissionId: string; signals: ConfirmationSignal[] }
@@ -87,6 +102,25 @@ export function senderDomain(from: string): string | null {
 function underDomain(domain: string, entry: string): boolean {
   const e = bareDomain(entry);
   return e !== '' && (domain === e || domain.endsWith(`.${e}`));
+}
+
+/**
+ * Signal B alone, for any of these candidates: the sender's address (never its display name) is
+ * at a candidate's company domain or an ATS sender domain for its kind. The triage rule
+ * `submission_window` keeps such a message so the matcher can see it (#119).
+ */
+export function fromExpectedSender(
+  fromAddress: string,
+  candidates: readonly ConfirmationCandidate[],
+  senders: AtsSenderDomains,
+): boolean {
+  const sender = senderDomain(fromAddress);
+  if (sender === null) return false;
+  return candidates.some((c) =>
+    [...(c.companyDomain === null ? [] : [c.companyDomain]), ...(senders[c.atsKind] ?? [])].some(
+      (d) => underDomain(sender, d),
+    ),
+  );
 }
 
 /** `needle` occurs in `haystack` as whole words (both already normalised by matchText). */

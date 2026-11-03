@@ -56,7 +56,8 @@ function allowedShape(path: string): boolean {
   const base = '/api/v1/submissions/:id';
   if (!path.startsWith(base)) return false;
   const tail = path.slice(base.length);
-  return tail === '' || (tail.startsWith('/') && /^[a-z]+$/.test(tail.slice(1)));
+  // One action, its words lowercase and joined by hyphens (unlink-confirmation, #119).
+  return tail === '' || (tail.startsWith('/') && /^[a-z]+(-[a-z]+)*$/.test(tail.slice(1)));
 }
 const idParams = (path: string) => (path.match(/:[A-Za-z]+/g) ?? []).length;
 

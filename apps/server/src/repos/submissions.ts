@@ -360,10 +360,6 @@ export async function listSubmissionsForOpportunity(
   return { items: rows.map(view), total: await countWhere(db, applicationSubmissions, where) };
 }
 
-export async function getSubmission(db: Db, ctx: UserCtx, id: string): Promise<Submission> {
-  return view(await getRow(db, ctx, id));
-}
-
 /** 409 naming the row and its current status, so the client can reload it and reconcile. */
 export const notNow = (row: SubmissionRow, to: SubmissionStatus): HttpError =>
   new HttpError(

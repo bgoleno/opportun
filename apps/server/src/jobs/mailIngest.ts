@@ -15,7 +15,16 @@ import {
   type MailFilterRuleRow,
 } from '../repos/mailFilters';
 import { and, eq, isNotNull } from 'drizzle-orm';
-import { withTransaction, type Db } from '../db/client';
+import { lockScope, withTransaction, type Db } from '../db/client';
+import { extractAtsJobRefs } from '../lib/atsJobRef';
+import {
+  ATS_SENDER_DOMAINS,
+  fromExpectedSender,
+  matchConfirmation,
+  type ConfirmationMatch,
+} from '../lib/submissionMatch';
+import { confirmationCandidates, confirmFromEmail } from '../repos/submissionConfirm';
+import { submissionScope } from '../repos/submissionReview';
 import { communications, jobs } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
 import type { Storage } from '../lib/storage';
@@ -159,10 +168,21 @@ async function threadLinked(db: Db, ctx: UserCtx, threadKey: string): Promise<bo
   return row !== undefined;
 }
 
+export interface IngestOptions {
+  /**
+   * Assisted apply is on for this deployment (config submissionsEnabled: the flag set and not the
+   * demo). Off or absent, ingest neither reads attempts nor matches confirmations (#119).
+   */
+  submissions?: boolean;
+}
+
 /**
  * Stores one inbound message for the caller. `alongside` runs inside the upsert's transaction
  * (Gmail saves its cursor there, so a crash never skips or repeats a message). Routing (digest
  * or classifier) happens only when the row is new: a re-delivered message is an update.
+ *
+ * With assisted apply on, a new message that matches exactly one application awaiting its
+ * confirmation confirms it in the same transaction (#119; repos/submissionConfirm.ts).
  */
 export async function ingestInbound(
   db: Db,
@@ -171,7 +191,12 @@ export async function ingestInbound(
   channel: CommChannel,
   message: InboundMessage,
   alongside?: (tx: Exec) => Promise<void>,
+  opts: IngestOptions = {},
 ): Promise<{ id: string; inserted: boolean }> {
+  // Applications awaiting a confirmation this message could be (#119): read once, before
+  // anything else, because triage's submission_window rule and the matcher both need them.
+  const candidates =
+    opts.submissions === true ? await confirmationCandidates(db, ctx, message.sentAt) : [];
   // Stage 1 (spec D1 rules 0-7), before anything is written. A drop here means the body is
   // never stored and the message is never queued for the classifier, so its content reaches
   // no model at all. The decision is deterministic and local: no AI is involved in deciding
@@ -191,6 +216,8 @@ export async function ingestInbound(
     selfAddress,
     threadLinked: await threadLinked(db, ctx, message.threadKey),
     digestSender,
+    submissionSender:
+      candidates.length > 0 && fromExpectedSender(message.from, candidates, ATS_SENDER_DOMAINS),
   });
   // Stage 2 (decision D-1): the gate is consulted here, inside ingest and before anything is
   // written, and only about a message Stage 1 passed on a positive signal. A drop writes the
@@ -212,13 +239,39 @@ export async function ingestInbound(
   // the user's own mail system, which is the only copy that has to exist. The body travels from
   // here to the classifier in the job payload and is cleared when that job finishes.
   const body = message.bodyText;
+  // The matcher reads the body here, transiently, like the classifier will; nothing it reads is
+  // stored but the signal names. A filtered message is never matched.
+  const match: ConfirmationMatch =
+    filtered || candidates.length === 0
+      ? { kind: 'none', reason: 'no_candidates', candidateIds: [] }
+      : matchConfirmation(
+          {
+            fromAddress: message.from,
+            subject: message.subject,
+            text: body,
+            sentAt: message.sentAt,
+            atsJobRefs: extractAtsJobRefs(`${message.subject}\n${body}`),
+          },
+          candidates,
+          ATS_SENDER_DOMAINS,
+        );
   await racePoint('mail.ingest');
   const result = await withTransaction(db, async (tx) => {
+    // The attempt's lock before anything else here (the order at submissionScope): upsertInbound
+    // and Gmail's cursor write take no advisory lock, and no lock follows this one.
+    if (match.kind === 'match') {
+      await lockScope(tx, submissionScope(match.submissionId));
+      await racePoint('mail.ingest.attemptLocked');
+    }
     const res = await upsertInbound(tx, ctx, channel, message, {
       decision: filtered ? 'filtered' : 'passed',
       rule: matchedRule,
     });
     await alongside?.(tx);
+    // A re-delivered message never confirms again: only the delivery that stored it.
+    if (match.kind === 'match' && res.inserted) {
+      await confirmFromEmail(tx, ctx, match.submissionId, res.id, match.signals, Date.now());
+    }
     return res;
   });
   if (filtered) return result;
