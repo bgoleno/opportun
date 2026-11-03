@@ -70,6 +70,11 @@ export interface PrefillAttempt {
   fields: Record<string, string>;
   answers: { label: string; value: string }[];
   resume: { snapshotState: string | null; filename: string | null; bytes: number | null };
+  /**
+   * Detail fields the server left out because their stored value fails today's checks (#196):
+   * keys only. Each is listed for the user to fill, never filled.
+   */
+  withheld: string[];
 }
 
 export type PrefillMiss = 'no_matching_attempt' | 'several_handed_off' | 'review_stale';
@@ -115,6 +120,12 @@ function parseCurrent(body: unknown): CurrentResult | null {
     if (!isRecord(x) || typeof x.label !== 'string' || typeof x.value !== 'string') return null;
     answers.push({ label: x.label, value: x.value });
   }
+  // Absent when nothing is withheld; when present, a list of field names, or the answer is wrong.
+  let withheld: string[] = [];
+  if (a.withheld !== undefined) {
+    if (!Array.isArray(a.withheld) || !a.withheld.every((k) => typeof k === 'string')) return null;
+    withheld = a.withheld as string[];
+  }
   const r = a.resume;
   return {
     kind: 'attempt',
@@ -128,6 +139,7 @@ function parseCurrent(body: unknown): CurrentResult | null {
         filename: typeof r.filename === 'string' ? r.filename : null,
         bytes: typeof r.bytes === 'number' ? r.bytes : null,
       },
+      withheld,
     },
   };
 }
@@ -277,6 +289,29 @@ export function buildPlan(
     standard,
     questions,
     resume: resumeBase64 === null || filename === null ? null : { filename, base64: resumeBase64 },
+    // Which field each withheld key is, so the filler reports it once (#196, tl on #201): its
+    // standard id or question labels and its name, never a value.
+    withheld: attempt.withheld.map(withheldField),
+  };
+}
+
+/** A withheld key as the filler finds it on the form: the same mapping as the fields above. */
+function withheldField(key: string): { id: string | null; labels: string[]; name: string } {
+  const name = withheldLabel(key);
+  const standardIds = new Map([
+    ['firstName', 'first_name'],
+    ['lastName', 'last_name'],
+    ['email', 'email'],
+    ['phone', 'phone'],
+  ]);
+  const questionLabels = new Map([
+    ['linkedinUrl', ['LinkedIn Profile', 'LinkedIn']],
+    ['websiteUrl', ['Website']],
+  ]);
+  return {
+    id: standardIds.get(key) ?? null,
+    labels: questionLabels.get(key) ?? [],
+    name,
   };
 }
 
@@ -293,6 +328,10 @@ export const NOT_FILLED_WORDS = new Map<NotFilledReason, string>([
   ],
   ['attach_yourself', 'attach your resume yourself'],
   ['attach_file_yourself', 'attach this file yourself'],
+  [
+    'withheld',
+    "it no longer passes Opportun's checks: correct it in Opportun, or fill it in yourself",
+  ],
   [
     'resume_unchecked',
     'it could not be checked: look at the resume on the form, and attach it yourself if it is missing or wrong',
@@ -403,3 +442,16 @@ export function reportLines(report: Extract<FillReport, { ok: true }>): {
     reminder: SUBMIT_REMINDER,
   };
 }
+
+/** The names the popup gives the detail fields the server can withhold (#196). */
+const WITHHELD_LABELS = new Map<string, string>([
+  ['firstName', 'First name'],
+  ['lastName', 'Last name'],
+  ['email', 'Email'],
+  ['phone', 'Phone'],
+  ['linkedinUrl', 'LinkedIn profile'],
+  ['websiteUrl', 'Website'],
+]);
+
+/** A withheld field's label, or its key when the popup has no name for it. */
+export const withheldLabel = (key: string): string => WITHHELD_LABELS.get(key) ?? key.slice(0, 200);

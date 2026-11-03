@@ -1713,6 +1713,57 @@ describe('#186: starting again from pre-check values, and a review refused by th
   });
 });
 
+describe("#196: a stored value that fails today's checks is flagged on the review, not refused", () => {
+  const stored = {
+    firstName: 'Jane\u202EExample',
+    linkedinUrl: 'https://user:pw@jane.example.com/',
+    email: 'jane@example.com',
+  };
+
+  it('each failing field carries a warning that it will not be filled; a passing one does not', async () => {
+    mockApi(routes(submission({ fields: stored })));
+    renderStep('review');
+    const section = (await screen.findByRole('heading', { name: 'Your details' })).closest(
+      'section',
+    ) as HTMLElement;
+    const warnings = within(section).getAllByText(
+      /This will not be filled until you correct it: it no longer passes Opportun's checks\./,
+    );
+    expect(warnings).toHaveLength(2);
+    // The confirm is not blocked by it.
+    expect(screen.getByRole('checkbox')).toBeEnabled();
+    expect(screen.getByRole('button', { name: /confirm review/i })).toBeEnabled();
+  });
+
+  it('no warning when every field passes', async () => {
+    mockApi(routes(submission()));
+    renderStep('review');
+    await screen.findByRole('heading', { name: 'Your details' });
+    expect(screen.queryByText(/will not be filled until you correct it/i)).toBeNull();
+  });
+
+  it('Review again still works for that row: it sends the stored fields back unchanged', async () => {
+    const reviewed = submission({
+      status: 'reviewed',
+      reviewExpiresAt: NOW - MIN,
+      fields: stored,
+    });
+    const api = mockApi(
+      routes(reviewed, {
+        'PATCH /submissions/sub-1': (c: ApiCall) => ({
+          status: 200,
+          body: { ...reviewed, ...(c.body as object), status: 'draft', reviewExpiresAt: null },
+        }),
+      }),
+    );
+    const { user } = renderStep('review');
+    await user.click(await screen.findByRole('button', { name: 'Review again' }));
+    await waitFor(() => expect(calls(api.calls, 'PATCH', '/submissions/sub-1')).toHaveLength(1));
+    const [again] = calls(api.calls, 'PATCH', '/submissions/sub-1');
+    expect((again?.body as { fields: unknown }).fields).toEqual(stored);
+  });
+});
+
 describe('#198: a 429 on the handoff says when to try again (tl on #194)', () => {
   it('a valid review whose handoff is rate limited: the clock time from retry-after, never "check your connection"', async () => {
     const api = mockApi(

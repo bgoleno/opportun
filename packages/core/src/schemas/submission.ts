@@ -118,6 +118,14 @@ const JOINER_IN_A_WORD = /(?<=[\p{L}\p{M}])[\u200C\u200D](?=[\p{L}\p{M}])/gu;
  * invisible, so the review would not show what is filled (#186).
  */
 const FORMAT = /\p{Cf}/u;
+/**
+ * Characters outside \p{Cf} that still show nothing (#196, tl's ruling): the Hangul fillers
+ * (U+115F, U+1160, U+3164, U+FFA0), the braille pattern blank (U+2800) and the combining
+ * grapheme joiner (U+034F). Variation selectors stay allowed: they render the same base
+ * character, and Japanese names can carry one.
+ */
+// U+034F is a combining mark, so it is matched on its own, never inside a character class.
+const BLANK = /[\u115F\u1160\u3164\uFFA0\u2800]|\u034F/u;
 
 function isPlainName(value: string): boolean {
   const length = [...value].length;
@@ -126,7 +134,8 @@ function isPlainName(value: string): boolean {
     length >= 1 &&
     length <= SUBMISSION_NAME_MAX_LENGTH &&
     !NOT_ONE_LINE.test(value) &&
-    !FORMAT.test(value.replace(JOINER_IN_A_WORD, ''))
+    !FORMAT.test(value.replace(JOINER_IN_A_WORD, '')) &&
+    !BLANK.test(value)
   );
 }
 

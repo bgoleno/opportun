@@ -36,7 +36,13 @@ const POPUP_HTML = readFileSync(new URL('../popup.html', import.meta.url), 'utf8
 const PDF = new TextEncoder().encode('%PDF-1.4\n% placeholder resume\n%%EOF\n');
 const TAB_URL = `${POSTING_URL}?gh_src=placeholder`;
 
-function attempt(over: Partial<PrefillAttempt> = {}): PrefillAttempt {
+/**
+ * The attempt as /current sends it. `withheld` is absent unless a test sets it, as the server
+ * leaves it out when nothing is withheld (#196).
+ */
+type AttemptJson = Omit<PrefillAttempt, 'withheld'> & { withheld?: string[] };
+
+function attempt(over: Partial<AttemptJson> = {}): AttemptJson {
   return {
     id: 'sub-1',
     destinationUrl: `https://boards.greenhouse.io/${BOARD}/jobs/${JOB_ID}`,
@@ -589,10 +595,86 @@ describe('#192 in the popup: a shared label is listed for the user to fill', () 
   });
 });
 
+describe('#196: a field the server withholds is listed for the user, with its own reason', () => {
+  it("a withheld LinkedIn address is not filled, and is listed once, under the form's label (tl on #201)", async () => {
+    const fields: Record<string, string> = { ...attempt().fields };
+    delete fields.linkedinUrl;
+    const s = setup({
+      current: json(200, {
+        attempt: { ...attempt({ fields }), withheld: ['linkedinUrl'] },
+        reason: null,
+      }),
+    });
+    await clickFill(s);
+    expect(valueOf(s.page.doc, 'question_9000110')).toBe('');
+    const lines = listed(s, 'Not filled in');
+    expect(lines).toContain(
+      "LinkedIn Profile: it no longer passes Opportun's checks: correct it in Opportun, or fill it in yourself",
+    );
+    // Once, with that reason only: never also "not in what you reviewed".
+    expect(lines.filter((l) => l.startsWith('LinkedIn'))).toHaveLength(1);
+    // The plan carries the field's name and labels, never a value.
+    expect(s.plans[0]!.withheld).toEqual([
+      { id: null, labels: ['LinkedIn Profile', 'LinkedIn'], name: 'LinkedIn profile' },
+    ]);
+    // The rest of the form is filled as usual.
+    expect(listed(s, 'Filled in')).toContain('First Name');
+  });
+
+  it("each withheld key is listed once: under the form's label, or its own name when the form lacks it", async () => {
+    const s = setup({
+      current: json(200, {
+        attempt: {
+          ...attempt({ fields: { email: 'jane@example.com' } }),
+          withheld: ['firstName', 'websiteUrl', 'someOther'],
+        },
+        reason: null,
+      }),
+    });
+    await clickFill(s);
+    const lines = listed(s, 'Not filled in');
+    for (const label of ['First Name', 'Website', 'someOther']) {
+      expect(lines).toContain(
+        `${label}: it no longer passes Opportun's checks: correct it in Opportun, or fill it in yourself`,
+      );
+    }
+    for (const label of ['First Name', 'Website']) {
+      expect(lines.filter((l) => l.startsWith(`${label}:`))).toHaveLength(1);
+    }
+    expect(valueOf(s.page.doc, 'first_name')).toBe('');
+  });
+
+  it('a withheld list that is not a list of names is an unexpected answer: nothing is filled', async () => {
+    const s = setup({
+      current: json(200, { attempt: { ...attempt(), withheld: 'linkedinUrl' }, reason: null }),
+    });
+    await clickFill(s);
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    expect(s.$('status').textContent).toMatch(/unexpected response \(200\)/);
+  });
+});
+
 describe('buildPlan', () => {
+  it('maps each withheld key to the field it names, with no value (#196, tl on #201)', () => {
+    const p = buildPlan(
+      { ...attempt(), withheld: ['firstName', 'websiteUrl', 'someOther'] },
+      { board: BOARD, jobId: JOB_ID },
+      null,
+    );
+    expect(p.withheld).toEqual([
+      { id: 'first_name', labels: [], name: 'First name' },
+      { id: null, labels: ['Website'], name: 'Website' },
+      { id: null, labels: [], name: 'someOther' },
+    ]);
+    expect(JSON.stringify(p.withheld)).not.toContain('@');
+  });
+
   it('maps the four standard fields by id and the two links and answers by label, leaving out empty values', () => {
     const p = buildPlan(
-      attempt({ fields: { firstName: 'Jane', websiteUrl: 'https://jane.example.com' } }),
+      {
+        withheld: [],
+        ...attempt({ fields: { firstName: 'Jane', websiteUrl: 'https://jane.example.com' } }),
+      },
       { board: BOARD, jobId: JOB_ID },
       null,
     );
@@ -605,7 +687,7 @@ describe('buildPlan', () => {
   });
 
   it('the LinkedIn address matches a question labelled "LinkedIn Profile" or plain "LinkedIn" (qa on #187)', () => {
-    const p = buildPlan(attempt(), { board: BOARD, jobId: JOB_ID }, null);
+    const p = buildPlan({ withheld: [], ...attempt() }, { board: BOARD, jobId: JOB_ID }, null);
     expect(p.questions[0]).toEqual({
       labels: ['LinkedIn Profile', 'LinkedIn'],
       name: 'LinkedIn profile',
