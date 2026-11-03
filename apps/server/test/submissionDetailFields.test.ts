@@ -102,6 +102,8 @@ describe('acceptance 1: the four fields are saved as typed and read back', () =>
       { firstName: '李', lastName: 'O’Brien' },
       { firstName: 'J'.repeat(100), lastName: 'D'.repeat(100) },
       { linkedinUrl: 'http://linkedin.example/in/jane', websiteUrl: 'HTTPS://JANE.EXAMPLE' },
+      // A backslash ends the host: this @ is in the path (qa on #194).
+      { linkedinUrl: 'https://www.linkedin.com\\@other.example/' },
     ];
     for (const fields of accepted) {
       const res = await patchFields(a, id, fields);

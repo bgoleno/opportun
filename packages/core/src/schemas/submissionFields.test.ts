@@ -137,6 +137,9 @@ describe('submissionFieldProblem', () => {
       'https://jane.example.com/?contact=jane@example.com',
       'https://jane.example.com/#@top',
       'https://jane.example.com/a%40b',
+      // A backslash ends the host, so this @ is in the path: the host is www.linkedin.com
+      // (qa on #194).
+      'https://www.linkedin.com\\@other.example/',
     ]) {
       expect(submissionFieldProblem({ websiteUrl: good }), good).toBeNull();
     }
