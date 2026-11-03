@@ -97,12 +97,13 @@ describe('acceptance 1: the four fields are saved as typed and read back', () =>
   it('accepts names in any script and at the length limit, and plain http addresses', async () => {
     const { app, a } = await boot(ON);
     const id = await draft(app, a);
-    for (const fields of [
+    const accepted: Record<string, string>[] = [
       { firstName: 'Zoë', lastName: 'Núñez de la Peña' },
       { firstName: '李', lastName: 'O’Brien' },
       { firstName: 'J'.repeat(100), lastName: 'D'.repeat(100) },
       { linkedinUrl: 'http://linkedin.example/in/jane', websiteUrl: 'HTTPS://JANE.EXAMPLE' },
-    ]) {
+    ];
+    for (const fields of accepted) {
       const res = await patchFields(a, id, fields);
       expect(res.statusCode, `${JSON.stringify(fields)}: ${res.body}`).toBe(200);
     }
