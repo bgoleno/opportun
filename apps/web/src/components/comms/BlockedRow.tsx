@@ -23,6 +23,8 @@ const RULE_LABELS: Record<string, string> = {
   job_sender: 'a known job sender',
   vocabulary: 'job wording in the message',
   thread: 'a thread linked to an opportunity',
+  // Only ever passes (#119), so a blocked row never shows it; listed so no rule is a bare id.
+  submission_window: 'expected from an application you submitted',
   ai_gate: 'not part of the job search',
   no_signal: 'nothing in it about a job',
   none: 'no rule',

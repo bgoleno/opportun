@@ -211,6 +211,32 @@ describe('S7: status and evidence', () => {
   });
 });
 
+describe('S7: an email confirmation (#119)', () => {
+  it('shows the email evidence card, with its unlink, instead of the one-line placeholder', async () => {
+    render(
+      attempt({
+        status: 'confirmed',
+        confirmationKind: 'email',
+        confirmedAt: NOW - DAY,
+        confirmationEmail: {
+          communicationId: 'comm-1',
+          subject: 'Application received',
+          fromAddress: 'careers@examplecorp.example',
+          sentAt: NOW - DAY,
+          signals: ['ats_job_ref', 'time_window'],
+        },
+      }),
+    );
+    const evidence = (await screen.findByRole('heading', { name: 'Evidence' })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(evidence).toHaveTextContent('Application received');
+    expect(
+      within(evidence).getByRole('button', { name: 'Not this application (unlink)' }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe('S7: recording an outcome, for every submitted or unknown attempt (#149, tl)', () => {
   it('an earlier unknown attempt can be answered here while a newer one is submitted', async () => {
     const earlier = attempt({ status: 'unknown', submittedAt: NOW - 6 * DAY });
@@ -333,5 +359,21 @@ describe('S7 follow-ups (#166; qa and tl on #163)', () => {
       `The application site refused the form on ${formatDateTime(NOW - DAY)}.`,
     );
     expect(evidence).not.toHaveTextContent('No confirmation yet');
+  });
+});
+
+describe('test gaps (#172)', () => {
+  // Only a refused attempt gets the dated refusal line (#166). A failed or stopped one, with no
+  // confirmation, keeps "No confirmation yet.": widening the refusal's condition fails here.
+  it.each([
+    ['failed', { status: 'failed' }],
+    ['stopped', { status: 'abandoned', failureReason: 'cancelled_by_user' }],
+  ] as const)('a %s attempt keeps "No confirmation yet." as its evidence', async (_n, over) => {
+    render(attempt({ ...over, updatedAt: NOW - DAY }));
+    const evidence = (await screen.findByRole('heading', { name: 'Evidence' })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(evidence).toHaveTextContent('No confirmation yet.');
+    expect(evidence).not.toHaveTextContent('refused the form');
   });
 });

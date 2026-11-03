@@ -312,6 +312,27 @@ export function useRecordOutcome(opportunityId: string) {
   });
 }
 
+/**
+ * "Not this application" (#119): undoes an email confirmation. The attempt returns to submitted,
+ * and the email leaves the opportunity's timeline if the match put it there.
+ */
+export function useUnlinkConfirmation(opportunityId: string) {
+  const qc = useQueryClient();
+  const invalidate = useInvalidate(opportunityId);
+  return useMutation({
+    mutationFn: (id: string) =>
+      api<SubmissionView>(`/submissions/${enc(id)}/unlink-confirmation`, {
+        method: 'POST',
+        body: {},
+      }),
+    onSettled: async () => {
+      await invalidate();
+      // The timeline loses the email when the match had put it there.
+      await qc.invalidateQueries({ queryKey: qk.opportunity(opportunityId) });
+    },
+  });
+}
+
 export function useCancelSubmission(opportunityId: string) {
   const invalidate = useInvalidate(opportunityId);
   return useMutation({

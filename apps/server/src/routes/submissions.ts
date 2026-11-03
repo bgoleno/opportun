@@ -24,7 +24,7 @@ import {
   cancelSubmission,
   createSubmissionDraft,
   getSnapshotForDownload,
-  getSubmission,
+  getRow,
   listSubmissionsForOpportunity,
   updateSubmissionDraft,
 } from '../repos/submissions';
@@ -39,6 +39,7 @@ import {
   reviewUsage,
   setUserReviewCap,
 } from '../repos/submissionReview';
+import { detailView, unlinkConfirmation } from '../repos/submissionConfirm';
 import { contentDisposition } from './attachments';
 import { DEFAULT_LIMIT, IdParams, MAX_LIMIT, pageOf } from './common';
 
@@ -216,7 +217,9 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
     { attachValidation: true, schema: { params: IdParams, response: { 200: SubmissionSchema } } },
     async (req, reply) => {
       if (answeredInvalid(req, reply)) return reply;
-      return getSubmission(db, app.requireUser(req), req.params.id);
+      // With an email confirmation's evidence (#119), the one view that carries it.
+      const ctx = app.requireUser(req);
+      return detailView(db, ctx, await getRow(db, ctx, req.params.id));
     },
   );
 
@@ -322,6 +325,19 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       if (answeredInvalid(req, reply)) return reply;
       return recordSubmissionOutcome(db, app.requireUser(req), req.params.id, req.body);
+    },
+  );
+
+  // "Not this application" (#119 criterion 5): undoes an email confirmation, one attempt at a time.
+  api.post(
+    '/submissions/:id/unlink-confirmation',
+    {
+      attachValidation: true,
+      schema: { params: IdParams, body: EmptyBody, response: { 200: SubmissionSchema } },
+    },
+    async (req, reply) => {
+      if (answeredInvalid(req, reply)) return reply;
+      return unlinkConfirmation(db, app.requireUser(req), req.params.id);
     },
   );
 

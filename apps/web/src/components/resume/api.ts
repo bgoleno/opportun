@@ -1,7 +1,8 @@
 // Resume workspace data: resumes, tailoring sessions (with the SSE chat stream), match
 // reports, the Google connection and the Reactive Resume connection (FR-R7).
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, ApiError, CSRF_COOKIE, API_BASE, readCookie } from '@/lib/api';
+import { toast } from '@/components/ui/toast';
+import { api, ApiError, CSRF_COOKIE, API_BASE, errorMessage, readCookie } from '@/lib/api';
 
 const enc = encodeURIComponent;
 
@@ -287,6 +288,11 @@ export function useRecordSend(opportunityId: string) {
   });
 }
 
+/**
+ * The toasts live here, not in the button's mutate() callbacks (#172 item 5): the refreshed list
+ * drops the removed row and its button with it, and React Query does not call a mutate() call's
+ * own callbacks once its component has unmounted. A hook's own callbacks always run.
+ */
 export function useRemoveSend(opportunityId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -294,7 +300,16 @@ export function useRemoveSend(opportunityId: string) {
       api<void>(`/opportunities/${enc(opportunityId)}/resume-sends/${enc(sendId)}`, {
         method: 'DELETE',
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: rk.resumes }),
+    onSuccess: async () => {
+      toast({ title: 'Sent record removed', variant: 'success' });
+      await qc.invalidateQueries({ queryKey: rk.resumes });
+    },
+    onError: (err) =>
+      toast({
+        title: 'Could not remove the record',
+        description: resumeErrorMessage(err) ?? errorMessage(err),
+        variant: 'destructive',
+      }),
   });
 }
 
