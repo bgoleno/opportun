@@ -101,7 +101,12 @@ export const SUBMISSION_URL_FIELDS = ['linkedinUrl', 'websiteUrl'] as const;
 /** Counted in characters as a person counts them (code points), not UTF-16 units. */
 export const SUBMISSION_NAME_MAX_LENGTH = 100;
 
-export const SUBMISSION_FIELD_REFUSALS = ['field_name_invalid', 'field_url_invalid'] as const;
+export const SUBMISSION_FIELD_REFUSALS = [
+  'field_name_invalid',
+  'field_url_invalid',
+  'field_email_invalid',
+  'field_phone_invalid',
+] as const;
 export type SubmissionFieldRefusal = (typeof SUBMISSION_FIELD_REFUSALS)[number];
 
 /** Control characters, and the line and paragraph separators that also break a line. */
@@ -186,6 +191,53 @@ function parseUrl(value: string): { username: string; password: string } | null 
 }
 
 /**
+ * One line, trimmed and not empty, with nothing invisible in it: no control character or line
+ * break, no format character at all (an email or a phone number needs no joiner), and none of
+ * the blanks names refuse (#203, tl's ruling).
+ */
+function isVisibleLine(value: string): boolean {
+  return (
+    value !== '' &&
+    value === value.trim() &&
+    !NOT_ONE_LINE.test(value) &&
+    !FORMAT.test(value) &&
+    !BLANK.test(value)
+  );
+}
+
+/**
+ * An email: a light shape check, not RFC 5322 (a strict one refuses real addresses), and the
+ * application site checks it again on submit (#203, tl). No whitespace; exactly one @ with
+ * something before it; a domain holding a dot that is neither its first nor last character; at
+ * most 254 characters. Letters outside ASCII stay allowed (internationalized addresses).
+ */
+function isEmail(value: string): boolean {
+  if (!isVisibleLine(value) || /\s/u.test(value) || [...value].length > 254) return false;
+  const parts = value.split('@');
+  if (parts.length !== 2) return false;
+  const [local, domain] = parts as [string, string];
+  return local !== '' && domain.includes('.') && !domain.startsWith('.') && !domain.endsWith('.');
+}
+
+/**
+ * A phone number (#203, tl): ASCII digits, spaces and - . ( ) /, a + only first, and an optional
+ * extension at the end (x, ext or ext., any case, then digits). 3 to 20 digits in all (E.164's
+ * 15 plus an extension), at most 40 characters; no other letters, no digits outside ASCII.
+ */
+// Two flat patterns, no nested quantifiers: the extension is taken off the end first.
+const PHONE_EXTENSION = /^(.*?)\s*(?:x|ext\.?)\s*([0-9]+)$/i;
+const PHONE_NUMBER = /^\+?[0-9 ()./-]+$/;
+
+function isPhone(value: string): boolean {
+  if (!isVisibleLine(value) || value.length > 40) return false;
+  const extension = PHONE_EXTENSION.exec(value);
+  const number = extension === null ? value : (extension[1] ?? '');
+  if (!PHONE_NUMBER.test(number)) return false;
+  const digits = value.replace(/[^0-9]/g, '').length;
+  return digits >= 3 && digits <= 20;
+}
+
+/**
  * The first named field whose value breaks its rule, in a fixed order (names, then links), or
  * null. The server refuses the edit with the code as a 422 and the field's name, never its value.
  */
@@ -201,6 +253,12 @@ export function submissionFieldProblem(
     const value = values.get(field);
     if (value !== undefined && !isWebAddress(value)) return { field, code: 'field_url_invalid' };
   }
+  const email = values.get('email');
+  if (email !== undefined && !isEmail(email))
+    return { field: 'email', code: 'field_email_invalid' };
+  const phone = values.get('phone');
+  if (phone !== undefined && !isPhone(phone))
+    return { field: 'phone', code: 'field_phone_invalid' };
   return null;
 }
 
