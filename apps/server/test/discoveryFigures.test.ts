@@ -204,15 +204,38 @@ describe('#209: each board source, over the last 14 days', () => {
     });
   });
 
-  it('open jobs come from the last run that counted them, past a failed one', async () => {
+  // A failed run finishes with the stats it reached and an error, as discoveryRun.ts's catch
+  // block writes it (tl on #212), never with no stats.
+  it('open jobs come from the newest run that succeeded, past a failed one', async () => {
     const { app, a } = await boot();
     const s = await board(app, a, 'vandelay');
     await run(app, a, s.id, 4, { fetched: 90, inserted: 90 });
     await run(app, a, s.id, 2, { fetched: 92, inserted: 2 });
-    await run(app, a, s.id, 1, null, 'the board answered 503');
+    await run(app, a, s.id, 1, { fetched: 0, inserted: 0 }, 'the board answered 503');
     const [row] = (await discoveryCostFigures(app.db, ctxOf(a), NOW)).sources;
     expect(row).toMatchObject({ openJobs: 92, days: 4 });
     expect(row!.newPerDay).toBeCloseTo(2 / 4, 10);
+  });
+
+  it('a failed first run, then the real backfill: the backfill and all before it are left out (tl on #212)', async () => {
+    const { app, a } = await boot();
+    const s = await board(app, a, 'acme');
+    await run(app, a, s.id, 10, { fetched: 3, inserted: 3 }, 'the board stopped answering');
+    await run(app, a, s.id, 8, { fetched: 300, inserted: 297 }); // the backfill
+    await run(app, a, s.id, 4, { fetched: 304, inserted: 5 });
+    await run(app, a, s.id, 1, { fetched: 305, inserted: 2 });
+    const [row] = (await discoveryCostFigures(app.db, ctxOf(a), NOW)).sources;
+    expect(row).toMatchObject({ openJobs: 305, days: 8 });
+    expect(row!.newPerDay).toBeCloseTo(7 / 8, 10);
+  });
+
+  it('a source whose runs have all failed: no open jobs and no rate', async () => {
+    const { app, a } = await boot();
+    const s = await board(app, a, 'cyberdyne');
+    await run(app, a, s.id, 3, { fetched: 0, inserted: 0 }, 'the board answered 404');
+    await run(app, a, s.id, 1, { fetched: 12, inserted: 12 }, 'the board stopped answering');
+    const [row] = (await discoveryCostFigures(app.db, ctxOf(a), NOW)).sources;
+    expect(row).toMatchObject({ openJobs: null, newPerDay: null, days: 0 });
   });
 
   it("only board sources are listed, and only the caller's", async () => {
