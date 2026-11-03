@@ -8,7 +8,8 @@ import { racePoint } from '../lib/racePoints';
 import type { Db, Exec, UserCtx } from './base';
 import { assertOpportunityOwned } from './activities';
 import { countWhere, type ListOpts, type Page } from './list';
-import { withTransaction } from '../db/client';
+import { lockScope, withTransaction } from '../db/client';
+import { hasSend, resumeScope } from './resumeSends';
 
 export type ResumeRow = typeof resumes.$inferSelect;
 export type ResumeStatus = ResumeRow['status'];
@@ -266,6 +267,19 @@ export async function updateResume(
     } else if (patch.submittedTo !== undefined || patch.submittedAt !== undefined) {
       throw new HttpError(422, 'not_submitted');
     }
+    // A resume with a send reads as submitted whatever its stored status (resumeSends.ts), so
+    // moving it to another status would change nothing anyone sees: say why instead (#158).
+    if (
+      patch.status !== undefined &&
+      patch.status !== 'submitted' &&
+      (await hasSend(tx, ctx, id))
+    ) {
+      throw new HttpError(
+        422,
+        'resume_has_sends',
+        'This resume is recorded as sent. Remove those records first to change its status.',
+      );
+    }
     const relink = 'opportunityId' in patch;
     if (relink && row.kind === 'base') throw new HttpError(422, 'base_cannot_attach');
     // Matches the convention every other cross-table relink in this layer follows (e.g.
@@ -307,7 +321,8 @@ export async function setResumeStatus(
 export type DeleteResumeResult = { outcome: 'deleted' } | { outcome: 'archived'; row: ResumeRow };
 
 /**
- * Stops tracking a resume. A submitted resume is archived (archivedAt set, status and every
+ * Stops tracking a resume. A submitted resume, or one recorded as sent (#158), is archived
+ * (archivedAt set, status and every
  * relationship left alone) rather than deleted, so the record of what was sent is not
  * destroyed (#70), and it keeps its document. An already-archived resume is a no-op that
  * reports 'archived' again, so a retried request is safe.
@@ -319,13 +334,18 @@ export type DeleteResumeResult = { outcome: 'deleted' } | { outcome: 'archived';
  */
 export async function deleteResume(db: Db, ctx: UserCtx, id: string): Promise<DeleteResumeResult> {
   return await withTransaction(db, async (tx) => {
+    // The lock a send's writer holds (resumeSends.ts): a send recorded first is seen below and
+    // the resume is archived; one recorded after finds the resume gone.
+    await lockScope(tx, resumeScope(id));
     const row = await tx
       .select()
       .from(resumes)
       .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
       .get();
     if (row === undefined) throw notFound();
-    if (row.status !== 'submitted') {
+    // Sent (#158) counts as submitted: its sends are the record of what was sent, and
+    // deleting the resume would cascade them away.
+    if (row.status !== 'submitted' && !(await hasSend(tx, ctx, id))) {
       await racePoint('resumes.delete.locked');
       // The doc_ref as the row is deleted, not as read above: on Postgres an apply can move the
       // resume to a new version in between, and the version read above is one that apply has

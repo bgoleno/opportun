@@ -27,7 +27,7 @@ import { racePoint } from '../lib/racePoints';
 import { createActivity, createNextStep } from './activities';
 import type { Db, Exec, UserCtx } from './base';
 import { afterStageChange, transitionOpportunityIn, type OpportunityView } from './opportunities';
-import { updateResume } from './resumes';
+import { insertSend, resumeScope } from './resumeSends';
 import { submissionScope } from './submissionReview';
 import { getRow, notNow, owned, view, type SubmissionRow } from './submissions';
 
@@ -134,22 +134,6 @@ export async function attestSubmission(
       participants: [],
       externalUrl: row.destinationUrl,
     });
-    // The resume's own record (FR-R3). One already submitted elsewhere stays as it is: the
-    // per-application fact is this attempt's, not the resume's.
-    if (row.resumeId !== null) {
-      const resume = await tx
-        .select({ status: resumes.status })
-        .from(resumes)
-        .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, row.resumeId)))
-        .get();
-      if (resume !== undefined && resume.status !== 'submitted') {
-        await updateResume(tx, ctx, row.resumeId, {
-          status: 'submitted',
-          submittedTo: `${atsName(row.atsKind)} / ${opp.company}`,
-          submittedAt,
-        });
-      }
-    }
     const [updated] = await tx
       .update(applicationSubmissions)
       .set({
@@ -174,6 +158,28 @@ export async function attestSubmission(
         to: 'applied',
         note: 'Applied via assisted submission',
       });
+    }
+    // The resume's record (FR-R3): one send per application, for a base or a tailored resume,
+    // so a resume sent before keeps every earlier send too (#158). The resume row itself is
+    // not written. Its lock is a leaf (resumeSends.ts), so it comes after every other lock
+    // this transaction takes; a resume deleted since it was chosen has nothing to record.
+    if (row.resumeId !== null) {
+      await lockScope(tx, resumeScope(row.resumeId));
+      const resume = await tx
+        .select({ id: resumes.id })
+        .from(resumes)
+        .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, row.resumeId)))
+        .get();
+      if (resume !== undefined) {
+        await insertSend(tx, ctx, {
+          opportunityId: row.opportunityId,
+          resumeId: resume.id,
+          sentAt: submittedAt,
+          sentVia: atsName(row.atsKind),
+          submissionId: id,
+        });
+        await racePoint('submissions.attest.sendRecorded');
+      }
     }
     await audit(tx, 'submission.attested', {
       userId: ctx.userId,

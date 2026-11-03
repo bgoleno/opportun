@@ -246,6 +246,21 @@ describe('AC1: one draft per eligible opportunity', () => {
     },
   );
 
+  it('a draft resume recorded as sent reads as submitted, so it is usable (#158, one derivation)', async () => {
+    const { app, a } = await boot(ON);
+    const oppId = await seedOpportunity(app, a);
+    const resumeId = await seedResume(app, a, 'draft');
+    const elsewhere = await seedOpportunity(app, a, { ats: null, postingState: null });
+    const sent = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${elsewhere}/resume-sends`,
+      payload: { resumeId, sentVia: 'Indeed' },
+    });
+    expect(sent.statusCode, sent.body).toBe(201);
+    const res = await create(a, oppId, { idempotencyKey: crypto.randomUUID(), resumeId });
+    expect(res.statusCode, res.body).toBe(201);
+  });
+
   it('another user’s resume, or an archived one, reads as not found', async () => {
     const { app, a, b } = await boot(ON);
     const oppId = await seedOpportunity(app, a);
