@@ -644,6 +644,65 @@ describe('resumeShown: the popup’s read-only look at the form (tl and sec on #
   });
 });
 
+// #191 (sec's point on #187): the name counts only where the user can see it. A copy inside a
+// hidden element, or under one, must not make the popup believe the form took the file.
+const HIDINGS: [string, string][] = [
+  ['the hidden attribute', '<span hidden>NAME</span>'],
+  ['display: none', '<span style="display: none">NAME</span>'],
+  ['visibility: hidden', '<span style="visibility: hidden">NAME</span>'],
+  ['aria-hidden', '<span aria-hidden="true">NAME</span>'],
+  ['inert', '<span inert>NAME</span>'],
+  ['a hidden ancestor', '<div style="display: none"><p><span>NAME</span></p></div>'],
+];
+
+/** The form with `markup` (the name in it) appended inside it. */
+function withHiddenName(markup: string, name: string) {
+  const page = loadForm(FEW_QUESTIONS, { showsFileName: false });
+  const form = page.doc.getElementById('application-form')!;
+  form.insertAdjacentHTML('beforeend', markup.replace('NAME', name));
+  return page;
+}
+
+describe('#191: the name counts only where it is visible', () => {
+  const check = { board: BOARD, jobId: JOB_ID, filename: 'Jane-Doe-Example-Resume.pdf' };
+
+  for (const [how, markup] of HIDINGS) {
+    it(`resumeShown does not count a name hidden by ${how}`, () => {
+      const page = withHiddenName(markup, check.filename);
+      expect(resumeShown(asJson(check), page.doc)).toBe(0);
+      // Shown for real, it counts once.
+      page.doc.querySelector('.file-upload__filename')!.textContent = check.filename;
+      expect(resumeShown(asJson(check), page.doc)).toBe(1);
+    });
+  }
+
+  it('clearResume does not take a hidden name as shown: it clears our file', async () => {
+    for (const [how, markup] of HIDINGS) {
+      const { doc } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
+      doc
+        .getElementById('application-form')!
+        .insertAdjacentHTML('beforeend', markup.replace('NAME', check.filename));
+      expect(clearResume(asJson({ ...check, size: PDF.length, before: 0 }), doc), how).toBe(
+        'cleared',
+      );
+    }
+  });
+
+  it('the fill counts only visible copies as there before, so a later visible one is news', async () => {
+    for (const [how, markup] of HIDINGS) {
+      const page = loadForm(
+        FEW_QUESTIONS.replace(
+          '</form>',
+          `${markup.replace('NAME', 'Jane-Doe-Example-Resume.pdf')}</form>`,
+        ),
+        { showsFileName: false },
+      );
+      const report = ok(await fillGreenhouseForm(asArgs(plan()), page.doc));
+      expect(report.resume?.before, how).toBe(0);
+    }
+  });
+});
+
 describe('clearResume: takes back only the file the filler set (tl and sec on #187)', () => {
   const check = {
     board: BOARD,
@@ -836,6 +895,19 @@ describe('the source scan of the injected functions (acceptance 2, sec 1 to 6)',
     expect(check).not.toMatch(
       /dispatchEvent|\.files\s*=[^=]|\.call\(|\.value\s*=[^=]|setAttribute|textContent\s*=[^=]/,
     );
+  });
+
+  it('the three copies of the visible-name count are the same code (sec on #202)', () => {
+    // Each injected function carries its own seenIn (it is serialized alone): one rule, three
+    // copies, so a fix to one that misses the others would let the counts disagree.
+    const copies = [fillGreenhouseForm, resumeShown, clearResume].map((f) => {
+      const m = /const seenIn = \(root[\s\S]*?return text\.split\(name\)\.length - 1;\s*\};/.exec(
+        f.toString(),
+      );
+      expect(m, f.name).not.toBeNull();
+      return m![0].replace(/\s+/g, ' ');
+    });
+    expect(new Set(copies).size).toBe(1);
   });
 
   it('every function injected checks the page’s address first', () => {

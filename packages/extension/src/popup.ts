@@ -19,7 +19,7 @@ import { bakedServerUrl, type SettingsStorage } from './settings';
 
 /** The few extension APIs the popup uses (no @types/chrome dependency). */
 interface ExtensionApi {
-  storage: { local: SettingsStorage };
+  storage: { local: SettingsStorage; session?: SettingsStorage };
   tabs: {
     query(q: { active: true; currentWindow: true }): Promise<{ id?: number; url?: string }[]>;
   };
@@ -109,6 +109,8 @@ const isFillReport = (v: unknown): v is FillReport => {
 
 void mountPopup(document, {
   storage: chrome.storage.local,
+  // This browser session only (#191); null where a browser has no storage.session.
+  checkStore: chrome.storage.session ?? null,
   fetch: (url, init) => fetch(url, init),
   get: (url, init) => fetch(url, init),
   // The address the server baked into this download, if it came from one.

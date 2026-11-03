@@ -101,10 +101,23 @@ On the click, and only then:
    and `change` event. A field that already has something in it is left as it was, and so is
    a field the form does not show: one that is hidden, or inside a hidden part of the form.
 
+   A detail you saved before Opportun's current checks, which no longer passes them, is left
+   out of the fill. The server withholds it, and the popup lists it under "Not filled in" with
+   the reason: correct it in Opportun, or fill it in yourself
+   ([#196](https://github.com/bgoleno/opportun/issues/196)).
+
 6. **It attaches the resume** to the form's file input through `DataTransfer`. The page side
    keeps no timer, so the popup then looks, read-only and for about 1.5 seconds, for the form
-   to show the file's name. If it never does, the popup takes the file back out (only if it is
-   still exactly the one it set) and says to attach it yourself.
+   to show the file's name where you can see it: a copy inside hidden content does not count.
+   If it never does, the popup takes the file back out (only if it is still exactly the one it
+   set) and says to attach it yourself.
+
+   **Keep the popup open until it says it is done.** Chrome closes a popup when you click
+   elsewhere, and the check ends with it. If that happens, the next time you open the popup on
+   that tab it tells you the resume was not confirmed, so look at the form yourself. That note
+   is kept in the extension's session storage only while the check runs; nothing else runs in
+   the page, and there is no background worker.
+
 7. **The popup lists** what was filled in and what was not, with the reason.
 
 It never chooses an option in a dropdown, checkbox or radio button, and never sets a hidden
