@@ -1,0 +1,368 @@
+// Assisted apply prefill, the popup's half (M3, https://github.com/bgoleno/opportun/issues/183;
+// tl's design on #120). On the user's click, on a Greenhouse posting tab: read the one
+// handed-off attempt for this page from the user's own server (GET /connector/apply/current,
+// #182), check the tab is that attempt's pinned posting, fetch its resume copy when it is
+// ready, and build the plan the injected filler (greenhouseFill.ts) fills from. The page itself
+// receives only the plan: the reviewed values and the file, never anything else of the popup's.
+// Pure helpers and injected fetch; unit-tested.
+import type { FetchResponse } from './api';
+import type { FillPlan, FillReport, NotFilledReason } from './greenhouseFill';
+import type { Rendered } from './render';
+import type { Settings } from './settings';
+
+const APPLY_PATH = '/api/v1/connector/apply';
+
+/** The reads here are GETs with no body; a capture's POST keeps its own FetchLike (api.ts). */
+export interface GetInit {
+  method: 'GET';
+  headers: Record<string, string>;
+  credentials: 'omit';
+  redirect: 'error';
+}
+export type GetLike = (url: string, init: GetInit) => Promise<FetchResponse>;
+
+/** The server's snapshot ceiling (10 MB, #115); anything larger is not attached. */
+export const MAX_RESUME_BYTES = 10 * 1024 * 1024;
+
+/**
+ * The Greenhouse posting an https tab URL is on: `/<board>/jobs/<id>` on either Greenhouse
+ * board host, which the server treats as one (destinationAllowed). Null for anything else,
+ * including an embedded board on another site, which M3 does not fill. The injected filler keeps
+ * its own copy of this rule for its last check in the page (it cannot import), and
+ * test/greenhouseFill.test.ts pins the two equal.
+ */
+export function greenhouseJobOf(href: string): { board: string; jobId: string } | null {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:') return null;
+  if (url.hostname !== 'job-boards.greenhouse.io' && url.hostname !== 'boards.greenhouse.io') {
+    return null;
+  }
+  const parts = url.pathname.split('/').filter((p) => p !== '');
+  if (parts.length !== 3 || parts[1] !== 'jobs') return null;
+  const [board, , jobId] = parts as [string, string, string];
+  return { board: board.toLowerCase(), jobId };
+}
+
+/** Same board (case-insensitive, as the server compares slugs) and the same job id. */
+export const samePosting = (
+  a: { board: string; jobId: string },
+  b: { board: string; jobId: string },
+): boolean => a.board.toLowerCase() === b.board.toLowerCase() && a.jobId === b.jobId;
+
+/** The attempt as GET /connector/apply/current returns it (routes/connectorApply.ts, #182). */
+export interface PrefillAttempt {
+  id: string;
+  destinationUrl: string;
+  fields: Record<string, string>;
+  answers: { label: string; value: string }[];
+  resume: { snapshotState: string | null; filename: string | null; bytes: number | null };
+}
+
+export type PrefillMiss = 'no_matching_attempt' | 'several_handed_off' | 'review_stale';
+
+export type CurrentResult =
+  | { kind: 'attempt'; attempt: PrefillAttempt }
+  | { kind: 'none'; reason: PrefillMiss }
+  | { kind: 'unauthorized' }
+  | { kind: 'no_scope' }
+  | { kind: 'unavailable' }
+  | { kind: 'rate_limited'; retryAfterSec: number | null }
+  | { kind: 'server_error'; status: number }
+  | { kind: 'network' };
+
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+const MISSES: readonly string[] = ['no_matching_attempt', 'several_handed_off', 'review_stale'];
+
+function stringRecord(v: unknown): Record<string, string> | null {
+  if (!isRecord(v)) return null;
+  const entries = Object.entries(v);
+  if (!entries.every(([, value]) => typeof value === 'string')) return null;
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
+/** The response body, checked field by field: anything off is a server error, never a guess. */
+function parseCurrent(body: unknown): CurrentResult | null {
+  if (!isRecord(body)) return null;
+  if (body.attempt === null) {
+    return typeof body.reason === 'string' && MISSES.includes(body.reason)
+      ? { kind: 'none', reason: body.reason as PrefillMiss }
+      : null;
+  }
+  const a = body.attempt;
+  if (!isRecord(a) || typeof a.id !== 'string' || typeof a.destinationUrl !== 'string') {
+    return null;
+  }
+  const fields = stringRecord(a.fields);
+  if (fields === null || !Array.isArray(a.answers) || !isRecord(a.resume)) return null;
+  const answers: { label: string; value: string }[] = [];
+  for (const x of a.answers as unknown[]) {
+    if (!isRecord(x) || typeof x.label !== 'string' || typeof x.value !== 'string') return null;
+    answers.push({ label: x.label, value: x.value });
+  }
+  const r = a.resume;
+  return {
+    kind: 'attempt',
+    attempt: {
+      id: a.id,
+      destinationUrl: a.destinationUrl,
+      fields,
+      answers,
+      resume: {
+        snapshotState: typeof r.snapshotState === 'string' ? r.snapshotState : null,
+        filename: typeof r.filename === 'string' ? r.filename : null,
+        bytes: typeof r.bytes === 'number' ? r.bytes : null,
+      },
+    },
+  };
+}
+
+async function get(fetch: GetLike, settings: Settings, url: string, accept: string) {
+  try {
+    return await fetch(url, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${settings.token}`, accept },
+      // As for a capture: bearer only, no cookies, and no redirect may carry the request away.
+      credentials: 'omit',
+      redirect: 'error',
+    });
+  } catch {
+    return null;
+  }
+}
+
+function retryAfter(res: FetchResponse): number | null {
+  const after = Number.parseInt(res.headers.get('retry-after') ?? '', 10);
+  return Number.isFinite(after) ? after : null;
+}
+
+/** The handed-off attempt for this tab, or why there is none. The tab's full URL is sent. */
+export async function fetchCurrent(
+  fetch: GetLike,
+  settings: Settings,
+  tabUrl: string,
+): Promise<CurrentResult> {
+  const res = await get(
+    fetch,
+    settings,
+    `${settings.serverUrl}${APPLY_PATH}/current?url=${encodeURIComponent(tabUrl)}`,
+    'application/json',
+  );
+  if (res === null) return { kind: 'network' };
+  if (res.status === 401) return { kind: 'unauthorized' };
+  if (res.status === 403) return { kind: 'no_scope' };
+  if (res.status === 404) return { kind: 'unavailable' };
+  if (res.status === 429) return { kind: 'rate_limited', retryAfterSec: retryAfter(res) };
+  if (res.status !== 200) return { kind: 'server_error', status: res.status };
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    body = undefined;
+  }
+  return parseCurrent(body) ?? { kind: 'server_error', status: res.status };
+}
+
+/** base64 of the bytes, in chunks so a large file does not overflow the argument list. */
+export function toBase64(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(out);
+}
+
+/**
+ * The attempt's resume copy as base64, or null whenever it cannot be attached as exactly that
+ * file: not ready, refused (409 not ready, or 404 when the attempt is no longer handed off), not
+ * a PDF, empty, larger than the server's ceiling, or not the size /current announced.
+ */
+export async function fetchResume(
+  fetch: GetLike,
+  settings: Settings,
+  attempt: PrefillAttempt,
+): Promise<string | null> {
+  const { snapshotState, filename, bytes } = attempt.resume;
+  if (snapshotState !== 'ready' || filename === null || bytes === null) return null;
+  if (bytes <= 0 || bytes > MAX_RESUME_BYTES) return null;
+  const res = await get(
+    fetch,
+    settings,
+    `${settings.serverUrl}${APPLY_PATH}/${encodeURIComponent(attempt.id)}/snapshot`,
+    'application/pdf',
+  );
+  if (res === null || res.status !== 200 || res.arrayBuffer === undefined) return null;
+  if (!(res.headers.get('content-type') ?? '').toLowerCase().startsWith('application/pdf')) {
+    return null;
+  }
+  let data: Uint8Array;
+  try {
+    data = new Uint8Array(await res.arrayBuffer());
+  } catch {
+    return null;
+  }
+  if (data.length !== bytes) return null;
+  // "%PDF-": the file is what the form is told it is.
+  const magic = [0x25, 0x50, 0x44, 0x46, 0x2d];
+  if (!magic.every((b, i) => data.at(i) === b)) return null;
+  return toBase64(data);
+}
+
+/**
+ * What the filler fills, from the reviewed attempt only (tl's mapping): the four standard
+ * fields by the form's ids, LinkedIn and website by the question's exact label, and each
+ * reviewed answer by its exact label. Empty values are left out: nothing is invented.
+ */
+export function buildPlan(
+  attempt: PrefillAttempt,
+  posting: { board: string; jobId: string },
+  resumeBase64: string | null,
+): FillPlan {
+  const fields = new Map(Object.entries(attempt.fields));
+  const value = (key: string): string => fields.get(key) ?? '';
+  const standard = [
+    { id: 'first_name', name: 'First name', value: value('firstName') },
+    { id: 'last_name', name: 'Last name', value: value('lastName') },
+    { id: 'email', name: 'Email', value: value('email') },
+    { id: 'phone', name: 'Phone', value: value('phone') },
+  ].filter((s) => s.value !== '');
+  const questions = [
+    {
+      labels: ['LinkedIn Profile', 'LinkedIn'],
+      name: 'LinkedIn profile',
+      value: value('linkedinUrl'),
+    },
+    { labels: ['Website'], name: 'Website', value: value('websiteUrl') },
+    ...attempt.answers.map((a) => ({ labels: [a.label], name: a.label, value: a.value })),
+  ].filter((q) => q.value !== '');
+  const filename = attempt.resume.filename;
+  return {
+    board: posting.board,
+    jobId: posting.jobId,
+    standard,
+    questions,
+    resume: resumeBase64 === null || filename === null ? null : { filename, base64: resumeBase64 },
+  };
+}
+
+/** Why a field was not filled, in words (the popup's list). */
+export const NOT_FILLED_WORDS = new Map<NotFilledReason, string>([
+  ['choose_on_form', 'choose it on the form'],
+  ['not_in_review', 'not in what you reviewed: answer it on the form'],
+  ['no_matching_question', 'no question on this form has exactly this label'],
+  ['has_value', 'it already had something in it, so it was left as it was'],
+  ['attach_yourself', 'attach your resume yourself'],
+  [
+    'resume_not_shown',
+    'the form did not show the file: check it, and attach your resume yourself if it is missing',
+  ],
+]);
+
+/** Always said after a fill: Opportun never submits. */
+export const SUBMIT_REMINDER =
+  "Opportun has not submitted anything. Check every field on the form, then press the site's own Submit button.";
+
+/** One status line for a stop before anything was filled. */
+export function renderPrefillStop(
+  stop:
+    | Exclude<CurrentResult, { kind: 'attempt' }>
+    | { kind: 'not_greenhouse' }
+    | { kind: 'other_posting'; destinationUrl: string }
+    | { kind: 'inject_failed' }
+    | { kind: 'wrong_page' }
+    | { kind: 'no_form' },
+): Rendered {
+  const nothing = 'Nothing was filled.';
+  switch (stop.kind) {
+    case 'not_greenhouse':
+      return {
+        tone: 'error',
+        text: `Open the application's page on Greenhouse (the address Opportun opened for you), then click Fill in again. ${nothing}`,
+      };
+    case 'none':
+      return {
+        tone: 'error',
+        text:
+          stop.reason === 'several_handed_off'
+            ? `More than one application you handed off is for this posting. In Opportun, say what happened to the earlier one, then try again. ${nothing}`
+            : stop.reason === 'review_stale'
+              ? `This application changed after you reviewed it. Review it again in Opportun. ${nothing}`
+              : `None of your applications was handed off to this posting. Start it from Opportun's Apply step, then try again. ${nothing}`,
+      };
+    case 'other_posting':
+      return {
+        tone: 'error',
+        text: `This tab is not the posting this application was handed off to (${stop.destinationUrl.slice(0, 200)}). ${nothing}`,
+      };
+    case 'unauthorized':
+      return {
+        tone: 'error',
+        text: `The server rejected the token: it may be revoked or mistyped. Create a new one in Opportun under Settings > Integrations > Extensions and Connectors. ${nothing}`,
+      };
+    case 'no_scope':
+      return {
+        tone: 'error',
+        text: "This extension's token can't fill in applications. In Opportun, open Settings > Integrations > Extensions and Connectors, set the extension up again and tick 'Also let it fill in applications you hand off', then revoke the old token.",
+      };
+    case 'unavailable':
+      return {
+        tone: 'error',
+        text: `Assisted apply is not turned on on your Opportun server. ${nothing}`,
+      };
+    case 'rate_limited':
+      return {
+        tone: 'error',
+        text: `Too many requests to your server for now. Try again in ${
+          stop.retryAfterSec === null
+            ? 'a few minutes'
+            : `about ${Math.max(1, Math.ceil(stop.retryAfterSec / 60))} minute(s)`
+        }. ${nothing}`,
+      };
+    case 'server_error':
+      return {
+        tone: 'error',
+        text: `The server returned an unexpected response (${stop.status}). ${nothing}`,
+      };
+    case 'network':
+      return {
+        tone: 'error',
+        text: `Could not reach the server. Check the address and that the server is running. ${nothing}`,
+      };
+    case 'inject_failed':
+      return {
+        tone: 'error',
+        text: `The extension could not run in this tab. Reload the page and try again. ${nothing}`,
+      };
+    case 'wrong_page':
+      return {
+        tone: 'error',
+        text: `The tab moved off this application's posting before filling. ${nothing}`,
+      };
+    case 'no_form':
+      return {
+        tone: 'error',
+        text: `No Greenhouse application form was found on this page. Wait for it to load and try again. ${nothing}`,
+      };
+  }
+}
+
+/** The report the popup lists: what was filled, what was not and why, then the reminder. */
+export function reportLines(report: Extract<FillReport, { ok: true }>): {
+  filled: string[];
+  notFilled: string[];
+  reminder: string;
+} {
+  return {
+    filled: report.filled.map((l) => l.slice(0, 200)),
+    notFilled: report.notFilled.map(
+      (n) => `${n.label.slice(0, 200)}: ${NOT_FILLED_WORDS.get(n.reason) ?? 'fill it in yourself'}`,
+    ),
+    reminder: SUBMIT_REMINDER,
+  };
+}

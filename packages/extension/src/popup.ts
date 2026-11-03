@@ -12,6 +12,7 @@ import {
   type ExtractResult,
   type RawPage,
 } from './extract';
+import { fillGreenhouseForm, type FillReport } from './greenhouseFill';
 import { mountPopup } from './popupController';
 import { bakedServerUrl, type SettingsStorage } from './settings';
 
@@ -55,9 +56,39 @@ const isExtractResult = (v: unknown): v is ExtractResult =>
     ((v as { ok?: unknown }).ok === false &&
       (v as { reason?: unknown }).reason === 'layout_unrecognized'));
 
+const NOT_FILLED_REASONS: readonly unknown[] = [
+  'choose_on_form',
+  'not_in_review',
+  'no_matching_question',
+  'has_value',
+  'attach_yourself',
+  'resume_not_shown',
+];
+
+/** What fillGreenhouseForm may return; anything else from the tab is treated as a failure. */
+const isFillReport = (v: unknown): v is FillReport => {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as { ok?: unknown; reason?: unknown; filled?: unknown; notFilled?: unknown };
+  if (r.ok === false) return r.reason === 'wrong_page' || r.reason === 'no_form';
+  return (
+    r.ok === true &&
+    Array.isArray(r.filled) &&
+    r.filled.every((l) => typeof l === 'string') &&
+    Array.isArray(r.notFilled) &&
+    r.notFilled.every(
+      (n: unknown) =>
+        typeof n === 'object' &&
+        n !== null &&
+        typeof (n as { label?: unknown }).label === 'string' &&
+        NOT_FILLED_REASONS.includes((n as { reason?: unknown }).reason),
+    )
+  );
+};
+
 void mountPopup(document, {
   storage: chrome.storage.local,
   fetch: (url, init) => fetch(url, init),
+  get: (url, init) => fetch(url, init),
   // The address the server baked into this download, if it came from one.
   bakedServerUrl: () =>
     bakedServerUrl({ url: (path) => chrome.runtime.getURL(path), fetch: (input) => fetch(input) }),
@@ -95,6 +126,21 @@ void mountPopup(document, {
         args: [markers],
       });
       return isRawPage(frame?.result) ? { ok: true, page: frame.result } : null;
+    } catch {
+      return null;
+    }
+  },
+  runFill: async (tabId, plan) => {
+    try {
+      // The top frame only: no allFrames and no frameIds, so no embedded frame is ever reached
+      // (sec's condition 4 on #183). The plan is the only argument: the reviewed values and the
+      // resume copy as base64, nothing else of the popup's.
+      const [frame] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: fillGreenhouseForm,
+        args: [plan],
+      });
+      return isFillReport(frame?.result) ? frame.result : null;
     } catch {
       return null;
     }
