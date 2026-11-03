@@ -376,6 +376,59 @@ describe('criterion 1: "I submitted it" records one timeline entry and one resum
     expect(await sendsOf(app, d.resumeId)).toHaveLength(1);
   });
 
+  it('a resume delete that comes after attest wrote the attempt waits for attest, never a deadlock (sec on #164, Postgres)', async () => {
+    const { app, a } = await boot(ON);
+    const d = await handedOff(app, a);
+    // Parked with the attempt row written. The resume lock is already held, so the delete waits
+    // on it; with that lock taken only after this point, the delete's ON DELETE SET NULL would
+    // wait on this attempt's row while this waited on the delete (40P01 on Postgres).
+    const [attested, deleted] = await heldApart(
+      app,
+      'submissions.attest.updated',
+      () => attest(a, d.id, { moveToApplied: false }),
+      () => api(a, 'DELETE', `/resumes/${d.resumeId}`),
+    );
+    expect(attested.statusCode, attested.body).toBe(200);
+    expect(deleted.statusCode, deleted.body).toBe(200);
+    expect(deleted.json()).toMatchObject({ outcome: 'archived' });
+    expect(await sendsOf(app, d.resumeId)).toHaveLength(1);
+  });
+
+  it('merging opportunities keeps both kinds of send on the one kept (tl on #164)', async () => {
+    const { app, a } = await boot(ON);
+    const d = await handedOff(app, a);
+    expect((await attest(a, d.id, { moveToApplied: false })).statusCode).toBe(200);
+    const other = await insertResume(app.db, ctxOf(a), {
+      kind: 'base',
+      title: 'Another Resume',
+      store: 'local_file',
+      docRef: `resumes/${newId()}.txt`,
+      opportunityId: null,
+      parentResumeId: null,
+    });
+    const manual = await api(a, 'POST', `/opportunities/${d.oppId}/resume-sends`, {
+      resumeId: other.id,
+      sentVia: 'Indeed',
+    });
+    expect(manual.statusCode, manual.body).toBe(201);
+    const keep = await createOpportunity(app.db, ctxOf(a), {
+      companyName: 'Example Corp',
+      title: 'Kept opportunity',
+      sourceKind: 'manual',
+    });
+    const before = await app.db.select().from(resumeSends).all();
+    expect(before).toHaveLength(2);
+
+    const merged = await api(a, 'POST', `/opportunities/${keep.id}/merge`, { otherId: d.oppId });
+    expect(merged.statusCode, merged.body).toBe(200);
+
+    const after = await app.db.select().from(resumeSends).all();
+    expect(after).toHaveLength(2);
+    expect(after.every((s) => s.opportunityId === keep.id)).toBe(true);
+    expect(after.map((s) => s.id).sort()).toEqual(before.map((s) => s.id).sort());
+    expect(after.find((s) => s.submissionId === d.id)).toBeDefined();
+  });
+
   it('a resume already submitted elsewhere keeps its record, and this application is a send of its own (#158)', async () => {
     const { app, a } = await boot(ON);
     const d = await handedOff(app, a);

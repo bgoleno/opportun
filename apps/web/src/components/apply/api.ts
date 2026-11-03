@@ -9,6 +9,7 @@ import type { Submission, SubmissionAnswer, SubmissionFields } from '@opportun/c
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, errorMessage } from '@/lib/api';
 import { qk, type Page } from '@/lib/opportunities';
+import { rk } from '@/components/resume/api';
 
 const enc = encodeURIComponent;
 
@@ -244,6 +245,9 @@ export function useAttestSubmission(opportunityId: string) {
         qc.invalidateQueries({ queryKey: qk.opportunity(opportunityId) }),
         qc.invalidateQueries({ queryKey: qk.opportunities }),
         qc.invalidateQueries({ queryKey: qk.dashboard }),
+        // The resume record is now a send (#158): every resume view, the Resume tab's list of
+        // sends and the resume's derived status read again (tl on #164).
+        qc.invalidateQueries({ queryKey: rk.resumes }),
       ]);
     },
   });

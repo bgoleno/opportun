@@ -636,8 +636,6 @@ export function resumeErrorMessage(err: unknown): string | undefined {
       return 'Say where the resume was submitted.';
     case 'base_cannot_attach':
       return "A base resume can't be attached directly. Record it as sent, or use Create tailored copy.";
-    case 'resume_has_sends':
-      return 'This resume is recorded as sent. Remove those records first to change its status.';
     case 'sent_at_in_future':
       return 'That date has not happened yet.';
     case 'resume_archived':

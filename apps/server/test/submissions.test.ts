@@ -246,10 +246,10 @@ describe('AC1: one draft per eligible opportunity', () => {
     },
   );
 
-  it('a draft resume recorded as sent reads as submitted, so it is usable (#158, one derivation)', async () => {
+  it('a sent resume tailored again is refused until marked final again (#158, tl on #164)', async () => {
     const { app, a } = await boot(ON);
     const oppId = await seedOpportunity(app, a);
-    const resumeId = await seedResume(app, a, 'draft');
+    const resumeId = await seedResume(app, a, 'final');
     const elsewhere = await seedOpportunity(app, a, { ats: null, postingState: null });
     const sent = await a.request({
       method: 'POST',
@@ -257,6 +257,18 @@ describe('AC1: one draft per eligible opportunity', () => {
       payload: { resumeId, sentVia: 'Indeed' },
     });
     expect(sent.statusCode, sent.body).toBe(201);
+    // Tailoring completion (setResumeStatus, not updateResume) leaves unreviewed edits.
+    await app.db.update(resumes).set({ status: 'in_review' }).where(eq(resumes.id, resumeId)).run();
+    const refused = await create(a, oppId, { idempotencyKey: crypto.randomUUID(), resumeId });
+    expect(refused.statusCode).toBe(422);
+    expect(refused.json().error.code).toBe('resume_not_final');
+    // Marked final again, the sent resume (it reads submitted) is usable.
+    const patched = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/resumes/${resumeId}`,
+      payload: { status: 'final' },
+    });
+    expect(patched.json()).toMatchObject({ status: 'submitted' });
     const res = await create(a, oppId, { idempotencyKey: crypto.randomUUID(), resumeId });
     expect(res.statusCode, res.body).toBe(201);
   });

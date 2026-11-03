@@ -267,19 +267,6 @@ export async function updateResume(
     } else if (patch.submittedTo !== undefined || patch.submittedAt !== undefined) {
       throw new HttpError(422, 'not_submitted');
     }
-    // A resume with a send reads as submitted whatever its stored status (resumeSends.ts), so
-    // moving it to another status would change nothing anyone sees: say why instead (#158).
-    if (
-      patch.status !== undefined &&
-      patch.status !== 'submitted' &&
-      (await hasSend(tx, ctx, id))
-    ) {
-      throw new HttpError(
-        422,
-        'resume_has_sends',
-        'This resume is recorded as sent. Remove those records first to change its status.',
-      );
-    }
     const relink = 'opportunityId' in patch;
     if (relink && row.kind === 'base') throw new HttpError(422, 'base_cannot_attach');
     // Matches the convention every other cross-table relink in this layer follows (e.g.

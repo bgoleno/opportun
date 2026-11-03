@@ -113,6 +113,11 @@ export async function attestSubmission(
   const done = await withTransaction(db, async (tx) => {
     await lockScope(tx, submissionScope(id));
     const row = await getRow(tx, ctx, id);
+    // The resume's lock right after the attempt's, before any row write (sec on
+    // https://github.com/bgoleno/opportun/pull/164): deleting that resume takes this lock and
+    // then, through ON DELETE SET NULL, row-locks this attempt. Taken after the attempt UPDATE
+    // below, the two would wait on each other on Postgres.
+    if (row.resumeId !== null) await lockScope(tx, resumeScope(row.resumeId));
     if (row.submittedActivityId !== null && row.status !== 'handed_off') {
       return { row, moved: null as OpportunityView | null };
     }
@@ -147,6 +152,8 @@ export async function attestSubmission(
       .returning();
     // Unreachable while every writer takes the attempt's lock; kept as a guard.
     if (updated === undefined) throw notNow(await getRow(tx, ctx, id), 'submitted');
+    // The attempt row is now locked by this transaction (the deadlock test parks here).
+    await racePoint('submissions.attest.updated');
     // Stages never change silently (FR-M2): only on the user's tick, and only forward.
     let moved: OpportunityView | null = null;
     if (
@@ -161,10 +168,8 @@ export async function attestSubmission(
     }
     // The resume's record (FR-R3): one send per application, for a base or a tailored resume,
     // so a resume sent before keeps every earlier send too (#158). The resume row itself is
-    // not written. Its lock is a leaf (resumeSends.ts), so it comes after every other lock
-    // this transaction takes; a resume deleted since it was chosen has nothing to record.
+    // not written. Its lock was taken above; a resume deleted before that has nothing to record.
     if (row.resumeId !== null) {
-      await lockScope(tx, resumeScope(row.resumeId));
       const resume = await tx
         .select({ id: resumes.id })
         .from(resumes)

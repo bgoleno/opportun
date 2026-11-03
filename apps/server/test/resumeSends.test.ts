@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { resumes, resumeSends, users } from '../src/db/schema';
-import { insertResume } from '../src/repos/resumes';
+import { insertResume, setResumeStatus } from '../src/repos/resumes';
 import { useApi } from './api';
 import { assertIsolated, type TestClient } from './isolation';
 import { heldApart } from './race';
@@ -27,6 +27,8 @@ async function resume(
     kind?: 'base' | 'tailored';
     parentResumeId?: string | null;
     opportunityId?: string | null;
+    /** Final by default: a finished resume, the kind that gets sent. */
+    status?: 'draft' | 'in_review' | 'final';
   } = {},
 ): Promise<string> {
   const row = await insertResume(app.db, ctxOf(c), {
@@ -37,6 +39,7 @@ async function resume(
     opportunityId: over.opportunityId ?? null,
     parentResumeId: over.parentResumeId ?? null,
   });
+  await setResumeStatus(app.db, ctxOf(c), row.id, over.status ?? 'final');
   return row.id;
 }
 
@@ -202,7 +205,7 @@ describe('removing a send (#158 criteria 3, 6)', () => {
     const one = (await record(a, opp, { resumeId: base, sentVia: 'Indeed' })).json();
     await removeSend(a, opp, one.id);
     expect((await getResume(a, base)).json()).toMatchObject({
-      status: 'draft',
+      status: 'final',
       submittedAt: null,
       submittedTo: null,
     });
@@ -258,29 +261,42 @@ describe('the derived summary (tl on #158)', () => {
       status: 'submitted',
       submittedTo: 'Indeed / Acme Labs',
     });
-    expect(list.find((r) => r.id === unsent)).toMatchObject({ status: 'draft', submittedTo: null });
+    expect(list.find((r) => r.id === unsent)).toMatchObject({ status: 'final', submittedTo: null });
     expect((await getResume(a, sent)).json()).toMatchObject({ submittedTo: 'Indeed / Acme Labs' });
   });
 
-  it('a resume with a send cannot be moved to another status, which would change nothing shown', async () => {
+  it('a draft or in-review resume keeps its status with a send, and still says where it went (tl on #164)', async () => {
+    const { app, a } = await boot();
+    const opp = await createOpportunity(a);
+    const draft = await resume(app, a, { status: 'draft' });
+    await record(a, opp, { resumeId: draft, sentVia: 'Indeed', sentAt: 1_000 });
+    expect((await getResume(a, draft)).json()).toMatchObject({
+      status: 'draft',
+      submittedTo: 'Indeed / Acme',
+      submittedAt: 1_000,
+    });
+  });
+
+  it('a sent resume tailored again reads In review; marked final again it reads submitted', async () => {
     const { app, a } = await boot();
     const opp = await createOpportunity(a);
     const id = await resume(app, a);
-    await record(a, opp, { resumeId: id, sentVia: 'Indeed' });
-    const res = await a.request({
+    await record(a, opp, { resumeId: id, sentVia: 'Indeed', sentAt: 1_000 });
+    expect((await getResume(a, id)).json()).toMatchObject({ status: 'submitted' });
+    // Tailoring completion moves it to in_review without going through updateResume.
+    await setResumeStatus(app.db, ctxOf(a), id, 'in_review');
+    expect((await getResume(a, id)).json()).toMatchObject({
+      status: 'in_review',
+      submittedTo: 'Indeed / Acme',
+    });
+    // The status stays the user's to set: no refusal for a resume with sends.
+    const final = await a.request({
       method: 'PATCH',
       url: `/api/v1/resumes/${id}`,
       payload: { status: 'final' },
     });
-    expect(res.statusCode).toBe(422);
-    expect(res.json().error.code).toBe('resume_has_sends');
-    // A title change is still fine.
-    const renamed = await a.request({
-      method: 'PATCH',
-      url: `/api/v1/resumes/${id}`,
-      payload: { title: 'Renamed' },
-    });
-    expect(renamed.statusCode).toBe(200);
+    expect(final.statusCode, final.body).toBe(200);
+    expect(final.json()).toMatchObject({ status: 'submitted', submittedTo: 'Indeed / Acme' });
   });
 });
 

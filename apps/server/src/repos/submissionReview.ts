@@ -61,8 +61,13 @@ const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
  * and checks the state it is about to change.
  *
  * Lock order, for every path that takes more than one (tl on #154): the attempt's lock
- * (`submission:<id>`) first, then the user's (`user:<id>`, taken by the review cap and by
- * findOrCreateCompanySync), then rows. An opportunity writer that may mark a posting change
+ * (`submission:<id>`) first, then a resume's (`resume:<id>`, repos/resumeSends.ts resumeScope:
+ * attest, recording a send, deleting a resume), then the user's (`user:<id>`, taken by the
+ * review cap and by findOrCreateCompanySync), then rows. Every advisory lock comes before any
+ * row write: a row write's cascade or foreign-key check can wait on a row another transaction
+ * locked, so a lock taken after a write can close a cycle with one taken before (sec on #164:
+ * attest wrote the attempt, then waited on the resume lock a resume delete held while its
+ * ON DELETE SET NULL waited on that attempt). An opportunity writer that may mark a posting change
  * takes the live attempt's lock before its company lookup and before writing the opportunity
  * (repos/submissions.ts lockLiveAttempt); a merge takes the live attempts' locks before it moves
  * anything. Two paths that each held one lock and waited for the other would deadlock on

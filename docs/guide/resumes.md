@@ -89,9 +89,12 @@ A resume can also be **recorded as sent** for an opportunity, from that opportun
 **Resume** tab. This is how a base resume you sent as it is (for example through a job site's
 own apply flow) is recorded, and "I submitted it" in assisted apply records one the same way.
 Each send is kept: a resume's page lists every opportunity it was sent for under **Sent for**.
-A resume with a send shows as Submitted, with the latest send (or a later "Submitted to" you
-entered) as where and when, and its status can't be changed until those records are removed.
-Deleting a resume that was recorded as sent archives it, like a submitted one.
+A Final resume with a send shows as Submitted, with the latest send (or a later "Submitted to"
+you entered) as where and when. A Draft or In review resume keeps its status even when it was
+sent (for example a base you tailored again afterwards), so assisted apply won't use it until you
+mark it Final; where it was last sent still shows under its status. Deleting a resume that was
+recorded as sent archives it, like a submitted one. Deleting an opportunity removes its sent
+records; merging two opportunities keeps them on the one kept.
 
 ## Deleting a resume
 

@@ -8,10 +8,11 @@
 // record (the manual "Submitted to..." status control), so neither hides the other (tl's ruling
 // on #158). Readers fetch the newest send per resume with latestSends, one query per page.
 //
-// Locks: `resume:<id>` (resumeScope) is a leaf, taken last in any transaction that holds it.
-// recordResumeSend and deleteResume take it, and assisted apply's attest takes it after every
-// other lock it holds, just before it inserts its send. So a delete either sees the send and
-// archives, or runs first and the send's writer finds the resume gone.
+// Locks: `resume:<id>` (resumeScope) is taken before any row write, in the order documented at
+// submissionScope (repos/submissionReview.ts): after an attempt's lock, before the user's.
+// recordResumeSend and deleteResume take it first; assisted apply's attest takes it right after
+// the attempt's lock. So a delete either sees the send and archives, or runs first and the
+// send's writer finds the resume gone.
 import { newId } from '@opportun/core';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { lockScope, withTransaction } from '../db/client';
@@ -43,9 +44,15 @@ export interface EffectiveSubmission {
 }
 
 /**
- * The one derivation of a resume's status and "where and when it was submitted" (FR-R3). With
- * no send, the stored record as it is. With one, the resume is submitted, and the summary is
- * whichever is later: the newest send, or a manual record the status control stored after it.
+ * The one derivation of a resume's status and "where and when it was submitted" (FR-R3).
+ *
+ * Two separate facts (tl on https://github.com/bgoleno/opportun/pull/164): the stored status is
+ * the document's workflow state, and a send is a record of where it went. So:
+ * - status: a stored `draft` or `in_review` stands, sends or not (a resume sent and then
+ *   tailored again has edits nobody has reviewed, and assisted apply must refuse it); a stored
+ *   `final` or `submitted` reads `submitted` once the resume has a send;
+ * - where and when: whichever is later, the newest send or the stored manual record (the
+ *   "Submitted to" control), whatever the status.
  */
 export function effectiveSubmission(
   row: Pick<ResumeRow, 'status' | 'submittedAt' | 'submittedTo'>,
@@ -53,10 +60,9 @@ export function effectiveSubmission(
 ): EffectiveSubmission {
   const stored = { status: row.status, submittedAt: row.submittedAt, submittedTo: row.submittedTo };
   if (latest === undefined) return stored;
-  if (row.status === 'submitted' && row.submittedAt !== null && row.submittedAt > latest.sentAt) {
-    return stored;
-  }
-  return { status: 'submitted', submittedAt: latest.sentAt, submittedTo: latest.submittedTo };
+  const status = row.status === 'draft' || row.status === 'in_review' ? row.status : 'submitted';
+  if (row.submittedAt !== null && row.submittedAt > latest.sentAt) return { ...stored, status };
+  return { status, submittedAt: latest.sentAt, submittedTo: latest.submittedTo };
 }
 
 /**
@@ -212,6 +218,9 @@ export async function recordResumeSend(
   if (sentAt > now + CLOCK_SKEW_MS) {
     throw new HttpError(422, 'sent_at_in_future', 'That time has not happened yet.');
   }
+  // Ownership first, outside any lock: another user's resume is a 404 and takes no lock in
+  // their scope (sec on #164; #129's rule for the submission routes).
+  await ownedResume(db, ctx, input.resumeId);
   const id = await withTransaction(db, async (tx) => {
     await lockScope(tx, resumeScope(input.resumeId));
     // Read under the lock: a delete that went first has removed it, and this is a 404.

@@ -54,7 +54,6 @@ describe('ResumeSentFor', () => {
 
   it('explains the server refusals a send can meet', () => {
     const err = (code: string) => new ApiError(422, code);
-    expect(resumeErrorMessage(err('resume_has_sends'))).toMatch(/Remove those records first/);
     expect(resumeErrorMessage(err('sent_at_in_future'))).toMatch(/not happened yet/);
     expect(resumeErrorMessage(err('resume_archived'))).toMatch(/archived/);
   });
