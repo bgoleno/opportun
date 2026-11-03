@@ -14,6 +14,7 @@ import { useApi } from './api';
 import { HTML_BODY, htmlBomb, INJECTION_BODY } from './fixtures/hostileMail';
 import type { TestClient } from './isolation';
 import { withFailingInsert } from './db';
+import { queuedBodyOf } from './classifyPayload';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -94,7 +95,7 @@ async function queuedBody(app: FastifyInstance, communicationId: string): Promis
     (j) => (j.payload as { communicationId: string } | null)?.communicationId === communicationId,
   );
   expect(job, 'a classify job for this message').toBeDefined();
-  return (job!.payload as { body?: string }).body ?? '';
+  return queuedBodyOf(app, job!.payload) ?? '';
 }
 
 describe('POST /connector/mail/batch', () => {

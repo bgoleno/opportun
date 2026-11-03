@@ -22,6 +22,7 @@ import { listCommunications, upsertInbound } from '../src/repos/communications';
 import { createOpportunity } from '../src/repos/opportunities';
 import { search } from '../src/repos/search';
 import { useApi } from './api';
+import { queuedBodyOf } from './classifyPayload';
 
 // The gate's model router is mocked: ingest consults the gate on every positive pass now, so a
 // test about anything else would otherwise depend on whatever a real provider did.
@@ -750,7 +751,8 @@ describe('message bodies are not persisted', () => {
     expect(row.snippet).not.toBeNull();
     expect(await filesUnder(`${dataDir}/attachments`)).toEqual([]);
     const job = await classifyJobFor(app, id);
-    expect((job?.payload as { body?: string }).body).toContain('staff engineer');
+    expect(queuedBodyOf(app, job?.payload)).toContain('staff engineer');
+    expect(JSON.stringify(job?.payload)).not.toContain('staff engineer');
   });
 
   it('clears the body from the payload when the job finishes', async () => {

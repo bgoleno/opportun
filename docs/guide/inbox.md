@@ -84,7 +84,13 @@ _Broadcast outreach lands in Spam and never creates an opportunity._
 - **Open** shows the snippet Opportun kept, up to 500 characters, and, for Gmail and most
   Apple Mail messages, a link back to the original in your own mailbox (LinkedIn messages,
   and the rare Apple Mail one the connector could not identify precisely, have none). Opportun
-  does not store or show the full body.
+  does not store or show the full body. While a new message waits to be classified, its full
+  text sits in the classification task, encrypted with your server's secrets key, and is
+  removed when that task finishes; from that change on
+  ([#175](https://github.com/bgoleno/opportun/issues/175)), neither the database files nor
+  Opportun's backups hold it unencrypted. Text of messages classified before it may remain in
+  unused database space until reused; an administrator can clear it once (see
+  [install guide section 6](../install.md#clearing-message-text-left-from-before-encrypted-classification)).
 - **Suggested stage**: **Move to ...** applies the suggested stage change; **Ignore** drops
   the suggestion. A suggestion never moves an opportunity back to an earlier stage, and only
   appears when the classifier is at least 70% confident.

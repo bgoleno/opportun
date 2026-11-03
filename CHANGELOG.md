@@ -7,6 +7,14 @@ milestone's work was merged. Each links the implementation plan it was built fro
 
 ## Unreleased
 
+- **A message's full text is encrypted while it waits to be classified.** The text of a new
+  message reaches the classifier through its job, which is cleared when the job finishes; it
+  is now sealed with the server's secrets key the whole time, so the database files never hold
+  it in the clear, not even in space a cleared value leaves behind. Text of messages classified
+  before this change may remain in that unused space until it is reused: the install guide
+  (section 6, "Clearing message text left from before encrypted classification") gives the
+  one-time step to clear it on SQLite and on Postgres
+  ([#175](https://github.com/bgoleno/opportun/issues/175)).
 - **LinkedIn job captures keep only what the page says.** With an AI key, a job captured from
   LinkedIn now keeps the location and pay the model reads only when the captured page itself
   contains them, as Indeed captures already do, and its description is the page's own text
