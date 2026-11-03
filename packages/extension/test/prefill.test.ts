@@ -250,6 +250,28 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
     expect(listed(s, 'Not filled in')).toContain('Resume: attach your resume yourself');
   });
 
+  it('a deleted copy (state deleted, #185) is not fetched: attach it yourself', async () => {
+    const s = setup({
+      current: json(200, {
+        attempt: attempt({ resume: { snapshotState: 'deleted', filename: null, bytes: null } }),
+        reason: null,
+      }),
+    });
+    await clickFill(s);
+    expect(s.get).toHaveBeenCalledTimes(1);
+    expect(s.plans[0]!.resume).toBeNull();
+    expect(listed(s, 'Not filled in')).toContain('Resume: attach your resume yourself');
+  });
+
+  it('a copy refused as review_stale (409, #185) stops everything: nothing is filled', async () => {
+    const s = setup({ snapshot: json(409, { error: { code: 'review_stale' } }) });
+    await clickFill(s);
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    expect(valueOf(s.page.doc, 'first_name')).toBe('');
+    expect(s.$('status').textContent).toMatch(/changed after you reviewed it/);
+    expect(s.$('status').dataset.tone).toBe('error');
+  });
+
   it('a copy larger than the server’s ceiling is not even fetched', async () => {
     const s = setup({
       current: json(200, {
