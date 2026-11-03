@@ -101,6 +101,11 @@ On the click, and only then:
    and `change` event. A field that already has something in it is left as it was, and so is
    a field the form does not show: one that is hidden, or inside a hidden part of the form.
 
+   A detail you saved before Opportun's current checks, which no longer passes them, is left
+   out of the fill. The server withholds it, and the popup lists it under "Not filled in" with
+   the reason: correct it in Opportun, or fill it in yourself
+   ([#196](https://github.com/bgoleno/opportun/issues/196)).
+
 6. **It attaches the resume** to the form's file input through `DataTransfer`. The page side
    keeps no timer, so the popup then looks, read-only and for about 1.5 seconds, for the form
    to show the file's name where you can see it: a copy inside hidden content does not count.
