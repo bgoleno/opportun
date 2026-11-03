@@ -267,3 +267,71 @@ describe('S7: where it does not exist', () => {
 function posts(calls: ApiCall[], path: string) {
   return calls.filter((c) => c.method === 'POST' && c.path === path);
 }
+
+describe('S7 follow-ups (#166; qa and tl on #163)', () => {
+  it.each([
+    ['no confirmation seen', { status: 'unknown' }, 'No confirmation seen'],
+    ['refused', { status: 'rejected' }, 'The application site refused it'],
+    ['failed', { status: 'failed', failureReason: 'other' }, 'Could not be completed'],
+    ['stopped', { status: 'abandoned', failureReason: 'cancelled_by_user' }, 'Stopped'],
+  ] as const)(
+    'a %s attempt’s history ends with that end state, at its last change',
+    async (_n, over, last) => {
+      render(attempt({ ...(over as Partial<SubmissionView>), updatedAt: NOW - DAY }));
+      const steps = within(await screen.findByRole('list', { name: 'History' }))
+        .getAllByRole('listitem')
+        .map((li) => li.textContent);
+      expect(steps.at(-1)).toContain(last);
+      expect(steps.at(-1)).toContain(formatDateTime(NOW - DAY));
+    },
+  );
+
+  it('after an outcome, the page reads the attempt again and shows it', async () => {
+    let current = attempt({ status: 'unknown' });
+    const api = mockApi({
+      'GET /opportunities/opp-1': OPP,
+      'GET /submissions/sub-1': () => ({ status: 200, body: current }),
+      'GET /opportunities/opp-1/submissions': () => ({ items: [current], total: 1 }),
+      'POST /submissions/sub-1/outcome': () => {
+        current = { ...current, status: 'confirmed', confirmationKind: 'user', confirmedAt: NOW };
+        return { status: 200, body: current };
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<SubmissionDetail opportunityId="opp-1" submissionId="sub-1" />);
+    await user.click(await screen.findByRole('button', { name: 'I saw a confirmation' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Mark as confirmed?' });
+    const reads = api.calls.filter(
+      (c) => c.method === 'GET' && c.path === '/submissions/sub-1',
+    ).length;
+    await user.click(within(dialog).getByRole('button', { name: 'Mark confirmed' }));
+    await waitFor(() =>
+      expect(
+        api.calls.filter((c) => c.method === 'GET' && c.path === '/submissions/sub-1').length,
+      ).toBeGreaterThan(reads),
+    );
+    expect(await screen.findByText(/You marked this confirmed on/)).toBeVisible();
+    // Confirmed now: the actions are gone from the page.
+    expect(screen.queryByRole('button', { name: 'I saw a confirmation' })).not.toBeInTheDocument();
+  });
+
+  it('a destination that is not http(s) is shown as text, never a link', async () => {
+    render(attempt({ destinationUrl: 'javascript:alert(1)' }));
+    const section = (await screen.findByRole('heading', { name: 'Where it went' })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(section).toHaveTextContent('javascript:alert(1)');
+    expect(within(section).queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('a refused attempt’s evidence says what was recorded, and when (#166)', async () => {
+    render(attempt({ status: 'rejected', updatedAt: NOW - DAY }));
+    const evidence = (await screen.findByRole('heading', { name: 'Evidence' })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(evidence).toHaveTextContent(
+      `The application site refused the form on ${formatDateTime(NOW - DAY)}.`,
+    );
+    expect(evidence).not.toHaveTextContent('No confirmation yet');
+  });
+});
