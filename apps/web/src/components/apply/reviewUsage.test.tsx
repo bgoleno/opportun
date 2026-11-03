@@ -186,3 +186,27 @@ describe('a saved limit above the server’s (#160)', () => {
     expect(screen.queryByText(/above this server’s limit/)).not.toBeInTheDocument();
   });
 });
+
+describe('the boundary: exactly the server’s limit (qa on #162)', () => {
+  it('saving exactly the server’s limit is allowed and sent', async () => {
+    let current = usage({ userCap: 4, cap: 4 });
+    const api = mockApi({
+      'GET /settings/applications': () => current,
+      'PUT /settings/applications': (c: ApiCall) => {
+        const cap = (c.body as { dailyReviewCap: number | null }).dailyReviewCap;
+        current = { ...current, userCap: cap, cap: cap ?? current.instanceCap };
+        return current;
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<ReviewCapCard />);
+    const input = await screen.findByLabelText('Reviews allowed per 24 hours');
+    await user.clear(input);
+    await user.type(input, '10');
+    await user.click(screen.getByRole('button', { name: 'Save limit' }));
+    await waitFor(() =>
+      expect(api.calls.filter((c) => c.method === 'PUT')[0]?.body).toEqual({ dailyReviewCap: 10 }),
+    );
+    expect(screen.queryByText(/This server allows at most/)).not.toBeInTheDocument();
+  });
+});

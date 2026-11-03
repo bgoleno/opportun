@@ -177,6 +177,22 @@ test('apply: choose a resume, add details, review everything, open the form, and
   // The chip reads "Submission status: Submitted" (its label is part of the text).
   await expect(panel.getByText(/Submission status: Submitted/)).toBeVisible();
   await expect(page.getByText(/Applied via Greenhouse:/).first()).toBeVisible();
+
+  // S7 (#149): the application's own page, and an outcome recorded from it.
+  await panel.getByRole('link', { name: 'View application' }).click();
+  await expect(
+    page.getByRole('heading', { level: 1, name: 'Application to Vandelay Industries' }),
+  ).toBeVisible();
+  await expect(page.getByText(/^Waiting for a confirmation\./)).toBeVisible();
+  const historySteps = page.getByRole('list', { name: 'History' }).getByRole('listitem');
+  await expect(historySteps).toHaveCount(4);
+  await page.getByRole('button', { name: 'I saw a confirmation' }).click();
+  await page
+    .getByRole('dialog', { name: 'Mark as confirmed?' })
+    .getByRole('button', { name: 'Mark confirmed' })
+    .click();
+  await expect(page.getByText(/Submission status: Confirmed/)).toBeVisible();
+  await expect(page.getByText(/You marked this confirmed on/)).toBeVisible();
 });
 
 // Phone widths (#135 criterion 8 asks 390; 320 is the narrowest mobile.spec.ts measures). Each

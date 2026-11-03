@@ -16,7 +16,9 @@ import {
   setPostingState,
 } from '../src/repos/opportunities';
 import { backfillAtsJobRefs } from '../src/jobs/atsJobRefBackfill';
+import { withTransaction } from '../src/db/client';
 import { insertResume } from '../src/repos/resumes';
+import { lockLiveAttempt, markPostingChanged } from '../src/repos/submissions';
 import { submissionDigest } from '../src/lib/submissionDigest';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
@@ -363,5 +365,37 @@ describe('lock order: the attempt, then the user, then rows (tl on #154; the dea
     // The merge won; the edit then finds its opportunity merged away. Never a 500.
     expect(e.statusCode, e.body).toBe(404);
     expect(await rowOf(app, d.id)).toMatchObject({ opportunityId: keep.id, status: 'draft' });
+  });
+});
+
+describe('the attempt the lock was taken on is the one marked (#157)', () => {
+  it('lockLiveAttempt returns the id it locked, or null with no live attempt', async () => {
+    const { app, a } = await boot(ON);
+    const d = await reviewed(app, a);
+    const locked = await withTransaction(app.db, (tx) => lockLiveAttempt(tx, ctxOf(a), d.oppId));
+    expect(locked).toBe(d.id);
+    const other = await createOpportunity(app.db, ctxOf(a), {
+      companyName: 'Example Corp',
+      title: 'No attempt here',
+      sourceKind: 'manual',
+    });
+    expect(
+      await withTransaction(app.db, (tx) => lockLiveAttempt(tx, ctxOf(a), other.id)),
+    ).toBeNull();
+  });
+
+  it('markPostingChanged acts on the id it is given, with no lookup of its own', async () => {
+    const { app, a } = await boot(ON);
+    const d = await reviewed(app, a);
+    const now = Date.now();
+    await withTransaction(app.db, async (tx) => {
+      const locked = await lockLiveAttempt(tx, ctxOf(a), d.oppId);
+      await markPostingChanged(tx, ctxOf(a), locked, d.oppId, now);
+    });
+    expect(await rowOf(app, d.id)).toMatchObject({ status: 'draft', postingChangedAt: now });
+    // Given no attempt (null), nothing is looked up and nothing changes.
+    const e = await reviewed(app, a);
+    await withTransaction(app.db, (tx) => markPostingChanged(tx, ctxOf(a), null, e.oppId, now));
+    expect(await rowOf(app, e.id)).toMatchObject({ status: 'reviewed', postingChangedAt: null });
   });
 });
