@@ -865,6 +865,19 @@ describe('the source scan of the injected functions (acceptance 2, sec 1 to 6)',
     );
   });
 
+  it('the three copies of the visible-name count are the same code (sec on #202)', () => {
+    // Each injected function carries its own seenIn (it is serialized alone): one rule, three
+    // copies, so a fix to one that misses the others would let the counts disagree.
+    const copies = [fillGreenhouseForm, resumeShown, clearResume].map((f) => {
+      const m = /const seenIn = \(root[\s\S]*?return text\.split\(name\)\.length - 1;\s*\};/.exec(
+        f.toString(),
+      );
+      expect(m, f.name).not.toBeNull();
+      return m![0].replace(/\s+/g, ' ');
+    });
+    expect(new Set(copies).size).toBe(1);
+  });
+
   it('every function injected checks the page’s address first', () => {
     for (const f of [fillGreenhouseForm, resumeShown, clearResume]) {
       // A plain string, not a pattern: this reads source text, not a URL (CodeQL on #187).
