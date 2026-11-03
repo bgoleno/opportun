@@ -589,6 +589,54 @@ describe('#192 in the popup: a shared label is listed for the user to fill', () 
   });
 });
 
+describe('#196: a field the server withholds is listed for the user, with its own reason', () => {
+  it('a withheld LinkedIn address is not filled, and is listed with why and what to do', async () => {
+    const fields: Record<string, string> = { ...attempt().fields };
+    delete fields.linkedinUrl;
+    const s = setup({
+      current: json(200, {
+        attempt: { ...attempt({ fields }), withheld: ['linkedinUrl'] },
+        reason: null,
+      }),
+    });
+    await clickFill(s);
+    expect(valueOf(s.page.doc, 'question_9000110')).toBe('');
+    expect(listed(s, 'Not filled in')).toContain(
+      "LinkedIn profile: it no longer passes Opportun's checks: correct it in Opportun, or fill it in yourself",
+    );
+    // The rest of the form is filled as usual.
+    expect(listed(s, 'Filled in')).toContain('First Name');
+  });
+
+  it('every withheld key is listed, by its label, or its key when there is none', async () => {
+    const s = setup({
+      current: json(200, {
+        attempt: {
+          ...attempt({ fields: { email: 'jane@example.com' } }),
+          withheld: ['firstName', 'websiteUrl', 'someOther'],
+        },
+        reason: null,
+      }),
+    });
+    await clickFill(s);
+    const lines = listed(s, 'Not filled in');
+    for (const label of ['First name', 'Website', 'someOther']) {
+      expect(lines).toContain(
+        `${label}: it no longer passes Opportun's checks: correct it in Opportun, or fill it in yourself`,
+      );
+    }
+  });
+
+  it('a withheld list that is not a list of names is an unexpected answer: nothing is filled', async () => {
+    const s = setup({
+      current: json(200, { attempt: { ...attempt(), withheld: 'linkedinUrl' }, reason: null }),
+    });
+    await clickFill(s);
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    expect(s.$('status').textContent).toMatch(/unexpected response \(200\)/);
+  });
+});
+
 describe('buildPlan', () => {
   it('maps the four standard fields by id and the two links and answers by label, leaving out empty values', () => {
     const p = buildPlan(
