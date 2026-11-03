@@ -95,6 +95,90 @@ describe('submissionFieldProblem', () => {
     }
   });
 
+  it('a name refuses U+115F, the Hangul choseong filler (#196, tl)', () => {
+    for (const bad of ['Jane\u115FExample', '\u115FJane', 'Jane\u115F']) {
+      expect(submissionFieldProblem({ firstName: bad })).toEqual({
+        field: 'firstName',
+        code: 'field_name_invalid',
+      });
+    }
+    expect(submissionFieldProblem({ lastName: 'Doe\u115F' })).toEqual({
+      field: 'lastName',
+      code: 'field_name_invalid',
+    });
+  });
+
+  it('a name refuses U+1160, the Hangul jungseong filler (#196, tl)', () => {
+    for (const bad of ['Jane\u1160Example', '\u1160Jane', 'Jane\u1160']) {
+      expect(submissionFieldProblem({ firstName: bad })).toEqual({
+        field: 'firstName',
+        code: 'field_name_invalid',
+      });
+    }
+    expect(submissionFieldProblem({ lastName: 'Doe\u1160' })).toEqual({
+      field: 'lastName',
+      code: 'field_name_invalid',
+    });
+  });
+
+  it('a name refuses U+3164, the Hangul filler (#196, tl)', () => {
+    for (const bad of ['Jane\u3164Example', '\u3164Jane', 'Jane\u3164']) {
+      expect(submissionFieldProblem({ firstName: bad })).toEqual({
+        field: 'firstName',
+        code: 'field_name_invalid',
+      });
+    }
+    expect(submissionFieldProblem({ lastName: 'Doe\u3164' })).toEqual({
+      field: 'lastName',
+      code: 'field_name_invalid',
+    });
+  });
+
+  it('a name refuses U+FFA0, the halfwidth Hangul filler (#196, tl)', () => {
+    for (const bad of ['Jane\uFFA0Example', '\uFFA0Jane', 'Jane\uFFA0']) {
+      expect(submissionFieldProblem({ firstName: bad })).toEqual({
+        field: 'firstName',
+        code: 'field_name_invalid',
+      });
+    }
+    expect(submissionFieldProblem({ lastName: 'Doe\uFFA0' })).toEqual({
+      field: 'lastName',
+      code: 'field_name_invalid',
+    });
+  });
+
+  it('a name refuses U+2800, the braille pattern blank (#196, tl)', () => {
+    for (const bad of ['Jane\u2800Example', '\u2800Jane', 'Jane\u2800']) {
+      expect(submissionFieldProblem({ firstName: bad })).toEqual({
+        field: 'firstName',
+        code: 'field_name_invalid',
+      });
+    }
+    expect(submissionFieldProblem({ lastName: 'Doe\u2800' })).toEqual({
+      field: 'lastName',
+      code: 'field_name_invalid',
+    });
+  });
+
+  it('a name refuses U+034F, the combining grapheme joiner (#196, tl)', () => {
+    for (const bad of ['Jane\u034FExample', '\u034FJane', 'Jane\u034F']) {
+      expect(submissionFieldProblem({ firstName: bad })).toEqual({
+        field: 'firstName',
+        code: 'field_name_invalid',
+      });
+    }
+    expect(submissionFieldProblem({ lastName: 'Doe\u034F' })).toEqual({
+      field: 'lastName',
+      code: 'field_name_invalid',
+    });
+  });
+
+  it('a name keeps a variation selector: it renders the same base character (#196, tl)', () => {
+    for (const good of ['\u845B\u{E0100}', 'Ja\uFE0Fne', 'Jane\uFE0E']) {
+      expect(submissionFieldProblem({ firstName: good }), JSON.stringify(good)).toBeNull();
+    }
+  });
+
   it('a name keeps a joiner or non-joiner between two letters or marks (#186, tl)', () => {
     for (const good of [
       '\u0915\u094D\u200D\u0937', // Devanagari: KA, VIRAMA, ZWJ, SSA
