@@ -478,7 +478,7 @@ export async function updateOpportunity(
     // A new posting URL will mark the live attempt (#144): its lock comes first, before the
     // company lookup below takes the user's (lock order: submissionScope).
     const urlWillChange = patch.postingUrl !== undefined && patch.postingUrl !== current.postingUrl;
-    if (urlWillChange) await lockLiveAttempt(tx, ctx, id);
+    const lockedAttempt = urlWillChange ? await lockLiveAttempt(tx, ctx, id) : null;
     if (patch.roleTargetId != null) await assertRoleTargetOwned(tx, ctx, patch.roleTargetId);
     const { companyName, ...fields } = patch;
     let companyId = current.companyId;
@@ -510,7 +510,7 @@ export async function updateOpportunity(
       .where(owned(ctx, id))
       .run();
     // A new posting URL under a live attempt (#144): the attempt says so and its review lapses.
-    if (urlChanged) await markPostingChanged(tx, ctx, id, now);
+    if (urlChanged) await markPostingChanged(tx, ctx, lockedAttempt, id, now);
     if (companyName !== undefined || fields.title !== undefined) {
       await detectDedupeCandidates(
         tx,
@@ -600,7 +600,7 @@ export async function setPostingState(
     const requisitionChanges =
       patch.atsJobRef !== undefined && !sameRequisition(before.atsJobRef, patch.atsJobRef);
     // The live attempt's lock before the opportunity row (lock order: submissionScope).
-    if (requisitionChanges) await lockLiveAttempt(tx, ctx, id);
+    const lockedAttempt = requisitionChanges ? await lockLiveAttempt(tx, ctx, id) : null;
     await tx
       .update(opportunities)
       .set({
@@ -615,7 +615,7 @@ export async function setPostingState(
       .where(owned(ctx, id))
       .run();
     // Another ATS identity under a live attempt (#144): it says so and its review lapses.
-    if (requisitionChanges) await markPostingChanged(tx, ctx, id, now);
+    if (requisitionChanges) await markPostingChanged(tx, ctx, lockedAttempt, id, now);
     return await getViewSync(tx, ctx, id);
   });
 }

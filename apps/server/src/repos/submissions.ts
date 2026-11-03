@@ -501,7 +501,7 @@ export async function lockLiveAttempt(
   tx: Exec,
   ctx: UserCtx,
   opportunityId: string,
-): Promise<void> {
+): Promise<string | null> {
   const live = await tx
     .select({ id: applicationSubmissions.id })
     .from(applicationSubmissions)
@@ -513,7 +513,10 @@ export async function lockLiveAttempt(
       ),
     )
     .get();
-  if (live !== undefined) await lockScope(tx, `submission:${live.id}`);
+  if (live === undefined) return null;
+  await lockScope(tx, `submission:${live.id}`);
+  // The caller passes this id to markPostingChanged (#157): the attempt marked is the one locked.
+  return live.id;
 }
 
 const NOT_YET_OPENED: SubmissionStatus[] = [...NOT_YET_OPENED_STATUSES];
@@ -530,19 +533,17 @@ const NOT_YET_OPENED: SubmissionStatus[] = [...NOT_YET_OPENED_STATUSES];
 export async function markPostingChanged(
   tx: Exec,
   ctx: UserCtx,
+  attemptId: string | null,
   opportunityId: string,
   now: number = Date.now(),
 ): Promise<void> {
+  // The attempt lockLiveAttempt locked, never a second lookup of "the live attempt" (#157): a
+  // later change to either query could otherwise make them disagree. None locked: nothing to do.
+  if (attemptId === null) return;
   const live = await tx
     .select({ id: applicationSubmissions.id, status: applicationSubmissions.status })
     .from(applicationSubmissions)
-    .where(
-      and(
-        eq(applicationSubmissions.userId, ctx.userId),
-        eq(applicationSubmissions.opportunityId, opportunityId),
-        inArray(applicationSubmissions.status, NOT_YET_OPENED),
-      ),
-    )
+    .where(owned(ctx, attemptId))
     .get();
   if (live === undefined) return;
   // The caller took this lock first (lockLiveAttempt); taking it again in the same transaction

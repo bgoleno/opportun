@@ -79,7 +79,7 @@ export async function backfillAtsJobRefs(db: Db, ctx: UserCtx): Promise<AtsJobRe
     await racePoint('opportunities.backfillAtsJobRef.beforeWrite');
     const changed = await withTransaction(db, async (tx) => {
       // The live attempt's lock before the opportunity row (lock order: submissionScope).
-      await lockLiveAttempt(tx, ctx, row.id);
+      const lockedAttempt = await lockLiveAttempt(tx, ctx, row.id);
       const now = Date.now();
       const written = await tx
         .update(opportunities)
@@ -95,7 +95,7 @@ export async function backfillAtsJobRefs(db: Db, ctx: UserCtx): Promise<AtsJobRe
         )
         .returning({ id: opportunities.id });
       // A corrected identity under a live attempt is a posting change like any other (#144).
-      if (written.length > 0) await markPostingChanged(tx, ctx, row.id, now);
+      if (written.length > 0) await markPostingChanged(tx, ctx, lockedAttempt, row.id, now);
       return written;
     });
     if (changed.length === 0) continue;
