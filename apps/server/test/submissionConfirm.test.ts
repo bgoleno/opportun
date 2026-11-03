@@ -23,6 +23,7 @@ import { followUpSubmissions } from '../src/repos/submissionOutcome';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 import { heldApart } from './race';
+import { queuedBodyOf } from './classifyPayload';
 import { api, submittedAttempt, type Submitted } from './submissionFixtures';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
@@ -413,8 +414,10 @@ describe('criterion 4: the body is never persisted', () => {
     const { id } = await ingest(app, a, confirmation(s));
     const classify = await app.db.select().from(jobs).where(eq(jobs.kind, CLASSIFY_JOB_KIND)).all();
     expect(classify).toHaveLength(1);
-    // In flight, the classifier's payload carries it (its only copy)...
-    expect(JSON.stringify(classify[0]!.payload)).toContain(BODY_SECRET);
+    // In flight, the classifier's payload carries it (its only copy), sealed with the instance's
+    // secrets key (https://github.com/bgoleno/opportun/issues/175): never in the clear...
+    expect(JSON.stringify(classify[0]!.payload)).not.toContain(BODY_SECRET);
+    expect(queuedBodyOf(app, classify[0]!.payload)).toContain(BODY_SECRET);
     await app.jobs.drain();
     // ...and once the job has run, nothing anywhere holds it.
     const after = await app.db.select().from(jobs).where(eq(jobs.kind, CLASSIFY_JOB_KIND)).all();
