@@ -18,6 +18,7 @@ import {
 } from '../src/db/schema';
 import { CLASSIFY_JOB_KIND, ingestInbound } from '../src/jobs/mailIngest';
 import { ATS_SENDER_DOMAINS } from '../src/lib/submissionMatch';
+import { createOpportunity } from '../src/repos/opportunities';
 import { followUpSubmissions } from '../src/repos/submissionOutcome';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
@@ -100,7 +101,7 @@ const stageOf = async (app: FastifyInstance, oppId: string) =>
   (await app.db.select().from(opportunities).where(eq(opportunities.id, oppId)).get())!.stage;
 
 describe('criterion 1: a matching confirmation confirms, and the stage does not change', () => {
-  it('links the email to the attempt and its timeline, with the signal names as the basis', async () => {
+  it('refers to the email by id, writes nothing to the message, and keeps only signal names', async () => {
     const { app, a } = await boot(ON);
     const s = await submittedAttempt(app, a);
     const stage = await stageOf(app, s.oppId);
@@ -113,14 +114,14 @@ describe('criterion 1: a matching confirmation confirms, and the stage does not 
       confirmationActivityId: null,
     });
     expect((await attempt(app, s.id)).confirmedAt).toEqual(expect.any(Number));
-    expect((await message(app, id)).opportunityId).toBe(s.oppId);
+    // The message is not placed on the opportunity: the attempt points at it (tl and sec on #173).
+    expect((await message(app, id)).opportunityId).toBeNull();
     expect(await stageOf(app, s.oppId)).toBe(stage);
-    // The basis is signal names (and whether this linked the message), nothing from the message
-    // (tl on #119): no subject, sender or body text.
+    // The basis is signal names, nothing from the message (tl on #119): no subject, sender or
+    // body text.
     const basis = (await attempt(app, s.id)).confirmationBasis;
     expect(basis).toEqual({
-      signals: ['ats_job_ref', 'ats_board', 'sender_domain', 'role_and_company', 'time_window'],
-      linkedMessage: true,
+      signals: ['ats_job_ref', 'sender_domain', 'role_and_company', 'time_window'],
     });
     const stored = JSON.stringify(basis);
     for (const text of ['Application received', 'careers@', BODY_SECRET, 'Thank you']) {
@@ -146,7 +147,7 @@ describe('criterion 1: a matching confirmation confirms, and the stage does not 
       subject: 'Application received',
       fromAddress: 'careers@examplecorp.example',
       sentAt: sent.sentAt,
-      signals: ['ats_job_ref', 'ats_board', 'sender_domain', 'role_and_company', 'time_window'],
+      signals: ['ats_job_ref', 'sender_domain', 'role_and_company', 'time_window'],
     });
     expect(JSON.stringify(detail)).not.toContain(BODY_SECRET);
   });
@@ -246,23 +247,17 @@ describe('criterion 3 and acceptance 6: the sender', () => {
   });
 });
 
-describe('acceptance 7: a board-only ATS ref', () => {
-  it('without B it does not confirm; with B it does', async () => {
+describe('acceptance 7, as corrected on #173: a link to another job at the same board', () => {
+  it('never confirms, even from the company domain with the role and company named', async () => {
     const { app, a } = await boot(ON);
     const s = await submittedAttempt(app, a);
-    // Another job's link at the same board: the board matches, the job id does not.
-    const boardOnly =
-      'Your application was received. https://boards.greenhouse.io/examplecorp/jobs/9999999';
-    await ingest(app, a, confirmation(s, { from: 'x@unrelated.example', bodyText: boardOnly }));
+    // Every extracted ref carries a job id: this one names another job at the same board, so
+    // the message is about that job (a rejection for it, or "you may also like").
+    const otherJob =
+      'Thank you for applying for Senior Platform Engineer at Example Corp. ' +
+      'You may also like https://boards.greenhouse.io/examplecorp/jobs/9999999';
+    await ingest(app, a, confirmation(s, { bodyText: otherJob }));
     expect((await attempt(app, s.id)).status).toBe('submitted');
-    await ingest(app, a, confirmation(s, { bodyText: boardOnly }));
-    const row = await attempt(app, s.id);
-    expect(row.status).toBe('confirmed');
-    expect((row.confirmationBasis as { signals: string[] }).signals).toEqual([
-      'ats_board',
-      'sender_domain',
-      'time_window',
-    ]);
   });
 });
 
@@ -293,6 +288,124 @@ describe('triage: submission_window keeps an expected confirmation with no job w
   });
 });
 
+describe('triage stays narrow: submission_window passes only what the matcher matched (tl on #173)', () => {
+  it('a non-confirmation from the company domain in the window is dropped, as before', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const { id } = await ingest(
+      app,
+      a,
+      confirmation(s, { subject: 'Your order has shipped', bodyText: 'Track your parcel here.' }),
+    );
+    expect(await message(app, id)).toMatchObject({
+      triageDecision: 'filtered',
+      triageRule: 'no_signal',
+    });
+  });
+
+  it('a matching confirmation with private content is kept out by that veto, and never matched', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const { id } = await ingest(
+      app,
+      a,
+      confirmation(s, { bodyText: `${confirmation(s).bodyText} Your claim number is 12345.` }),
+    );
+    expect(await message(app, id)).toMatchObject({
+      triageDecision: 'filtered',
+      triageRule: 'private_content',
+    });
+    expect((await attempt(app, s.id)).status).toBe('submitted');
+  });
+
+  it('a match from a personal email provider is kept out by that veto', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a, { domain: 'gmail.com' });
+    const { id } = await ingest(
+      app,
+      a,
+      confirmation(s, {
+        from: 'hr@gmail.com',
+        bodyText: 'Thank you for applying for Senior Platform Engineer at Example Corp.',
+      }),
+    );
+    expect(await message(app, id)).toMatchObject({
+      triageDecision: 'filtered',
+      triageRule: 'consumer_domain',
+    });
+    expect((await attempt(app, s.id)).status).toBe('submitted');
+  });
+
+  it('a confirmation found by email does not count as a thread the user linked', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const first = confirmation(s);
+    await ingest(app, a, first);
+    expect((await attempt(app, s.id)).status).toBe('confirmed');
+    // Later in the same thread, from a personal address, with no job wording: still the
+    // ordinary rules, so it is kept out and placed nowhere.
+    const later = await ingest(
+      app,
+      a,
+      confirmation(s, {
+        threadKey: first.threadKey,
+        from: 'someone@gmail.com',
+        subject: 'Re: Application received',
+        bodyText: 'Lunch on Friday?',
+      }),
+    );
+    expect(await message(app, later.id)).toMatchObject({
+      triageDecision: 'filtered',
+      opportunityId: null,
+    });
+  });
+});
+
+describe('a merge or an opportunity delete waits for an email confirmation in flight (tl on #173, Postgres)', () => {
+  it('a merge of its opportunity waits on the attempt, then moves it confirmed', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    // Unknown, with its follow-up step: the confirmation writes the attempt, then that step.
+    await followUpSubmissions(app.db, s.submittedAt + 4 * DAY);
+    const keep = await createOpportunity(app.db, ctxOf(a), {
+      companyName: 'Example Corp',
+      title: 'Kept opportunity',
+      sourceKind: 'manual',
+    });
+    const [, merged] = await heldApart(
+      app,
+      'submissions.confirm.updated',
+      () => ingest(app, a, confirmation(s, { sentAt: s.submittedAt + 5 * DAY })),
+      () => api(a, 'POST', `/opportunities/${keep.id}/merge`, { otherId: s.oppId }),
+    );
+    expect(merged.statusCode, merged.body).toBe(200);
+    expect(await attempt(app, s.id)).toMatchObject({
+      status: 'confirmed',
+      opportunityId: keep.id,
+    });
+  });
+
+  it('a delete of its opportunity waits on the attempt, then removes it', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const [ingested, deleted] = await heldApart(
+      app,
+      'submissions.confirm.updated',
+      () => ingest(app, a, confirmation(s)),
+      () => api(a, 'DELETE', `/opportunities/${s.oppId}`),
+    );
+    expect(deleted.statusCode, deleted.body).toBeLessThan(300);
+    expect(
+      await app.db
+        .select()
+        .from(applicationSubmissions)
+        .where(eq(applicationSubmissions.id, s.id))
+        .get(),
+    ).toBeUndefined();
+    expect((await message(app, ingested.id)).id).toBe(ingested.id);
+  });
+});
+
 describe('criterion 4: the body is never persisted', () => {
   it('not on the message, the attempt or the audit; the classify payload drops it when the job ends', async () => {
     const { app, a } = await boot(ON);
@@ -313,7 +426,7 @@ describe('criterion 4: the body is never persisted', () => {
 });
 
 describe('criterion 5: unlink', () => {
-  it('returns the attempt to submitted, clears the confirmation, and takes the email off the timeline', async () => {
+  it('returns the attempt to submitted and clears the confirmation; the message is untouched', async () => {
     const { app, a } = await boot(ON);
     const s = await submittedAttempt(app, a);
     const { id } = await ingest(app, a, confirmation(s));
@@ -336,18 +449,17 @@ describe('criterion 5: unlink', () => {
     expect(audited).toHaveLength(1);
   });
 
-  it('keeps a link the user made after the match moved the message elsewhere', async () => {
+  it('leaves a link the user made to the message as it is', async () => {
     const { app, a } = await boot(ON);
     const s = await submittedAttempt(app, a);
-    const other = await submittedAttempt(app, a, { company: 'Other Co', domain: 'other.example' });
     const { id } = await ingest(app, a, confirmation(s));
     await app.db
       .update(communications)
-      .set({ opportunityId: other.oppId })
+      .set({ opportunityId: s.oppId })
       .where(eq(communications.id, id))
       .run();
     await api(a, 'POST', `/submissions/${s.id}/unlink-confirmation`, {});
-    expect((await message(app, id)).opportunityId).toBe(other.oppId);
+    expect((await message(app, id)).opportunityId).toBe(s.oppId);
   });
 
   it('refuses an attempt not confirmed by an email, and another user gets a 404', async () => {

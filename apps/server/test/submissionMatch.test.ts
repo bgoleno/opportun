@@ -60,9 +60,20 @@ const match = (
 describe('signal A: the ATS job reference (criterion 1)', () => {
   it.each([
     ['kind and externalId', [{ kind: 'ats_greenhouse', org: null, externalId: '1000001' }], true],
-    // The board alone names the company, not the job: never enough on its own (tl on #119).
     [
-      'kind and org only',
+      'kind, externalId and the same org, in another case',
+      [{ kind: 'ats_greenhouse', org: 'ExampleCorp', externalId: '1000001' }],
+      true,
+    ],
+    // A Workday requisition id is unique only within its tenant (tl on #173): the same id at
+    // another board is another company's job.
+    [
+      'the right id at another board',
+      [{ kind: 'ats_greenhouse', org: 'othercorp', externalId: '1000001' }],
+      false,
+    ],
+    [
+      'another job at the same board',
       [{ kind: 'ats_greenhouse', org: 'examplecorp', externalId: '999' }],
       false,
     ],
@@ -86,36 +97,30 @@ describe('signal A: the ATS job reference (criterion 1)', () => {
   });
 });
 
-describe('signal A by board only (#119 acceptance 7): it confirms only together with B', () => {
-  const BOARD_ONLY = [{ kind: 'ats_greenhouse', org: 'ExampleCorp', externalId: '999' }];
+describe('a link to another job at the same board (#119 acceptance 7, as corrected on #173)', () => {
+  // Every extracted ref carries a job id, so a same-board ref with another id says the message
+  // is about another job there: a rejection for it, or "you may also like".
+  const OTHER_JOB = [{ kind: 'ats_greenhouse', org: 'ExampleCorp', externalId: '999' }];
 
-  it('a board ref without B does not confirm, even with the title and company', () => {
-    const result = match({
-      ...MESSAGE,
-      fromAddress: 'someone@unrelated.example',
-      atsJobRefs: BOARD_ONLY,
-    });
-    expect(result).toEqual({ kind: 'none', reason: 'no_match', candidateIds: [] });
-  });
-
-  it('a board ref (in another case) with B confirms, without the title or company', () => {
-    const result = match({ ...BARE, atsJobRefs: BOARD_ONLY });
-    expect(result).toEqual({
-      kind: 'match',
-      submissionId: 'sub-1',
-      signals: ['ats_board', 'sender_domain', 'time_window'],
+  it('never confirms, even with the company domain, the title and the company named', () => {
+    expect(match({ ...MESSAGE, atsJobRefs: OTHER_JOB })).toEqual({
+      kind: 'none',
+      reason: 'no_match',
+      candidateIds: [],
     });
   });
 
-  it('the id and the board in one ref give both signals', () => {
-    const result = match(MESSAGE);
-    expect(result.kind === 'match' && result.signals).toEqual([
-      'ats_job_ref',
-      'ats_board',
-      'sender_domain',
-      'role_and_company',
-      'time_window',
-    ]);
+  it('a link to this job beside it still confirms', () => {
+    const atsJobRefs = [
+      ...OTHER_JOB,
+      { kind: 'ats_greenhouse', org: 'examplecorp', externalId: '1000001' },
+    ];
+    expect(match({ ...BARE, fromAddress: 'x@unrelated.example', atsJobRefs }).kind).toBe('match');
+  });
+
+  it('another job at another board is no evidence either way: B and C still confirm', () => {
+    const atsJobRefs = [{ kind: 'ats_greenhouse', org: 'othercorp', externalId: '999' }];
+    expect(match({ ...MESSAGE, atsJobRefs }).kind).toBe('match');
   });
 });
 
@@ -245,7 +250,7 @@ describe('the rule: D and (A, or B and C) (criterion 2)', () => {
     expect(match(MESSAGE)).toEqual({
       kind: 'match',
       submissionId: 'sub-1',
-      signals: ['ats_job_ref', 'ats_board', 'sender_domain', 'role_and_company', 'time_window'],
+      signals: ['ats_job_ref', 'sender_domain', 'role_and_company', 'time_window'],
     });
   });
 

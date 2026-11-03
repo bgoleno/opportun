@@ -24,7 +24,6 @@ export type SubmissionStatus = (typeof SUBMISSION_STATUSES)[number];
 /** The signals a confirmation email can match on (lib/submissionMatch, #119). */
 export const SUBMISSION_CONFIRMATION_SIGNALS = [
   'ats_job_ref',
-  'ats_board',
   'sender_domain',
   'role_and_company',
   'time_window',

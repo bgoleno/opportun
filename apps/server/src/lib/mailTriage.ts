@@ -195,10 +195,10 @@ export interface TriageMessageInput {
    */
   digestSender: boolean;
   /**
-   * True when the sender's address is one an open application expects a confirmation from
-   * (assisted apply, #119): the company's domain or an ATS sender domain of one of the user's
-   * attempts submitted within the last 14 days (lib/submissionMatch fromExpectedSender). Absent
-   * counts as false, so every caller that predates it is unchanged.
+   * True when the confirmation matcher (lib/submissionMatch, #119) matched this message to one
+   * of the user's applications awaiting a confirmation, or to several (ambiguous). Only that, not
+   * every message from a company's domain: the pass is not gated, so it must stay narrow (tl on
+   * #173). Absent counts as false, so every caller that predates it is unchanged.
    */
   submissionSender?: boolean;
 }
@@ -259,9 +259,9 @@ export function triageMessage(input: TriageMessageInput): TriageVerdict {
       signal: senderSignal,
     };
   }
-  // Below both private-content vetoes, above every other pass (#119; tl on #79): an automated
-  // confirmation from no-reply@ often carries no job wording, and rule 7 would drop it before
-  // the matcher could see it. Not gated (lib/triageGate): the pass is already narrow.
+  // Below both private-content vetoes (and rules 0 to 2 above), above every other pass (#119; tl
+  // on #79): an automated confirmation from no-reply@ often carries no job wording, and rule 7
+  // would drop it. Not gated (lib/triageGate): only a message the matcher matched gets here.
   if (input.submissionSender === true) {
     return { decision: 'pass', matchedRule: 'submission_window', ruleId: null, pattern: null };
   }

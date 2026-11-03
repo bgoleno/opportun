@@ -18,6 +18,7 @@ import {
 } from '../db/schema';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
+import { racePoint } from '../lib/racePoints';
 import {
   CONFIRMATION_SKEW_MS,
   CONFIRMATION_WINDOW_MS,
@@ -33,18 +34,15 @@ import type { Submission } from '@opportun/core';
 /** The attempts an email may confirm: submitted or with no confirmation seen. */
 const AWAITING = ['submitted', 'unknown'] as const;
 
-/** What an email confirmation stores: signal names, and whether it linked the message. */
+/** What an email confirmation stores: the names of the signals that matched, nothing else. */
 export interface EmailConfirmationBasis {
   signals: ConfirmationSignal[];
-  /** True when this confirmation set the message's opportunity, so an unlink clears it. */
-  linkedMessage: boolean;
 }
 
 function emailBasis(value: unknown): EmailConfirmationBasis | null {
   if (typeof value !== 'object' || value === null) return null;
   const v = value as Partial<EmailConfirmationBasis>;
-  if (!Array.isArray(v.signals)) return null;
-  return { signals: v.signals, linkedMessage: v.linkedMessage === true };
+  return Array.isArray(v.signals) ? { signals: v.signals } : null;
 }
 
 /**
@@ -108,7 +106,7 @@ export async function confirmFromEmail(
   if (current === undefined || !(AWAITING as readonly string[]).includes(current.status)) {
     return false;
   }
-  const basis: EmailConfirmationBasis = { signals: [...signals], linkedMessage: false };
+  const basis: EmailConfirmationBasis = { signals: [...signals] };
   const [updated] = await tx
     .update(applicationSubmissions)
     .set({
@@ -122,28 +120,13 @@ export async function confirmFromEmail(
     .where(and(owned(ctx, submissionId), eq(applicationSubmissions.status, current.status)))
     .returning();
   if (updated === undefined) return false;
-  // The message joins the opportunity's timeline. Only a newly stored message gets here, and a
-  // new row has no opportunity yet, so the null check is a guard: a confirmation never moves a
-  // message someone else placed.
-  const linked = await tx
-    .update(communications)
-    .set({ opportunityId: current.opportunityId, updatedAt: now })
-    .where(
-      and(
-        eq(communications.userId, ctx.userId),
-        eq(communications.id, communicationId),
-        isNull(communications.opportunityId),
-      ),
-    )
-    .returning({ id: communications.id })
-    .get();
-  if (linked !== undefined) {
-    await tx
-      .update(applicationSubmissions)
-      .set({ confirmationBasis: { ...basis, linkedMessage: true } })
-      .where(owned(ctx, submissionId))
-      .run();
-  }
+  // The attempt row is now locked by this transaction (tests park a merge or a delete here).
+  await racePoint('submissions.confirm.updated');
+  // The message itself is not written: the attempt refers to it by confirmation_comm_id, and
+  // the evidence card reads it from there. A confirmation found by matching an unauthenticated
+  // sender does not place the message on the opportunity, or its thread with it (tl and sec on
+  // https://github.com/bgoleno/opportun/pull/173); the classifier and the user decide that, as
+  // for any other message.
   // The follow-up's "Check whether…" step has its answer (#148's rule): done if still open; a
   // step the user completed keeps its own time.
   if (current.followupNextStepId !== null) {
@@ -175,8 +158,8 @@ export async function confirmFromEmail(
 
 /**
  * "Not this application": an email confirmation undone (#119 criterion 5). Only an attempt an
- * email confirmed; it returns to `submitted`, its confirmation fields cleared, and the message
- * leaves the opportunity's timeline only if this confirmation put it there.
+ * email confirmed; it returns to `submitted` with its confirmation fields cleared. The message
+ * is untouched: a confirmation never linked it (confirmFromEmail), so nothing else remains.
  */
 export async function unlinkConfirmation(db: Db, ctx: UserCtx, id: string): Promise<Submission> {
   await getRow(db, ctx, id); // another user's id is a 404 and takes no lock
@@ -205,30 +188,12 @@ export async function unlinkConfirmation(db: Db, ctx: UserCtx, id: string): Prom
       .where(and(owned(ctx, id), eq(applicationSubmissions.status, 'confirmed')))
       .returning();
     if (updated === undefined) throw notNow(await getRow(tx, ctx, id), 'submitted');
-    const basis = emailBasis(current.confirmationBasis);
-    let unlinkedMessage = false;
-    if (basis?.linkedMessage === true && current.confirmationCommId !== null) {
-      const cleared = await tx
-        .update(communications)
-        .set({ opportunityId: null, updatedAt: now })
-        .where(
-          and(
-            eq(communications.userId, ctx.userId),
-            eq(communications.id, current.confirmationCommId),
-            eq(communications.opportunityId, current.opportunityId),
-          ),
-        )
-        .returning({ id: communications.id })
-        .get();
-      unlinkedMessage = cleared !== undefined;
-    }
     await audit(tx, 'submission.confirmation_unlinked', {
       userId: ctx.userId,
       detail: {
         submissionId: id,
         opportunityId: current.opportunityId,
         communicationId: current.confirmationCommId,
-        unlinkedMessage,
       },
     });
     return updated;

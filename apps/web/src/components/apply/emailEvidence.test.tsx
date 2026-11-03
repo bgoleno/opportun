@@ -62,9 +62,19 @@ describe('EmailEvidence', () => {
     );
   });
 
+  it('a sender address that could not be read says so (qa on #173)', async () => {
+    mockApi({});
+    const unreadable = {
+      ...confirmed,
+      confirmationEmail: { ...confirmed.confirmationEmail!, fromAddress: '' },
+    } as SubmissionView;
+    renderWithProviders(<EmailEvidence attempt={unreadable} />);
+    expect(await screen.findByText('(unreadable)')).toBeInTheDocument();
+  });
+
   it('every signal has words of its own', () => {
-    expect(signalSummary(['ats_job_ref', 'ats_board'])).toBe(
-      "this job's id in a link; the company's job board in a link",
+    expect(signalSummary(['ats_job_ref', 'sender_domain'])).toBe(
+      "this job's id in a link; the sender's address is at the company's domain",
     );
   });
 });

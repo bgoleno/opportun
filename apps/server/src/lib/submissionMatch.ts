@@ -7,17 +7,19 @@
 //
 // Four signals, per candidate:
 //   A  the message's ATS job refs (extracted at ingest) name the candidate's ATS kind and its
-//      external id (`ats_job_ref`, the strong form), or only its board org (`ats_board`: any
-//      job at that board, so on its own it says which company, not which application; tl on
-//      https://github.com/bgoleno/opportun/issues/119);
+//      external id, with the same board org when both carry one (a Workday requisition id is
+//      only unique within its tenant);
 //   B  the sender's address (never its display name) is at the company's domain, or at an ATS
 //      sender domain for the candidate's ATS kind, or a subdomain of either;
 //   C  the subject or text carries the role title and the company name, as whole words,
 //      normalised the way @opportun/core's dedupe normalises them;
 //   D  the message was sent no earlier than 5 minutes before the submission (clock skew) and no
 //      later than 14 days after it.
-// A candidate matches on D and (A by id, or A by board and B, or B and C). One match: that
-// candidate, with every signal
+// A candidate matches on D and (A, or B and C), unless the message links only OTHER jobs at the
+// candidate's board: every extracted ref carries a job id, so such a link says the message is
+// about another job there (a rejection for job 1, "you may also like" job 3), and it never
+// confirms this one, whatever else holds (tl on https://github.com/bgoleno/opportun/pull/173).
+// One match: that candidate, with every signal
 // that held. Two or more: none, ambiguous, naming them; a person decides. Nothing here changes
 // any state: this only answers the question.
 import {
@@ -104,25 +106,6 @@ function underDomain(domain: string, entry: string): boolean {
   return e !== '' && (domain === e || domain.endsWith(`.${e}`));
 }
 
-/**
- * Signal B alone, for any of these candidates: the sender's address (never its display name) is
- * at a candidate's company domain or an ATS sender domain for its kind. The triage rule
- * `submission_window` keeps such a message so the matcher can see it (#119).
- */
-export function fromExpectedSender(
-  fromAddress: string,
-  candidates: readonly ConfirmationCandidate[],
-  senders: AtsSenderDomains,
-): boolean {
-  const sender = senderDomain(fromAddress);
-  if (sender === null) return false;
-  return candidates.some((c) =>
-    [...(c.companyDomain === null ? [] : [c.companyDomain]), ...(senders[c.atsKind] ?? [])].some(
-      (d) => underDomain(sender, d),
-    ),
-  );
-}
-
 /** `needle` occurs in `haystack` as whole words (both already normalised by matchText). */
 function hasWords(haystack: string, needle: string): boolean {
   // A key with no Latin letters is a hash (see titleMatchKey): free text never contains it.
@@ -130,22 +113,32 @@ function hasWords(haystack: string, needle: string): boolean {
   return ` ${haystack} `.includes(` ${needle} `);
 }
 
-function signalsFor(
+interface Assessment {
+  signals: ConfirmationSignal[];
+  /** The message links another job at this candidate's board, and not this one. */
+  otherJob: boolean;
+}
+
+function assess(
   message: ConfirmationMessage,
   candidate: ConfirmationCandidate,
   sender: string | null,
   text: string,
   senders: AtsSenderDomains,
-): ConfirmationSignal[] {
+): Assessment {
   const signals: ConfirmationSignal[] = [];
-  const atsRef = candidate.atsRef === null ? null : lower(candidate.atsRef);
+  const board = candidate.atsRef === null ? null : lower(candidate.atsRef);
+  const id = lower(candidate.atsExternalId);
   const sameKind = message.atsJobRefs.filter((r) => r.kind === candidate.atsKind);
-  if (sameKind.some((r) => lower(r.externalId) === lower(candidate.atsExternalId))) {
-    signals.push('ats_job_ref');
-  }
-  if (sameKind.some((r) => r.org !== null && atsRef !== null && lower(r.org) === atsRef)) {
-    signals.push('ats_board');
-  }
+  const orgAgrees = (org: string | null) => org === null || board === null || lower(org) === board;
+  const thisJob = sameKind.some((r) => lower(r.externalId) === id && orgAgrees(r.org));
+  if (thisJob) signals.push('ats_job_ref');
+  const otherJob =
+    !thisJob &&
+    sameKind.some(
+      (r) =>
+        r.org !== null && board !== null && lower(r.org) === board && lower(r.externalId) !== id,
+    );
   if (sender !== null) {
     const domains = [
       ...(candidate.companyDomain === null ? [] : [candidate.companyDomain]),
@@ -165,14 +158,13 @@ function signalsFor(
   ) {
     signals.push('time_window');
   }
-  return signals;
+  return { signals, otherJob };
 }
 
-const matches = (signals: readonly ConfirmationSignal[]): boolean =>
+const matches = ({ signals, otherJob }: Assessment): boolean =>
+  !otherJob &&
   signals.includes('time_window') &&
   (signals.includes('ats_job_ref') ||
-    // A board ref names the company's board, not this job: it counts only with the sender.
-    (signals.includes('ats_board') && signals.includes('sender_domain')) ||
     (signals.includes('sender_domain') && signals.includes('role_and_company')));
 
 export function matchConfirmation(
@@ -184,12 +176,12 @@ export function matchConfirmation(
   const sender = senderDomain(message.fromAddress);
   const text = matchText(`${message.subject ?? ''}\n${message.text}`);
   const found = candidates
-    .map((c) => ({ id: c.id, signals: signalsFor(message, c, sender, text, atsSenderDomains) }))
-    .filter((c) => matches(c.signals));
+    .map((c) => ({ id: c.id, ...assess(message, c, sender, text, atsSenderDomains) }))
+    .filter(matches);
   if (found.length === 0) return { kind: 'none', reason: 'no_match', candidateIds: [] };
   if (found.length > 1) {
     return { kind: 'none', reason: 'ambiguous', candidateIds: found.map((c) => c.id).sort() };
   }
-  const [only] = found as [{ id: string; signals: ConfirmationSignal[] }];
+  const only = found[0]!;
   return { kind: 'match', submissionId: only.id, signals: only.signals };
 }

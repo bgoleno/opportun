@@ -12,7 +12,6 @@ import { useUnlinkConfirmation, type SubmissionView } from './api';
 
 const SIGNAL_WORDS = new Map<SubmissionConfirmationSignal, string>([
   ['ats_job_ref', "this job's id in a link"],
-  ['ats_board', "the company's job board in a link"],
   ['sender_domain', "the sender's address is at the company's domain"],
   ['role_and_company', 'the role and the company are named'],
   ['time_window', 'sent soon after you applied'],

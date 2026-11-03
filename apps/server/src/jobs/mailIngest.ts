@@ -19,7 +19,6 @@ import { lockScope, withTransaction, type Db } from '../db/client';
 import { extractAtsJobRefs } from '../lib/atsJobRef';
 import {
   ATS_SENDER_DOMAINS,
-  fromExpectedSender,
   matchConfirmation,
   type ConfirmationMatch,
 } from '../lib/submissionMatch';
@@ -193,10 +192,27 @@ export async function ingestInbound(
   alongside?: (tx: Exec) => Promise<void>,
   opts: IngestOptions = {},
 ): Promise<{ id: string; inserted: boolean }> {
-  // Applications awaiting a confirmation this message could be (#119): read once, before
-  // anything else, because triage's submission_window rule and the matcher both need them.
+  // Applications awaiting a confirmation this message could be (#119), and the matcher's answer,
+  // before triage: the submission_window rule passes only a message the matcher matches (tl on
+  // https://github.com/bgoleno/opportun/pull/173), not all mail from a candidate's domain. The
+  // matcher reads the body here, transiently, like the classifier will; nothing it reads is
+  // stored but the signal names.
   const candidates =
     opts.submissions === true ? await confirmationCandidates(db, ctx, message.sentAt) : [];
+  const matched: ConfirmationMatch =
+    candidates.length === 0
+      ? { kind: 'none', reason: 'no_candidates', candidateIds: [] }
+      : matchConfirmation(
+          {
+            fromAddress: message.from,
+            subject: message.subject,
+            text: message.bodyText,
+            sentAt: message.sentAt,
+            atsJobRefs: extractAtsJobRefs(`${message.subject}\n${message.bodyText}`),
+          },
+          candidates,
+          ATS_SENDER_DOMAINS,
+        );
   // Stage 1 (spec D1 rules 0-7), before anything is written. A drop here means the body is
   // never stored and the message is never queued for the classifier, so its content reaches
   // no model at all. The decision is deterministic and local: no AI is involved in deciding
@@ -216,8 +232,9 @@ export async function ingestInbound(
     selfAddress,
     threadLinked: await threadLinked(db, ctx, message.threadKey),
     digestSender,
+    // A single match, or an ambiguous one (kept for the user, linked to nothing).
     submissionSender:
-      candidates.length > 0 && fromExpectedSender(message.from, candidates, ATS_SENDER_DOMAINS),
+      matched.kind === 'match' || (matched.kind === 'none' && matched.reason === 'ambiguous'),
   });
   // Stage 2 (decision D-1): the gate is consulted here, inside ingest and before anything is
   // written, and only about a message Stage 1 passed on a positive signal. A drop writes the
@@ -239,22 +256,10 @@ export async function ingestInbound(
   // the user's own mail system, which is the only copy that has to exist. The body travels from
   // here to the classifier in the job payload and is cleared when that job finishes.
   const body = message.bodyText;
-  // The matcher reads the body here, transiently, like the classifier will; nothing it reads is
-  // stored but the signal names. A filtered message is never matched.
-  const match: ConfirmationMatch =
-    filtered || candidates.length === 0
-      ? { kind: 'none', reason: 'no_candidates', candidateIds: [] }
-      : matchConfirmation(
-          {
-            fromAddress: message.from,
-            subject: message.subject,
-            text: body,
-            sentAt: message.sentAt,
-            atsJobRefs: extractAtsJobRefs(`${message.subject}\n${body}`),
-          },
-          candidates,
-          ATS_SENDER_DOMAINS,
-        );
+  // A message the filter kept out is never matched, whatever the matcher said.
+  const match: ConfirmationMatch = filtered
+    ? { kind: 'none', reason: 'no_candidates', candidateIds: [] }
+    : matched;
   await racePoint('mail.ingest');
   const result = await withTransaction(db, async (tx) => {
     // The attempt's lock before anything else here (the order at submissionScope): upsertInbound
