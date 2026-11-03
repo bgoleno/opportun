@@ -7,6 +7,7 @@ import { errorMessage } from '@/lib/api';
 import { useMatchReport, useResume, type Resume } from './api';
 import { ChatPanel } from './ChatPanel';
 import { MatchPanel, MatchScoreHeader } from './MatchPanel';
+import { ResumeSentFor } from './ResumeSends';
 import { ResumeTextViewer } from './ResumeTextViewer';
 import { StatusControl } from './StatusControl';
 
@@ -110,6 +111,8 @@ function ResumeWorkspaceLoaded({ resume }: { resume: Resume }) {
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_var(--container-chat)] xl:items-start">
         <div className="grid min-w-0 gap-6">
           {resume.url === null ? <ResumeTextViewer resumeId={resume.id} /> : null}
+          {/* Every opportunity this resume was recorded as sent for (#158); nothing when none. */}
+          <ResumeSentFor resumeId={resume.id} />
           <MatchPanel resume={resume} />
         </div>
         {/* top-22 is the app header (h-14) plus the main area's top padding (md:p-8), and the

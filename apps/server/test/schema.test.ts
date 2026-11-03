@@ -31,6 +31,7 @@ const EXPECTED_TABLES = [
   'prompts',
   'resume_match_reports',
   'resume_rules',
+  'resume_sends',
   'resumes',
   'role_targets',
   'secrets',

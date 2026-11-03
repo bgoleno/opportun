@@ -122,6 +122,7 @@ export const TABLE_EXPORTS = [
   'networkContacts',
   'communications',
   'applicationSubmissions',
+  'resumeSends',
   'syncState',
   'jobs',
   'settings',

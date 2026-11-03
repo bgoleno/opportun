@@ -30,6 +30,7 @@ import type { Db, Exec, UserCtx } from './base';
 // the other at load time: destinationAllowed is only called inside createSubmissionDraft.
 import { destinationAllowed } from './submissionReview';
 import { countWhere, type ListOpts, type Page } from './list';
+import { effectiveSubmission, latestSends } from './resumeSends';
 
 export type SubmissionRow = typeof applicationSubmissions.$inferSelect;
 
@@ -191,7 +192,12 @@ async function finalResume(exec: Exec, ctx: UserCtx, resumeId: string) {
     .get();
   // Another user's resume reads exactly like a missing one.
   if (resume === undefined || resume.archivedAt !== null) throw ineligible('resume_not_found');
-  if (!USABLE_RESUME_STATUSES.includes(resume.status)) throw ineligible('resume_not_final');
+  // Its status as every reader sees it: a resume recorded as sent reads as submitted (#158).
+  const { status } = effectiveSubmission(
+    resume,
+    (await latestSends(exec, ctx, [resume.id])).get(resume.id),
+  );
+  if (!USABLE_RESUME_STATUSES.includes(status)) throw ineligible('resume_not_final');
   return resume;
 }
 
