@@ -36,21 +36,26 @@ export interface Submitted {
   submittedAt: number;
 }
 
+export interface AttemptOptions {
+  company?: string;
+  domain?: string | null;
+  title?: string;
+  ats?: AtsJobRef;
+  /** Field values to review (default none). */
+  fields?: Record<string, string>;
+  /** Stop before the handoff: a draft, or a reviewed attempt (default: handed off). */
+  stopAt?: 'draft' | 'reviewed';
+}
+
 /**
  * One opportunity at `company` (with `domain` as its known domain, or none), for `title`, taken
- * through to `submitted` with "I submitted it" at `submittedAt` (default now), stage unticked.
+ * through review and handoff: `handed_off`, the employer's form open, nothing submitted.
  */
-export async function submittedAttempt(
+export async function handedOffAttempt(
   app: FastifyInstance,
   c: TestClient,
-  opts: {
-    company?: string;
-    domain?: string | null;
-    title?: string;
-    ats?: AtsJobRef;
-    submittedAt?: number;
-  } = {},
-): Promise<Submitted> {
+  opts: AttemptOptions = {},
+): Promise<Omit<Submitted, 'submittedAt'> & { resumeId: string }> {
   const ctx = { userId: c.userId, isAdmin: false };
   const ats = opts.ats ?? requisition();
   const opp = await createOpportunity(app.db, ctx, {
@@ -86,19 +91,38 @@ export async function submittedAttempt(
   expect(created.statusCode, created.body).toBe(201);
   const id = created.json<{ id: string }>().id;
   await app.jobs.drain(); // the local file's snapshot settles as unsupported, which review allows
+  if (opts.fields !== undefined) {
+    const edited = await api(c, 'PATCH', `/submissions/${id}`, { fields: opts.fields });
+    expect(edited.statusCode, edited.body).toBe(200);
+  }
+  if (opts.stopAt === 'draft') return { id, oppId: opp.id, companyId, ats, resumeId: resume.id };
   const current = await api(c, 'GET', `/submissions/${id}`);
   const reviewed = await api(c, 'POST', `/submissions/${id}/review`, {
     reviewDigest: current.json<{ reviewDigest: string }>().reviewDigest,
     acknowledged: true,
   });
   expect(reviewed.statusCode, reviewed.body).toBe(200);
+  if (opts.stopAt === 'reviewed') return { id, oppId: opp.id, companyId, ats, resumeId: resume.id };
   const handed = await api(c, 'POST', `/submissions/${id}/handoff`, {});
   expect(handed.statusCode, handed.body).toBe(200);
+  return { id, oppId: opp.id, companyId, ats, resumeId: resume.id };
+}
+
+/**
+ * One opportunity at `company` (with `domain` as its known domain, or none), for `title`, taken
+ * through to `submitted` with "I submitted it" at `submittedAt` (default now), stage unticked.
+ */
+export async function submittedAttempt(
+  app: FastifyInstance,
+  c: TestClient,
+  opts: AttemptOptions & { submittedAt?: number } = {},
+): Promise<Submitted> {
+  const { id, oppId, companyId, ats } = await handedOffAttempt(app, c, opts);
   const submittedAt = opts.submittedAt ?? Date.now();
   const attested = await api(c, 'POST', `/submissions/${id}/attest`, {
     moveToApplied: false,
     submittedAt,
   });
   expect(attested.statusCode, attested.body).toBe(200);
-  return { id, oppId: opp.id, companyId, ats, submittedAt };
+  return { id, oppId, companyId, ats, submittedAt };
 }

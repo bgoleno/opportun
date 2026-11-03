@@ -1,7 +1,7 @@
 // The guided setup flow (design D2, D4, D6, D7, D8, D11, D15, D20, D23, D24): one dialog that
 // mints the scoped token, hands over the matching download, and keeps the token on screen for
 // as long as the install takes.
-import { screen } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { mockApi, renderWithProviders } from '@/test/render';
@@ -268,5 +268,54 @@ describe('ExtensionSetupDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Close setup' }));
     expect(await screen.findByText(/cannot be shown again/i)).toBeInTheDocument();
     expect(closed).toBe(false);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/182: assisted apply rides on the extension's one
+// token, when the user ticks it (tl and sec): never by default, never where the feature is off.
+describe('ExtensionSetupDialog: assisted apply', () => {
+  const ON = {
+    'GET /settings/applications': {
+      used: 0,
+      cap: 10,
+      instanceCap: 10,
+      userCap: null,
+      nextFreeAt: null,
+    },
+  };
+
+  it('offers it unticked where assisted apply is on, and mints capture only by default', async () => {
+    const user = userEvent.setup();
+    const { calls } = show(ON);
+    const box = await screen.findByRole('checkbox', { name: /assisted apply/i });
+    expect(box).not.toBeChecked();
+    await mint(user);
+    await screen.findByText(TOKEN);
+    const post = calls.find((c) => c.method === 'POST' && c.path === '/device-tokens');
+    expect(post?.body).toMatchObject({ scopes: ['capture:push'] });
+  });
+
+  it('ticked, mints one token with both scopes, and says how to take it away later', async () => {
+    const user = userEvent.setup();
+    const { calls } = show(ON);
+    await user.click(await screen.findByRole('checkbox', { name: /assisted apply/i }));
+    expect(
+      screen.getByText(/set the extension up again without it, then revoke/i),
+    ).toBeInTheDocument();
+    await mint(user);
+    await screen.findByText(TOKEN);
+    const post = calls.find((c) => c.method === 'POST' && c.path === '/device-tokens');
+    expect(post?.body).toMatchObject({ scopes: ['capture:push', 'apply:assist'] });
+  });
+
+  it('is not offered where assisted apply does not exist', async () => {
+    const { calls } = show();
+    await screen.findByLabelText(/password/i);
+    // After the availability check has answered (404 here), not only before it (tl on #185).
+    await waitFor(() => expect(calls.some((c) => c.path === '/settings/applications')).toBe(true));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(screen.queryByRole('checkbox', { name: /assisted apply/i })).not.toBeInTheDocument();
   });
 });

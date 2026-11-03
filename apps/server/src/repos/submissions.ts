@@ -20,7 +20,13 @@ import {
 } from '@opportun/core';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
-import { applicationSubmissions, attachments, opportunities, resumes } from '../db/schema';
+import {
+  applicationSubmissions,
+  attachments,
+  companies,
+  opportunities,
+  resumes,
+} from '../db/schema';
 import { audit } from '../lib/audit';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
@@ -28,7 +34,7 @@ import { submissionDigest } from '../lib/submissionDigest';
 import { enqueueSnapshot } from '../jobs/submissionSnapshot';
 import type { Db, Exec, UserCtx } from './base';
 // A cycle (submissionReview imports this module's row helpers), safe because neither module uses
-// the other at load time: destinationAllowed is only called inside createSubmissionDraft.
+// the other at load time: destinationAllowed is only called inside functions here.
 import { destinationAllowed } from './submissionReview';
 import { countWhere, type ListOpts, type Page } from './list';
 import { effectiveSubmission, latestSends } from './resumeSends';
@@ -512,6 +518,115 @@ export async function getSnapshotForDownload(
     throw new HttpError(404, 'no_snapshot', 'This application has no saved resume file.');
   }
   return file;
+}
+
+/** Why the extension has no attempt to prefill on this page (#182). */
+export type PrefillMiss = 'no_matching_attempt' | 'several_handed_off' | 'review_stale';
+
+export type PrefillLookup =
+  | {
+      kind: 'found';
+      row: SubmissionRow;
+      opportunityTitle: string;
+      companyName: string;
+      /** The snapshot file, when the snapshot is ready: what the extension will attach. */
+      snapshotFile: { filename: string; bytes: number } | null;
+      /**
+       * The snapshot's state as the extension can act on it (tl on #185): `deleted` when the
+       * stored state is `ready` but its file is gone, so `ready` always comes with a file.
+       */
+      snapshotState: SubmissionSnapshotState | 'deleted' | null;
+    }
+  | { kind: 'none'; reason: PrefillMiss };
+
+/**
+ * The caller's one handed-off attempt whose pinned destination is the page the extension is on
+ * (#182; tl's ruling): `pageUrl` must pass destinationAllowed for it, the rule handoff itself
+ * used (the same ATS, board or tenant, and requisition id). One attempt per call, never a list:
+ * none matching, or several (a re-application to one requisition), is a named miss, never a
+ * guess. A digest that no longer matches what was reviewed is a miss too, though nothing can
+ * edit a handed-off attempt: what is read is exactly what the user reviewed.
+ */
+export async function handedOffForPage(
+  db: Db,
+  ctx: UserCtx,
+  pageUrl: string,
+): Promise<PrefillLookup> {
+  const rows = await db
+    .select({
+      row: applicationSubmissions,
+      opportunityTitle: opportunities.title,
+      companyName: companies.name,
+    })
+    .from(applicationSubmissions)
+    .innerJoin(opportunities, eq(opportunities.id, applicationSubmissions.opportunityId))
+    .innerJoin(companies, eq(companies.id, opportunities.companyId))
+    .where(
+      and(
+        eq(applicationSubmissions.userId, ctx.userId),
+        eq(applicationSubmissions.status, 'handed_off'),
+      ),
+    )
+    .all();
+  const matching = rows.filter((r) => destinationAllowed(pageUrl, r.row));
+  if (matching.length === 0) return { kind: 'none', reason: 'no_matching_attempt' };
+  if (matching.length > 1) return { kind: 'none', reason: 'several_handed_off' };
+  const only = matching[0]!;
+  if (only.row.reviewDigest === null || submissionDigest(only.row) !== only.row.reviewDigest) {
+    return { kind: 'none', reason: 'review_stale' };
+  }
+  const file =
+    only.row.snapshotState !== 'ready' || only.row.resumeAttachmentId === null
+      ? undefined
+      : await db
+          .select({ filename: attachments.filename, bytes: attachments.bytes })
+          .from(attachments)
+          .where(
+            and(
+              eq(attachments.userId, ctx.userId),
+              eq(attachments.id, only.row.resumeAttachmentId),
+            ),
+          )
+          .get();
+  const snapshotState =
+    only.row.snapshotState === 'ready' && file === undefined ? 'deleted' : only.row.snapshotState;
+  return { kind: 'found', ...only, snapshotFile: file ?? null, snapshotState };
+}
+
+/**
+ * The snapshot file of the caller's own handed-off attempt, for the extension to attach (#182).
+ * Another user's attempt, or one not handed off, is a 404 like a missing one; a snapshot that is
+ * not ready (pending, unsupported, failed or deleted) is a named refusal, so the extension says
+ * "attach the resume yourself" rather than attaching anything else.
+ */
+export async function handedOffSnapshot(
+  db: Db,
+  ctx: UserCtx,
+  id: string,
+): Promise<{ row: SubmissionRow; file: typeof attachments.$inferSelect }> {
+  const row = await getRow(db, ctx, id);
+  if (row.status !== 'handed_off') throw notFound();
+  // Served only for an attempt /current would return (tl on #185): what was reviewed, unchanged.
+  if (row.reviewDigest === null || submissionDigest(row) !== row.reviewDigest) {
+    throw new HttpError(409, 'review_stale', 'This application changed after it was reviewed.');
+  }
+  const file =
+    row.snapshotState !== 'ready' || row.resumeAttachmentId === null
+      ? undefined
+      : await db
+          .select()
+          .from(attachments)
+          .where(
+            and(eq(attachments.userId, ctx.userId), eq(attachments.id, row.resumeAttachmentId)),
+          )
+          .get();
+  if (file === undefined) {
+    throw new HttpError(409, 'snapshot_not_ready', 'This application has no resume file ready.', {
+      // The same effective state /current reports: a ready snapshot whose file is gone is deleted.
+      snapshotState: row.snapshotState === 'ready' ? 'deleted' : row.snapshotState,
+    });
+  }
+  return { row, file };
 }
 
 /** Attempts a posting change reaches: live and not yet opened on the ATS (#144). */

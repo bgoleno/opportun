@@ -5,6 +5,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Copy, Download } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
+import { useReviewUsage } from '@/components/apply/api';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FormError } from '@/components/FormError';
 import { FormField } from '@/components/FormField';
@@ -96,6 +97,9 @@ export function ExtensionSetupDialog({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
+  // Off unless the user ticks it (sec on #182), and offered only where assisted apply is on.
+  const [withAssist, setWithAssist] = useState(false);
+  const assistAvailable = useReviewUsage().data != null;
 
   const artifacts = useQuery({
     queryKey: ek.artifacts,
@@ -149,6 +153,7 @@ export function ExtensionSetupDialog({
     setName('');
     setError(null);
     setConfirmClose(false);
+    setWithAssist(false);
     onOpenChange(false);
   }
 
@@ -179,7 +184,14 @@ export function ExtensionSetupDialog({
     try {
       const res = await api<MintedToken>('/device-tokens', {
         method: 'POST',
-        body: { name: proposedName, scopes: ['capture:push'], password },
+        // One token for the extension (tl and sec on #182): it keeps every token in one place,
+        // so two would protect nothing one does not. Each route still checks its own scope.
+        body: {
+          name: proposedName,
+          scopes:
+            withAssist && assistAvailable ? ['capture:push', 'apply:assist'] : ['capture:push'],
+          password,
+        },
       });
       setMinted(res);
       setName(res.name);
@@ -258,6 +270,23 @@ export function ExtensionSetupDialog({
                   </p>
                 )}
               </Step>
+              {assistAvailable ? (
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={withAssist}
+                    onChange={(e) => setWithAssist(e.currentTarget.checked)}
+                    className="mt-0.5 size-4 accent-primary"
+                  />
+                  <span>
+                    Also let it fill in applications you hand off (assisted apply). It reads an
+                    application you have handed off (what you reviewed, and its resume copy) when it
+                    asks for that application&apos;s posting page, and never submits anything. To
+                    take this away later, set the extension up again without it, then revoke this
+                    token under Settings.
+                  </span>
+                </label>
+              ) : null}
               <div>
                 <Button type="submit" disabled={busy || !hasPassword || password.length === 0}>
                   {busy ? 'Working...' : 'Continue'}

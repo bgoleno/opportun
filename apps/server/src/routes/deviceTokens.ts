@@ -5,7 +5,9 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { DEVICE_TOKEN_SCOPES } from '../db/schema';
+import { submissionsEnabled } from '../config';
 import { audit } from '../lib/audit';
+import { HttpError } from '../lib/errors';
 import {
   createDeviceToken,
   listDeviceTokens,
@@ -62,6 +64,11 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req, reply) => {
       const ctx = requireUser(req);
+      // The assisted apply scope exists only where the feature is on (#182; sec): its routes
+      // 404 otherwise, and no token should carry a right this server never grants.
+      if (req.body.scopes.includes('apply:assist') && !submissionsEnabled(app.config)) {
+        throw new HttpError(422, 'scope_unavailable', 'Assisted apply is not available here.');
+      }
       const confirmed = await confirmPassword(req, reply, {
         userId: ctx.userId,
         password: req.body.password,

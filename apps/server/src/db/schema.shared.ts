@@ -5,7 +5,12 @@
 export const SESSION_KINDS = ['session', 'pending_2fa'] as const;
 
 /** Scopes a device token may carry (FR-M5, FR-C5). */
-export const DEVICE_TOKEN_SCOPES = ['mail:push', 'capture:push'] as const;
+/**
+ * `apply:assist` (#182): the browser extension reads the one handed-off application it is about
+ * to prefill, and its resume snapshot (routes/connectorApply.ts). Minted only while assisted
+ * apply is on.
+ */
+export const DEVICE_TOKEN_SCOPES = ['mail:push', 'capture:push', 'apply:assist'] as const;
 export type DeviceTokenScope = (typeof DEVICE_TOKEN_SCOPES)[number];
 
 export const SECRET_KINDS = ['ai_api_key', 'oauth_token', 'device_token'] as const;
