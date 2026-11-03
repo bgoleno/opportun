@@ -54,6 +54,7 @@ export const taskRuns = t.taskRuns;
 export const networkContacts = t.networkContacts;
 export const communications = t.communications;
 export const applicationSubmissions = t.applicationSubmissions;
+export const resumeSends = t.resumeSends;
 export const syncState = t.syncState;
 export const jobs = t.jobs;
 export const settings = t.settings;

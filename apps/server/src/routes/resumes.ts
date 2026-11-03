@@ -9,8 +9,17 @@ import type { DocumentStore } from '../adapters/documentStore';
 import { docUrl, searchDriveDocuments } from '../adapters/googleDocs';
 import { readDocumentStorePref, readRrBaseUrl, rrResumeUrl } from '../adapters/reactiveResume';
 import { users } from '../db/schema';
-import { requireUser } from '../repos/base';
+import { requireUser, type Db, type UserCtx } from '../repos/base';
 import { getOpportunity } from '../repos/opportunities';
+import {
+  effectiveSubmission,
+  latestSends,
+  listOpportunitySends,
+  listResumeSends,
+  recordResumeSend,
+  removeResumeSend,
+  type LatestSend,
+} from '../repos/resumeSends';
 import {
   deleteResume,
   getResume,
@@ -62,10 +71,17 @@ function resumeUrl(r: ResumeRow, rrBaseUrl: string | null): string | null {
   return null;
 }
 
+/**
+ * A resume as the API shows it. Its status and submitted fields are the derived ones
+ * (resumeSends.ts effectiveSubmission, #158): pass the resume's newest send, from latestSends,
+ * or every route through resumeViews, which fetches it.
+ */
 export function toResumeView(
   r: ResumeRow,
   rrBaseUrl: string | null = null,
+  latest?: LatestSend,
 ): z.infer<typeof ResumeView> {
+  const submission = effectiveSubmission(r, latest);
   return {
     id: r.id,
     kind: r.kind,
@@ -75,16 +91,58 @@ export function toResumeView(
     docRef: r.docRef,
     url: resumeUrl(r, rrBaseUrl),
     parentResumeId: r.parentResumeId,
-    status: r.status,
-    submittedAt: r.submittedAt,
-    submittedTo: r.submittedTo,
+    status: submission.status,
+    submittedAt: submission.submittedAt,
+    submittedTo: submission.submittedTo,
     archivedAt: r.archivedAt,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
   };
 }
 
+/** Every resume the API returns goes through here: one latestSends query per response. */
+async function resumeViews(
+  db: Db,
+  ctx: UserCtx,
+  rows: readonly ResumeRow[],
+): Promise<z.infer<typeof ResumeView>[]> {
+  const [latest, rrBase] = await Promise.all([
+    latestSends(
+      db,
+      ctx,
+      rows.map((r) => r.id),
+    ),
+    readRrBaseUrl(db, ctx),
+  ]);
+  return rows.map((r) => toResumeView(r, rrBase, latest.get(r.id)));
+}
+const resumeView = async (db: Db, ctx: UserCtx, row: ResumeRow) =>
+  (await resumeViews(db, ctx, [row]))[0]!;
+
 const Id = z.string().min(1).max(64);
+
+/** A send as listed on the opportunity's Resume tab and on the resume's page (#158). */
+const ResumeSendView = z.object({
+  id: z.string(),
+  opportunityId: z.string(),
+  opportunityTitle: z.string(),
+  companyName: z.string(),
+  resumeId: z.string(),
+  resumeTitle: z.string(),
+  resumeKind: z.enum(RESUME_KINDS),
+  sentAt: z.number().int(),
+  sentVia: z.string(),
+  submissionId: z.string().nullable(),
+  createdAt: z.number().int(),
+});
+const RecordSendBody = z
+  .object({
+    resumeId: Id,
+    sentVia: z.string().trim().min(1).max(300),
+    sentAt: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+const SendParams = z.object({ id: Id, sendId: Id });
 /**
  * Without `store`, the user's document store preference decides (default Google). An
  * `opportunityId` registers and attaches in one step (#77): the row is created as a tailored
@@ -164,8 +222,7 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
     async (req) => {
       const ctx = requireUser(req);
       const page = await listResumes(db, ctx, req.query);
-      const rrBase = await readRrBaseUrl(db, ctx);
-      return { items: page.items.map((r) => toResumeView(r, rrBase)), total: page.total };
+      return { items: await resumeViews(db, ctx, page.items), total: page.total };
     },
   );
 
@@ -190,7 +247,6 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const ctx = requireUser(req);
       const body = req.body;
-      const rrBase = await readRrBaseUrl(db, ctx);
       if ('docRef' in body) {
         // User-scoped: another user's opportunity is a 404, same as the tailored-copy path below.
         const opportunity =
@@ -211,7 +267,7 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
           opportunityId: opportunity?.id ?? null,
           parentResumeId: null,
         });
-        return reply.code(201).send(toResumeView(row, rrBase));
+        return reply.code(201).send(await resumeView(db, ctx, row));
       }
       // Both lookups are user-scoped: another user's base or opportunity is a 404.
       const base = await getResume(db, ctx, body.baseResumeId);
@@ -240,7 +296,7 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
         opportunityId: opportunity.id,
         parentResumeId: base.id,
       });
-      return reply.code(201).send(toResumeView(row, rrBase));
+      return reply.code(201).send(await resumeView(db, ctx, row));
     },
   );
 
@@ -249,7 +305,7 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
     { schema: { params: IdParams, response: { 200: ResumeView } } },
     async (req) => {
       const ctx = requireUser(req);
-      return toResumeView(await getResume(db, ctx, req.params.id), await readRrBaseUrl(db, ctx));
+      return await resumeView(db, ctx, await getResume(db, ctx, req.params.id));
     },
   );
 
@@ -265,7 +321,7 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
         await getOpportunity(db, ctx, opportunityId);
       }
       const row = await updateResume(db, ctx, req.params.id, req.body);
-      return toResumeView(row, await readRrBaseUrl(db, ctx));
+      return await resumeView(db, ctx, row);
     },
   );
 
@@ -288,9 +344,46 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
       if (result.outcome === 'deleted') return { outcome: 'deleted' as const };
       return {
         outcome: 'archived' as const,
-        resume: toResumeView(result.row, await readRrBaseUrl(db, ctx)),
+        resume: await resumeView(db, ctx, result.row),
       };
     },
+  );
+
+  // Resume sends (#158): record, list and remove which resume was sent for an opportunity.
+  api.get(
+    '/opportunities/:id/resume-sends',
+    {
+      schema: { params: IdParams, response: { 200: z.object({ items: z.array(ResumeSendView) }) } },
+    },
+    async (req) => ({
+      items: await listOpportunitySends(db, requireUser(req), req.params.id),
+    }),
+  );
+
+  api.post(
+    '/opportunities/:id/resume-sends',
+    { schema: { params: IdParams, body: RecordSendBody, response: { 201: ResumeSendView } } },
+    async (req, reply) => {
+      const send = await recordResumeSend(db, requireUser(req), req.params.id, req.body);
+      return reply.code(201).send(send);
+    },
+  );
+
+  api.delete(
+    '/opportunities/:id/resume-sends/:sendId',
+    { schema: { params: SendParams } },
+    async (req, reply) => {
+      await removeResumeSend(db, requireUser(req), req.params.id, req.params.sendId);
+      return reply.code(204).send();
+    },
+  );
+
+  api.get(
+    '/resumes/:id/sends',
+    {
+      schema: { params: IdParams, response: { 200: z.object({ items: z.array(ResumeSendView) }) } },
+    },
+    async (req) => ({ items: await listResumeSends(db, requireUser(req), req.params.id) }),
   );
 
   api.get(

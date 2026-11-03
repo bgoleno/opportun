@@ -70,7 +70,9 @@ export function StatusControl({ resume }: { resume: Resume }) {
           </Select>
         </div>
       </div>
-      {resume.status === 'submitted' && !askingSubmit && resume.submittedTo ? (
+      {/* Shown whatever the status: a resume sent and then tailored again reads In review, and
+          its latest send still says where it went (#158). */}
+      {!askingSubmit && resume.submittedTo ? (
         <p className="text-xs text-muted-foreground">
           Sent to {resume.submittedTo}
           {resume.submittedAt ? ` on ${formatDate(resume.submittedAt)}` : ''}

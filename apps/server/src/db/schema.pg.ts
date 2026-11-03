@@ -952,6 +952,39 @@ export const applicationSubmissions = pgTable(
   ],
 );
 
+// Resume sends (https://github.com/bgoleno/opportun/issues/158, option A): one row per time a
+// resume, base or tailored, was sent for an opportunity. A send never writes the resume row:
+// the resume's status and submitted_at/submitted_to as the API shows them are derived from
+// its sends and its own stored record (repos/resumeSends.ts, effectiveSubmission).
+export const resumeSends = pgTable(
+  'resume_sends',
+  {
+    id: id(),
+    userId: userRef(),
+    opportunityId: text('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    /** CASCADE, not RESTRICT (tl): deleteResume archives a resume that has sends, so a normal
+     *  delete keeps them; RESTRICT would break deletes cascading from above (a user). */
+    resumeId: text('resume_id')
+      .notNull()
+      .references(() => resumes.id, { onDelete: 'cascade' }),
+    sentAt: int('sent_at').notNull(),
+    /** How it was sent, in the user's words ("Indeed"), or the ATS name for assisted apply. */
+    sentVia: text('sent_via').notNull(),
+    /** The assisted-apply attempt whose "I submitted it" recorded this send, if any. */
+    submissionId: text('submission_id').references(() => applicationSubmissions.id, {
+      onDelete: 'set null',
+    }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('resume_sends_user_id_idx').on(t.userId),
+    index('resume_sends_opportunity_idx').on(t.opportunityId, t.sentAt),
+    index('resume_sends_resume_idx').on(t.resumeId, t.sentAt),
+  ],
+);
+
 export const syncState = pgTable(
   'sync_state',
   {

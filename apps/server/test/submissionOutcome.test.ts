@@ -14,6 +14,7 @@ import {
   nextSteps,
   opportunities,
   resumes,
+  resumeSends,
   stageHistory,
 } from '../src/db/schema';
 import { readSchedules } from '../src/jobs/runner';
@@ -26,7 +27,7 @@ import { insertResume } from '../src/repos/resumes';
 import { FOLLOWUP_MS, followUpSubmissions } from '../src/repos/submissionOutcome';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
-import { holdAt } from './race';
+import { heldApart, holdAt } from './race';
 
 const boot = useApi();
 const ON = { submissions: true };
@@ -44,7 +45,7 @@ const ANSWER_VALUE = 'ANSWER-value-4b1d';
 
 const api = (
   c: TestClient,
-  method: 'GET' | 'POST' | 'PATCH',
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   url: string,
   payload?: Record<string, unknown>,
 ) => c.request({ method, url: `/api/v1${url}`, ...(payload === undefined ? {} : { payload }) });
@@ -192,8 +193,14 @@ async function countsFor(app: FastifyInstance, oppId: string) {
     nextSteps: await n(
       app.db.select({ n: count() }).from(nextSteps).where(eq(nextSteps.opportunityId, oppId)),
     ),
+    sends: await n(
+      app.db.select({ n: count() }).from(resumeSends).where(eq(resumeSends.opportunityId, oppId)),
+    ),
   };
 }
+
+const sendsOf = async (app: FastifyInstance, resumeId: string) =>
+  await app.db.select().from(resumeSends).where(eq(resumeSends.resumeId, resumeId)).all();
 
 const stageOf = async (app: FastifyInstance, oppId: string) =>
   (
@@ -204,7 +211,7 @@ const stageOf = async (app: FastifyInstance, oppId: string) =>
       .get()
   )?.stage;
 
-describe('criterion 1: "I submitted it" records one timeline entry and one resume update', () => {
+describe('criterion 1: "I submitted it" records one timeline entry and one resume send', () => {
   it('records the application, the resume and the attempt, with field names and no values', async () => {
     const { app, a } = await boot(ON);
     const d = await handedOff(app, a);
@@ -235,8 +242,23 @@ describe('criterion 1: "I submitted it" records one timeline entry and one resum
     expect(entry?.bodyMd).not.toContain(FIELD_VALUE);
     expect(entry?.bodyMd).not.toContain(ANSWER_VALUE);
 
+    // The resume's record is a send (#158): the resume row itself is not written, and the
+    // resume reads as submitted, to this ATS at this company, through the send.
     const resume = await app.db.select().from(resumes).where(eq(resumes.id, d.resumeId)).get();
-    expect(resume).toMatchObject({ status: 'submitted', submittedTo: 'Greenhouse / Example Corp' });
+    expect(resume).toMatchObject({ status: 'final', submittedTo: null, submittedAt: null });
+    const sends = await sendsOf(app, d.resumeId);
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({
+      opportunityId: d.oppId,
+      sentVia: 'Greenhouse',
+      submissionId: d.id,
+      sentAt: sub.submittedAt,
+    });
+    expect((await api(a, 'GET', `/resumes/${d.resumeId}`)).json()).toMatchObject({
+      status: 'submitted',
+      submittedTo: 'Greenhouse / Example Corp',
+      submittedAt: sub.submittedAt,
+    });
     expect(await rowOf(app, d.id)).toMatchObject({
       submittedBasis: 'user_attested',
       submittedActivityId: sub.submittedActivityId,
@@ -274,7 +296,7 @@ describe('criterion 1: "I submitted it" records one timeline entry and one resum
     expect(await stageOf(app, d.oppId)).toBe('in_process');
   });
 
-  it('two concurrent attests record exactly one application, one stage change and one resume update (race)', async () => {
+  it('two concurrent attests record exactly one application, one stage change and one resume send (race)', async () => {
     const { app, a } = await boot(ON);
     const d = await handedOff(app, a);
     const before = await countsFor(app, d.oppId);
@@ -299,15 +321,16 @@ describe('criterion 1: "I submitted it" records one timeline entry and one resum
       .where(eq(auditLog.event, 'submission.attested'))
       .get();
     expect(attested?.n).toBe(1);
-    // One resume update: it carries the winner's time, the same the attempt and its entry carry.
+    // One send: it carries the winner's time, the same the attempt and its entry carry.
     const row = await rowOf(app, d.id);
-    const resume = await app.db.select().from(resumes).where(eq(resumes.id, d.resumeId)).get();
+    const sends = await sendsOf(app, d.resumeId);
+    expect(sends).toHaveLength(1);
     const entry = await app.db
       .select()
       .from(activities)
       .where(eq(activities.id, row?.submittedActivityId as string))
       .get();
-    expect(resume?.submittedAt).toBe(row?.submittedAt);
+    expect(sends[0]?.sentAt).toBe(row?.submittedAt);
     expect(entry?.occurredAt).toBe(row?.submittedAt);
   });
 
@@ -338,7 +361,75 @@ describe('criterion 1: "I submitted it" records one timeline entry and one resum
     expect(await countsFor(app, d.oppId)).toEqual(mid);
   });
 
-  it('a resume already submitted elsewhere keeps its record', async () => {
+  it('a resume delete that comes while the attest records its send waits, then archives (#158, Postgres-relevant)', async () => {
+    const { app, a } = await boot(ON);
+    const d = await handedOff(app, a);
+    const [attested, deleted] = await heldApart(
+      app,
+      'submissions.attest.sendRecorded',
+      () => attest(a, d.id, { moveToApplied: false }),
+      () => api(a, 'DELETE', `/resumes/${d.resumeId}`),
+    );
+    expect(attested.statusCode, attested.body).toBe(200);
+    // The delete saw the send: the resume is archived, not deleted, and the send survives.
+    expect(deleted.json()).toMatchObject({ outcome: 'archived' });
+    expect(await sendsOf(app, d.resumeId)).toHaveLength(1);
+  });
+
+  it('a resume delete that comes after attest wrote the attempt waits for attest, never a deadlock (sec on #164, Postgres)', async () => {
+    const { app, a } = await boot(ON);
+    const d = await handedOff(app, a);
+    // Parked with the attempt row written. The resume lock is already held, so the delete waits
+    // on it; with that lock taken only after this point, the delete's ON DELETE SET NULL would
+    // wait on this attempt's row while this waited on the delete (40P01 on Postgres).
+    const [attested, deleted] = await heldApart(
+      app,
+      'submissions.attest.updated',
+      () => attest(a, d.id, { moveToApplied: false }),
+      () => api(a, 'DELETE', `/resumes/${d.resumeId}`),
+    );
+    expect(attested.statusCode, attested.body).toBe(200);
+    expect(deleted.statusCode, deleted.body).toBe(200);
+    expect(deleted.json()).toMatchObject({ outcome: 'archived' });
+    expect(await sendsOf(app, d.resumeId)).toHaveLength(1);
+  });
+
+  it('merging opportunities keeps both kinds of send on the one kept (tl on #164)', async () => {
+    const { app, a } = await boot(ON);
+    const d = await handedOff(app, a);
+    expect((await attest(a, d.id, { moveToApplied: false })).statusCode).toBe(200);
+    const other = await insertResume(app.db, ctxOf(a), {
+      kind: 'base',
+      title: 'Another Resume',
+      store: 'local_file',
+      docRef: `resumes/${newId()}.txt`,
+      opportunityId: null,
+      parentResumeId: null,
+    });
+    const manual = await api(a, 'POST', `/opportunities/${d.oppId}/resume-sends`, {
+      resumeId: other.id,
+      sentVia: 'Indeed',
+    });
+    expect(manual.statusCode, manual.body).toBe(201);
+    const keep = await createOpportunity(app.db, ctxOf(a), {
+      companyName: 'Example Corp',
+      title: 'Kept opportunity',
+      sourceKind: 'manual',
+    });
+    const before = await app.db.select().from(resumeSends).all();
+    expect(before).toHaveLength(2);
+
+    const merged = await api(a, 'POST', `/opportunities/${keep.id}/merge`, { otherId: d.oppId });
+    expect(merged.statusCode, merged.body).toBe(200);
+
+    const after = await app.db.select().from(resumeSends).all();
+    expect(after).toHaveLength(2);
+    expect(after.every((s) => s.opportunityId === keep.id)).toBe(true);
+    expect(after.map((s) => s.id).sort()).toEqual(before.map((s) => s.id).sort());
+    expect(after.find((s) => s.submissionId === d.id)).toBeDefined();
+  });
+
+  it('a resume already submitted elsewhere keeps its record, and this application is a send of its own (#158)', async () => {
     const { app, a } = await boot(ON);
     const d = await handedOff(app, a);
     await app.db
@@ -346,9 +437,18 @@ describe('criterion 1: "I submitted it" records one timeline entry and one resum
       .set({ status: 'submitted', submittedTo: 'Elsewhere', submittedAt: 1 })
       .where(eq(resumes.id, d.resumeId))
       .run();
-    expect((await attest(a, d.id)).statusCode).toBe(200);
+    const res = await attest(a, d.id);
+    expect(res.statusCode).toBe(200);
+    // Before #158 this application left no trace on the resume (M2a's lossy case for bases).
     const resume = await app.db.select().from(resumes).where(eq(resumes.id, d.resumeId)).get();
     expect(resume).toMatchObject({ submittedTo: 'Elsewhere', submittedAt: 1 });
+    expect(await sendsOf(app, d.resumeId)).toHaveLength(1);
+    // The send is the later record, so the summary shows it.
+    expect((await api(a, 'GET', `/resumes/${d.resumeId}`)).json()).toMatchObject({
+      status: 'submitted',
+      submittedTo: 'Greenhouse / Example Corp',
+      submittedAt: (res.json() as { submittedAt: number }).submittedAt,
+    });
   });
 
   it('takes the time the user gives, and refuses one in the future or before the handoff', async () => {

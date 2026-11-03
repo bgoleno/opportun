@@ -64,6 +64,8 @@ const USER_TABLES: UserTable[] = [
   schema.communications,
   // Assisted apply (#114): the user's own attempts, answers included, like their notes.
   schema.applicationSubmissions,
+  // Resume sends (#158): the user's record of which resume went where.
+  schema.resumeSends,
   schema.syncState,
   schema.settings,
 ] as UserTable[];

@@ -31,6 +31,7 @@ import {
   resumes,
   roleTargets,
   stageHistory,
+  resumeSends,
 } from '../db/schema';
 import { postingAtsJobRef } from '../lib/atsJobRef';
 import { racePoint } from '../lib/racePoints';
@@ -796,6 +797,9 @@ export async function mergeOpportunities(
       discoveryResults,
       dismissalFeedback,
       applicationSubmissions,
+      // A send is the record of which resume went where (#158); the duplicate's would otherwise
+      // cascade away when it is deleted below (tl on https://github.com/bgoleno/opportun/pull/164).
+      resumeSends,
     ] as const) {
       await tx
         .update(table)

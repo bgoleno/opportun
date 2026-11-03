@@ -190,6 +190,13 @@
       "when": 1794100000000,
       "tag": "0026_submission_posting_changed",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1794200000000,
+      "tag": "0027_resume_sends",
+      "breakpoints": true
     }
   ]
 }
