@@ -612,6 +612,65 @@ describe('resumeShown: the popup’s read-only look at the form (tl and sec on #
   });
 });
 
+// #191 (sec's point on #187): the name counts only where the user can see it. A copy inside a
+// hidden element, or under one, must not make the popup believe the form took the file.
+const HIDINGS: [string, string][] = [
+  ['the hidden attribute', '<span hidden>NAME</span>'],
+  ['display: none', '<span style="display: none">NAME</span>'],
+  ['visibility: hidden', '<span style="visibility: hidden">NAME</span>'],
+  ['aria-hidden', '<span aria-hidden="true">NAME</span>'],
+  ['inert', '<span inert>NAME</span>'],
+  ['a hidden ancestor', '<div style="display: none"><p><span>NAME</span></p></div>'],
+];
+
+/** The form with `markup` (the name in it) appended inside it. */
+function withHiddenName(markup: string, name: string) {
+  const page = loadForm(FEW_QUESTIONS, { showsFileName: false });
+  const form = page.doc.getElementById('application-form')!;
+  form.insertAdjacentHTML('beforeend', markup.replace('NAME', name));
+  return page;
+}
+
+describe('#191: the name counts only where it is visible', () => {
+  const check = { board: BOARD, jobId: JOB_ID, filename: 'Jane-Doe-Example-Resume.pdf' };
+
+  for (const [how, markup] of HIDINGS) {
+    it(`resumeShown does not count a name hidden by ${how}`, () => {
+      const page = withHiddenName(markup, check.filename);
+      expect(resumeShown(asJson(check), page.doc)).toBe(0);
+      // Shown for real, it counts once.
+      page.doc.querySelector('.file-upload__filename')!.textContent = check.filename;
+      expect(resumeShown(asJson(check), page.doc)).toBe(1);
+    });
+  }
+
+  it('clearResume does not take a hidden name as shown: it clears our file', async () => {
+    for (const [how, markup] of HIDINGS) {
+      const { doc } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
+      doc
+        .getElementById('application-form')!
+        .insertAdjacentHTML('beforeend', markup.replace('NAME', check.filename));
+      expect(clearResume(asJson({ ...check, size: PDF.length, before: 0 }), doc), how).toBe(
+        'cleared',
+      );
+    }
+  });
+
+  it('the fill counts only visible copies as there before, so a later visible one is news', async () => {
+    for (const [how, markup] of HIDINGS) {
+      const page = loadForm(
+        FEW_QUESTIONS.replace(
+          '</form>',
+          `${markup.replace('NAME', 'Jane-Doe-Example-Resume.pdf')}</form>`,
+        ),
+        { showsFileName: false },
+      );
+      const report = ok(await fillGreenhouseForm(asArgs(plan()), page.doc));
+      expect(report.resume?.before, how).toBe(0);
+    }
+  });
+});
+
 describe('clearResume: takes back only the file the filler set (tl and sec on #187)', () => {
   const check = {
     board: BOARD,
