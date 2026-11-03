@@ -64,6 +64,7 @@ const NOT_FILLED_REASONS: readonly unknown[] = [
   'not_shown',
   'ambiguous',
   'attach_yourself',
+  'attach_file_yourself',
   'resume_unchecked',
 ];
 
@@ -179,7 +180,14 @@ void mountPopup(document, {
         args: [check],
       });
       const r = frame?.result;
-      return r === 'cleared' || r === 'kept' || r === 'wrong_page' || r === 'no_input' ? r : null;
+      return r === 'cleared' ||
+        r === 'shown' ||
+        r === 'kept' ||
+        r === 'empty' ||
+        r === 'wrong_page' ||
+        r === 'no_input'
+        ? r
+        : null;
     } catch {
       return null;
     }

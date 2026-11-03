@@ -292,6 +292,7 @@ export const NOT_FILLED_WORDS = new Map<NotFilledReason, string>([
     'more than one question or answer has this label, so it was not filled: answer it on the form',
   ],
   ['attach_yourself', 'attach your resume yourself'],
+  ['attach_file_yourself', 'attach this file yourself'],
   [
     'resume_unchecked',
     'it could not be checked: look at the resume on the form, and attach it yourself if it is missing or wrong',

@@ -53,8 +53,8 @@ export interface PopupDeps {
   /** Runs clearResume once in that tab's top frame; null when the injection failed. */
   runResumeClear(
     tabId: number,
-    check: ResumeCheck & { size: number },
-  ): Promise<'cleared' | 'kept' | 'wrong_page' | 'no_input' | null>;
+    check: ResumeCheck & { size: number; before: number },
+  ): Promise<'cleared' | 'shown' | 'kept' | 'empty' | 'wrong_page' | 'no_input' | null>;
   /** The popup's own timer between resume checks (the page side keeps none). */
   wait(ms: number): Promise<void>;
   /** permissions.request for one origin pattern; must be called inside the click gesture. */
@@ -392,13 +392,18 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
           const cleared = await deps.runResumeClear(tab.id, {
             ...check,
             size: filled.resume.size,
+            before: filled.resume.before,
           });
+          // Shown at the last moment: attached. Taken back out, or already empty: attach it
+          // yourself. Another file (the user's): left. Anything else: look at it yourself.
           reason =
-            cleared === 'cleared'
-              ? 'attach_yourself'
-              : cleared === 'kept'
-                ? 'has_value'
-                : 'resume_unchecked';
+            cleared === 'shown'
+              ? null
+              : cleared === 'cleared' || cleared === 'empty'
+                ? 'attach_yourself'
+                : cleared === 'kept'
+                  ? 'has_value'
+                  : 'resume_unchecked';
         }
         if (reason === null) report.filled.push('Resume');
         else report.notFilled.push({ label: 'Resume', reason });

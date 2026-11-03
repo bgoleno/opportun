@@ -58,6 +58,8 @@ export type NotFilledReason =
    * never showed the file's name (it was taken back out), or another file input on the form.
    */
   | 'attach_yourself'
+  /** Another file input on the form (a cover letter): never set; attach that file yourself. */
+  | 'attach_file_yourself'
   /** The resume could not be checked (the tab moved on): look at it on the form. */
   | 'resume_unchecked';
 
@@ -193,7 +195,7 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
     if (!f.text) {
       // Another file input (a cover letter): never set, but say so in the words that fit.
       if (f.el.tagName === 'INPUT' && (f.el.getAttribute('type') ?? '').toLowerCase() === 'file') {
-        notFilled.push({ label: text, reason: 'attach_yourself' });
+        notFilled.push({ label: text, reason: 'attach_file_yourself' });
       } else if (f.el.tagName === 'INPUT' || f.el.tagName === 'SELECT') {
         notFilled.push({ label: text, reason: 'choose_on_form' });
       }
@@ -314,12 +316,13 @@ export function resumeShown(check: ResumeCheck, doc: Document = document): numbe
 /**
  * Takes the resume back out when the form never showed it: only if #resume still holds exactly
  * the one file the filler set (its name and size), so a file the user chose meanwhile is kept.
- * One write, then one plain input and one change, as the filler does.
+ * It looks for the name once more first ('shown': nothing written), and an input empty by now
+ * is 'empty'. One write, then one plain input and one change, as the filler does.
  */
 export function clearResume(
-  check: ResumeCheck & { size: number },
+  check: ResumeCheck & { size: number; before: number },
   doc: Document = document,
-): 'cleared' | 'kept' | 'wrong_page' | 'no_input' {
+): 'cleared' | 'shown' | 'kept' | 'empty' | 'wrong_page' | 'no_input' {
   const view = doc.defaultView;
   if (view === null) return 'no_input';
   let here: URL | null;
@@ -351,8 +354,17 @@ export function clearResume(
   ) {
     return 'no_input';
   }
+  // Look once more first: a name the form has just shown means it took the file (tl on #187).
+  if (
+    check.filename !== '' &&
+    (form.textContent ?? '').split(check.filename).length - 1 > check.before
+  ) {
+    return 'shown';
+  }
   const fileInput = file as HTMLInputElement;
   const held = fileInput.files;
+  // Nothing in it by now (a reload, or the form's own handler): nothing to take back.
+  if (held === null || held.length === 0) return 'empty';
   const ours =
     held !== null &&
     held.length === 1 &&

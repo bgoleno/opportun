@@ -131,8 +131,12 @@ function setup(opts: {
     runResumeCheck: vi.fn(async (_tabId: number, check: ResumeCheck) =>
       resumeShown(JSON.parse(JSON.stringify(check)) as ResumeCheck, page.doc),
     ),
-    runResumeClear: vi.fn(async (_tabId: number, check: ResumeCheck & { size: number }) =>
-      clearResume(JSON.parse(JSON.stringify(check)) as ResumeCheck & { size: number }, page.doc),
+    runResumeClear: vi.fn(
+      async (_tabId: number, check: ResumeCheck & { size: number; before: number }) =>
+        clearResume(
+          JSON.parse(JSON.stringify(check)) as ResumeCheck & { size: number; before: number },
+          page.doc,
+        ),
     ),
     // The popup's own timer, made deterministic: each wait lets the page's pending timers run.
     wait: vi.fn(async () => {
