@@ -7,6 +7,7 @@ import { ProposedRefinement } from '@/components/ai/ProposedRefinement';
 import { PromptEditor } from '@/components/ai/promptEditor';
 import { ProviderKeysCard } from '@/components/ai/ProviderKeysCard';
 import { RankCostCard } from '@/components/ai/RankCostCard';
+import { RankSkipsLine } from '@/components/ai/RankSkips';
 import { UsageTable } from '@/components/ai/UsageTable';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -37,8 +38,9 @@ function AiSettings() {
           <CardTitle>Usage</CardTitle>
           <CardDescription>Tokens and estimated cost per task per day.</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="grid gap-3">
           <UsageTable />
+          <RankSkipsLine />
         </CardContent>
       </Card>
       <RankCostCard />

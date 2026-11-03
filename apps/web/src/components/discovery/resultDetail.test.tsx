@@ -36,6 +36,7 @@ const lead = (over: Partial<DiscoveryResult> = {}): DiscoveryResult =>
     dedupeKey: 'northwind|staff-platform-engineer|austin',
     aiScore: 82,
     aiRationale: 'Matches the platform engineering target, and the comp band fits.',
+    rankSkipReason: null,
     resolution: 'full',
     resolvedSourceRef: null,
     disposition: 'pending',

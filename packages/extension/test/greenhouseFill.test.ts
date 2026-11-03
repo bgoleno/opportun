@@ -564,6 +564,45 @@ describe('#204: an answer for a choice control is listed once, as choose it on t
     expect(events.filter((e) => e.target.startsWith('q_r'))).toEqual([]);
   });
 
+  // #206 item 1 (qa on #205): the choose-it-on-the-form path skips a group the form hides.
+  it('a hidden radio group whose legend is a reviewed answer gives no line for it', async () => {
+    const { report } = await fill(
+      withExtra(
+        `<fieldset class="field-wrapper" hidden><legend>Placeholder hidden question</legend><label for="q_h1">Yes</label><input id="q_h1" type="radio" name="q_hg" value="yes" /></fieldset>`,
+      ),
+      answering('Placeholder hidden question'),
+    );
+    // Not "choose it on the form": the form does not show it, so the answer matched nothing.
+    expect(linesFor(report, 'Placeholder hidden question')).toEqual([
+      { label: 'Placeholder hidden question', reason: 'no_matching_question' },
+    ]);
+  });
+
+  // #206 item 2 (tl on #205): a fieldset's legend is its own, never a nested fieldset's.
+  it('a radio group inside another fieldset is listed once, by its own legend', async () => {
+    const { report } = await fill(
+      withExtra(
+        `<fieldset class="field-wrapper"><div><fieldset><legend>Placeholder inner question</legend><label for="q_n1">Yes</label><input id="q_n1" type="radio" name="q_ng" value="yes" /></fieldset></div></fieldset>`,
+      ),
+      answering('Placeholder inner question'),
+    );
+    expect(linesFor(report, 'Placeholder inner question')).toEqual([
+      { label: 'Placeholder inner question', reason: 'choose_on_form' },
+    ]);
+  });
+
+  it("a hidden inner group's legend is not read as the visible outer group's", async () => {
+    // The outer fieldset has no legend of its own; the hidden inner one is labelled Website. Read
+    // through the outer group, that legend made the Website text question look ambiguous.
+    const { doc, report } = await fill(
+      withExtra(
+        `<fieldset class="field-wrapper"><fieldset hidden><legend>Website</legend><label for="q_w1">Yes</label><input id="q_w1" type="radio" name="q_wg" value="yes" /></fieldset></fieldset>`,
+      ),
+    );
+    expect(valueOf(doc, 'question_9000102')).toBe('https://jane.example.com');
+    expect(linesFor(report, 'Website')).toEqual([]);
+  });
+
   it('an answer that matches no question at all still says so (criterion 2)', async () => {
     const { report } = await fill(MANY_QUESTIONS, answering('A question this form does not ask'));
     expect(linesFor(report, 'A question this form does not ask')).toEqual([

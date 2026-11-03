@@ -229,6 +229,81 @@ describe('submissionFieldProblem', () => {
     }
   });
 
+  it('an email: a light shape check, and no invisible characters (#203, tl)', () => {
+    for (const good of [
+      'jane@example.com',
+      'jane.doe+apply@sub.example.co.uk',
+      'j\u00F6rg@example.de',
+      '\u7528\u6237@\u4F8B\u5B50.example',
+    ]) {
+      expect(submissionFieldProblem({ email: good }), good).toBeNull();
+    }
+    const refused: [string, string][] = [
+      ['two @', 'jane@doe@example.com'],
+      // Only the exactly-one-@ rule catches this one: every piece would pass on its own.
+      ['two @, each side with a dot', 'jane@doe.example@example.com'],
+      ['nothing before @', '@example.com'],
+      ['no domain', 'jane@'],
+      ['no dot in the domain', 'jane@localhost'],
+      ['a dot first in the domain', 'jane@.example.com'],
+      ['a dot last in the domain', 'jane@example.'],
+      ['a space', 'jane doe@example.com'],
+      ['no @', 'jane.example.com'],
+      [
+        'too long',
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@example.com',
+      ],
+      ['a zero width space', 'jane\u200B@example.com'],
+      ['a joiner (no exception here)', 'ja\u200Dne@example.com'],
+      ['a bidi override', 'jane@exa\u202Emple.com'],
+      ['a Hangul filler', 'jane\u3164@example.com'],
+      ['a control character', 'jane\u0007@example.com'],
+      ['a line separator', 'jane\u2028@example.com'],
+      ['a leading space', ' jane@example.com'],
+      ['empty', ''],
+    ];
+    for (const [what, bad] of refused) {
+      expect(submissionFieldProblem({ email: bad }), what).toEqual({
+        field: 'email',
+        code: 'field_email_invalid',
+      });
+    }
+  });
+
+  it('a phone: ASCII digits and a few separators, a leading +, an optional extension (#203, tl)', () => {
+    for (const good of [
+      '+1 (555) 123-4567',
+      '555.123.4567',
+      '+44 20 7946 0958 ext. 12',
+      '555-1234 x89',
+      '555/123 4567',
+      '555 0100 EXT 7',
+    ]) {
+      expect(submissionFieldProblem({ phone: good }), good).toBeNull();
+    }
+    const refused: [string, string][] = [
+      ['a letter', '555-CALL-NOW'],
+      ['a + mid-number', '555+1234'],
+      ['two +', '++1 555 0100'],
+      ['too few digits', '12'],
+      ['too many digits', '111111111111111111111'],
+      ['too long', '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'],
+      ['a non-ASCII digit', '555 \u0661\u0662\u0663'],
+      ['an extension with no digits', '555 0100 ext'],
+      ['a zero width space', '555\u200B0100'],
+      ['a bidi override', '555 \u202E0100'],
+      ['a braille blank', '555\u28000100'],
+      ['a trailing space', '555 0100 '],
+      ['empty', ''],
+    ];
+    for (const [what, bad] of refused) {
+      expect(submissionFieldProblem({ phone: bad }), what).toEqual({
+        field: 'phone',
+        code: 'field_phone_invalid',
+      });
+    }
+  });
+
   it('reports the first problem in a fixed order, whatever order the keys came in', () => {
     expect(submissionFieldProblem({ websiteUrl: 'x', firstName: '' })).toEqual({
       field: 'firstName',

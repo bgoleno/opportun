@@ -1594,6 +1594,8 @@ describe('M3a (#181): the fields prefill reads by name', () => {
     ['field_url_invalid', 'websiteUrl', /Website.*https:\/\//i],
     ['field_name_invalid', 'firstName', /First name.*one line.*100 characters/i],
     ['field_name_invalid', 'lastName', /Last name.*one line.*100 characters/i],
+    ['field_email_invalid', 'email', /Email.*one line, like name@example\.com/i],
+    ['field_phone_invalid', 'phone', /Phone.*digits, spaces, \+, -, \., \( \) and an extension/i],
   ] as const) {
     it(`422 ${code} on ${field}: plain words naming the field, never the code`, async () => {
       mockApi(
