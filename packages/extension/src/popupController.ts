@@ -22,7 +22,6 @@ import {
   renderPrefillStop,
   reportLines,
   samePosting,
-  withheldLabel,
 } from './prefill';
 import { renderOutcome, type Rendered } from './render';
 import {
@@ -430,10 +429,6 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         }
         if (reason === null) report.filled.push('Resume');
         else report.notFilled.push({ label: 'Resume', reason });
-      }
-      // Fields the server withheld (#196): never sent, so never filled; listed for the user.
-      for (const key of attempt.withheld) {
-        report.notFilled.push({ label: withheldLabel(key), reason: 'withheld' });
       }
       const lines = reportLines(report);
       show({ tone: 'info', text: lines.reminder });

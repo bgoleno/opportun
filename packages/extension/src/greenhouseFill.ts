@@ -38,6 +38,12 @@ export interface FillPlan {
   questions: { labels: string[]; name: string; value: string }[];
   /** The ready resume snapshot as base64 (executeScript args are JSON only), or null. */
   resume: { filename: string; base64: string } | null;
+  /**
+   * Fields the server withheld because their stored value fails today's checks (#196): which
+   * field each is (a standard id, or question labels) and its name, never a value. Each is
+   * reported once as withheld, under the form's label, or by its name if the form lacks it.
+   */
+  withheld: { id: string | null; labels: string[]; name: string }[];
 }
 
 export type NotFilledReason =
@@ -62,10 +68,7 @@ export type NotFilledReason =
   | 'attach_file_yourself'
   /** The resume could not be checked (the tab moved on): look at it on the form. */
   | 'resume_unchecked'
-  /**
-   * Set by the popup, never by this filler: the server withheld the field, because its stored
-   * value fails today's checks (#196).
-   */
+  /** The server withheld the field: its stored value fails today's checks (#196). */
   | 'withheld';
 
 export type FillReport =
@@ -208,6 +211,18 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
         : plan.questions.flatMap((q, i) =>
             q.labels.some((l) => norm(l) === f.key) ? [`q${i}`] : [],
           );
+    // A field the server withheld (#196): nothing to fill it with, so it is reported once, as
+    // withheld, under the form's label (never also as not reviewed: tl on #201).
+    const withheldAt = !f.text
+      ? -1
+      : (plan.withheld ?? []).findIndex((w) =>
+          STANDARD_IDS.includes(f.id) ? w.id === f.id : w.labels.some((l) => norm(l) === f.key),
+        );
+    if (withheldAt >= 0) {
+      used.add(`w${withheldAt}`);
+      notFilled.push({ label: text, reason: 'withheld' });
+      continue;
+    }
     // Nor anything the form does not show: reported only when there was a value for it.
     if (concealed(f.el, true)) {
       if (matches.length > 0) {
@@ -266,6 +281,10 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
   });
   plan.questions.forEach((q, i) => {
     if (!used.has(`q${i}`)) notFilled.push({ label: q.name, reason: 'no_matching_question' });
+  });
+  // A withheld field the form does not ask for is still listed, by its name.
+  (plan.withheld ?? []).forEach((w, i) => {
+    if (!used.has(`w${i}`)) notFilled.push({ label: w.name, reason: 'withheld' });
   });
 
   // The resume: the only hidden input this sets, and only with the ready copy.

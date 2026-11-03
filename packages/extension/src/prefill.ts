@@ -289,6 +289,29 @@ export function buildPlan(
     standard,
     questions,
     resume: resumeBase64 === null || filename === null ? null : { filename, base64: resumeBase64 },
+    // Which field each withheld key is, so the filler reports it once (#196, tl on #201): its
+    // standard id or question labels and its name, never a value.
+    withheld: attempt.withheld.map(withheldField),
+  };
+}
+
+/** A withheld key as the filler finds it on the form: the same mapping as the fields above. */
+function withheldField(key: string): { id: string | null; labels: string[]; name: string } {
+  const name = withheldLabel(key);
+  const standardIds = new Map([
+    ['firstName', 'first_name'],
+    ['lastName', 'last_name'],
+    ['email', 'email'],
+    ['phone', 'phone'],
+  ]);
+  const questionLabels = new Map([
+    ['linkedinUrl', ['LinkedIn Profile', 'LinkedIn']],
+    ['websiteUrl', ['Website']],
+  ]);
+  return {
+    id: standardIds.get(key) ?? null,
+    labels: questionLabels.get(key) ?? [],
+    name,
   };
 }
 
