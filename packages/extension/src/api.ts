@@ -16,6 +16,8 @@ export interface FetchResponse {
   status: number;
   headers: { get(name: string): string | null };
   json(): Promise<unknown>;
+  /** The resume copy's bytes (assisted apply, prefill.ts); every real fetch Response has it. */
+  arrayBuffer?(): Promise<ArrayBuffer>;
 }
 
 export type FetchLike = (url: string, init: FetchInit) => Promise<FetchResponse>;

@@ -14,7 +14,16 @@
         server. Nothing is read until you click Capture.
       </p>
       <button id="capture" type="button" class="primary">Capture this page</button>
+      <section id="assist" aria-labelledby="assist-title" hidden>
+        <h2 id="assist-title">Assisted apply</h2>
+        <p class="hint">
+          Fills this Greenhouse form with what you reviewed in Opportun, and attaches your resume
+          copy. You check everything and press the site's own Submit button.
+        </p>
+        <button id="prefill" type="button">Fill in this application</button>
+      </section>
       <p id="status" role="status" aria-live="polite"></p>
+      <div id="prefill-report"></div>
 
       <details id="settings-panel">
         <summary>Settings</summary>

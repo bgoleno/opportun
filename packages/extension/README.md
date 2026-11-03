@@ -70,6 +70,54 @@ following the Indeed capture text contract
 If the job's parts cannot be found (Indeed changed its page), the popup says Indeed's layout was
 not recognized and sends nothing. It never falls back to the whole page.
 
+## Assisted apply: filling a Greenhouse application
+
+With assisted apply on, and a token set up with **Also let it fill in applications you hand
+off** (the `apply:assist` scope), the popup offers **Fill in this application** over a
+Greenhouse posting (`job-boards.greenhouse.io/<board>/jobs/<id>`, or the same on
+`boards.greenhouse.io`). It fills only what you reviewed in Opportun, and you press the site's
+own Submit button ([#183](https://github.com/bgoleno/opportun/issues/183)).
+
+On the click, and only then:
+
+1. **The popup asks your server for the application.**
+   - It calls `GET <server>/api/v1/connector/apply/current?url=<the tab's address>`, which
+     returns the one application you handed off to this posting.
+   - It checks that the tab is that application's pinned posting: the same board and the same
+     job id. Any other tab is not filled, and the popup says why.
+2. **It fetches the resume copy,** with `GET <server>/api/v1/connector/apply/<id>/snapshot`,
+   only when the copy is ready. The file must be a PDF of the announced size.
+3. **It runs the filler once, in that tab's top frame.** The filler's only argument is the
+   plan: the reviewed values and the PDF as base64.
+4. **The filler checks the page's address again** before it changes anything.
+5. **It fills each empty field it has a value for:**
+   - first and last name, email and phone, by the form's own field ids;
+   - your LinkedIn and website, by a question labelled exactly "LinkedIn Profile" (or
+     "LinkedIn") or "Website";
+   - each answer you reviewed, by a question whose label is exactly the same, ignoring case,
+     spacing and a trailing `*`.
+
+   Each value is written once with the browser's own value setter, followed by a plain `input`
+   and `change` event. A field that already has something in it is left as it was, and so is
+   a field the form does not show: one that is hidden, or inside a hidden part of the form.
+
+6. **It attaches the resume** to the form's file input through `DataTransfer`. The page side
+   keeps no timer, so the popup then looks, read-only and for about 1.5 seconds, for the form
+   to show the file's name. If it never does, the popup takes the file back out (only if it is
+   still exactly the one it set) and says to attach it yourself.
+7. **The popup lists** what was filled in and what was not, with the reason.
+
+It never chooses an option in a dropdown, checkbox or radio button, and never sets a hidden
+field other than the resume input. It also never does any of the following:
+
+- presses a button or submits the form;
+- sends a key, mouse, pointer or focus event;
+- reaches into another frame or the captcha;
+- makes a network request from the page.
+
+A test scans the filler's own source to enforce this. It needs no new permission, and still
+adds no content script and no background worker: `activeTab` covers the tab you clicked in.
+
 ## Installing it normally
 
 Nobody has to read this file to use the extension. A running Opportun hands it over:

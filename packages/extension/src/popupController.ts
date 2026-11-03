@@ -3,7 +3,20 @@
 import { postCapture, testConnection, type FetchLike, type Outcome } from './api';
 import { captureSiteOf, indeedJobKey, type CaptureSiteId } from './canonical';
 import type { ExtractResult } from './extract';
+import type { FillPlan, FillReport, NotFilledReason, ResumeCheck } from './greenhouseFill';
 import { normalizeCapture } from './normalize';
+import {
+  buildPlan,
+  fetchCurrent,
+  fetchResume,
+  greenhouseJobOf,
+  RESUME_CHECKS,
+  RESUME_GAP_MS,
+  type GetLike,
+  renderPrefillStop,
+  reportLines,
+  samePosting,
+} from './prefill';
 import { renderOutcome, type Rendered } from './render';
 import {
   loadSettings,
@@ -20,6 +33,8 @@ export interface PopupDeps {
   /** The address this copy was downloaded from, '' for a build made from source (design D9). */
   bakedServerUrl: () => Promise<string>;
   fetch: FetchLike;
+  /** GET on the user's server, for assisted apply's reads (prefill.ts). */
+  get: GetLike;
   /** The tab the popup was opened over (tabs.query active + currentWindow). */
   activeTab(): Promise<{ id: number; url: string | undefined } | null>;
   /**
@@ -28,6 +43,20 @@ export interface PopupDeps {
    * Null when the injection itself failed.
    */
   runExtract(tabId: number, site: CaptureSiteId): Promise<ExtractResult | null>;
+  /**
+   * Runs the Greenhouse filler once in that tab's top frame (scripting.executeScript, assisted
+   * apply prefill, #183), with the plan as its only argument. Null when the injection failed.
+   */
+  runFill(tabId: number, plan: FillPlan): Promise<FillReport | null>;
+  /** Runs resumeShown once in that tab's top frame (read only): the name's count, or null. */
+  runResumeCheck(tabId: number, check: ResumeCheck): Promise<number | null>;
+  /** Runs clearResume once in that tab's top frame; null when the injection failed. */
+  runResumeClear(
+    tabId: number,
+    check: ResumeCheck & { size: number; before: number },
+  ): Promise<'cleared' | 'shown' | 'kept' | 'empty' | 'wrong_page' | 'no_input' | null>;
+  /** The popup's own timer between resume checks (the page side keeps none). */
+  wait(ms: number): Promise<void>;
   /** permissions.request for one origin pattern; must be called inside the click gesture. */
   requestOrigin(pattern: string): Promise<boolean>;
   /** permissions.contains for one origin pattern. */
@@ -65,7 +94,7 @@ function reportStartupFailure(doc: Document, err: unknown): void {
       'The popup failed to start. Reload the extension at chrome://extensions and try again; ' +
       'if it keeps happening, this is a bug worth reporting.';
   }
-  for (const id of ['capture', 'save', 'test']) {
+  for (const id of ['capture', 'save', 'test', 'prefill']) {
     const button = doc.getElementById(id) as HTMLButtonElement | null;
     if (button !== null) button.disabled = true;
   }
@@ -85,12 +114,17 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
   const tokenInput = element<HTMLInputElement>(doc, 'token');
   const panel = element<HTMLDetailsElement>(doc, 'settings-panel');
   const status = element<HTMLElement>(doc, 'status');
-  const buttons = ['capture', 'save', 'test'].map((id) => element<HTMLButtonElement>(doc, id));
-  const [captureButton, , testButton] = buttons as [
+  const buttons = ['capture', 'save', 'test', 'prefill'].map((id) =>
+    element<HTMLButtonElement>(doc, id),
+  );
+  const [captureButton, , testButton, prefillButton] = buttons as [
+    HTMLButtonElement,
     HTMLButtonElement,
     HTMLButtonElement,
     HTMLButtonElement,
   ];
+  const assist = element<HTMLElement>(doc, 'assist');
+  const report = element<HTMLElement>(doc, 'prefill-report');
 
   const show = ({ tone, text }: Rendered): void => {
     status.dataset.tone = tone;
@@ -102,6 +136,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
   const busy = async (work: () => Promise<void>): Promise<void> => {
     for (const b of buttons) b.disabled = true;
     status.textContent = '';
+    report.replaceChildren();
     try {
       await work();
     } catch {
@@ -264,6 +299,131 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       showOutcome(await postCapture(deps.fetch, s, normalized.payload), site);
     });
   });
+
+  /**
+   * The prefill report, built with textContent only: labels come from the page, so they are
+   * never markup here.
+   */
+  const showReport = (lines: ReturnType<typeof reportLines>): void => {
+    const list = (title: string, items: string[]): void => {
+      if (items.length === 0) return;
+      const heading = doc.createElement('h3');
+      heading.textContent = title;
+      const ul = doc.createElement('ul');
+      for (const item of items) {
+        const li = doc.createElement('li');
+        li.textContent = item;
+        ul.append(li);
+      }
+      report.append(heading, ul);
+    };
+    list('Filled in', lines.filled);
+    list('Not filled in', lines.notFilled);
+  };
+
+  prefillButton.addEventListener('click', () => {
+    void busy(async () => {
+      const s = await ready();
+      if (isOutcome(s)) {
+        showOutcome(s);
+        return;
+      }
+      // Decided from the tab's address alone: any other tab is neither asked about nor touched.
+      const tab = await deps.activeTab();
+      const posting = tab?.url === undefined ? null : greenhouseJobOf(tab.url);
+      if (tab === null || tab.url === undefined || posting === null) {
+        show(renderPrefillStop({ kind: 'not_greenhouse' }));
+        return;
+      }
+      const current = await fetchCurrent(deps.get, s, tab.url);
+      if (current.kind !== 'attempt') {
+        show(renderPrefillStop(current));
+        return;
+      }
+      const { attempt } = current;
+      // The server matched the page to the attempt; the popup checks again against the pinned
+      // destination itself, so a wrong answer can never fill another posting (acceptance 4).
+      const pinned = greenhouseJobOf(attempt.destinationUrl);
+      if (pinned === null || !samePosting(pinned, posting)) {
+        show(renderPrefillStop({ kind: 'other_posting', destinationUrl: attempt.destinationUrl }));
+        return;
+      }
+      const resume = await fetchResume(deps.get, s, attempt);
+      if (resume.kind === 'review_stale') {
+        show(renderPrefillStop({ kind: 'none', reason: 'review_stale' }));
+        return;
+      }
+      const plan = buildPlan(attempt, pinned, resume.kind === 'file' ? resume.base64 : null);
+      const filled = await deps.runFill(tab.id, plan);
+      if (filled === null) {
+        show(renderPrefillStop({ kind: 'inject_failed' }));
+        return;
+      }
+      if (!filled.ok) {
+        show(renderPrefillStop({ kind: filled.reason }));
+        return;
+      }
+      // The resume: confirmed here, not in the page (tl and sec on #187). Look for its name a
+      // bounded number of times; if it never shows, take back exactly our file.
+      const report = { ...filled, filled: [...filled.filled], notFilled: [...filled.notFilled] };
+      if (filled.resume !== null) {
+        show({ tone: 'info', text: 'Checking that the form shows your resume...' });
+        const check: ResumeCheck = {
+          board: pinned.board,
+          jobId: pinned.jobId,
+          filename: filled.resume.filename,
+        };
+        let outcome: 'shown' | 'gone' | 'unseen' = 'unseen';
+        for (let i = 0; i < RESUME_CHECKS; i += 1) {
+          if (i > 0) await deps.wait(RESUME_GAP_MS);
+          const count = await deps.runResumeCheck(tab.id, check);
+          if (count === null) {
+            outcome = 'gone';
+            break;
+          }
+          if (count > filled.resume.before) {
+            outcome = 'shown';
+            break;
+          }
+        }
+        let reason: NotFilledReason | null = null;
+        if (outcome === 'gone') reason = 'resume_unchecked';
+        if (outcome === 'unseen') {
+          const cleared = await deps.runResumeClear(tab.id, {
+            ...check,
+            size: filled.resume.size,
+            before: filled.resume.before,
+          });
+          // Shown at the last moment: attached. Taken back out, or already empty: attach it
+          // yourself. Another file (the user's): left. Anything else: look at it yourself.
+          reason =
+            cleared === 'shown'
+              ? null
+              : cleared === 'cleared' || cleared === 'empty'
+                ? 'attach_yourself'
+                : cleared === 'kept'
+                  ? 'has_value'
+                  : 'resume_unchecked';
+        }
+        if (reason === null) report.filled.push('Resume');
+        else report.notFilled.push({ label: 'Resume', reason });
+      }
+      const lines = reportLines(report);
+      show({ tone: 'info', text: lines.reminder });
+      showReport(lines);
+    });
+  });
+
+  // The Assisted apply section shows only over a Greenhouse posting tab: decided from the tab's
+  // address, which the popup already knows; nothing in the page is read for it.
+  void (async () => {
+    try {
+      const tab = await deps.activeTab();
+      assist.hidden = tab?.url === undefined || greenhouseJobOf(tab.url) === null;
+    } catch {
+      assist.hidden = true;
+    }
+  })();
 
   // Fills an empty address field from the download's baked config, once that read finishes, but
   // never before the listeners above are already attached and never over something the person

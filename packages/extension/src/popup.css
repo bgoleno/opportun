@@ -120,3 +120,26 @@ input {
   display: flex;
   gap: 8px;
 }
+
+/* Assisted apply prefill (#183): the section and the report of what was and was not filled. */
+#assist {
+  margin: 12px 0 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--border);
+}
+
+#assist h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+#prefill-report h3 {
+  margin: 8px 0 2px;
+  font-size: 13px;
+}
+
+#prefill-report ul {
+  margin: 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
