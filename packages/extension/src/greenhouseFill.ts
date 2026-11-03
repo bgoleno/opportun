@@ -164,11 +164,30 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
     const raw = label.textContent ?? '';
     fields.push({ el, id, label: raw, key: norm(raw), text });
   }
-  // How many questions on the form carry each label: a label on two is ambiguous.
+  // How many questions on the form carry each label: a label on two is ambiguous. A choice
+  // control the form shows counts too (a select, a dropdown widget, a radio or checkbox, or the
+  // legend of a group of them): its label beside a text question's means the reviewed value may
+  // be the answer to either, so neither is filled (tl on #187, #192).
   const sameLabel = new Map<string, number>();
+  const count = (key: string): void => {
+    sameLabel.set(key, (sameLabel.get(key) ?? 0) + 1);
+  };
+  const CHOICE_TYPES = ['radio', 'checkbox'];
   for (const f of fields) {
-    if (f.text && !STANDARD_IDS.includes(f.id))
-      sameLabel.set(f.key, (sameLabel.get(f.key) ?? 0) + 1);
+    const type = (f.el.getAttribute('type') ?? '').toLowerCase();
+    const choice =
+      !f.text &&
+      (f.el.tagName === 'SELECT' ||
+        isChoice(f.el) ||
+        (f.el.tagName === 'INPUT' && CHOICE_TYPES.includes(type)));
+    if (f.text && !STANDARD_IDS.includes(f.id)) count(f.key);
+    else if (choice && !concealed(f.el, true)) count(f.key);
+  }
+  for (const group of Array.from(form.querySelectorAll('fieldset'))) {
+    const legend = group.querySelector('legend');
+    const choices = group.querySelector('input[type="radio"], input[type="checkbox"]');
+    if (legend === null || choices === null || concealed(group, true)) continue;
+    count(norm(legend.textContent ?? ''));
   }
 
   const used = new Set<string>();
