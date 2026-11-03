@@ -1459,3 +1459,35 @@ describe('the review screen shows the daily review usage from the server (#130)'
     expect(screen.queryByText(/reviews used in the last 24 hours/)).not.toBeInTheDocument();
   });
 });
+
+describe('the Apply panel links to each application’s own page (#149)', () => {
+  it('the last submitted application, and an earlier one, each link to their page', async () => {
+    const earlier = submission({
+      id: 'sub-old',
+      status: 'unknown',
+      submittedAt: NOW - 6 * 24 * 60 * MIN,
+    });
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': {
+        items: [submission({ id: 'sub-new', status: 'draft' }), earlier],
+        total: 2,
+      },
+    });
+    renderWithProviders(<ApplyPanel opp={OPP} />);
+    const block = await screen.findByRole('region', { name: 'Earlier application' });
+    expect(within(block).getByRole('link', { name: 'View application' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1/applications/sub-old',
+    );
+  });
+
+  it('the newest submitted application links to its page', async () => {
+    mockApi(routes(submission({ status: 'submitted', submittedAt: NOW - 60 * MIN })));
+    renderWithProviders(<ApplyPanel opp={OPP} />);
+    expect(await screen.findByRole('link', { name: 'View application' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1/applications/sub-1',
+    );
+  });
+});

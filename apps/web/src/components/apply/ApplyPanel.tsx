@@ -239,6 +239,7 @@ function LastAttempt({ latest, companyName }: { latest: SubmissionView; companyN
           {latest.submittedAt !== null ? (
             <span className="text-muted-foreground">{formatDateTime(latest.submittedAt)}</span>
           ) : null}
+          <ViewApplication attempt={latest} />
         </div>
         {/* What happened after submitting (#148): for submitted or no confirmation seen. */}
         <OutcomeActions attempt={latest} companyName={companyName} />
@@ -268,9 +269,23 @@ function EarlierAttempt({
           {attempt.submittedAt !== null ? `, submitted ${formatDateTime(attempt.submittedAt)}` : ''}
         </span>
         <SubmissionStatusChip status={attempt.status} />
+        <ViewApplication attempt={attempt} />
       </div>
       <OutcomeActions attempt={attempt} companyName={companyName} />
     </section>
+  );
+}
+
+/** The application's own page (design S7, #149): what was sent, its history and evidence. */
+function ViewApplication({ attempt }: { attempt: SubmissionView }) {
+  return (
+    <Link
+      to="/opportunities/$id/applications/$submissionId"
+      params={{ id: attempt.opportunityId, submissionId: attempt.id }}
+      className="text-primary underline-offset-4 hover:underline"
+    >
+      View application
+    </Link>
   );
 }
 
