@@ -1,8 +1,8 @@
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
-import type { Resume, ResumeSend } from './api';
+import { rk, type Resume, type ResumeSend } from './api';
 import { OpportunityResumeTab } from './OpportunityResumeTab';
 import { sentAtFor } from './ResumeSends';
 
@@ -208,5 +208,55 @@ describe('OpportunityResumeTab: recording a base resume as sent (#158)', () => {
     expect([at.getFullYear(), at.getMonth() + 1, at.getDate(), at.getHours()]).toEqual([
       2026, 10, 30, 12,
     ]);
+  });
+
+  // #172 item 5 (qa and tl on #164): the refreshed list drops the removed row, and its button
+  // with it. The toasts sat in that button's own mutate() callbacks, which React Query does not
+  // call once their component has unmounted, so whether one showed was a race the user mostly
+  // lost. These tests fix the order: the DELETE is held, the row leaves the list, then it answers.
+  function heldRemoval(answer: { status: number; body?: unknown }) {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let removed = false;
+    const api = mockApi({
+      ...resumeRoutes({}),
+      'GET /opportunities/opp-1/resume-sends': () => ({ items: removed ? [] : [sentBase] }),
+      'DELETE /opportunities/opp-1/resume-sends/send-1': async () => {
+        removed = true; // gone on the server (or, for a failure, removed by another tab)
+        await held;
+        return answer;
+      },
+    });
+    return { api, release };
+  }
+
+  async function removeWhileTheRowLeaves(answer: { status: number; body?: unknown }) {
+    const user = userEvent.setup();
+    const { api, release } = heldRemoval(answer);
+    const { queryClient } = renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Remove the record that Jane Base Resume was sent',
+      }),
+    );
+    await waitFor(() => expect(api.calls.some((c) => c.method === 'DELETE')).toBe(true));
+    await queryClient.invalidateQueries({ queryKey: rk.opportunitySends('opp-1') });
+    await waitFor(() =>
+      expect(screen.queryByRole('link', { name: 'Jane Base Resume' })).not.toBeInTheDocument(),
+    );
+    release();
+  }
+
+  it('says the record was removed, though its row (and button) left the list first', async () => {
+    await removeWhileTheRowLeaves({ status: 204 });
+    expect(await screen.findByText('Sent record removed')).toBeInTheDocument();
+  });
+
+  it('says a removal failed, and why, though its row left the list first', async () => {
+    await removeWhileTheRowLeaves({
+      status: 409,
+      body: { error: { code: 'conflict', message: 'Something changed' } },
+    });
+    expect(await screen.findByText('Could not remove the record')).toBeInTheDocument();
   });
 });
