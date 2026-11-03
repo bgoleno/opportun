@@ -366,10 +366,6 @@ export async function listSubmissionsForOpportunity(
   return { items: rows.map(view), total: await countWhere(db, applicationSubmissions, where) };
 }
 
-export async function getSubmission(db: Db, ctx: UserCtx, id: string): Promise<Submission> {
-  return view(await getRow(db, ctx, id));
-}
-
 /** 409 naming the row and its current status, so the client can reload it and reconcile. */
 export const notNow = (row: SubmissionRow, to: SubmissionStatus): HttpError =>
   new HttpError(
@@ -523,6 +519,32 @@ export async function lockLiveAttempt(
   await lockScope(tx, `submission:${live.id}`);
   // The caller passes this id to markPostingChanged (#157): the attempt marked is the one locked.
   return live.id;
+}
+
+/**
+ * Takes the lock of every attempt on these opportunities, whatever its status, in id order (so
+ * two callers cannot take them in opposite orders). For a writer that moves or removes those
+ * attempts' rows, a merge or a delete, before its first row write: mail ingest confirms an
+ * attempt under its lock and then writes the attempt and its follow-up step, and a writer that
+ * reached those rows first, or the opportunity row their keys check, would wait on ingest while
+ * ingest waited on it (40P01 on Postgres; tl on https://github.com/bgoleno/opportun/pull/173).
+ */
+export async function lockAttemptsOf(
+  tx: Exec,
+  ctx: UserCtx,
+  opportunityIds: readonly string[],
+): Promise<void> {
+  const rows = await tx
+    .select({ id: applicationSubmissions.id })
+    .from(applicationSubmissions)
+    .where(
+      and(
+        eq(applicationSubmissions.userId, ctx.userId),
+        inArray(applicationSubmissions.opportunityId, [...opportunityIds]),
+      ),
+    )
+    .all();
+  for (const id of rows.map((r) => r.id).sort()) await lockScope(tx, `submission:${id}`);
 }
 
 const NOT_YET_OPENED: SubmissionStatus[] = [...NOT_YET_OPENED_STATUSES];

@@ -7,17 +7,27 @@
 //
 // Four signals, per candidate:
 //   A  the message's ATS job refs (extracted at ingest) name the candidate's ATS kind and its
-//      external id, or its board org;
+//      external id, with the same board org when both carry one (a Workday requisition id is
+//      only unique within its tenant);
 //   B  the sender's address (never its display name) is at the company's domain, or at an ATS
 //      sender domain for the candidate's ATS kind, or a subdomain of either;
 //   C  the subject or text carries the role title and the company name, as whole words,
 //      normalised the way @opportun/core's dedupe normalises them;
 //   D  the message was sent no earlier than 5 minutes before the submission (clock skew) and no
 //      later than 14 days after it.
-// A candidate matches on D and (A, or B and C). One match: that candidate, with every signal
+// A candidate matches on D and (A, or B and C), unless the message links only OTHER jobs at the
+// candidate's board: every extracted ref carries a job id, so such a link says the message is
+// about another job there (a rejection for job 1, "you may also like" job 3), and it never
+// confirms this one, whatever else holds (tl on https://github.com/bgoleno/opportun/pull/173).
+// One match: that candidate, with every signal
 // that held. Two or more: none, ambiguous, naming them; a person decides. Nothing here changes
 // any state: this only answers the question.
-import { companyMatchKey, matchText, titleMatchKey } from '@opportun/core';
+import {
+  companyMatchKey,
+  matchText,
+  titleMatchKey,
+  type SubmissionConfirmationSignal,
+} from '@opportun/core';
 
 export interface ConfirmationMessage {
   /** The From header as received: a display name may precede the address. */
@@ -46,8 +56,18 @@ export interface ConfirmationCandidate {
 /** Sender domains each ATS sends from, by ATS kind (the caller's list). */
 export type AtsSenderDomains = Readonly<Partial<Record<string, readonly string[]>>>;
 
-export type ConfirmationSignal =
-  'ats_job_ref' | 'sender_domain' | 'role_and_company' | 'time_window';
+/**
+ * The ATS sender domains the ingest wiring uses (#119): evidence policy, so a reviewed constant,
+ * never configuration. Empty until the owner supplies the observed list (M0 item 4 of
+ * https://github.com/bgoleno/opportun/issues/79); that change lands as its own PR, reviewed by
+ * sec. Empty, signal B holds only for a sender under the company's own domain, and a
+ * confirmation sent from an ATS's mail domain is matched only by an ATS ref with the job id (A),
+ * or not at all: a missed confirmation, never a false one (tl on #119).
+ */
+export const ATS_SENDER_DOMAINS: AtsSenderDomains = {};
+
+/** One list with the API's (@opportun/core SUBMISSION_CONFIRMATION_SIGNALS), so they cannot drift. */
+export type ConfirmationSignal = SubmissionConfirmationSignal;
 
 export type ConfirmationMatch =
   | { kind: 'match'; submissionId: string; signals: ConfirmationSignal[] }
@@ -93,25 +113,32 @@ function hasWords(haystack: string, needle: string): boolean {
   return ` ${haystack} `.includes(` ${needle} `);
 }
 
-function signalsFor(
+interface Assessment {
+  signals: ConfirmationSignal[];
+  /** The message links another job at this candidate's board, and not this one. */
+  otherJob: boolean;
+}
+
+function assess(
   message: ConfirmationMessage,
   candidate: ConfirmationCandidate,
   sender: string | null,
   text: string,
   senders: AtsSenderDomains,
-): ConfirmationSignal[] {
+): Assessment {
   const signals: ConfirmationSignal[] = [];
-  const atsRef = candidate.atsRef === null ? null : lower(candidate.atsRef);
-  if (
-    message.atsJobRefs.some(
+  const board = candidate.atsRef === null ? null : lower(candidate.atsRef);
+  const id = lower(candidate.atsExternalId);
+  const sameKind = message.atsJobRefs.filter((r) => r.kind === candidate.atsKind);
+  const orgAgrees = (org: string | null) => org === null || board === null || lower(org) === board;
+  const thisJob = sameKind.some((r) => lower(r.externalId) === id && orgAgrees(r.org));
+  if (thisJob) signals.push('ats_job_ref');
+  const otherJob =
+    !thisJob &&
+    sameKind.some(
       (r) =>
-        r.kind === candidate.atsKind &&
-        (lower(r.externalId) === lower(candidate.atsExternalId) ||
-          (r.org !== null && atsRef !== null && lower(r.org) === atsRef)),
-    )
-  ) {
-    signals.push('ats_job_ref');
-  }
+        r.org !== null && board !== null && lower(r.org) === board && lower(r.externalId) !== id,
+    );
   if (sender !== null) {
     const domains = [
       ...(candidate.companyDomain === null ? [] : [candidate.companyDomain]),
@@ -131,10 +158,11 @@ function signalsFor(
   ) {
     signals.push('time_window');
   }
-  return signals;
+  return { signals, otherJob };
 }
 
-const matches = (signals: readonly ConfirmationSignal[]): boolean =>
+const matches = ({ signals, otherJob }: Assessment): boolean =>
+  !otherJob &&
   signals.includes('time_window') &&
   (signals.includes('ats_job_ref') ||
     (signals.includes('sender_domain') && signals.includes('role_and_company')));
@@ -148,12 +176,12 @@ export function matchConfirmation(
   const sender = senderDomain(message.fromAddress);
   const text = matchText(`${message.subject ?? ''}\n${message.text}`);
   const found = candidates
-    .map((c) => ({ id: c.id, signals: signalsFor(message, c, sender, text, atsSenderDomains) }))
-    .filter((c) => matches(c.signals));
+    .map((c) => ({ id: c.id, ...assess(message, c, sender, text, atsSenderDomains) }))
+    .filter(matches);
   if (found.length === 0) return { kind: 'none', reason: 'no_match', candidateIds: [] };
   if (found.length > 1) {
     return { kind: 'none', reason: 'ambiguous', candidateIds: found.map((c) => c.id).sort() };
   }
-  const [only] = found as [{ id: string; signals: ConfirmationSignal[] }];
+  const only = found[0]!;
   return { kind: 'match', submissionId: only.id, signals: only.signals };
 }

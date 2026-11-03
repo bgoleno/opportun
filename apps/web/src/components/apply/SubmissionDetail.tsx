@@ -15,6 +15,7 @@ import { formatDateTime, safeHttpUrl } from '@/lib/opportunities';
 import { cn } from '@/lib/utils';
 import { DETAIL_FIELDS, SavedCopy } from './ApplyPage';
 import { atsLabel, useOpportunitySubmissions, useSubmission, type SubmissionView } from './api';
+import { EmailEvidence } from './EmailEvidence';
 import { OutcomeActions, REPORTABLE } from './OutcomeActions';
 import { SubmissionStatusChip } from './parts';
 
@@ -165,6 +166,8 @@ export function SubmissionDetail({
           <p className="rounded-md border border-dashed px-3 py-2 text-sm">
             You marked this confirmed on {formatDateTime(s.confirmedAt)}. No evidence attached.
           </p>
+        ) : s.confirmationKind === 'email' && s.status === 'confirmed' ? (
+          <EmailEvidence attempt={s} />
         ) : s.confirmationKind !== null ? (
           <p className="text-sm">
             A confirmation {s.confirmationKind === 'email' ? 'email' : 'page'} backs this up.

@@ -32,18 +32,22 @@ decides whether a message is let through or kept out:
    personal (for example "explanation of benefits", "claim number" or "routing number"), even
    from a known job sender. So is a sender whose domain name looks like a healthcare, pharmacy,
    insurance or bank one, unless it is a known job sender.
-6. A **known job sender** (see below) is let through.
-7. **Job wording** in the subject or text, such as "interview", "hiring", "recruiter" or
+6. With assisted apply on, a message from **an address an application of yours expects** is let
+   through: one at the company's own domain, for an application you submitted in the last 14
+   days. An automated "we received your application" note often has no job wording in it, and
+   this is how it reaches the confirmation matching. The AI check below does not look at it.
+7. A **known job sender** (see below) is let through.
+8. **Job wording** in the subject or text, such as "interview", "hiring", "recruiter" or
    "salary", lets a message through.
-8. A message in a **thread you have linked to an opportunity** is let through.
-9. **Anything else** is kept out: there is nothing in it about a job.
+9. A message in a **thread you have linked to an opportunity** is let through.
+10. **Anything else** is kept out: there is nothing in it about a job.
 
 A sender address Opportun cannot read is let through, so a filter never hides a message it
 could not check.
 
 ### The AI check
 
-A message let through at step 6, 7 or 8 gets one more check: the `comms.triage` AI task sends
+A message let through at step 7, 8 or 9 gets one more check: the `comms.triage` AI task sends
 the sender's address, the subject and the first 500 characters of the message to your AI
 provider, which decides whether it is part of your job search. Only a confident "no" keeps a message out. If the model
 is unsure, or cannot answer at all (no AI key, the daily budget spent, a provider error), the
