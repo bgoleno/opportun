@@ -31,6 +31,46 @@ export type SubmissionView = Submission & {
 };
 
 /**
+ * The profile values a form usually asks for, in the order the details step shows them. Keys
+ * follow the server's field-name rule. firstName, lastName, linkedinUrl and websiteUrl are what
+ * prefill fills by name (M3a, #181); the full name and the free-text links stay as they were,
+ * and nothing is ever split or derived from them.
+ */
+export const DETAIL_FIELDS = [
+  { key: 'firstName', label: 'First name', type: 'text', autoComplete: 'given-name' },
+  { key: 'lastName', label: 'Last name', type: 'text', autoComplete: 'family-name' },
+  { key: 'fullName', label: 'Full name', type: 'text', autoComplete: 'name' },
+  { key: 'email', label: 'Email', type: 'email', autoComplete: 'email' },
+  { key: 'phone', label: 'Phone', type: 'tel', autoComplete: 'tel' },
+  { key: 'location', label: 'Location', type: 'text', autoComplete: 'address-level2' },
+  { key: 'workAuthorization', label: 'Work authorisation', type: 'text', autoComplete: 'off' },
+  // 'off', not 'url': the browser's one "url" value is a home page, which belongs in Website.
+  { key: 'linkedinUrl', label: 'LinkedIn profile', type: 'url', autoComplete: 'off' },
+  { key: 'websiteUrl', label: 'Website', type: 'url', autoComplete: 'url' },
+  { key: 'links', label: 'Links', type: 'text', autoComplete: 'url' },
+] as const;
+
+/** A field's label, or its key when the screens do not know it. */
+export const detailLabel = (key: string): string =>
+  DETAIL_FIELDS.find((f) => f.key === key)?.label ?? key;
+
+/**
+ * An attempt's fields as label and value rows, in the details step's order, then any other key
+ * as stored. Stored order is not display order: Postgres jsonb sorts an object's keys.
+ */
+export function detailRows(
+  fields: SubmissionFields,
+): { key: string; label: string; value: string }[] {
+  const values = new Map(Object.entries(fields));
+  const known: string[] = DETAIL_FIELDS.map((f) => f.key);
+  const keys = [
+    ...known.filter((k) => values.has(k)),
+    ...[...values.keys()].filter((k) => !known.includes(k)),
+  ];
+  return keys.map((key) => ({ key, label: detailLabel(key), value: values.get(key) ?? '' }));
+}
+
+/**
  * A refusal from the submission routes, in words. The server's error envelope carries the code
  * only (plugins/security.ts), so an ApiError's message is the code itself: never show it.
  */
@@ -66,12 +106,23 @@ export function submissionErrorText(err: unknown): string {
       return 'That is before you opened the form. Choose when you pressed Submit.';
     case 'submitted_at_in_future':
       return 'That time has not happened yet. Choose when you pressed Submit.';
+    // The fields prefill fills by name (#181): the server names the field, never its value.
+    case 'field_url_invalid':
+      return `${refusedField(err)}: enter the whole web address, starting with https:// (or http://).`;
+    case 'field_name_invalid':
+      return `${refusedField(err)}: use one line of plain text, up to 100 characters, with no spaces at the start or end.`;
     case null:
       return 'Could not reach Opportun. Check your connection and try again.';
     default:
       // The shared wording (validation, rate_limited, csrf, ...), never a bare code.
       return errorMessage(err);
   }
+}
+
+/** The label of the field a 422 names, or a plain stand-in when it names none we know. */
+function refusedField(err: unknown): string {
+  const field = err instanceof ApiError ? err.details.field : undefined;
+  return typeof field === 'string' ? detailLabel(field) : 'One of your details';
 }
 
 /** What the user can do about a snapshot that could not be made, in words (#115's codes). */

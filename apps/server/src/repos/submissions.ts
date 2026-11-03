@@ -11,6 +11,7 @@ import {
   applySubmissionTransition,
   canSubmissionTransition,
   newId,
+  submissionFieldProblem,
   type Submission,
   type SubmissionAnswer,
   type SubmissionFields,
@@ -375,6 +376,28 @@ export const notNow = (row: SubmissionRow, to: SubmissionStatus): HttpError =>
     { submissionId: row.id, from: row.status, to },
   );
 
+const FIELD_REFUSAL_MESSAGES = {
+  field_name_invalid: 'A name must be one line of plain text, at most 100 characters.',
+  field_url_invalid: 'A link must be a whole web address starting with http:// or https://.',
+} as const;
+
+/**
+ * The fields prefill reads by name (M3a, #181) are checked as they are edited; the 422 names
+ * the field, never its value, and the refused edit changes nothing (a reviewed attempt stays
+ * reviewed). A value sent back exactly as stored is not checked again: "Review again" re-sends
+ * the stored fields, and a row saved before the check must keep working (acceptance 3).
+ */
+function refuseChangedFieldProblem(stored: SubmissionFields, next: SubmissionFields): void {
+  const before = new Map(Object.entries(stored));
+  const changed = Object.fromEntries(Object.entries(next).filter(([k, v]) => before.get(k) !== v));
+  const problem = submissionFieldProblem(changed);
+  if (problem !== null) {
+    throw new HttpError(422, problem.code, FIELD_REFUSAL_MESSAGES[problem.code], {
+      field: problem.field,
+    });
+  }
+}
+
 export interface SubmissionPatch {
   resumeId?: string;
   fields?: SubmissionFields;
@@ -401,6 +424,7 @@ export async function updateSubmissionDraft(
     const row = await getRow(tx, ctx, id);
     if (row.status !== 'draft' && row.status !== 'reviewed') throw notNow(row, 'draft');
     applySubmissionTransition(row, 'draft');
+    if (patch.fields !== undefined) refuseChangedFieldProblem(row.fields, patch.fields);
     const resume = patch.resumeId === undefined ? null : await finalResume(tx, ctx, patch.resumeId);
     const [changed] = await tx
       .update(applicationSubmissions)

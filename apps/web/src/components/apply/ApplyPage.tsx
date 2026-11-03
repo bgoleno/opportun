@@ -37,6 +37,8 @@ import {
   atsLabel,
   clockTime,
   hostOf,
+  DETAIL_FIELDS,
+  detailRows,
   isLive,
   snapshotErrorText,
   submissionErrorText,
@@ -401,16 +403,6 @@ export function SavedCopy({
 
 // ---------------------------------------------------------------------------------------------
 // S3: Details
-
-/** The profile values a form usually asks for. Keys follow the server's field-name rule. */
-export const DETAIL_FIELDS = [
-  { key: 'fullName', label: 'Full name', type: 'text', autoComplete: 'name' },
-  { key: 'email', label: 'Email', type: 'email', autoComplete: 'email' },
-  { key: 'phone', label: 'Phone', type: 'tel', autoComplete: 'tel' },
-  { key: 'location', label: 'Location', type: 'text', autoComplete: 'address-level2' },
-  { key: 'workAuthorization', label: 'Work authorisation', type: 'text', autoComplete: 'off' },
-  { key: 'links', label: 'Links', type: 'text', autoComplete: 'url' },
-] as const;
 
 interface AnswerRow {
   label: string;
@@ -940,12 +932,8 @@ function ReviewStep({
           </p>
         ) : (
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-            {Object.entries(live.fields).map(([key, value]) => (
-              <DetailRow
-                key={key}
-                label={DETAIL_FIELDS.find((f) => f.key === key)?.label ?? key}
-                value={value}
-              />
+            {detailRows(live.fields).map((r) => (
+              <DetailRow key={r.key} label={r.label} value={r.value} />
             ))}
           </dl>
         )}
@@ -1343,11 +1331,7 @@ function AttestDialog({
 function CopyDetails({ live }: { live: SubmissionView }) {
   const [copied, setCopied] = useState<string | null>(null);
   const rows = [
-    ...Object.entries(live.fields).map(([k, v]) => ({
-      key: `field-${k}`,
-      label: DETAIL_FIELDS.find((f) => f.key === k)?.label ?? k,
-      value: v,
-    })),
+    ...detailRows(live.fields).map((r) => ({ ...r, key: `field-${r.key}` })),
     ...live.answers.map((a) => ({
       key: `answer-${a.questionKey}`,
       label: a.label,
