@@ -338,7 +338,12 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         return;
       }
       const resume = await fetchResume(deps.get, s, attempt);
-      const filled = await deps.runFill(tab.id, buildPlan(attempt, pinned, resume));
+      if (resume.kind === 'review_stale') {
+        show(renderPrefillStop({ kind: 'none', reason: 'review_stale' }));
+        return;
+      }
+      const plan = buildPlan(attempt, pinned, resume.kind === 'file' ? resume.base64 : null);
+      const filled = await deps.runFill(tab.id, plan);
       if (filled === null) {
         show(renderPrefillStop({ kind: 'inject_failed' }));
         return;

@@ -178,40 +178,58 @@ export function toBase64(bytes: Uint8Array): string {
   return btoa(out);
 }
 
+/** The resume copy, none to attach, or a refusal that stops the whole fill. */
+export type ResumeResult =
+  { kind: 'file'; base64: string } | { kind: 'none' } | { kind: 'review_stale' };
+
 /**
- * The attempt's resume copy as base64, or null whenever it cannot be attached as exactly that
- * file: not ready, refused (409 not ready, or 404 when the attempt is no longer handed off), not
- * a PDF, empty, larger than the server's ceiling, or not the size /current announced.
+ * The attempt's resume copy as base64, or none whenever it cannot be attached as exactly that
+ * file: not `ready` (pending, unsupported, failed, or `deleted`, #185), refused (409
+ * snapshot_not_ready, or 404 when the attempt is no longer handed off), not a PDF, empty,
+ * larger than the server's ceiling, or not the size /current announced. A 409 review_stale is
+ * different: what was reviewed changed, so nothing at all may be filled (#185, tl).
  */
 export async function fetchResume(
   fetch: GetLike,
   settings: Settings,
   attempt: PrefillAttempt,
-): Promise<string | null> {
+): Promise<ResumeResult> {
+  const none = { kind: 'none' } as const;
   const { snapshotState, filename, bytes } = attempt.resume;
-  if (snapshotState !== 'ready' || filename === null || bytes === null) return null;
-  if (bytes <= 0 || bytes > MAX_RESUME_BYTES) return null;
+  if (snapshotState !== 'ready' || filename === null || bytes === null) return none;
+  if (bytes <= 0 || bytes > MAX_RESUME_BYTES) return none;
   const res = await get(
     fetch,
     settings,
     `${settings.serverUrl}${APPLY_PATH}/${encodeURIComponent(attempt.id)}/snapshot`,
     'application/pdf',
   );
-  if (res === null || res.status !== 200 || res.arrayBuffer === undefined) return null;
+  if (res === null) return none;
+  if (res.status === 409) {
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      body = undefined;
+    }
+    const error = isRecord(body) && isRecord(body.error) ? body.error : {};
+    return error.code === 'review_stale' ? { kind: 'review_stale' } : none;
+  }
+  if (res.status !== 200 || res.arrayBuffer === undefined) return none;
   if (!(res.headers.get('content-type') ?? '').toLowerCase().startsWith('application/pdf')) {
-    return null;
+    return none;
   }
   let data: Uint8Array;
   try {
     data = new Uint8Array(await res.arrayBuffer());
   } catch {
-    return null;
+    return none;
   }
-  if (data.length !== bytes) return null;
+  if (data.length !== bytes) return none;
   // "%PDF-": the file is what the form is told it is.
   const magic = [0x25, 0x50, 0x44, 0x46, 0x2d];
-  if (!magic.every((b, i) => data.at(i) === b)) return null;
-  return toBase64(data);
+  if (!magic.every((b, i) => data.at(i) === b)) return none;
+  return { kind: 'file', base64: toBase64(data) };
 }
 
 /**
