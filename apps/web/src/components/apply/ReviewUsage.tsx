@@ -45,14 +45,22 @@ function ReviewCapForm({ usage }: { usage: ReviewUsage }) {
   const setCap = useSetReviewCap();
   const inputId = useId();
   const helpId = useId();
-  const [value, setValue] = useState(String(usage.userCap ?? usage.cap));
+  // The limit in force, not the stored one: an admin may have lowered the server's limit below
+  // what the user saved (#160), and then the server applies its own.
+  const [value, setValue] = useState(String(usage.cap));
+  const savedAbove = usage.userCap !== null && usage.userCap > usage.instanceCap;
+  const aboveServer = `This server allows at most ${usage.instanceCap} reviews per 24 hours. Choose ${usage.instanceCap} or fewer.`;
   const [error, setError] = useState<string | null>(null);
   // Follow the server's value when it changes (another tab, or "Use the server's limit").
-  useEffect(() => setValue(String(usage.userCap ?? usage.cap)), [usage.userCap, usage.cap]);
+  useEffect(() => setValue(String(usage.cap)), [usage.cap]);
 
   async function save(cap: number | null) {
     setError(null);
-    if (cap !== null && (!Number.isInteger(cap) || cap < 1 || cap > usage.instanceCap)) {
+    if (cap !== null && Number.isInteger(cap) && cap > usage.instanceCap) {
+      setError(aboveServer);
+      return;
+    }
+    if (cap !== null && (!Number.isInteger(cap) || cap < 1)) {
       setError(`Choose a whole number from 1 to ${usage.instanceCap}.`);
       return;
     }
@@ -62,7 +70,7 @@ function ReviewCapForm({ usage }: { usage: ReviewUsage }) {
     } catch (err) {
       setError(
         err instanceof ApiError && err.code === 'cap_out_of_range'
-          ? `Choose a whole number from 1 to ${usage.instanceCap}.`
+          ? aboveServer
           : errorMessage(err),
       );
     }
@@ -97,6 +105,12 @@ function ReviewCapForm({ usage }: { usage: ReviewUsage }) {
             limit helps you stay deliberate.
           </p>
         </div>
+        {savedAbove ? (
+          <p className="text-sm text-muted-foreground">
+            Your saved limit of {usage.userCap} is above this server’s limit, so {usage.cap}{' '}
+            applies.
+          </p>
+        ) : null}
         <p className="text-sm text-muted-foreground">{usageText(usage)}</p>
         <FormError message={error} />
         <div className="flex flex-wrap gap-2">

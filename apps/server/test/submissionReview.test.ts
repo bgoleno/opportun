@@ -1161,3 +1161,51 @@ describe('review usage and the user’s own cap (#130)', () => {
     }
   });
 });
+
+describe('the user’s own cap: its audit entry and its lock (#160)', () => {
+  const setCap = (c: TestClient, cap: number | null) =>
+    api(c, 'PUT', '/settings/applications', { dailyReviewCap: cap });
+
+  it('every change writes submission.review_cap_set, with the value and the server’s limit', async () => {
+    const { app, a } = await boot({ ...ON, dailyReviewCap: 10 });
+    expect((await setCap(a, 3)).statusCode).toBe(200);
+    expect((await setCap(a, null)).statusCode).toBe(200);
+    const rows = await app.db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.userId, a.userId), eq(auditLog.event, 'submission.review_cap_set')))
+      .all();
+    expect(
+      rows.map((r) => r.detail).sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y))),
+    ).toEqual(
+      [
+        { cap: 3, instanceCap: 10 },
+        { cap: null, instanceCap: 10 },
+      ].sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y))),
+    );
+  });
+
+  it('a refused change writes nothing', async () => {
+    const { app, a } = await boot({ ...ON, dailyReviewCap: 10 });
+    expect((await setCap(a, 11)).statusCode).toBe(422);
+    expect(await auditEvents(app, a, 'submission.review_cap_set')).toHaveLength(0);
+  });
+
+  // The review parks inside its transaction, holding the user's scope lock, after it read the
+  // cap and before its write (`submissions.review.locked`). A cap change must be seen waiting on
+  // that lock rather than land mid-review. On Postgres only the lock keeps them apart; on SQLite
+  // the write gate does too.
+  it('a cap change waits while a review holds the user’s lock', async () => {
+    const { app, a } = await boot({ ...ON, dailyReviewCap: 10 });
+    const d = await draft(app, a);
+    const [r, c] = await heldApart(
+      app,
+      'submissions.review.locked',
+      () => review(a, d.id, d.submission.reviewDigest),
+      () => setCap(a, 1),
+    );
+    expect(r.statusCode, r.body).toBe(200);
+    expect(c.statusCode, c.body).toBe(200);
+    expect(c.json()).toMatchObject({ cap: 1, userCap: 1, used: 1 });
+  });
+});
