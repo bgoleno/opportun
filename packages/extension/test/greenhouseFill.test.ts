@@ -169,6 +169,11 @@ describe('sec (2) on #187: nothing inside a hidden container is filled', () => {
       'the field itself display:none',
       (b) => b.replace('type="text"', 'type="text" style="display:none"'),
     ],
+    // qa on #187: a labelled field that is itself aria-hidden.
+    [
+      'the field itself aria-hidden',
+      (b: string) => b.replace('type="text"', 'type="text" aria-hidden="true"'),
+    ],
   ];
 
   for (const [what, wrap] of wrappers) {
@@ -304,6 +309,13 @@ describe('tl on #187: ambiguity, react-selects by structure, and the edges of ma
     expect(r.notFilled.filter((n) => n.label === 'Why us?')).toEqual([
       { label: 'Why us?', reason: 'ambiguous' },
     ]);
+  });
+
+  it('a question labelled plain "LinkedIn" takes the LinkedIn address (qa on #187)', async () => {
+    const html = MANY_QUESTIONS.replace('>LinkedIn Profile<', '>LinkedIn<');
+    const { doc, report } = await fill(html);
+    expect(valueOf(doc, 'question_9000110')).toBe('https://www.linkedin.com/in/jane-doe-example');
+    expect(ok(report).filled).toContain('LinkedIn');
   });
 
   it('labels are compared whole: two long questions sharing their first 200 characters stay apart', async () => {
