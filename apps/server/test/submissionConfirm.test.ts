@@ -153,6 +153,23 @@ describe('criterion 1: a matching confirmation confirms, and the stage does not 
     expect(JSON.stringify(detail)).not.toContain(BODY_SECRET);
   });
 
+  // https://github.com/bgoleno/opportun/issues/176 item 1, the server half of "(unreadable)":
+  // a From header that names no single mailbox gives the evidence card an empty address,
+  // never the raw header (the web half shows "(unreadable)" for it, emailEvidence.test.tsx).
+  it('gives the evidence an empty sender address when the From header names no single mailbox', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    // Matched on the job id (A); the header lists two mailboxes, so it has no one sender.
+    await ingest(
+      app,
+      a,
+      confirmation(s, { from: 'careers@examplecorp.example, other@examplecorp.example' }),
+    );
+    expect((await attempt(app, s.id)).status).toBe('confirmed');
+    const detail = (await api(a, 'GET', `/submissions/${s.id}`)).json();
+    expect(detail.confirmationEmail.fromAddress).toBe('');
+  });
+
   it('a re-delivered message does not confirm again, and a later outcome is not undone', async () => {
     const { app, a } = await boot(ON);
     const s = await submittedAttempt(app, a);
@@ -290,6 +307,34 @@ describe('triage: submission_window keeps an expected confirmation with no job w
 });
 
 describe('triage stays narrow: submission_window passes only what the matcher matched (tl on #173)', () => {
+  // https://github.com/bgoleno/opportun/issues/176 item 2: with no job wording, only
+  // submission_window can keep this message, and it does so for an ambiguous match too.
+  it('keeps an ambiguous confirmation with no job wording, under submission_window, confirming neither', async () => {
+    const { app, a } = await boot(ON);
+    // A real ambiguous pair: "QA Engineer" is whole words inside "QA Engineer Tools", so a
+    // message naming the second names the first too (and the two titles dedupe apart).
+    const qa = await submittedAttempt(app, a, { title: 'QA Engineer' });
+    const tools = await submittedAttempt(app, a, { title: 'QA Engineer Tools' });
+    const { id } = await ingest(
+      app,
+      a,
+      confirmation(qa, {
+        subject: 'Received',
+        bodyText: 'We got it: QA Engineer Tools at Example Corp.',
+      }),
+    );
+    expect(await message(app, id)).toMatchObject({
+      triageDecision: 'passed',
+      triageRule: 'submission_window',
+    });
+    for (const s of [qa, tools]) {
+      expect(await attempt(app, s.id)).toMatchObject({
+        status: 'submitted',
+        confirmationCommId: null,
+      });
+    }
+  });
+
   it('a non-confirmation from the company domain in the window is dropped, as before', async () => {
     const { app, a } = await boot(ON);
     const s = await submittedAttempt(app, a);
