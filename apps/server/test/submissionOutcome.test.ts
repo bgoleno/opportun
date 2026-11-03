@@ -508,6 +508,20 @@ describe('criterion 1: "I submitted it" records one timeline entry and one resum
 });
 
 describe('criterion 2: no confirmation after 3 days shows a next step; nothing is retried or sent', () => {
+  // The other tests here count from FOLLOWUP_MS, so they move with it. This one writes the
+  // three days out, so a change to the constant fails (#172; qa on #145).
+  it('the wait is three days, written out: 259,200,000 ms', async () => {
+    const THREE_DAYS_MS = 259_200_000;
+    const { app, a } = await boot(ON);
+    const d = await handedOff(app, a);
+    const submittedAt = Date.now() - 1000;
+    expect((await attest(a, d.id, { moveToApplied: false, submittedAt })).statusCode).toBe(200);
+    expect(await followUpSubmissions(app.db, submittedAt + THREE_DAYS_MS - 1)).toBe(0);
+    expect((await rowOf(app, d.id))?.status).toBe('submitted');
+    expect(await followUpSubmissions(app.db, submittedAt + THREE_DAYS_MS)).toBe(1);
+    expect((await rowOf(app, d.id))?.status).toBe('unknown');
+  });
+
   it('marks an attempt unknown at 3 days, with one next step, and not a millisecond before', async () => {
     const { app, a } = await boot(ON);
     const d = await handedOff(app, a);

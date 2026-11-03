@@ -9,7 +9,9 @@ import { resumes, resumeSends, users } from '../src/db/schema';
 import { insertResume, setResumeStatus } from '../src/repos/resumes';
 import { useApi } from './api';
 import { assertIsolated, type TestClient } from './isolation';
-import { heldApart } from './race';
+import { heldApart, pauseAt, settledOrWaiting } from './race';
+import { testDialect } from './db';
+import { onSlowTransaction } from '../src/db/gate';
 import { connectGoogle, fakeGoogle } from './fakeGoogle';
 import { BASE_DOC_ID, BASE_TEXT, createOpportunity, registerBase } from './resumeFixtures';
 
@@ -437,4 +439,82 @@ describe('isolation', () => {
       return removeSend(c, opp, send);
     },
   });
+});
+
+describe('test gaps (#172; qa on #164)', () => {
+  /**
+   * A send row of user `owner`'s, written directly: the API cannot make one that crosses users
+   * (the routes check ownership first), so this stands in for a bug elsewhere. The readers'
+   * own user filter is what must keep it out.
+   */
+  async function foreignSend(
+    app: FastifyInstance,
+    owner: TestClient,
+    row: { opportunityId: string; resumeId: string },
+  ) {
+    await app.db
+      .insert(resumeSends)
+      .values({
+        id: newId(),
+        userId: owner.userId,
+        ...row,
+        sentAt: Date.now(),
+        sentVia: 'Elsewhere',
+        submissionId: null,
+        createdAt: Date.now(),
+      })
+      .run();
+  }
+
+  it("a resume's summary ignores a send row of another user's (latestSends' user filter)", async () => {
+    const { app, a, b } = await boot();
+    const mine = await resume(app, a);
+    await foreignSend(app, b, { opportunityId: await createOpportunity(b), resumeId: mine });
+    const one = (await getResume(a, mine)).json();
+    expect(one).toMatchObject({ status: 'final', submittedTo: null, submittedAt: null });
+    const list = await a.request({ method: 'GET', url: '/api/v1/resumes' });
+    const listed = (list.json().items as { id: string; submittedTo: string | null }[]).find(
+      (r) => r.id === mine,
+    );
+    expect(listed).toMatchObject({ submittedTo: null });
+  });
+
+  it("the send lists ignore a send row of another user's (the lists' user filter)", async () => {
+    const { app, a, b } = await boot();
+    const myOpp = await createOpportunity(a);
+    const mine = await resume(app, a);
+    await foreignSend(app, b, { opportunityId: myOpp, resumeId: mine });
+    expect((await listSends(a, myOpp)).json().items).toEqual([]);
+    const byResume = await a.request({ method: 'GET', url: `/api/v1/resumes/${mine}/sends` });
+    expect(byResume.json().items).toEqual([]);
+  });
+
+  // sec's rule on #164: another user's resume id is refused before any lock, so it can never be
+  // made to wait on (or hold up) the owner's lock. With a's delete parked inside a's resume lock,
+  // b's attempt on that resume must answer 404 at once, not queue behind it. Postgres only: on
+  // SQLite the write gate holds every caller, even a plain read, while a transaction is open, so
+  // there the oracle cannot tell "refused before the lock" from "queued behind it".
+  it.runIf(testDialect === 'postgres')(
+    "recording another user's resume answers at once while its owner holds the resume lock",
+    async () => {
+      const { app, a, b } = await boot();
+      const id = await resume(app, a);
+      const theirOpp = await createOpportunity(b);
+      onSlowTransaction(() => undefined);
+      const pause = pauseAt('resumes.delete.locked');
+      const deleting = a.request({ method: 'DELETE', url: `/api/v1/resumes/${id}` });
+      await pause.reached;
+      const sent = record(b, theirOpp, { resumeId: id, sentVia: 'Indeed' });
+      let seen;
+      try {
+        seen = await settledOrWaiting(app, sent, pause);
+      } finally {
+        pause.release();
+      }
+      expect(seen).toBe('settled');
+      expect((await sent).statusCode).toBe(404);
+      expect((await deleting).json()).toMatchObject({ outcome: 'deleted' });
+      expect(await app.db.select().from(resumeSends).all()).toEqual([]);
+    },
+  );
 });
