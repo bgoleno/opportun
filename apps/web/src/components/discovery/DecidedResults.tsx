@@ -181,7 +181,8 @@ function DecidedRow({
       onClick={onSelect}
       onFocus={onSelect}
       className={cn(
-        'grid gap-2 rounded-xl border bg-card p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        // grid-cols-1, not a bare grid: see QueueRow.tsx on the queue's cards (#193).
+        'grid grid-cols-1 gap-2 rounded-xl border bg-card p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring',
         selected && 'border-primary ring-1 ring-primary',
       )}
     >

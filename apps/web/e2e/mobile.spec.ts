@@ -286,3 +286,169 @@ for (const width of WIDTHS) {
     });
   });
 }
+
+// The Discovery screens with a populated queue (https://github.com/bgoleno/opportun/issues/193).
+// "every view fits the screen" above visits /discovery as a brand-new user, whose queue is empty,
+// so no result card was ever on screen there. These cards carry the widest content a real queue
+// can: long reasons and descriptions with an unbroken link, a long location, and the full badge
+// row. They are stubs (made-up data); everything else on the page comes from the real server.
+const DISCOVERY_WIDTHS = [440, 390, 320] as const;
+const DAY = 24 * 60 * 60 * 1000;
+const UNBROKEN =
+  'https://careers.example-holdings.com/jobs/principal-platform-intelligence-engineer-remote-united-states?gh_src=discovery_feed_tracking_0123456789abcdef';
+const LONG_WHY = `Strong match for your Staff and Principal platform engineering targets: owns the internal developer platform, observability and cost tooling end to end, remote in your region, and the level matches your floor. See ${UNBROKEN}`;
+const LONG_DESCRIPTION = `About International Consolidated Platform Intelligence Holdings: a multinational enterprise software group building analytics infrastructure for regulated industries across forty countries. ${UNBROKEN}`;
+const LONG_LOCATION =
+  'Remote, United States (Eastern or Central time zones preferred); occasional travel to San Francisco, California';
+
+function stubResult(i: number, over: Record<string, unknown> = {}): Record<string, unknown> {
+  const now = Date.now();
+  const posting = {
+    company: 'International Consolidated Platform Intelligence Holdings',
+    title: `Principal Platform Intelligence Engineer, Developer Experience and Observability ${i}`,
+    descriptionMd: LONG_DESCRIPTION,
+    postingUrl: UNBROKEN,
+    location: LONG_LOCATION,
+    remote: true,
+    compNote:
+      'USD 245,000 to 310,000 base, plus equity and an annual performance bonus target of 20%',
+    externalId: `stub-${i}`,
+    postedAt: null,
+  };
+  return {
+    id: `stub-result-${i}`,
+    runId: 'stub-run',
+    sourceId: 'stub-source',
+    sourceKind: 'ats_greenhouse',
+    roleTargetId: null,
+    dedupeKey: `international consolidated|principal platform ${i}|remote ${i}`,
+    aiScore: 91,
+    aiRationale: LONG_WHY,
+    // needs capture and stale (discovered ten days ago): the badge row at its fullest.
+    resolution: 'needs_capture',
+    resolvedSourceRef: null,
+    disposition: 'pending',
+    opportunityId: null,
+    sourceMailChannel: null,
+    sourceMailExternalId: null,
+    dismissReason: null,
+    dismissNote: null,
+    createdAt: now - 10 * DAY,
+    updatedAt: now - 10 * DAY,
+    ...over,
+    posting: { ...posting, ...((over.posting as object | undefined) ?? {}) },
+  };
+}
+
+/** Serves every discovery results list (the queue and both Decided tabs) with stub cards. */
+async function stubDiscoveryResults(page: Page): Promise<void> {
+  await page.route(/\/api\/v1\/discovery\/results\?/, async (route) => {
+    if (route.request().method() !== 'GET') return await route.fallback();
+    const disposition = new URL(route.request().url()).searchParams.get('disposition');
+    const items = [
+      stubResult(1),
+      stubResult(2, { aiScore: 64, sourceKind: 'alert_email' }),
+      // Two locations of one role: the queue shows them as one group card (#191).
+      stubResult(3, { dedupeKey: 'international consolidated|principal platform 3|a' }),
+      stubResult(4, {
+        dedupeKey: 'international consolidated|principal platform 3|b',
+        posting: { location: `${LONG_LOCATION} or London, United Kingdom`, title: stubTitle(3) },
+      }),
+    ].map((r) =>
+      disposition === 'pending' ? r : { ...r, disposition, dismissReason: 'not_a_fit' },
+    );
+    // More than are loaded, so "Select all N matching" shows too.
+    await route.fulfill({ json: { items, total: disposition === 'pending' ? 250 : items.length } });
+  });
+}
+const stubTitle = (i: number) =>
+  `Principal Platform Intelligence Engineer, Developer Experience and Observability ${i}`;
+
+/**
+ * Content inside each result card that runs past the card's own right edge, or a box whose text
+ * is wider than it is, other than a deliberate ellipsis (text-overflow: ellipsis).
+ */
+async function spillsOutOfCards(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const out: string[] = [];
+    for (const card of document.querySelectorAll('[data-result-id]')) {
+      const edge = card.getBoundingClientRect().right;
+      for (const el of card.querySelectorAll('*')) {
+        const style = getComputedStyle(el);
+        if (style.textOverflow === 'ellipsis') continue;
+        const past = el.getBoundingClientRect().right > edge + 1;
+        const wider = el.scrollWidth > el.clientWidth + 1 && style.overflowX === 'visible';
+        if (past || (wider && el.clientWidth > 0)) {
+          out.push(
+            `<${el.tagName.toLowerCase()} class="${String(el.className).slice(0, 60)}">: "${(el.textContent ?? '').trim().slice(0, 50)}"`,
+          );
+        }
+        if (out.length >= 6) return out;
+      }
+    }
+    return out;
+  });
+}
+
+const DISCOVERY_TABS = [
+  ['Decided', '/discovery/decided'],
+  ['Companies', '/discovery/companies'],
+  ['Sources', '/discovery/sources'],
+  ['Prompts', '/discovery/prompts'],
+  ['Review queue', '/discovery'],
+] as const;
+
+for (const width of DISCOVERY_WIDTHS) {
+  test.describe(`Discovery at ${width}px wide`, () => {
+    test.use({ viewport: { width, height: 844 } });
+
+    test('a full review queue, and every Discovery tab, fit the screen (#193)', async ({
+      page,
+    }) => {
+      await registerUser(page);
+      await stubDiscoveryResults(page);
+      await page.goto('/discovery');
+      const queue = page.getByRole('list', { name: 'Results to review' });
+      await expect(queue.getByText(LONG_WHY).first()).toBeVisible();
+      await expectFits(page, 'the review queue');
+      expect(await spillsOutOfCards(page), 'text spilling out of a card').toEqual([]);
+
+      // The toolbar is on screen and usable without zooming (#193 criterion 4).
+      for (const control of [
+        page.getByRole('button', { name: 'Capture posting' }),
+        page.getByLabel('Sort by'),
+        page.getByRole('button', { name: /^Select all \d+ loaded$/ }),
+        page.getByRole('button', { name: 'Select all 250 matching' }),
+      ]) {
+        await expect(control).toBeInViewport({ ratio: 1 });
+      }
+      await page.getByLabel('Sort by').selectOption({ index: 1 });
+      await page.getByRole('button', { name: /^Select all \d+ loaded$/ }).click();
+      await expect(page.getByText(/^\d+ selected$/)).toBeVisible();
+      await expectFits(page, 'the review queue with a selection');
+
+      // Every tab is on screen without scrolling the bar (criterion 3: it wraps), and each fits.
+      const sections = page.getByRole('navigation', { name: 'Discovery sections' });
+      for (const [name, path] of DISCOVERY_TABS) {
+        const tab = sections.getByRole('link', { name, exact: true });
+        await expect(tab).toBeInViewport({ ratio: 1 });
+        await tab.click();
+        await expect(page).toHaveURL((url) => url.pathname === path);
+        await expectFits(page, `Discovery ${name}`);
+        if (name === 'Decided') {
+          for (const [decided, tabName] of [
+            ['Dismissed', /^Dismissed/],
+            ['Accepted', /^Accepted/],
+          ] as const) {
+            await page.getByRole('tab', { name: tabName }).click();
+            await expect(page.getByText(LONG_LOCATION).first()).toBeVisible();
+            await expectFits(page, `Discovery Decided ${decided}`);
+            expect(await spillsOutOfCards(page), `text spilling out of a ${decided} card`).toEqual(
+              [],
+            );
+          }
+        }
+      }
+    });
+  });
+}

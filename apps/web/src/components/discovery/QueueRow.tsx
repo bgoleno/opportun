@@ -70,6 +70,11 @@ function StaleBadge() {
   );
 }
 
+// Each card is `grid grid-cols-1`, one minmax(0, 1fr) column, never a bare `grid`: a bare grid's
+// implicit column is as wide as its widest content's min-content size, and a nowrap (truncated)
+// location or a long unbroken link made the card, and so the whole queue, wider than a phone's
+// screen (#193). With the column pinned to the card's width, that text truncates or wraps inside.
+
 /** The card's outline when stale; after `selected`, so a stale card keeps it under the cursor. */
 const STALE_OUTLINE = 'border-destructive';
 
@@ -111,7 +116,7 @@ export function QueueRow(props: {
       onClick={props.onSelect}
       onFocus={props.onSelect}
       className={cn(
-        'grid gap-2 rounded-xl border bg-card p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'grid grid-cols-1 gap-2 rounded-xl border bg-card p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring',
         selected && 'border-primary ring-1 ring-primary',
         props.stale && STALE_OUTLINE,
       )}
@@ -218,7 +223,7 @@ export function QueueGroupRow(props: {
       onClick={props.onSelect}
       onFocus={props.onSelect}
       className={cn(
-        'grid gap-2 rounded-xl border bg-card p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'grid grid-cols-1 gap-2 rounded-xl border bg-card p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring',
         selected && 'border-primary ring-1 ring-primary',
         props.stale && STALE_OUTLINE,
       )}
