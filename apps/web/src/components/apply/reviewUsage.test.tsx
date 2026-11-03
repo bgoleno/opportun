@@ -102,17 +102,18 @@ describe('the user’s own limit in Settings', () => {
     expect(await screen.findByText(/3 of 3 reviews used/)).toBeVisible();
   });
 
+  const ABOVE = 'This server allows at most 10 reviews per 24 hours. Choose 10 or fewer.';
   it.each([
-    ['above the server’s limit', '11'],
-    ['zero', '0'],
-    ['not a whole number', '2.5'],
-  ])('refuses a value %s before sending anything', async (_n, typed) => {
+    ['above the server’s limit', '11', ABOVE],
+    ['zero', '0', 'Choose a whole number from 1 to 10.'],
+    ['not a whole number', '2.5', 'Choose a whole number from 1 to 10.'],
+  ])('refuses a value %s before sending anything', async (_n, typed, message) => {
     const { api, user } = setup(usage());
     const input = await screen.findByLabelText('Reviews allowed per 24 hours');
     await user.clear(input);
     await user.type(input, typed);
     await user.click(screen.getByRole('button', { name: 'Save limit' }));
-    expect(await screen.findByText('Choose a whole number from 1 to 10.')).toBeVisible();
+    expect(await screen.findByText(message)).toBeVisible();
     expect(puts(api.calls)).toHaveLength(0);
   });
 
@@ -137,7 +138,7 @@ describe('the user’s own limit in Settings', () => {
       body: { error: { code: 'cap_out_of_range', max: 10 } },
     }));
     await user.click(await screen.findByRole('button', { name: 'Save limit' }));
-    expect(await screen.findByText('Choose a whole number from 1 to 10.')).toBeVisible();
+    expect(await screen.findByText(ABOVE)).toBeVisible();
   });
 
   it('renders nothing where the feature is off (no Settings control)', async () => {
@@ -145,5 +146,43 @@ describe('the user’s own limit in Settings', () => {
     const { container } = renderWithProviders(<ReviewCapCard />);
     await waitFor(() => expect(api.calls).toHaveLength(1));
     expect(container.textContent).toBe('');
+  });
+});
+
+describe('a saved limit above the server’s (#160)', () => {
+  // An admin lowered the instance cap below what the user had saved: 15 saved, 10 applies.
+  const above = usage({ userCap: 15, cap: 10, instanceCap: 10 });
+
+  it('the input shows the limit in force, and a line says why', async () => {
+    mockApi({ 'GET /settings/applications': above });
+    renderWithProviders(<ReviewCapCard />);
+    const input = await screen.findByLabelText('Reviews allowed per 24 hours');
+    expect(input).toHaveValue(10);
+    expect(
+      screen.getByText('Your saved limit of 15 is above this server’s limit, so 10 applies.'),
+    ).toBeVisible();
+  });
+
+  it('saving a value above the server’s limit is refused with that explanation', async () => {
+    const api = mockApi({ 'GET /settings/applications': above });
+    const user = userEvent.setup();
+    renderWithProviders(<ReviewCapCard />);
+    const input = await screen.findByLabelText('Reviews allowed per 24 hours');
+    await user.clear(input);
+    await user.type(input, '15');
+    await user.click(screen.getByRole('button', { name: 'Save limit' }));
+    expect(
+      await screen.findByText(
+        'This server allows at most 10 reviews per 24 hours. Choose 10 or fewer.',
+      ),
+    ).toBeVisible();
+    expect(api.calls.filter((c) => c.method === 'PUT')).toHaveLength(0);
+  });
+
+  it('no line when the saved limit is within the server’s', async () => {
+    mockApi({ 'GET /settings/applications': usage({ userCap: 4, cap: 4 }) });
+    renderWithProviders(<ReviewCapCard />);
+    await screen.findByLabelText('Reviews allowed per 24 hours');
+    expect(screen.queryByText(/above this server’s limit/)).not.toBeInTheDocument();
   });
 });
