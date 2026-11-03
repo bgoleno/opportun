@@ -235,7 +235,7 @@ describe('acceptance 3: attempts without them keep working, with nothing invente
     expect((await read(a, r.id)).fields).toEqual(legacy);
   });
 
-  it('a row stored before these checks, with a value they would refuse, still reads and reviews', async () => {
+  it('a row stored before these checks, with a value they would refuse, still reads, reviews and is sent back unchanged', async () => {
     const { app, a } = await boot(ON);
     const id = await draft(app, a);
     const stored = { linkedinUrl: 'linkedin.com/in/jane-doe-example' };
@@ -251,5 +251,13 @@ describe('acceptance 3: attempts without them keep working, with nothing invente
       acknowledged: true,
     });
     expect(res.statusCode, res.body).toBe(200);
+    // "Review again" sends the stored fields back unchanged: not refused for a value it kept...
+    const again = await patchFields(a, id, { ...stored, email: 'jane@example.com' });
+    expect(again.statusCode, again.body).toBe(200);
+    expect(again.json<SubmissionJson>().fields).toEqual({ ...stored, email: 'jane@example.com' });
+    // ...but a new value for that field is checked like any other.
+    const changed = await patchFields(a, id, { linkedinUrl: 'www.linkedin.com/in/jane' });
+    expect(changed.statusCode, changed.body).toBe(422);
+    expect(changed.json<{ error: { code: string } }>().error.code).toBe('field_url_invalid');
   });
 });

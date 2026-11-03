@@ -90,6 +90,67 @@ export const SubmissionFieldsSchema = z
   .refine((r) => Object.keys(r).length <= 50, { message: 'at most 50 fields' });
 export type SubmissionFields = z.infer<typeof SubmissionFieldsSchema>;
 
+/**
+ * The detail fields prefill reads by name (M3a, https://github.com/bgoleno/opportun/issues/181;
+ * tl's design on #120): it fills a form's first and last name, and its LinkedIn and website
+ * questions, with exactly these values, so the extension never splits a full name or a
+ * free-text links field. Every other key stays free text, as before.
+ */
+export const SUBMISSION_NAME_FIELDS = ['firstName', 'lastName'] as const;
+export const SUBMISSION_URL_FIELDS = ['linkedinUrl', 'websiteUrl'] as const;
+/** Counted in characters as a person counts them (code points), not UTF-16 units. */
+export const SUBMISSION_NAME_MAX_LENGTH = 100;
+
+export const SUBMISSION_FIELD_REFUSALS = ['field_name_invalid', 'field_url_invalid'] as const;
+export type SubmissionFieldRefusal = (typeof SUBMISSION_FIELD_REFUSALS)[number];
+
+/** Control characters, and the line and paragraph separators that also break a line. */
+const NOT_ONE_LINE = /[\p{Cc}\u2028\u2029]/u;
+
+function isPlainName(value: string): boolean {
+  const length = [...value].length;
+  return (
+    value === value.trim() &&
+    length >= 1 &&
+    length <= SUBMISSION_NAME_MAX_LENGTH &&
+    !NOT_ONE_LINE.test(value)
+  );
+}
+
+/**
+ * An absolute http or https address with a host, exactly as typed: no surrounding or inner
+ * whitespace, which the URL parser would otherwise trim or encode into something the user
+ * never saw on the review.
+ */
+function isWebAddress(value: string): boolean {
+  if (/\s/u.test(value)) return false;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return (url.protocol === 'https:' || url.protocol === 'http:') && url.hostname !== '';
+}
+
+/**
+ * The first named field whose value breaks its rule, in a fixed order (names, then links), or
+ * null. The server refuses the edit with the code as a 422 and the field's name, never its value.
+ */
+export function submissionFieldProblem(
+  fields: Record<string, string>,
+): { field: string; code: SubmissionFieldRefusal } | null {
+  for (const field of SUBMISSION_NAME_FIELDS) {
+    const value = fields[field];
+    if (value !== undefined && !isPlainName(value)) return { field, code: 'field_name_invalid' };
+  }
+  for (const field of SUBMISSION_URL_FIELDS) {
+    const value = fields[field];
+    if (value !== undefined && !isWebAddress(value)) return { field, code: 'field_url_invalid' };
+  }
+  return null;
+}
+
 /** One application question and the user's answer to it. User-authored, treated like notes. */
 export const SubmissionAnswerSchema = z
   .object({
