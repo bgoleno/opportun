@@ -240,6 +240,8 @@ describe('submissionFieldProblem', () => {
     }
     const refused: [string, string][] = [
       ['two @', 'jane@doe@example.com'],
+      // Only the exactly-one-@ rule catches this one: every piece would pass on its own.
+      ['two @, each side with a dot', 'jane@doe.example@example.com'],
       ['nothing before @', '@example.com'],
       ['no domain', 'jane@'],
       ['no dot in the domain', 'jane@localhost'],
