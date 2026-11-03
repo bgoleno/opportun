@@ -10,6 +10,7 @@ import type {
   Disposition,
   DismissReason,
   NormalizedPosting,
+  RankSkipReason,
   Resolution,
 } from '@opportun/core';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -30,6 +31,8 @@ export interface DiscoveryResult {
   /** 0 to 100, or null before (or without) AI ranking. */
   aiScore: number | null;
   aiRationale: string | null;
+  /** Why ranking was skipped (#210), until it is ranked; null otherwise. */
+  rankSkipReason: RankSkipReason | null;
   resolution: Resolution;
   resolvedSourceRef: string | null;
   disposition: Disposition;

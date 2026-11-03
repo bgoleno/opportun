@@ -17,7 +17,7 @@ import { roleTargets } from '../db/schema';
 import { buildAiDeps } from '../lib/ai';
 import { HttpError } from '../lib/errors';
 import type { UserCtx } from '../repos/base';
-import { getResult, setRanking, type DiscoveryResultView } from '../repos/discovery';
+import { getResult, setRanking, setRankSkip, type DiscoveryResultView } from '../repos/discovery';
 import { resolveDiscoveryPrompt } from '../repos/profile';
 import { roleTargetLine, roleTargetsText } from './classify';
 import { DISCOVERY_RANK_KIND, MULTI_POSTED_PREFIX, MULTI_POSTED_SCORE_CAP } from './discoveryKinds';
@@ -101,8 +101,12 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
       promptId: resolved.prompt.id,
     });
   } catch (err) {
-    // No key, over budget, or the provider is down: leave it unranked for manual triage.
-    if (err instanceof AiUnavailableError) return { status: 'skipped', reason: err.reason };
+    // No key, over budget, or the provider is down: leave it unranked for manual triage, and
+    // keep why on the result so its card can say so (#210). Nothing here retries or defers it.
+    if (err instanceof AiUnavailableError) {
+      await setRankSkip(db, ctx, resultId, err.reason);
+      return { status: 'skipped', reason: err.reason };
+    }
     throw err;
   }
   const multiPosted = result.aiRationale?.startsWith(MULTI_POSTED_PREFIX) === true;

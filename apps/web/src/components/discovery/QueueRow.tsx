@@ -2,7 +2,7 @@
 // dedupeKey prefix that differ only by location. The posting is third-party data: every field
 // is rendered as a React text node (never markdown, never HTML), and a posting link is offered
 // only for http(s).
-import type { Resolution } from '@opportun/core';
+import type { RankSkipReason, Resolution } from '@opportun/core';
 import { Check, ExternalLink, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -25,6 +25,19 @@ export function excerpt(text: string | null | undefined, max = EXCERPT): string 
 
 export const resultLabel = (r: DiscoveryResult): string =>
   `${r.posting.title} at ${r.posting.company}`;
+
+/** Why a result is unscored, in the user's words (#210); none for one never sent to the AI. */
+const SKIP_WORDS = new Map<RankSkipReason, string>([
+  ['budget_exceeded', "Not ranked: today's AI budget was spent"],
+  ['no_key', 'Not ranked: AI is not set up (Settings > AI)'],
+  ['provider_error', 'Not ranked: the AI provider was unavailable'],
+  ['invalid_output', "Not ranked: the AI's answer could not be used"],
+]);
+
+export function RankSkipLine({ reason }: { reason: RankSkipReason | null }) {
+  if (reason === null) return null;
+  return <p className="text-sm text-muted-foreground">{SKIP_WORDS.get(reason)}</p>;
+}
 
 export function ScoreBadge({ score }: { score: number | null }) {
   if (score === null) {
@@ -154,6 +167,7 @@ export function QueueRow(props: {
         <span className="text-sm [overflow-wrap:anywhere] text-muted-foreground">{p.company}</span>
         <DiscoveredLine at={r.createdAt} />
       </div>
+      <RankSkipLine reason={r.rankSkipReason} />
       {r.aiRationale ? (
         <p className="text-sm break-words">
           <span className="text-muted-foreground">Why: </span>
@@ -249,6 +263,7 @@ export function QueueGroupRow(props: {
         <span className="text-sm [overflow-wrap:anywhere] text-muted-foreground">{p.company}</span>
         <DiscoveredLine at={firstDiscoveredAt(group)} />
       </div>
+      <RankSkipLine reason={primary.rankSkipReason} />
       <ul
         className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground"
         aria-label="Locations"

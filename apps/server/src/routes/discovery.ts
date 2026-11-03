@@ -7,6 +7,7 @@ import {
   DISPOSITIONS,
   newId,
   NormalizedPostingSchema,
+  RANK_SKIP_REASONS,
   RESOLUTIONS,
 } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
@@ -53,6 +54,8 @@ const ResultSchema = z.object({
   dedupeKey: z.string().nullable(),
   aiScore: z.number().nullable(),
   aiRationale: z.string().nullable(),
+  /** Why ranking was skipped (#210), until the result is ranked; null otherwise. */
+  rankSkipReason: z.enum(RANK_SKIP_REASONS).nullable(),
   resolution: z.enum(RESOLUTIONS),
   resolvedSourceRef: z.string().nullable(),
   disposition: z.enum(DISPOSITIONS),

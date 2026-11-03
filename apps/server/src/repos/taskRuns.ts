@@ -59,6 +59,38 @@ export async function spentTodayUsd(
   return row?.total ?? 0;
 }
 
+/**
+ * How often ranking a posting was refused because the task's daily budget was spent (#210): the
+ * router records each refusal as a task_runs error `budget_exceeded`, so this counts those rows
+ * for discovery.rank, today (the budget's own UTC day) and over the last 7 UTC days, today
+ * included. A refusal stays counted even after the posting is ranked later.
+ */
+export async function rankBudgetSkips(
+  db: Db,
+  ctx: UserCtx,
+  now = Date.now(),
+): Promise<{ today: number; last7Days: number }> {
+  const today = startOfUtcDay(now);
+  const since = today - 6 * DAY_MS;
+  const row = await db
+    .select({
+      today: sql<number>`coalesce(sum(case when ${taskRuns.createdAt} >= ${today} then 1 else 0 end), 0)`,
+      last7Days: countAll(),
+    })
+    .from(taskRuns)
+    .where(
+      and(
+        eq(taskRuns.userId, ctx.userId),
+        eq(taskRuns.taskKey, 'discovery.rank'),
+        eq(taskRuns.status, 'error'),
+        eq(taskRuns.error, 'budget_exceeded'),
+        gte(taskRuns.createdAt, since),
+      ),
+    )
+    .get();
+  return { today: Number(row?.today ?? 0), last7Days: Number(row?.last7Days ?? 0) };
+}
+
 export interface UsageRow {
   taskKey: string;
   runs: number;

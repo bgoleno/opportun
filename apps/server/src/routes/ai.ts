@@ -36,7 +36,7 @@ import {
   getPromptVersion,
   listPromptVersions,
 } from '../repos/prompts';
-import { usageRollup } from '../repos/taskRuns';
+import { rankBudgetSkips, usageRollup } from '../repos/taskRuns';
 import { IdParams } from './common';
 
 const TaskKeySchema = z.enum(TASK_KEYS);
@@ -73,6 +73,10 @@ const CreatePromptBody = z
     }
   });
 
+const RankSkipsSchema = z.object({
+  today: z.number().int(),
+  last7Days: z.number().int(),
+});
 const UsageQuery = z.object({ days: z.coerce.number().int().min(1).max(366).default(30) });
 const UsageMetrics = {
   taskKey: z.string(),
@@ -336,5 +340,12 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     '/ai/usage',
     { schema: { querystring: UsageQuery, response: { 200: UsageSchema } } },
     async (req) => await usageRollup(db, requireUser(req), req.query.days),
+  );
+
+  // Postings whose ranking the daily budget refused (#210): counts only, from task_runs.
+  api.get(
+    '/ai/usage/rank-skips',
+    { schema: { response: { 200: RankSkipsSchema } } },
+    async (req) => await rankBudgetSkips(db, requireUser(req)),
   );
 }

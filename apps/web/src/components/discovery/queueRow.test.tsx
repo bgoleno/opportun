@@ -26,6 +26,7 @@ function result(over: Partial<DiscoveryResult> & { id: string }): DiscoveryResul
     dedupeKey: null,
     aiScore: 80,
     aiRationale: 'Strong match on platform work.',
+    rankSkipReason: null,
     resolution: 'full',
     resolvedSourceRef: null,
     disposition: 'pending',
@@ -176,6 +177,65 @@ describe('QueueRow', () => {
       </ul>,
     );
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+});
+
+// #210: a result the AI did not rank says why, in plain words; one never sent says nothing.
+describe('QueueRow: why a result was not ranked (#210)', () => {
+  const row = (over: Partial<DiscoveryResult>) =>
+    render(
+      <ul>
+        <QueueRow
+          result={result({ id: 'r1', aiScore: null, aiRationale: null, ...over })}
+          selected={false}
+          stale={false}
+          onSelect={vi.fn()}
+          onAccept={vi.fn()}
+          onDismiss={vi.fn()}
+          onOpen={vi.fn()}
+          checked={false}
+          onToggleChecked={vi.fn()}
+        />
+      </ul>,
+    );
+
+  for (const [reason, words] of [
+    ['budget_exceeded', "Not ranked: today's AI budget was spent"],
+    ['no_key', 'Not ranked: AI is not set up (Settings > AI)'],
+    ['provider_error', 'Not ranked: the AI provider was unavailable'],
+    ['invalid_output', "Not ranked: the AI's answer could not be used"],
+  ] as const) {
+    it(`says so for ${reason}`, () => {
+      row({ rankSkipReason: reason });
+      expect(screen.getByText(words)).toBeInTheDocument();
+      expect(screen.getByLabelText('Not scored yet')).toBeInTheDocument();
+    });
+  }
+
+  it('a result never sent for ranking shows nothing new', () => {
+    const { container } = row({ rankSkipReason: null });
+    expect(container).not.toHaveTextContent('Not ranked');
+  });
+
+  it('a location group says why for its primary member', () => {
+    const [group] = groupResults([
+      result({ id: 'g1', dedupeKey: 'acme|role|a', rankSkipReason: 'budget_exceeded' }),
+      result({ id: 'g2', dedupeKey: 'acme|role|b', rankSkipReason: 'budget_exceeded' }),
+    ]);
+    render(
+      <ul>
+        <QueueGroupRow
+          group={group!}
+          selected={false}
+          stale={false}
+          onSelect={vi.fn()}
+          onAcceptAll={vi.fn()}
+          onDismissAll={vi.fn()}
+          onOpen={vi.fn()}
+        />
+      </ul>,
+    );
+    expect(screen.getAllByText("Not ranked: today's AI budget was spent")).toHaveLength(1);
   });
 });
 

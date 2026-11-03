@@ -1,0 +1,1 @@
+ALTER TABLE `discovery_results` ADD `rank_skip_reason` text;

@@ -30,6 +30,7 @@ import {
   POSTING_STATE_DETAILS,
   POSTING_STATES,
   REMOTE_PREFS,
+  RANK_SKIP_REASONS,
   RESOLUTIONS,
   RESUME_KINDS,
   RESUME_RULE_CATEGORIES,
@@ -690,6 +691,8 @@ export const discoveryResults = sqliteTable(
     dedupeKey: text('dedupe_key'),
     aiScore: real('ai_score'),
     aiRationale: text('ai_rationale'),
+    /** Why ranking was skipped, until it is ranked (#210); null otherwise. */
+    rankSkipReason: text('rank_skip_reason', { enum: RANK_SKIP_REASONS }),
     resolution: text('resolution', { enum: RESOLUTIONS }).notNull(),
     /** ATS posting reference when resolved. */
     resolvedSourceRef: text('resolved_source_ref'),

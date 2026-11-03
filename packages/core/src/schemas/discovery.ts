@@ -47,5 +47,19 @@ export type DiscoverySourceKind = (typeof DISCOVERY_SOURCE_KINDS)[number];
 export const RESOLUTIONS = ['full', 'resolved_ats', 'needs_capture', 'capture_failed'] as const;
 export type Resolution = (typeof RESOLUTIONS)[number];
 
+/**
+ * Why a result was not ranked (https://github.com/bgoleno/opportun/issues/210): the AI router's
+ * own AiUnavailableError reason (@opportun/ai), kept on the result until it is ranked. No key or
+ * no provider set up, the task's daily budget spent, the provider failing, or its answer unusable.
+ * Null for a ranked result and for one never sent for ranking.
+ */
+export const RANK_SKIP_REASONS = [
+  'no_key',
+  'budget_exceeded',
+  'provider_error',
+  'invalid_output',
+] as const;
+export type RankSkipReason = (typeof RANK_SKIP_REASONS)[number];
+
 export const DISPOSITIONS = ['pending', 'accepted', 'dismissed'] as const;
 export type Disposition = (typeof DISPOSITIONS)[number];
