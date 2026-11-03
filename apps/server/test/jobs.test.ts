@@ -237,6 +237,28 @@ describe('job queue', () => {
     expect((await jobRow(db, orphan)).lastError).toMatch(/no handler/);
   });
 
+  it('strips the transient fields from a payload that fails validation, as from any finished job (#175)', async () => {
+    const { db } = await freshDb();
+    registerJob({
+      kind: 'test.echo',
+      payloadSchema: z.object({ n: z.number(), secret: z.string().optional() }),
+      maxAttempts: 5,
+      transientPayloadKeys: ['secret'],
+      run: async () => {},
+    });
+    const id = await enqueue(db, 'test.echo', { n: 1, secret: 'do not keep me' });
+    await exec(
+      { db },
+      `UPDATE jobs SET payload = '{"n":"bad","secret":"do not keep me"}' WHERE id = ?`,
+      id,
+    );
+    await runDueJobs(db);
+    const row = await jobRow(db, id);
+    expect(row.status).toBe('dead');
+    expect(row.lastError).toMatch(/invalid payload/);
+    expect(row.payload).toEqual({ n: 'bad' });
+  });
+
   it('suppresses a duplicate enqueue while a job with the same kind and dedupeKey is unfinished', async () => {
     const { db } = await freshDb();
     registerJob({
