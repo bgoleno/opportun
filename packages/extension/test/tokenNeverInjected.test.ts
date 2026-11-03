@@ -21,8 +21,9 @@ function injections(source: string): string[] {
     let depth = 0;
     let end = open;
     for (; end < source.length; end += 1) {
-      if (source[end] === '{') depth += 1;
-      if (source[end] === '}') depth -= 1;
+      const ch = source.charAt(end);
+      if (ch === '{') depth += 1;
+      if (ch === '}') depth -= 1;
       if (depth === 0) break;
     }
     calls.push(source.slice(open, end + 1));
