@@ -22,6 +22,7 @@ import type { Storage } from '../lib/storage';
 import type { UserCtx } from '../repos/base';
 import { upsertInbound } from '../repos/communications';
 import { enqueue } from './runner';
+import { encryptSecret } from '../lib/secretBox';
 import type { Exec } from '../db/client';
 
 export const CLASSIFY_JOB_KIND = 'comms.classify';
@@ -69,10 +70,13 @@ export function invalidateTriageContext(userId: string): void {
 /**
  * Queues classification of one stored message (at most one unfinished job per message).
  *
- * `body` travels in the payload because it is not stored anywhere else (Plan 3 Task 1): the
+ * The body travels in the payload because it is not stored anywhere else (Plan 3 Task 1): the
  * classifier is the one consumer that needs the whole message, and the runner clears the field
- * when the job finishes. A caller without a body (a replay, the backfill) omits it, and the
- * classifier falls back to the snippet.
+ * when the job finishes. It is sealed first, with the instance's secretBox key (#175): clearing a
+ * field does not erase it from disk (SQLite keeps the old row image in its WAL and free pages,
+ * Postgres in dead tuples and WAL segments until reused), so only ciphertext is ever written.
+ * A caller without a body (a replay, the backfill) omits it, and the classifier falls back to
+ * the snippet.
  */
 export async function enqueueClassify(
   db: Db,
@@ -83,7 +87,9 @@ export async function enqueueClassify(
   return enqueue(
     db,
     CLASSIFY_JOB_KIND,
-    body === undefined || body.length === 0 ? { communicationId } : { communicationId, body },
+    body === undefined || body.length === 0
+      ? { communicationId }
+      : { communicationId, bodySealed: encryptSecret(db, body) },
     { dedupeKey: classifyDedupeKey(communicationId), userId: ctx.userId },
   );
 }

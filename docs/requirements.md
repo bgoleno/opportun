@@ -489,7 +489,21 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
 - NFR-PRV5: A message's full text is never persisted. What the database keeps is a
   short snippet; the full text reaches the classification task (FR-M2) as a
   transient job payload only, and is scrubbed from the job row when that job
-  finishes, whether it succeeds or is given up on. Reading more than the snippet is
+  finishes, whether it succeeds or is given up on. In that payload it is sealed with
+  the instance's secrets key (the AES-256-GCM key that protects stored credentials),
+  so the text itself is never written to the database
+  (https://github.com/bgoleno/opportun/issues/175). This matters because
+  scrubbing a field does not erase it from disk: SQLite keeps the old row image in
+  its WAL and in free pages, and Postgres in dead tuples and WAL segments, until
+  that space is reused. What can linger there is ciphertext, readable only with the
+  master key. Opportun's own backups copy live rows only (`VACUUM INTO`, `pg_dump`):
+  a body already scrubbed is not in them, and one still waiting is in them only as
+  ciphertext. A raw copy of the database files, or a Postgres WAL archive or
+  replica, can likewise hold the ciphertext but not the text.
+  SQLite's `secure_delete` is not turned on: with no plaintext to erase it would only
+  add a write to every delete, and in WAL mode it does not reach older WAL frames
+  anyway. A job a server queued before that change, still waiting when it is upgraded,
+  carries its body in the clear until it runs. Reading more than the snippet is
   a deep link back to the message where it already lives in the user's own
   mailbox, not a copy the app keeps; this is what makes aggressive outreach
   filtering (FR-M8) safe, since refusing to keep a filtered message's content costs
