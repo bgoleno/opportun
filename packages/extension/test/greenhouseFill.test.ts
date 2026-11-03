@@ -655,7 +655,8 @@ describe('the source scan of the injected functions (acceptance 2, sec 1 to 6)',
 
   it('every function injected checks the page’s address first', () => {
     for (const f of [fillGreenhouseForm, resumeShown, clearResume]) {
-      expect(f.toString(), f.name).toMatch(/job-boards\.greenhouse\.io/);
+      // A plain string, not a pattern: this reads source text, not a URL (CodeQL on #187).
+      expect(f.toString(), f.name).toContain('job-boards.greenhouse.io');
       expect(f.toString(), f.name).toMatch(/\.port\s*===\s*['"]['"]/);
     }
   });
