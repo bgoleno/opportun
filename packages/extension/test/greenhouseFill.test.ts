@@ -157,6 +157,56 @@ describe('acceptance 1: what it fills, and only from the plan', () => {
   });
 });
 
+describe('sec (2) on #187: nothing inside a hidden container is filled', () => {
+  const WEBSITE = `<label id="question_9000102-label" for="question_9000102">Website</label>`;
+  const wrappers: [string, (block: string) => string][] = [
+    ['a hidden container', (b) => `<div hidden>${b}</div>`],
+    ['a display:none container', (b) => `<div style="display:none">${b}</div>`],
+    ['an aria-hidden container', (b) => `<div aria-hidden="true">${b}</div>`],
+    ['an inert container', (b) => `<div inert>${b}</div>`],
+    ['a visibility:hidden container', (b) => `<div style="visibility:hidden">${b}</div>`],
+    [
+      'the field itself display:none',
+      (b) => b.replace('type="text"', 'type="text" style="display:none"'),
+    ],
+  ];
+
+  for (const [what, wrap] of wrappers) {
+    it(`a question in ${what} is left alone and reported as not shown`, async () => {
+      // The Website question's whole field-wrapper block, wrapped.
+      const start = MANY_QUESTIONS.lastIndexOf(
+        '<div class="field-wrapper">',
+        MANY_QUESTIONS.indexOf(WEBSITE),
+      );
+      const end = MANY_QUESTIONS.indexOf('<div class="field-wrapper">', start + 1);
+      const html =
+        MANY_QUESTIONS.slice(0, start) +
+        wrap(MANY_QUESTIONS.slice(start, end)) +
+        MANY_QUESTIONS.slice(end);
+      const { doc, report, events } = await fill(html);
+      expect(valueOf(doc, 'question_9000102')).toBe('');
+      expect(events.filter((e) => e.target === 'question_9000102')).toEqual([]);
+      const r = ok(report);
+      expect(r.notFilled).toContainEqual({ label: 'Website', reason: 'not_shown' });
+      // Reported once, as not shown: not also as a reviewed value with no question.
+      expect(r.notFilled.filter((n) => n.label === 'Website')).toHaveLength(1);
+      // Everything shown is still filled.
+      expect(valueOf(doc, 'first_name')).toBe('Jane');
+    });
+  }
+
+  it('a resume input in a hidden container is not attached: attach it yourself', async () => {
+    const html = FEW_QUESTIONS.replace(
+      '<div class="file-upload">',
+      '<div class="file-upload" style="display:none">',
+    );
+    const { doc, report, events } = await fill(html);
+    expect((doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(0);
+    expect(events.filter((e) => e.target === 'resume')).toEqual([]);
+    expect(ok(report).notFilled).toContainEqual({ label: 'Resume', reason: 'attach_yourself' });
+  });
+});
+
 describe('acceptance 2: one write per field, input and change only', () => {
   it('uses the native setter: the controlled stand-in ignores every plain assignment', async () => {
     const { doc, ignoredAssignments } = await fill(MANY_QUESTIONS);
@@ -210,10 +260,26 @@ describe('acceptance 3: the resume, through DataTransfer on #resume only', () =>
     expect(ok(report).filled).toContain('Resume');
   });
 
-  it('when the form does not show the file’s name, it says to check and attach it yourself', async () => {
-    const { report } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
+  it('when the form does not show the file’s name, the file is cleared again: attach it yourself (sec on #187)', async () => {
+    const { doc, report, events } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
+    expect((doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(0);
+    // The set, then the clear: each with one plain input and one change.
+    expect(events.filter((e) => e.target === 'resume').map((e) => e.type)).toEqual([
+      'input',
+      'change',
+      'input',
+      'change',
+    ]);
     expect(ok(report).filled).not.toContain('Resume');
-    expect(ok(report).notFilled).toContainEqual({ label: 'Resume', reason: 'resume_not_shown' });
+    expect(ok(report).notFilled).toContainEqual({ label: 'Resume', reason: 'attach_yourself' });
+  });
+
+  it('a name the form showed before the attach proves nothing: cleared, attach it yourself (sec on #187)', async () => {
+    const page = loadForm(FEW_QUESTIONS);
+    page.doc.querySelector('.file-upload__filename')!.textContent = 'Jane-Doe-Example-Resume.pdf';
+    const report = ok(await fillGreenhouseForm(asArgs(plan()), page.doc));
+    expect((page.doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(0);
+    expect(report.notFilled).toContainEqual({ label: 'Resume', reason: 'attach_yourself' });
   });
 
   it('with no ready copy, #resume is untouched and the report says to attach it yourself', async () => {
@@ -304,7 +370,9 @@ describe('the source scan of the injected filler (acceptance 2, sec 1 to 6)', ()
 
   it('writes values only through the native setter, and files only on #resume', () => {
     expect(source).not.toMatch(/\.value\s*=[^=]/);
-    expect(source.match(/\.files\s*=[^=]/g)).toHaveLength(1);
+    // Two writes, both on #resume: the attach, and the clear when the form does not show it.
+    expect(source.match(/\.files\s*=[^=]/g)).toHaveLength(2);
+    expect(source.match(/fileInput\.files\s*=[^=]/g)).toHaveLength(2);
     expect(source).toMatch(/fileInput\.files\s*=\s*carrier\.files/);
     expect(source).toMatch(/getElementById\(['"]resume['"]\)/);
   });
