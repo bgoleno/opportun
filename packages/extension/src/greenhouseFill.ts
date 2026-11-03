@@ -13,6 +13,8 @@
 // - attach the resume through DataTransfer on #resume only, the one hidden input it touches,
 //   and report it as attached only when the form then shows the file's name (absent before,
 //   shown after); otherwise clear it again the same way and say to attach it yourself;
+// - leave alone a dropdown widget however it is marked up, and a label that is ambiguous (two
+//   questions, or two reviewed answers, carry it): which value goes where cannot be known;
 // - leave alone anything the form does not show: a field that is, or sits in a container that
 //   is, hidden, aria-hidden, inert, display:none or visibility:hidden (sec on #187);
 // - never activate a control, never send the form, never touch another frame, the captcha
@@ -45,6 +47,8 @@ export type NotFilledReason =
   | 'has_value'
   /** A field the form does not show (it, or a container of it, is hidden): left alone. */
   | 'not_shown'
+  /** Two questions on the form, or two reviewed answers, share this label: neither is filled. */
+  | 'ambiguous'
   /**
    * The resume: no ready copy, no shown file input that takes a PDF, or the form did not show
    * the file's name once it was set (then it is cleared again).
@@ -78,6 +82,7 @@ export async function fillGreenhouseForm(
     here !== null &&
     here.protocol === 'https:' &&
     (here.hostname === 'job-boards.greenhouse.io' || here.hostname === 'boards.greenhouse.io') &&
+    here.port === '' &&
     parts.length === 3 &&
     (parts[0] ?? '').toLowerCase() === plan.board.toLowerCase() &&
     parts[1] === 'jobs' &&
@@ -92,14 +97,15 @@ export async function fillGreenhouseForm(
   const fire = (el: Element, type: 'input' | 'change'): void => {
     el.dispatchEvent(new view.Event(type, { bubbles: true }));
   };
-  const shown = (s: string): string =>
+  const clean = (s: string): string =>
     s
       .replace(/\s+/g, ' ')
       .trim()
       .replace(/\s*\*$/, '')
-      .trim()
-      .slice(0, 200);
-  const norm = (s: string): string => shown(s).toLowerCase();
+      .trim();
+  // Labels are compared whole; the report shows at most 200 characters of one.
+  const shown = (s: string): string => clean(s).slice(0, 200);
+  const norm = (s: string): string => clean(s).toLowerCase();
   // Whether the form hides this element: it (when `self`) or any container of it up to the form
   // is hidden, aria-hidden, inert, display:none or visibility:hidden. Nothing hidden is filled.
   const concealed = (el: Element, self: boolean): boolean => {
@@ -112,13 +118,21 @@ export async function fillGreenhouseForm(
     }
     return false;
   };
+  // A dropdown widget is a choice whatever its markup carries, not only when it has its role:
+  // writing into its search box would open and filter its menu.
+  const isChoice = (el: Element): boolean =>
+    el.getAttribute('role') === 'combobox' ||
+    el.hasAttribute('aria-autocomplete') ||
+    el.hasAttribute('aria-haspopup') ||
+    el.classList.contains('select__input') ||
+    el.closest('.select, .select__container') !== null;
 
   const STANDARD_IDS = ['first_name', 'last_name', 'email', 'phone'];
   const TEXT_TYPES = ['', 'text', 'tel', 'email', 'url'];
   const filled: string[] = [];
   const notFilled: { label: string; reason: NotFilledReason }[] = [];
-  const used = new Set<string>();
 
+  const fields: { el: Element; id: string; label: string; key: string; text: boolean }[] = [];
   for (const label of Array.from(form.querySelectorAll('label[for]'))) {
     const id = label.getAttribute('for') ?? '';
     if (id === '' || id === 'resume') continue;
@@ -127,37 +141,62 @@ export async function fillGreenhouseForm(
     const type = (el.getAttribute('type') ?? '').toLowerCase();
     // Never a hidden input.
     if (type === 'hidden') continue;
-    const text = shown(label.textContent ?? '');
-    const isText =
-      (el.tagName === 'INPUT' &&
-        TEXT_TYPES.includes(type) &&
-        el.getAttribute('role') !== 'combobox') ||
-      el.tagName === 'TEXTAREA';
-    const entry = !isText
-      ? undefined
-      : STANDARD_IDS.includes(id)
-        ? plan.standard.find((s) => s.id === id)
-        : plan.questions.find((q) => q.labels.some((l) => norm(l) === norm(text)));
+    const text =
+      ((el.tagName === 'INPUT' && TEXT_TYPES.includes(type)) || el.tagName === 'TEXTAREA') &&
+      !isChoice(el);
+    const raw = label.textContent ?? '';
+    fields.push({ el, id, label: raw, key: norm(raw), text });
+  }
+  // How many questions on the form carry each label: a label on two is ambiguous.
+  const sameLabel = new Map<string, number>();
+  for (const f of fields) {
+    if (f.text && !STANDARD_IDS.includes(f.id))
+      sameLabel.set(f.key, (sameLabel.get(f.key) ?? 0) + 1);
+  }
+
+  const used = new Set<string>();
+  for (const f of fields) {
+    const text = shown(f.label);
+    const standardAt = plan.standard.findIndex((s) => s.id === f.id);
+    const matches = !f.text
+      ? []
+      : STANDARD_IDS.includes(f.id)
+        ? standardAt < 0
+          ? []
+          : [`s${standardAt}`]
+        : plan.questions.flatMap((q, i) =>
+            q.labels.some((l) => norm(l) === f.key) ? [`q${i}`] : [],
+          );
     // Nor anything the form does not show: reported only when there was a value for it.
-    if (concealed(el, true)) {
-      if (entry !== undefined) {
-        used.add(entry.name);
+    if (concealed(f.el, true)) {
+      if (matches.length > 0) {
+        for (const m of matches) used.add(m);
         notFilled.push({ label: text, reason: 'not_shown' });
       }
       continue;
     }
-    if (!isText) {
-      if (el.tagName === 'INPUT' || el.tagName === 'SELECT') {
+    if (!f.text) {
+      if (f.el.tagName === 'INPUT' || f.el.tagName === 'SELECT') {
         notFilled.push({ label: text, reason: 'choose_on_form' });
       }
       continue;
     }
-    if (entry === undefined) {
+    if (matches.length === 0) {
       notFilled.push({ label: text, reason: 'not_in_review' });
       continue;
     }
-    used.add(entry.name);
-    const field = el as HTMLInputElement | HTMLTextAreaElement;
+    for (const m of matches) used.add(m);
+    // Two answers for this label, or two questions with it: which goes where cannot be known.
+    if (matches.length > 1 || (sameLabel.get(f.key) ?? 0) > 1) {
+      notFilled.push({ label: text, reason: 'ambiguous' });
+      continue;
+    }
+    const only = matches[0] ?? '';
+    const entry = only.startsWith('s')
+      ? plan.standard.at(Number(only.slice(1)))
+      : plan.questions.at(Number(only.slice(1)));
+    if (entry === undefined) continue;
+    const field = f.el as HTMLInputElement | HTMLTextAreaElement;
     if (field.value === entry.value) {
       filled.push(text);
       continue;
@@ -166,7 +205,7 @@ export async function fillGreenhouseForm(
       notFilled.push({ label: text, reason: 'has_value' });
       continue;
     }
-    const setter = (el.tagName === 'TEXTAREA' ? areaValue : inputValue)?.set;
+    const setter = (f.el.tagName === 'TEXTAREA' ? areaValue : inputValue)?.set;
     if (setter === undefined) {
       notFilled.push({ label: text, reason: 'choose_on_form' });
       continue;
@@ -178,10 +217,12 @@ export async function fillGreenhouseForm(
     filled.push(text);
   }
 
-  for (const entry of [...plan.standard, ...plan.questions]) {
-    if (!used.has(entry.name))
-      notFilled.push({ label: entry.name, reason: 'no_matching_question' });
-  }
+  plan.standard.forEach((s, i) => {
+    if (!used.has(`s${i}`)) notFilled.push({ label: s.name, reason: 'no_matching_question' });
+  });
+  plan.questions.forEach((q, i) => {
+    if (!used.has(`q${i}`)) notFilled.push({ label: q.name, reason: 'no_matching_question' });
+  });
 
   // The resume: the only hidden input this sets, and only with the ready copy.
   const file = doc.getElementById('resume');
@@ -196,17 +237,24 @@ export async function fillGreenhouseForm(
   const takesPdf =
     accept === '' || accept.split(',').some((a) => ['.pdf', 'application/pdf'].includes(a.trim()));
   // The input itself is visually hidden by design; a hidden container of it is not.
-  if (plan.resume === null || fileInput === null || !takesPdf || concealed(fileInput, false)) {
+  const name = plan.resume?.filename ?? '';
+  if (
+    plan.resume === null ||
+    name === '' ||
+    fileInput === null ||
+    !takesPdf ||
+    concealed(fileInput, false)
+  ) {
     notFilled.push({ label: 'Resume', reason: 'attach_yourself' });
   } else if ((fileInput.files?.length ?? 0) > 0) {
     notFilled.push({ label: 'Resume', reason: 'has_value' });
   } else {
-    // The name must appear because of the attach: absent before, shown after.
-    const named = (): boolean => (form.textContent ?? '').includes(plan.resume?.filename ?? '');
+    // The name must appear because of the attach: shown once more after it than before.
+    const named = (): number => (form.textContent ?? '').split(name).length - 1;
     const namedBefore = named();
     const raw = view.atob(plan.resume.base64);
     const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0));
-    const pdf = new view.File([bytes], plan.resume.filename, { type: 'application/pdf' });
+    const pdf = new view.File([bytes], name, { type: 'application/pdf' });
     const carrier = new view.DataTransfer();
     carrier.items.add(pdf);
     fileInput.files = carrier.files;
@@ -215,7 +263,7 @@ export async function fillGreenhouseForm(
     // Let the form render what it did with the file (two microtasks, no clock), then look.
     await Promise.resolve();
     await Promise.resolve();
-    if (!namedBefore && named()) {
+    if (named() > namedBefore) {
       filled.push('Resume');
     } else {
       // Not shown: take the file back out, the same way, and say to attach it yourself.

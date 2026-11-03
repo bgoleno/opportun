@@ -38,7 +38,8 @@ export function greenhouseJobOf(href: string): { board: string; jobId: string } 
   } catch {
     return null;
   }
-  if (url.protocol !== 'https:') return null;
+  // https on the default port only (tl on #187).
+  if (url.protocol !== 'https:' || url.port !== '') return null;
   if (url.hostname !== 'job-boards.greenhouse.io' && url.hostname !== 'boards.greenhouse.io') {
     return null;
   }
@@ -196,7 +197,9 @@ export async function fetchResume(
 ): Promise<ResumeResult> {
   const none = { kind: 'none' } as const;
   const { snapshotState, filename, bytes } = attempt.resume;
-  if (snapshotState !== 'ready' || filename === null || bytes === null) return none;
+  if (snapshotState !== 'ready' || filename === null || filename === '' || bytes === null) {
+    return none;
+  }
   if (bytes <= 0 || bytes > MAX_RESUME_BYTES) return none;
   const res = await get(
     fetch,
@@ -276,6 +279,10 @@ export const NOT_FILLED_WORDS = new Map<NotFilledReason, string>([
   ['no_matching_question', 'no question on this form has exactly this label'],
   ['has_value', 'it already had something in it, so it was left as it was'],
   ['not_shown', 'the form does not show this field, so it was left alone'],
+  [
+    'ambiguous',
+    'more than one question or answer has this label, so it was not filled: answer it on the form',
+  ],
   ['attach_yourself', 'attach your resume yourself'],
 ]);
 

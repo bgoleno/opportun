@@ -62,6 +62,7 @@ const NOT_FILLED_REASONS: readonly unknown[] = [
   'no_matching_question',
   'has_value',
   'not_shown',
+  'ambiguous',
   'attach_yourself',
 ];
 
