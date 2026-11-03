@@ -111,6 +111,11 @@ export function submissionErrorText(err: unknown): string {
       return `${refusedField(err)}: enter the whole web address, starting with https:// (or http://).`;
     case 'field_name_invalid':
       return `${refusedField(err)}: use one line of plain text, up to 100 characters, with no spaces at the start or end.`;
+    // #203, tl's wording.
+    case 'field_email_invalid':
+      return `${refusedField(err)}: an email address must be one line, like name@example.com.`;
+    case 'field_phone_invalid':
+      return `${refusedField(err)}: a phone number may hold digits, spaces, +, -, ., ( ) and an extension.`;
     case null:
       return 'Could not reach Opportun. Check your connection and try again.';
     default:

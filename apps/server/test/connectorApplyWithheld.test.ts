@@ -114,4 +114,19 @@ describe("#196: /current withholds a stored value that fails today's checks", ()
     expect(row?.fields).toEqual(stored);
     expect(row?.status).toBe('handed_off');
   });
+
+  it("a stored email or phone that fails today's checks is withheld too (#203)", async () => {
+    const { app, a } = await boot(ON);
+    const s = await storedThenHandedOff(app, a, {
+      email: 'jane\u200B@example.com',
+      phone: '555-CALL-NOW',
+      lastName: 'Doe-Example',
+    });
+    const res = await current(app, await token(a), s.ats.url as string);
+    const attempt = res.json<{ attempt: { fields: Record<string, string>; withheld?: string[] } }>()
+      .attempt;
+    expect(attempt.fields).toEqual({ lastName: 'Doe-Example' });
+    expect(attempt.withheld).toEqual(['email', 'phone']);
+    expect(res.body).not.toContain('CALL');
+  });
 });

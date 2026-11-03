@@ -182,6 +182,22 @@ describe('acceptance 4: refusals are named 422 reasons, and nothing is saved', (
     }
   });
 
+  it('an email or phone that breaks its rule is field_email_invalid or field_phone_invalid (#203)', async () => {
+    const { app, a } = await boot(ON);
+    for (const bad of ['jane@doe@example.com', 'jane@localhost', 'jane\u200B@example.com']) {
+      await refused(app, a, { email: bad }, 'field_email_invalid', 'email');
+    }
+    for (const bad of ['555-CALL-NOW', '555+1234', '555\u202E0100']) {
+      await refused(app, a, { phone: bad }, 'field_phone_invalid', 'phone');
+    }
+    const id = await draft(app, a);
+    const ok = await patchFields(a, id, {
+      email: 'jane.doe+apply@example.co.uk',
+      phone: '+44 20 7946 0958 ext. 12',
+    });
+    expect(ok.statusCode, ok.body).toBe(200);
+  });
+
   it('a refused edit leaves a reviewed attempt reviewed, its digest unchanged', async () => {
     const { app, a } = await boot(ON);
     const r = await reviewedWith(app, a, PREFILL);

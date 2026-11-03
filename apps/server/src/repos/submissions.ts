@@ -385,6 +385,8 @@ export const notNow = (row: SubmissionRow, to: SubmissionStatus): HttpError =>
 const FIELD_REFUSAL_MESSAGES = {
   field_name_invalid: 'A name must be one line of plain text, at most 100 characters.',
   field_url_invalid: 'A link must be a whole web address starting with http:// or https://.',
+  field_email_invalid: 'An email address must be one line, like name@example.com.',
+  field_phone_invalid: 'A phone number may hold digits, spaces, +, -, ., ( ) and an extension.',
 } as const;
 
 /**

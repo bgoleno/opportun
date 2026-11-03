@@ -675,6 +675,29 @@ describe('#196: a field the server withholds is listed for the user, with its ow
   });
 });
 
+describe('#203 in the popup: a withheld email or phone is listed once', () => {
+  it("under the form's Email and Phone labels, and neither is filled", async () => {
+    const fields: Record<string, string> = { ...attempt().fields };
+    delete fields.email;
+    delete fields.phone;
+    const s = setup({
+      current: json(200, {
+        attempt: { ...attempt({ fields }), withheld: ['email', 'phone'] },
+        reason: null,
+      }),
+    });
+    await clickFill(s);
+    expect(valueOf(s.page.doc, 'email')).toBe('');
+    expect(valueOf(s.page.doc, 'phone')).toBe('');
+    const lines = listed(s, 'Not filled in');
+    for (const label of ['Email', 'Phone']) {
+      expect(lines.filter((l) => l.startsWith(`${label}:`))).toEqual([
+        `${label}: it no longer passes Opportun's checks: correct it in Opportun, or fill it in yourself`,
+      ]);
+    }
+  });
+});
+
 describe('#204 in the popup: an answer for a dropdown is listed once', () => {
   it('a reviewed answer for Gender reads "choose it on the form", never also "no question"', async () => {
     const s = setup({
