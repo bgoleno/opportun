@@ -142,12 +142,38 @@ function isWebAddress(value: string): boolean {
   if (/\s/u.test(value) || FORMAT.test(value)) return false;
   if (!HttpUrlSchema.safeParse(value).success) return false;
   // No username or password (#186), as destinationAllowed refuses them: an @ before the host
-  // makes the address show one site and open another. Read from the text as typed: the part
-  // after the scheme, up to the first / ? # or backslash. An @ in a path is fine.
+  // makes the address show one site and open another. Three checks, any one refusing:
+  // - nothing but the host may follow the scheme's //: an extra slash or a backslash there is
+  //   skipped by the URL parser, so the text after it would read as no authority at all
+  //   (tl and sec on #194, https:///user@evil.example/);
+  // - no @ in the authority as typed: after the scheme, up to the first / ? # or backslash
+  //   (an @ in a path is fine);
+  // - the parsed address has no username and no password, whatever the text looked like.
   const scheme = /^https?:\/\//i.exec(value);
   if (scheme === null) return false;
-  const authority = value.slice(scheme[0].length).split(/[/?#\\]/)[0] ?? '';
-  return !authority.includes('@');
+  const rest = value.slice(scheme[0].length);
+  if (/^[/\\]/.test(rest)) return false;
+  const authority = rest.split(/[/?#\\]/)[0] ?? '';
+  if (authority.includes('@')) return false;
+  const parsed = parseUrl(value);
+  return parsed !== null && parsed.username === '' && parsed.password === '';
+}
+
+/**
+ * The platform's URL parser (present in Node, browsers and the extension), reached through
+ * globalThis because this package's types carry no DOM or Node lib. Null when it cannot parse,
+ * or is missing: the caller then refuses, never assumes.
+ */
+function parseUrl(value: string): { username: string; password: string } | null {
+  const Url = (
+    globalThis as { URL?: new (input: string) => { username: string; password: string } }
+  ).URL;
+  if (Url === undefined) return null;
+  try {
+    return new Url(value);
+  } catch {
+    return null;
+  }
 }
 
 /**
