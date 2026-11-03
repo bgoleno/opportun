@@ -22,7 +22,7 @@ import { followUpSubmissions } from '../src/repos/submissionOutcome';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 import { heldApart } from './race';
-import { api, requisition, submittedAttempt, type Submitted } from './submissionFixtures';
+import { api, submittedAttempt, type Submitted } from './submissionFixtures';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
