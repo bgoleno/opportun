@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
@@ -44,14 +44,32 @@ function bootContacts() {
   });
 }
 
+// Each page is a full 200 rows (CONTACTS_PAGE_SIZE is fixed and "Showing a-b" counts the rows),
+// so these tests keep that many on screen. What made them slow was not the render (about 0.1 s
+// for the 1,660 nodes of a page) but whole-document role queries over it
+// (https://github.com/bgoleno/opportun/issues/161): `getByRole('row', { name })` computes the
+// accessible name of all 201 rows, about 0.25 s on an idle worker per call, and every
+// `getByRole('button')` checks the role of every node. A full gate run slows that CPU work
+// 10x or more. So a row is found by its contact's name, and a pager button inside the pager.
+/** The table row that shows this contact, or null. */
+function contactRow(name: string): HTMLElement | null {
+  return screen.queryByText(name)?.closest('tr') ?? null;
+}
+/** A button of the pager, looked up inside the pager rather than across the page. */
+function pagerButton(name: string): HTMLElement {
+  return within(screen.getByRole('navigation', { name: 'Network pages' })).getByRole('button', {
+    name,
+  });
+}
+
 describe('NetworkList pagination (issue #207)', () => {
   it('shows the first page with its position and a page count, not stuck at 200', async () => {
     bootContacts();
     renderWithProviders(<NetworkList />);
     expect(await screen.findByText(/Showing 1–200 of 1754\./)).toBeInTheDocument();
     expect(screen.getByText('Page 1 of 9')).toBeInTheDocument();
-    expect(screen.getByRole('row', { name: /Contact 0000/ })).toBeInTheDocument();
-    expect(screen.queryByRole('row', { name: /Contact 0200/ })).toBeNull();
+    expect(contactRow('Contact 0000')).not.toBeNull();
+    expect(contactRow('Contact 0200')).toBeNull();
   });
 
   it('pages forward and back with the on-screen controls', async () => {
@@ -60,12 +78,12 @@ describe('NetworkList pagination (issue #207)', () => {
     renderWithProviders(<NetworkList />);
     await screen.findByText(/Showing 1–200 of 1754\./);
 
-    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await user.click(pagerButton('Next page'));
     expect(await screen.findByText(/Showing 201–400 of 1754\./)).toBeInTheDocument();
-    expect(screen.getByRole('row', { name: /Contact 0200/ })).toBeInTheDocument();
-    expect(screen.queryByRole('row', { name: /Contact 0000/ })).toBeNull();
+    expect(contactRow('Contact 0200')).not.toBeNull();
+    expect(contactRow('Contact 0000')).toBeNull();
 
-    await user.click(screen.getByRole('button', { name: 'Previous page' }));
+    await user.click(pagerButton('Previous page'));
     expect(await screen.findByText(/Showing 1–200 of 1754\./)).toBeInTheDocument();
   });
 
@@ -75,17 +93,17 @@ describe('NetworkList pagination (issue #207)', () => {
     renderWithProviders(<NetworkList />);
     await screen.findByText(/Showing 1–200 of 1754\./);
 
-    await user.click(screen.getByRole('button', { name: 'Last page' }));
+    await user.click(pagerButton('Last page'));
     // 1754 = 8 full pages of 200 (1600) + 154 on the 9th.
     expect(await screen.findByText(/Showing 1601–1754 of 1754\./)).toBeInTheDocument();
     expect(screen.getByText('Page 9 of 9')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Last page' })).toBeDisabled();
+    expect(pagerButton('Next page')).toBeDisabled();
+    expect(pagerButton('Last page')).toBeDisabled();
 
-    await user.click(screen.getByRole('button', { name: 'First page' }));
+    await user.click(pagerButton('First page'));
     expect(await screen.findByText(/Showing 1–200 of 1754\./)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'First page' })).toBeDisabled();
+    expect(pagerButton('Previous page')).toBeDisabled();
+    expect(pagerButton('First page')).toBeDisabled();
   });
 
   it('pages with the keyboard: n, p, Home and End', async () => {
@@ -114,8 +132,8 @@ describe('NetworkList pagination (issue #207)', () => {
     bootContacts();
     renderWithProviders(<NetworkList />);
     await screen.findByText(/Showing 1–200 of 1754\./);
-    expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'First page' })).toBeDisabled();
+    expect(pagerButton('Previous page')).toBeDisabled();
+    expect(pagerButton('First page')).toBeDisabled();
   });
 
   it('shows no pager at all when everything fits on one page', async () => {
@@ -136,14 +154,14 @@ describe('NetworkList pagination (issue #207)', () => {
     renderWithProviders(<NetworkList />);
     await screen.findByText(/Showing 1–200 of 1754\./);
 
-    await user.click(screen.getByRole('button', { name: 'Last page' }));
+    await user.click(pagerButton('Last page'));
     await screen.findByText(/Showing 1601–1754 of 1754\./);
 
     await user.type(screen.getByLabelText('Search your network'), 'Contact 0005');
     // Exactly one match ("Contact 0005"), so the reset lands on a real first page, not an
     // empty one left over from the old query's last page.
     expect(await screen.findByText(/Showing 1–1 of 1\./)).toBeInTheDocument();
-    expect(screen.getByRole('row', { name: /Contact 0005/ })).toBeInTheDocument();
+    expect(contactRow('Contact 0005')).not.toBeNull();
 
     // The request that actually won the race carried the new query, not a page number
     // computed against the old one's total.
@@ -171,7 +189,7 @@ describe('NetworkList pagination (issue #207)', () => {
     await user.type(screen.getByLabelText('Search your network'), '0');
     await screen.findByText((text) => text.includes(`of ${matches.length}.`));
 
-    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await user.click(pagerButton('Next page'));
     await waitFor(() => {
       const last = calls.at(-1)!;
       expect(new URLSearchParams(last.search).get('offset')).toBe('200');
