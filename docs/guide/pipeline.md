@@ -138,7 +138,12 @@ Opportun, and **Attach a new document** registers and attaches a document not ye
 in one step. Each attached resume has its own **Remove from this opportunity** (detach: the
 link is cleared, nothing else changes, and it's free to attach elsewhere) and **Delete** (the
 same rule as the Resumes page: a hard delete, except a submitted resume is archived instead).
-See [Resumes](resumes.md).
+
+A base resume is never attached. Pick one under **Attach an existing resume** and it offers
+**Record as sent** instead: say how you sent it (for example "Indeed") and on what day. The
+send is listed here, marked **Base resume**, and the resume itself does not change, so the
+same base can be recorded for other opportunities and still tailored from. Each send has its
+own remove control, which removes only that record. See [Resumes](resumes.md).
 
 ### Communications
 

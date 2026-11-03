@@ -243,7 +243,7 @@ describe('OpportunityDetail', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Resume' }));
     const resume = await screen.findByRole('tabpanel', { name: 'Resume' });
-    await within(resume).findByText('No tailored resume yet.');
+    await within(resume).findByText('No resume for this opportunity yet.');
     expect(resume.querySelector('[data-slot="main-with-rail"]')).not.toBeNull();
   });
 
@@ -347,7 +347,7 @@ describe('OpportunityDetail', () => {
     const { user, api } = setup();
     await user.click(await screen.findByRole('tab', { name: 'Resume' }));
     const panel = await screen.findByRole('tabpanel', { name: 'Resume' });
-    expect(await within(panel).findByText('No tailored resume yet.')).toBeInTheDocument();
+    expect(await within(panel).findByText('No resume for this opportunity yet.')).toBeInTheDocument();
     expect(within(panel).getByLabelText('Base resume')).toHaveDisplayValue('Jane Base');
     await user.click(within(panel).getByRole('button', { name: 'Create tailored copy' }));
     await waitFor(() =>

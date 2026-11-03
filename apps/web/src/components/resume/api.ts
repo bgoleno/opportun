@@ -136,6 +136,10 @@ export const rk = {
   documentStore: ['settings', 'document-store'] as const,
   namingTemplate: ['settings', 'resume-naming-template'] as const,
   driveSearch: (q: string) => ['resumes', 'drive-search', q] as const,
+  // Under the rk.resumes prefix: every resume mutation already refreshes them.
+  opportunitySends: (opportunityId: string) =>
+    ['resumes', 'sends', 'opportunity', opportunityId] as const,
+  resumeSends: (resumeId: string) => ['resumes', 'sends', 'resume', resumeId] as const,
 };
 
 export function useResumes(params: { opportunityId?: string; kind?: 'base' | 'tailored' } = {}) {
@@ -226,6 +230,70 @@ export function useAttachResume() {
   return useMutation({
     mutationFn: ({ id, opportunityId }: { id: string; opportunityId: string | null }) =>
       api<Resume>(`/resumes/${enc(id)}`, { method: 'PATCH', body: { opportunityId } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: rk.resumes }),
+  });
+}
+
+/**
+ * One time a resume, base or tailored, was sent for an opportunity (#158). Recording one never
+ * changes the resume itself; the server derives the resume's status and "Sent to" from its
+ * sends, so every resume query is refreshed after a send is recorded or removed.
+ */
+export interface ResumeSend {
+  id: string;
+  opportunityId: string;
+  opportunityTitle: string;
+  companyName: string;
+  resumeId: string;
+  resumeTitle: string;
+  resumeKind: 'base' | 'tailored';
+  sentAt: number;
+  sentVia: string;
+  submissionId: string | null;
+  createdAt: number;
+}
+
+export function useOpportunitySends(opportunityId: string) {
+  return useQuery({
+    queryKey: rk.opportunitySends(opportunityId),
+    queryFn: () =>
+      api<{ items: ResumeSend[] }>(`/opportunities/${enc(opportunityId)}/resume-sends`),
+  });
+}
+
+export function useResumeSends(resumeId: string) {
+  return useQuery({
+    queryKey: rk.resumeSends(resumeId),
+    queryFn: () => api<{ items: ResumeSend[] }>(`/resumes/${enc(resumeId)}/sends`),
+  });
+}
+
+export interface RecordSendInput {
+  resumeId: string;
+  sentVia: string;
+  /** Omitted for "now". */
+  sentAt?: number;
+}
+
+export function useRecordSend(opportunityId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: RecordSendInput) =>
+      api<ResumeSend>(`/opportunities/${enc(opportunityId)}/resume-sends`, {
+        method: 'POST',
+        body,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: rk.resumes }),
+  });
+}
+
+export function useRemoveSend(opportunityId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (sendId: string) =>
+      api<void>(`/opportunities/${enc(opportunityId)}/resume-sends/${enc(sendId)}`, {
+        method: 'DELETE',
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: rk.resumes }),
   });
 }
@@ -567,7 +635,13 @@ export function resumeErrorMessage(err: unknown): string | undefined {
     case 'submitted_to_required':
       return 'Say where the resume was submitted.';
     case 'base_cannot_attach':
-      return "A base resume can't be attached directly. Use Create tailored copy instead.";
+      return "A base resume can't be attached directly. Record it as sent, or use Create tailored copy.";
+    case 'resume_has_sends':
+      return 'This resume is recorded as sent. Remove those records first to change its status.';
+    case 'sent_at_in_future':
+      return 'That date has not happened yet.';
+    case 'resume_archived':
+      return 'An archived resume cannot be recorded as sent.';
     case 'ai_unavailable':
       return aiReason(
         String(err.details.reason ?? ''),

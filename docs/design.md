@@ -207,7 +207,25 @@ either opportunity cannot re-propose a pair the user already rejected.
   attached, moved between opportunities, or detached by distinguishing a present
   string, a present `null`, and an absent value on the update, not by three
   separate verbs; a base resume, the one tailored copies are made from, can never
-  be attached to an opportunity.
+  be attached to an opportunity. Sending one is recorded in `resume_sends` instead
+  (below): a send is a record, not an attachment.
+- **resume_sends** (#158): id, user_id, opportunity_id, resume_id, sent_at,
+  sent_via (free text: "Indeed", "Email", or the ATS name for assisted apply),
+  submission_id (nullable: the assisted-apply attempt whose "I submitted it"
+  recorded it), created_at. One row per send, many per resume and per
+  opportunity, duplicates allowed. Recording or removing a send never writes the
+  resume row. Deleting the opportunity removes its sends; a resume with a send is
+  archived rather than deleted, as a submitted one is, so its sends survive
+  (`resume_id` cascades only when something above it, such as the user, is
+  deleted). **Derivation**: a resume's status and `submitted_at`/`submitted_to`,
+  wherever the API shows or checks them, come from one function: with no send, the
+  stored columns as they are (the manual "Submitted to" control still writes them);
+  with a send, status `submitted`, and the summary is the later of the newest send
+  and the stored record, a send showing as "<sent_via> / <company>" with the
+  company's name read at read time. A resume with a send cannot be moved to another
+  status (`resume_has_sends`). Locks: `resume:<id>` is taken by recording a send,
+  by deleting the resume and by "I submitted it", always as the last lock in its
+  transaction.
 - **tailoring_sessions**: id, resume_id, task_run ids, transcript (JSON of
   user/assistant turns), accepted_at. Keeps the iterate-until-satisfied loop (FR-R4)
   auditable and resumable.

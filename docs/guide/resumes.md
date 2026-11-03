@@ -85,6 +85,14 @@ The **Status** menu on a tailored resume moves it through Draft, In review, Fina
 Submitted. Choosing Submitted asks where you sent it (for example "Northwind careers portal")
 and records it on the resume, so you can always tell which version a company has.
 
+A resume can also be **recorded as sent** for an opportunity, from that opportunity's
+**Resume** tab. This is how a base resume you sent as it is (for example through a job site's
+own apply flow) is recorded, and "I submitted it" in assisted apply records one the same way.
+Each send is kept: a resume's page lists every opportunity it was sent for under **Sent for**.
+A resume with a send shows as Submitted, with the latest send (or a later "Submitted to" you
+entered) as where and when, and its status can't be changed until those records are removed.
+Deleting a resume that was recorded as sent archives it, like a submitted one.
+
 ## Deleting a resume
 
 Each row on the Resumes page has a delete control. It asks first, and what it says depends on

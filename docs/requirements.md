@@ -112,7 +112,10 @@ Priority: **P0** (MVP, milestone M1), **P1** (near-term, M2/M3), **P2** (later).
   (following a configurable naming convention), and store the Doc link and revision
   references for each version.
 - FR-R3 (P0): Record the status of each resume version (draft, in review, final,
-  submitted) and where and when it was submitted.
+  submitted) and where and when it was submitted. Each time a resume, base or
+  tailored, is sent for an opportunity is its own record (when, and how: "Indeed",
+  an ATS), without changing the resume, so one base can be recorded as sent for any
+  number of opportunities.
 - FR-R4 (P0): AI tailoring: given an opportunity's job description and the base
   resume, suggest modifications to the resume introduction and body. The user
   iterates with the assistant through as many rounds as needed and explicitly marks
@@ -417,7 +420,7 @@ https://github.com/bgoleno/opportun/issues/79. The feature sits behind
   user already applied to needs a reason the user types.
 - FR-X3 (P1): The submission's outcome and confirmation evidence (the user's
   "I submitted it", a captured confirmation page, a matched confirmation email) are
-  recorded on the opportunity timeline and in the resume's submitted record (FR-R3).
+  recorded on the opportunity timeline and as a send of the resume (FR-R3).
   The stage moves to Applied only on the user's click. The absence of a confirmation
   is surfaced as a next step, never as a failure, and is never acted on
   automatically.

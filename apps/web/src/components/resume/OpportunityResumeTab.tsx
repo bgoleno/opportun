@@ -1,10 +1,12 @@
 // The Resume tab of an opportunity: resumes attached to it, attaching one (existing or new),
-// detaching or deleting one, and "Create tailored copy" (#70, #77).
+// detaching or deleting one, and "Create tailored copy" (#70, #77). A base resume is never
+// attached; it is recorded as sent instead, and listed with its sends (#158).
 import { Link, useNavigate } from '@tanstack/react-router';
 import { FilePlus2, Unlink } from 'lucide-react';
 import { useState } from 'react';
 import { MainWithRail } from '@/components/MainWithRail';
 import { FormError } from '@/components/FormError';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { IconButton } from '@/components/ui/icon-button';
@@ -17,6 +19,7 @@ import {
   resumeErrorMessage,
   useAttachResume,
   useCreateResume,
+  useOpportunitySends,
   useResumes,
   type Resume,
 } from './api';
@@ -27,6 +30,7 @@ import {
   RegisterDocCard,
   StatusBadge,
 } from './ResumeList';
+import { RecordSendFields, RemoveSendButton, sentLine } from './ResumeSends';
 
 /** A resume already registered elsewhere in Opportun, with no opportunity of its own yet. */
 function AttachExistingCard({ opportunityId }: { opportunityId: string }) {
@@ -35,6 +39,7 @@ function AttachExistingCard({ opportunityId }: { opportunityId: string }) {
   const [chosen, setChosen] = useState('');
   const unattached = (all.data?.items ?? []).filter((r) => r.opportunityId === null);
   const id = chosen || unattached[0]?.id || '';
+  const picked = unattached.find((r) => r.id === id);
 
   function attachChosen() {
     if (id === '') return;
@@ -52,7 +57,8 @@ function AttachExistingCard({ opportunityId }: { opportunityId: string }) {
       <CardHeader>
         <CardTitle>Attach an existing resume</CardTitle>
         <CardDescription>
-          Link a resume already registered in Opportun, from anywhere else it was created.
+          Link a resume already registered in Opportun, from anywhere else it was created. A base
+          resume you sent as it is (for example through a job site) is recorded as sent.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
@@ -78,13 +84,21 @@ function AttachExistingCard({ opportunityId }: { opportunityId: string }) {
                 ))}
               </Select>
             </div>
-            {attach.error ? (
-              <FormError message={resumeErrorMessage(attach.error) ?? errorMessage(attach.error)} />
-            ) : null}
-            {/* eslint-disable-next-line opportun/no-stretched-grid-button -- full width by default, not by decision: w-fit or w-full is still to be chosen (https://github.com/bgoleno/opportun/issues/9) */}
-            <Button onClick={attachChosen} disabled={attach.isPending}>
-              {attach.isPending ? 'Attaching...' : 'Attach'}
-            </Button>
+            {picked?.kind === 'base' ? (
+              <RecordSendFields key={picked.id} opportunityId={opportunityId} resume={picked} />
+            ) : (
+              <>
+                {attach.error ? (
+                  <FormError
+                    message={resumeErrorMessage(attach.error) ?? errorMessage(attach.error)}
+                  />
+                ) : null}
+                {/* eslint-disable-next-line opportun/no-stretched-grid-button -- full width by default, not by decision: w-fit or w-full is still to be chosen (https://github.com/bgoleno/opportun/issues/9) */}
+                <Button onClick={attachChosen} disabled={attach.isPending}>
+                  {attach.isPending ? 'Attaching...' : 'Attach'}
+                </Button>
+              </>
+            )}
           </>
         )}
       </CardContent>
@@ -122,6 +136,8 @@ function DetachButton({ resume }: { resume: Resume }) {
 
 export function OpportunityResumeTab({ opportunityId }: { opportunityId: string }) {
   const tailored = useResumes({ opportunityId });
+  const sends = useOpportunitySends(opportunityId);
+  const sendItems = sends.data?.items ?? [];
   const bases = useResumes({ kind: 'base' });
   const create = useCreateResume();
   const navigate = useNavigate();
@@ -144,12 +160,35 @@ export function OpportunityResumeTab({ opportunityId }: { opportunityId: string 
           <CardTitle>Resumes for this opportunity</CardTitle>
         </CardHeader>
         <CardContent>
-          {tailored.isPending ? (
+          {tailored.isPending || sends.isPending ? (
             <p className="text-sm text-muted-foreground">Loading...</p>
-          ) : (tailored.data?.items.length ?? 0) === 0 ? (
-            <p className="text-sm text-muted-foreground">No tailored resume yet.</p>
+          ) : (tailored.data?.items.length ?? 0) === 0 && sendItems.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No resume for this opportunity yet.</p>
           ) : (
             <ul className="grid gap-2">
+              {sendItems.map((s) => (
+                <li
+                  key={`send-${s.id}`}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
+                >
+                  <span className="flex flex-wrap items-center gap-2">
+                    <Link
+                      to="/resumes/$id"
+                      params={{ id: s.resumeId }}
+                      className="font-medium break-all text-primary underline-offset-4 hover:underline"
+                    >
+                      {s.resumeTitle}
+                    </Link>
+                    <Badge variant="secondary">
+                      {s.resumeKind === 'base' ? 'Base resume' : 'Tailored'}
+                    </Badge>
+                  </span>
+                  <span className="flex items-center gap-2 text-muted-foreground">
+                    {sentLine(s)}
+                    <RemoveSendButton opportunityId={opportunityId} send={s} />
+                  </span>
+                </li>
+              ))}
               {tailored.data?.items.map((r) => (
                 <li
                   key={r.id}
