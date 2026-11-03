@@ -61,12 +61,13 @@ export const detailLabel = (key: string): string =>
 export function detailRows(
   fields: SubmissionFields,
 ): { key: string; label: string; value: string }[] {
+  const values = new Map(Object.entries(fields));
   const known: string[] = DETAIL_FIELDS.map((f) => f.key);
   const keys = [
-    ...known.filter((k) => fields[k] !== undefined),
-    ...Object.keys(fields).filter((k) => !known.includes(k)),
+    ...known.filter((k) => values.has(k)),
+    ...[...values.keys()].filter((k) => !known.includes(k)),
   ];
-  return keys.map((key) => ({ key, label: detailLabel(key), value: fields[key] as string }));
+  return keys.map((key) => ({ key, label: detailLabel(key), value: values.get(key) ?? '' }));
 }
 
 /**

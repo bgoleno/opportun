@@ -117,20 +117,16 @@ function isPlainName(value: string): boolean {
   );
 }
 
+/** zod's URL check (the platform URL parser), limited to http and https. */
+const HttpUrlSchema = z.url({ protocol: /^https?$/ });
+
 /**
  * An absolute http or https address with a host, exactly as typed: no surrounding or inner
  * whitespace, which the URL parser would otherwise trim or encode into something the user
  * never saw on the review.
  */
 function isWebAddress(value: string): boolean {
-  if (/\s/u.test(value)) return false;
-  let url: URL;
-  try {
-    url = new URL(value);
-  } catch {
-    return false;
-  }
-  return (url.protocol === 'https:' || url.protocol === 'http:') && url.hostname !== '';
+  return !/\s/u.test(value) && HttpUrlSchema.safeParse(value).success;
 }
 
 /**
@@ -140,12 +136,13 @@ function isWebAddress(value: string): boolean {
 export function submissionFieldProblem(
   fields: Record<string, string>,
 ): { field: string; code: SubmissionFieldRefusal } | null {
+  const values = new Map(Object.entries(fields));
   for (const field of SUBMISSION_NAME_FIELDS) {
-    const value = fields[field];
+    const value = values.get(field);
     if (value !== undefined && !isPlainName(value)) return { field, code: 'field_name_invalid' };
   }
   for (const field of SUBMISSION_URL_FIELDS) {
-    const value = fields[field];
+    const value = values.get(field);
     if (value !== undefined && !isWebAddress(value)) return { field, code: 'field_url_invalid' };
   }
   return null;

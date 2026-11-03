@@ -388,7 +388,8 @@ const FIELD_REFUSAL_MESSAGES = {
  * the stored fields, and a row saved before the check must keep working (acceptance 3).
  */
 function refuseChangedFieldProblem(stored: SubmissionFields, next: SubmissionFields): void {
-  const changed = Object.fromEntries(Object.entries(next).filter(([k, v]) => stored[k] !== v));
+  const before = new Map(Object.entries(stored));
+  const changed = Object.fromEntries(Object.entries(next).filter(([k, v]) => before.get(k) !== v));
   const problem = submissionFieldProblem(changed);
   if (problem !== null) {
     throw new HttpError(422, problem.code, FIELD_REFUSAL_MESSAGES[problem.code], {
