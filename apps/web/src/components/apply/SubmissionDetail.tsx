@@ -13,8 +13,14 @@ import { FormError } from '@/components/FormError';
 import { useOpportunity } from '@/components/opportunity/api';
 import { formatDateTime, safeHttpUrl } from '@/lib/opportunities';
 import { cn } from '@/lib/utils';
-import { DETAIL_FIELDS, SavedCopy } from './ApplyPage';
-import { atsLabel, useOpportunitySubmissions, useSubmission, type SubmissionView } from './api';
+import { SavedCopy } from './ApplyPage';
+import {
+  atsLabel,
+  detailRows,
+  useOpportunitySubmissions,
+  useSubmission,
+  type SubmissionView,
+} from './api';
 import { EmailEvidence } from './EmailEvidence';
 import { OutcomeActions, REPORTABLE } from './OutcomeActions';
 import { SubmissionStatusChip } from './parts';
@@ -226,12 +232,10 @@ export function SubmissionDetail({
         </p>
         {Object.keys(s.fields).length > 0 ? (
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
-            {Object.entries(s.fields).map(([key, value]) => (
-              <div key={key} className="contents">
-                <dt className="text-muted-foreground">
-                  {DETAIL_FIELDS.find((f) => f.key === key)?.label ?? key}
-                </dt>
-                <dd className="[overflow-wrap:anywhere]">{value}</dd>
+            {detailRows(s.fields).map((r) => (
+              <div key={r.key} className="contents">
+                <dt className="text-muted-foreground">{r.label}</dt>
+                <dd className="[overflow-wrap:anywhere]">{r.value}</dd>
               </div>
             ))}
           </dl>

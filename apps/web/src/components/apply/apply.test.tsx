@@ -1491,3 +1491,125 @@ describe('the Apply panel links to each application’s own page (#149)', () => 
     );
   });
 });
+
+describe('M3a (#181): the fields prefill reads by name', () => {
+  const PREFILL = {
+    firstName: 'Jane',
+    lastName: 'Doe-Example',
+    linkedinUrl: 'https://www.linkedin.com/in/jane-doe-example',
+    websiteUrl: 'https://jane.example.com',
+  };
+
+  it('the details step has first and last name, LinkedIn and website, and saves them by name', async () => {
+    const api = mockApi(
+      routes(submission(), {
+        'PATCH /submissions/sub-1': (c: ApiCall) => ({
+          status: 200,
+          body: { ...submission(), ...(c.body as object) },
+        }),
+      }),
+    );
+    const { user, router } = renderStep('details');
+    await user.type(await screen.findByLabelText('First name'), PREFILL.firstName);
+    await user.type(screen.getByLabelText('Last name'), PREFILL.lastName);
+    await user.type(screen.getByLabelText('LinkedIn profile'), PREFILL.linkedinUrl);
+    await user.type(screen.getByLabelText('Website'), ` ${PREFILL.websiteUrl} `);
+    // The full name and the free-text links stay as they were: nothing is split or derived.
+    expect(screen.getByLabelText('Full name')).toHaveValue('Jane Doe');
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'review' }));
+    const [edit] = calls(api.calls, 'PATCH', '/submissions/sub-1');
+    expect((edit?.body as { fields: unknown }).fields).toEqual({
+      fullName: 'Jane Doe',
+      email: 'jane@example.com',
+      ...PREFILL,
+    });
+  });
+
+  it('the links are web-address inputs and the names offer the browser’s own name autofill', async () => {
+    mockApi(routes(submission()));
+    renderStep('details');
+    expect(await screen.findByLabelText('First name')).toHaveAttribute(
+      'autocomplete',
+      'given-name',
+    );
+    expect(screen.getByLabelText('Last name')).toHaveAttribute('autocomplete', 'family-name');
+    expect(screen.getByLabelText('LinkedIn profile')).toHaveAttribute('type', 'url');
+    expect(screen.getByLabelText('Website')).toHaveAttribute('type', 'url');
+  });
+
+  it('the review shows each under its own label, in the order of the details step', async () => {
+    mockApi(
+      routes(
+        submission({
+          // Stored order is not display order (Postgres jsonb sorts its keys).
+          fields: {
+            websiteUrl: PREFILL.websiteUrl,
+            email: 'jane@example.com',
+            linkedinUrl: PREFILL.linkedinUrl,
+            lastName: PREFILL.lastName,
+            firstName: PREFILL.firstName,
+          },
+        }),
+      ),
+    );
+    renderStep('review');
+    const section = (await screen.findByRole('heading', { name: 'Your details' })).closest(
+      'section',
+    ) as HTMLElement;
+    const terms = within(section)
+      .getAllByRole('term')
+      .map((t) => t.textContent);
+    expect(terms).toEqual(['First name', 'Last name', 'Email', 'LinkedIn profile', 'Website']);
+    for (const value of [...Object.values(PREFILL), 'jane@example.com']) {
+      expect(within(section).getByText(value)).toBeVisible();
+    }
+  });
+
+  it('the open step offers each to copy, under its label', async () => {
+    mockApi(routes(submission({ status: 'handed_off', handedOffAt: NOW, fields: { ...PREFILL } })));
+    renderStep('open');
+    for (const label of ['First name', 'Last name', 'LinkedIn profile', 'Website']) {
+      expect(await screen.findByRole('button', { name: `Copy ${label}` })).toBeVisible();
+    }
+  });
+
+  it('an attempt without them shows empty fields, and the review invents none', async () => {
+    mockApi(routes(submission({ status: 'reviewed', reviewExpiresAt: NOW + 30 * MIN })));
+    const first = renderStep('details');
+    expect(await screen.findByLabelText('First name')).toHaveValue('');
+    expect(screen.getByLabelText('Last name')).toHaveValue('');
+    expect(screen.getByLabelText('LinkedIn profile')).toHaveValue('');
+    expect(screen.getByLabelText('Website')).toHaveValue('');
+    first.unmount();
+    renderStep('review');
+    await screen.findByText('Jane Doe');
+    for (const label of ['First name', 'Last name', 'LinkedIn profile', 'Website']) {
+      expect(screen.queryByText(label)).toBeNull();
+    }
+  });
+
+  for (const [code, field, words] of [
+    ['field_url_invalid', 'linkedinUrl', /LinkedIn profile.*https:\/\//i],
+    ['field_url_invalid', 'websiteUrl', /Website.*https:\/\//i],
+    ['field_name_invalid', 'firstName', /First name.*one line.*100 characters/i],
+    ['field_name_invalid', 'lastName', /Last name.*one line.*100 characters/i],
+  ] as const) {
+    it(`422 ${code} on ${field}: plain words naming the field, never the code`, async () => {
+      mockApi(
+        routes(submission(), {
+          'PATCH /submissions/sub-1': () => ({
+            status: 422,
+            body: { error: { code, field } },
+          }),
+        }),
+      );
+      const { user, router } = renderStep('details');
+      await user.type(await screen.findByLabelText('Phone'), '555 0100');
+      await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+      expect(await screen.findByText(words)).toBeVisible();
+      expect(document.body.textContent).not.toContain(code);
+      expect(router.state.location.search).toEqual({ step: 'details' });
+    });
+  }
+});

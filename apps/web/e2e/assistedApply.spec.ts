@@ -126,6 +126,15 @@ test('apply: choose a resume, add details, review everything, open the form, and
   await page.getByRole('button', { name: 'Add a question' }).click();
   await page.getByLabel('Question', { exact: true }).fill('Why Vandelay?');
   await page.getByLabel('Your answer').fill('Latex, mostly.');
+  // The fields prefill fills by name (#181). A LinkedIn address without its scheme is refused
+  // by the server in words naming the field, and the step stays put until it is fixed.
+  await page.getByLabel('First name').fill('Jane');
+  await page.getByLabel('Last name').fill('Example');
+  await page.getByLabel('LinkedIn profile').fill('linkedin.com/in/jane-example');
+  await page.getByLabel('Website').fill('https://jane.example.com');
+  await page.getByRole('button', { name: 'Next: Review' }).click();
+  await expect(page.getByText(/LinkedIn profile: enter the whole web address/)).toBeVisible();
+  await page.getByLabel('LinkedIn profile').fill('https://www.linkedin.com/in/jane-example');
   await page.getByRole('button', { name: 'Next: Review' }).click();
 
   // S4: everything on one screen, the box unticked, no countdown.
@@ -133,7 +142,16 @@ test('apply: choose a resume, add details, review everything, open the form, and
     page.getByRole('heading', { level: 1, name: 'Check everything before you open the form' }),
   ).toBeVisible();
   await expect(page.getByText('https://boards.greenhouse.io/vandelay/jobs/1002')).toBeVisible();
-  for (const text of ['Jane Example', 'jane@example.com', 'Why Vandelay?', 'Latex, mostly.']) {
+  for (const text of [
+    'Jane Example',
+    'jane@example.com',
+    'Why Vandelay?',
+    'Latex, mostly.',
+    'Jane',
+    'Example',
+    'https://www.linkedin.com/in/jane-example',
+    'https://jane.example.com',
+  ]) {
     await expect(page.getByText(text, { exact: true }).first()).toBeVisible();
   }
   const box = page.getByRole('checkbox', { name: /I will press Submit myself/ });
