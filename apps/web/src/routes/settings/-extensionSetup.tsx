@@ -279,10 +279,11 @@ export function ExtensionSetupDialog({
                     className="mt-0.5 size-4 accent-primary"
                   />
                   <span>
-                    Also let it fill in applications you hand off (assisted apply). It reads only
-                    the application you handed off, with its resume copy, on that application&apos;s
-                    page, and never submits anything. To take this away later, set the extension up
-                    again without it, then revoke this token under Settings.
+                    Also let it fill in applications you hand off (assisted apply). It reads an
+                    application you have handed off (what you reviewed, and its resume copy) when it
+                    asks for that application&apos;s posting page, and never submits anything. To
+                    take this away later, set the extension up again without it, then revoke this
+                    token under Settings.
                   </span>
                 </label>
               ) : null}

@@ -1,7 +1,7 @@
 // The guided setup flow (design D2, D4, D6, D7, D8, D11, D15, D20, D23, D24): one dialog that
 // mints the scoped token, hands over the matching download, and keeps the token on screen for
 // as long as the install takes.
-import { screen } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { mockApi, renderWithProviders } from '@/test/render';
@@ -309,8 +309,13 @@ describe('ExtensionSetupDialog: assisted apply', () => {
   });
 
   it('is not offered where assisted apply does not exist', async () => {
-    show();
+    const { calls } = show();
     await screen.findByLabelText(/password/i);
+    // After the availability check has answered (404 here), not only before it (tl on #185).
+    await waitFor(() => expect(calls.some((c) => c.path === '/settings/applications')).toBe(true));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
     expect(screen.queryByRole('checkbox', { name: /assisted apply/i })).not.toBeInTheDocument();
   });
 });

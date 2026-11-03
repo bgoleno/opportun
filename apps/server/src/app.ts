@@ -232,7 +232,14 @@ export function loggedUrl(url: string | undefined): string | undefined {
   if (url === undefined) return undefined;
   const q = url.indexOf('?');
   if (q === -1) return url;
-  return QUERY_REDACTED_PATHS.has(url.slice(0, q)) ? `${url.slice(0, q)}?[redacted]` : url;
+  // Compared decoded, so a percent-encoded spelling of a listed path is redacted too (tl on #185).
+  let path = url.slice(0, q);
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // A malformed escape: compare as sent.
+  }
+  return QUERY_REDACTED_PATHS.has(path) ? `${url.slice(0, q)}?[redacted]` : url;
 }
 
 interface LoggableRequest {

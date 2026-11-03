@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
@@ -412,11 +412,19 @@ describe('DevicesCard: the assisted apply permission', () => {
 
   it('is not offered where assisted apply does not exist', async () => {
     const user = userEvent.setup();
-    mockApi({ 'GET /device-tokens': { items: [] }, 'GET /integrations/apple-mail': NOT_CONNECTED });
+    const { calls } = mockApi({
+      'GET /device-tokens': { items: [] },
+      'GET /integrations/apple-mail': NOT_CONNECTED,
+    });
     renderWithProviders(<DevicesCard />);
     await user.click(await screen.findByRole('button', { name: 'Create token' }));
     const dialog = await screen.findByRole('dialog', { name: 'Create a device token' });
     await within(dialog).findByRole('checkbox', { name: /Browser capture/ });
+    // After the availability check has answered (404 here), not only before it (tl on #185).
+    await waitFor(() => expect(calls.some((c) => c.path === '/settings/applications')).toBe(true));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
     expect(within(dialog).queryByRole('checkbox', { name: /Assisted apply/ })).toBeNull();
   });
 

@@ -48,7 +48,11 @@ const CurrentResponse = z.object({
       answers: SubmissionAnswersSchema,
       resume: z.object({
         title: z.string().nullable(),
-        snapshotState: z.enum(SUBMISSION_SNAPSHOT_STATES).nullable(),
+        /**
+         * Attach only when this is `ready`: then `filename` and `bytes` are set. `deleted` is a
+         * ready snapshot whose file was deleted since (tl on #185).
+         */
+        snapshotState: z.enum([...SUBMISSION_SNAPSHOT_STATES, 'deleted']).nullable(),
         /** Set only when the snapshot is ready to attach. */
         filename: z.string().nullable(),
         bytes: z.number().int().nullable(),
@@ -104,7 +108,7 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
         userId: ctx.userId,
         ip: req.ip,
         detail: {
-          tokenId: ctx.tokenId,
+          deviceTokenId: ctx.tokenId,
           host: hostOf(req.query.url),
           ...(found.kind === 'found'
             ? { submissionId: found.row.id }
@@ -125,7 +129,7 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
           answers: row.answers,
           resume: {
             title: row.resumeTitle,
-            snapshotState: row.snapshotState,
+            snapshotState: found.snapshotState,
             filename: found.snapshotFile?.filename ?? null,
             bytes: found.snapshotFile?.bytes ?? null,
           },
@@ -146,7 +150,7 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
       await audit(db, 'submission.snapshot_downloaded', {
         userId: ctx.userId,
         ip: req.ip,
-        detail: { submissionId: row.id, tokenId: ctx.tokenId, via: 'device' },
+        detail: { submissionId: row.id, deviceTokenId: ctx.tokenId, via: 'device' },
       });
       const stream = await app.storage.openAttachment(file.storedPath);
       return reply

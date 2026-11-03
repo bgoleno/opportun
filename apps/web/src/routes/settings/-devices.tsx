@@ -112,9 +112,9 @@ export function DevicesCard() {
         <CardDescription>
           Tokens for programs on your own devices: the Apple Mail connector on your Mac and the
           Opportun browser extension. Mail and capture permissions can only send data in. The
-          assisted apply permission reads one thing back: the application you handed off, with its
-          resume copy, on that application's own page. Revoke a token and the device is cut off at
-          once.
+          assisted apply permission reads back an application you have handed off (what you
+          reviewed, and its resume copy) when the extension asks for its posting page. Revoke a
+          token and the device is cut off at once.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 text-sm">
@@ -396,9 +396,9 @@ function CreateDialog(props: {
             ))}
             {assistAvailable ? (
               <p className="text-xs text-muted-foreground">
-                Assisted apply lets the extension read the one application you handed off, with its
-                resume copy, while you are on that application&apos;s page. It cannot start, review
-                or submit an application.
+                Assisted apply lets the extension read an application you have handed off (what you
+                reviewed, and its resume copy) when it asks for that application&apos;s posting
+                page. It cannot start, review or submit an application.
               </p>
             ) : null}
             {errors.scopes ? (

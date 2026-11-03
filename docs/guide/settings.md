@@ -145,9 +145,9 @@ under **Settings > Integrations > Extensions and Connectors**:
   (apply:assist)**), and your current password. The token is shown once; the server keeps only
   a hash.
 - The mail and capture permissions can only push data in; they cannot read anything back.
-  **Assisted apply** reads one thing: the application you handed off, with its resume copy,
-  and only while the extension is on that application's own page. It cannot start, review or
-  submit an application.
+  **Assisted apply** reads back an application you have handed off (what you reviewed, and its
+  resume copy) when the extension asks for that application's posting page. It cannot start,
+  review or submit an application.
 - The list shows each token's permissions, when it was created and last used. **Revoke**
   cuts the device off on its next request.
 

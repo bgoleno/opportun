@@ -507,6 +507,11 @@ export type PrefillLookup =
       companyName: string;
       /** The snapshot file, when the snapshot is ready: what the extension will attach. */
       snapshotFile: { filename: string; bytes: number } | null;
+      /**
+       * The snapshot's state as the extension can act on it (tl on #185): `deleted` when the
+       * stored state is `ready` but its file is gone, so `ready` always comes with a file.
+       */
+      snapshotState: SubmissionSnapshotState | 'deleted' | null;
     }
   | { kind: 'none'; reason: PrefillMiss };
 
@@ -559,7 +564,9 @@ export async function handedOffForPage(
             ),
           )
           .get();
-  return { kind: 'found', ...only, snapshotFile: file ?? null };
+  const snapshotState =
+    only.row.snapshotState === 'ready' && file === undefined ? 'deleted' : only.row.snapshotState;
+  return { kind: 'found', ...only, snapshotFile: file ?? null, snapshotState };
 }
 
 /**
@@ -575,6 +582,10 @@ export async function handedOffSnapshot(
 ): Promise<{ row: SubmissionRow; file: typeof attachments.$inferSelect }> {
   const row = await getRow(db, ctx, id);
   if (row.status !== 'handed_off') throw notFound();
+  // Served only for an attempt /current would return (tl on #185): what was reviewed, unchanged.
+  if (row.reviewDigest === null || submissionDigest(row) !== row.reviewDigest) {
+    throw new HttpError(409, 'review_stale', 'This application changed after it was reviewed.');
+  }
   const file =
     row.snapshotState !== 'ready' || row.resumeAttachmentId === null
       ? undefined
@@ -587,7 +598,8 @@ export async function handedOffSnapshot(
           .get();
   if (file === undefined) {
     throw new HttpError(409, 'snapshot_not_ready', 'This application has no resume file ready.', {
-      snapshotState: row.snapshotState,
+      // The same effective state /current reports: a ready snapshot whose file is gone is deleted.
+      snapshotState: row.snapshotState === 'ready' ? 'deleted' : row.snapshotState,
     });
   }
   return { row, file };

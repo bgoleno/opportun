@@ -43,6 +43,8 @@ export interface AttemptOptions {
   ats?: AtsJobRef;
   /** Field values to review (default none). */
   fields?: Record<string, string>;
+  /** Stop before the handoff: a draft, or a reviewed attempt (default: handed off). */
+  stopAt?: 'draft' | 'reviewed';
 }
 
 /**
@@ -93,12 +95,14 @@ export async function handedOffAttempt(
     const edited = await api(c, 'PATCH', `/submissions/${id}`, { fields: opts.fields });
     expect(edited.statusCode, edited.body).toBe(200);
   }
+  if (opts.stopAt === 'draft') return { id, oppId: opp.id, companyId, ats, resumeId: resume.id };
   const current = await api(c, 'GET', `/submissions/${id}`);
   const reviewed = await api(c, 'POST', `/submissions/${id}/review`, {
     reviewDigest: current.json<{ reviewDigest: string }>().reviewDigest,
     acknowledged: true,
   });
   expect(reviewed.statusCode, reviewed.body).toBe(200);
+  if (opts.stopAt === 'reviewed') return { id, oppId: opp.id, companyId, ats, resumeId: resume.id };
   const handed = await api(c, 'POST', `/submissions/${id}/handoff`, {});
   expect(handed.statusCode, handed.body).toBe(200);
   return { id, oppId: opp.id, companyId, ats, resumeId: resume.id };

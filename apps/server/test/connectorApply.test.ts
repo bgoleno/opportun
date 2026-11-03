@@ -8,6 +8,7 @@ import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { loggedUrl } from '../src/app';
 import { applicationSubmissions, attachments, auditLog } from '../src/db/schema';
+import { REDACTED, redactDetail } from '../src/lib/audit';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 import { api, handedOffAttempt, requisition } from './submissionFixtures';
@@ -29,10 +30,15 @@ async function mint(c: TestClient, scopes: string[]) {
 async function token(c: TestClient, scopes: string[]): Promise<string> {
   const res = await mint(c, scopes);
   expect(res.statusCode, res.body).toBe(201);
+  minted.set(res.json().token as string, res.json().id as string);
   return res.json().token as string;
 }
 
 const bearer = (t: string) => ({ authorization: `Bearer ${t}` });
+
+/** Each minted token's device_tokens id, as the audit should record it. */
+const minted = new Map<string, string>();
+const tokenIdOf = (t: string): string => minted.get(t)!;
 
 const current = (app: FastifyInstance, t: string, url: string) =>
   app.inject({
@@ -222,11 +228,77 @@ describe('GET /connector/apply/current (#182 criterion 2)', () => {
     expect(entry?.detail).toMatchObject({
       host: new URL(pageOf(s.ats)).hostname,
       submissionId: s.id,
+      // Which token read it, so the owner knows which to revoke (tl on #185).
+      deviceTokenId: tokenIdOf(t),
     });
     expect(JSON.stringify(entry?.detail)).not.toContain(s.ats.externalId);
     expect(
       loggedUrl(`/api/v1/connector/apply/current?url=${encodeURIComponent(pageOf(s.ats))}`),
     ).toBe('/api/v1/connector/apply/current?[redacted]');
+  });
+});
+
+describe('what /current and the snapshot say about a deleted snapshot, and a stale review (tl on #185)', () => {
+  it('a ready snapshot whose file was deleted reads "deleted", never "ready", and is not served', async () => {
+    const { app, a } = await boot(ON);
+    const s = await handedOffAttempt(app, a);
+    await makeReady(app, a, s.id);
+    const before = await app.db
+      .select()
+      .from(applicationSubmissions)
+      .where(eq(applicationSubmissions.id, s.id))
+      .get();
+    // Deleting the attachment clears the link (ON DELETE SET NULL); the stored state stays ready.
+    await app.db.delete(attachments).where(eq(attachments.id, before!.resumeAttachmentId!)).run();
+    const after = await app.db
+      .select()
+      .from(applicationSubmissions)
+      .where(eq(applicationSubmissions.id, s.id))
+      .get();
+    expect(after?.snapshotState).toBe('ready');
+    const t = await token(a, ['apply:assist']);
+    expect((await current(app, t, pageOf(s.ats))).json().attempt.resume).toEqual({
+      title: 'Example Resume',
+      snapshotState: 'deleted',
+      filename: null,
+      bytes: null,
+    });
+    const res = await snapshot(app, t, s.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatchObject({
+      code: 'snapshot_not_ready',
+      snapshotState: 'deleted',
+    });
+  });
+
+  it('the snapshot of an attempt whose fields changed after review is not served', async () => {
+    const { app, a } = await boot(ON);
+    const s = await handedOffAttempt(app, a, { fields: { email: 'applicant@example.com' } });
+    await makeReady(app, a, s.id);
+    await app.db
+      .update(applicationSubmissions)
+      .set({ fields: { email: 'changed@example.com' } })
+      .where(eq(applicationSubmissions.id, s.id))
+      .run();
+    const t = await token(a, ['apply:assist']);
+    const res = await snapshot(app, t, s.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.code).toBe('review_stale');
+  });
+});
+
+describe('the audit keeps a token id, never a token (tl and the EM on #185)', () => {
+  it('keeps a row id under a *TokenId key, and still redacts a credential, there or under token', () => {
+    const id = '01a19edf-c436-7e06-879d-9d9be4b0f55f';
+    expect(redactDetail({ deviceTokenId: id })).toEqual({ deviceTokenId: id });
+    expect(redactDetail({ deviceTokenId: `odt_${'A'.repeat(43)}` })).toEqual({
+      deviceTokenId: REDACTED,
+    });
+    expect(redactDetail({ token: id, apiKey: 'x', nested: { tokenId: 'secret-value' } })).toEqual({
+      token: REDACTED,
+      apiKey: REDACTED,
+      nested: { tokenId: REDACTED },
+    });
   });
 });
 
@@ -245,7 +317,13 @@ describe('GET /connector/apply/:id/snapshot (#182 criterion 3)', () => {
       .from(auditLog)
       .where(eq(auditLog.event, 'submission.snapshot_downloaded'))
       .get();
-    expect(entry?.detail).toMatchObject({ submissionId: s.id, via: 'device' });
+    expect(entry?.detail).toMatchObject({
+      submissionId: s.id,
+      via: 'device',
+      deviceTokenId: tokenIdOf(t),
+    });
+    expect(res.headers['cache-control']).toBe('private, no-store');
+    expect(res.headers['content-disposition']).toContain('Example Resume.pdf');
   });
 
   it('refuses, by name, a snapshot that is not ready', async () => {
@@ -323,6 +401,81 @@ describe('scopes refuse each other (#182 criterion 4; tl and sec)', () => {
     const minted = (await mint(a, ['apply:assist'])).json();
     await a.request({ method: 'DELETE', url: `/api/v1/device-tokens/${minted.id as string}` });
     expect((await current(app, minted.token as string, pageOf(s.ats))).statusCode).toBe(401);
+  });
+});
+
+describe('the guards no other test pins (tl on #185)', () => {
+  it('a mail:push token is refused on the apply routes, and an apply:assist token on mail', async () => {
+    const { app, a } = await boot(ON);
+    const s = await handedOffAttempt(app, a);
+    const mail = await token(a, ['mail:push']);
+    expect((await current(app, mail, pageOf(s.ats))).statusCode).toBe(403);
+    expect((await snapshot(app, mail, s.id)).statusCode).toBe(403);
+    const apply = await token(a, ['apply:assist']);
+    const pushed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/connector/mail/batch',
+      headers: bearer(apply),
+      payload: { messages: [] },
+    });
+    expect(pushed.statusCode).toBe(403);
+  });
+
+  it('a signed-in browser session alone reads nothing: these routes take a device token only', async () => {
+    const { app, a } = await boot(ON);
+    const s = await handedOffAttempt(app, a);
+    const res = await a.request({
+      method: 'GET',
+      url: `/api/v1/connector/apply/current?url=${encodeURIComponent(pageOf(s.ats))}`,
+    });
+    expect(res.statusCode).toBe(401);
+    const file = await a.request({
+      method: 'GET',
+      url: `/api/v1/connector/apply/${s.id}/snapshot`,
+    });
+    expect(file.statusCode).toBe(401);
+  });
+
+  it('on the demo, every apply route is a 404, whatever the token holds', async () => {
+    const { app, a } = await boot(ON);
+    const s = await handedOffAttempt(app, a);
+    const t = await token(a, ['apply:assist']);
+    (app.config as { demo: boolean }).demo = true;
+    expect((await current(app, t, pageOf(s.ats))).statusCode).toBe(404);
+    expect((await snapshot(app, t, s.id)).statusCode).toBe(404);
+  });
+
+  it('with the feature off, the 404 comes before any token is looked at', async () => {
+    const { app } = await boot({ submissions: false });
+    for (const headers of [{}, bearer(`odt_${'B'.repeat(43)}`)]) {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/connector/apply/current?url=https%3A%2F%2Fexample.com%2F',
+        headers,
+      });
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('feature_unavailable');
+    }
+  });
+
+  it('a draft or a reviewed attempt is never returned, even for its exact page', async () => {
+    const { app, a } = await boot(ON);
+    const draft = await handedOffAttempt(app, a, { stopAt: 'draft', title: 'Draft Role' });
+    const reviewed = await handedOffAttempt(app, a, { stopAt: 'reviewed', title: 'Reviewed Role' });
+    const t = await token(a, ['apply:assist']);
+    for (const s of [draft, reviewed]) {
+      expect((await current(app, t, pageOf(s.ats))).json()).toEqual({
+        attempt: null,
+        reason: 'no_matching_attempt',
+      });
+      expect((await snapshot(app, t, s.id)).statusCode).toBe(404);
+    }
+  });
+
+  it('a percent-encoded spelling of /current still keeps the page out of the log', () => {
+    expect(loggedUrl('/api/v1/connector/apply/curren%74?url=https%3A%2F%2Fx')).toBe(
+      '/api/v1/connector/apply/curren%74?[redacted]',
+    );
   });
 });
 
