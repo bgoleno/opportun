@@ -147,3 +147,41 @@ describe('the user’s own limit in Settings', () => {
     expect(container.textContent).toBe('');
   });
 });
+
+describe('a saved limit above the server’s (#160)', () => {
+  // An admin lowered the instance cap below what the user had saved: 15 saved, 10 applies.
+  const above = usage({ userCap: 15, cap: 10, instanceCap: 10 });
+
+  it('the input shows the limit in force, and a line says why', async () => {
+    mockApi({ 'GET /settings/applications': above });
+    renderWithProviders(<ReviewCapCard />);
+    const input = await screen.findByLabelText('Reviews allowed per 24 hours');
+    expect(input).toHaveValue(10);
+    expect(
+      screen.getByText('Your saved limit of 15 is above this server’s limit, so 10 applies.'),
+    ).toBeVisible();
+  });
+
+  it('saving a value above the server’s limit is refused with that explanation', async () => {
+    const api = mockApi({ 'GET /settings/applications': above });
+    const user = userEvent.setup();
+    renderWithProviders(<ReviewCapCard />);
+    const input = await screen.findByLabelText('Reviews allowed per 24 hours');
+    await user.clear(input);
+    await user.type(input, '15');
+    await user.click(screen.getByRole('button', { name: 'Save limit' }));
+    expect(
+      await screen.findByText(
+        'This server allows at most 10 reviews per 24 hours. Choose 10 or fewer.',
+      ),
+    ).toBeVisible();
+    expect(api.calls.filter((c) => c.method === 'PUT')).toHaveLength(0);
+  });
+
+  it('no line when the saved limit is within the server’s', async () => {
+    mockApi({ 'GET /settings/applications': usage({ userCap: 4, cap: 4 }) });
+    renderWithProviders(<ReviewCapCard />);
+    await screen.findByLabelText('Reviews allowed per 24 hours');
+    expect(screen.queryByText(/above this server’s limit/)).not.toBeInTheDocument();
+  });
+});
