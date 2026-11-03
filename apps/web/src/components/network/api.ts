@@ -83,25 +83,27 @@ export const CONTACTS_PAGE_SIZE = 200;
 
 export const ck = {
   network: ['network'] as const,
-  list: (q: string, page: number) => ['network', 'list', q, page] as const,
+  list: (q: string, page: number, pageSize: number) =>
+    ['network', 'list', q, page, pageSize] as const,
   contact: (id: string) => ['network', 'detail', id] as const,
   candidates: (oppId: string) => ['referral-candidates', oppId] as const,
   referrals: (oppId: string) => ['referrals', oppId] as const,
 };
 
 /**
- * One page of up to CONTACTS_PAGE_SIZE contacts (issue #207): `page` is 0-based, and the
- * query key includes both `q` and `page`, so a change to either is its own cache entry.
+ * One page of up to `pageSize` contacts (CONTACTS_PAGE_SIZE unless a caller says otherwise;
+ * issue #207): `page` is 0-based, and the query key includes `q`, `page` and the page size, so
+ * a change to any is its own cache entry.
  * `keepPreviousData` keeps the outgoing page on screen while the new one loads, rather than
  * flashing to a loading state on every click.
  */
-export function useContacts(q: string, page: number) {
+export function useContacts(q: string, page: number, pageSize: number = CONTACTS_PAGE_SIZE) {
   const query = q.trim();
   return useQuery({
-    queryKey: ck.list(query, page),
+    queryKey: ck.list(query, page, pageSize),
     queryFn: () =>
       api<Page<Contact>>(
-        `/network?sort=name&limit=${CONTACTS_PAGE_SIZE}&offset=${page * CONTACTS_PAGE_SIZE}` +
+        `/network?sort=name&limit=${pageSize}&offset=${page * pageSize}` +
           (query === '' ? '' : `&q=${enc(query)}`),
       ),
     placeholderData: keepPreviousData,
