@@ -334,7 +334,9 @@ describe('every stop before a fill says why, and fills nothing', () => {
     [
       'two attempts',
       json(200, { attempt: null, reason: 'several_handed_off' }),
-      /More than one application/,
+      // Reachable through the real routes: a re-application from a second opportunity handed off
+      // while the first still is (qa, tl on #183). Which one is meant cannot be known: refuse.
+      /You have two applications open for this job\. In Opportun, record the earlier one \(I submitted it, or I did not submit it\), then try again\. Nothing was filled\./,
     ],
     [
       'a stale review',
