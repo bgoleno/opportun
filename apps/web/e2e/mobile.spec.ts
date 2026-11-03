@@ -303,6 +303,7 @@ const LONG_DESCRIPTION = `About International Consolidated Platform Intelligence
 const UNBROKEN_TITLE =
   'PrincipalPlatformIntelligenceEngineerDeveloperExperienceObservabilityAndReliability';
 const UNBROKEN_COMPANY = 'InternationalConsolidatedPlatformIntelligenceHoldingsGmbH';
+const UNBROKEN_LOCATION = 'FrankfurtamMainNiederradLyonerStrasseBuerostandortGebaeudeC';
 const COMPOUND_TITLE = 'Datenbankadministratorenteamleiterin (m/w/d)';
 const COMPOUND_COMPANY = 'Bundesversicherungsanstaltsverwaltungsgesellschaft mbH';
 const LONG_LOCATION =
@@ -370,10 +371,16 @@ async function stubDiscoveryResults(page: Page): Promise<void> {
       }),
       stubResult(8, {
         dedupeKey: 'unbroken|unbroken title|b',
-        posting: { title: UNBROKEN_TITLE, company: UNBROKEN_COMPANY, location: 'Berlin' },
+        // A location with no break in it, in the group's list of locations (tl, optional).
+        posting: { title: UNBROKEN_TITLE, company: UNBROKEN_COMPANY, location: UNBROKEN_LOCATION },
       }),
     ].map((r) =>
-      disposition === 'pending' ? r : { ...r, disposition, dismissReason: 'not_a_fit' },
+      disposition === 'pending'
+        ? r
+        : // A denied company's dismissal names the company (#199), which can be unbroken too (tl).
+          r.id === 'stub-result-5'
+          ? { ...r, disposition, dismissReason: 'denied_company', dismissNote: UNBROKEN_COMPANY }
+          : { ...r, disposition, dismissReason: 'not_a_fit' },
     );
     // More than are loaded, so "Select all N matching" shows too.
     await route.fulfill({ json: { items, total: disposition === 'pending' ? 250 : items.length } });

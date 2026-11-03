@@ -201,7 +201,7 @@ function DecidedRow({
         <span className="text-sm [overflow-wrap:anywhere] text-muted-foreground">{p.company}</span>
       </div>
       {r.dismissReason !== null ? (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs [overflow-wrap:anywhere] text-muted-foreground">
           Dismissed: {dismissReasonLabel(r.dismissReason as DismissReason)}
           {/* issue #199: the denied company's own name, so this reads as "Oracle" rather than
            *  a bare reason label that leaves the reader to guess which company matched. */}

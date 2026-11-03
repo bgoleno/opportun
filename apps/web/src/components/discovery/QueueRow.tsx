@@ -257,7 +257,7 @@ export function QueueGroupRow(props: {
           const loc = m.posting.location ?? 'Unspecified location';
           const href = safeHttpUrl(m.posting.postingUrl);
           return (
-            <li key={m.id}>
+            <li key={m.id} className="[overflow-wrap:anywhere]">
               {href !== null ? (
                 <a
                   href={href}
