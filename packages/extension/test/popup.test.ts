@@ -84,6 +84,11 @@ function setup(
     requestOrigin: vi.fn(async () => opts.granted ?? true),
     hasOrigin: vi.fn(async () => opts.granted ?? true),
     bakedServerUrl: vi.fn(async () => opts.baked ?? ''),
+    // Assisted apply prefill (#183) has its own tests (prefill.test.ts); never reached here.
+    get: vi.fn(async () => {
+      throw new Error('no GET in the capture tests');
+    }),
+    runFill: vi.fn(async () => null),
   };
   const $ = <T extends HTMLElement>(id: string) => doc.getElementById(id) as T;
   return { doc, data, deps, fetch, $ };
