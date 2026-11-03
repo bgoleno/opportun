@@ -59,6 +59,7 @@ import {
   WillNotSubmitCallout,
   type StepId,
 } from './parts';
+import { ReviewUsageLine } from './ReviewUsage';
 
 export function ApplyPage({
   opportunityId,
@@ -1032,6 +1033,8 @@ function ReviewStep({
                     ? SNAPSHOT_FAILED_HINT
                     : 'Tick the box to continue. Once you confirm, your review stays valid for 30 minutes, until a time shown here.')}
         </p>
+        {/* The daily review cap, from the server (#130). */}
+        <ReviewUsageLine />
       </section>
       <ConfirmDialog
         open={stopping}

@@ -42,7 +42,7 @@ import {
   view,
   type SubmissionRow,
 } from './submissions';
-import { readUserSetting } from './userSettings';
+import { deleteUserSetting, readUserSetting, writeUserSetting } from './userSettings';
 
 /** How long a review may be handed off: a fixed "valid until", never a countdown. */
 export const REVIEW_TTL_MS = 30 * 60 * 1000;
@@ -75,6 +75,9 @@ const SNAPSHOT_BLOCK_MESSAGES = new Map([
   ['snapshot_failed', 'Opportun could not save a copy of your resume. Choose it again to retry.'],
 ] as const);
 
+/** A user's own cap as stored: 1 up to the ceiling, or none. */
+const USER_CAP = z.number().int().min(1).max(MAX_DAILY_REVIEW_CAP).nullable();
+
 /** The cap that applies to this user: their own value if lower, else the instance's. */
 async function dailyCap(
   exec: Exec,
@@ -82,13 +85,7 @@ async function dailyCap(
   cfg: Pick<Config, 'dailyReviewCap'>,
 ): Promise<number> {
   const instance = cfg.dailyReviewCap ?? DEFAULT_DAILY_REVIEW_CAP;
-  const own = await readUserSetting(
-    exec,
-    ctx,
-    DAILY_REVIEW_CAP_SETTING,
-    z.number().int().min(1).max(MAX_DAILY_REVIEW_CAP).nullable(),
-    null,
-  );
+  const own = await readUserSetting(exec, ctx, DAILY_REVIEW_CAP_SETTING, USER_CAP, null);
   return own === null ? instance : Math.min(own, instance);
 }
 
@@ -122,6 +119,85 @@ async function reviewsInWindow(
     .filter((r) => r.submissionId !== exceptId && r.at !== null)
     .map((r) => r.at as number)
     .sort((a, b) => a - b);
+}
+
+/** What the user has used of the daily review cap (#130), from the same count the cap uses. */
+export interface ReviewUsage {
+  /** Distinct attempts reviewed in the last 24 hours. */
+  used: number;
+  /** The cap that applies: the user's own value if lower, else the instance's. */
+  cap: number;
+  /** The instance's value: the most a user's own cap can be. */
+  instanceCap: number;
+  /** The user's own value, or null when they have not set one. */
+  userCap: number | null;
+  /**
+   * When a place next frees up: at the cap, the same reset time a 429 gives (the (n - cap + 1)th
+   * oldest plus 24 hours); under it, when the oldest review in the window leaves it. Null when
+   * nothing is in the window.
+   */
+  nextFreeAt: number | null;
+}
+
+async function usageOf(
+  exec: Exec,
+  ctx: UserCtx,
+  cfg: Pick<Config, 'dailyReviewCap'>,
+  now: number,
+): Promise<ReviewUsage> {
+  const at = await reviewsInWindow(exec, ctx, now, '');
+  const cap = await dailyCap(exec, ctx, cfg);
+  const userCap = await readUserSetting(exec, ctx, DAILY_REVIEW_CAP_SETTING, USER_CAP, null);
+  const oldestToGo = at.length >= cap ? at[at.length - cap] : at[0];
+  return {
+    used: at.length,
+    cap,
+    instanceCap: cfg.dailyReviewCap ?? DEFAULT_DAILY_REVIEW_CAP,
+    userCap,
+    nextFreeAt: oldestToGo === undefined ? null : oldestToGo + REVIEW_CAP_WINDOW_MS,
+  };
+}
+
+/** The caller's own review usage (#130). Never another user's: everything is keyed on ctx. */
+export async function reviewUsage(
+  db: Db,
+  ctx: UserCtx,
+  cfg: Pick<Config, 'dailyReviewCap'>,
+  now: number = Date.now(),
+): Promise<ReviewUsage> {
+  return await usageOf(db, ctx, cfg, now);
+}
+
+/**
+ * Sets the caller's own daily review cap (#130, owner decision 5 on #79: a user can only lower
+ * it). 1 up to the instance's value; null removes it, back to the instance's. Under the user's
+ * scope lock, the same one a review's cap check takes, so a review never reads a half-made change.
+ */
+export async function setUserReviewCap(
+  db: Db,
+  ctx: UserCtx,
+  cfg: Pick<Config, 'dailyReviewCap'>,
+  cap: number | null,
+): Promise<ReviewUsage> {
+  const instance = cfg.dailyReviewCap ?? DEFAULT_DAILY_REVIEW_CAP;
+  if (cap !== null && (!Number.isInteger(cap) || cap < 1 || cap > instance)) {
+    throw new HttpError(
+      422,
+      'cap_out_of_range',
+      `Your daily review limit can be from 1 to ${instance}, this server's limit.`,
+      { max: instance },
+    );
+  }
+  return await withTransaction(db, async (tx) => {
+    await lockScope(tx, userScope(ctx));
+    if (cap === null) await deleteUserSetting(tx, ctx, DAILY_REVIEW_CAP_SETTING);
+    else await writeUserSetting(tx, ctx, DAILY_REVIEW_CAP_SETTING, cap);
+    await audit(tx, 'submission.review_cap_set', {
+      userId: ctx.userId,
+      detail: { cap, instanceCap: instance },
+    });
+    return await usageOf(tx, ctx, cfg, Date.now());
+  });
 }
 
 const reviewStale = (): HttpError =>

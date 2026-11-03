@@ -1405,3 +1405,57 @@ describe('an earlier submission can still be reported on (#148, tl)', () => {
     expect(screen.queryByRole('button', { name: 'I saw a confirmation' })).not.toBeInTheDocument();
   });
 });
+
+describe('the review screen shows the daily review usage from the server (#130)', () => {
+  it('"n of N reviews used in the last 24 hours" and when the next frees up', async () => {
+    const nextFreeAt = NOW + 3 * 60 * MIN;
+    mockApi(
+      routes(submission(), {
+        'GET /settings/applications': {
+          used: 4,
+          cap: 10,
+          instanceCap: 10,
+          userCap: null,
+          nextFreeAt,
+        },
+      }),
+    );
+    renderStep('review');
+    expect(await screen.findByText(/4 of 10 reviews used in the last 24 hours/)).toHaveTextContent(
+      `The next place frees up at ${formatDateTime(nextFreeAt)}.`,
+    );
+  });
+
+  it('a review reads the usage again, so the count moves with it', async () => {
+    const api = mockApi(
+      routes(submission(), {
+        'GET /settings/applications': {
+          used: 4,
+          cap: 10,
+          instanceCap: 10,
+          userCap: null,
+          nextFreeAt: null,
+        },
+        'POST /submissions/sub-1/review': submission({ status: 'reviewed' }),
+        'POST /submissions/sub-1/handoff': { destinationUrl: DEST, expiresAt: NOW },
+      }),
+    );
+    fakeWindowOpen();
+    const { user, router } = renderStep('review');
+    await screen.findByText(/4 of 10 reviews used/);
+    const before = calls(api.calls, 'GET', '/settings/applications').length;
+    await user.click(screen.getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: /confirm review/i }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'open' }));
+    await waitFor(() =>
+      expect(calls(api.calls, 'GET', '/settings/applications').length).toBeGreaterThan(before),
+    );
+  });
+
+  it('no line where the usage route is off', async () => {
+    mockApi(routes(submission()));
+    renderStep('review');
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.queryByText(/reviews used in the last 24 hours/)).not.toBeInTheDocument();
+  });
+});

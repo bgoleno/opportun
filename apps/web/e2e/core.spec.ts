@@ -27,7 +27,8 @@ test('register, set up, track opportunities, and see correct dashboard counts', 
   await page.goto('/settings/profile');
   await page.getByLabel('Full name').fill('Jane Example');
   await page.getByLabel('Headline').fill('Platform engineer for developer tools');
-  await page.getByRole('button', { name: /^Save/ }).click();
+  // Exact: the page also has the Applications card's own save (#130).
+  await page.getByRole('button', { name: 'Save profile' }).click();
   await expect(toasts(page).getByText('Profile saved')).toBeVisible();
 
   await page.goto('/settings/role-targets');
