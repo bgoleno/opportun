@@ -8,7 +8,10 @@
 // - each element, or, for a plain identifier, the initializer of the variable it names in that
 //   file, contains nothing token-like (the token, the settings that hold it, an auth header);
 // - the injected `func`, found by name among the source files' function declarations, never
-//   mentions a token or an auth header.
+//   mentions a token or an auth header;
+// - the options argument is an object literal, and `func` a bare identifier (sec's point on
+//   https://github.com/bgoleno/opportun/pull/185, taken in #183): anything else fails, because
+//   it cannot be checked. "A literal or it fails" holds for func as it does for args.
 // A filler added later (#183) is covered without changing this test. What it cannot see: a value
 // passed through a chain of variables or function calls; keep injected args to a literal built
 // in place from named fields.
@@ -41,39 +44,59 @@ interface Injection {
   args: ts.Expression | undefined;
   func: string | undefined;
   source: ts.SourceFile;
+  /** Why this call cannot be checked, which fails it; undefined when it can be. */
+  unreadable?: string;
+}
+
+/** The injections and named function declarations in one source text. */
+function parseSource(
+  file: string,
+  text: string,
+): { injections: Injection[]; functions: Map<string, string> } {
+  const injections: Injection[] = [];
+  const functions = new Map<string, string>();
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  walk(source, (n) => {
+    if (ts.isFunctionDeclaration(n) && n.name !== undefined) {
+      functions.set(n.name.text, n.getText(source));
+    }
+    if (!ts.isCallExpression(n) || !n.expression.getText(source).endsWith('executeScript')) return;
+    const options = n.arguments[0];
+    if (options === undefined || !ts.isObjectLiteralExpression(options)) {
+      injections.push({
+        file,
+        args: undefined,
+        func: undefined,
+        source,
+        unreadable: `options must be an object literal: ${n.getText(source)}`,
+      });
+      return;
+    }
+    const prop = (name: string) =>
+      options.properties.find(
+        (p): p is ts.PropertyAssignment =>
+          ts.isPropertyAssignment(p) && p.name.getText(source) === name,
+      )?.initializer;
+    const func = prop('func');
+    const funcOk = func === undefined || ts.isIdentifier(func);
+    injections.push({
+      file,
+      args: prop('args'),
+      func: func !== undefined && ts.isIdentifier(func) ? func.text : undefined,
+      source,
+      ...(funcOk ? {} : { unreadable: `func must be a bare identifier: ${func.getText(source)}` }),
+    });
+  });
+  return { injections, functions };
 }
 
 async function parse(): Promise<{ injections: Injection[]; functions: Map<string, string> }> {
   const injections: Injection[] = [];
   const functions = new Map<string, string>();
   for (const file of await sourceFiles(SRC)) {
-    const source = ts.createSourceFile(
-      file,
-      await readFile(file, 'utf8'),
-      ts.ScriptTarget.Latest,
-      true,
-    );
-    walk(source, (n) => {
-      if (ts.isFunctionDeclaration(n) && n.name !== undefined) {
-        functions.set(n.name.text, n.getText(source));
-      }
-      if (!ts.isCallExpression(n) || !n.expression.getText(source).endsWith('executeScript'))
-        return;
-      const options = n.arguments[0];
-      if (options === undefined || !ts.isObjectLiteralExpression(options)) return;
-      const prop = (name: string) =>
-        options.properties.find(
-          (p): p is ts.PropertyAssignment =>
-            ts.isPropertyAssignment(p) && p.name.getText(source) === name,
-        )?.initializer;
-      const func = prop('func');
-      injections.push({
-        file,
-        args: prop('args'),
-        func: func !== undefined && ts.isIdentifier(func) ? func.text : undefined,
-        source,
-      });
-    });
+    const one = parseSource(file, await readFile(file, 'utf8'));
+    injections.push(...one.injections);
+    for (const [name, body] of one.functions) functions.set(name, body);
   }
   return { injections, functions };
 }
@@ -96,6 +119,11 @@ function initializerOf(source: ts.SourceFile, name: string): string | undefined 
 }
 
 describe('the device token never goes into the page', () => {
+  it('every executeScript call can be read: an object literal, with a bare func', async () => {
+    const { injections } = await parse();
+    for (const i of injections) expect(i.unreadable, i.file).toBeUndefined();
+  });
+
   it('every injection passes literal args with nothing token-like in them', async () => {
     const { injections } = await parse();
     const withArgs = injections.filter((i) => i.args !== undefined);
@@ -117,11 +145,45 @@ describe('the device token never goes into the page', () => {
   it('every function injected into the page is found, and never mentions a token', async () => {
     const { injections, functions } = await parse();
     const funcs = injections.map((i) => i.func).filter((f): f is string => f !== undefined);
-    expect(funcs).toEqual(expect.arrayContaining(['extractPage', 'extractIndeedJob']));
+    // The prefill filler (#183) is injected too, and checked like the readers.
+    expect(funcs).toEqual(
+      expect.arrayContaining(['extractPage', 'extractIndeedJob', 'fillGreenhouseForm']),
+    );
     for (const name of funcs) {
       const body = functions.get(name);
       expect(body, `the injected function ${name} is declared in src`).toBeDefined();
       expect(body, name).not.toMatch(FUNC_TOKENISH);
     }
+  });
+});
+
+describe('the scan fails what it cannot read (sec on #185, taken in #183)', () => {
+  const bad = (text: string) => parseSource('bad.ts', text).injections;
+
+  it('an options argument that is not an object literal is unreadable', () => {
+    for (const call of [
+      'chrome.scripting.executeScript(injection);',
+      'chrome.scripting.executeScript(make());',
+    ]) {
+      const [i] = bad(call);
+      expect(i?.unreadable).toMatch(/options must be an object literal/);
+    }
+  });
+
+  it('a func that is not a bare identifier is unreadable', () => {
+    for (const func of ['() => document.title', 'mod.fill', 'function () { return 1; }']) {
+      const [i] = bad(
+        `chrome.scripting.executeScript({ target: { tabId: 1 }, func: ${func}, args: [] });`,
+      );
+      expect(i?.unreadable, func).toMatch(/func must be a bare identifier/);
+    }
+  });
+
+  it('a readable call is not flagged', () => {
+    const [i] = bad(
+      'chrome.scripting.executeScript({ target: { tabId: 1 }, func: fill, args: [plan] });',
+    );
+    expect(i?.unreadable).toBeUndefined();
+    expect(i?.func).toBe('fill');
   });
 });
