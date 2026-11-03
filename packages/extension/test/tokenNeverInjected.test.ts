@@ -9,9 +9,11 @@
 //   file, contains nothing token-like (the token, the settings that hold it, an auth header);
 // - the injected `func`, found by name among the source files' function declarations, never
 //   mentions a token or an auth header;
-// - the options argument is an object literal, and `func` a bare identifier (sec's point on
-//   https://github.com/bgoleno/opportun/pull/185, taken in #183): anything else fails, because
-//   it cannot be checked. "A literal or it fails" holds for func as it does for args.
+// - the options argument is one object literal of `name: value` options, exactly target
+//   (`{ tabId }` alone), func (a bare identifier) and args (an array literal, no spread), and
+//   every other mention of executeScript fails (sec's point on
+//   https://github.com/bgoleno/opportun/pull/185, and tl's point 8 on #187, taken in #183):
+//   anything the scan cannot read fails, because it cannot be checked.
 // A filler added later (#183) is covered without changing this test. What it cannot see: a value
 // passed through a chain of variables or function calls; keep injected args to a literal built
 // in place from named fields.
@@ -48,7 +50,62 @@ interface Injection {
   unreadable?: string;
 }
 
-/** The injections and named function declarations in one source text. */
+/** The one call shape the scan reads: `x.executeScript({ target: { tabId }, func, args: [...] })`. */
+function readCall(file: string, source: ts.SourceFile, call: ts.CallExpression): Injection {
+  const fail = (why: string): Injection => ({
+    file,
+    args: undefined,
+    func: undefined,
+    source,
+    unreadable: `${why}: ${call.getText(source)}`,
+  });
+  const options = call.arguments[0];
+  if (call.arguments.length !== 1 || options === undefined) {
+    return fail('executeScript takes exactly one options argument');
+  }
+  if (!ts.isObjectLiteralExpression(options)) return fail('options must be an object literal');
+  const props = new Map<string, ts.Expression>();
+  for (const p of options.properties) {
+    // No shorthand, spread, quoted or computed key: each option is written `name: value`.
+    if (!ts.isPropertyAssignment(p) || !ts.isIdentifier(p.name)) {
+      return fail(`every option must be written name: value (${p.getText(source)})`);
+    }
+    props.set(p.name.text, p.initializer);
+  }
+  for (const key of props.keys()) {
+    if (!['target', 'func', 'args'].includes(key))
+      return fail(`only target, func and args (${key})`);
+  }
+  // The top frame of one tab: `{ tabId }` and nothing else (no allFrames, no frameIds).
+  const target = props.get('target');
+  if (
+    target === undefined ||
+    !ts.isObjectLiteralExpression(target) ||
+    target.properties.length !== 1 ||
+    target.properties[0]?.name?.getText(source) !== 'tabId' ||
+    !(
+      ts.isShorthandPropertyAssignment(target.properties[0]) ||
+      ts.isPropertyAssignment(target.properties[0])
+    )
+  ) {
+    return fail('target must be { tabId } alone');
+  }
+  const func = props.get('func');
+  if (func === undefined || !ts.isIdentifier(func)) return fail('func must be a bare identifier');
+  const args = props.get('args');
+  if (args === undefined || !ts.isArrayLiteralExpression(args)) {
+    return fail('args must be an array literal written in the call');
+  }
+  if (args.elements.some((e) => ts.isSpreadElement(e))) return fail('args may not spread');
+  return { file, args, func: func.text, source };
+}
+
+/**
+ * The injections and named function declarations in one source text. Every mention of the name
+ * executeScript (sec on #187) is either a direct call the scan reads, or the API's type
+ * signature; any other (an alias, element access, .call or .apply, Reflect) fails, so nothing
+ * escapes the scan by being written another way.
+ */
 function parseSource(
   file: string,
   text: string,
@@ -60,31 +117,25 @@ function parseSource(
     if (ts.isFunctionDeclaration(n) && n.name !== undefined) {
       functions.set(n.name.text, n.getText(source));
     }
-    if (!ts.isCallExpression(n) || !n.expression.getText(source).endsWith('executeScript')) return;
-    const options = n.arguments[0];
-    if (options === undefined || !ts.isObjectLiteralExpression(options)) {
-      injections.push({
-        file,
-        args: undefined,
-        func: undefined,
-        source,
-        unreadable: `options must be an object literal: ${n.getText(source)}`,
-      });
+    const named = (ts.isIdentifier(n) || ts.isStringLiteralLike(n)) && n.text === 'executeScript';
+    if (!named) return;
+    const parent = n.parent;
+    if (ts.isMethodSignature(parent) && parent.name === n) return;
+    if (
+      ts.isPropertyAccessExpression(parent) &&
+      parent.name === n &&
+      ts.isCallExpression(parent.parent) &&
+      parent.parent.expression === parent
+    ) {
+      injections.push(readCall(file, source, parent.parent));
       return;
     }
-    const prop = (name: string) =>
-      options.properties.find(
-        (p): p is ts.PropertyAssignment =>
-          ts.isPropertyAssignment(p) && p.name.getText(source) === name,
-      )?.initializer;
-    const func = prop('func');
-    const funcOk = func === undefined || ts.isIdentifier(func);
     injections.push({
       file,
-      args: prop('args'),
-      func: func !== undefined && ts.isIdentifier(func) ? func.text : undefined,
+      args: undefined,
+      func: undefined,
       source,
-      ...(funcOk ? {} : { unreadable: `func must be a bare identifier: ${func.getText(source)}` }),
+      unreadable: `executeScript must be called directly as x.executeScript({ ... }): ${parent.getText(source)}`,
     });
   });
   return { injections, functions };
