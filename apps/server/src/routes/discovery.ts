@@ -7,6 +7,8 @@ import {
   DISPOSITIONS,
   newId,
   NormalizedPostingSchema,
+  PREFILTER_OUTCOMES,
+  PREFILTER_RULES,
   RANK_SKIP_REASONS,
   RESOLUTIONS,
 } from '@opportun/core';
@@ -26,6 +28,7 @@ import {
   getResult,
   getSourceRow,
   listResults,
+  prefilterRecall,
   listRuns,
   listSources,
   RESULT_SORTS,
@@ -54,6 +57,10 @@ const ResultSchema = z.object({
   dedupeKey: z.string().nullable(),
   aiScore: z.number().nullable(),
   aiRationale: z.string().nullable(),
+  /** The pre-filter's verdict (#217, shadow mode); null for a posting it did not judge. */
+  prefilterOutcome: z.enum(PREFILTER_OUTCOMES).nullable(),
+  prefilterRule: z.enum(PREFILTER_RULES).nullable(),
+  prefilterScore: z.number().nullable(),
   /** Why ranking was skipped (#210), until the result is ranked; null otherwise. */
   rankSkipReason: z.enum(RANK_SKIP_REASONS).nullable(),
   resolution: z.enum(RESOLUTIONS),
@@ -71,6 +78,15 @@ const ResultSchema = z.object({
   dismissNote: z.string().nullable(),
   createdAt: z.number().int(),
   updatedAt: z.number().int(),
+});
+
+const PrefilterRecallSchema = z.object({
+  /** Accepted postings the pre-filter judged: what the figure is based on. */
+  positives: z.number().int(),
+  /** How many of them it would have kept. */
+  kept: z.number().int(),
+  /** kept / positives, 0 to 1; null with none yet. */
+  recall: z.number().nullable(),
 });
 
 const ResultListQuery = listQuery([...RESULT_SORTS.keys()]).extend({
@@ -225,6 +241,13 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     '/discovery/results',
     { schema: { querystring: ResultListQuery, response: { 200: pageOf(ResultSchema) } } },
     async (req) => await listResults(db, app.requireUser(req), req.query),
+  );
+
+  // The pre-filter's recall on what the user accepted (#217): measured, acting on nothing yet.
+  api.get(
+    '/discovery/prefilter/recall',
+    { schema: { response: { 200: PrefilterRecallSchema } } },
+    async (req) => await prefilterRecall(db, app.requireUser(req)),
   );
 
   api.get(

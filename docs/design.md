@@ -295,17 +295,18 @@ Each AI feature is a **task**: `{ task_key, description, default_prompt,
 default_policy, input_schema, output_schema }`, registered in `packages/ai`.
 Launch tasks:
 
-| task_key                | Purpose                                                        | Default policy shape                     |
-| ----------------------- | -------------------------------------------------------------- | ---------------------------------------- |
-| resume.tailor           | Interactive tailoring chat (FR-R4)                             | most capable configured model, streaming |
-| discovery.rank          | Score posting vs role target (FR-D4)                           | mid-tier model, batched                  |
-| discovery.refine_prompt | Propose prompt edits from dismissals (FR-D6)                   | capable model, scheduled                 |
-| comms.classify          | Classify, outreach-filter, and link messages (FR-M2, FR-M8)    | small/fast model, batched                |
-| opportunity.dedupe      | Duplicate and multi-recruiter repost detection (FR-O7, FR-O10) | small model after cheap heuristics       |
-| referral.rationale      | Rank referral candidates (FR-C3)                               | mid-tier model                           |
-| capture.extract         | Parse pasted job posting into fields (FR-D1)                   | small model, structured output           |
-| resume.match            | Score resume vs job description with gap report (FR-R8)        | mid-tier model, structured output        |
-| company.suggest         | Propose fitting companies from resume + role targets (FR-D8)   | capable model, scheduled                 |
+| task_key                 | Purpose                                                        | Default policy shape                     |
+| ------------------------ | -------------------------------------------------------------- | ---------------------------------------- |
+| resume.tailor            | Interactive tailoring chat (FR-R4)                             | most capable configured model, streaming |
+| discovery.rank           | Score posting vs role target (FR-D4)                           | mid-tier model, batched                  |
+| discovery.refine_prompt  | Propose prompt edits from dismissals (FR-D6)                   | capable model, scheduled                 |
+| discovery.title_variants | List equivalent titles for one role target (#217)              | mid-tier model, on target create/rename  |
+| comms.classify           | Classify, outreach-filter, and link messages (FR-M2, FR-M8)    | small/fast model, batched                |
+| opportunity.dedupe       | Duplicate and multi-recruiter repost detection (FR-O7, FR-O10) | small model after cheap heuristics       |
+| referral.rationale       | Rank referral candidates (FR-C3)                               | mid-tier model                           |
+| capture.extract          | Parse pasted job posting into fields (FR-D1)                   | small model, structured output           |
+| resume.match             | Score resume vs job description with gap report (FR-R8)        | mid-tier model, structured output        |
+| company.suggest          | Propose fitting companies from resume + role targets (FR-D8)   | capable model, scheduled                 |
 
 The **router** resolves `task_key → {provider, model, params}` from user settings
 overlaid on defaults, acquires the decrypted key, enforces per-task token ceilings

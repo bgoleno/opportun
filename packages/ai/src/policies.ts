@@ -10,6 +10,8 @@ export const DEFAULT_POLICIES: Readonly<Record<TaskKey, Readonly<ModelPolicy>>> 
   'resume.tailor': { provider: 'anthropic', model: OPUS, maxOutputTokens: 16_000 },
   'resume.match': { provider: 'anthropic', model: SONNET, maxOutputTokens: 4_000 },
   'discovery.rank': { provider: 'anthropic', model: SONNET, maxOutputTokens: 4_000 },
+  // One call per role target when it is created or its title changes (#217, tl's 4.4).
+  'discovery.title_variants': { provider: 'anthropic', model: SONNET, maxOutputTokens: 2_000 },
   'discovery.refine_prompt': { provider: 'anthropic', model: SONNET, maxOutputTokens: 4_000 },
   // Stage 2 of the mail funnel: one yes/no question about a sender, a subject and 500
   // characters, asked on every message Stage 1 positively passed. Cheapest capable model.

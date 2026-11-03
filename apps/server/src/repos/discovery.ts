@@ -8,7 +8,18 @@ import {
   type RankSkipReason,
   type Resolution,
 } from '@opportun/core';
-import { and, asc, count, eq, getTableColumns, inArray, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  eq,
+  getTableColumns,
+  inArray,
+  isNotNull,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
+import type { PrefilterVerdict } from '../lib/prefilter';
 import { z } from 'zod';
 import { SOURCE_CONFIG_SCHEMAS, type SourceKind } from '../adapters/discoverySource';
 import {
@@ -505,6 +516,8 @@ export interface ResultInput {
   aiRationale?: string | null | undefined;
   /** The message this lead was parsed out of, for a channel that delivers postings by mail. */
   sourceCommunicationId?: string | null | undefined;
+  /** The pre-filter's verdict (#217), for a board posting; absent for any other. */
+  prefilter?: PrefilterVerdict | null | undefined;
 }
 
 export async function insertResult(
@@ -526,6 +539,9 @@ export async function insertResult(
       resolution: input.resolution,
       aiRationale: input.aiRationale ?? null,
       sourceCommunicationId: input.sourceCommunicationId ?? null,
+      prefilterOutcome: input.prefilter?.outcome ?? null,
+      prefilterRule: input.prefilter?.rule ?? null,
+      prefilterScore: input.prefilter?.score ?? null,
       createdAt: now,
       updatedAt: now,
     })
@@ -644,6 +660,35 @@ export async function setRanking(
     .where(ownedResult(ctx, id))
     .run();
   return await getResult(exec, ctx, id);
+}
+
+/**
+ * How the pre-filter would have done on what the user decided (#217, tl's proposal 4.3): of the
+ * postings they accepted that it judged, how many it would have kept. Accepted (moved to the
+ * pipeline) is the only "wanted" a result records. A posting from before the filter, or from a
+ * source it does not judge, has no outcome and is not counted. Recall is null with none yet.
+ */
+export async function prefilterRecall(
+  exec: Exec,
+  ctx: UserCtx,
+): Promise<{ positives: number; kept: number; recall: number | null }> {
+  const row = await exec
+    .select({
+      positives: count(),
+      kept: sql<number>`coalesce(sum(case when ${discoveryResults.prefilterOutcome} = 'pass' then 1 else 0 end), 0)`,
+    })
+    .from(discoveryResults)
+    .where(
+      and(
+        eq(discoveryResults.userId, ctx.userId),
+        eq(discoveryResults.disposition, 'accepted'),
+        isNotNull(discoveryResults.prefilterOutcome),
+      ),
+    )
+    .get();
+  const positives = Number(row?.positives ?? 0);
+  const kept = Number(row?.kept ?? 0);
+  return { positives, kept, recall: positives === 0 ? null : kept / positives };
 }
 
 /**

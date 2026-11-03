@@ -35,6 +35,8 @@ const TailorInput = vars('resume_rules', 'base_resume', 'jd_untrusted', 'match_r
 const MatchInput = vars('resume_text', 'jd_untrusted');
 const RankInput = vars('role_target', 'posting_untrusted');
 const RefineInput = vars('current_prompt', 'feedback_summary');
+/** One role target, as the user wrote it (#217): the titles it means, to expand into variants. */
+const TitleVariantsInput = vars('role_target');
 /** Stage 2's gate: the sender, the subject and a 500-character head of the body, fenced. */
 const TriageInput = vars('message_untrusted');
 const ClassifyInput = vars('role_targets', 'open_opportunities_untrusted', 'message_untrusted');
@@ -92,6 +94,15 @@ export const RankOutputSchema = z.object({
   score: PercentScoreSchema,
   rationale: z.string().max(1000),
   disqualifiers: z.array(z.string().max(200)).max(10),
+});
+
+/**
+ * Job titles equivalent to a role target's (#217): what a posting for the same work may be
+ * called. The pre-filter matches posting titles against them. 20 to 40 are asked for; the server
+ * trims, de-duplicates and keeps at most 40, so a longer or shorter answer is still usable.
+ */
+export const TitleVariantsOutputSchema = z.object({
+  titles: z.array(z.string().min(1).max(200)).max(80),
 });
 
 export const RefineOutputSchema = z.object({
@@ -254,6 +265,12 @@ export const TASKS: Record<TaskKey, TaskDef<any, any>> = {
     'Scores one discovered job posting against one role target, with disqualifiers.',
     RankInput,
     RankOutputSchema,
+  ),
+  'discovery.title_variants': def(
+    'discovery.title_variants',
+    'Lists 20 to 40 job titles equivalent to one role target, for the discovery pre-filter.',
+    TitleVariantsInput,
+    TitleVariantsOutputSchema,
   ),
   'discovery.refine_prompt': def(
     'discovery.refine_prompt',

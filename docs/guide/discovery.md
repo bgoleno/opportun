@@ -89,6 +89,19 @@ role target is judged against all your role targets in that one call). A busy bo
 the model reading your role target and the posting text; it misses things a posting leaves
 out, so skim the low scorers occasionally.
 
+**The title pre-filter (measuring only).** Each new posting from a job board also gets a
+pass or filtered verdict from a cheap, local check: does its title match your role target, and
+does its stated location and remote setting fit? It needs no AI call per posting and, for now,
+changes nothing: every posting is still ranked. **Decided** shows how often it would have kept
+the postings you accepted, with the count, so you can judge it before it is ever turned on.
+Postings from job-alert emails are not checked.
+
+It compares titles with each role target's **title variants** (**Settings > Role targets**):
+20 to 40 equivalent titles, made by one `discovery.title_variants` AI call when you add a target
+or change its name or title family. That call sends the target's name, title family, seniority
+range and keywords, and nothing else. You can edit the list. A new name or title family
+replaces it with a fresh one.
+
 ## Decided results
 
 Accepting or dismissing a result keeps a later sighting of the same job (same company, title

@@ -696,8 +696,10 @@ describe.runIf(sqliteOnly)('migration journal', () => {
         .all() as { id: string; body: string; version: number; active: number }[];
     const others = (db: Database.Database) =>
       db
-        .prepare(`SELECT id, body FROM prompts WHERE task_key <> 'capture.linkedin' ORDER BY id`)
-        .all();
+        .prepare(
+          `SELECT id, user_id, task_key, body FROM prompts WHERE task_key <> 'capture.linkedin' ORDER BY id`,
+        )
+        .all() as { id: string; user_id: string | null; task_key: string; body: string }[];
     // A user's own version of the prompt, made from the old default, is theirs: left alone.
     const userId = newId();
     old
@@ -728,8 +730,17 @@ describe.runIf(sqliteOnly)('migration journal', () => {
       expect(body).not.toContain('clean Markdown');
       expect(promptVariables(body)).toEqual([...TASK_PROMPT_VARS['capture.linkedin']]);
       expect(body).not.toContain(String.fromCharCode(0x2014));
-      // Everything else is untouched, including the user's own version.
-      expect(others(sqlite)).toEqual(othersBefore);
+      // Everything else is untouched, including the user's own version. The upgrade runs the
+      // whole chain, so a later migration may seed a new task's system default
+      // (discovery.title_variants, #217): such a row is a system default of a task that had none.
+      const known = new Set(othersBefore.map((r) => r.id));
+      const rowsAfter = others(sqlite);
+      expect(rowsAfter.filter((r) => known.has(r.id))).toEqual(othersBefore);
+      const tasksBefore = new Set(othersBefore.map((r) => r.task_key));
+      for (const added of rowsAfter.filter((r) => !known.has(r.id))) {
+        expect(added.user_id, added.task_key).toBeNull();
+        expect(tasksBefore.has(added.task_key), added.task_key).toBe(false);
+      }
       const mine = sqlite
         .prepare(`SELECT body FROM prompts WHERE user_id = ? AND task_key = 'capture.linkedin'`)
         .get(userId) as { body: string };

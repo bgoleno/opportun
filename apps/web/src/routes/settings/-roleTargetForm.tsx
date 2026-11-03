@@ -17,6 +17,7 @@ import { FormField } from '@/components/FormField';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select } from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 import {
   applyServerError,
   joinList,
@@ -66,6 +67,24 @@ const listField = (coreField: typeof core.industries) =>
     .pipe(z.array(z.string().max(200, 'Keep each entry under 200 characters')).max(100))
     .pipe(coreField.unwrap());
 
+/**
+ * One title per line, not comma separated: a job title can hold a comma ("Engineer, Platform").
+ * The same limit as the server's (#217).
+ */
+const titleVariantsField = z
+  .string()
+  .transform((s) =>
+    s
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== ''),
+  )
+  .pipe(
+    z
+      .array(z.string().max(200, 'Keep each title under 200 characters'))
+      .max(40, 'Keep the list to 40 titles or fewer'),
+  );
+
 const RoleTargetFormSchema = z
   .object({
     name: z.string().trim().min(1, 'Enter a name').max(200).pipe(core.name),
@@ -75,6 +94,7 @@ const RoleTargetFormSchema = z
     industries: listField(core.industries),
     keywords: listField(core.keywords),
     locations: listField(core.locations),
+    titleVariants: titleVariantsField,
     remotePref: z.enum(REMOTE_PREFS),
     compMin: optionalWholeNumber.pipe(core.compMin.unwrap()),
     compMax: optionalWholeNumber.pipe(core.compMax.unwrap()),
@@ -107,8 +127,13 @@ const RoleTargetFormSchema = z
   });
 
 type FormInput = z.input<typeof RoleTargetFormSchema>;
-/** The POST /role-targets (and full PATCH) body. */
-export type RoleTargetPayload = z.output<typeof RoleTargetFormSchema>;
+type FormOutput = z.output<typeof RoleTargetFormSchema>;
+/**
+ * The POST /role-targets (and full PATCH) body. The title variants go only when the user changed
+ * them (#217): a save that leaves them alone must not stand in for an edit, or a new name would
+ * not get a new list, and a form opened before the AI's list arrived would wipe it.
+ */
+export type RoleTargetPayload = Omit<FormOutput, 'titleVariants'> & { titleVariants?: string[] };
 
 const FIELDS = Object.keys(RoleTargetFormSchema.shape);
 
@@ -121,6 +146,7 @@ function toFormValues(t?: RoleTargetPayload): FormInput {
     industries: joinList(t?.industries),
     keywords: joinList(t?.keywords),
     locations: joinList(t?.locations),
+    titleVariants: (t?.titleVariants ?? []).join('\n'),
     remotePref: t?.remotePref ?? 'any',
     compMin: numberText(t?.compMin),
     compMax: numberText(t?.compMax),
@@ -136,7 +162,7 @@ export function RoleTargetForm(props: {
   submitLabel: string;
 }) {
   const [formError, setFormError] = useState<string | null>(null);
-  const form = useForm<FormInput, unknown, RoleTargetPayload>({
+  const form = useForm<FormInput, unknown, FormOutput>({
     resolver: zodResolver(RoleTargetFormSchema),
     defaultValues: toFormValues(props.initial),
   });
@@ -145,7 +171,9 @@ export function RoleTargetForm(props: {
   const submit = form.handleSubmit(async (payload) => {
     setFormError(null);
     try {
-      await props.onSubmit(payload);
+      const { titleVariants, ...rest } = payload;
+      const edited = form.formState.dirtyFields.titleVariants === true;
+      await props.onSubmit(edited ? { ...rest, titleVariants } : rest);
     } catch (err) {
       setFormError(applyServerError(err, form.setError, FIELDS));
     }
@@ -192,6 +220,13 @@ export function RoleTargetForm(props: {
       </FormField>
       <FormField label="Locations" error={errors.locations?.message} hint="Comma separated.">
         {(p) => <Input {...p} {...form.register('locations')} />}
+      </FormField>
+      <FormField
+        label="Title variants"
+        error={errors.titleVariants?.message}
+        hint="One title per line, up to 40. Discovery compares posting titles with these. Opportun asks the AI for a new list when you add a target or change its name or title family, replacing this one."
+      >
+        {(p) => <Textarea {...p} rows={5} {...form.register('titleVariants')} />}
       </FormField>
       <div className="grid gap-4 sm:grid-cols-3">
         <FormField label="Work arrangement" error={errors.remotePref?.message}>

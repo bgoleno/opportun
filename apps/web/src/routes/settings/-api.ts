@@ -100,6 +100,7 @@ export function useCreateRoleTarget() {
         ...page.items,
         {
           ...body,
+          titleVariants: body.titleVariants ?? [],
           id: tempId(),
           userId: '',
           discoveryPromptId: null,

@@ -54,6 +54,7 @@ function toPayload(t: RoleTarget): RoleTargetPayload {
     industries: t.industries,
     keywords: t.keywords,
     locations: t.locations,
+    titleVariants: t.titleVariants,
     remotePref: t.remotePref,
     compMin: t.compMin ?? null,
     compMax: t.compMax ?? null,

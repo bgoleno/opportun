@@ -57,6 +57,8 @@ import {
   POSTING_STATE_DETAILS,
   POSTING_STATES,
   REMOTE_PREFS,
+  PREFILTER_OUTCOMES,
+  PREFILTER_RULES,
   RANK_SKIP_REASONS,
   RESOLUTIONS,
   RESUME_KINDS,
@@ -273,6 +275,8 @@ export const roleTargets = pgTable(
     seniorityMax: int('seniority_max'),
     industries: json<string[]>('industries').notNull().default([]),
     keywords: json<string[]>('keywords').notNull().default([]),
+    /** Equivalent job titles for the discovery pre-filter (#217); AI-made, user-editable. */
+    titleVariants: json<string[]>('title_variants').notNull().default([]),
     locations: json<string[]>('locations').notNull().default([]),
     remotePref: text('remote_pref', { enum: REMOTE_PREFS }).notNull().default('any'),
     compMin: int('comp_min'),
@@ -655,6 +659,10 @@ export const discoveryResults = pgTable(
     dedupeKey: text('dedupe_key'),
     aiScore: doublePrecision('ai_score'),
     aiRationale: text('ai_rationale'),
+    /** The pre-filter's verdict, rule and title score (#217, shadow mode); null when not judged. */
+    prefilterOutcome: text('prefilter_outcome', { enum: PREFILTER_OUTCOMES }),
+    prefilterRule: text('prefilter_rule', { enum: PREFILTER_RULES }),
+    prefilterScore: doublePrecision('prefilter_score'),
     /** Why ranking was skipped, until it is ranked (#210); null otherwise. */
     rankSkipReason: text('rank_skip_reason', { enum: RANK_SKIP_REASONS }),
     resolution: text('resolution', { enum: RESOLUTIONS }).notNull(),
