@@ -41,7 +41,9 @@ export interface SourceVolume {
   openJobs: number | null;
   /** Stored new postings a day; null with no run after its first success ("no data yet"). */
   newPerDay: number | null;
-  /** The days the rate is averaged over: 14, fewer for a newer source, 0 with no rate. */
+  /** The whole days the rate covers, for its label: 14 once the span reaches 14 days, else the
+   *  span rounded down and at least 1; 0 with no rate. The rate itself divides by the exact
+   *  span (at least 1 day). */
   days: number;
   /** Each stored posting is ranked once, so this equals newPerDay. */
   rankCallsPerDay: number | null;
@@ -177,9 +179,15 @@ export async function discoveryCostFigures(
       const start = Math.max(now - VOLUME_DAYS * DAY_MS, backfill.startedAt);
       const inWindow = later.filter((r) => r.startedAt >= start);
       if (inWindow.length === 0) return none;
-      const days = Math.min(VOLUME_DAYS, Math.max(1, Math.ceil((now - start) / DAY_MS)));
+      // tl's rule on #212: divide by the exact span, so a young board is not divided by days it
+      // has not run (rounding up gave 5 a day where 9.6 were stored). At least 1 day, so a run
+      // hours after the backfill does not extrapolate a day from a few hours; at most 14. The
+      // label's days are the span rounded down, at least 1: under 14 it reads "(n days)".
+      const span = (now - start) / DAY_MS;
+      const divisor = Math.min(VOLUME_DAYS, Math.max(1, span));
+      const days = span >= VOLUME_DAYS ? VOLUME_DAYS : Math.max(1, Math.floor(span));
       const stored = inWindow.reduce((sum, r) => sum + (statNumber(r.stats, 'inserted') ?? 0), 0);
-      const newPerDay = stored / days;
+      const newPerDay = stored / divisor;
       return {
         ...none,
         newPerDay,

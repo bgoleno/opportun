@@ -10,7 +10,9 @@ const NO_DATA = 'no data yet';
 
 /** A rate a day, with the days it covers while they are fewer than 14. */
 const rate = (value: number | null, days: number): string =>
-  value === null ? NO_DATA : `${perDay.format(value)}${days < 14 ? ` (${days} days)` : ''}`;
+  value === null
+    ? NO_DATA
+    : `${perDay.format(value)}${days < 14 ? ` (${days} ${days === 1 ? 'day' : 'days'})` : ''}`;
 
 function cost(v: SourceVolumeFigures): string {
   if (v.newPerDay === null) return NO_DATA;
