@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { communications, jobs } from '../src/db/schema';
@@ -17,7 +17,7 @@ import { CLASSIFY_JOB_KIND, enqueueClassify } from '../src/jobs/mailIngest';
 import { enqueue, runDueJobs } from '../src/jobs/runner';
 import { bindVaultKey, decryptSecret } from '../src/lib/secretBox';
 import { useApi } from './api';
-import { testDialect } from './db';
+import { queryAll, testDialect } from './db';
 import type { TestClient } from './isolation';
 
 const boot = useApi();
@@ -146,7 +146,8 @@ describe('the classify job carries the body sealed (#175)', () => {
       expect((await classifyJob(app))?.status).toBe('done');
       expect((await databaseBytes(dataDir)).includes(sentinel)).toBe(false);
       // Moves every WAL frame, old row images included, into the main file's pages.
-      await app.db.run(sql`PRAGMA wal_checkpoint(TRUNCATE)`);
+      const [checkpoint] = await queryAll<{ busy: number }>(app, 'PRAGMA wal_checkpoint(TRUNCATE)');
+      expect(checkpoint?.busy).toBe(0);
       expect((await databaseBytes(dataDir)).includes(sentinel)).toBe(false);
     },
   );
