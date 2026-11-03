@@ -181,7 +181,8 @@ function DecidedRow({
       onClick={onSelect}
       onFocus={onSelect}
       className={cn(
-        'grid gap-2 rounded-xl border bg-card p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        // grid-cols-1, not a bare grid: see QueueRow.tsx on the queue's cards (#193).
+        'grid grid-cols-1 gap-2 rounded-xl border bg-card p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring',
         selected && 'border-primary ring-1 ring-primary',
       )}
     >
@@ -196,11 +197,11 @@ function DecidedRow({
         </span>
       </div>
       <div className="grid gap-0.5">
-        <span className="font-medium break-words">{p.title}</span>
-        <span className="text-sm break-words text-muted-foreground">{p.company}</span>
+        <span className="font-medium [overflow-wrap:anywhere]">{p.title}</span>
+        <span className="text-sm [overflow-wrap:anywhere] text-muted-foreground">{p.company}</span>
       </div>
       {r.dismissReason !== null ? (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs [overflow-wrap:anywhere] text-muted-foreground">
           Dismissed: {dismissReasonLabel(r.dismissReason as DismissReason)}
           {/* issue #199: the denied company's own name, so this reads as "Oracle" rather than
            *  a bare reason label that leaves the reader to guess which company matched. */}

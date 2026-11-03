@@ -121,3 +121,23 @@ describe('TimelineList activity body (issue #236)', () => {
     );
   });
 });
+
+describe('TimelineList: a recorded confirmation page (#121)', () => {
+  it('shows the page text as plain text, never as Markdown', async () => {
+    setup([
+      activity({
+        id: 'act-page',
+        activityKind: 'confirmation_page',
+        title: 'Confirmation page recorded (boards.greenhouse.io)',
+        bodyMd: '# Thanks\n**Bold** [link](https://example.com)',
+      }),
+      activity({ id: 'act-note', bodyMd: 'A **real** note' }),
+    ]);
+    const typed = await screen.findByText(/# Thanks/);
+    expect(typed).toHaveTextContent('**Bold** [link](https://example.com)');
+    expect(screen.queryByRole('heading', { name: 'Thanks' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'link' })).toBeNull();
+    // A note is still Markdown.
+    expect(screen.getByText('real').tagName).toBe('STRONG');
+  });
+});

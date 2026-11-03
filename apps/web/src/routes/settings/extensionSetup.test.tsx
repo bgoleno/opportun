@@ -289,6 +289,10 @@ describe('ExtensionSetupDialog: assisted apply', () => {
     const { calls } = show(ON);
     const box = await screen.findByRole('checkbox', { name: /assisted apply/i });
     expect(box).not.toBeChecked();
+    // What it can read is stated, the confirmation lookup included (sec on #199).
+    expect(box.closest('label')).toHaveTextContent(
+      /asking first which of your applications a page belongs to: its title and company/,
+    );
     await mint(user);
     await screen.findByText(TOKEN);
     const post = calls.find((c) => c.method === 'POST' && c.path === '/device-tokens');

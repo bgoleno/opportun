@@ -74,7 +74,11 @@ import { attachmentRoutes } from './routes/attachments';
 import { backupRoutes } from './routes/backups';
 import { authRoutes } from './routes/auth';
 import { captureRoutes } from './routes/capture';
-import { connectorApplyRoutes, CONNECTOR_APPLY_CURRENT_PATH } from './routes/connectorApply';
+import {
+  connectorApplyRoutes,
+  CONNECTOR_APPLY_CONFIRMABLE_PATH,
+  CONNECTOR_APPLY_CURRENT_PATH,
+} from './routes/connectorApply';
 import { connectorCaptureRoutes } from './routes/connectorCapture';
 import { communicationRoutes } from './routes/communications';
 import { companyRoutes } from './routes/companies';
@@ -216,12 +220,13 @@ export const LOG_REDACT_PATHS = [
 
 /**
  * Request urls whose query string is not logged: the OAuth code and state, and the ATS page the
- * extension is on (`?url=`, #182: only its host is recorded, in the audit entry).
+ * extension is on (`?url=`, #182 and #121: only its host is recorded, in the audit entry).
  */
 const QUERY_REDACTED_PATHS: ReadonlySet<string> = new Set([
   GOOGLE_CALLBACK_PATH,
   ...OAUTH_PROVIDERS.map(oauthCallbackPath),
   CONNECTOR_APPLY_CURRENT_PATH,
+  CONNECTOR_APPLY_CONFIRMABLE_PATH,
 ]);
 
 /** OPPORTUN_HOST values that answer this machine only, never another device (issue #24). */

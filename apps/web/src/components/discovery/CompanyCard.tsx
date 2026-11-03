@@ -88,7 +88,7 @@ export function DeniedCompanyRow(props: {
       aria-label={c.name}
       className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-4"
     >
-      <span className="min-w-0 font-medium break-words">{c.name}</span>
+      <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{c.name}</span>
       <Button
         size="sm"
         variant="outline"
@@ -118,13 +118,13 @@ export function SuggestionCard(props: {
       data-company-id={c.id}
     >
       <div className="grid gap-0.5">
-        <span className="font-medium break-words">{c.name}</span>
+        <span className="font-medium [overflow-wrap:anywhere]">{c.name}</span>
         {c.domain ? (
-          <span className="text-sm break-words text-muted-foreground">{c.domain}</span>
+          <span className="text-sm [overflow-wrap:anywhere] text-muted-foreground">{c.domain}</span>
         ) : null}
       </div>
       {c.suggestionRationale ? (
-        <p className="text-sm break-words">
+        <p className="text-sm [overflow-wrap:anywhere]">
           <span className="text-muted-foreground">Why: </span>
           {c.suggestionRationale}
         </p>
@@ -160,7 +160,12 @@ export function AtsStatusChip({ company: c }: { company: CompanyView }) {
   const found = c.atsKind != null && c.atsKind !== 'none';
   const verified = c.atsVerifiedAt != null ? ` (checked ${formatDate(c.atsVerifiedAt)})` : '';
   return (
-    <Badge variant={found ? 'success' : c.atsKind === 'none' ? 'secondary' : 'outline'}>
+    // A board slug can be long and unbroken: the badge wraps rather than keeping one line, which
+    // made the Companies tab wider than a phone (qa on https://github.com/bgoleno/opportun/pull/195).
+    <Badge
+      variant={found ? 'success' : c.atsKind === 'none' ? 'secondary' : 'outline'}
+      className="shrink whitespace-normal [overflow-wrap:anywhere]"
+    >
       {atsLabel(c.atsKind)}
       {found && c.atsRef ? `: ${c.atsRef}` : ''}
       {verified}
@@ -203,7 +208,7 @@ export function FollowedCompanyRow(props: {
   return (
     <li aria-label={c.name} className="grid gap-2 rounded-xl border bg-card p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="min-w-0 font-medium break-words">{c.name}</span>
+        <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{c.name}</span>
         <AtsStatusChip company={c} />
         {careers !== null ? (
           <a

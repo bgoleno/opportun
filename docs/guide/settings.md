@@ -146,8 +146,11 @@ under **Settings > Integrations > Extensions and Connectors**:
   a hash.
 - The mail and capture permissions can only push data in; they cannot read anything back.
   **Assisted apply** reads back an application you have handed off (what you reviewed, and its
-  resume copy) when the extension asks for that application's posting page. It cannot start,
-  review or submit an application.
+  resume copy) when the extension asks for that application's posting page, and records the
+  thank-you page of an application you said you submitted, when you click **Record
+  confirmation page**. To find which application, it can also ask which of yours a job site's
+  page belongs to, which tells it that application's title and company (at most 10 such
+  questions per 15 minutes). It cannot start, review or submit an application.
 - The list shows each token's permissions, when it was created and last used. **Revoke**
   cuts the device off on its next request.
 
