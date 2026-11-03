@@ -70,6 +70,13 @@ describe('#209: posting volume and ranking cost for each board source', () => {
     expect(row).toHaveTextContent(/no cost data yet/i);
   });
 
+  it('a board one day old says "(1 day)", not "(1 days)" (tl on #212)', async () => {
+    setup([volume('s2', { openJobs: 110, newPerDay: 9.6, days: 1, rankCallsPerDay: 9.6 })]);
+    const row = await screen.findByRole('listitem', { name: /globex/i });
+    expect(row).toHaveTextContent('9.6 (1 day)');
+    expect(row).not.toHaveTextContent('(1 days)');
+  });
+
   it('no rate yet, or no runs at all: "no data yet", never a zero', async () => {
     setup([volume('s1', { openJobs: 80 }), volume('s3', {})]);
     const first = await screen.findByRole('listitem', { name: /initech/i });

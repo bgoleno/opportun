@@ -142,6 +142,19 @@ describe('#209: discovery.rank over the last 7 and 30 days', () => {
   });
 });
 
+describe('#209: the 90th percentile is not the maximum (qa on #212)', () => {
+  it('twenty calls: the nearest-rank 90th percentile is the 18th, below the largest', async () => {
+    const { app, a } = await boot();
+    for (let i = 1; i <= 20; i++) await call(app, a, 1, i * 10, i, 0.001);
+    const [d7] = (await discoveryCostFigures(app.db, ctxOf(a), NOW)).rank;
+    expect(d7).toMatchObject({
+      calls: 20,
+      inputTokens: { median: 105, p90: 180 },
+      outputTokens: { median: 10.5, p90: 18 },
+    });
+  });
+});
+
 describe('#209: each board source, over the last 14 days', () => {
   it('a source with runs before and inside the window: a full 14 days, its first run long gone', async () => {
     const { app, a } = await boot();
@@ -238,6 +251,87 @@ describe('#209: each board source, over the last 14 days', () => {
     expect(row).toMatchObject({ openJobs: null, newPerDay: null, days: 0 });
   });
 
+  it('a later run that failed still counts the postings it stored (tl on #212)', async () => {
+    const { app, a } = await boot();
+    const s = await board(app, a, 'hooli');
+    await run(app, a, s.id, 5, { fetched: 200, inserted: 200 }); // the backfill
+    await run(app, a, s.id, 3, { fetched: 202, inserted: 2 });
+    await run(app, a, s.id, 1, { fetched: 30, inserted: 4 }, 'the board stopped answering');
+    const [row] = (await discoveryCostFigures(app.db, ctxOf(a), NOW)).sources;
+    expect(row).toMatchObject({ openJobs: 202, days: 5 });
+    expect(row!.newPerDay).toBeCloseTo(6 / 5, 10);
+  });
+
+  it('a run still going is left out: no open jobs, no postings from it (qa on #212)', async () => {
+    const { app, a } = await boot();
+    const s = await board(app, a, 'umbrella');
+    await run(app, a, s.id, 5, { fetched: 200, inserted: 200 }); // the backfill
+    await run(app, a, s.id, 3, { fetched: 202, inserted: 2 });
+    await app.db
+      .insert(discoveryRuns)
+      .values({
+        id: newId(),
+        userId: a.userId,
+        sourceId: s.id,
+        startedAt: NOW - DAY,
+        finishedAt: null,
+        stats: { fetched: 999, inserted: 50, duplicates: 0, invalid: 0, suppressed: 0 },
+        error: null,
+      })
+      .run();
+    const [row] = (await discoveryCostFigures(app.db, ctxOf(a), NOW)).sources;
+    expect(row).toMatchObject({ openJobs: 202, days: 5 });
+    expect(row!.newPerDay).toBeCloseTo(2 / 5, 10);
+  });
+});
+
+// tl's rule on #212 (https://github.com/bgoleno/opportun/pull/212#issuecomment-6617850019): the
+// rate divides by the exact span from the window's start to now, at least 1 day and at most 14;
+// the label's days are that span rounded down, at least 1, and it shows while the span is under
+// 14. Each board: its backfill `span` days ago, then one run half a day ago that stored 10.
+describe('#209: the days a young board is averaged over (tl on #212)', () => {
+  async function youngBoard(span: number) {
+    const { app, a } = await boot();
+    const s = await board(app, a, 'initrode');
+    await run(app, a, s.id, span, { fetched: 100, inserted: 100 });
+    await run(app, a, s.id, Math.min(0.5, span / 2), { fetched: 110, inserted: 10 });
+    const [row] = (await discoveryCostFigures(app.db, ctxOf(a), NOW)).sources;
+    return row!;
+  }
+
+  it('just over a day: the exact span divides, and the label says 1 day', async () => {
+    const row = await youngBoard(1.04);
+    expect(row.days).toBe(1);
+    expect(row.newPerDay).toBeCloseTo(10 / 1.04, 10);
+    expect(row.rankCallsPerDay).toBeCloseTo(10 / 1.04, 10);
+  });
+
+  it('13.01 and 13.5 days: still labelled 13 days, over the exact span', async () => {
+    const a = await youngBoard(13.01);
+    expect(a.days).toBe(13);
+    expect(a.newPerDay).toBeCloseTo(10 / 13.01, 10);
+    const b = await youngBoard(13.5);
+    expect(b.days).toBe(13);
+    expect(b.newPerDay).toBeCloseTo(10 / 13.5, 10);
+  });
+
+  it('exactly 14 days, or more: 14, and no label', async () => {
+    const a = await youngBoard(14);
+    expect(a.days).toBe(14);
+    expect(a.newPerDay).toBeCloseTo(10 / 14, 10);
+    const b = await youngBoard(20);
+    expect(b.days).toBe(14);
+    expect(b.newPerDay).toBeCloseTo(10 / 14, 10);
+  });
+
+  it('under a day: divided by one day, never extrapolated from hours', async () => {
+    const row = await youngBoard(0.25);
+    expect(row.days).toBe(1);
+    expect(row.newPerDay).toBeCloseTo(10, 10);
+  });
+});
+
+describe('#209: which sources', () => {
   it("only board sources are listed, and only the caller's", async () => {
     const { app, a, b } = await boot();
     const mine = await board(app, a, 'initech');
