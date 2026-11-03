@@ -76,6 +76,8 @@ function setup(opts: {
   current?: FetchResponse | (() => Promise<FetchResponse>);
   snapshot?: FetchResponse;
   showsFileName?: boolean | 'macrotask';
+  /** The form, when a test needs another than MANY_QUESTIONS. */
+  html?: string;
   /** Runs inside each of the popup's waits between resume checks, as the user or page might. */
   duringWait?: (page: ReturnType<typeof loadForm>, n: number) => void;
   fill?: 'fixture' | 'fails';
@@ -97,7 +99,7 @@ function setup(opts: {
       Object.assign(data, items);
     },
   };
-  const page = loadForm(MANY_QUESTIONS, {
+  const page = loadForm(opts.html ?? MANY_QUESTIONS, {
     url: opts.tabUrl ?? TAB_URL,
     showsFileName: opts.showsFileName,
   });
@@ -360,6 +362,55 @@ describe('the resume is confirmed by the popup, not the page (tl and sec on #187
     expect(resumeFiles(s)).toHaveLength(0);
     expect(listed(s, 'Filled in')).not.toContain('Resume');
     expect(listed(s, 'Not filled in')).toContain('Resume: attach your resume yourself');
+  });
+
+  it('a name already on the form before the fill, and never shown after it: cleared, not attached (tl on #187)', async () => {
+    const s = setup({
+      showsFileName: false,
+      html: MANY_QUESTIONS.replace('>Country<', '>Country (Jane-Resume.pdf)<'),
+    });
+    await clickFill(s);
+    expect(s.deps.runResumeClear).toHaveBeenCalledTimes(1);
+    expect(resumeFiles(s)).toHaveLength(0);
+    expect(listed(s, 'Filled in')).not.toContain('Resume');
+    expect(listed(s, 'Not filled in')).toContain('Resume: attach your resume yourself');
+  });
+
+  it('a name the form shows just before the clear: the clear looks again, and the resume is attached (tl on #187)', async () => {
+    const s = setup({ showsFileName: false });
+    const real = s.deps.runResumeClear;
+    s.deps.runResumeClear = vi.fn(async (tabId: number, check: Parameters<typeof real>[1]) => {
+      s.page.doc.querySelector('.file-upload__filename')!.textContent = 'Jane-Resume.pdf';
+      return real(tabId, check);
+    });
+    await clickFill(s);
+    expect(resumeFiles(s)).toHaveLength(1);
+    expect(listed(s, 'Filled in')).toContain('Resume');
+  });
+
+  it('an input emptied meanwhile: attach your resume yourself, not "already had something" (tl on #187)', async () => {
+    const s = setup({
+      showsFileName: false,
+      duringWait: (page, n) => {
+        if (n === 1) {
+          (page.doc.getElementById('resume') as HTMLInputElement).files =
+            new page.window.DataTransfer().files as unknown as FileList;
+        }
+      },
+    });
+    await clickFill(s);
+    expect(listed(s, 'Not filled in')).toContain('Resume: attach your resume yourself');
+  });
+
+  it('a cover letter is "attach this file yourself", never "your resume" (tl on #187)', async () => {
+    const s = setup({
+      html: MANY_QUESTIONS.replace(
+        '<div class="file-upload">',
+        '<div class="field-wrapper"><label for="cover_letter">Cover Letter</label><input id="cover_letter" type="file" class="visually-hidden" /></div><div class="file-upload">',
+      ),
+    });
+    await clickFill(s);
+    expect(listed(s, 'Not filled in')).toContain('Cover Letter: attach this file yourself');
   });
 
   it('a file the user attached meanwhile is kept, and the report says so', async () => {

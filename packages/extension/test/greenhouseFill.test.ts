@@ -273,6 +273,37 @@ describe('tl on #187: ambiguity, react-selects by structure, and the edges of ma
           .replace('class="select__input"', 'class="plain"')
           .replace('<div class="select">', '<div class="plain-outer">'),
     ],
+    // One marker alone, each (tl on #187): the rest renamed away.
+    [
+      'with only its role',
+      (b) =>
+        b
+          .replace('aria-autocomplete="list"', '')
+          .replace('aria-haspopup="true"', '')
+          .replace('class="select__input"', 'class="plain"')
+          .replace('<div class="select">', '<div class="plain-outer">')
+          .replace('class="select__container"', 'class="plain-container"'),
+    ],
+    [
+      'with only aria-haspopup',
+      (b) =>
+        b
+          .replace('role="combobox" ', '')
+          .replace('aria-autocomplete="list"', '')
+          .replace('class="select__input"', 'class="plain"')
+          .replace('<div class="select">', '<div class="plain-outer">')
+          .replace('class="select__container"', 'class="plain-container"'),
+    ],
+    [
+      'with only its select__input class',
+      (b) =>
+        b
+          .replace('role="combobox" ', '')
+          .replace('aria-autocomplete="list"', '')
+          .replace('aria-haspopup="true"', '')
+          .replace('<div class="select">', '<div class="plain-outer">')
+          .replace('class="select__container"', 'class="plain-container"'),
+    ],
     [
       'with only aria-autocomplete',
       (b) =>
@@ -475,9 +506,10 @@ describe('acceptance 3: the resume, through DataTransfer on #resume only', () =>
     );
     const { doc, report } = await fill(html);
     expect((doc.getElementById('cover_letter') as HTMLInputElement).files).toHaveLength(0);
+    // Its own reason: the words for it say "this file", never "your resume" (tl on #187).
     expect(ok(report).notFilled).toContainEqual({
       label: 'Cover Letter',
-      reason: 'attach_yourself',
+      reason: 'attach_file_yourself',
     });
   });
 });
@@ -509,6 +541,7 @@ describe('clearResume: takes back only the file the filler set (tl and sec on #1
     jobId: JOB_ID,
     filename: 'Jane-Doe-Example-Resume.pdf',
     size: PDF.length,
+    before: 0,
   };
 
   it('our one file: cleared, with one plain input and one change', async () => {
@@ -538,6 +571,36 @@ describe('clearResume: takes back only the file the filler set (tl and sec on #1
     const { doc } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
     expect(clearResume(asJson({ ...check, size: check.size + 1 }), doc)).toBe('kept');
     expect((doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(1);
+  });
+
+  it('a file of our size but another name is not ours: kept (tl on #187)', async () => {
+    const { window, doc, events } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
+    const input = doc.getElementById('resume') as HTMLInputElement;
+    const same = new window.DataTransfer();
+    same.items.add(new window.File([PDF], 'Another-Name.pdf', { type: 'application/pdf' }));
+    input.files = same.files as unknown as FileList;
+    const before = events.length;
+    expect(clearResume(asJson(check), doc)).toBe('kept');
+    expect(input.files?.[0]?.name).toBe('Another-Name.pdf');
+    expect(events.length).toBe(before);
+  });
+
+  it('a name the form has just shown is looked for again first: shown, nothing cleared (tl on #187)', async () => {
+    const { doc, events } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
+    doc.querySelector('.file-upload__filename')!.textContent = check.filename;
+    const before = events.length;
+    expect(clearResume(asJson(check), doc)).toBe('shown');
+    expect((doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(1);
+    expect(events.length).toBe(before);
+  });
+
+  it('an input that is empty by then is reported as empty, and nothing is written (tl on #187)', async () => {
+    const { window, doc, events } = await fill(FEW_QUESTIONS, plan(), { showsFileName: false });
+    const input = doc.getElementById('resume') as HTMLInputElement;
+    input.files = new window.DataTransfer().files as unknown as FileList;
+    const before = events.length;
+    expect(clearResume(asJson(check), doc)).toBe('empty');
+    expect(events.length).toBe(before);
   });
 
   it('on any other page it touches nothing', async () => {
@@ -576,12 +639,25 @@ describe('acceptance 4 and sec (5): the page must still be the pinned posting', 
       expect(popupSays !== null && samePosting(popupSays, { board: BOARD, jobId: JOB_ID })).toBe(
         same,
       );
-      // The resume check carries the same address rule (it cannot import it either).
+      // The resume check and the clear carry the same address rule (they cannot import it
+      // either): https, the host, the default port, the board and the job id (tl on #187).
       expect(
         resumeShown(
           { board: BOARD, jobId: JOB_ID, filename: 'Jane-Doe-Example-Resume.pdf' },
           loadForm(MANY_QUESTIONS, { url }).doc,
         ) !== null,
+      ).toBe(same);
+      expect(
+        clearResume(
+          {
+            board: BOARD,
+            jobId: JOB_ID,
+            filename: 'Jane-Doe-Example-Resume.pdf',
+            size: PDF.length,
+            before: 0,
+          },
+          loadForm(MANY_QUESTIONS, { url }).doc,
+        ) !== 'wrong_page',
       ).toBe(same);
       if (same) {
         expect(report.ok).toBe(true);
