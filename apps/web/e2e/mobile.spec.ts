@@ -386,6 +386,61 @@ async function stubDiscoveryResults(page: Page): Promise<void> {
     await route.fulfill({ json: { items, total: disposition === 'pending' ? 250 : items.length } });
   });
 }
+/**
+ * Serves the Companies tab's three lists with stub companies (qa's sweep on #195): an unbroken
+ * name and domain, a suggestion whose "Why" holds a board URL, a followed company whose detected
+ * board slug is long, and a denied company with an unbroken name.
+ */
+async function stubCompanies(page: Page): Promise<void> {
+  await page.route(/\/api\/v1\/companies(\/suggestions)?\?/, async (route) => {
+    if (route.request().method() !== 'GET') return await route.fallback();
+    const url = new URL(route.request().url());
+    const now = Date.now();
+    const base = {
+      userId: 'stub-user',
+      domain: 'internationalconsolidatedplatformintelligenceholdings.example',
+      careersUrl: UNBROKEN,
+      suggestionRationale: null,
+      atsKind: null,
+      atsRef: null,
+      atsVerifiedAt: null,
+      notes: null,
+      atsDetectPending: false,
+      needsCareersUrl: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const status = url.pathname.endsWith('/suggestions')
+      ? 'suggested'
+      : (url.searchParams.get('status') ?? 'followed');
+    const items =
+      status === 'suggested'
+        ? [
+            {
+              ...base,
+              id: 'stub-co-s',
+              name: UNBROKEN_COMPANY,
+              status: 'suggested',
+              suggestionRationale: `You applied to two of its roles; its board is ${UNBROKEN}`,
+            },
+          ]
+        : status === 'denied'
+          ? [{ ...base, id: 'stub-co-d', name: UNBROKEN_COMPANY, status: 'denied' }]
+          : [
+              {
+                ...base,
+                id: 'stub-co-f',
+                name: UNBROKEN_COMPANY,
+                status: 'followed',
+                atsKind: 'ats_greenhouse',
+                atsRef: 'internationalconsolidatedplatformintel41',
+                atsVerifiedAt: now,
+              },
+            ];
+    await route.fulfill({ json: { items, total: items.length } });
+  });
+}
+
 const stubTitle = (i: number) =>
   `Principal Platform Intelligence Engineer, Developer Experience and Observability ${i}`;
 
@@ -398,7 +453,8 @@ const stubTitle = (i: number) =>
 async function spillsOutOfCards(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const out: string[] = [];
-    for (const card of document.querySelectorAll('[data-result-id]')) {
+    const cards = document.querySelectorAll('[data-result-id], [aria-label$="companies"] > li');
+    for (const card of cards) {
       const edge = card.getBoundingClientRect().right;
       for (const el of card.querySelectorAll('*')) {
         const style = getComputedStyle(el);
@@ -433,6 +489,7 @@ for (const width of DISCOVERY_WIDTHS) {
     }) => {
       await registerUser(page);
       await stubDiscoveryResults(page);
+      await stubCompanies(page);
       await page.goto('/discovery');
       const queue = page.getByRole('list', { name: 'Results to review' });
       await expect(queue.getByText(LONG_WHY).first()).toBeVisible();
@@ -461,7 +518,14 @@ for (const width of DISCOVERY_WIDTHS) {
         await expect(tab).toBeInViewport({ ratio: 1 });
         await tab.click();
         await expect(page).toHaveURL((url) => url.pathname === path);
+        // The stub companies are on screen before measuring, so the check sees them.
+        if (name === 'Companies') {
+          await expect(page.getByText(/^Greenhouse: internationalconsolidated/)).toBeVisible();
+        }
         await expectFits(page, `Discovery ${name}`);
+        if (name === 'Companies') {
+          expect(await spillsOutOfCards(page), 'text spilling out of a company card').toEqual([]);
+        }
         if (name === 'Decided') {
           for (const [decided, tabName] of [
             ['Dismissed', /^Dismissed/],
