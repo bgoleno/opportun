@@ -141,9 +141,13 @@ Programs on your own devices (the [Apple Mail connector](inbox.md#apple-mail) an
 under **Settings > Integrations > Extensions and Connectors**:
 
 - **Create token**: a name, the permissions (**Apple Mail connector (mail:push)**, **Browser
-  capture (capture:push)**), and your current password. The token is shown once; the server
-  keeps only a hash.
-- A token can only push data in, for the permissions it has. It cannot read anything back.
+  capture (capture:push)**, and, where assisted apply is on, **Assisted apply
+  (apply:assist)**), and your current password. The token is shown once; the server keeps only
+  a hash.
+- The mail and capture permissions can only push data in; they cannot read anything back.
+  **Assisted apply** reads one thing: the application you handed off, with its resume copy,
+  and only while the extension is on that application's own page. It cannot start, review or
+  submit an application.
 - The list shows each token's permissions, when it was created and last used. **Revoke**
   cuts the device off on its next request.
 

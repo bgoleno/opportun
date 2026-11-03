@@ -270,3 +270,47 @@ describe('ExtensionSetupDialog', () => {
     expect(closed).toBe(false);
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/182: assisted apply rides on the extension's one
+// token, when the user ticks it (tl and sec): never by default, never where the feature is off.
+describe('ExtensionSetupDialog: assisted apply', () => {
+  const ON = {
+    'GET /settings/applications': {
+      used: 0,
+      cap: 10,
+      instanceCap: 10,
+      userCap: null,
+      nextFreeAt: null,
+    },
+  };
+
+  it('offers it unticked where assisted apply is on, and mints capture only by default', async () => {
+    const user = userEvent.setup();
+    const { calls } = show(ON);
+    const box = await screen.findByRole('checkbox', { name: /assisted apply/i });
+    expect(box).not.toBeChecked();
+    await mint(user);
+    await screen.findByText(TOKEN);
+    const post = calls.find((c) => c.method === 'POST' && c.path === '/device-tokens');
+    expect(post?.body).toMatchObject({ scopes: ['capture:push'] });
+  });
+
+  it('ticked, mints one token with both scopes, and says how to take it away later', async () => {
+    const user = userEvent.setup();
+    const { calls } = show(ON);
+    await user.click(await screen.findByRole('checkbox', { name: /assisted apply/i }));
+    expect(
+      screen.getByText(/set the extension up again without it, then revoke/i),
+    ).toBeInTheDocument();
+    await mint(user);
+    await screen.findByText(TOKEN);
+    const post = calls.find((c) => c.method === 'POST' && c.path === '/device-tokens');
+    expect(post?.body).toMatchObject({ scopes: ['capture:push', 'apply:assist'] });
+  });
+
+  it('is not offered where assisted apply does not exist', async () => {
+    show();
+    await screen.findByLabelText(/password/i);
+    expect(screen.queryByRole('checkbox', { name: /assisted apply/i })).not.toBeInTheDocument();
+  });
+});

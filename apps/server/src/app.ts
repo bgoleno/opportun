@@ -74,6 +74,7 @@ import { attachmentRoutes } from './routes/attachments';
 import { backupRoutes } from './routes/backups';
 import { authRoutes } from './routes/auth';
 import { captureRoutes } from './routes/capture';
+import { connectorApplyRoutes, CONNECTOR_APPLY_CURRENT_PATH } from './routes/connectorApply';
 import { connectorCaptureRoutes } from './routes/connectorCapture';
 import { communicationRoutes } from './routes/communications';
 import { companyRoutes } from './routes/companies';
@@ -213,10 +214,14 @@ export const LOG_REDACT_PATHS = [
   '*.ciphertext',
 ];
 
-/** Request urls whose query string carries credentials (the OAuth code and state). */
+/**
+ * Request urls whose query string is not logged: the OAuth code and state, and the ATS page the
+ * extension is on (`?url=`, #182: only its host is recorded, in the audit entry).
+ */
 const QUERY_REDACTED_PATHS: ReadonlySet<string> = new Set([
   GOOGLE_CALLBACK_PATH,
   ...OAUTH_PROVIDERS.map(oauthCallbackPath),
+  CONNECTOR_APPLY_CURRENT_PATH,
 ]);
 
 /** OPPORTUN_HOST values that answer this machine only, never another device (issue #24). */
@@ -507,6 +512,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       await api.register(discoveryRoutes);
       await api.register(captureRoutes);
       await api.register(connectorCaptureRoutes);
+      // Assisted apply prefill's device routes (#182); they 404 unless the feature is on.
+      await api.register(connectorApplyRoutes);
       await api.register(networkRoutes);
       await api.register(referralRoutes);
       // Assisted apply (#114): every route 404s unless OPPORTUN_SUBMISSIONS=1, never on the demo.

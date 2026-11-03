@@ -841,8 +841,11 @@ making the employer's copy the description and keeping what only the captured pa
 When it cannot settle that, it changes nothing and flags the opportunity for you. See
 [the guide](guide/browser-extension.md).
 
-- **Token**: the setup dialog creates one for you, with the **Browser capture** permission
-  only. It can only push captures; revoke it under Settings > Integrations > Extensions and
+- **Token**: the setup dialog creates one for you, with the **Browser capture** permission,
+  which can only push captures. Where assisted apply is on, the dialog also offers to add the
+  **Assisted apply** permission (off unless you tick it), which reads only the application you
+  handed off, on its own page. To drop it later, set the extension up again without it and
+  revoke the old token. Revoke a token under Settings > Integrations > Extensions and
   Connectors at any time.
 - **Install**: open **Settings > Integrations > Extensions and Connectors**, find
   **Browser extension** and press **Set up**. The dialog creates the token, hands over the

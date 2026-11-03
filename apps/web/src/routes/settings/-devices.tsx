@@ -23,11 +23,14 @@ import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { api, ApiError, errorMessage } from '@/lib/api';
 import { meQuery } from '@/lib/auth';
+import { useReviewUsage } from '@/components/apply/api';
 import { ek, ExtensionSetupDialog, type ArtifactList } from './-extensionSetup';
 
 const SCOPES = [
   { scope: 'mail:push', label: 'Apple Mail connector' },
   { scope: 'capture:push', label: 'Browser capture' },
+  // Offered only where assisted apply is on (#182): the server refuses it otherwise.
+  { scope: 'apply:assist', label: 'Assisted apply' },
 ] as const;
 type Scope = (typeof SCOPES)[number]['scope'];
 
@@ -108,8 +111,10 @@ export function DevicesCard() {
         <CardTitle>Extensions and Connectors</CardTitle>
         <CardDescription>
           Tokens for programs on your own devices: the Apple Mail connector on your Mac and the
-          Opportun browser extension. A token can only send data in for the permissions you give it;
-          it cannot read anything back. Revoke one and the device is cut off at once.
+          Opportun browser extension. Mail and capture permissions can only send data in. The
+          assisted apply permission reads one thing back: the application you handed off, with its
+          resume copy, on that application's own page. Revoke a token and the device is cut off at
+          once.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 text-sm">
@@ -298,6 +303,9 @@ function CreateDialog(props: {
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<Scope[]>(['mail:push']);
   const [password, setPassword] = useState('');
+  // null where the feature does not exist (the flag off, or the demo): the scope is not offered.
+  const assistAvailable = useReviewUsage().data != null;
+  const offered = SCOPES.filter((s) => s.scope !== 'apply:assist' || assistAvailable);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -368,7 +376,7 @@ function CreateDialog(props: {
           </FormField>
           <fieldset className="grid gap-2">
             <legend className="mb-1 text-sm font-medium">Permissions</legend>
-            {SCOPES.map(({ scope, label }) => (
+            {offered.map(({ scope, label }) => (
               <label key={scope} className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
@@ -386,6 +394,13 @@ function CreateDialog(props: {
                 {label} <span className="text-muted-foreground">({scope})</span>
               </label>
             ))}
+            {assistAvailable ? (
+              <p className="text-xs text-muted-foreground">
+                Assisted apply lets the extension read the one application you handed off, with its
+                resume copy, while you are on that application&apos;s page. It cannot start, review
+                or submit an application.
+              </p>
+            ) : null}
             {errors.scopes ? (
               <p role="alert" className="text-sm text-destructive">
                 {errors.scopes}
