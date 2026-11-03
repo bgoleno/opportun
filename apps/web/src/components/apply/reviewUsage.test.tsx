@@ -102,17 +102,18 @@ describe('the user’s own limit in Settings', () => {
     expect(await screen.findByText(/3 of 3 reviews used/)).toBeVisible();
   });
 
+  const ABOVE = 'This server allows at most 10 reviews per 24 hours. Choose 10 or fewer.';
   it.each([
-    ['above the server’s limit', '11'],
-    ['zero', '0'],
-    ['not a whole number', '2.5'],
-  ])('refuses a value %s before sending anything', async (_n, typed) => {
+    ['above the server’s limit', '11', ABOVE],
+    ['zero', '0', 'Choose a whole number from 1 to 10.'],
+    ['not a whole number', '2.5', 'Choose a whole number from 1 to 10.'],
+  ])('refuses a value %s before sending anything', async (_n, typed, message) => {
     const { api, user } = setup(usage());
     const input = await screen.findByLabelText('Reviews allowed per 24 hours');
     await user.clear(input);
     await user.type(input, typed);
     await user.click(screen.getByRole('button', { name: 'Save limit' }));
-    expect(await screen.findByText('Choose a whole number from 1 to 10.')).toBeVisible();
+    expect(await screen.findByText(message)).toBeVisible();
     expect(puts(api.calls)).toHaveLength(0);
   });
 
@@ -137,7 +138,7 @@ describe('the user’s own limit in Settings', () => {
       body: { error: { code: 'cap_out_of_range', max: 10 } },
     }));
     await user.click(await screen.findByRole('button', { name: 'Save limit' }));
-    expect(await screen.findByText('Choose a whole number from 1 to 10.')).toBeVisible();
+    expect(await screen.findByText(ABOVE)).toBeVisible();
   });
 
   it('renders nothing where the feature is off (no Settings control)', async () => {
