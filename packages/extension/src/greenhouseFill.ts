@@ -221,7 +221,8 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
     else if (choice && !concealed(f.el, true)) count(f.key);
   }
   for (const group of Array.from(form.querySelectorAll('fieldset'))) {
-    const legend = group.querySelector('legend');
+    // Its own legend only, never a nested fieldset's (tl on #205, #206).
+    const legend = group.querySelector(':scope > legend');
     const choices = group.querySelector('input[type="radio"], input[type="checkbox"]');
     if (legend === null || choices === null || concealed(group, true)) continue;
     count(norm(legend.textContent ?? ''));
@@ -313,7 +314,8 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
   // A radio or checkbox group the form shows, whose legend is a reviewed answer's label: one
   // "choose it on the form" line under the legend, and the answer is accounted for (#204).
   for (const group of Array.from(form.querySelectorAll('fieldset'))) {
-    const legend = group.querySelector('legend');
+    // Its own legend only, never a nested fieldset's (tl on #205, #206).
+    const legend = group.querySelector(':scope > legend');
     const choices = group.querySelector('input[type="radio"], input[type="checkbox"]');
     if (legend === null || choices === null || concealed(group, true)) continue;
     const key = norm(legend.textContent ?? '');
