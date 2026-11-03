@@ -28,7 +28,10 @@ function calls(w: RankWindow): string {
 export function RankCostCard() {
   const figures = useCostFigures();
   return (
-    <Card>
+    // min-w-0: a grid item is as wide as its content by default, so the six-column table would
+    // widen the whole settings column on a phone; this lets the table scroll inside its own
+    // container instead (e2e/mobile.spec.ts, every view fits the screen).
+    <Card className="min-w-0">
       <CardHeader>
         <CardTitle>Discovery ranking cost</CardTitle>
         <CardDescription>

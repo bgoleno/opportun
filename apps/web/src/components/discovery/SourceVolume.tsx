@@ -45,7 +45,8 @@ export function SourceVolume() {
   const sources = useSources();
   const byId = new Map((sources.data?.items ?? []).map((s) => [s.id, s]));
   return (
-    <Card>
+    // min-w-0 for the same reason as RankCostCard: a long source name must wrap, not widen the page.
+    <Card className="min-w-0">
       <CardHeader>
         <CardTitle>Posting volume and ranking cost</CardTitle>
         <CardDescription>
