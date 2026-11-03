@@ -7,14 +7,17 @@
 //
 // Four signals, per candidate:
 //   A  the message's ATS job refs (extracted at ingest) name the candidate's ATS kind and its
-//      external id, or its board org;
+//      external id (`ats_job_ref`, the strong form), or only its board org (`ats_board`: any
+//      job at that board, so on its own it says which company, not which application; tl on
+//      https://github.com/bgoleno/opportun/issues/119);
 //   B  the sender's address (never its display name) is at the company's domain, or at an ATS
 //      sender domain for the candidate's ATS kind, or a subdomain of either;
 //   C  the subject or text carries the role title and the company name, as whole words,
 //      normalised the way @opportun/core's dedupe normalises them;
 //   D  the message was sent no earlier than 5 minutes before the submission (clock skew) and no
 //      later than 14 days after it.
-// A candidate matches on D and (A, or B and C). One match: that candidate, with every signal
+// A candidate matches on D and (A by id, or A by board and B, or B and C). One match: that
+// candidate, with every signal
 // that held. Two or more: none, ambiguous, naming them; a person decides. Nothing here changes
 // any state: this only answers the question.
 import { companyMatchKey, matchText, titleMatchKey } from '@opportun/core';
@@ -47,7 +50,7 @@ export interface ConfirmationCandidate {
 export type AtsSenderDomains = Readonly<Partial<Record<string, readonly string[]>>>;
 
 export type ConfirmationSignal =
-  'ats_job_ref' | 'sender_domain' | 'role_and_company' | 'time_window';
+  'ats_job_ref' | 'ats_board' | 'sender_domain' | 'role_and_company' | 'time_window';
 
 export type ConfirmationMatch =
   | { kind: 'match'; submissionId: string; signals: ConfirmationSignal[] }
@@ -102,15 +105,12 @@ function signalsFor(
 ): ConfirmationSignal[] {
   const signals: ConfirmationSignal[] = [];
   const atsRef = candidate.atsRef === null ? null : lower(candidate.atsRef);
-  if (
-    message.atsJobRefs.some(
-      (r) =>
-        r.kind === candidate.atsKind &&
-        (lower(r.externalId) === lower(candidate.atsExternalId) ||
-          (r.org !== null && atsRef !== null && lower(r.org) === atsRef)),
-    )
-  ) {
+  const sameKind = message.atsJobRefs.filter((r) => r.kind === candidate.atsKind);
+  if (sameKind.some((r) => lower(r.externalId) === lower(candidate.atsExternalId))) {
     signals.push('ats_job_ref');
+  }
+  if (sameKind.some((r) => r.org !== null && atsRef !== null && lower(r.org) === atsRef)) {
+    signals.push('ats_board');
   }
   if (sender !== null) {
     const domains = [
@@ -137,6 +137,8 @@ function signalsFor(
 const matches = (signals: readonly ConfirmationSignal[]): boolean =>
   signals.includes('time_window') &&
   (signals.includes('ats_job_ref') ||
+    // A board ref names the company's board, not this job: it counts only with the sender.
+    (signals.includes('ats_board') && signals.includes('sender_domain')) ||
     (signals.includes('sender_domain') && signals.includes('role_and_company')));
 
 export function matchConfirmation(

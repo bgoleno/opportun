@@ -60,11 +60,11 @@ const match = (
 describe('signal A: the ATS job reference (criterion 1)', () => {
   it.each([
     ['kind and externalId', [{ kind: 'ats_greenhouse', org: null, externalId: '1000001' }], true],
-    ['kind and org', [{ kind: 'ats_greenhouse', org: 'examplecorp', externalId: '999' }], true],
+    // The board alone names the company, not the job: never enough on its own (tl on #119).
     [
-      'kind and org, in another case',
-      [{ kind: 'ats_greenhouse', org: 'ExampleCorp', externalId: '9' }],
-      true,
+      'kind and org only',
+      [{ kind: 'ats_greenhouse', org: 'examplecorp', externalId: '999' }],
+      false,
     ],
     [
       'the right id on another ATS',
@@ -83,6 +83,39 @@ describe('signal A: the ATS job reference (criterion 1)', () => {
     const result = match(message);
     expect(result.kind).toBe(matched ? 'match' : 'none');
     if (result.kind === 'match') expect(result.signals).toContain('ats_job_ref');
+  });
+});
+
+describe('signal A by board only (#119 acceptance 7): it confirms only together with B', () => {
+  const BOARD_ONLY = [{ kind: 'ats_greenhouse', org: 'ExampleCorp', externalId: '999' }];
+
+  it('a board ref without B does not confirm, even with the title and company', () => {
+    const result = match({
+      ...MESSAGE,
+      fromAddress: 'someone@unrelated.example',
+      atsJobRefs: BOARD_ONLY,
+    });
+    expect(result).toEqual({ kind: 'none', reason: 'no_match', candidateIds: [] });
+  });
+
+  it('a board ref (in another case) with B confirms, without the title or company', () => {
+    const result = match({ ...BARE, atsJobRefs: BOARD_ONLY });
+    expect(result).toEqual({
+      kind: 'match',
+      submissionId: 'sub-1',
+      signals: ['ats_board', 'sender_domain', 'time_window'],
+    });
+  });
+
+  it('the id and the board in one ref give both signals', () => {
+    const result = match(MESSAGE);
+    expect(result.kind === 'match' && result.signals).toEqual([
+      'ats_job_ref',
+      'ats_board',
+      'sender_domain',
+      'role_and_company',
+      'time_window',
+    ]);
   });
 });
 
@@ -146,6 +179,9 @@ describe('signal B: the sender address, never the display name (criterion 1)', (
     ['  Careers <careers@examplecorp.example>  ', 'examplecorp.example'],
     ['"Jobs <at> Example" <careers@examplecorp.example>', 'examplecorp.example'],
     ['careers@examplecorp.example', 'examplecorp.example'],
+    // qa on #134: without the endsWith('>') condition, slicing off the last character would read
+    // the company's address out of a header that does not end with its bracket.
+    ['Careers <careers@examplecorp.example)', null],
   ])('senderDomain(%j) is %j: a bracket counts only when it ends the header', (from, domain) => {
     expect(senderDomain(from)).toBe(domain);
   });
@@ -209,12 +245,13 @@ describe('the rule: D and (A, or B and C) (criterion 2)', () => {
     expect(match(MESSAGE)).toEqual({
       kind: 'match',
       submissionId: 'sub-1',
-      signals: ['ats_job_ref', 'sender_domain', 'role_and_company', 'time_window'],
+      signals: ['ats_job_ref', 'ats_board', 'sender_domain', 'role_and_company', 'time_window'],
     });
   });
 
-  it('A and D alone are enough', () => {
-    expect(match({ ...BARE, fromAddress: 'x@unrelated.example' })).toEqual({
+  it('A by id and D alone are enough', () => {
+    const atsJobRefs = [{ kind: 'ats_greenhouse', org: null, externalId: '1000001' }];
+    expect(match({ ...BARE, fromAddress: 'x@unrelated.example', atsJobRefs })).toEqual({
       kind: 'match',
       submissionId: 'sub-1',
       signals: ['ats_job_ref', 'time_window'],
