@@ -256,6 +256,30 @@ export async function fetchResume(
 }
 
 /**
+ * Each detail field prefill fills by name (tl's mapping, #183): its key in the attempt, the form's
+ * standard id for it or the question labels it matches, and the name the popup gives it. One
+ * table for the fields to fill and for those the server withholds (#196; tl and qa on #201, #204).
+ */
+const PREFILL_FIELDS: readonly {
+  key: string;
+  id: string | null;
+  labels: readonly string[];
+  name: string;
+}[] = [
+  { key: 'firstName', id: 'first_name', labels: [], name: 'First name' },
+  { key: 'lastName', id: 'last_name', labels: [], name: 'Last name' },
+  { key: 'email', id: 'email', labels: [], name: 'Email' },
+  { key: 'phone', id: 'phone', labels: [], name: 'Phone' },
+  {
+    key: 'linkedinUrl',
+    id: null,
+    labels: ['LinkedIn Profile', 'LinkedIn'],
+    name: 'LinkedIn profile',
+  },
+  { key: 'websiteUrl', id: null, labels: ['Website'], name: 'Website' },
+];
+
+/**
  * What the filler fills, from the reviewed attempt only (tl's mapping): the four standard
  * fields by the form's ids, LinkedIn and website by the question's exact label, and each
  * reviewed answer by its exact label. Empty values are left out: nothing is invented.
@@ -267,19 +291,13 @@ export function buildPlan(
 ): FillPlan {
   const fields = new Map(Object.entries(attempt.fields));
   const value = (key: string): string => fields.get(key) ?? '';
-  const standard = [
-    { id: 'first_name', name: 'First name', value: value('firstName') },
-    { id: 'last_name', name: 'Last name', value: value('lastName') },
-    { id: 'email', name: 'Email', value: value('email') },
-    { id: 'phone', name: 'Phone', value: value('phone') },
-  ].filter((s) => s.value !== '');
+  const standard = PREFILL_FIELDS.flatMap((f) =>
+    f.id === null ? [] : [{ id: f.id, name: f.name, value: value(f.key) }],
+  ).filter((x) => x.value !== '');
   const questions = [
-    {
-      labels: ['LinkedIn Profile', 'LinkedIn'],
-      name: 'LinkedIn profile',
-      value: value('linkedinUrl'),
-    },
-    { labels: ['Website'], name: 'Website', value: value('websiteUrl') },
+    ...PREFILL_FIELDS.flatMap((f) =>
+      f.id !== null ? [] : [{ labels: [...f.labels], name: f.name, value: value(f.key) }],
+    ),
     ...attempt.answers.map((a) => ({ labels: [a.label], name: a.label, value: a.value })),
   ].filter((q) => q.value !== '');
   const filename = attempt.resume.filename;
@@ -295,24 +313,12 @@ export function buildPlan(
   };
 }
 
-/** A withheld key as the filler finds it on the form: the same mapping as the fields above. */
+/** A withheld key as the filler finds it on the form: the same table as the fields to fill. */
 function withheldField(key: string): { id: string | null; labels: string[]; name: string } {
-  const name = withheldLabel(key);
-  const standardIds = new Map([
-    ['firstName', 'first_name'],
-    ['lastName', 'last_name'],
-    ['email', 'email'],
-    ['phone', 'phone'],
-  ]);
-  const questionLabels = new Map([
-    ['linkedinUrl', ['LinkedIn Profile', 'LinkedIn']],
-    ['websiteUrl', ['Website']],
-  ]);
-  return {
-    id: standardIds.get(key) ?? null,
-    labels: questionLabels.get(key) ?? [],
-    name,
-  };
+  const f = PREFILL_FIELDS.find((x) => x.key === key);
+  return f === undefined
+    ? { id: null, labels: [], name: withheldLabel(key) }
+    : { id: f.id, labels: [...f.labels], name: f.name };
 }
 
 /** Why a field was not filled, in words (the popup's list). */
@@ -443,15 +449,6 @@ export function reportLines(report: Extract<FillReport, { ok: true }>): {
   };
 }
 
-/** The names the popup gives the detail fields the server can withhold (#196). */
-const WITHHELD_LABELS = new Map<string, string>([
-  ['firstName', 'First name'],
-  ['lastName', 'Last name'],
-  ['email', 'Email'],
-  ['phone', 'Phone'],
-  ['linkedinUrl', 'LinkedIn profile'],
-  ['websiteUrl', 'Website'],
-]);
-
 /** A withheld field's label, or its key when the popup has no name for it. */
-export const withheldLabel = (key: string): string => WITHHELD_LABELS.get(key) ?? key.slice(0, 200);
+export const withheldLabel = (key: string): string =>
+  PREFILL_FIELDS.find((f) => f.key === key)?.name ?? key.slice(0, 200);
