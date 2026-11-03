@@ -1712,3 +1712,32 @@ describe('#186: starting again from pre-check values, and a review refused by th
     expect(screen.queryByText(/check your connection/i)).toBeNull();
   });
 });
+
+describe('#198: a 429 on the handoff says when to try again (tl on #194)', () => {
+  it('a valid review whose handoff is rate limited: the clock time from retry-after, never "check your connection"', async () => {
+    const api = mockApi(
+      routes(submission({ status: 'reviewed', reviewExpiresAt: NOW + 30 * MIN }), {
+        'POST /submissions/sub-1/handoff': () => ({
+          status: 429,
+          body: { error: { code: 'rate_limited' } },
+          headers: { 'retry-after': '90' },
+        }),
+      }),
+    );
+    const { tab } = fakeWindowOpen();
+    const { user } = renderStep('review');
+    const before = Date.now();
+    await user.click(await screen.findByRole('button', { name: 'Open boards.greenhouse.io' }));
+    await waitFor(() => expect(tab.close).toHaveBeenCalled());
+    // Only the handoff ran: the review was still valid.
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/review')).toHaveLength(0);
+    expect(calls(api.calls, 'POST', '/submissions/sub-1/handoff')).toHaveLength(1);
+    const alert = (await screen.findByText(/too many tries in a short time/i)).closest(
+      '[role="alert"]',
+    ) as HTMLElement;
+    const at = [clockTime(before + 90_000), clockTime(Date.now() + 90_000)];
+    expect(at.some((t) => alert.textContent?.includes(t))).toBe(true);
+    expect(alert).not.toHaveTextContent(/in a minute/i);
+    expect(screen.queryByText(/check your connection/i)).toBeNull();
+  });
+});

@@ -470,6 +470,16 @@ describe('#192: a label shared by a text field and a choice control is ambiguous
     expect(ok(report).filled).toContain('Website');
   });
 
+  it('a hidden radio group whose legend shares the label does not make it ambiguous (qa on #197, #198)', async () => {
+    const { doc, report } = await fill(
+      withExtra(
+        `<fieldset class="field-wrapper" hidden><legend>Website</legend><label for="q_r1">Yes</label><input id="q_r1" type="radio" name="q_rg" value="yes" /></fieldset>`,
+      ),
+    );
+    expect(valueOf(doc, 'question_9000102')).toBe('https://jane.example.com');
+    expect(ok(report).filled).toContain('Website');
+  });
+
   it('a hidden choice control does not make a shown text question ambiguous', async () => {
     const { doc } = await fill(
       withExtra(
