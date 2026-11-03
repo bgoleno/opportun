@@ -1543,7 +1543,13 @@ describe('M3a (#181): the fields prefill reads by name', () => {
       routes(
         submission({
           // Stored order is not display order (Postgres jsonb sorts its keys).
-          fields: { websiteUrl: PREFILL.websiteUrl, email: 'jane@example.com', ...PREFILL },
+          fields: {
+            websiteUrl: PREFILL.websiteUrl,
+            email: 'jane@example.com',
+            linkedinUrl: PREFILL.linkedinUrl,
+            lastName: PREFILL.lastName,
+            firstName: PREFILL.firstName,
+          },
         }),
       ),
     );
