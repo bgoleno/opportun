@@ -413,6 +413,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     sourceFetch: opts.sourceFetch ?? safeFetch,
     log: app.log,
     env: opts.env ?? process.env,
+    submissions: submissionsEnabled(cfg),
   };
   app.decorate('jobs', {
     services,

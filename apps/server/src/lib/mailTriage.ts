@@ -80,6 +80,7 @@ export type TriageRule =
   | 'job_sender'
   | 'vocabulary'
   | 'thread'
+  | 'submission_window'
   | 'ai_gate'
   | 'no_signal'
   | 'none';
@@ -193,6 +194,13 @@ export interface TriageMessageInput {
    * of rule 5's words, so without this rule 7 would drop it and Discovery would quietly empty.
    */
   digestSender: boolean;
+  /**
+   * True when the confirmation matcher (lib/submissionMatch, #119) matched this message to one
+   * of the user's applications awaiting a confirmation, or to several (ambiguous). Only that, not
+   * every message from a company's domain: the pass is not gated, so it must stay narrow (tl on
+   * #173). Absent counts as false, so every caller that predates it is unchanged.
+   */
+  submissionSender?: boolean;
 }
 
 /**
@@ -250,6 +258,12 @@ export function triageMessage(input: TriageMessageInput): TriageVerdict {
       pattern: null,
       signal: senderSignal,
     };
+  }
+  // Below both private-content vetoes (and rules 0 to 2 above), above every other pass (#119; tl
+  // on #79): an automated confirmation from no-reply@ often carries no job wording, and rule 7
+  // would drop it. Not gated (lib/triageGate): only a message the matcher matched gets here.
+  if (input.submissionSender === true) {
+    return { decision: 'pass', matchedRule: 'submission_window', ruleId: null, pattern: null };
   }
   if (jobSender) {
     return { decision: 'pass', matchedRule: 'job_sender', ruleId: null, pattern: null };

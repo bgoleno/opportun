@@ -60,11 +60,22 @@ const match = (
 describe('signal A: the ATS job reference (criterion 1)', () => {
   it.each([
     ['kind and externalId', [{ kind: 'ats_greenhouse', org: null, externalId: '1000001' }], true],
-    ['kind and org', [{ kind: 'ats_greenhouse', org: 'examplecorp', externalId: '999' }], true],
     [
-      'kind and org, in another case',
-      [{ kind: 'ats_greenhouse', org: 'ExampleCorp', externalId: '9' }],
+      'kind, externalId and the same org, in another case',
+      [{ kind: 'ats_greenhouse', org: 'ExampleCorp', externalId: '1000001' }],
       true,
+    ],
+    // A Workday requisition id is unique only within its tenant (tl on #173): the same id at
+    // another board is another company's job.
+    [
+      'the right id at another board',
+      [{ kind: 'ats_greenhouse', org: 'othercorp', externalId: '1000001' }],
+      false,
+    ],
+    [
+      'another job at the same board',
+      [{ kind: 'ats_greenhouse', org: 'examplecorp', externalId: '999' }],
+      false,
     ],
     [
       'the right id on another ATS',
@@ -83,6 +94,33 @@ describe('signal A: the ATS job reference (criterion 1)', () => {
     const result = match(message);
     expect(result.kind).toBe(matched ? 'match' : 'none');
     if (result.kind === 'match') expect(result.signals).toContain('ats_job_ref');
+  });
+});
+
+describe('a link to another job at the same board (#119 acceptance 7, as corrected on #173)', () => {
+  // Every extracted ref carries a job id, so a same-board ref with another id says the message
+  // is about another job there: a rejection for it, or "you may also like".
+  const OTHER_JOB = [{ kind: 'ats_greenhouse', org: 'ExampleCorp', externalId: '999' }];
+
+  it('never confirms, even with the company domain, the title and the company named', () => {
+    expect(match({ ...MESSAGE, atsJobRefs: OTHER_JOB })).toEqual({
+      kind: 'none',
+      reason: 'no_match',
+      candidateIds: [],
+    });
+  });
+
+  it('a link to this job beside it still confirms', () => {
+    const atsJobRefs = [
+      ...OTHER_JOB,
+      { kind: 'ats_greenhouse', org: 'examplecorp', externalId: '1000001' },
+    ];
+    expect(match({ ...BARE, fromAddress: 'x@unrelated.example', atsJobRefs }).kind).toBe('match');
+  });
+
+  it('another job at another board is no evidence either way: B and C still confirm', () => {
+    const atsJobRefs = [{ kind: 'ats_greenhouse', org: 'othercorp', externalId: '999' }];
+    expect(match({ ...MESSAGE, atsJobRefs }).kind).toBe('match');
   });
 });
 
@@ -146,6 +184,9 @@ describe('signal B: the sender address, never the display name (criterion 1)', (
     ['  Careers <careers@examplecorp.example>  ', 'examplecorp.example'],
     ['"Jobs <at> Example" <careers@examplecorp.example>', 'examplecorp.example'],
     ['careers@examplecorp.example', 'examplecorp.example'],
+    // qa on #134: without the endsWith('>') condition, slicing off the last character would read
+    // the company's address out of a header that does not end with its bracket.
+    ['Careers <careers@examplecorp.example)', null],
   ])('senderDomain(%j) is %j: a bracket counts only when it ends the header', (from, domain) => {
     expect(senderDomain(from)).toBe(domain);
   });
@@ -213,8 +254,9 @@ describe('the rule: D and (A, or B and C) (criterion 2)', () => {
     });
   });
 
-  it('A and D alone are enough', () => {
-    expect(match({ ...BARE, fromAddress: 'x@unrelated.example' })).toEqual({
+  it('A by id and D alone are enough', () => {
+    const atsJobRefs = [{ kind: 'ats_greenhouse', org: null, externalId: '1000001' }];
+    expect(match({ ...BARE, fromAddress: 'x@unrelated.example', atsJobRefs })).toEqual({
       kind: 'match',
       submissionId: 'sub-1',
       signals: ['ats_job_ref', 'time_window'],

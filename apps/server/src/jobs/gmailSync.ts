@@ -14,7 +14,7 @@ import { GMAIL_SCOPES, googleErrorReason, googleErrorStatus, readTokens } from '
 import type { Storage } from '../lib/storage';
 import type { UserCtx } from '../repos/base';
 import { getSyncState, putSyncState } from '../repos/communications';
-import { ingestInbound } from './mailIngest';
+import { ingestInbound, type IngestOptions } from './mailIngest';
 import { requireService, type JobHandler } from './registry';
 import { enqueue } from './runner';
 
@@ -35,6 +35,7 @@ export async function syncMailbox(
   ctx: UserCtx,
   provider: MailProvider,
   storage: Storage,
+  opts: IngestOptions = {},
 ): Promise<SyncOutcome> {
   const state = await getSyncState(db, ctx, GMAIL_INTEGRATION);
   const outcome: SyncOutcome = { stored: 0, inserted: 0 };
@@ -48,6 +49,7 @@ export async function syncMailbox(
         'gmail',
         item.message,
         async (tx) => await putSyncState(tx, ctx, GMAIL_INTEGRATION, { cursor: item.nextCursor }),
+        opts,
       );
       outcome.stored += 1;
       if (inserted) outcome.inserted += 1;
@@ -87,6 +89,7 @@ export const gmailSyncJob: JobHandler<Record<string, never>> = {
         user,
         requireService(ctx, 'mailProvider'),
         requireService(ctx, 'storage'),
+        { submissions: ctx.services.submissions === true },
       );
       await ctx.setResult(outcome);
     } catch (err) {

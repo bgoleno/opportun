@@ -211,6 +211,32 @@ describe('S7: status and evidence', () => {
   });
 });
 
+describe('S7: an email confirmation (#119)', () => {
+  it('shows the email evidence card, with its unlink, instead of the one-line placeholder', async () => {
+    render(
+      attempt({
+        status: 'confirmed',
+        confirmationKind: 'email',
+        confirmedAt: NOW - DAY,
+        confirmationEmail: {
+          communicationId: 'comm-1',
+          subject: 'Application received',
+          fromAddress: 'careers@examplecorp.example',
+          sentAt: NOW - DAY,
+          signals: ['ats_job_ref', 'time_window'],
+        },
+      }),
+    );
+    const evidence = (await screen.findByRole('heading', { name: 'Evidence' })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(evidence).toHaveTextContent('Application received');
+    expect(
+      within(evidence).getByRole('button', { name: 'Not this application (unlink)' }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe('S7: recording an outcome, for every submitted or unknown attempt (#149, tl)', () => {
   it('an earlier unknown attempt can be answered here while a newer one is submitted', async () => {
     const earlier = attempt({ status: 'unknown', submittedAt: NOW - 6 * DAY });

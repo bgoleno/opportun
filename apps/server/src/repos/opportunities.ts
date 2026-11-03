@@ -35,7 +35,7 @@ import {
 } from '../db/schema';
 import { postingAtsJobRef } from '../lib/atsJobRef';
 import { racePoint } from '../lib/racePoints';
-import { lockLiveAttempt, markPostingChanged } from './submissions';
+import { lockAttemptsOf, lockLiveAttempt, markPostingChanged } from './submissions';
 import { duplicate, HttpError, notFound } from '../lib/errors';
 import { isSystemWritten } from '../lib/postingFingerprint';
 import { lastActivityAt } from './activities';
@@ -711,6 +711,8 @@ export async function afterStageChange(db: Db, ctx: UserCtx, view: OpportunityVi
 
 export async function deleteOpportunity(db: Db, ctx: UserCtx, id: string): Promise<void> {
   await withTransaction(db, async (tx) => {
+    // Its attempts' locks before any row write: the delete cascades to them (#173).
+    await lockAttemptsOf(tx, ctx, [id]);
     // Index rows first: the activity ids are gone once the delete cascades.
     await removeOpportunityFromIndex(tx, ctx, id);
     const changes = await runCount(tx.delete(opportunities).where(owned(ctx, id)));
@@ -742,11 +744,10 @@ export async function mergeOpportunities(
 ): Promise<OpportunityView> {
   if (keepId === otherId) throw new HttpError(422, 'merge_self');
   return await withTransaction(db, async (tx) => {
-    // The live attempts' locks before anything is moved or deleted (lock order: submissionScope),
-    // in a fixed order so two merges cannot wait on each other.
-    for (const opportunityId of [keepId, otherId].sort()) {
-      await lockLiveAttempt(tx, ctx, opportunityId);
-    }
+    // Every attempt's lock, live or not, before anything is moved or deleted (lock order:
+    // submissionScope), in a fixed order so two merges cannot wait on each other: a posting
+    // change marks a live attempt, and mail ingest confirms a submitted one (#173).
+    await lockAttemptsOf(tx, ctx, [keepId, otherId]);
     const keep = await getViewSync(tx, ctx, keepId);
     const other = await getViewSync(tx, ctx, otherId);
     const now = Date.now();

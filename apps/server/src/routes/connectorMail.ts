@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import type { FastifyInstance, onRequestAsyncHookHandler } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { submissionsEnabled } from '../config';
 import { APPLE_MAIL_INTEGRATION, ingestInbound } from '../jobs/mailIngest';
 import { deviceRoute, requireDevice, requireDeviceToken } from '../lib/deviceTokens';
 import { HttpError } from '../lib/errors';
@@ -143,7 +144,9 @@ export async function connectorMailRoutes(app: FastifyInstance): Promise<void> {
       let inserted = 0;
       try {
         for (const message of capped) {
-          const res = await ingestInbound(db, ctx, app.storage, 'apple_mail', message);
+          const res = await ingestInbound(db, ctx, app.storage, 'apple_mail', message, undefined, {
+            submissions: submissionsEnabled(app.config),
+          });
           stored += 1;
           if (res.inserted) inserted += 1;
         }

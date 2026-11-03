@@ -27,6 +27,9 @@ export interface JobServices {
   /** The demo reset job's credentials source (issue #280); real process.env in production,
    *  a literal object in tests (#292). */
   env: NodeJS.ProcessEnv;
+  /** Assisted apply is on (config submissionsEnabled); mail ingest matches confirmations only
+   *  then (#119). Absent counts as off. */
+  submissions: boolean;
 }
 
 /** Per-run context, passed as the third argument to run(). */
