@@ -237,6 +237,11 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
         notFilled.push({ label: text, reason: 'attach_file_yourself' });
       } else if (f.el.tagName === 'INPUT' || f.el.tagName === 'SELECT') {
         notFilled.push({ label: text, reason: 'choose_on_form' });
+        // A reviewed answer for this choice is accounted for by that line: it is never also
+        // reported as having no question (#204).
+        plan.questions.forEach((q, i) => {
+          if (q.labels.some((l) => norm(l) === f.key)) used.add(`q${i}`);
+        });
       }
       continue;
     }
@@ -274,6 +279,21 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
     fire(field, 'input');
     fire(field, 'change');
     filled.push(text);
+  }
+
+  // A radio or checkbox group the form shows, whose legend is a reviewed answer's label: one
+  // "choose it on the form" line under the legend, and the answer is accounted for (#204).
+  for (const group of Array.from(form.querySelectorAll('fieldset'))) {
+    const legend = group.querySelector('legend');
+    const choices = group.querySelector('input[type="radio"], input[type="checkbox"]');
+    if (legend === null || choices === null || concealed(group, true)) continue;
+    const key = norm(legend.textContent ?? '');
+    const answered = plan.questions.flatMap((q, i) =>
+      q.labels.some((l) => norm(l) === key) ? [`q${i}`] : [],
+    );
+    if (answered.length === 0) continue;
+    for (const m of answered) used.add(m);
+    notFilled.push({ label: shown(legend.textContent ?? ''), reason: 'choose_on_form' });
   }
 
   plan.standard.forEach((s, i) => {
