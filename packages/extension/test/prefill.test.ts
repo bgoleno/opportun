@@ -653,7 +653,7 @@ describe('#191: a popup that closes before the resume check ends', () => {
       checkStore: store,
       duringWait: () => {
         seen.push(s.$('status').textContent ?? '');
-        seen.push(JSON.stringify(store.data.resumeCheckPending));
+        seen.push(JSON.stringify(store.data['resumeCheckPending:7']));
       },
     });
     await clickFill(s);
@@ -665,7 +665,7 @@ describe('#191: a popup that closes before the resume check ends', () => {
       jobId: JOB_ID,
       at: expect.any(Number),
     });
-    expect(store.data.resumeCheckPending).toBeNull();
+    expect(store.data['resumeCheckPending:7']).toBeNull();
   });
 
   it('the next popup on that tab says the resume was not confirmed, once', async () => {
@@ -676,12 +676,12 @@ describe('#191: a popup that closes before the resume check ends', () => {
     await mountPopup(first.doc, first.deps);
     first.$('prefill').click();
     await vi.waitFor(() => expect(first.$('status').textContent).toBe(RESUME_CHECKING));
-    expect(store.data.resumeCheckPending).not.toBeNull();
+    expect(store.data['resumeCheckPending:7']).not.toBeNull();
 
     const next = setup({ checkStore: store });
     await mountPopup(next.doc, next.deps);
     await vi.waitFor(() => expect(next.$('status').textContent).toBe(RESUME_UNCONFIRMED));
-    expect(store.data.resumeCheckPending).toBeNull();
+    expect(store.data['resumeCheckPending:7']).toBeNull();
     // Nothing was asked of the server or the page to say so.
     expect(next.get).not.toHaveBeenCalled();
     expect(next.deps.runResumeCheck).not.toHaveBeenCalled();
@@ -694,12 +694,25 @@ describe('#191: a popup that closes before the resume check ends', () => {
 
   it('a popup on another tab says nothing and leaves the note for its own tab', async () => {
     const store = memoryStore();
-    store.data.resumeCheckPending = { tabId: 7, board: BOARD, jobId: JOB_ID, at: Date.now() };
+    store.data['resumeCheckPending:7'] = { tabId: 7, board: BOARD, jobId: JOB_ID, at: Date.now() };
     const other = setup({ checkStore: store, tabId: 8 });
     await mountPopup(other.doc, other.deps);
     await new Promise((r) => setTimeout(r, 5));
     expect(other.$('status').textContent).toBe('');
-    expect(store.data.resumeCheckPending).not.toBeNull();
+    expect(store.data['resumeCheckPending:7']).not.toBeNull();
+  });
+
+  it("a fill in another tab keeps this tab's unfinished note (tl on #202)", async () => {
+    const store = memoryStore();
+    const pending = { tabId: 7, board: BOARD, jobId: JOB_ID, at: Date.now() };
+    store.data['resumeCheckPending:7'] = pending;
+    const other = setup({ checkStore: store, tabId: 8, showsFileName: false });
+    await clickFill(other);
+    expect(store.data['resumeCheckPending:7']).toEqual(pending);
+    expect(store.data['resumeCheckPending:8']).toBeNull();
+    const back = setup({ checkStore: store, tabId: 7 });
+    await mountPopup(back.doc, back.deps);
+    await vi.waitFor(() => expect(back.$('status').textContent).toBe(RESUME_UNCONFIRMED));
   });
 
   it('on that tab but another page, or after an hour, it is dropped without a word', async () => {
@@ -708,10 +721,10 @@ describe('#191: a popup that closes before the resume check ends', () => {
       [{ tabId: 7, board: BOARD, jobId: JOB_ID, at: Date.now() - 61 * 60 * 1000 }, undefined],
     ] as const) {
       const store = memoryStore();
-      store.data.resumeCheckPending = note;
+      store.data['resumeCheckPending:7'] = note;
       const s = setup({ checkStore: store, ...(tabUrl === undefined ? {} : { tabUrl }) });
       await mountPopup(s.doc, s.deps);
-      await vi.waitFor(() => expect(store.data.resumeCheckPending).toBeNull());
+      await vi.waitFor(() => expect(store.data['resumeCheckPending:7']).toBeNull());
       expect(s.$('status').textContent).toBe('');
     }
   });

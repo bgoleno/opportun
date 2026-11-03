@@ -89,9 +89,11 @@ const SERVER_URL_ERRORS = {
 const TOKEN_ERROR = 'Paste a device token (it starts with odt_).';
 const SERVER_CHANGED = 'Server changed: re-enter the token for the new server.';
 
-/** The note left while the resume check runs (#191): which tab and posting, and since when. */
-// Read back by name below (`resumeCheckPending`): keep the two the same.
-const CHECK_PENDING_KEY = 'resumeCheckPending';
+/**
+ * The note left while the resume check runs (#191): which tab and posting, and since when. One
+ * key per tab (tl on #202), so a fill in another window never overwrites an unfinished note.
+ */
+const checkPendingKey = (tabId: number): string => `resumeCheckPending:${tabId}`;
 /** A note older than this is not about the fill the user remembers: it is dropped silently. */
 const CHECK_PENDING_MAX_AGE_MS = 60 * 60 * 1000;
 export const RESUME_CHECKING =
@@ -434,7 +436,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
           jobId: pinned.jobId,
           at: Date.now(),
         };
-        await deps.checkStore?.set({ [CHECK_PENDING_KEY]: note }).catch(() => undefined);
+        await deps.checkStore?.set({ [checkPendingKey(tab.id)]: note }).catch(() => undefined);
         const check: ResumeCheck = {
           board: pinned.board,
           jobId: pinned.jobId,
@@ -472,7 +474,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
                   ? 'has_value'
                   : 'resume_unchecked';
         }
-        await deps.checkStore?.set({ [CHECK_PENDING_KEY]: null }).catch(() => undefined);
+        await deps.checkStore?.set({ [checkPendingKey(tab.id)]: null }).catch(() => undefined);
         if (reason === null) report.filled.push('Resume');
         else report.notFilled.push({ label: 'Resume', reason });
       }
@@ -533,21 +535,20 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
 
   /**
    * A resume check that a closed popup left unfinished on this tab's posting (#191): said once,
-   * then forgotten. A note for another tab is left for that tab's popup.
+   * then forgotten. Another tab's note is under its own key, for that tab's popup; one older than
+   * an hour, or for another page now, is dropped without a word.
    */
   const tellUnfinishedCheck = async (
     tabId: number | null,
     posting: { board: string; jobId: string } | null,
   ): Promise<void> => {
     if (deps.checkStore === null || tabId === null) return;
-    const { resumeCheckPending: note } = await deps.checkStore.get([CHECK_PENDING_KEY]);
+    const key = checkPendingKey(tabId);
+    // Only this tab's key is asked for, so the one value back is its note, if any.
+    const [note] = Object.values(await deps.checkStore.get([key]));
     if (!isCheckPending(note)) return;
-    if (Date.now() - note.at > CHECK_PENDING_MAX_AGE_MS) {
-      await deps.checkStore.set({ [CHECK_PENDING_KEY]: null });
-      return;
-    }
-    if (note.tabId !== tabId) return;
-    await deps.checkStore.set({ [CHECK_PENDING_KEY]: null });
+    await deps.checkStore.set({ [key]: null });
+    if (note.tabId !== tabId || Date.now() - note.at > CHECK_PENDING_MAX_AGE_MS) return;
     if (posting !== null && samePosting(posting, note)) {
       show({ tone: 'error', text: RESUME_UNCONFIRMED });
     }
