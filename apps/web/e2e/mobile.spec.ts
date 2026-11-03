@@ -366,7 +366,9 @@ const stubTitle = (i: number) =>
 
 /**
  * Content inside each result card that runs past the card's own right edge, or a box whose text
- * is wider than it is, other than a deliberate ellipsis (text-overflow: ellipsis).
+ * is wider than it is. A deliberate ellipsis (the location's `truncate`) is overflow: hidden, so
+ * its clipped text is not "wider"; but the box itself must still end inside the card (tl on
+ * https://github.com/bgoleno/opportun/pull/195), so nothing is exempt from `past`.
  */
 async function spillsOutOfCards(page: Page): Promise<string[]> {
   return page.evaluate(() => {
@@ -375,7 +377,6 @@ async function spillsOutOfCards(page: Page): Promise<string[]> {
       const edge = card.getBoundingClientRect().right;
       for (const el of card.querySelectorAll('*')) {
         const style = getComputedStyle(el);
-        if (style.textOverflow === 'ellipsis') continue;
         const past = el.getBoundingClientRect().right > edge + 1;
         const wider = el.scrollWidth > el.clientWidth + 1 && style.overflowX === 'visible';
         if (past || (wider && el.clientWidth > 0)) {
