@@ -4,7 +4,15 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from '../src/api';
 import type { CaptureSiteId } from '../src/canonical';
 import { extractIndeedJob, type ExtractResult, type RawPage } from '../src/extract';
-import { COMPANY, JK, NEVER_SENT, splitView, TITLE, viewjobPage } from './fixtures/indeedPages';
+import {
+  COMPANY,
+  homePage,
+  JK,
+  NEVER_SENT,
+  splitView,
+  TITLE,
+  viewjobPage,
+} from './fixtures/indeedPages';
 import { load, type FixturePage } from './fixtures/pages';
 import { mountPopup, type PopupDeps } from '../src/popupController';
 import { renderOutcome } from '../src/render';
@@ -341,7 +349,12 @@ describe('popup capture on Indeed', () => {
 
   it('the split view sends exactly what /viewjob sends, and the job title, not the search', async () => {
     const bodies = [];
-    for (const fixture of [viewjobPage(), splitView({ compactHeaderShowing: true })]) {
+    for (const fixture of [
+      viewjobPage(),
+      splitView({ compactHeaderShowing: true }),
+      // The home page, a job opened from its second list (#156).
+      homePage({ openedFrom: 1 }),
+    ]) {
       const { doc, deps, fetch, $ } = setup({
         stored: SAVED,
         tabUrl: fixture.url,
@@ -352,6 +365,7 @@ describe('popup capture on Indeed', () => {
       bodies.push(sent(fetch));
     }
     expect(bodies[1]).toEqual(bodies[0]);
+    expect(bodies[2]).toEqual(bodies[0]);
     expect(bodies[1]!.title).toBe(TITLE);
     expect(bodies[1]!.title).not.toMatch(/Now Hiring|Jobs in/);
     for (const never of NEVER_SENT) expect(JSON.stringify(bodies[1])).not.toContain(never);
@@ -375,6 +389,9 @@ describe('popup capture on Indeed', () => {
     ['search results with no job open', 'https://www.indeed.com/jobs?q=placeholder&l=x'],
     ['a company page', 'https://www.indeed.com/cmp/Example-Corp'],
     ['a malformed job key', 'https://www.indeed.com/viewjob?jk=not-a-key'],
+    // #156: as it loads, the home page shows a job but its URL names none.
+    ['the home page with no job opened', 'https://www.indeed.com/'],
+    ['the home page with a malformed key', 'https://www.indeed.com/?vjk=not-a-key'],
   ])('%s is refused in the popup without reading the tab', async (_name, tabUrl) => {
     const { doc, deps, fetch, $ } = setup({ stored: SAVED, tabUrl });
     await mountPopup(doc, deps);

@@ -44,8 +44,10 @@ function bootContacts() {
   });
 }
 
-// Each page is a full 200 rows (CONTACTS_PAGE_SIZE is fixed and "Showing a-b" counts the rows),
-// so these tests keep that many on screen. What made them slow was not the render (about 0.1 s
+// The tests about the default page show its full 200 rows ("Showing a-b" counts the rows). The
+// keyboard and search tests page through the same directory 5 rows at a time (the list's
+// pageSize, https://github.com/bgoleno/opportun/issues/161): their claims are about which page
+// a key or a search lands on, and re-rendering 154 to 200 rows per step was most of their time. What made them slow was not the render (about 0.1 s
 // for the 1,660 nodes of a page) but whole-document role queries over it
 // (https://github.com/bgoleno/opportun/issues/161): `getByRole('row', { name })` computes the
 // accessible name of all 201 rows, about 0.25 s on an idle worker per call, and every
@@ -108,24 +110,29 @@ describe('NetworkList pagination (issue #207)', () => {
 
   it('pages with the keyboard: n, p, Home and End', async () => {
     const user = userEvent.setup();
-    bootContacts();
-    renderWithProviders(<NetworkList />);
-    await screen.findByText(/Showing 1–200 of 1754\./);
+    const { calls } = bootContacts();
+    renderWithProviders(<NetworkList pageSize={5} />);
+    await screen.findByText(/Showing 1–5 of 1754\./);
     // Focus must be outside the search input, or useHotkeys ignores the keystroke (never
     // steals a key while typing).
     await user.click(screen.getByRole('table', { name: 'Network' }));
 
     await user.keyboard('n');
-    expect(await screen.findByText(/Showing 201–400 of 1754\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Showing 6–10 of 1754\./)).toBeInTheDocument();
 
+    // 1754 = 350 full pages of 5 (1750) + 4 on the 351st.
     await user.keyboard('{End}');
-    expect(await screen.findByText(/Showing 1601–1754 of 1754\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Showing 1751–1754 of 1754\./)).toBeInTheDocument();
 
     await user.keyboard('p');
-    expect(await screen.findByText(/Showing 1401–1600 of 1754\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Showing 1746–1750 of 1754\./)).toBeInTheDocument();
 
     await user.keyboard('{Home}');
-    expect(await screen.findByText(/Showing 1–200 of 1754\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Showing 1–5 of 1754\./)).toBeInTheDocument();
+    // Every page was asked for at the list's page size.
+    expect(new Set(calls.map((c) => new URLSearchParams(c.search).get('limit')))).toEqual(
+      new Set(['5']),
+    );
   });
 
   it('does not page past either end', async () => {
@@ -151,11 +158,11 @@ describe('NetworkList pagination (issue #207)', () => {
     const { calls } = mockApi({
       'GET /network': (call: ApiCall) => paged(new URLSearchParams(call.search)),
     });
-    renderWithProviders(<NetworkList />);
-    await screen.findByText(/Showing 1–200 of 1754\./);
+    renderWithProviders(<NetworkList pageSize={5} />);
+    await screen.findByText(/Showing 1–5 of 1754\./);
 
     await user.click(pagerButton('Last page'));
-    await screen.findByText(/Showing 1601–1754 of 1754\./);
+    await screen.findByText(/Showing 1751–1754 of 1754\./);
 
     await user.type(screen.getByLabelText('Search your network'), 'Contact 0005');
     // Exactly one match ("Contact 0005"), so the reset lands on a real first page, not an

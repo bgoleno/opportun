@@ -157,7 +157,8 @@ export function renderOutcome(outcome: Outcome, site: CaptureSiteId = 'linkedin'
     case 'not_a_posting':
       return {
         tone: 'error',
-        text: 'Open a single Indeed job (a job page, or a search with a job open on the right), then click Capture.',
+        // The home page shows a job as it loads, but only clicking it puts the job in the URL (#156).
+        text: 'Open a single Indeed job (a job page, or a list with a job open on the right; on the home page, click the job first), then click Capture.',
       };
     case 'layout_unrecognized':
       return {

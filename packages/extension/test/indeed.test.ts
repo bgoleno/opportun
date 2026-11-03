@@ -12,6 +12,7 @@ import { extractIndeedJob, type ExtractResult } from '../src/extract';
 import { normalizeCapture } from '../src/normalize';
 import {
   COMPANY,
+  homePage,
   JK,
   NEVER_SENT,
   NON_TEXT_CHILDREN,
@@ -80,6 +81,14 @@ describe('the Indeed job key and canonical URL', () => {
     expect(indeedJobKey(`https://www.indeed.com/viewjob?jk=${JK.toUpperCase()}`)).toBe(JK);
   });
 
+  it('reads vjk on the home page, where a job opens in the right pane (#156)', () => {
+    expect(indeedJobKey(`https://www.indeed.com/?vjk=${JK}`)).toBe(JK);
+    expect(indeedJobKey(`https://www.indeed.com/?from=placeholder&vjk=${JK.toUpperCase()}`)).toBe(
+      JK,
+    );
+    expect(canonicalCaptureUrl(homePage().url)).toBe(CANONICAL);
+  });
+
   it('has no key for anything that is not one posting, or a key of the wrong shape', () => {
     for (const href of [
       'https://www.indeed.com/jobs?q=a&l=b',
@@ -90,6 +99,11 @@ describe('the Indeed job key and canonical URL', () => {
       'https://www.indeed.com/viewjob?jk=abc',
       `https://www.indeed.com/viewjob?jk=${'a'.repeat(33)}`,
       `https://notindeed.com/viewjob?jk=${JK}`,
+      // The home page names its job only with vjk; as it loads it shows one with none (#156).
+      'https://www.indeed.com/',
+      'https://www.indeed.com/?from=placeholder',
+      `https://www.indeed.com/?jk=${JK}`,
+      'https://www.indeed.com/?vjk=not-a-key',
     ]) {
       expect(indeedJobKey(href), href).toBeNull();
     }
@@ -201,6 +215,29 @@ describe('extractIndeedJob', () => {
     );
   });
 
+  // https://github.com/bgoleno/opportun/issues/156: the home page keeps a highlighted card in
+  // each of its lists, so several are on the page; only the opened list's names the URL's job.
+  it('captures the home page job opened from any list, not only the first', () => {
+    for (const openedFrom of [0, 1, 3]) {
+      const page = homePage({ openedFrom });
+      expect(load(page).querySelectorAll('.vjs-highlight').length).toBe(4);
+      expect(ok(extractIndeedJob(load(page))).text).toBe(EXPECTED_TEXT);
+    }
+  });
+
+  it('refuses the home page when no highlighted card names the URL’s job', () => {
+    expect(extractIndeedJob(load(homePage({ openedFrom: null })))).toEqual({
+      ok: false,
+      reason: 'layout_unrecognized',
+    });
+  });
+
+  it('sends nothing from the home page’s lists or chrome', () => {
+    const text = ok(extractIndeedJob(load(homePage()))).text;
+    for (const never of NEVER_SENT) expect(text).not.toContain(never);
+    expect(text).not.toContain('Job Search');
+  });
+
   it('skips style, script, noscript and template children of the description container', () => {
     for (const fixture of [
       viewjobPage({ descriptionContainerExtras: NON_TEXT_CHILDREN }),
@@ -241,14 +278,19 @@ describe('extractIndeedJob', () => {
 });
 
 describe('what the popup sends for an Indeed job', () => {
-  it('both layouts send the same canonical URL, job title and text', () => {
-    const payloads = [viewjobPage(), splitView({ compactHeaderShowing: true })].map((f) => {
+  it('every layout (/viewjob, the split view, the home page) sends the same URL, title and text', () => {
+    const payloads = [
+      viewjobPage(),
+      splitView({ compactHeaderShowing: true }),
+      homePage({ openedFrom: 2 }),
+    ].map((f) => {
       const n = normalizeCapture(ok(extractIndeedJob(load(f))));
       if (!n.ok) throw new Error(n.error);
       return n.payload;
     });
     expect(payloads[0]).toEqual({ url: CANONICAL, title: TITLE, text: EXPECTED_TEXT });
     expect(payloads[1]).toEqual(payloads[0]);
+    expect(payloads[2]).toEqual(payloads[0]);
   });
 });
 

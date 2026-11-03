@@ -126,7 +126,7 @@ function AddContactCard() {
 }
 
 /**
- * Previous/next/first/last through a result set paged at CONTACTS_PAGE_SIZE (issue #207).
+ * Previous/next/first/last through a result set paged at the list's page size (issue #207).
  * Keyboard-reachable (the owner's standing ruling: every function reachable from the
  * keyboard), matching the `?` overlay added alongside this. Paging, not infinite scroll or
  * load-more: an alphabetical list this long needs a place to come back to ("281-400 of
@@ -204,15 +204,21 @@ function ContactPager({
   );
 }
 
-export function NetworkList() {
+/**
+ * `pageSize` is CONTACTS_PAGE_SIZE (200) for everyone who uses the app. A test passes a small
+ * one so that paging through the same claims renders a few rows instead of 200 per page
+ * (https://github.com/bgoleno/opportun/issues/161): re-rendering full pages is what made the
+ * keyboard and search tests slow under load.
+ */
+export function NetworkList({ pageSize = CONTACTS_PAGE_SIZE }: { pageSize?: number } = {}) {
   const [q, setQ] = useState('');
   const [page, setPage] = useState(0);
-  const contacts = useContacts(q, page);
+  const contacts = useContacts(q, page, pageSize);
   const items = contacts.data?.items ?? [];
   const total = contacts.data?.total ?? 0;
-  const pageCount = Math.max(1, Math.ceil(total / CONTACTS_PAGE_SIZE));
-  const start = page * CONTACTS_PAGE_SIZE + 1;
-  const end = page * CONTACTS_PAGE_SIZE + items.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const start = page * pageSize + 1;
+  const end = page * pageSize + items.length;
 
   // A search for a different query starting on whatever page the last one left off on is
   // the failure this ticket calls out by name: page three of an old query, silently showing
