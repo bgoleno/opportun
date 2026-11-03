@@ -13,6 +13,7 @@ import {
   type RawPage,
 } from './extract';
 import { clearResume, fillGreenhouseForm, resumeShown, type FillReport } from './greenhouseFill';
+import { readConfirmationPage, type ReadPage } from './confirmation';
 import { mountPopup } from './popupController';
 import { bakedServerUrl, type SettingsStorage } from './settings';
 
@@ -67,6 +68,14 @@ const NOT_FILLED_REASONS: readonly unknown[] = [
   'attach_file_yourself',
   'resume_unchecked',
 ];
+
+/** What readConfirmationPage may return; anything else from the tab is treated as a failure. */
+const isReadPage = (v: unknown): v is ReadPage =>
+  typeof v === 'object' &&
+  v !== null &&
+  typeof (v as ReadPage).href === 'string' &&
+  typeof (v as ReadPage).title === 'string' &&
+  typeof (v as ReadPage).text === 'string';
 
 /** What fillGreenhouseForm may return; anything else from the tab is treated as a failure. */
 const isFillReport = (v: unknown): v is FillReport => {
@@ -188,6 +197,19 @@ void mountPopup(document, {
         r === 'no_input'
         ? r
         : null;
+    } catch {
+      return null;
+    }
+  },
+  // The confirmation page's reader (#121): top frame only, a bare func and no args; it only reads.
+  runReadPage: async (tabId) => {
+    try {
+      const [frame] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: readConfirmationPage,
+        args: [],
+      });
+      return isReadPage(frame?.result) ? frame.result : null;
     } catch {
       return null;
     }
