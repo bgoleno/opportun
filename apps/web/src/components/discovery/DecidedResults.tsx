@@ -197,8 +197,8 @@ function DecidedRow({
         </span>
       </div>
       <div className="grid gap-0.5">
-        <span className="font-medium break-words">{p.title}</span>
-        <span className="text-sm break-words text-muted-foreground">{p.company}</span>
+        <span className="font-medium [overflow-wrap:anywhere]">{p.title}</span>
+        <span className="text-sm [overflow-wrap:anywhere] text-muted-foreground">{p.company}</span>
       </div>
       {r.dismissReason !== null ? (
         <p className="text-xs text-muted-foreground">

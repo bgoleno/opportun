@@ -74,6 +74,10 @@ function StaleBadge() {
 // implicit column is as wide as its widest content's min-content size, and a nowrap (truncated)
 // location or a long unbroken link made the card, and so the whole queue, wider than a phone's
 // screen (#193). With the column pinned to the card's width, that text truncates or wraps inside.
+// The title and company are overflow-wrap: anywhere, not break-words: a name with no break in it
+// (or a long compound word) keeps break-words' min-content width, so the inner grid, and the
+// title's w-fit button, stayed that wide (qa and tl on https://github.com/bgoleno/opportun/pull/195).
+// anywhere lowers the min-content width itself, so the name wraps inside the card.
 
 /** The card's outline when stale; after `selected`, so a stale card keeps it under the cursor. */
 const STALE_OUTLINE = 'border-destructive';
@@ -143,11 +147,11 @@ export function QueueRow(props: {
         <button
           type="button"
           onClick={props.onOpen}
-          className="w-fit text-left font-medium break-words underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          className="w-fit text-left font-medium [overflow-wrap:anywhere] underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
         >
           {p.title}
         </button>
-        <span className="text-sm break-words text-muted-foreground">{p.company}</span>
+        <span className="text-sm [overflow-wrap:anywhere] text-muted-foreground">{p.company}</span>
         <DiscoveredLine at={r.createdAt} />
       </div>
       {r.aiRationale ? (
@@ -238,11 +242,11 @@ export function QueueGroupRow(props: {
         <button
           type="button"
           onClick={props.onOpen}
-          className="w-fit text-left font-medium break-words underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          className="w-fit text-left font-medium [overflow-wrap:anywhere] underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
         >
           {p.title}
         </button>
-        <span className="text-sm break-words text-muted-foreground">{p.company}</span>
+        <span className="text-sm [overflow-wrap:anywhere] text-muted-foreground">{p.company}</span>
         <DiscoveredLine at={firstDiscoveredAt(group)} />
       </div>
       <ul

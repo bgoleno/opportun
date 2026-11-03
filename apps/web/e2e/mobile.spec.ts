@@ -298,6 +298,13 @@ const UNBROKEN =
   'https://careers.example-holdings.com/jobs/principal-platform-intelligence-engineer-remote-united-states?gh_src=discovery_feed_tracking_0123456789abcdef';
 const LONG_WHY = `Strong match for your Staff and Principal platform engineering targets: owns the internal developer platform, observability and cost tooling end to end, remote in your region, and the level matches your floor. See ${UNBROKEN}`;
 const LONG_DESCRIPTION = `About International Consolidated Platform Intelligence Holdings: a multinational enterprise software group building analytics infrastructure for regulated industries across forty countries. ${UNBROKEN}`;
+// A title and a company with no break opportunity at all, and a real compound-word title
+// (qa and tl on https://github.com/bgoleno/opportun/pull/195): text with spaces always wrapped.
+const UNBROKEN_TITLE =
+  'PrincipalPlatformIntelligenceEngineerDeveloperExperienceObservabilityAndReliability';
+const UNBROKEN_COMPANY = 'InternationalConsolidatedPlatformIntelligenceHoldingsGmbH';
+const COMPOUND_TITLE = 'Datenbankadministratorenteamleiterin (m/w/d)';
+const COMPOUND_COMPANY = 'Bundesversicherungsanstaltsverwaltungsgesellschaft mbH';
 const LONG_LOCATION =
   'Remote, United States (Eastern or Central time zones preferred); occasional travel to San Francisco, California';
 
@@ -353,6 +360,17 @@ async function stubDiscoveryResults(page: Page): Promise<void> {
       stubResult(4, {
         dedupeKey: 'international consolidated|principal platform 3|b',
         posting: { location: `${LONG_LOCATION} or London, United Kingdom`, title: stubTitle(3) },
+      }),
+      stubResult(5, { posting: { title: UNBROKEN_TITLE, company: UNBROKEN_COMPANY } }),
+      stubResult(6, { posting: { title: COMPOUND_TITLE, company: COMPOUND_COMPANY } }),
+      // A location group whose title and company have no break either.
+      stubResult(7, {
+        dedupeKey: 'unbroken|unbroken title|a',
+        posting: { title: UNBROKEN_TITLE, company: UNBROKEN_COMPANY },
+      }),
+      stubResult(8, {
+        dedupeKey: 'unbroken|unbroken title|b',
+        posting: { title: UNBROKEN_TITLE, company: UNBROKEN_COMPANY, location: 'Berlin' },
       }),
     ].map((r) =>
       disposition === 'pending' ? r : { ...r, disposition, dismissReason: 'not_a_fit' },
@@ -411,6 +429,7 @@ for (const width of DISCOVERY_WIDTHS) {
       await page.goto('/discovery');
       const queue = page.getByRole('list', { name: 'Results to review' });
       await expect(queue.getByText(LONG_WHY).first()).toBeVisible();
+      await expect(queue.getByText(COMPOUND_TITLE)).toBeVisible();
       await expectFits(page, 'the review queue');
       expect(await spillsOutOfCards(page), 'text spilling out of a card').toEqual([]);
 
