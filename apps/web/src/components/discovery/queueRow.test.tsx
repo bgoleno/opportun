@@ -810,6 +810,13 @@ describe('ReviewQueue bulk triage (#184)', () => {
     expect(paged.map((c) => new URLSearchParams(c.search).get('offset'))).toEqual(['0', '200']);
   });
 
+  it('offers no "Select all N matching" when everything matching is already loaded', async () => {
+    mockApi({ 'GET /discovery/results': { items: [X, Y, Z], total: 3 } });
+    renderWithProviders(<ReviewQueue />);
+    await screen.findByText('Select all 3 loaded');
+    expect(screen.queryByText(/^Select all \d+ matching$/)).not.toBeInTheDocument();
+  });
+
   it('space toggles the keyboard cursor row, Escape clears the whole selection', async () => {
     const user = userEvent.setup();
     mockApi({ 'GET /discovery/results': { items: [X, Y], total: 2 } });
