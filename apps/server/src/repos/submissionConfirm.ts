@@ -19,10 +19,12 @@ import {
 } from '../db/schema';
 import { WORKDAY_HOST } from '../adapters/discoverySource';
 import { boardFromUrl } from '../jobs/atsDetect';
+import { extractAtsJobRefs } from '../lib/atsJobRef';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { isPageFetchProhibited } from '../lib/safeFetch';
+import { cleanText } from '../lib/safeText';
 import {
   CONFIRMATION_SKEW_MS,
   CONFIRMATION_WINDOW_MS,
@@ -170,42 +172,79 @@ export function hostOf(url: string): string | null {
   }
 }
 
+/** Whether a page may confirm an attempt, or why not (confirmationPageVerdict). */
+export type ConfirmationPageVerdict = 'ok' | 'wrong_site' | 'different_job';
+
 /**
- * Where a confirmation page may come from (tl's ruling 3 on #121, made stricter where a board
- * host is shared):
+ * Whether `pageUrl` may confirm this attempt: the one rule for both the extension's lookup and
+ * the recording itself (tl on #121: one function, not a copy).
+ *
+ * The site (tl's ruling 3 on #121, made stricter where a board host is shared):
  * - A page that names an ATS board (boardFromUrl) counts only when it is the attempt's board:
  *   the same ATS, and the attempt's board or tenant whatever its case. So Greenhouse's thank-you
  *   page on job-boards.greenhouse.io counts for an attempt opened on boards.greenhouse.io.
  * - A page that names no board counts only on the destination's own origin, and only where that
  *   origin is the employer's alone: a Workday tenant's host. boards.greenhouse.io, jobs.lever.co
  *   and jobs.ashbyhq.com serve every employer, so "the same origin" there would let another
- *   employer's page through (the wrong_site test's first case).
- * https only, no credentials, and never a host the server may not read pages from (LinkedIn,
- * Indeed), which boardFromUrl never names either.
+ *   employer's page through.
+ * - https only, no credentials, and never a host the server may not read pages from (LinkedIn,
+ *   Indeed), which boardFromUrl never names either.
+ *
+ * The job (tl, from qa's PASS on https://github.com/bgoleno/opportun/pull/188): a page on the
+ * right site whose address names a job of that ATS (extractAtsJobRefs) other than the attempt's
+ * is another job's page: `different_job`. One that names no job counts, as does the posting
+ * page itself (Ashby may show its confirmation at the posting's address).
  */
-export function confirmationPageAllowed(
+export function confirmationPageVerdict(
   pageUrl: string,
-  sub: Pick<SubmissionRow, 'destinationUrl' | 'atsKind' | 'atsRef'>,
-): boolean {
+  sub: Pick<SubmissionRow, 'destinationUrl' | 'atsKind' | 'atsRef' | 'atsExternalId'>,
+): ConfirmationPageVerdict {
   let url: URL;
   let destination: URL;
   try {
     url = new URL(pageUrl);
     destination = new URL(sub.destinationUrl);
   } catch {
-    return false;
+    return 'wrong_site';
   }
-  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') return false;
-  if (isPageFetchProhibited(url.hostname)) return false;
+  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') return 'wrong_site';
+  if (isPageFetchProhibited(url.hostname)) return 'wrong_site';
   const board = boardFromUrl(url.href);
-  if (board !== null) {
-    return (
-      board.kind === sub.atsKind &&
-      sub.atsRef !== null &&
-      board.slug.toLowerCase() === sub.atsRef.toLowerCase()
-    );
+  const site =
+    board !== null
+      ? board.kind === sub.atsKind &&
+        sub.atsRef !== null &&
+        board.slug.toLowerCase() === sub.atsRef.toLowerCase()
+      : url.origin === destination.origin && WORKDAY_HOST.test(url.hostname);
+  if (!site) return 'wrong_site';
+  const jobs = extractAtsJobRefs(url.href).filter((r) => r.kind === sub.atsKind);
+  if (jobs.length > 0 && !jobs.some((r) => r.externalId === sub.atsExternalId)) {
+    return 'different_job';
   }
-  return url.origin === destination.origin && WORKDAY_HOST.test(url.hostname);
+  return 'ok';
+}
+
+/** The refusal for a page that may not confirm the attempt. */
+function verdictRefusal(verdict: Exclude<ConfirmationPageVerdict, 'ok'>): HttpError {
+  return verdict === 'different_job'
+    ? new HttpError(409, 'different_job', 'This page is for another job, so it was not recorded.')
+    : new HttpError(
+        422,
+        'wrong_site',
+        "This page is not on this application's site, so it was not recorded.",
+      );
+}
+
+/**
+ * The page's address as the timeline keeps it: no query or fragment, which on a thank-you page
+ * can carry a session or an application token (sec on https://github.com/bgoleno/opportun/pull/188).
+ * The site check above reads the whole address (Greenhouse's embed names its board in `?for=`).
+ */
+function withoutQuery(pageUrl: string): string {
+  const url = new URL(pageUrl);
+  url.search = '';
+  url.hash = '';
+  return url.href;
 }
 
 /** What the extension sends from the page the user is on (design 6.2). */
@@ -223,6 +262,58 @@ export interface DeviceCaller {
   ip: string;
 }
 
+/** The timeline entry for a recorded page (cleanText: Postgres refuses a NUL, tl on #188). */
+async function pageEntry(
+  tx: Exec,
+  ctx: UserCtx,
+  opportunityId: string,
+  input: ConfirmationPageInput,
+) {
+  return await createActivity(tx, ctx, opportunityId, {
+    kind: 'confirmation_page',
+    title: `Confirmation page recorded (${hostOf(input.url)})`,
+    bodyMd: cleanText(input.text),
+    occurredAt: Date.now(),
+    participants: [],
+    externalUrl: withoutQuery(input.url),
+  });
+}
+
+/** A new copy for a page confirmation whose copy was deleted; the caller holds the lock. */
+async function relinkPage(
+  tx: Exec,
+  ctx: UserCtx,
+  current: SubmissionRow,
+  input: ConfirmationPageInput,
+  caller: DeviceCaller,
+): Promise<SubmissionRow> {
+  const entry = await pageEntry(tx, ctx, current.opportunityId, input);
+  const [updated] = await tx
+    .update(applicationSubmissions)
+    .set({ confirmationActivityId: entry.id, updatedAt: Date.now() })
+    .where(
+      and(
+        owned(ctx, current.id),
+        eq(applicationSubmissions.status, 'confirmed'),
+        isNull(applicationSubmissions.confirmationActivityId),
+      ),
+    )
+    .returning();
+  // Unreachable while every writer takes the attempt's lock; kept as a guard.
+  if (updated === undefined) throw notNow(await getRow(tx, ctx, current.id), 'confirmed');
+  await audit(tx, 'submission.confirmation_page_relinked', {
+    userId: ctx.userId,
+    ip: caller.ip,
+    detail: {
+      submissionId: current.id,
+      opportunityId: current.opportunityId,
+      deviceTokenId: caller.tokenId,
+      host: hostOf(input.url),
+    },
+  });
+  return updated;
+}
+
 /**
  * Records the application site's confirmation page (#121, tl's rulings): the attempt becomes
  * confirmed, kind `page`, with the page kept whole as a `confirmation_page` timeline entry.
@@ -232,8 +323,12 @@ export interface DeviceCaller {
  * - Once: an attempt an email or a page already confirmed answers unchanged and stores nothing.
  *   One the user marked confirmed is backed by the page: kind `page`, the entry linked, the
  *   user's note left on the timeline and their confirmation time kept (ruling 2).
- * - A page from anywhere else is 422 wrong_site, storing nothing; the refusal is audited with
- *   the page's host only (ruling 3).
+ * - A page from anywhere else is 422 wrong_site, and another job's page 409 different_job, each
+ *   storing nothing; the refusal is audited with the page's host only (confirmationPageVerdict).
+ * - A page confirmation whose copy was deleted takes the new copy (relinkPage).
+ *
+ * This decides alone: the extension's lookup (confirmableForPage) only says which attempt to
+ * name, and nothing here assumes it was asked (tl on #121).
  *
  * The text is the user's own capture and stays on the timeline only: no job, no AI, no audit
  * (ruling 4). Lock order as everywhere: the attempt's lock first, before any row write.
@@ -250,25 +345,30 @@ export async function confirmFromPage(
   // the row the transaction will see.
   const pre = await getRow(db, ctx, id);
   const host = hostOf(input.url);
-  if (!confirmationPageAllowed(input.url, pre)) {
+  const verdict = confirmationPageVerdict(input.url, pre);
+  if (verdict !== 'ok') {
     await audit(db, 'submission.confirmation_refused', {
       userId: ctx.userId,
       ip: caller.ip,
-      detail: { submissionId: id, deviceTokenId: caller.tokenId, reason: 'wrong_site', host },
+      detail: { submissionId: id, deviceTokenId: caller.tokenId, reason: verdict, host },
     });
-    throw new HttpError(
-      422,
-      'wrong_site',
-      "This page is not on this application's site, so it was not recorded.",
-    );
+    throw verdictRefusal(verdict);
   }
   await racePoint('submissions.confirmPage');
   return await withTransaction(db, async (tx) => {
     await lockScope(tx, submissionScope(id));
     const current = await getRow(tx, ctx, id);
-    if (current.status === 'confirmed' && current.confirmationKind !== 'user') {
+    // A page confirmation whose copy the user deleted takes a new copy (tl, from qa on #188):
+    // relinked, with the kind and the confirmation time unchanged. While a copy exists: once.
+    const relinking =
+      current.status === 'confirmed' &&
+      current.confirmationKind === 'page' &&
+      current.confirmationActivityId === null;
+    if (current.status === 'confirmed' && current.confirmationKind !== 'user' && !relinking) {
       return { row: current, recorded: false };
     }
+    if (relinking)
+      return { row: await relinkPage(tx, ctx, current, input, caller), recorded: true };
     const upgrading = current.status === 'confirmed';
     if (current.status === 'handed_off') {
       throw new HttpError(
@@ -282,14 +382,7 @@ export async function confirmFromPage(
       throw notNow(current, 'confirmed');
     }
     const now = Date.now();
-    const entry = await createActivity(tx, ctx, current.opportunityId, {
-      kind: 'confirmation_page',
-      title: `Confirmation page recorded (${host})`,
-      bodyMd: input.text,
-      occurredAt: now,
-      participants: [],
-      externalUrl: input.url,
-    });
+    const entry = await pageEntry(tx, ctx, current.opportunityId, input);
     const [updated] = await tx
       .update(applicationSubmissions)
       .set({
@@ -333,6 +426,75 @@ export async function confirmFromPage(
     });
     return { row: updated, recorded: true };
   });
+}
+
+/** Why the extension's lookup names no attempt to record a page for (tl on #121). */
+export type ConfirmableMiss =
+  'no_matching_attempt' | 'several_matching' | 'needs_submitted_first' | 'already_recorded';
+
+export type ConfirmableResult =
+  | { kind: 'found'; row: SubmissionRow; opportunityTitle: string; companyName: string }
+  | { kind: 'none'; reason: ConfirmableMiss };
+
+/**
+ * Which of the caller's applications the page in this tab could confirm, for the extension's
+ * "Record confirmation page" (tl's ruling on #121). It decides nothing: confirmFromPage checks
+ * everything again under the attempt's lock.
+ *
+ * Among the attempts whose site and job the page may be (confirmationPageVerdict):
+ * - any handed-off one makes it needs_submitted_first, naming none (tl on
+ *   https://github.com/bgoleno/opportun/pull/199): this page may be that application's thank-you
+ *   page, so an older submitted one must not take it. The user says "I submitted it" in
+ *   Opportun; a device never does;
+ * - else the recordable ones: submitted, unknown, confirmed by the user's word, or confirmed by a
+ *   page whose copy was deleted. Exactly one is found; more than one is several_matching;
+ * - else a page confirmation whose copy exists is already_recorded;
+ * - everything else (email confirmations, reviewed, refused, cancelled and the rest) is
+ *   no_matching_attempt.
+ * A miss is a reason code only, and a match only its id, title and company (sec and tl on
+ * #199): a leaked token learns as little as it can from probing which boards match.
+ */
+export async function confirmableForPage(
+  db: Db,
+  ctx: UserCtx,
+  pageUrl: string,
+): Promise<ConfirmableResult> {
+  const rows = await db
+    .select({
+      row: applicationSubmissions,
+      opportunityTitle: opportunities.title,
+      companyName: companies.name,
+    })
+    .from(applicationSubmissions)
+    .innerJoin(opportunities, eq(opportunities.id, applicationSubmissions.opportunityId))
+    .innerJoin(companies, eq(companies.id, opportunities.companyId))
+    .where(
+      and(
+        eq(applicationSubmissions.userId, ctx.userId),
+        inArray(applicationSubmissions.status, ['handed_off', 'submitted', 'unknown', 'confirmed']),
+      ),
+    )
+    .all();
+  const matching = rows.filter((r) => confirmationPageVerdict(pageUrl, r.row) === 'ok');
+  if (matching.some(({ row }) => row.status === 'handed_off')) {
+    return { kind: 'none', reason: 'needs_submitted_first' };
+  }
+  const recordable = matching.filter(({ row }) =>
+    row.status === 'confirmed'
+      ? row.confirmationKind === 'user' ||
+        (row.confirmationKind === 'page' && row.confirmationActivityId === null)
+      : true,
+  );
+  const [only] = recordable;
+  if (recordable.length === 1 && only !== undefined) return { kind: 'found', ...only };
+  if (recordable.length > 1) return { kind: 'none', reason: 'several_matching' };
+  const recorded = matching.some(
+    ({ row }) =>
+      row.status === 'confirmed' &&
+      row.confirmationKind === 'page' &&
+      row.confirmationActivityId !== null,
+  );
+  return { kind: 'none', reason: recorded ? 'already_recorded' : 'no_matching_attempt' };
 }
 
 /**

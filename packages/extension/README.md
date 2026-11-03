@@ -118,6 +118,37 @@ field other than the resume input. It also never does any of the following:
 A test scans the filler's own source to enforce this. It needs no new permission, and still
 adds no content script and no background worker: `activeTab` covers the tab you clicked in.
 
+## Assisted apply: recording the confirmation page
+
+With the same token, the popup offers **Record confirmation page** over any https page
+([#121](https://github.com/bgoleno/opportun/issues/121)). Use it on the thank-you page an
+application site shows after you submit, once you have told Opportun you submitted it (**I
+submitted it**). The extension never records that for you.
+
+On the click, and only then:
+
+1. **The popup asks your server which application this page may confirm.**
+   - It calls `GET <server>/api/v1/connector/apply/confirmable?url=<the tab's address>`.
+   - The server answers with one application's id, title and company, and nothing else. Or it
+     gives only a reason code for why there is none: you have not said you submitted it yet,
+     its page is already recorded, more than one application matches, or none is on this site.
+   - A token gets 10 of these questions per 15 minutes: the question names which employers'
+     boards match, so a token that leaked cannot sweep for them.
+2. **It reads the page once, in that tab's top frame:** its title and visible text. A tab that
+   moved to another address since the question is not recorded.
+3. **It sends the page** with `POST <server>/api/v1/connector/apply/<id>/confirmation`: the
+   tab's own address as the browser reports it, the title, and at most 20,000 characters of
+   text.
+
+The server checks everything again before storing anything:
+
+- the application is one you said you submitted;
+- the page is on that application's own site and board;
+- the page does not name another job.
+
+It stores the text on the opportunity's timeline as a **Confirmation page** entry, without the
+address's query. The entry is never sent to an AI provider, and you can delete it.
+
 ## Installing it normally
 
 Nobody has to read this file to use the extension. A running Opportun hands it over:

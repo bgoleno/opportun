@@ -36,7 +36,7 @@ const COLLAPSED_BODY_HEIGHT = 'max-h-[14rem]';
  * into a region that's clipped from view, which the "Show more" control and edge fade exist to
  * make unsurprising.
  */
-function ActivityBody({ bodyMd }: { bodyMd: string }) {
+function ActivityBody({ bodyMd, plain = false }: { bodyMd: string; plain?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -69,7 +69,13 @@ function ActivityBody({ bodyMd }: { bodyMd: string }) {
           !expanded && overflowing && 'timeline-body-fade',
         )}
       >
-        <Markdown>{bodyMd}</Markdown>
+        {plain ? (
+          // A recorded confirmation page is the application site's text, kept as typed: shown as
+          // plain text, never read as Markdown (#121, as its S7 evidence card shows it).
+          <p className="text-sm break-words whitespace-pre-wrap">{bodyMd}</p>
+        ) : (
+          <Markdown>{bodyMd}</Markdown>
+        )}
       </div>
       {overflowing ? (
         <Button
@@ -152,7 +158,12 @@ export function TimelineList({ opportunityId }: { opportunityId: string }) {
                     With {item.participants.map(participantName).join(', ')}
                   </p>
                 ) : null}
-                {item.bodyMd ? <ActivityBody bodyMd={item.bodyMd} /> : null}
+                {item.bodyMd ? (
+                  <ActivityBody
+                    bodyMd={item.bodyMd}
+                    plain={item.activityKind === 'confirmation_page'}
+                  />
+                ) : null}
                 {safeHttpUrl(item.externalUrl) ? (
                   <a
                     href={safeHttpUrl(item.externalUrl) ?? undefined}

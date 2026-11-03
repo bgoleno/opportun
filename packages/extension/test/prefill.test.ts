@@ -118,6 +118,7 @@ function setup(opts: {
     fetch: vi.fn(async () => {
       throw new Error('prefill never POSTs');
     }),
+    runReadPage: vi.fn(async () => null),
     get,
     activeTab: vi.fn(async () => ({ id: 7, url: opts.tabUrl ?? TAB_URL })),
     runExtract: vi.fn(async () => null),

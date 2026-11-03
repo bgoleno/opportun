@@ -2,6 +2,12 @@
 // runs under happy-dom in tests. The page is read only inside the Capture click handler (C-1).
 import { postCapture, testConnection, type FetchLike, type Outcome } from './api';
 import { captureSiteOf, indeedJobKey, type CaptureSiteId } from './canonical';
+import {
+  fetchConfirmable,
+  postConfirmation,
+  renderConfirmation,
+  type ReadPage,
+} from './confirmation';
 import type { ExtractResult } from './extract';
 import type { FillPlan, FillReport, NotFilledReason, ResumeCheck } from './greenhouseFill';
 import { normalizeCapture } from './normalize';
@@ -55,6 +61,11 @@ export interface PopupDeps {
     tabId: number,
     check: ResumeCheck & { size: number; before: number },
   ): Promise<'cleared' | 'shown' | 'kept' | 'empty' | 'wrong_page' | 'no_input' | null>;
+  /**
+   * Runs readConfirmationPage once in that tab's top frame (read only, no args): the page's text
+   * for "Record confirmation page" (#121). Null when the injection failed.
+   */
+  runReadPage(tabId: number): Promise<ReadPage | null>;
   /** The popup's own timer between resume checks (the page side keeps none). */
   wait(ms: number): Promise<void>;
   /** permissions.request for one origin pattern; must be called inside the click gesture. */
@@ -71,6 +82,15 @@ const SERVER_URL_ERRORS = {
 } as const;
 const TOKEN_ERROR = 'Paste a device token (it starts with odt_).';
 const SERVER_CHANGED = 'Server changed: re-enter the token for the new server.';
+
+/** An https page, the only kind a confirmation page can be (the server's rule too). */
+function isHttpsPage(href: string): boolean {
+  try {
+    return new URL(href).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
 function element<T extends HTMLElement>(doc: Document, id: string): T {
   const el = doc.getElementById(id);
@@ -94,7 +114,7 @@ function reportStartupFailure(doc: Document, err: unknown): void {
       'The popup failed to start. Reload the extension at chrome://extensions and try again; ' +
       'if it keeps happening, this is a bug worth reporting.';
   }
-  for (const id of ['capture', 'save', 'test', 'prefill']) {
+  for (const id of ['capture', 'save', 'test', 'prefill', 'record']) {
     const button = doc.getElementById(id) as HTMLButtonElement | null;
     if (button !== null) button.disabled = true;
   }
@@ -114,16 +134,18 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
   const tokenInput = element<HTMLInputElement>(doc, 'token');
   const panel = element<HTMLDetailsElement>(doc, 'settings-panel');
   const status = element<HTMLElement>(doc, 'status');
-  const buttons = ['capture', 'save', 'test', 'prefill'].map((id) =>
+  const buttons = ['capture', 'save', 'test', 'prefill', 'record'].map((id) =>
     element<HTMLButtonElement>(doc, id),
   );
-  const [captureButton, , testButton, prefillButton] = buttons as [
+  const [captureButton, , testButton, prefillButton, recordButton] = buttons as [
+    HTMLButtonElement,
     HTMLButtonElement,
     HTMLButtonElement,
     HTMLButtonElement,
     HTMLButtonElement,
   ];
   const assist = element<HTMLElement>(doc, 'assist');
+  const confirm = element<HTMLElement>(doc, 'confirm');
   const report = element<HTMLElement>(doc, 'prefill-report');
 
   const show = ({ tone, text }: Rendered): void => {
@@ -414,14 +436,66 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     });
   });
 
+  // "Record confirmation page" (#121): ask which application, then read the page once, then
+  // send it with the tab's own address. The server checks everything again on the POST.
+  recordButton.addEventListener('click', () => {
+    void busy(async () => {
+      const s = await ready();
+      if (isOutcome(s)) {
+        showOutcome(s);
+        return;
+      }
+      const tab = await deps.activeTab();
+      if (tab === null || tab.url === undefined || !isHttpsPage(tab.url)) {
+        show(renderConfirmation({ kind: 'not_a_page' }));
+        return;
+      }
+      // A second guard for C-1 (sec on https://github.com/bgoleno/opportun/pull/199): a capture
+      // site is neither asked about nor read here; the server never matches it either.
+      if (captureSiteOf(tab.url) !== null) {
+        show(renderConfirmation({ kind: 'capture_site' }));
+        return;
+      }
+      const found = await fetchConfirmable(deps.get, s, tab.url);
+      if (found.kind !== 'attempt') {
+        show(renderConfirmation(found));
+        return;
+      }
+      const read = await deps.runReadPage(tab.id);
+      if (read === null) {
+        show(renderConfirmation({ kind: 'inject_failed' }));
+        return;
+      }
+      // The page's own address is compared, never sent: a tab that moved since the lookup is
+      // not recorded (the server would check the address sent, which is the tab's).
+      if (read.href !== tab.url) {
+        show(renderConfirmation({ kind: 'moved' }));
+        return;
+      }
+      if (read.text.trim() === '') {
+        show(renderConfirmation({ kind: 'empty' }));
+        return;
+      }
+      const sent = await postConfirmation(deps.fetch, s, found.id, {
+        url: tab.url,
+        title: read.title,
+        text: read.text,
+      });
+      show(renderConfirmation(sent, `${found.opportunityTitle} at ${found.companyName}`));
+    });
+  });
+
   // The Assisted apply section shows only over a Greenhouse posting tab: decided from the tab's
   // address, which the popup already knows; nothing in the page is read for it.
   void (async () => {
     try {
       const tab = await deps.activeTab();
       assist.hidden = tab?.url === undefined || greenhouseJobOf(tab.url) === null;
+      // Any https page may be a thank-you page; which one counts is the server's to say.
+      confirm.hidden = tab?.url === undefined || !isHttpsPage(tab.url);
     } catch {
       assist.hidden = true;
+      confirm.hidden = true;
     }
   })();
 

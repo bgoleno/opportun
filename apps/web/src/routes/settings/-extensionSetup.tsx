@@ -281,9 +281,11 @@ export function ExtensionSetupDialog({
                   <span>
                     Also let it fill in applications you hand off (assisted apply). It reads an
                     application you have handed off (what you reviewed, and its resume copy) when it
-                    asks for that application&apos;s posting page, and never submits anything. To
-                    take this away later, set the extension up again without it, then revoke this
-                    token under Settings.
+                    asks for that application&apos;s posting page, records the thank-you page of one
+                    you said you submitted when you click Record (asking first which of your
+                    applications a page belongs to: its title and company), and never submits
+                    anything. To take this away later, set the extension up again without it, then
+                    revoke this token under Settings.
                   </span>
                 </label>
               ) : null}

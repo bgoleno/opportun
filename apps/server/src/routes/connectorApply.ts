@@ -25,12 +25,16 @@ import { audit } from '../lib/audit';
 import { deviceRoute, requireDevice, requireDeviceToken } from '../lib/deviceTokens';
 import { HttpError } from '../lib/errors';
 import { rateLimit } from '../lib/rateLimit';
-import { confirmFromPage, hostOf } from '../repos/submissionConfirm';
+import { confirmableForPage, confirmFromPage, hostOf } from '../repos/submissionConfirm';
 import { handedOffForPage, handedOffSnapshot } from '../repos/submissions';
 import { contentDisposition } from './attachments';
 
 /** The full path, for the request log's query redaction (app.ts): the page URL is not logged. */
 export const CONNECTOR_APPLY_CURRENT_PATH = '/api/v1/connector/apply/current';
+/** How many confirmation lookups a token gets per 15 minutes (sec on #199). */
+export const CONFIRMABLE_LIMIT = 10;
+/** The confirmation lookup's full path, redacted the same way (#121). */
+export const CONNECTOR_APPLY_CONFIRMABLE_PATH = '/api/v1/connector/apply/confirmable';
 
 const CurrentQuery = z
   .object({
@@ -71,6 +75,19 @@ const CurrentResponse = z.object({
 const IdParams = z.object({ id: z.string().min(1).max(64) }).strict();
 
 /**
+ * Which application the page in this tab may confirm (#121): its id, title and company only,
+ * or a reason code (sec and tl on https://github.com/bgoleno/opportun/pull/199).
+ */
+const ConfirmableResponse = z.object({
+  attempt: z
+    .object({ id: z.string(), opportunityTitle: z.string(), companyName: z.string() })
+    .nullable(),
+  reason: z
+    .enum(['no_matching_attempt', 'several_matching', 'needs_submitted_first', 'already_recorded'])
+    .nullable(),
+});
+
+/**
  * The confirmation page (#121, design 6.2): what the user's browser read on the thank-you page.
  * The text is capped at 20,000 characters (the extension trims it before sending).
  */
@@ -109,6 +126,15 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
     requireDeviceToken('apply:assist') as unknown as onRequestAsyncHookHandler,
     perToken as unknown as onRequestAsyncHookHandler,
   ];
+  // The confirmation lookup answers for any page on a board, so a leaked token could probe
+  // which employers the user applied to: a budget of its own, small for one click per
+  // application (sec on https://github.com/bgoleno/opportun/pull/199). It counts after the shared
+  // one, so a refused lookup is also a spent read.
+  const perTokenLookup = rateLimit({
+    limit: CONFIRMABLE_LIMIT,
+    windowMs: 15 * 60 * 1000,
+    keyFn: (req) => requireDevice(req).tokenId,
+  });
 
   api.get(
     '/connector/apply/current',
@@ -175,6 +201,41 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
         .header('content-disposition', contentDisposition(file.filename))
         .header('cache-control', 'private, no-store')
         .send(stream);
+    },
+  );
+
+  // The application a thank-you page could confirm, asked on the user's click before reading the
+  // page (#121, tl's ruling). It decides nothing: the POST below checks everything again.
+  api.get(
+    '/connector/apply/confirmable',
+    {
+      ...deviceRoute('apply:assist'),
+      onRequest: [...authenticate, perTokenLookup as unknown as onRequestAsyncHookHandler],
+      schema: { querystring: CurrentQuery, response: { 200: ConfirmableResponse } },
+    },
+    async (req) => {
+      const ctx = requireDevice(req);
+      const found = await confirmableForPage(db, ctx, req.query.url);
+      await audit(db, 'submission.confirmable_read', {
+        userId: ctx.userId,
+        ip: req.ip,
+        detail: {
+          deviceTokenId: ctx.tokenId,
+          host: hostOf(req.query.url),
+          ...(found.kind === 'found'
+            ? { submissionId: found.row.id }
+            : { submissionId: null, reason: found.reason }),
+        },
+      });
+      if (found.kind === 'none') return { attempt: null, reason: found.reason };
+      return {
+        attempt: {
+          id: found.row.id,
+          opportunityTitle: found.opportunityTitle,
+          companyName: found.companyName,
+        },
+        reason: null,
+      };
     },
   );
 

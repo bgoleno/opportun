@@ -7,12 +7,13 @@ import { strFromU8, unzipSync } from 'fflate';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { activities, applicationSubmissions, auditLog, jobs, nextSteps } from '../src/db/schema';
+import { loggedUrl } from '../src/app';
 import { capturedPage } from '../src/jobs/postingReconcile';
 import { FOLLOWUP_MS, followUpSubmissions } from '../src/repos/submissionOutcome';
 import { useApi } from './api';
 import { captureLogs } from './helpers';
 import type { TestClient } from './isolation';
-import { api, handedOffAttempt, submittedAttempt } from './submissionFixtures';
+import { api, handedOffAttempt, requisition, submittedAttempt } from './submissionFixtures';
 
 const logs = captureLogs();
 const boot = useApi(() => ({ logStream: logs }));
@@ -80,7 +81,8 @@ describe('POST /connector/apply/:id/confirmation (#121)', () => {
     const t = await token(a, ['apply:assist']);
     const url = thanksOn(s.ats);
 
-    const res = await record(app, t, s.id, page(url));
+    // The query and fragment are not kept (sec on #188): they can carry a token.
+    const res = await record(app, t, s.id, page(`${url}?token=app-secret-1#done`));
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toEqual({
       submissionId: s.id,
@@ -100,6 +102,9 @@ describe('POST /connector/apply/:id/confirmation (#121)', () => {
       bodyMd: PAGE_TEXT,
       externalUrl: url,
     });
+    expect(JSON.stringify(await app.db.select().from(activities).all())).not.toContain(
+      'app-secret-1',
+    );
 
     const [entry] = await auditOf(app, 'submission.confirmed');
     expect(entry!.detail).toEqual({
@@ -269,6 +274,8 @@ describe('POST /connector/apply/:id/confirmation (#121)', () => {
     });
     const t = await token(a, ['apply:assist']);
     const refused = [
+      // Another tenant's bare host: names no site, and is not the destination's origin (tl).
+      'https://globex.wd1.myworkdayjobs.com/',
       'https://globex.wd1.myworkdayjobs.com/en-US/External/job/X/Engineer_JR-000001',
       'https://acme.wd1.myworkdayjobs.com/en-US/Internal/job/X/Engineer_JR-000001',
       'https://wd1.myworkdaysite.com/recruiting/globex/External/job/X',
@@ -361,6 +368,25 @@ describe('POST /connector/apply/:id/confirmation (#121)', () => {
     expect(off.statusCode).toBe(404);
     expect(off.json().error.code).toBe('feature_unavailable');
     expect(await pagesOf(app, s.oppId)).toHaveLength(0);
+  });
+
+  it('on the demo, or off, is a 404 before any token is looked at, and stores nothing (#189)', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const t = await token(a, ['apply:assist']);
+    (app.config as { demo: boolean }).demo = true;
+    const demo = await record(app, t, s.id, page(thanksOn(s.ats)));
+    expect(demo.statusCode).toBe(404);
+    expect(demo.json().error.code).toBe('feature_unavailable');
+    (app.config as { demo: boolean }).demo = false;
+    (app.config as { submissions?: boolean }).submissions = false;
+    for (const bearerToken of [null, `odt_${'B'.repeat(43)}`]) {
+      const res = await record(app, bearerToken, s.id, page(thanksOn(s.ats)));
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('feature_unavailable');
+    }
+    expect(await pagesOf(app, s.oppId)).toHaveLength(0);
+    expect((await rowOf(app, s.id)).status).toBe('submitted');
   });
 
   it('takes at most 20,000 characters of page text, and nothing it does not know', async () => {
@@ -492,5 +518,271 @@ describe('a recorded confirmation page is not a posting capture (tl on #121)', (
     // Deleted from the timeline: the card has nothing left to show.
     expect((await api(a, 'DELETE', `/activities/${activityId}`)).statusCode).toBe(204);
     expect((await api(a, 'GET', `/submissions/${s.id}`)).json().confirmationPage).toBeNull();
+  });
+});
+
+const lookup = (app: FastifyInstance, t: string, url: string) =>
+  app.inject({
+    method: 'GET',
+    url: `/api/v1/connector/apply/confirmable?url=${encodeURIComponent(url)}`,
+    headers: { authorization: `Bearer ${t}` },
+  });
+
+describe("tl's rulings from qa on #188: another job, and a deleted copy", () => {
+  it("refuses another job's page on the same board with different_job, and keeps a page naming no job", async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const t = await token(a, ['apply:assist']);
+    const other = `https://boards.greenhouse.io/${s.ats.org}/jobs/1234567/confirmation`;
+    const res = await record(app, t, s.id, page(other));
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json().error.code).toBe('different_job');
+    expect(await pagesOf(app, s.oppId)).toHaveLength(0);
+    const [refusal] = await auditOf(app, 'submission.confirmation_refused');
+    expect(refusal!.detail).toEqual({
+      submissionId: s.id,
+      deviceTokenId: tokenIdOf(t),
+      reason: 'different_job',
+      host: 'boards.greenhouse.io',
+    });
+
+    // A thank-you page that names no job at all, on the attempt's board, still counts.
+    const noJob = `https://boards.greenhouse.io/${s.ats.org}/confirmation`;
+    const ok = await record(app, t, s.id, page(noJob));
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(ok.json().recorded).toBe(true);
+  });
+
+  it('the posting page itself counts (Ashby may confirm at the posting address)', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const t = await token(a, ['apply:assist']);
+    const res = await record(app, t, s.id, page(s.ats.url!));
+    expect(res.statusCode, res.body).toBe(200);
+  });
+
+  it('a page confirmation whose copy was deleted takes a new copy; with a copy, once', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const t = await token(a, ['apply:assist']);
+    expect((await record(app, t, s.id, page(thanksOn(s.ats)))).statusCode).toBe(200);
+    const first = await rowOf(app, s.id);
+    expect((await api(a, 'DELETE', `/activities/${first.confirmationActivityId}`)).statusCode).toBe(
+      204,
+    );
+
+    const again = await record(app, t, s.id, page(thanksOn(s.ats), 'The thank-you page, again'));
+    expect(again.statusCode, again.body).toBe(200);
+    expect(again.json()).toMatchObject({
+      status: 'confirmed',
+      confirmationKind: 'page',
+      recorded: true,
+    });
+    const after = await rowOf(app, s.id);
+    const [copy] = await pagesOf(app, s.oppId);
+    expect(copy?.bodyMd).toBe('The thank-you page, again');
+    expect(after.confirmationActivityId).toBe(copy!.id);
+    expect(after.confirmedAt).toBe(first.confirmedAt);
+    expect(after.confirmationKind).toBe('page');
+    expect(await auditOf(app, 'submission.confirmation_page_relinked')).toHaveLength(1);
+
+    const third = await record(app, t, s.id, page(thanksOn(s.ats), 'And once more'));
+    expect(third.json().recorded).toBe(false);
+    expect(await pagesOf(app, s.oppId)).toHaveLength(1);
+  });
+
+  it('strips NUL from the page text before storing it (Postgres refuses it, tl on #188)', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const t = await token(a, ['apply:assist']);
+    const res = await record(app, t, s.id, page(thanksOn(s.ats), 'Thank\u0000 you'));
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await pagesOf(app, s.oppId))[0]?.bodyMd).toBe('Thank you');
+  });
+
+  it('four pages at once on a confirmation the user marked store one copy (the attempt lock)', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const marked = await api(a, 'POST', `/submissions/${s.id}/outcome`, {
+      outcome: 'confirmed_by_user',
+    });
+    expect(marked.statusCode, marked.body).toBe(200);
+    const t = await token(a, ['apply:assist']);
+    const results = await Promise.all(
+      [1, 2, 3, 4].map((i) => record(app, t, s.id, page(thanksOn(s.ats), `Page ${i}`))),
+    );
+    expect(results.map((r) => r.statusCode)).toEqual([200, 200, 200, 200]);
+    expect(results.filter((r) => r.json().recorded === true)).toHaveLength(1);
+    expect(await pagesOf(app, s.oppId)).toHaveLength(1);
+  });
+});
+
+describe('GET /connector/apply/confirmable (tl on #121)', () => {
+  it('names the one submitted application the page may confirm, and nothing else of it', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a, { fields: { email: 'applicant@example.com' } });
+    const t = await token(a, ['apply:assist']);
+    const TAB_SECRET = `${thanksOn(s.ats)}?token=lookup-secret-9`;
+    const res = await lookup(app, t, TAB_SECRET);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({
+      // The id, title and company only (sec and tl on #199).
+      attempt: {
+        id: s.id,
+        opportunityTitle: 'Senior Platform Engineer',
+        companyName: 'Example Corp',
+      },
+      reason: null,
+    });
+    expect(res.body).not.toContain('applicant@example.com');
+    // The page's address is in no log line, and the audit keeps its host only.
+    expect(logs.text()).not.toContain('lookup-secret-9');
+    expect(
+      loggedUrl(`/api/v1/connector/apply/confirmable?url=${encodeURIComponent(TAB_SECRET)}`),
+    ).toBe('/api/v1/connector/apply/confirmable?[redacted]');
+    const [entry] = await auditOf(app, 'submission.confirmable_read');
+    expect(entry!.detail).toEqual({
+      deviceTokenId: tokenIdOf(t),
+      host: 'boards.greenhouse.io',
+      submissionId: s.id,
+    });
+    expect(JSON.stringify(entry)).not.toContain('lookup-secret-9');
+  });
+
+  it('considers unknown, a user-marked confirmation, and a page confirmation whose copy was deleted', async () => {
+    const { app, a } = await boot(ON);
+    const t = await token(a, ['apply:assist']);
+
+    const unknown = await submittedAttempt(app, a, { title: 'Platform Engineer' });
+    expect(await followUpSubmissions(app.db, unknown.submittedAt + FOLLOWUP_MS)).toBe(1);
+    expect((await lookup(app, t, thanksOn(unknown.ats))).json().attempt?.id).toBe(unknown.id);
+
+    const marked = await submittedAttempt(app, a, { title: 'Data Engineer' });
+    await api(a, 'POST', `/submissions/${marked.id}/outcome`, { outcome: 'confirmed_by_user' });
+    expect((await lookup(app, t, thanksOn(marked.ats))).json().attempt?.id).toBe(marked.id);
+
+    const paged = await submittedAttempt(app, a, { title: 'Site Engineer' });
+    expect((await record(app, t, paged.id, page(thanksOn(paged.ats)))).statusCode).toBe(200);
+    // With its copy: already recorded, a reason code only (sec on #199).
+    expect((await lookup(app, t, thanksOn(paged.ats))).json()).toEqual({
+      attempt: null,
+      reason: 'already_recorded',
+    });
+    const copy = (await rowOf(app, paged.id)).confirmationActivityId!;
+    await api(a, 'DELETE', `/activities/${copy}`);
+    expect((await lookup(app, t, thanksOn(paged.ats))).json().attempt?.id).toBe(paged.id);
+  });
+
+  it('says why when there is no one application to name', async () => {
+    const { app, a, b } = await boot(ON);
+    const t = await token(a, ['apply:assist']);
+
+    // Handed off: the user says "I submitted it" in Opportun first.
+    const handed = await handedOffAttempt(app, a, {
+      title: 'Handed Off Role',
+      ats: requisition('handedcorp'),
+    });
+    expect((await lookup(app, t, thanksOn(handed.ats))).json()).toEqual({
+      attempt: null,
+      reason: 'needs_submitted_first',
+    });
+
+    // An email confirmation is not considered.
+    const emailed = await submittedAttempt(app, a, { title: 'Emailed Role' });
+    await app.db
+      .update(applicationSubmissions)
+      .set({ status: 'confirmed', confirmationKind: 'email', confirmedAt: Date.now() })
+      .where(eq(applicationSubmissions.id, emailed.id))
+      .run();
+    expect((await lookup(app, t, thanksOn(emailed.ats))).json().reason).toBe('no_matching_attempt');
+
+    // Another job's page on the same board, and another site.
+    const s = await submittedAttempt(app, a, { title: 'Submitted Role' });
+    const otherJob = `https://boards.greenhouse.io/${s.ats.org}/jobs/1234567/confirmation`;
+    expect((await lookup(app, t, otherJob)).json().reason).toBe('no_matching_attempt');
+    expect((await lookup(app, t, 'https://jobs.lever.co/examplecorp/x')).json().reason).toBe(
+      'no_matching_attempt',
+    );
+
+    // Two submitted applications on the same board, and a page naming no job: no id is given.
+    await submittedAttempt(app, a, { title: 'Second Submitted Role' });
+    const both = `https://boards.greenhouse.io/examplecorp/confirmation`;
+    expect((await lookup(app, t, both)).json()).toEqual({
+      attempt: null,
+      reason: 'several_matching',
+    });
+
+    // Another user's application is never named.
+    const tb = await token(b, ['apply:assist']);
+    expect((await lookup(app, tb, thanksOn(s.ats))).json().reason).toBe('no_matching_attempt');
+  });
+
+  it('a handed-off match names none, even beside a submitted one (tl on #199)', async () => {
+    const { app, a } = await boot(ON);
+    const t = await token(a, ['apply:assist']);
+    // An older application at the board, submitted, and a newer one only handed off: a thank-you
+    // page naming no job may be the newer one's, so it must not confirm the older one.
+    await submittedAttempt(app, a, { title: 'Older Role', ats: requisition('bothcorp') });
+    await handedOffAttempt(app, a, { title: 'Newer Role', ats: requisition('bothcorp') });
+    expect(
+      (await lookup(app, t, 'https://boards.greenhouse.io/bothcorp/confirmation')).json(),
+    ).toEqual({ attempt: null, reason: 'needs_submitted_first' });
+  });
+
+  it('attempts in no confirmable status answer no_matching_attempt (the status filter)', async () => {
+    const { app, a } = await boot(ON);
+    const t = await token(a, ['apply:assist']);
+    const draft = await handedOffAttempt(app, a, { title: 'Draft Role', stopAt: 'draft' });
+    const reviewed = await handedOffAttempt(app, a, { title: 'Reviewed Role', stopAt: 'reviewed' });
+    const rejected = await submittedAttempt(app, a, { title: 'Rejected Role' });
+    await api(a, 'POST', `/submissions/${rejected.id}/outcome`, { outcome: 'ats_refused' });
+    const failed = await handedOffAttempt(app, a, { title: 'Failed Role' });
+    await api(a, 'POST', `/submissions/${failed.id}/outcome`, { outcome: 'failed' });
+    for (const x of [draft, reviewed, rejected, failed]) {
+      expect((await lookup(app, t, thanksOn(x.ats))).json(), x.id).toEqual({
+        attempt: null,
+        reason: 'no_matching_attempt',
+      });
+    }
+  });
+
+  it('a token gets 10 lookups in its window, then 429 (sec on #199)', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const t = await token(a, ['apply:assist']);
+    for (let i = 0; i < 10; i += 1) {
+      expect((await lookup(app, t, thanksOn(s.ats))).statusCode).toBe(200);
+    }
+    const limited = await lookup(app, t, thanksOn(s.ats));
+    expect(limited.statusCode).toBe(429);
+    expect(limited.headers['retry-after']).toBeDefined();
+    // Recording itself is not on the lookup's budget.
+    expect((await record(app, t, s.id, page(thanksOn(s.ats)))).statusCode).toBe(200);
+  });
+
+  it('decides nothing: the status changes after the lookup, and the POST refuses', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const t = await token(a, ['apply:assist']);
+    expect((await lookup(app, t, thanksOn(s.ats))).json().attempt?.id).toBe(s.id);
+    const refused = await api(a, 'POST', `/submissions/${s.id}/outcome`, {
+      outcome: 'ats_refused',
+    });
+    expect(refused.statusCode, refused.body).toBe(200);
+    const res = await record(app, t, s.id, page(thanksOn(s.ats)));
+    expect(res.statusCode, res.body).toBe(409);
+    expect(await pagesOf(app, s.oppId)).toHaveLength(0);
+  });
+
+  it('takes an apply:assist token only, and is closed when the feature is off', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const capture = await token(a, ['capture:push']);
+    expect((await lookup(app, capture, thanksOn(s.ats))).statusCode).toBe(403);
+    const t = await token(a, ['apply:assist']);
+    (app.config as { submissions?: boolean }).submissions = false;
+    const off = await lookup(app, t, thanksOn(s.ats));
+    expect(off.statusCode).toBe(404);
+    expect(off.json().error.code).toBe('feature_unavailable');
   });
 });

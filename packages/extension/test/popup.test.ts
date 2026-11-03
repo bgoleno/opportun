@@ -91,6 +91,7 @@ function setup(
     runFill: vi.fn(async () => null),
     runResumeCheck: vi.fn(async () => null),
     runResumeClear: vi.fn(async () => 'wrong_page' as const),
+    runReadPage: vi.fn(async () => null),
     wait: vi.fn(async () => {}),
   };
   const $ = <T extends HTMLElement>(id: string) => doc.getElementById(id) as T;
