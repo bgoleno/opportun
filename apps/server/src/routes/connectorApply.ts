@@ -16,6 +16,7 @@ import {
   SUBMISSION_STATUSES,
   SubmissionAnswersSchema,
   SubmissionFieldsSchema,
+  submissionFieldProblem,
 } from '@opportun/core';
 import type { FastifyInstance, onRequestAsyncHookHandler } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -48,8 +49,16 @@ const CurrentResponse = z.object({
       companyName: z.string(),
       atsKind: z.enum(ATS_REF_KINDS),
       destinationUrl: z.string(),
-      /** What the user reviewed: the digest covers these. */
+      /**
+       * What the user reviewed (the digest covers these), less any field withheld below.
+       */
       fields: SubmissionFieldsSchema,
+      /**
+       * Fields left out because their stored value fails today's checks (a row saved before
+       * #186): keys only, sorted, never the values, so the device never fills them (#196, tl).
+       * Absent when nothing is withheld.
+       */
+      withheld: z.array(z.string()).optional(),
       answers: SubmissionAnswersSchema,
       resume: z.object({
         title: z.string().nullable(),
@@ -133,6 +142,16 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
       });
       if (found.kind === 'none') return { attempt: null, reason: found.reason };
       const { row } = found;
+      // Each stored field through the rule the PATCH uses (core's submissionFieldProblem): a
+      // value that fails it is left out, and only its key is named (#196, tl's ruling).
+      const entries = Object.entries(row.fields);
+      const passes = ([k, v]: [string, string]) =>
+        submissionFieldProblem(Object.fromEntries([[k, v]])) === null;
+      const fields = Object.fromEntries(entries.filter(passes));
+      const withheld = entries
+        .filter((e) => !passes(e))
+        .map(([k]) => k)
+        .sort();
       return {
         attempt: {
           id: row.id,
@@ -141,7 +160,8 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
           companyName: found.companyName,
           atsKind: row.atsKind,
           destinationUrl: row.destinationUrl,
-          fields: row.fields,
+          fields,
+          ...(withheld.length > 0 ? { withheld } : {}),
           answers: row.answers,
           resume: {
             title: row.resumeTitle,
