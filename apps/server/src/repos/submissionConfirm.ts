@@ -434,20 +434,25 @@ export type ConfirmableMiss =
 
 export type ConfirmableResult =
   | { kind: 'found'; row: SubmissionRow; opportunityTitle: string; companyName: string }
-  | { kind: 'none'; reason: ConfirmableMiss; opportunityTitle: string | null };
+  | { kind: 'none'; reason: ConfirmableMiss };
 
 /**
  * Which of the caller's applications the page in this tab could confirm, for the extension's
  * "Record confirmation page" (tl's ruling on #121). It decides nothing: confirmFromPage checks
  * everything again under the attempt's lock.
  *
- * Considered, among the attempts whose site and job the page may be (confirmationPageVerdict):
- * submitted and unknown; confirmed by the user's word; and confirmed by a page whose copy was
- * deleted. Exactly one is found; more than one is several_matching, naming none. With none, a
- * handed-off match is needs_submitted_first (the user says "I submitted it" in Opportun; a device
- * never does), and a page confirmation whose copy exists is already_recorded, named by its
- * title so the popup can say which. Everything else (email confirmations, refused, cancelled and
- * the rest) is not considered.
+ * Among the attempts whose site and job the page may be (confirmationPageVerdict):
+ * - any handed-off one makes it needs_submitted_first, naming none (tl on
+ *   https://github.com/bgoleno/opportun/pull/199): this page may be that application's thank-you
+ *   page, so an older submitted one must not take it. The user says "I submitted it" in
+ *   Opportun; a device never does;
+ * - else the recordable ones: submitted, unknown, confirmed by the user's word, or confirmed by a
+ *   page whose copy was deleted. Exactly one is found; more than one is several_matching;
+ * - else a page confirmation whose copy exists is already_recorded;
+ * - everything else (email confirmations, reviewed, refused, cancelled and the rest) is
+ *   no_matching_attempt.
+ * A miss is a reason code only, and a match only its id, title and company (sec and tl on
+ * #199): a leaked token learns as little as it can from probing which boards match.
  */
 export async function confirmableForPage(
   db: Db,
@@ -471,31 +476,25 @@ export async function confirmableForPage(
     )
     .all();
   const matching = rows.filter((r) => confirmationPageVerdict(pageUrl, r.row) === 'ok');
+  if (matching.some(({ row }) => row.status === 'handed_off')) {
+    return { kind: 'none', reason: 'needs_submitted_first' };
+  }
   const recordable = matching.filter(({ row }) =>
     row.status === 'confirmed'
       ? row.confirmationKind === 'user' ||
         (row.confirmationKind === 'page' && row.confirmationActivityId === null)
-      : row.status !== 'handed_off',
+      : true,
   );
   const [only] = recordable;
-  if (recordable.length === 1 && only !== undefined) {
-    return { kind: 'found', ...only };
-  }
-  if (recordable.length > 1) {
-    return { kind: 'none', reason: 'several_matching', opportunityTitle: null };
-  }
-  if (matching.some(({ row }) => row.status === 'handed_off')) {
-    return { kind: 'none', reason: 'needs_submitted_first', opportunityTitle: null };
-  }
-  const recorded = matching.find(
+  if (recordable.length === 1 && only !== undefined) return { kind: 'found', ...only };
+  if (recordable.length > 1) return { kind: 'none', reason: 'several_matching' };
+  const recorded = matching.some(
     ({ row }) =>
       row.status === 'confirmed' &&
       row.confirmationKind === 'page' &&
       row.confirmationActivityId !== null,
   );
-  return recorded === undefined
-    ? { kind: 'none', reason: 'no_matching_attempt', opportunityTitle: null }
-    : { kind: 'none', reason: 'already_recorded', opportunityTitle: recorded.opportunityTitle };
+  return { kind: 'none', reason: recorded ? 'already_recorded' : 'no_matching_attempt' };
 }
 
 /**

@@ -31,6 +31,8 @@ import { contentDisposition } from './attachments';
 
 /** The full path, for the request log's query redaction (app.ts): the page URL is not logged. */
 export const CONNECTOR_APPLY_CURRENT_PATH = '/api/v1/connector/apply/current';
+/** How many confirmation lookups a token gets per 15 minutes (sec on #199). */
+export const CONFIRMABLE_LIMIT = 10;
 /** The confirmation lookup's full path, redacted the same way (#121). */
 export const CONNECTOR_APPLY_CONFIRMABLE_PATH = '/api/v1/connector/apply/confirmable';
 
@@ -73,24 +75,16 @@ const CurrentResponse = z.object({
 const IdParams = z.object({ id: z.string().min(1).max(64) }).strict();
 
 /**
- * Which application the page in this tab may confirm (#121, tl's ruling): who and what, never
- * the fields, answers, resume or any page text. `recordedFor` names the application whose page
- * is already recorded (reason already_recorded), so the popup can say which.
+ * Which application the page in this tab may confirm (#121): its id, title and company only,
+ * or a reason code (sec and tl on https://github.com/bgoleno/opportun/pull/199).
  */
 const ConfirmableResponse = z.object({
   attempt: z
-    .object({
-      id: z.string(),
-      opportunityTitle: z.string(),
-      companyName: z.string(),
-      status: z.enum(SUBMISSION_STATUSES),
-      confirmationKind: z.enum(SUBMISSION_CONFIRMATION_KINDS).nullable(),
-    })
+    .object({ id: z.string(), opportunityTitle: z.string(), companyName: z.string() })
     .nullable(),
   reason: z
     .enum(['no_matching_attempt', 'several_matching', 'needs_submitted_first', 'already_recorded'])
     .nullable(),
-  recordedFor: z.string().nullable(),
 });
 
 /**
@@ -132,6 +126,15 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
     requireDeviceToken('apply:assist') as unknown as onRequestAsyncHookHandler,
     perToken as unknown as onRequestAsyncHookHandler,
   ];
+  // The confirmation lookup answers for any page on a board, so a leaked token could probe
+  // which employers the user applied to: a budget of its own, small for one click per
+  // application (sec on https://github.com/bgoleno/opportun/pull/199). It counts after the shared
+  // one, so a refused lookup is also a spent read.
+  const perTokenLookup = rateLimit({
+    limit: CONFIRMABLE_LIMIT,
+    windowMs: 15 * 60 * 1000,
+    keyFn: (req) => requireDevice(req).tokenId,
+  });
 
   api.get(
     '/connector/apply/current',
@@ -207,7 +210,7 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
     '/connector/apply/confirmable',
     {
       ...deviceRoute('apply:assist'),
-      onRequest: authenticate,
+      onRequest: [...authenticate, perTokenLookup as unknown as onRequestAsyncHookHandler],
       schema: { querystring: CurrentQuery, response: { 200: ConfirmableResponse } },
     },
     async (req) => {
@@ -224,19 +227,14 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
             : { submissionId: null, reason: found.reason }),
         },
       });
-      if (found.kind === 'none') {
-        return { attempt: null, reason: found.reason, recordedFor: found.opportunityTitle };
-      }
+      if (found.kind === 'none') return { attempt: null, reason: found.reason };
       return {
         attempt: {
           id: found.row.id,
           opportunityTitle: found.opportunityTitle,
           companyName: found.companyName,
-          status: found.row.status,
-          confirmationKind: found.row.confirmationKind,
         },
         reason: null,
-        recordedFor: null,
       };
     },
   );

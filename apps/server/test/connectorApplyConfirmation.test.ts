@@ -13,7 +13,7 @@ import { FOLLOWUP_MS, followUpSubmissions } from '../src/repos/submissionOutcome
 import { useApi } from './api';
 import { captureLogs } from './helpers';
 import type { TestClient } from './isolation';
-import { api, handedOffAttempt, submittedAttempt } from './submissionFixtures';
+import { api, handedOffAttempt, requisition, submittedAttempt } from './submissionFixtures';
 
 const logs = captureLogs();
 const boot = useApi(() => ({ logStream: logs }));
@@ -626,15 +626,13 @@ describe('GET /connector/apply/confirmable (tl on #121)', () => {
     const res = await lookup(app, t, TAB_SECRET);
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toEqual({
+      // The id, title and company only (sec and tl on #199).
       attempt: {
         id: s.id,
         opportunityTitle: 'Senior Platform Engineer',
         companyName: 'Example Corp',
-        status: 'submitted',
-        confirmationKind: null,
       },
       reason: null,
-      recordedFor: null,
     });
     expect(res.body).not.toContain('applicant@example.com');
     // The page's address is in no log line, and the audit keeps its host only.
@@ -657,33 +655,22 @@ describe('GET /connector/apply/confirmable (tl on #121)', () => {
 
     const unknown = await submittedAttempt(app, a, { title: 'Platform Engineer' });
     expect(await followUpSubmissions(app.db, unknown.submittedAt + FOLLOWUP_MS)).toBe(1);
-    expect((await lookup(app, t, thanksOn(unknown.ats))).json().attempt).toMatchObject({
-      id: unknown.id,
-      status: 'unknown',
-    });
+    expect((await lookup(app, t, thanksOn(unknown.ats))).json().attempt?.id).toBe(unknown.id);
 
     const marked = await submittedAttempt(app, a, { title: 'Data Engineer' });
     await api(a, 'POST', `/submissions/${marked.id}/outcome`, { outcome: 'confirmed_by_user' });
-    expect((await lookup(app, t, thanksOn(marked.ats))).json().attempt).toMatchObject({
-      id: marked.id,
-      status: 'confirmed',
-      confirmationKind: 'user',
-    });
+    expect((await lookup(app, t, thanksOn(marked.ats))).json().attempt?.id).toBe(marked.id);
 
     const paged = await submittedAttempt(app, a, { title: 'Site Engineer' });
     expect((await record(app, t, paged.id, page(thanksOn(paged.ats)))).statusCode).toBe(200);
-    // With its copy: already recorded, and named.
+    // With its copy: already recorded, a reason code only (sec on #199).
     expect((await lookup(app, t, thanksOn(paged.ats))).json()).toEqual({
       attempt: null,
       reason: 'already_recorded',
-      recordedFor: 'Site Engineer',
     });
     const copy = (await rowOf(app, paged.id)).confirmationActivityId!;
     await api(a, 'DELETE', `/activities/${copy}`);
-    expect((await lookup(app, t, thanksOn(paged.ats))).json().attempt).toMatchObject({
-      id: paged.id,
-      confirmationKind: 'page',
-    });
+    expect((await lookup(app, t, thanksOn(paged.ats))).json().attempt?.id).toBe(paged.id);
   });
 
   it('says why when there is no one application to name', async () => {
@@ -691,11 +678,13 @@ describe('GET /connector/apply/confirmable (tl on #121)', () => {
     const t = await token(a, ['apply:assist']);
 
     // Handed off: the user says "I submitted it" in Opportun first.
-    const handed = await handedOffAttempt(app, a, { title: 'Handed Off Role' });
+    const handed = await handedOffAttempt(app, a, {
+      title: 'Handed Off Role',
+      ats: requisition('handedcorp'),
+    });
     expect((await lookup(app, t, thanksOn(handed.ats))).json()).toEqual({
       attempt: null,
       reason: 'needs_submitted_first',
-      recordedFor: null,
     });
 
     // An email confirmation is not considered.
@@ -721,12 +710,54 @@ describe('GET /connector/apply/confirmable (tl on #121)', () => {
     expect((await lookup(app, t, both)).json()).toEqual({
       attempt: null,
       reason: 'several_matching',
-      recordedFor: null,
     });
 
     // Another user's application is never named.
     const tb = await token(b, ['apply:assist']);
     expect((await lookup(app, tb, thanksOn(s.ats))).json().reason).toBe('no_matching_attempt');
+  });
+
+  it('a handed-off match names none, even beside a submitted one (tl on #199)', async () => {
+    const { app, a } = await boot(ON);
+    const t = await token(a, ['apply:assist']);
+    // An older application at the board, submitted, and a newer one only handed off: a thank-you
+    // page naming no job may be the newer one's, so it must not confirm the older one.
+    await submittedAttempt(app, a, { title: 'Older Role', ats: requisition('bothcorp') });
+    await handedOffAttempt(app, a, { title: 'Newer Role', ats: requisition('bothcorp') });
+    expect(
+      (await lookup(app, t, 'https://boards.greenhouse.io/bothcorp/confirmation')).json(),
+    ).toEqual({ attempt: null, reason: 'needs_submitted_first' });
+  });
+
+  it('attempts in no confirmable status answer no_matching_attempt (the status filter)', async () => {
+    const { app, a } = await boot(ON);
+    const t = await token(a, ['apply:assist']);
+    const draft = await handedOffAttempt(app, a, { title: 'Draft Role', stopAt: 'draft' });
+    const reviewed = await handedOffAttempt(app, a, { title: 'Reviewed Role', stopAt: 'reviewed' });
+    const rejected = await submittedAttempt(app, a, { title: 'Rejected Role' });
+    await api(a, 'POST', `/submissions/${rejected.id}/outcome`, { outcome: 'ats_refused' });
+    const failed = await handedOffAttempt(app, a, { title: 'Failed Role' });
+    await api(a, 'POST', `/submissions/${failed.id}/outcome`, { outcome: 'failed' });
+    for (const x of [draft, reviewed, rejected, failed]) {
+      expect((await lookup(app, t, thanksOn(x.ats))).json(), x.id).toEqual({
+        attempt: null,
+        reason: 'no_matching_attempt',
+      });
+    }
+  });
+
+  it('a token gets 10 lookups in its window, then 429 (sec on #199)', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const t = await token(a, ['apply:assist']);
+    for (let i = 0; i < 10; i += 1) {
+      expect((await lookup(app, t, thanksOn(s.ats))).statusCode).toBe(200);
+    }
+    const limited = await lookup(app, t, thanksOn(s.ats));
+    expect(limited.statusCode).toBe(429);
+    expect(limited.headers['retry-after']).toBeDefined();
+    // Recording itself is not on the lookup's budget.
+    expect((await record(app, t, s.id, page(thanksOn(s.ats)))).statusCode).toBe(200);
   });
 
   it('decides nothing: the status changes after the lookup, and the POST refuses', async () => {

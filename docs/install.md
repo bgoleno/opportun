@@ -845,7 +845,9 @@ When it cannot settle that, it changes nothing and flags the opportunity for you
   which can only push captures. Where assisted apply is on, the dialog also offers to add the
   **Assisted apply** permission (off unless you tick it), which reads an application you have
   handed off, with its resume copy, when the extension asks for its posting page, and records
-  the thank-you page of one you said you submitted, on your click. To drop it later, set the
+  the thank-you page of one you said you submitted, on your click (asking first which of your
+  applications the page belongs to, which tells it that application's title and company). To
+  drop it later, set the
   extension up again without it and
   revoke the old token. Revoke a token under Settings > Integrations > Extensions and
   Connectors at any time.

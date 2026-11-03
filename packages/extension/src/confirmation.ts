@@ -40,7 +40,7 @@ export type ConfirmableMiss =
 
 export type ConfirmableResult =
   | { kind: 'attempt'; id: string; opportunityTitle: string; companyName: string }
-  | { kind: 'none'; reason: ConfirmableMiss; recordedFor: string | null }
+  | { kind: 'none'; reason: ConfirmableMiss }
   | { kind: 'unauthorized' }
   | { kind: 'no_scope' }
   | { kind: 'unavailable' }
@@ -84,14 +84,10 @@ async function body(res: FetchResponse): Promise<unknown> {
 
 function parseConfirmable(value: unknown): ConfirmableResult | null {
   if (typeof value !== 'object' || value === null) return null;
-  const v = value as { attempt?: unknown; reason?: unknown; recordedFor?: unknown };
+  const v = value as { attempt?: unknown; reason?: unknown };
   if (v.attempt === null) {
     if (typeof v.reason !== 'string' || !MISSES.includes(v.reason)) return null;
-    return {
-      kind: 'none',
-      reason: v.reason as ConfirmableMiss,
-      recordedFor: typeof v.recordedFor === 'string' ? v.recordedFor : null,
-    };
+    return { kind: 'none', reason: v.reason as ConfirmableMiss };
   }
   const a = v.attempt as { id?: unknown; opportunityTitle?: unknown; companyName?: unknown };
   if (
@@ -194,6 +190,7 @@ export function renderConfirmation(
     | Exclude<ConfirmableResult, { kind: 'attempt' }>
     | RecordResult
     | { kind: 'not_a_page' }
+    | { kind: 'capture_site' }
     | { kind: 'inject_failed' }
     | { kind: 'moved' }
     | { kind: 'empty' },
@@ -220,7 +217,7 @@ export function renderConfirmation(
         case 'already_recorded':
           return {
             tone: 'info',
-            text: `A confirmation page is already recorded for ${result.recordedFor ?? 'this application'}. ${NOTHING}`,
+            text: `A confirmation page is already recorded for the application this page belongs to. ${NOTHING}`,
           };
         case 'several_matching':
           return {
@@ -250,6 +247,11 @@ export function renderConfirmation(
       return {
         tone: 'error',
         text: `Open the application site's thank-you page in this tab, then click Record again. ${NOTHING}`,
+      };
+    case 'capture_site':
+      return {
+        tone: 'error',
+        text: `A LinkedIn or Indeed page is never an application's confirmation page. ${NOTHING}`,
       };
     case 'inject_failed':
       return {

@@ -129,9 +129,11 @@ On the click, and only then:
 
 1. **The popup asks your server which application this page may confirm.**
    - It calls `GET <server>/api/v1/connector/apply/confirmable?url=<the tab's address>`.
-   - The server answers with one application (its title and company only), or says why there
-     is none: you have not said you submitted it yet, its page is already recorded, more than
-     one application matches, or none is on this site.
+   - The server answers with one application's id, title and company, and nothing else. Or it
+     gives only a reason code for why there is none: you have not said you submitted it yet,
+     its page is already recorded, more than one application matches, or none is on this site.
+   - A token gets 10 of these questions per 15 minutes: the question names which employers'
+     boards match, so a token that leaked cannot sweep for them.
 2. **It reads the page once, in that tab's top frame:** its title and visible text. A tab that
    moved to another address since the question is not recorded.
 3. **It sends the page** with `POST <server>/api/v1/connector/apply/<id>/confirmation`: the

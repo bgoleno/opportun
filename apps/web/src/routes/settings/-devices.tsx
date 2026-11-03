@@ -114,8 +114,9 @@ export function DevicesCard() {
           Opportun browser extension. Mail and capture permissions can only send data in. The
           assisted apply permission reads back an application you have handed off (what you
           reviewed, and its resume copy) when the extension asks for its posting page, and records
-          the thank-you page of one you said you submitted, on your click. Revoke a token and the
-          device is cut off at once.
+          the thank-you page of one you said you submitted, on your click. To find which one, it can
+          also ask which of your applications a job site&apos;s page belongs to (its title and
+          company). Revoke a token and the device is cut off at once.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 text-sm">
@@ -400,7 +401,9 @@ function CreateDialog(props: {
                 Assisted apply lets the extension read an application you have handed off (what you
                 reviewed, and its resume copy) when it asks for that application&apos;s posting
                 page, and record the thank-you page of an application you said you submitted, when
-                you click Record. It cannot start, review or submit an application.
+                you click Record. To find which one, it can ask which of your applications a job
+                site&apos;s page belongs to, which tells it that application&apos;s title and
+                company. It cannot start, review or submit an application.
               </p>
             ) : null}
             {errors.scopes ? (

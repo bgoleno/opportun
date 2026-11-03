@@ -20,11 +20,8 @@ const FOUND = {
     id: 'sub-1',
     opportunityTitle: 'Platform Engineer',
     companyName: 'Example Corp',
-    status: 'submitted',
-    confirmationKind: null,
   },
   reason: null,
-  recordedFor: null,
 };
 
 const json = (status: number, body: unknown) =>
@@ -163,6 +160,19 @@ describe('Record confirmation page', () => {
     }
   });
 
+  it('a LinkedIn or Indeed tab is neither asked about nor read (sec on #199)', async () => {
+    for (const url of [
+      'https://www.linkedin.com/jobs/view/4000001/',
+      'https://www.indeed.com/viewjob?jk=0123456789abcdef',
+    ]) {
+      const s = setup({ tabUrl: url });
+      expect(await clickRecord(s), url).toContain('never an application');
+      expect(s.get).not.toHaveBeenCalled();
+      expect(s.deps.runReadPage).not.toHaveBeenCalled();
+      expect(s.posts).toHaveLength(0);
+    }
+  });
+
   it('a page that is not https is not asked about or read', async () => {
     const s = setup({ tabUrl: 'chrome://newtab/' });
     expect(await clickRecord(s)).toContain("Open the application site's thank-you page");
@@ -173,19 +183,19 @@ describe('Record confirmation page', () => {
   it('says why when the server names no application, and neither reads nor sends', async () => {
     const cases: [Record<string, unknown>, string][] = [
       [
-        { reason: 'needs_submitted_first', recordedFor: null },
+        { reason: 'needs_submitted_first' },
         'In Opportun, say you submitted this application first (I submitted it), then record this page. Nothing was recorded.',
       ],
       [
-        { reason: 'already_recorded', recordedFor: 'Data Engineer' },
-        'A confirmation page is already recorded for Data Engineer. Nothing was recorded.',
+        { reason: 'already_recorded' },
+        'A confirmation page is already recorded for the application this page belongs to. Nothing was recorded.',
       ],
       [
-        { reason: 'several_matching', recordedFor: null },
+        { reason: 'several_matching' },
         'More than one of your applications could match this page. Mark the right one confirmed in Opportun instead. Nothing was recorded.',
       ],
       [
-        { reason: 'no_matching_attempt', recordedFor: null },
+        { reason: 'no_matching_attempt' },
         'None of your submitted applications is on this site. Open the thank-you page the application site showed you. Nothing was recorded.',
       ],
     ];

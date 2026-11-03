@@ -450,6 +450,12 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         show(renderConfirmation({ kind: 'not_a_page' }));
         return;
       }
+      // A second guard for C-1 (sec on https://github.com/bgoleno/opportun/pull/199): a capture
+      // site is neither asked about nor read here; the server never matches it either.
+      if (captureSiteOf(tab.url) !== null) {
+        show(renderConfirmation({ kind: 'capture_site' }));
+        return;
+      }
       const found = await fetchConfirmable(deps.get, s, tab.url);
       if (found.kind !== 'attempt') {
         show(renderConfirmation(found));

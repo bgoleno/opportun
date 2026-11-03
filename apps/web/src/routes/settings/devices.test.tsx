@@ -389,6 +389,10 @@ describe('DevicesCard: the assisted apply permission', () => {
       }),
     });
     renderWithProviders(<DevicesCard />);
+    // The card says what the permission reads too, the confirmation lookup included (#199).
+    expect(
+      await screen.findByText(/also ask which of your applications a job site's page belongs to/),
+    ).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: 'Create token' }));
     const dialog = await screen.findByRole('dialog', { name: 'Create a device token' });
     await user.type(within(dialog).getByLabelText('Name'), 'Chrome');
@@ -396,6 +400,10 @@ describe('DevicesCard: the assisted apply permission', () => {
     await user.click(await within(dialog).findByRole('checkbox', { name: /Assisted apply/ }));
     expect(
       within(dialog).getByText(/cannot start, review or submit an application/),
+    ).toBeInTheDocument();
+    // What the token can read is stated, the confirmation lookup included (sec on #199).
+    expect(
+      within(dialog).getByText(/which of your applications a job site's page belongs to/),
     ).toBeInTheDocument();
     await user.type(within(dialog).getByLabelText('Current password'), PW);
     await user.click(within(dialog).getByRole('button', { name: 'Create' }));
