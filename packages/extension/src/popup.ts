@@ -12,7 +12,7 @@ import {
   type ExtractResult,
   type RawPage,
 } from './extract';
-import { fillGreenhouseForm, type FillReport } from './greenhouseFill';
+import { clearResume, fillGreenhouseForm, resumeShown, type FillReport } from './greenhouseFill';
 import { mountPopup } from './popupController';
 import { bakedServerUrl, type SettingsStorage } from './settings';
 
@@ -64,6 +64,7 @@ const NOT_FILLED_REASONS: readonly unknown[] = [
   'not_shown',
   'ambiguous',
   'attach_yourself',
+  'resume_unchecked',
 ];
 
 /** What fillGreenhouseForm may return; anything else from the tab is treated as a failure. */
@@ -71,8 +72,17 @@ const isFillReport = (v: unknown): v is FillReport => {
   if (typeof v !== 'object' || v === null) return false;
   const r = v as { ok?: unknown; reason?: unknown; filled?: unknown; notFilled?: unknown };
   if (r.ok === false) return r.reason === 'wrong_page' || r.reason === 'no_form';
+  const resume = (v as { resume?: unknown }).resume;
+  const resumeOk =
+    resume === null ||
+    (typeof resume === 'object' &&
+      resume !== null &&
+      typeof (resume as { filename?: unknown }).filename === 'string' &&
+      typeof (resume as { size?: unknown }).size === 'number' &&
+      typeof (resume as { before?: unknown }).before === 'number');
   return (
     r.ok === true &&
+    resumeOk &&
     Array.isArray(r.filled) &&
     r.filled.every((l) => typeof l === 'string') &&
     Array.isArray(r.notFilled) &&
@@ -146,6 +156,35 @@ void mountPopup(document, {
       return null;
     }
   },
+  // The resume check and clear (tl and sec on #187): top frame only, a bare func and inline
+  // args, like the filler; the check only reads.
+  runResumeCheck: async (tabId, check) => {
+    try {
+      const [frame] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: resumeShown,
+        args: [check],
+      });
+      const n = frame?.result;
+      return typeof n === 'number' ? n : null;
+    } catch {
+      return null;
+    }
+  },
+  runResumeClear: async (tabId, check) => {
+    try {
+      const [frame] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: clearResume,
+        args: [check],
+      });
+      const r = frame?.result;
+      return r === 'cleared' || r === 'kept' || r === 'wrong_page' || r === 'no_input' ? r : null;
+    } catch {
+      return null;
+    }
+  },
+  wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   requestOrigin: (pattern) => chrome.permissions.request({ origins: [pattern] }),
   hasOrigin: (pattern) => chrome.permissions.contains({ origins: [pattern] }),
 });

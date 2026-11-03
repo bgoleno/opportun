@@ -101,9 +101,10 @@ On the click, and only then:
    and `change` event. A field that already has something in it is left as it was, and so is
    a field the form does not show: one that is hidden, or inside a hidden part of the form.
 
-6. **It attaches the resume** to the form's file input through `DataTransfer`. It counts the
-   resume as attached only when the form then shows the file's name, which it did not show
-   before. Otherwise it takes the file back out and says to attach it yourself.
+6. **It attaches the resume** to the form's file input through `DataTransfer`. The page side
+   keeps no timer, so the popup then looks, read-only and for about 1.5 seconds, for the form
+   to show the file's name. If it never does, the popup takes the file back out (only if it is
+   still exactly the one it set) and says to attach it yourself.
 7. **The popup lists** what was filled in and what was not, with the reason.
 
 It never chooses an option in a dropdown, checkbox or radio button, and never sets a hidden

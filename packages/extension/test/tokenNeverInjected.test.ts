@@ -178,9 +178,10 @@ describe('the device token never goes into the page', () => {
   it('every injection passes literal args with nothing token-like in them', async () => {
     const { injections } = await parse();
     const withArgs = injections.filter((i) => i.args !== undefined);
-    // Not hollow (sec on #187): the LinkedIn and Indeed readers and the prefill filler are all
-    // found and checked; a parser that stopped finding calls would fail here.
-    expect(withArgs.length).toBeGreaterThanOrEqual(3);
+    // Not hollow (sec on #187): the LinkedIn and Indeed readers, the prefill filler and its
+    // resume check and clear are all found and checked; a parser that stopped finding calls
+    // would fail here.
+    expect(withArgs.length).toBeGreaterThanOrEqual(5);
     for (const { file, args, source } of withArgs) {
       expect(ts.isArrayLiteralExpression(args!), `${file}: args must be a literal array`).toBe(
         true,
@@ -199,7 +200,13 @@ describe('the device token never goes into the page', () => {
     const funcs = injections.map((i) => i.func).filter((f): f is string => f !== undefined);
     // The prefill filler (#183) is injected too, and checked like the readers.
     expect(funcs).toEqual(
-      expect.arrayContaining(['extractPage', 'extractIndeedJob', 'fillGreenhouseForm']),
+      expect.arrayContaining([
+        'extractPage',
+        'extractIndeedJob',
+        'fillGreenhouseForm',
+        'resumeShown',
+        'clearResume',
+      ]),
     );
     for (const name of funcs) {
       const body = functions.get(name);

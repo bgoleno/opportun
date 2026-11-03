@@ -1,9 +1,11 @@
-// The one function that runs inside a Greenhouse application tab for assisted apply prefill (M3,
+// The functions that run inside a Greenhouse application tab for assisted apply prefill (M3,
 // https://github.com/bgoleno/opportun/issues/183; tl's design on #120 and sec's six conditions
-// on #183). The popup runs it once, on the user's click, in the top frame of the active tab
-// (chrome.scripting.executeScript serializes it with toString()). It must stay self-contained,
-// as extract.ts's readers are: no imports, no module-level names, only its parameters, its own
-// body and the page's globals. Type-only names are erased before it is serialized.
+// on #183): the filler, then, for the resume only, a read-only check and a clear (tl and sec on
+// #187). The popup runs each in the top frame of the active tab, the filler once on the user's
+// click (chrome.scripting.executeScript serializes them with toString()). Each must stay
+// self-contained, as extract.ts's readers are: no imports, no module-level names, only its
+// parameters, its own body and the page's globals, so each carries its own copy of the address
+// check. Type-only names are erased before they are serialized.
 //
 // What it may do, enforced by a scan of its own source (test/greenhouseFill.test.ts):
 // - set a text input's or textarea's value once, with the element prototype's native setter
@@ -11,8 +13,10 @@
 //   bubbling Event 'input' and Event 'change' on that element, and nothing else: no key,
 //   pointer, mouse, drag or focus events, no InputEvent, no per-character loop, no timers;
 // - attach the resume through DataTransfer on #resume only, the one hidden input it touches,
-//   and report it as attached only when the form then shows the file's name (absent before,
-//   shown after); otherwise clear it again the same way and say to attach it yourself;
+//   and return how often its name was on the form before. It does not judge whether the form
+//   took it: React renders the name after a macrotask, and the page side keeps no timer. The
+//   popup looks with resumeShown, read-only, at fixed gaps on its own timer, and if the name
+//   never appears, clearResume takes the file back out, and only if it is still exactly ours;
 // - leave alone a dropdown widget however it is marked up, and a label that is ambiguous (two
 //   questions, or two reviewed answers, carry it): which value goes where cannot be known;
 // - leave alone anything the form does not show: a field that is, or sits in a container that
@@ -50,23 +54,34 @@ export type NotFilledReason =
   /** Two questions on the form, or two reviewed answers, share this label: neither is filled. */
   | 'ambiguous'
   /**
-   * The resume: no ready copy, no shown file input that takes a PDF, or the form did not show
-   * the file's name once it was set (then it is cleared again).
+   * A file to attach yourself: no ready copy, no shown file input that takes a PDF, the form
+   * never showed the file's name (it was taken back out), or another file input on the form.
    */
-  | 'attach_yourself';
+  | 'attach_yourself'
+  /** The resume could not be checked (the tab moved on): look at it on the form. */
+  | 'resume_unchecked';
 
 export type FillReport =
   | {
       ok: true;
       filled: string[];
       notFilled: { label: string; reason: NotFilledReason }[];
+      /**
+       * The resume the filler set, for the popup to confirm: its name, its size, and how often
+       * the name was on the form before the attach. Null when it set none.
+       */
+      resume: { filename: string; size: number; before: number } | null;
     }
   | { ok: false; reason: 'wrong_page' | 'no_form' };
 
-export async function fillGreenhouseForm(
-  plan: FillPlan,
-  doc: Document = document,
-): Promise<FillReport> {
+/** What resumeShown and clearResume are given: the posting, and the file the filler set. */
+export interface ResumeCheck {
+  board: string;
+  jobId: string;
+  filename: string;
+}
+
+export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): FillReport {
   const view = doc.defaultView;
   if (view === null) return { ok: false, reason: 'no_form' };
 
@@ -176,7 +191,10 @@ export async function fillGreenhouseForm(
       continue;
     }
     if (!f.text) {
-      if (f.el.tagName === 'INPUT' || f.el.tagName === 'SELECT') {
+      // Another file input (a cover letter): never set, but say so in the words that fit.
+      if (f.el.tagName === 'INPUT' && (f.el.getAttribute('type') ?? '').toLowerCase() === 'file') {
+        notFilled.push({ label: text, reason: 'attach_yourself' });
+      } else if (f.el.tagName === 'INPUT' || f.el.tagName === 'SELECT') {
         notFilled.push({ label: text, reason: 'choose_on_form' });
       }
       continue;
@@ -238,6 +256,7 @@ export async function fillGreenhouseForm(
     accept === '' || accept.split(',').some((a) => ['.pdf', 'application/pdf'].includes(a.trim()));
   // The input itself is visually hidden by design; a hidden container of it is not.
   const name = plan.resume?.filename ?? '';
+  let attached: { filename: string; size: number; before: number } | null = null;
   if (
     plan.resume === null ||
     name === '' ||
@@ -249,9 +268,8 @@ export async function fillGreenhouseForm(
   } else if ((fileInput.files?.length ?? 0) > 0) {
     notFilled.push({ label: 'Resume', reason: 'has_value' });
   } else {
-    // The name must appear because of the attach: shown once more after it than before.
-    const named = (): number => (form.textContent ?? '').split(name).length - 1;
-    const namedBefore = named();
+    // How often the name is on the form now: the popup looks for one more.
+    const before = (form.textContent ?? '').split(name).length - 1;
     const raw = view.atob(plan.resume.base64);
     const bytes = Uint8Array.from(raw, (c) => c.charCodeAt(0));
     const pdf = new view.File([bytes], name, { type: 'application/pdf' });
@@ -260,19 +278,92 @@ export async function fillGreenhouseForm(
     fileInput.files = carrier.files;
     fire(fileInput, 'input');
     fire(fileInput, 'change');
-    // Let the form render what it did with the file (two microtasks, no clock), then look.
-    await Promise.resolve();
-    await Promise.resolve();
-    if (named() > namedBefore) {
-      filled.push('Resume');
-    } else {
-      // Not shown: take the file back out, the same way, and say to attach it yourself.
-      fileInput.files = new view.DataTransfer().files;
-      fire(fileInput, 'input');
-      fire(fileInput, 'change');
-      notFilled.push({ label: 'Resume', reason: 'attach_yourself' });
-    }
+    attached = { filename: name, size: pdf.size, before };
   }
 
-  return { ok: true, filled, notFilled };
+  return { ok: true, filled, notFilled, resume: attached };
+}
+
+/**
+ * How often the resume's name is on the form now, read only: no event, no write. Null when the
+ * page is no longer the posting, or has no form. The popup calls it at fixed gaps after the fill.
+ */
+export function resumeShown(check: ResumeCheck, doc: Document = document): number | null {
+  let here: URL | null;
+  try {
+    here = new URL(doc.location.href);
+  } catch {
+    here = null;
+  }
+  const parts = here === null ? [] : here.pathname.split('/').filter((p) => p !== '');
+  const onPosting =
+    here !== null &&
+    here.protocol === 'https:' &&
+    (here.hostname === 'job-boards.greenhouse.io' || here.hostname === 'boards.greenhouse.io') &&
+    here.port === '' &&
+    parts.length === 3 &&
+    (parts[0] ?? '').toLowerCase() === check.board.toLowerCase() &&
+    parts[1] === 'jobs' &&
+    parts[2] === check.jobId;
+  if (!onPosting || check.filename === '') return null;
+  const form = doc.getElementById('application-form');
+  if (form === null || form.tagName !== 'FORM') return null;
+  return (form.textContent ?? '').split(check.filename).length - 1;
+}
+
+/**
+ * Takes the resume back out when the form never showed it: only if #resume still holds exactly
+ * the one file the filler set (its name and size), so a file the user chose meanwhile is kept.
+ * One write, then one plain input and one change, as the filler does.
+ */
+export function clearResume(
+  check: ResumeCheck & { size: number },
+  doc: Document = document,
+): 'cleared' | 'kept' | 'wrong_page' | 'no_input' {
+  const view = doc.defaultView;
+  if (view === null) return 'no_input';
+  let here: URL | null;
+  try {
+    here = new URL(doc.location.href);
+  } catch {
+    here = null;
+  }
+  const parts = here === null ? [] : here.pathname.split('/').filter((p) => p !== '');
+  const onPosting =
+    here !== null &&
+    here.protocol === 'https:' &&
+    (here.hostname === 'job-boards.greenhouse.io' || here.hostname === 'boards.greenhouse.io') &&
+    here.port === '' &&
+    parts.length === 3 &&
+    (parts[0] ?? '').toLowerCase() === check.board.toLowerCase() &&
+    parts[1] === 'jobs' &&
+    parts[2] === check.jobId;
+  if (!onPosting) return 'wrong_page';
+  const form = doc.getElementById('application-form');
+  const file = doc.getElementById('resume');
+  if (
+    form === null ||
+    form.tagName !== 'FORM' ||
+    file === null ||
+    !form.contains(file) ||
+    file.tagName !== 'INPUT' ||
+    (file.getAttribute('type') ?? '').toLowerCase() !== 'file'
+  ) {
+    return 'no_input';
+  }
+  const fileInput = file as HTMLInputElement;
+  const held = fileInput.files;
+  const ours =
+    held !== null &&
+    held.length === 1 &&
+    held[0]?.name === check.filename &&
+    held[0]?.size === check.size;
+  if (!ours) return 'kept';
+  const fire = (el: Element, type: 'input' | 'change'): void => {
+    el.dispatchEvent(new view.Event(type, { bubbles: true }));
+  };
+  fileInput.files = new view.DataTransfer().files;
+  fire(fileInput, 'input');
+  fire(fileInput, 'change');
+  return 'cleared';
 }

@@ -576,6 +576,13 @@ describe('acceptance 4 and sec (5): the page must still be the pinned posting', 
       expect(popupSays !== null && samePosting(popupSays, { board: BOARD, jobId: JOB_ID })).toBe(
         same,
       );
+      // The resume check carries the same address rule (it cannot import it either).
+      expect(
+        resumeShown(
+          { board: BOARD, jobId: JOB_ID, filename: 'Jane-Doe-Example-Resume.pdf' },
+          loadForm(MANY_QUESTIONS, { url }).doc,
+        ) !== null,
+      ).toBe(same);
       if (same) {
         expect(report.ok).toBe(true);
       } else {

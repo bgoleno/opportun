@@ -3,13 +3,15 @@
 import { postCapture, testConnection, type FetchLike, type Outcome } from './api';
 import { captureSiteOf, indeedJobKey, type CaptureSiteId } from './canonical';
 import type { ExtractResult } from './extract';
-import type { FillPlan, FillReport } from './greenhouseFill';
+import type { FillPlan, FillReport, NotFilledReason, ResumeCheck } from './greenhouseFill';
 import { normalizeCapture } from './normalize';
 import {
   buildPlan,
   fetchCurrent,
   fetchResume,
   greenhouseJobOf,
+  RESUME_CHECKS,
+  RESUME_GAP_MS,
   type GetLike,
   renderPrefillStop,
   reportLines,
@@ -46,6 +48,15 @@ export interface PopupDeps {
    * apply prefill, #183), with the plan as its only argument. Null when the injection failed.
    */
   runFill(tabId: number, plan: FillPlan): Promise<FillReport | null>;
+  /** Runs resumeShown once in that tab's top frame (read only): the name's count, or null. */
+  runResumeCheck(tabId: number, check: ResumeCheck): Promise<number | null>;
+  /** Runs clearResume once in that tab's top frame; null when the injection failed. */
+  runResumeClear(
+    tabId: number,
+    check: ResumeCheck & { size: number },
+  ): Promise<'cleared' | 'kept' | 'wrong_page' | 'no_input' | null>;
+  /** The popup's own timer between resume checks (the page side keeps none). */
+  wait(ms: number): Promise<void>;
   /** permissions.request for one origin pattern; must be called inside the click gesture. */
   requestOrigin(pattern: string): Promise<boolean>;
   /** permissions.contains for one origin pattern. */
@@ -352,7 +363,47 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         show(renderPrefillStop({ kind: filled.reason }));
         return;
       }
-      const lines = reportLines(filled);
+      // The resume: confirmed here, not in the page (tl and sec on #187). Look for its name a
+      // bounded number of times; if it never shows, take back exactly our file.
+      const report = { ...filled, filled: [...filled.filled], notFilled: [...filled.notFilled] };
+      if (filled.resume !== null) {
+        show({ tone: 'info', text: 'Checking that the form shows your resume...' });
+        const check: ResumeCheck = {
+          board: pinned.board,
+          jobId: pinned.jobId,
+          filename: filled.resume.filename,
+        };
+        let outcome: 'shown' | 'gone' | 'unseen' = 'unseen';
+        for (let i = 0; i < RESUME_CHECKS; i += 1) {
+          if (i > 0) await deps.wait(RESUME_GAP_MS);
+          const count = await deps.runResumeCheck(tab.id, check);
+          if (count === null) {
+            outcome = 'gone';
+            break;
+          }
+          if (count > filled.resume.before) {
+            outcome = 'shown';
+            break;
+          }
+        }
+        let reason: NotFilledReason | null = null;
+        if (outcome === 'gone') reason = 'resume_unchecked';
+        if (outcome === 'unseen') {
+          const cleared = await deps.runResumeClear(tab.id, {
+            ...check,
+            size: filled.resume.size,
+          });
+          reason =
+            cleared === 'cleared'
+              ? 'attach_yourself'
+              : cleared === 'kept'
+                ? 'has_value'
+                : 'resume_unchecked';
+        }
+        if (reason === null) report.filled.push('Resume');
+        else report.notFilled.push({ label: 'Resume', reason });
+      }
+      const lines = reportLines(report);
       show({ tone: 'info', text: lines.reminder });
       showReport(lines);
     });

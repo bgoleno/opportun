@@ -21,6 +21,14 @@ export interface GetInit {
 }
 export type GetLike = (url: string, init: GetInit) => Promise<FetchResponse>;
 
+/**
+ * How the popup confirms the resume after the fill (tl and sec on #187): it looks this many
+ * times, this far apart (about 1.5 s in all), for the form to show the file's name. React 19
+ * renders it after a macrotask, so the page side, which keeps no timer, cannot tell.
+ */
+export const RESUME_CHECKS = 6;
+export const RESUME_GAP_MS = 300;
+
 /** The server's snapshot ceiling (10 MB, #115); anything larger is not attached. */
 export const MAX_RESUME_BYTES = 10 * 1024 * 1024;
 
@@ -284,6 +292,10 @@ export const NOT_FILLED_WORDS = new Map<NotFilledReason, string>([
     'more than one question or answer has this label, so it was not filled: answer it on the form',
   ],
   ['attach_yourself', 'attach your resume yourself'],
+  [
+    'resume_unchecked',
+    'it could not be checked: look at the resume on the form, and attach it yourself if it is missing or wrong',
+  ],
 ]);
 
 /** Always said after a fill: Opportun never submits. */
