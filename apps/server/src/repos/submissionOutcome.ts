@@ -226,6 +226,8 @@ export async function recordSubmissionOutcome(
   const note = input.note?.trim() ?? '';
   const row = await withTransaction(db, async (tx) => {
     await lockScope(tx, submissionScope(id));
+    // Tests hold an outcome here against an email confirmation of the same attempt (#119).
+    await racePoint('submissions.outcome.locked');
     const current = await getRow(tx, ctx, id);
     if (alreadyRecorded(current, input.outcome)) return current;
     if (!canSubmissionTransition(current.status, to)) throw notNow(current, to);

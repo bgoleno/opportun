@@ -122,8 +122,9 @@ export async function confirmFromEmail(
     .where(and(owned(ctx, submissionId), eq(applicationSubmissions.status, current.status)))
     .returning();
   if (updated === undefined) return false;
-  // The message joins the opportunity's timeline, unless the user or the classifier already put
-  // it somewhere: a confirmation never moves a message.
+  // The message joins the opportunity's timeline. Only a newly stored message gets here, and a
+  // new row has no opportunity yet, so the null check is a guard: a confirmation never moves a
+  // message someone else placed.
   const linked = await tx
     .update(communications)
     .set({ opportunityId: current.opportunityId, updatedAt: now })
