@@ -384,6 +384,23 @@ export function useUnlinkConfirmation(opportunityId: string) {
   });
 }
 
+/**
+ * Deletes the recorded confirmation page (#121) from the timeline. The application stays
+ * confirmed: the user removed the page's text, not what it showed.
+ */
+export function useDeleteConfirmationPage(opportunityId: string) {
+  const qc = useQueryClient();
+  const invalidate = useInvalidate(opportunityId);
+  return useMutation({
+    mutationFn: (activityId: string) =>
+      api<void>(`/activities/${enc(activityId)}`, { method: 'DELETE' }),
+    onSettled: async () => {
+      await invalidate();
+      await qc.invalidateQueries({ queryKey: qk.opportunity(opportunityId) });
+    },
+  });
+}
+
 export function useCancelSubmission(opportunityId: string) {
   const invalidate = useInvalidate(opportunityId);
   return useMutation({

@@ -10,15 +10,19 @@
 import { and, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
 import { lockScope, withTransaction } from '../db/client';
 import {
+  activities,
   applicationSubmissions,
   communications,
   companies,
   nextSteps,
   opportunities,
 } from '../db/schema';
+import { WORKDAY_HOST } from '../adapters/discoverySource';
+import { boardFromUrl } from '../jobs/atsDetect';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
+import { isPageFetchProhibited } from '../lib/safeFetch';
 import {
   CONFIRMATION_SKEW_MS,
   CONFIRMATION_WINDOW_MS,
@@ -26,6 +30,7 @@ import {
   type ConfirmationSignal,
 } from '../lib/submissionMatch';
 import { senderAddress } from '../adapters/sources/alertEmail';
+import { createActivity } from './activities';
 import type { Db, Exec, UserCtx } from './base';
 import { submissionScope } from './submissionReview';
 import { getRow, notNow, owned, view, type SubmissionRow } from './submissions';
@@ -156,6 +161,180 @@ export async function confirmFromEmail(
   return true;
 }
 
+/** A page URL's host for an audit entry or a title: never its path or query (tl on #182). */
+export function hostOf(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where a confirmation page may come from (tl's ruling 3 on #121, made stricter where a board
+ * host is shared):
+ * - A page that names an ATS board (boardFromUrl) counts only when it is the attempt's board:
+ *   the same ATS, and the attempt's board or tenant whatever its case. So Greenhouse's thank-you
+ *   page on job-boards.greenhouse.io counts for an attempt opened on boards.greenhouse.io.
+ * - A page that names no board counts only on the destination's own origin, and only where that
+ *   origin is the employer's alone: a Workday tenant's host. boards.greenhouse.io, jobs.lever.co
+ *   and jobs.ashbyhq.com serve every employer, so "the same origin" there would let another
+ *   employer's page through (the wrong_site test's first case).
+ * https only, no credentials, and never a host the server may not read pages from (LinkedIn,
+ * Indeed), which boardFromUrl never names either.
+ */
+export function confirmationPageAllowed(
+  pageUrl: string,
+  sub: Pick<SubmissionRow, 'destinationUrl' | 'atsKind' | 'atsRef'>,
+): boolean {
+  let url: URL;
+  let destination: URL;
+  try {
+    url = new URL(pageUrl);
+    destination = new URL(sub.destinationUrl);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') return false;
+  if (isPageFetchProhibited(url.hostname)) return false;
+  const board = boardFromUrl(url.href);
+  if (board !== null) {
+    return (
+      board.kind === sub.atsKind &&
+      sub.atsRef !== null &&
+      board.slug.toLowerCase() === sub.atsRef.toLowerCase()
+    );
+  }
+  return url.origin === destination.origin && WORKDAY_HOST.test(url.hostname);
+}
+
+/** What the extension sends from the page the user is on (design 6.2). */
+export interface ConfirmationPageInput {
+  url: string;
+  /** The tab's title. Not stored: the entry's title names the host, which the server checked. */
+  title: string;
+  /** The page's text as the browser read it, at most 20,000 characters (the route's schema). */
+  text: string;
+}
+
+/** Who recorded it, for the audit entries. */
+export interface DeviceCaller {
+  tokenId: string;
+  ip: string;
+}
+
+/**
+ * Records the application site's confirmation page (#121, tl's rulings): the attempt becomes
+ * confirmed, kind `page`, with the page kept whole as a `confirmation_page` timeline entry.
+ *
+ * - Only for an attempt the user said they submitted (submitted, or unknown after the follow-up).
+ *   Handed off is 409 not_submitted: a device never records "I submitted it" (ruling 1).
+ * - Once: an attempt an email or a page already confirmed answers unchanged and stores nothing.
+ *   One the user marked confirmed is backed by the page: kind `page`, the entry linked, the
+ *   user's note left on the timeline and their confirmation time kept (ruling 2).
+ * - A page from anywhere else is 422 wrong_site, storing nothing; the refusal is audited with
+ *   the page's host only (ruling 3).
+ *
+ * The text is the user's own capture and stays on the timeline only: no job, no AI, no audit
+ * (ruling 4). Lock order as everywhere: the attempt's lock first, before any row write.
+ */
+export async function confirmFromPage(
+  db: Db,
+  ctx: UserCtx,
+  id: string,
+  input: ConfirmationPageInput,
+  caller: DeviceCaller,
+): Promise<{ row: SubmissionRow; recorded: boolean }> {
+  // Another user's id is a 404 and takes no lock. The destination, ATS kind and board are fixed
+  // when the attempt is created, so checking the page against this read is checking it against
+  // the row the transaction will see.
+  const pre = await getRow(db, ctx, id);
+  const host = hostOf(input.url);
+  if (!confirmationPageAllowed(input.url, pre)) {
+    await audit(db, 'submission.confirmation_refused', {
+      userId: ctx.userId,
+      ip: caller.ip,
+      detail: { submissionId: id, deviceTokenId: caller.tokenId, reason: 'wrong_site', host },
+    });
+    throw new HttpError(
+      422,
+      'wrong_site',
+      "This page is not on this application's site, so it was not recorded.",
+    );
+  }
+  await racePoint('submissions.confirmPage');
+  return await withTransaction(db, async (tx) => {
+    await lockScope(tx, submissionScope(id));
+    const current = await getRow(tx, ctx, id);
+    if (current.status === 'confirmed' && current.confirmationKind !== 'user') {
+      return { row: current, recorded: false };
+    }
+    const upgrading = current.status === 'confirmed';
+    if (current.status === 'handed_off') {
+      throw new HttpError(
+        409,
+        'not_submitted',
+        'Say you submitted this application in Opportun first, then record its confirmation page.',
+        { submissionId: id, status: current.status },
+      );
+    }
+    if (!upgrading && !(AWAITING as readonly string[]).includes(current.status)) {
+      throw notNow(current, 'confirmed');
+    }
+    const now = Date.now();
+    const entry = await createActivity(tx, ctx, current.opportunityId, {
+      kind: 'confirmation_page',
+      title: `Confirmation page recorded (${host})`,
+      bodyMd: input.text,
+      occurredAt: now,
+      participants: [],
+      externalUrl: input.url,
+    });
+    const [updated] = await tx
+      .update(applicationSubmissions)
+      .set({
+        status: 'confirmed',
+        // A confirmation the user marked keeps its time: the page backs that confirmation.
+        confirmedAt: upgrading ? (current.confirmedAt ?? now) : now,
+        confirmationKind: 'page',
+        confirmationActivityId: entry.id,
+        updatedAt: now,
+      })
+      .where(and(owned(ctx, id), eq(applicationSubmissions.status, current.status)))
+      .returning();
+    // Unreachable while every writer takes the attempt's lock; kept as a guard.
+    if (updated === undefined) throw notNow(await getRow(tx, ctx, id), 'confirmed');
+    // The follow-up's "Check whether…" step has its answer (#148's rule), as for an email.
+    if (current.followupNextStepId !== null) {
+      await tx
+        .update(nextSteps)
+        .set({ doneAt: now, updatedAt: now })
+        .where(
+          and(
+            eq(nextSteps.id, current.followupNextStepId),
+            eq(nextSteps.userId, ctx.userId),
+            isNull(nextSteps.doneAt),
+          ),
+        )
+        .run();
+    }
+    await audit(tx, 'submission.confirmed', {
+      userId: ctx.userId,
+      ip: caller.ip,
+      detail: {
+        submissionId: id,
+        opportunityId: current.opportunityId,
+        from: current.status,
+        kind: 'page',
+        deviceTokenId: caller.tokenId,
+        host,
+        ...(upgrading ? { upgradedFrom: 'user' } : {}),
+      },
+    });
+    return { row: updated, recorded: true };
+  });
+}
+
 /**
  * "Not this application": an email confirmation undone (#119 criterion 5). Only an attempt an
  * email confirmed; it returns to `submitted` with its confirmation fields cleared. The message
@@ -201,6 +380,33 @@ export async function unlinkConfirmation(db: Db, ctx: UserCtx, id: string): Prom
   return await detailView(db, ctx, row);
 }
 
+/** The recorded confirmation page (#121), while a page is the confirmation and still exists. */
+async function confirmationPage(
+  exec: Exec,
+  ctx: UserCtx,
+  row: SubmissionRow,
+): Promise<Submission['confirmationPage']> {
+  if (row.confirmationKind !== 'page' || row.confirmationActivityId === null) return null;
+  const entry = await exec
+    .select({
+      id: activities.id,
+      externalUrl: activities.externalUrl,
+      occurredAt: activities.occurredAt,
+      bodyMd: activities.bodyMd,
+    })
+    .from(activities)
+    .where(and(eq(activities.userId, ctx.userId), eq(activities.id, row.confirmationActivityId)))
+    .get();
+  if (entry === undefined) return null;
+  return {
+    activityId: entry.id,
+    url: entry.externalUrl,
+    host: entry.externalUrl === null ? null : hostOf(entry.externalUrl),
+    recordedAt: entry.occurredAt,
+    text: entry.bodyMd,
+  };
+}
+
 /**
  * GET /submissions/:id's view: the attempt, and for an email confirmation what its evidence card
  * shows (subject, the sender's address without its display name, when, which signals).
@@ -210,7 +416,7 @@ export async function detailView(
   ctx: UserCtx,
   row: SubmissionRow,
 ): Promise<Submission> {
-  const base = view(row);
+  const base = { ...view(row), confirmationPage: await confirmationPage(exec, ctx, row) };
   if (row.confirmationKind !== 'email' || row.confirmationCommId === null) {
     return { ...base, confirmationEmail: null };
   }
