@@ -57,6 +57,7 @@ import {
   POSTING_STATE_DETAILS,
   POSTING_STATES,
   REMOTE_PREFS,
+  RANK_SKIP_REASONS,
   RESOLUTIONS,
   RESUME_KINDS,
   RESUME_RULE_CATEGORIES,
@@ -654,6 +655,8 @@ export const discoveryResults = pgTable(
     dedupeKey: text('dedupe_key'),
     aiScore: doublePrecision('ai_score'),
     aiRationale: text('ai_rationale'),
+    /** Why ranking was skipped, until it is ranked (#210); null otherwise. */
+    rankSkipReason: text('rank_skip_reason', { enum: RANK_SKIP_REASONS }),
     resolution: text('resolution', { enum: RESOLUTIONS }).notNull(),
     resolvedSourceRef: text('resolved_source_ref'),
     disposition: text('disposition', { enum: DISPOSITIONS }).notNull().default('pending'),

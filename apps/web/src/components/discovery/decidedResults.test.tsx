@@ -28,6 +28,7 @@ function result(over: Partial<DiscoveryResult> & { id: string }): DiscoveryResul
     dedupeKey: 'initech|staff-engineer|austin',
     aiScore: 80,
     aiRationale: null,
+    rankSkipReason: null,
     resolution: 'full',
     resolvedSourceRef: null,
     disposition: 'dismissed',

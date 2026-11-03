@@ -332,6 +332,7 @@ function stubResult(i: number, over: Record<string, unknown> = {}): Record<strin
     dedupeKey: `international consolidated|principal platform ${i}|remote ${i}`,
     aiScore: 91,
     aiRationale: LONG_WHY,
+    rankSkipReason: null,
     // needs capture and stale (discovered ten days ago): the badge row at its fullest.
     resolution: 'needs_capture',
     resolvedSourceRef: null,

@@ -1,7 +1,13 @@
 // Discovery sources, runs and results (FR-D1..D3). Every function is scoped to the caller: a
 // source, run or result of another user is a 404, and a reference (role target, company,
 // source, run) must be the caller's own.
-import { newId, type Disposition, type NormalizedPosting, type Resolution } from '@opportun/core';
+import {
+  newId,
+  type Disposition,
+  type NormalizedPosting,
+  type RankSkipReason,
+  type Resolution,
+} from '@opportun/core';
 import { and, asc, count, eq, getTableColumns, inArray, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { SOURCE_CONFIG_SCHEMAS, type SourceKind } from '../adapters/discoverySource';
@@ -631,12 +637,31 @@ export async function setRanking(
   ranking: { aiScore: number | null; aiRationale: string | null },
 ): Promise<DiscoveryResultView> {
   await getResult(exec, ctx, id);
+  // Ranked now, so any earlier reason it was not is cleared (#210).
   await exec
     .update(discoveryResults)
-    .set({ ...ranking, updatedAt: Date.now() })
+    .set({ ...ranking, rankSkipReason: null, updatedAt: Date.now() })
     .where(ownedResult(ctx, id))
     .run();
   return await getResult(exec, ctx, id);
+}
+
+/**
+ * Records why ranking was skipped (#210): the AI router's reason, shown on the result's card
+ * until it is ranked. Only the reason is written: the score, the rationale, and whether or when
+ * it is ranked again are unchanged (that is the owner's decision 2 on #190).
+ */
+export async function setRankSkip(
+  exec: Exec,
+  ctx: UserCtx,
+  id: string,
+  reason: RankSkipReason,
+): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankSkipReason: reason })
+    .where(ownedResult(ctx, id))
+    .run();
 }
 
 /** Stores a lead's resolution and, when resolved, the posting filled from the ATS. */

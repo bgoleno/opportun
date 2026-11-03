@@ -31,6 +31,7 @@ const LEAD: DiscoveryResult = {
   dedupeKey: null,
   aiScore: null,
   aiRationale: null,
+  rankSkipReason: null,
   resolution: 'needs_capture',
   resolvedSourceRef: null,
   disposition: 'pending',

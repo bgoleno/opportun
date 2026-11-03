@@ -27,6 +27,7 @@ function result(over: Partial<DiscoveryResult> & { id: string }): DiscoveryResul
     dedupeKey: null,
     aiScore: 80,
     aiRationale: null,
+    rankSkipReason: null,
     resolution: 'full',
     resolvedSourceRef: null,
     disposition: 'pending',

@@ -57,6 +57,36 @@ type Row = Record<string, string | number | null>;
 const onlyEarlierTables = (after: Record<string, number>, before: Record<string, number>) =>
   Object.fromEntries(Object.entries(after).filter(([table, n]) => table in before || n !== 0));
 
+/**
+ * Rows after the upgrade, on the columns they had before it. The upgrade runs the whole chain,
+ * so a later migration may add a column to a compared table (discovery_results.rank_skip_reason,
+ * https://github.com/bgoleno/opportun/issues/210). Such a column must be null on every kept row,
+ * which this checks; this test is about 0038 keeping rows, not about later columns.
+ */
+function onlyEarlierColumns(
+  after: Record<string, unknown[]>,
+  before: Record<string, unknown[]>,
+): Record<string, unknown[]> {
+  const was = new Map(Object.entries(before));
+  return Object.fromEntries(
+    Object.entries(after).map(([table, rows]) => {
+      const first = was.get(table)?.[0] as Row | undefined;
+      if (first === undefined) return [table, rows];
+      const keep = new Set(Object.keys(first));
+      return [
+        table,
+        rows.map((row) => {
+          const entries = Object.entries(row as Row);
+          for (const [column, value] of entries) {
+            if (!keep.has(column)) expect(value, `${table}.${column}`).toBeNull();
+          }
+          return Object.fromEntries(entries.filter(([column]) => keep.has(column)));
+        }),
+      ];
+    }),
+  );
+}
+
 const T = 1_790_000_000_000;
 const U1 = 'u-1';
 const U2 = 'u-2';
@@ -310,7 +340,7 @@ describe.runIf(sqliteOnly)('0038 network_contacts on SQLite', () => {
       expect(
         onlyEarlierTables(countsLessLaterSeeds(sqlite, promptIdsBefore), countsBefore),
       ).toEqual(countsBefore);
-      expect(contents(sqlite, renamed)).toEqual(rowsBefore);
+      expect(onlyEarlierColumns(contents(sqlite, renamed), rowsBefore)).toEqual(rowsBefore);
       expect(searchRows(sqlite)).toEqual(searchBefore);
       expect(sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
     } finally {
@@ -459,7 +489,7 @@ describe.runIf(livePgUrl !== undefined)('0020 network_contacts on Postgres (live
         expect(
           onlyEarlierTables(await countsLessLaterSeeds(pool, promptIdsBefore), countsBefore),
         ).toEqual(countsBefore);
-        expect(await contents(pool, renamed)).toEqual(rowsBefore);
+        expect(onlyEarlierColumns(await contents(pool, renamed), rowsBefore)).toEqual(rowsBefore);
         expect(await searchRows(pool)).toEqual(searchBefore);
         // Postgres's own foreign_key_check: no row points at a parent that is not there.
         const dangling = await query(
