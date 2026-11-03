@@ -112,6 +112,12 @@ describe('submissionFieldProblem', () => {
       'https://user@jane.example.com/',
       'https://:pw@jane.example.com/',
       'https://www.linkedin.com@jane.example.com/in/jane',
+      // tl and sec on #194: extra slashes or a backslash after the scheme, which the URL
+      // parser skips, so the text right after // reads as no authority at all.
+      'https:///user:pw@evil.example/in/jane',
+      'https://\\user:pw@evil.example/',
+      'https:////www.linkedin.com@evil.example/in/jane',
+      'https:///user@evil.example/',
       'https://jane.example.com/\u202Efdp.exe',
       'https://jane.example.com/a\u200Bb',
       'https://jane.example.com/?q=\u2066x',

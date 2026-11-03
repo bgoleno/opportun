@@ -147,6 +147,11 @@ describe('acceptance 4: refusals are named 422 reasons, and nothing is saved', (
       // #186: a username or password, or a format character, is refused too.
       'https://user:pw@jane.example.com/',
       'https://www.linkedin.com@jane.example.com/in/jane',
+      // tl and sec on #194: extra slashes or a backslash after the scheme.
+      'https:///user:pw@evil.example/in/jane',
+      'https://\\user:pw@evil.example/',
+      'https:////www.linkedin.com@evil.example/in/jane',
+      'https:///user@evil.example/',
       'https://jane.example.com/\u202Efdp.exe',
     ]) {
       await refused(app, a, { linkedinUrl: bad }, 'field_url_invalid', 'linkedinUrl');
