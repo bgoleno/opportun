@@ -212,6 +212,21 @@ export const SubmissionSchema = z.object({
     })
     .nullable()
     .optional(),
+  /**
+   * The recorded confirmation page (#121), on GET /submissions/:id only, and only while a page is
+   * the confirmation and its timeline entry still exists (the user may delete it). The text is
+   * the page as the user's browser read it, which the user chose to record.
+   */
+  confirmationPage: z
+    .object({
+      activityId: IdSchema,
+      url: z.string().nullable(),
+      host: z.string().nullable(),
+      recordedAt: TimestampSchema,
+      text: z.string().nullable(),
+    })
+    .nullable()
+    .optional(),
   failureReason: z.enum(SUBMISSION_FAILURE_REASONS).nullable(),
   /**
    * A re-application (owner decision 6, #118): the earlier attempt at the same requisition, and

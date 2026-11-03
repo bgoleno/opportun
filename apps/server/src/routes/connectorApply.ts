@@ -1,15 +1,19 @@
-// The browser extension's read routes for assisted apply prefill (M3b,
-// https://github.com/bgoleno/opportun/issues/182; design Part A 6.2, tl's rulings on the issue).
+// The browser extension's routes for assisted apply (design Part A 6.2): prefill's reads (M3b,
+// https://github.com/bgoleno/opportun/issues/182) and recording the confirmation page (M4,
+// https://github.com/bgoleno/opportun/issues/121), each under tl's rulings on its issue.
 // Bearer `apply:assist` device token only, no session and no CSRF. Each answers about one
 // attempt: the caller's handed-off application whose pinned destination is the page the
-// extension is on, and that attempt's resume snapshot. Nothing here starts, reviews, hands off or
-// submits anything, and nothing lists applications.
+// extension is on, that attempt's resume snapshot, or the confirmation page of an application
+// the user said they submitted. Nothing here starts, reviews, hands off or submits anything,
+// nothing records "I submitted it", and nothing lists applications.
 //
 // Off, or on the demo, every route here 404s before any token is looked at, whatever the token's
 // scopes (sec on #182).
 import {
   ATS_REF_KINDS,
+  SUBMISSION_CONFIRMATION_KINDS,
   SUBMISSION_SNAPSHOT_STATES,
+  SUBMISSION_STATUSES,
   SubmissionAnswersSchema,
   SubmissionFieldsSchema,
 } from '@opportun/core';
@@ -21,6 +25,7 @@ import { audit } from '../lib/audit';
 import { deviceRoute, requireDevice, requireDeviceToken } from '../lib/deviceTokens';
 import { HttpError } from '../lib/errors';
 import { rateLimit } from '../lib/rateLimit';
+import { confirmFromPage, hostOf } from '../repos/submissionConfirm';
 import { handedOffForPage, handedOffSnapshot } from '../repos/submissions';
 import { contentDisposition } from './attachments';
 
@@ -65,14 +70,25 @@ const CurrentResponse = z.object({
 
 const IdParams = z.object({ id: z.string().min(1).max(64) }).strict();
 
-/** The page's host for the audit entry: the full URL is not recorded (tl on #182). */
-function hostOf(url: string): string | null {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return null;
-  }
-}
+/**
+ * The confirmation page (#121, design 6.2): what the user's browser read on the thank-you page.
+ * The text is capped at 20,000 characters (the extension trims it before sending).
+ */
+const ConfirmationBody = z
+  .object({
+    url: z.string().min(1).max(2048),
+    title: z.string().max(500),
+    text: z.string().min(1).max(20_000),
+  })
+  .strict();
+
+const ConfirmationResponse = z.object({
+  submissionId: z.string(),
+  status: z.enum(SUBMISSION_STATUSES),
+  confirmationKind: z.enum(SUBMISSION_CONFIRMATION_KINDS).nullable(),
+  /** False when the attempt was already confirmed by an email or a page: nothing was stored. */
+  recorded: z.boolean(),
+});
 
 export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
@@ -159,6 +175,34 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
         .header('content-disposition', contentDisposition(file.filename))
         .header('cache-control', 'private, no-store')
         .send(stream);
+    },
+  );
+
+  // The thank-you page, recorded on the user's click (#121). Only for an application the user
+  // said they submitted, only from its own site, and once; see confirmFromPage.
+  api.post(
+    '/connector/apply/:id/confirmation',
+    {
+      ...deviceRoute('apply:assist'),
+      onRequest: authenticate,
+      schema: {
+        params: IdParams,
+        body: ConfirmationBody,
+        response: { 200: ConfirmationResponse },
+      },
+    },
+    async (req) => {
+      const ctx = requireDevice(req);
+      const { row, recorded } = await confirmFromPage(db, ctx, req.params.id, req.body, {
+        tokenId: ctx.tokenId,
+        ip: req.ip,
+      });
+      return {
+        submissionId: row.id,
+        status: row.status,
+        confirmationKind: row.confirmationKind,
+        recorded,
+      };
     },
   );
 }

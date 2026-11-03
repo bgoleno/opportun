@@ -157,6 +157,7 @@ const ACTIVITY_KIND_LABELS = new Map<ActivityKind, string>([
   ['referral', 'Referral'],
   ['link', 'Link'],
   ['capture', 'Captured page'],
+  ['confirmation_page', 'Confirmation page'],
 ]);
 
 export const activityKindLabel = (k: ActivityKind): string => ACTIVITY_KIND_LABELS.get(k) ?? k;

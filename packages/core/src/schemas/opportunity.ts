@@ -188,6 +188,13 @@ export const ACTIVITY_KINDS = [
   'link',
   /** The page text the browser extension captured, kept whole (design D12). */
   'capture',
+  /**
+   * An application site's confirmation page, recorded from the extension (assisted apply M4,
+   * https://github.com/bgoleno/opportun/issues/121). Its own kind, never 'capture': the posting
+   * readers (capturedPage, hasCapturedPage, re-derive) take every 'capture' as the job's own page
+   * and send it to the AI, which a thank-you page must never reach (tl on #121).
+   */
+  'confirmation_page',
 ] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 

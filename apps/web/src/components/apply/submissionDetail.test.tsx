@@ -235,6 +235,32 @@ describe('S7: an email confirmation (#119)', () => {
       within(evidence).getByRole('button', { name: 'Not this application (unlink)' }),
     ).toBeInTheDocument();
   });
+
+  it('shows the recorded confirmation page, with its delete, instead of the one-line placeholder (#121)', async () => {
+    render(
+      attempt({
+        status: 'confirmed',
+        confirmationKind: 'page',
+        confirmedAt: NOW - DAY,
+        confirmationPage: {
+          activityId: 'act-1',
+          url: 'https://boards.greenhouse.io/examplecorp/jobs/123/confirmation',
+          host: 'boards.greenhouse.io',
+          recordedAt: NOW - DAY,
+          text: 'Thank you for applying!',
+        },
+      }),
+    );
+    const evidence = (await screen.findByRole('heading', { name: 'Evidence' })).closest(
+      'section',
+    ) as HTMLElement;
+    expect(
+      within(evidence).getByRole('link', { name: 'boards.greenhouse.io' }),
+    ).toBeInTheDocument();
+    expect(
+      within(evidence).getByRole('button', { name: 'Delete the recorded page' }),
+    ).toBeInTheDocument();
+  });
 });
 
 describe('S7: recording an outcome, for every submitted or unknown attempt (#149, tl)', () => {
