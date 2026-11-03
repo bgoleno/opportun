@@ -268,16 +268,23 @@ function posts(calls: ApiCall[], path: string) {
   return calls.filter((c) => c.method === 'POST' && c.path === path);
 }
 
-describe('S7: qa on #163', () => {
-  it('the history ends with the end state, at its last change', async () => {
-    const sub = attempt({ status: 'unknown', updatedAt: NOW - DAY });
-    render(sub);
-    const steps = within(await screen.findByRole('list', { name: 'History' }))
-      .getAllByRole('listitem')
-      .map((li) => li.textContent);
-    expect(steps.at(-1)).toContain('No confirmation seen');
-    expect(steps.at(-1)).toContain(formatDateTime(NOW - DAY));
-  });
+describe('S7 follow-ups (#166; qa and tl on #163)', () => {
+  it.each([
+    ['no confirmation seen', { status: 'unknown' }, 'No confirmation seen'],
+    ['refused', { status: 'rejected' }, 'The application site refused it'],
+    ['failed', { status: 'failed', failureReason: 'other' }, 'Could not be completed'],
+    ['stopped', { status: 'abandoned', failureReason: 'cancelled_by_user' }, 'Stopped'],
+  ] as const)(
+    'a %s attempt’s history ends with that end state, at its last change',
+    async (_n, over, last) => {
+      render(attempt({ ...(over as Partial<SubmissionView>), updatedAt: NOW - DAY }));
+      const steps = within(await screen.findByRole('list', { name: 'History' }))
+        .getAllByRole('listitem')
+        .map((li) => li.textContent);
+      expect(steps.at(-1)).toContain(last);
+      expect(steps.at(-1)).toContain(formatDateTime(NOW - DAY));
+    },
+  );
 
   it('after an outcome, the page reads the attempt again and shows it', async () => {
     let current = attempt({ status: 'unknown' });
@@ -304,6 +311,8 @@ describe('S7: qa on #163', () => {
       ).toBeGreaterThan(reads),
     );
     expect(await screen.findByText(/You marked this confirmed on/)).toBeVisible();
+    // Confirmed now: the actions are gone from the page.
+    expect(screen.queryByRole('button', { name: 'I saw a confirmation' })).not.toBeInTheDocument();
   });
 
   it('a destination that is not http(s) is shown as text, never a link', async () => {
@@ -315,16 +324,14 @@ describe('S7: qa on #163', () => {
     expect(within(section).queryByRole('link')).not.toBeInTheDocument();
   });
 
-  it.each([
-    ['refused', { status: 'rejected' }],
-    ['failed', { status: 'failed', failureReason: 'other' }],
-    ['stopped', { status: 'abandoned', failureReason: 'cancelled_by_user', submittedAt: null }],
-  ] as const)('a %s attempt’s evidence does not promise one is coming', async (_n, over) => {
-    render(attempt(over as Partial<SubmissionView>));
+  it('a refused attempt’s evidence says what was recorded, and when (#166)', async () => {
+    render(attempt({ status: 'rejected', updatedAt: NOW - DAY }));
     const evidence = (await screen.findByRole('heading', { name: 'Evidence' })).closest(
       'section',
     ) as HTMLElement;
-    expect(evidence).toHaveTextContent('No confirmation.');
-    expect(evidence).not.toHaveTextContent('yet');
+    expect(evidence).toHaveTextContent(
+      `The application site refused the form on ${formatDateTime(NOW - DAY)}.`,
+    );
+    expect(evidence).not.toHaveTextContent('No confirmation yet');
   });
 });

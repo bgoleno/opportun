@@ -170,12 +170,11 @@ export function SubmissionDetail({
             A confirmation {s.confirmationKind === 'email' ? 'email' : 'page'} backs this up.
           </p>
         ) : (
-          // "Yet" only while one could still come (qa on #163): not for a refused, failed or
-          // stopped attempt.
+          // A refused attempt says what was recorded, and when (#166): not "no confirmation yet".
           <p className="text-sm text-muted-foreground">
-            {['submitted', 'unknown', 'handed_off'].includes(s.status)
-              ? 'No confirmation yet.'
-              : 'No confirmation.'}
+            {s.status === 'rejected'
+              ? `The application site refused the form on ${formatDateTime(s.updatedAt)}.`
+              : 'No confirmation yet.'}
           </p>
         )}
       </Section>
