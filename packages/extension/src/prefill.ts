@@ -308,7 +308,9 @@ export function renderPrefillStop(
         tone: 'error',
         text:
           stop.reason === 'several_handed_off'
-            ? `More than one application you handed off is for this posting. In Opportun, say what happened to the earlier one, then try again. ${nothing}`
+            ? // A re-application from a second opportunity can be handed off while the first still
+              // is (qa, tl on #183): which one is meant cannot be known here, so nothing is filled.
+              `You have two applications open for this job. In Opportun, record the earlier one (I submitted it, or I did not submit it), then try again. ${nothing}`
             : stop.reason === 'review_stale'
               ? `This application changed after you reviewed it. Review it again in Opportun. ${nothing}`
               : `None of your applications was handed off to this posting. Start it from Opportun's Apply step, then try again. ${nothing}`,
