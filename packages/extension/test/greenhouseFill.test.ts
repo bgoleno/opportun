@@ -207,6 +207,167 @@ describe('sec (2) on #187: nothing inside a hidden container is filled', () => {
   });
 });
 
+describe('tl on #187: ambiguity, react-selects by structure, and the edges of matching', () => {
+  const SPONSOR = 'Do you need sponsorship?';
+  const withSponsorAnswer = () =>
+    plan({
+      questions: [...plan().questions, { labels: [SPONSOR], name: SPONSOR, value: 'No' }],
+    });
+  /** The sponsorship react-select's own markup, rewritten by `edit`. */
+  const sponsor = (edit: (block: string) => string): string => {
+    const start = MANY_QUESTIONS.lastIndexOf(
+      '<div class="field-wrapper">',
+      MANY_QUESTIONS.indexOf('for="question_9000106"'),
+    );
+    const end = MANY_QUESTIONS.indexOf('<div class="field-wrapper">', start + 1);
+    return (
+      MANY_QUESTIONS.slice(0, start) +
+      edit(MANY_QUESTIONS.slice(start, end)) +
+      MANY_QUESTIONS.slice(end)
+    );
+  };
+  const variants: [string, (b: string) => string][] = [
+    ['without its role', (b) => b.replace('role="combobox" ', '')],
+    [
+      'with only its class and containers',
+      (b) =>
+        b
+          .replace('role="combobox" ', '')
+          .replace('aria-autocomplete="list"', '')
+          .replace('aria-haspopup="true"', ''),
+    ],
+    [
+      'with only a .select container',
+      (b) =>
+        b
+          .replace('role="combobox" ', '')
+          .replace('aria-autocomplete="list"', '')
+          .replace('aria-haspopup="true"', '')
+          .replace('class="select__input"', 'class="plain"')
+          .replace('class="select__container"', 'class="plain-container"'),
+    ],
+    [
+      'with only a .select__container container',
+      (b) =>
+        b
+          .replace('role="combobox" ', '')
+          .replace('aria-autocomplete="list"', '')
+          .replace('aria-haspopup="true"', '')
+          .replace('class="select__input"', 'class="plain"')
+          .replace('<div class="select">', '<div class="plain-outer">'),
+    ],
+    [
+      'with only aria-autocomplete',
+      (b) =>
+        b
+          .replace('role="combobox" ', '')
+          .replace('aria-haspopup="true"', '')
+          .replace('class="select__input"', 'class="plain"')
+          .replace('<div class="select">', '<div class="plain-outer">')
+          .replace('class="select__container"', 'class="plain-container"'),
+    ],
+  ];
+  for (const [what, edit] of variants) {
+    it(`a react-select ${what} is never typed into, even with a reviewed answer for it`, async () => {
+      const { doc, report, events } = await fill(sponsor(edit), withSponsorAnswer());
+      expect(valueOf(doc, 'question_9000106')).toBe('');
+      expect(events.filter((e) => e.target === 'question_9000106')).toEqual([]);
+      expect(ok(report).notFilled).toContainEqual({ label: SPONSOR, reason: 'choose_on_form' });
+    });
+  }
+
+  it('two questions on the form with one label: neither is filled, both are reported', async () => {
+    const html = MANY_QUESTIONS.replace('>Website URL<', '>Website<');
+    const { doc, report, events } = await fill(html);
+    expect(valueOf(doc, 'question_9000102')).toBe('');
+    expect(valueOf(doc, 'question_9000111')).toBe('');
+    expect(
+      events.filter((e) => e.target.startsWith('question_90001')).map((e) => e.target),
+    ).not.toContain('question_9000102');
+    const r = ok(report);
+    expect(r.notFilled.filter((n) => n.label === 'Website')).toEqual([
+      { label: 'Website', reason: 'ambiguous' },
+      { label: 'Website', reason: 'ambiguous' },
+    ]);
+  });
+
+  it('two reviewed answers with one label: the question is not filled, and it is reported once', async () => {
+    const p = plan({
+      questions: [
+        ...plan().questions,
+        { labels: ['Why us?'], name: 'Why us?', value: 'A second, different answer.' },
+      ],
+    });
+    const { doc, report } = await fill(MANY_QUESTIONS, p);
+    expect(valueOf(doc, 'question_9000107')).toBe('');
+    const r = ok(report);
+    expect(r.notFilled.filter((n) => n.label === 'Why us?')).toEqual([
+      { label: 'Why us?', reason: 'ambiguous' },
+    ]);
+  });
+
+  it('labels are compared whole: two long questions sharing their first 200 characters stay apart', async () => {
+    const stem = 'Placeholder '.repeat(20);
+    const html = MANY_QUESTIONS.replace('>Preferred First Name<', `>${stem} one<`).replace(
+      '>What is your placeholder notice period?<',
+      `>${stem} two<`,
+    );
+    const p = plan({
+      questions: [{ labels: [`${stem} two`], name: 'Long two', value: 'Answer two' }],
+    });
+    const { doc } = await fill(html, p);
+    expect(valueOf(doc, 'question_9000101')).toBe('');
+    expect(valueOf(doc, 'question_9000104')).toBe('Answer two');
+  });
+
+  it('a label inside the form for a field outside it fills nothing', async () => {
+    const html = MANY_QUESTIONS.replace(
+      '</form>',
+      '<label for="outside_q">Outside question</label></form><input id="outside_q" type="text" />',
+    );
+    const p = plan({ questions: [{ labels: ['Outside question'], name: 'Outside', value: 'x' }] });
+    const { doc, report } = await fill(html, p);
+    expect(valueOf(doc, 'outside_q')).toBe('');
+    expect(ok(report).notFilled).toContainEqual({
+      label: 'Outside',
+      reason: 'no_matching_question',
+    });
+  });
+
+  it('an element named application-form that is not a form fills nothing', async () => {
+    const html = MANY_QUESTIONS.replace(
+      '<form id="application-form"',
+      '<div id="application-form"',
+    ).replace('</form>', '</div>');
+    const page = loadForm(html);
+    expect(await fillGreenhouseForm(asArgs(plan()), page.doc)).toEqual({
+      ok: false,
+      reason: 'no_form',
+    });
+    expect(valueOf(page.doc, 'first_name')).toBe('');
+  });
+
+  it('an empty file name is never attached: attach it yourself', async () => {
+    const { doc, report, events } = await fill(
+      FEW_QUESTIONS,
+      plan({ resume: { filename: '', base64: btoa('%PDF-1.4') } }),
+    );
+    expect((doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(0);
+    expect(events.filter((e) => e.target === 'resume')).toEqual([]);
+    expect(ok(report).notFilled).toContainEqual({ label: 'Resume', reason: 'attach_yourself' });
+  });
+
+  it('a name already elsewhere on the form still counts when the attach shows it once more', async () => {
+    const html = FEW_QUESTIONS.replace(
+      '<h1>Placeholder Engineer</h1>',
+      '<h1>Placeholder Engineer</h1>',
+    ).replace('>Country<', '>Country (Jane-Doe-Example-Resume.pdf)<');
+    const { doc, report } = await fill(html);
+    expect((doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(1);
+    expect(ok(report).filled).toContain('Resume');
+  });
+});
+
 describe('acceptance 2: one write per field, input and change only', () => {
   it('uses the native setter: the controlled stand-in ignores every plain assignment', async () => {
     const { doc, ignoredAssignments } = await fill(MANY_QUESTIONS);
@@ -305,6 +466,8 @@ describe('acceptance 4 and sec (5): the page must still be the pinned posting', 
     [`https://job-boards.greenhouse.io/${BOARD}/jobs/1000002`, false],
     [`https://job-boards.greenhouse.io/othercorp/jobs/${JOB_ID}`, false],
     [`http://job-boards.greenhouse.io/${BOARD}/jobs/${JOB_ID}`, false],
+    [`https://job-boards.greenhouse.io:8443/${BOARD}/jobs/${JOB_ID}`, false],
+    [`https://job-boards.greenhouse.io:443/${BOARD}/jobs/${JOB_ID}`, true],
     [`https://job-boards.greenhouse.io.example.com/${BOARD}/jobs/${JOB_ID}`, false],
     [`https://careers.example.com/${BOARD}/jobs/${JOB_ID}`, false],
     [`https://job-boards.greenhouse.io/embed/job_app?for=${BOARD}`, false],

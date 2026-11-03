@@ -272,6 +272,18 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
     expect(s.$('status').dataset.tone).toBe('error');
   });
 
+  it('a copy with an empty file name is not fetched (tl on #187)', async () => {
+    const s = setup({
+      current: json(200, {
+        attempt: attempt({ resume: { snapshotState: 'ready', filename: '', bytes: PDF.length } }),
+        reason: null,
+      }),
+    });
+    await clickFill(s);
+    expect(s.get).toHaveBeenCalledTimes(1);
+    expect(s.plans[0]!.resume).toBeNull();
+  });
+
   it('a copy larger than the server’s ceiling is not even fetched', async () => {
     const s = setup({
       current: json(200, {
@@ -310,6 +322,27 @@ describe('acceptance 4: a tab that is not the pinned posting fills nothing and s
     expect(s.deps.runFill).not.toHaveBeenCalled();
     expect(s.$('status').textContent).toMatch(/not the posting this application was handed off to/);
     expect(valueOf(s.page.doc, 'first_name')).toBe('');
+  });
+
+  it('an attempt pinned to the same job id on another board: nothing injected (tl on #187)', async () => {
+    const s = setup({
+      current: json(200, {
+        attempt: attempt({
+          destinationUrl: `https://boards.greenhouse.io/othercorp/jobs/${JOB_ID}`,
+        }),
+        reason: null,
+      }),
+    });
+    await clickFill(s);
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    expect(s.$('status').textContent).toMatch(/not the posting this application was handed off to/);
+  });
+
+  it('a tab on a non-default port is not a Greenhouse posting: nothing is asked (tl on #187)', async () => {
+    const s = setup({ tabUrl: `https://job-boards.greenhouse.io:8443/${BOARD}/jobs/${JOB_ID}` });
+    await clickFill(s);
+    expect(s.get).not.toHaveBeenCalled();
+    expect(s.deps.runFill).not.toHaveBeenCalled();
   });
 
   it('the tab moved on before the fill: the filler’s own check stops it', async () => {
