@@ -398,4 +398,36 @@ describe('the attempt the lock was taken on is the one marked (#157)', () => {
     await withTransaction(app.db, (tx) => markPostingChanged(tx, ctxOf(a), null, e.oppId, now));
     expect(await rowOf(app, e.id)).toMatchObject({ status: 'reviewed', postingChangedAt: null });
   });
+
+  it("given one opportunity's attempt and another's opportunity id, only the given attempt changes (#170)", async () => {
+    // Two live attempts, on opportunities A and B. The id is the one A's lock returned, while the
+    // opportunity id is B's. A lookup of B's live attempt (the code before #157) would mark B's
+    // attempt and leave A's alone; acting on the id given marks A's and only A's.
+    const { app, a } = await boot(ON);
+    const onA = await reviewed(app, a);
+    // B starts from another requisition, so its attempt is not a re-application of A's.
+    const onB = await reviewed(app, a, {
+      ...OLD_REF,
+      externalId: '1000004',
+      url: 'https://boards.greenhouse.io/examplecorp/jobs/1000004',
+    });
+    const now = Date.now();
+    await withTransaction(app.db, async (tx) => {
+      const lockedA = await lockLiveAttempt(tx, ctxOf(a), onA.oppId);
+      expect(lockedA).toBe(onA.id);
+      await markPostingChanged(tx, ctxOf(a), lockedA, onB.oppId, now);
+    });
+    expect(await rowOf(app, onA.id)).toMatchObject({ status: 'draft', postingChangedAt: now });
+    expect(await rowOf(app, onB.id)).toMatchObject({
+      status: 'reviewed',
+      postingChangedAt: null,
+      reviewDigest: onB.digest,
+    });
+    const audits = await app.db
+      .select({ detail: auditLog.detail })
+      .from(auditLog)
+      .where(eq(auditLog.event, 'submission.posting_changed'))
+      .all();
+    expect(audits.map((r) => r.detail?.submissionId)).toEqual([onA.id]);
+  });
 });
