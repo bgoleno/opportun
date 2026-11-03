@@ -61,7 +61,12 @@ export type NotFilledReason =
   /** Another file input on the form (a cover letter): never set; attach that file yourself. */
   | 'attach_file_yourself'
   /** The resume could not be checked (the tab moved on): look at it on the form. */
-  | 'resume_unchecked';
+  | 'resume_unchecked'
+  /**
+   * Set by the popup, never by this filler: the server withheld the field, because its stored
+   * value fails today's checks (#196).
+   */
+  | 'withheld';
 
 export type FillReport =
   | {

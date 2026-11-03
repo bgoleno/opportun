@@ -36,7 +36,13 @@ const POPUP_HTML = readFileSync(new URL('../popup.html', import.meta.url), 'utf8
 const PDF = new TextEncoder().encode('%PDF-1.4\n% placeholder resume\n%%EOF\n');
 const TAB_URL = `${POSTING_URL}?gh_src=placeholder`;
 
-function attempt(over: Partial<PrefillAttempt> = {}): PrefillAttempt {
+/**
+ * The attempt as /current sends it. `withheld` is absent unless a test sets it, as the server
+ * leaves it out when nothing is withheld (#196).
+ */
+type AttemptJson = Omit<PrefillAttempt, 'withheld'> & { withheld?: string[] };
+
+function attempt(over: Partial<AttemptJson> = {}): AttemptJson {
   return {
     id: 'sub-1',
     destinationUrl: `https://boards.greenhouse.io/${BOARD}/jobs/${JOB_ID}`,
@@ -640,7 +646,10 @@ describe('#196: a field the server withholds is listed for the user, with its ow
 describe('buildPlan', () => {
   it('maps the four standard fields by id and the two links and answers by label, leaving out empty values', () => {
     const p = buildPlan(
-      attempt({ fields: { firstName: 'Jane', websiteUrl: 'https://jane.example.com' } }),
+      {
+        withheld: [],
+        ...attempt({ fields: { firstName: 'Jane', websiteUrl: 'https://jane.example.com' } }),
+      },
       { board: BOARD, jobId: JOB_ID },
       null,
     );
@@ -653,7 +662,7 @@ describe('buildPlan', () => {
   });
 
   it('the LinkedIn address matches a question labelled "LinkedIn Profile" or plain "LinkedIn" (qa on #187)', () => {
-    const p = buildPlan(attempt(), { board: BOARD, jobId: JOB_ID }, null);
+    const p = buildPlan({ withheld: [], ...attempt() }, { board: BOARD, jobId: JOB_ID }, null);
     expect(p.questions[0]).toEqual({
       labels: ['LinkedIn Profile', 'LinkedIn'],
       name: 'LinkedIn profile',
