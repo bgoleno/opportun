@@ -292,7 +292,7 @@ function ResumeStep({
  * (design S2), and on the review (S4, criterion 1), where pending and failed are already said by
  * the gate's own notices and so are only named here.
  */
-function SavedCopy({
+export function SavedCopy({
   live,
   where = 'resume',
 }: {

@@ -142,7 +142,34 @@ function useInvalidate(opportunityId: string) {
     Promise.all([
       qc.invalidateQueries({ queryKey: ak.submissions(opportunityId) }),
       qc.invalidateQueries({ queryKey: ak.reviewUsage }),
+      // A submission detail page open on it reads it again too (#149).
+      qc.invalidateQueries({ queryKey: ['submissions', 'one'] }),
     ]);
+}
+
+/** One attempt (GET /submissions/:id, #149), or why there is none to show. */
+export type SubmissionLoad =
+  { kind: 'ok'; submission: SubmissionView } | { kind: 'off' } | { kind: 'not_found' };
+
+/**
+ * One attempt, for the submission detail page. A 404 is either the feature being off (or the
+ * demo: `feature_unavailable`) or no such attempt for this user (another user's reads the same).
+ */
+export function useSubmission(id: string) {
+  return useQuery({
+    queryKey: ['submissions', 'one', id] as const,
+    queryFn: async (): Promise<SubmissionLoad> => {
+      try {
+        return { kind: 'ok', submission: await api<SubmissionView>(`/submissions/${enc(id)}`) };
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+          return err.code === 'feature_unavailable' ? { kind: 'off' } : { kind: 'not_found' };
+        }
+        throw err;
+      }
+    },
+    retry: false,
+  });
 }
 
 export function useCreateSubmission(opportunityId: string) {

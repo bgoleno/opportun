@@ -41,6 +41,7 @@ import { Route as SettingsRoleTargetsRouteImport } from './routes/settings/role-
 import { Route as SettingsSecurityRouteImport } from './routes/settings/security';
 import { Route as SettingsUsersRouteImport } from './routes/settings/users';
 import { Route as OpportunitiesIdApplyRouteImport } from './routes/opportunities.$id_.apply';
+import { Route as OpportunitiesIdApplicationsSubmissionIdRouteImport } from './routes/opportunities.$id_.applications.$submissionId';
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -202,6 +203,12 @@ const OpportunitiesIdApplyRoute = OpportunitiesIdApplyRouteImport.update({
   path: '/opportunities/$id/apply',
   getParentRoute: () => rootRouteImport,
 } as any);
+const OpportunitiesIdApplicationsSubmissionIdRoute =
+  OpportunitiesIdApplicationsSubmissionIdRouteImport.update({
+    id: '/opportunities/$id_/applications/$submissionId',
+    path: '/opportunities/$id/applications/$submissionId',
+    getParentRoute: () => rootRouteImport,
+  } as any);
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute;
@@ -236,6 +243,7 @@ export interface FileRoutesByFullPath {
   '/resumes/': typeof ResumesIndexRoute;
   '/settings/': typeof SettingsIndexRoute;
   '/opportunities/$id/apply': typeof OpportunitiesIdApplyRoute;
+  '/opportunities/$id/applications/$submissionId': typeof OpportunitiesIdApplicationsSubmissionIdRoute;
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute;
@@ -268,6 +276,7 @@ export interface FileRoutesByTo {
   '/resumes': typeof ResumesIndexRoute;
   '/settings': typeof SettingsIndexRoute;
   '/opportunities/$id/apply': typeof OpportunitiesIdApplyRoute;
+  '/opportunities/$id/applications/$submissionId': typeof OpportunitiesIdApplicationsSubmissionIdRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
@@ -303,6 +312,7 @@ export interface FileRoutesById {
   '/resumes/': typeof ResumesIndexRoute;
   '/settings/': typeof SettingsIndexRoute;
   '/opportunities/$id_/apply': typeof OpportunitiesIdApplyRoute;
+  '/opportunities/$id_/applications/$submissionId': typeof OpportunitiesIdApplicationsSubmissionIdRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
@@ -338,7 +348,8 @@ export interface FileRouteTypes {
     | '/network/'
     | '/resumes/'
     | '/settings/'
-    | '/opportunities/$id/apply';
+    | '/opportunities/$id/apply'
+    | '/opportunities/$id/applications/$submissionId';
   fileRoutesByTo: FileRoutesByTo;
   to:
     | '/'
@@ -370,7 +381,8 @@ export interface FileRouteTypes {
     | '/network'
     | '/resumes'
     | '/settings'
-    | '/opportunities/$id/apply';
+    | '/opportunities/$id/apply'
+    | '/opportunities/$id/applications/$submissionId';
   id:
     | '__root__'
     | '/'
@@ -404,7 +416,8 @@ export interface FileRouteTypes {
     | '/network/'
     | '/resumes/'
     | '/settings/'
-    | '/opportunities/$id_/apply';
+    | '/opportunities/$id_/apply'
+    | '/opportunities/$id_/applications/$submissionId';
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -423,6 +436,7 @@ export interface RootRouteChildren {
   NetworkIndexRoute: typeof NetworkIndexRoute;
   ResumesIndexRoute: typeof ResumesIndexRoute;
   OpportunitiesIdApplyRoute: typeof OpportunitiesIdApplyRoute;
+  OpportunitiesIdApplicationsSubmissionIdRoute: typeof OpportunitiesIdApplicationsSubmissionIdRoute;
 }
 
 declare module '@tanstack/react-router' {
@@ -651,6 +665,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OpportunitiesIdApplyRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    '/opportunities/$id_/applications/$submissionId': {
+      id: '/opportunities/$id_/applications/$submissionId';
+      path: '/opportunities/$id/applications/$submissionId';
+      fullPath: '/opportunities/$id/applications/$submissionId';
+      preLoaderRoute: typeof OpportunitiesIdApplicationsSubmissionIdRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
   }
 }
 
@@ -724,6 +745,8 @@ const rootRouteChildren: RootRouteChildren = {
   NetworkIndexRoute: NetworkIndexRoute,
   ResumesIndexRoute: ResumesIndexRoute,
   OpportunitiesIdApplyRoute: OpportunitiesIdApplyRoute,
+  OpportunitiesIdApplicationsSubmissionIdRoute:
+    OpportunitiesIdApplicationsSubmissionIdRoute,
 };
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
