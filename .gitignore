@@ -31,9 +31,8 @@ test-results/
 pg-test-report.json
 # Browser-automation debris. Page snapshots and console logs from driving the running app,
 # which carry whatever was on screen plus absolute paths naming the developer's home
-# directory. Untracked files never reach the published snapshot (it is built with
-# `git archive`, which takes tracked files only), but an `add -A` would stage them into the
-# commit that does, so they are ignored rather than merely uncommitted.
+# directory. An `add -A` would stage them into a commit, so they are ignored rather than merely
+# uncommitted.
 .playwright-mcp/
 
 # Agent tooling scratch
