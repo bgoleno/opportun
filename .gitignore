@@ -37,6 +37,9 @@ pg-test-report.json
 
 # Agent tooling scratch
 /.superpowers/
+# Where the planning skills write working plans. By the owner's rule (2026-10-25) those are not
+# kept in this repository; the requirements and design docs are.
+/docs/superpowers/
 # Both forms are deliberate. The trailing-slash form matches the directory this normally is.
 # The bare form matches it when it is a symlink, which it became on 2026-10-22 when the ten
 # worktrees were moved to /Volumes/MacMiniExt1 to recover internal disk. A directory-only

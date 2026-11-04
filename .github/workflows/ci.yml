@@ -95,18 +95,6 @@ jobs:
         if: matrix.db == 'sqlite'
         run: bash scripts/merge-when-green.test.sh
 
-      # Same reason: scripts/ is outside every workspace, so neither pnpm test nor pnpm lint
-      # reaches it. These tests need no database -- the matcher and the candidate extraction
-      # are pure -- and one of them checks the matcher against grep itself, so the step needs
-      # grep on PATH and nothing else.
-      - name: Test collect-identifiers.mjs
-        # Guarded on the file existing, not only on the dialect leg. The script and its test are not
-        # in this repository, and without this guard the step runs `node --test` against an absent
-        # file and fails the sqlite leg on every push. `hashFiles` returns an empty string when
-        # nothing matches, and checkout has already run by this point.
-        if: matrix.db == 'sqlite' && hashFiles('scripts/collect-identifiers.test.mjs') != ''
-        run: node --test scripts/collect-identifiers.test.mjs
-
       - name: Configure Postgres for the suite and for diagnosis
         if: matrix.db == 'postgres'
         env:

@@ -1,23 +1,2 @@
-# Paths that `git archive` leaves out of an archive of this repository.
-#
-# `export-ignore` affects only `git archive`. A listed file that exists is tracked, reviewed and
-# kept in history like any other. Apart from `.DS_Store` files, which are junk, the paths below
-# are not in this repository.
-
-# A process checklist.
-docs/pre-publication-checklist.md export-ignore
-
-# Deployment notes.
-docs/site-deployment.md export-ignore
-
-# A maintenance script and its test.
-scripts/collect-identifiers.mjs export-ignore
-scripts/collect-identifiers.test.mjs export-ignore
-
-# Working plans, which by the owner's rule (2026-10-25) are not kept in this repository. The
-# requirements and design docs are.
-docs/superpowers/** export-ignore
-docs/superpowers/.DS_Store export-ignore
-
-# Editor and OS junk.
+# Leaves editor and OS junk out of `git archive`, if one was ever force-added past `.gitignore`.
 **/.DS_Store export-ignore
