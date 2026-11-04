@@ -124,7 +124,9 @@ describe('syncOnce', () => {
     await withConfig(fs);
     const failure = syncOnce(io, CONFIG);
     await expect(failure).rejects.toMatchObject({ exitCode: EXIT.AUTH });
-    await expect(failure).rejects.toThrow(/revoked.*Settings > Integrations > Devices.*init/s);
+    await expect(failure).rejects.toThrow(
+      /revoked.*Settings > Integrations > Extensions and Connectors.*init/s,
+    );
     expect(f.calls).toHaveLength(1);
     expect(await loadState(io)).toEqual({ cursor: null });
   });
