@@ -3,6 +3,7 @@
 // glob list actually catches the historical case it was built to catch, and doesn't fire on
 // everything else.
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { test } from 'node:test';
 import { matchingSecurityPaths } from './security-paths.mjs';
 
@@ -76,3 +77,49 @@ test('a same-named file in an unrelated directory is not a match (directory-scop
 test('an empty change set matches nothing', () => {
   assert.deepEqual(matchingSecurityPaths([]), []);
 });
+
+// https://github.com/bgoleno/opportun/issues/248: changes to these got no automatic flag, and the
+// need for a security review was caught by hand. Each must still exist, because a glob left behind
+// by a rename stops matching without any error, which is the same miss again.
+const ISSUE_248_FILES = [
+  'apps/server/src/plugins/security.ts',
+  'apps/server/src/routes/secrets.ts',
+  'apps/server/src/routes/deviceTokens.ts',
+  'apps/server/src/routes/connectorApply.ts',
+  'apps/server/src/lib/aiProviderFetch.ts',
+  'apps/server/src/lib/audit.ts',
+];
+
+for (const file of ISSUE_248_FILES) {
+  test(`flags ${file}`, () => {
+    assert.ok(
+      existsSync(new URL(`../../${file}`, import.meta.url)),
+      `${file} is gone: update its glob in security-paths.mjs`,
+    );
+    assert.deepEqual(matchingSecurityPaths([file]), [file]);
+  });
+}
+
+// Fails if a glob for one of the files above grows to take in its neighbours, or the label stops
+// meaning anything. plugins/ holds only sensitive files today, so its control is a made-up name.
+const NOT_SENSITIVE = [
+  // real files beside them
+  'apps/server/src/routes/companies.ts',
+  'apps/server/src/routes/opportunities.ts',
+  'apps/server/src/lib/csv.ts',
+  'apps/server/src/lib/textSignals.ts',
+  'apps/web/src/routes/settings/security.tsx',
+  // made-up names one step away from them
+  'apps/server/src/plugins/requestLogger.ts',
+  'apps/server/src/plugins/securityHeaders.ts',
+  'apps/server/src/routes/secretsHelper.ts',
+  'apps/server/src/routes/audit.ts',
+  'apps/server/src/lib/secrets.ts',
+  'apps/server/src/lib/auditHelper.ts',
+];
+
+for (const file of NOT_SENSITIVE) {
+  test(`does not flag ${file}`, () => {
+    assert.deepEqual(matchingSecurityPaths([file]), []);
+  });
+}

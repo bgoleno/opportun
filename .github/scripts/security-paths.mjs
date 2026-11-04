@@ -25,8 +25,18 @@ export const SECURITY_SENSITIVE_GLOBS = [
   '**/routes/googleAuth.ts',
   '**/routes/oauthLogin.ts',
   '**/cli/resetPassword.ts',
+  '**/routes/deviceTokens.ts',
+  // bearer device tokens, no session and no CSRF
+  '**/routes/connectorApply.ts',
+  // CSRF and response headers for every route
+  '**/plugins/security.ts',
+  // the audit trail and its redaction. It has no category of its own in CONTRIBUTING.md; it is
+  // here because auth, reauth and token changes are among what it records.
+  '**/lib/audit.ts',
   // crypto
   '**/lib/secretBox.ts',
+  // the secrets vault's API, which takes values that secretBox then encrypts
+  '**/routes/secrets.ts',
   // adapters
   '**/adapters/**',
   // fetchers (safeFetch is the SSRF-safe chokepoint; mcpClient does its own outbound
@@ -34,6 +44,8 @@ export const SECURITY_SENSITIVE_GLOBS = [
   // and DNS rebinding" deviation)
   '**/lib/safeFetch.ts',
   '**/lib/mcpClient.ts',
+  // the SSRF check for the AI provider path, whose baseUrl the user controls
+  '**/lib/aiProviderFetch.ts',
 ];
 
 /** The changed paths, in order, that match a security-sensitive glob. */
