@@ -13,6 +13,7 @@ import { companyDomainBackfillJob, companyDomainResolveJob } from './companyDoma
 import { companySuggestJob } from './companySuggest';
 import { demoResetJob } from './demoReset';
 import { discoveryRankJob } from './discoveryRank';
+import { rankWaitingJob, rankWaitingSweepJob } from './discoveryRankWaiting';
 import { discoveryRunJob } from './discoveryRun';
 import { jobPruneJob } from './jobPrune';
 import { leadResolveJob } from './leadResolve';
@@ -46,6 +47,8 @@ registerJob(classifyBackfillJob);
 registerJob(refineClassifyPromptJob);
 registerJob(discoveryRunJob);
 registerJob(discoveryRankJob);
+registerJob(rankWaitingJob);
+registerJob(rankWaitingSweepJob);
 registerJob(refineDiscoveryPromptJob);
 registerJob(leadResolveJob);
 registerJob(atsDetectJob);

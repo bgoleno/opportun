@@ -34,6 +34,7 @@ import './adapters/sources/index';
 import './jobs/index';
 import type { JobServices } from './jobs/registry';
 import { ATS_REVERIFY_CRON, ATS_REVERIFY_KIND } from './jobs/atsDetect';
+import { RANK_WAITING_SWEEP_CRON, RANK_WAITING_SWEEP_KIND } from './jobs/discoveryRankWaiting';
 import { ATTACHMENT_SWEEP_CRON, ATTACHMENT_SWEEP_JOB_KIND } from './jobs/attachmentSweep';
 import { SUBMISSION_EXPIRE_CRON, SUBMISSION_EXPIRE_JOB_KIND } from './jobs/submissionExpire';
 import { SUBMISSION_FOLLOWUP_CRON, SUBMISSION_FOLLOWUP_JOB_KIND } from './jobs/submissionFollowup';
@@ -392,6 +393,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   await seedSchedule(db, REFINE_JOB_KIND, REFINE_CRON);
   await seedSchedule(db, DISCOVERY_REFINE_KIND, DISCOVERY_REFINE_CRON);
   await seedSchedule(db, ATS_REVERIFY_KIND, ATS_REVERIFY_CRON);
+  await seedSchedule(db, RANK_WAITING_SWEEP_KIND, RANK_WAITING_SWEEP_CRON);
   await seedSchedule(db, COMPANY_SUGGEST_KIND, COMPANY_SUGGEST_CRON);
   // Assisted apply (#115): settle any draft whose resume snapshot was left pending with no job.
   // Only while the feature is on; with it off nothing may export a resume, so the schedule (and

@@ -17,10 +17,12 @@ import { DISCOVERY_RANK_KIND, rankResult } from '../src/jobs/discoveryRank';
 import {
   drainWaitingResults,
   RANK_WAITING_KIND,
+  RANK_WAITING_SWEEP_CRON,
+  RANK_WAITING_SWEEP_KIND,
   sweepWaitingResults,
 } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
-import { enqueue, runNextJob, startRunner } from '../src/jobs/runner';
+import { enqueue, readSchedules, runNextJob, startRunner } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import { createSource, listResults, setDisposition, setRanking } from '../src/repos/discovery';
 import { DEFAULT_DISCOVERY_DAILY_USD, writeDiscoveryBudget } from '../src/repos/discoveryBudget';
@@ -39,7 +41,10 @@ const PAGE = { limit: 200, offset: 0 };
 const DAY = 86_400_000;
 const CALL_USD = 0.01;
 
-beforeEach(() => vi.mocked(runStructured).mockReset());
+// Braces matter: a function returned from beforeEach is run as a cleanup hook, here the mock.
+beforeEach(() => {
+  vi.mocked(runStructured).mockReset();
+});
 afterEach(() => {
   vi.useRealTimers();
   resetSources();
@@ -388,6 +393,33 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
       .where(and(eq(jobs.kind, RANK_WAITING_KIND), inArray(jobs.status, ['pending'])))
       .all();
     expect(queued).toEqual([{ userId: a.userId }]);
+  });
+});
+
+describe('#214: the sweep is scheduled', () => {
+  it('hourly, so the next UTC day is reached in every server time zone', async () => {
+    const { app } = await boot();
+    const schedules = await readSchedules(app.db);
+    expect(schedules.find((x) => x.kind === RANK_WAITING_SWEEP_KIND)?.schedule).toEqual({
+      cron: RANK_WAITING_SWEEP_CRON,
+      enabled: true,
+    });
+    expect(RANK_WAITING_SWEEP_CRON).toBe('5 * * * *');
+  });
+
+  it('the sweep job and the drain job run from the queue', async () => {
+    const { app, a } = await boot();
+    await writeDiscoveryBudget(app.db, ctxOf(a), 2 * CALL_USD);
+    await spend(app, a, 2 * CALL_USD);
+    await discover(app, a, 2);
+    await app.db
+      .update(taskRuns)
+      .set({ createdAt: Date.now() - 2 * DAY })
+      .run();
+    providerCharges(app, a);
+    await enqueue(app.db, RANK_WAITING_SWEEP_KIND, {});
+    await app.jobs.drain();
+    expect((await results(app, a)).every((r) => r.aiScore === 60)).toBe(true);
   });
 });
 

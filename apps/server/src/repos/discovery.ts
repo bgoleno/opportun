@@ -8,7 +8,17 @@ import {
   type RankSkipReason,
   type Resolution,
 } from '@opportun/core';
-import { and, asc, count, eq, getTableColumns, inArray, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  eq,
+  getTableColumns,
+  inArray,
+  isNotNull,
+  isNull,
+  type SQL,
+} from 'drizzle-orm';
 import { z } from 'zod';
 import { SOURCE_CONFIG_SCHEMAS, type SourceKind } from '../adapters/discoverySource';
 import {
@@ -637,10 +647,10 @@ export async function setRanking(
   ranking: { aiScore: number | null; aiRationale: string | null },
 ): Promise<DiscoveryResultView> {
   await getResult(exec, ctx, id);
-  // Ranked now, so any earlier reason it was not is cleared (#210).
+  // Ranked now, so any earlier reason it was not, and any wait for budget, is cleared (#210, #214).
   await exec
     .update(discoveryResults)
-    .set({ ...ranking, rankSkipReason: null, updatedAt: Date.now() })
+    .set({ ...ranking, rankSkipReason: null, rankDeferredAt: null, updatedAt: Date.now() })
     .where(ownedResult(ctx, id))
     .run();
   return await getResult(exec, ctx, id);
@@ -648,8 +658,8 @@ export async function setRanking(
 
 /**
  * Records why ranking was skipped (#210): the AI router's reason, shown on the result's card
- * until it is ranked. Only the reason is written: the score, the rationale, and whether or when
- * it is ranked again are unchanged (that is the owner's decision 2 on #190).
+ * until it is ranked. Only the reason is written. A result that already has a score keeps none:
+ * it is ranked, so it must never read "not ranked" (tl on #213).
  */
 export async function setRankSkip(
   exec: Exec,
@@ -660,8 +670,71 @@ export async function setRankSkip(
   await exec
     .update(discoveryResults)
     .set({ rankSkipReason: reason })
+    .where(and(ownedResult(ctx, id), isNull(discoveryResults.aiScore)))
+    .run();
+}
+
+/**
+ * The result waits for the discovery budget (#214): it is ranked on a later budget day, oldest
+ * first (jobs/discoveryRankWaiting.ts). A second refusal keeps the first time. A scored result
+ * keeps its score while its re-rank waits. Like a skip, this leaves updatedAt alone.
+ */
+export async function setRankDeferred(
+  exec: Exec,
+  ctx: UserCtx,
+  id: string,
+  now: number = Date.now(),
+): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankDeferredAt: now, rankSkipReason: null })
+    .where(and(ownedResult(ctx, id), isNull(discoveryResults.rankDeferredAt)))
+    .run();
+}
+
+/** The result stops waiting for budget, without being ranked. */
+export async function clearRankDeferred(exec: Exec, ctx: UserCtx, id: string): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankDeferredAt: null })
     .where(ownedResult(ctx, id))
     .run();
+}
+
+const waitingForBudget = and(
+  isNotNull(discoveryResults.rankDeferredAt),
+  eq(discoveryResults.disposition, 'pending'),
+);
+
+/** The caller's results waiting for budget, oldest first (#218 brings pre-filter scores). */
+export async function listWaitingResultIds(exec: Exec, ctx: UserCtx): Promise<string[]> {
+  const rows = await exec
+    .select({ id: discoveryResults.id })
+    .from(discoveryResults)
+    .where(and(eq(discoveryResults.userId, ctx.userId), waitingForBudget))
+    .orderBy(asc(discoveryResults.createdAt), asc(discoveryResults.id))
+    .all();
+  return rows.map((r) => r.id);
+}
+
+/** How many of the caller's results wait for budget. Each is one row, so each counts once. */
+export async function countWaitingResults(exec: Exec, ctx: UserCtx): Promise<number> {
+  const row = await exec
+    .select({ n: count() })
+    .from(discoveryResults)
+    .where(and(eq(discoveryResults.userId, ctx.userId), waitingForBudget))
+    .get();
+  return Number(row?.n ?? 0);
+}
+
+/** The users with a result waiting for budget (the sweep's list). */
+export async function usersWithWaitingResults(exec: Exec): Promise<string[]> {
+  const rows = await exec
+    .selectDistinct({ userId: discoveryResults.userId })
+    .from(discoveryResults)
+    .where(waitingForBudget)
+    .all();
+  return rows.map((r) => r.userId);
 }
 
 /** Stores a lead's resolution and, when resolved, the posting filled from the ATS. */

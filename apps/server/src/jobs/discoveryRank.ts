@@ -16,8 +16,16 @@ import type { Db } from '../db/client';
 import { roleTargets } from '../db/schema';
 import { buildAiDeps } from '../lib/ai';
 import { HttpError } from '../lib/errors';
+import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
-import { getResult, setRanking, setRankSkip, type DiscoveryResultView } from '../repos/discovery';
+import {
+  getResult,
+  setRankDeferred,
+  setRanking,
+  setRankSkip,
+  type DiscoveryResultView,
+} from '../repos/discovery';
+import { discoveryBudgetHasRoom } from '../repos/discoveryBudget';
 import { resolveDiscoveryPrompt } from '../repos/profile';
 import { roleTargetLine, roleTargetsText } from './classify';
 import { DISCOVERY_RANK_KIND, MULTI_POSTED_PREFIX, MULTI_POSTED_SCORE_CAP } from './discoveryKinds';
@@ -74,6 +82,15 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
   }
   if (result.disposition !== 'pending') return { status: 'skipped', reason: 'not_pending' };
 
+  // The discovery budget (#214): over it, the posting waits for a later budget day and the
+  // provider is not called. Spend is on the ledger only when a call ends, so calls that passed
+  // this check together can pass the budget by the calls in flight, and no further.
+  if (!(await discoveryBudgetHasRoom(db, ctx))) {
+    await setRankDeferred(db, ctx, resultId);
+    return { status: 'skipped', reason: 'budget_exceeded' };
+  }
+  await racePoint('discoveryRank.budget_checked');
+
   const target =
     result.roleTargetId === null
       ? undefined
@@ -101,8 +118,14 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
       promptId: resolved.prompt.id,
     });
   } catch (err) {
-    // No key, over budget, or the provider is down: leave it unranked for manual triage, and
-    // keep why on the result so its card can say so (#210). Nothing here retries or defers it.
+    // The per-task hard stop behind the budget: this waits too, since nothing is ever skipped
+    // for budget (the owner's decision 2 on #190).
+    if (err instanceof AiUnavailableError && err.reason === 'budget_exceeded') {
+      await setRankDeferred(db, ctx, resultId);
+      return { status: 'skipped', reason: err.reason };
+    }
+    // No key, or the provider is down: leave it unranked for manual triage, and keep why on the
+    // result so its card can say so (#210).
     if (err instanceof AiUnavailableError) {
       await setRankSkip(db, ctx, resultId, err.reason);
       return { status: 'skipped', reason: err.reason };

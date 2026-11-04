@@ -693,6 +693,8 @@ export const discoveryResults = sqliteTable(
     aiRationale: text('ai_rationale'),
     /** Why ranking was skipped, until it is ranked (#210); null otherwise. */
     rankSkipReason: text('rank_skip_reason', { enum: RANK_SKIP_REASONS }),
+    /** When ranking first waited for the discovery budget (#214), until it is ranked; else null. */
+    rankDeferredAt: integer('rank_deferred_at'),
     resolution: text('resolution', { enum: RESOLUTIONS }).notNull(),
     /** ATS posting reference when resolved. */
     resolvedSourceRef: text('resolved_source_ref'),
@@ -714,6 +716,7 @@ export const discoveryResults = sqliteTable(
     index('discovery_results_user_id_idx').on(t.userId),
     index('discovery_results_run_idx').on(t.runId),
     index('discovery_results_user_dedupe_idx').on(t.userId, t.dedupeKey),
+    index('discovery_results_user_deferred_idx').on(t.userId, t.rankDeferredAt),
   ],
 );
 

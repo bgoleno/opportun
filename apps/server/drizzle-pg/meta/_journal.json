@@ -204,6 +204,13 @@
       "when": 1794300000000,
       "tag": "0028_discovery_rank_skip_reason",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1794400000000,
+      "tag": "0029_discovery_rank_deferred",
+      "breakpoints": true
     }
   ]
 }

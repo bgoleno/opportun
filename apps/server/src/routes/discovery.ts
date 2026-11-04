@@ -56,6 +56,8 @@ const ResultSchema = z.object({
   aiRationale: z.string().nullable(),
   /** Why ranking was skipped (#210), until the result is ranked; null otherwise. */
   rankSkipReason: z.enum(RANK_SKIP_REASONS).nullable(),
+  /** When its ranking began waiting for the discovery budget (#214); null when it is not. */
+  rankDeferredAt: z.number().int().nullable(),
   resolution: z.enum(RESOLUTIONS),
   resolvedSourceRef: z.string().nullable(),
   disposition: z.enum(DISPOSITIONS),

@@ -330,6 +330,13 @@
       "when": 1794300000000,
       "tag": "0046_discovery_rank_skip_reason",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1794400000000,
+      "tag": "0047_discovery_rank_deferred",
+      "breakpoints": true
     }
   ]
 }

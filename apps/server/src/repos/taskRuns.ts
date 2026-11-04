@@ -60,10 +60,11 @@ export async function spentTodayUsd(
 }
 
 /**
- * How often ranking a posting was refused because the task's daily budget was spent (#210): the
+ * How often a ranking call was refused because the task's daily hard stop was reached (#210): the
  * router records each refusal as a task_runs error `budget_exceeded`, so this counts those rows
  * for discovery.rank, today (the budget's own UTC day) and over the last 7 UTC days, today
- * included. A refusal stays counted even after the posting is ranked later.
+ * included. It counts refusals, not postings: a posting that waits and is refused again counts
+ * again (#214), and the discovery budget's own deferrals make no router call, so no row.
  */
 export async function rankBudgetSkips(
   db: Db,
