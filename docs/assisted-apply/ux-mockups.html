@@ -1,0 +1,664 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Opportun Assisted apply: UX mockups</title>
+<style>
+/* Tokens copied from apps/web/src/index.css (light :root, dark [data-theme='dark']); dark here follows prefers-color-scheme. */
+:root{
+  --background:oklch(0.985 0.002 260);--foreground:oklch(0.21 0.02 265);--card:oklch(1 0 0);--card-foreground:oklch(0.21 0.02 265);
+  --popover:oklch(1 0 0);--primary:oklch(0.5 0.2 275);--primary-foreground:oklch(0.985 0.005 275);
+  --secondary:oklch(0.955 0.006 265);--secondary-foreground:oklch(0.25 0.02 265);--muted:oklch(0.955 0.006 265);--muted-foreground:oklch(0.48 0.02 265);
+  --accent:oklch(0.94 0.02 275);--accent-foreground:oklch(0.3 0.08 275);--destructive:oklch(0.55 0.21 27);--destructive-foreground:oklch(0.985 0 0);
+  --success:oklch(0.52 0.13 155);--success-foreground:oklch(0.985 0 0);--warning:oklch(0.8 0.15 80);--warning-foreground:oklch(0.25 0.06 70);
+  --border:oklch(0.91 0.008 265);--input:oklch(0.86 0.01 265);--ring:oklch(0.55 0.2 275);--sidebar:oklch(0.97 0.004 265);--sidebar-foreground:oklch(0.3 0.02 265);
+  --radius:0.5rem;
+  --amber-bg:#fffbeb;--amber-bd:#fcd34d;--amber-fg:#78350f;
+  --scrim:oklch(0 0 0 / 0.5);
+  /* extension popup tokens: packages/extension/src/popup.css */
+  --x-fg:#1c1c1e;--x-muted:#6b6b70;--x-bg:#ffffff;--x-border:#d0d0d5;--x-accent:#2557d6;--x-accent-fg:#fff;--x-ok:#1a7f37;--x-info:#3a5f9e;--x-err:#b42318;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --background:oklch(0.17 0.012 265);--foreground:oklch(0.94 0.006 265);--card:oklch(0.21 0.014 265);--card-foreground:oklch(0.94 0.006 265);
+  --popover:oklch(0.23 0.014 265);--primary:oklch(0.7 0.15 275);--primary-foreground:oklch(0.18 0.03 275);
+  --secondary:oklch(0.27 0.014 265);--secondary-foreground:oklch(0.94 0.006 265);--muted:oklch(0.26 0.012 265);--muted-foreground:oklch(0.72 0.015 265);
+  --accent:oklch(0.3 0.04 275);--accent-foreground:oklch(0.94 0.02 275);--destructive:oklch(0.66 0.19 25);--destructive-foreground:oklch(0.15 0.02 25);
+  --success:oklch(0.72 0.14 155);--success-foreground:oklch(0.16 0.03 155);--warning:oklch(0.78 0.14 80);--warning-foreground:oklch(0.18 0.04 70);
+  --border:oklch(0.3 0.014 265);--input:oklch(0.36 0.016 265);--ring:oklch(0.72 0.15 275);--sidebar:oklch(0.19 0.013 265);--sidebar-foreground:oklch(0.86 0.01 265);
+  --amber-bg:#451a0366;--amber-bd:#78350f99;--amber-fg:#fde68a;--scrim:oklch(0 0 0 / 0.7);
+  --x-fg:#ececf0;--x-muted:#a0a0a8;--x-bg:#1c1c1e;--x-border:#3a3a40;--x-accent:#6d93ff;--x-accent-fg:#0b0b0c;--x-ok:#4ac26b;--x-info:#8fb3ff;--x-err:#ff7b72;
+  color-scheme:dark;
+}}
+*{box-sizing:border-box;border-color:var(--border)}
+body{margin:0;background:var(--background);color:var(--foreground);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased;font-size:16px;line-height:1.5}
+h1,h2,h3,h4,p,ul,ol,dl,dd{margin:0}
+ul,ol{padding:0;list-style:none}
+a{color:var(--primary);text-underline-offset:2px}
+:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+svg.i{width:1rem;height:1rem;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+svg.i.s{width:.75rem;height:.75rem}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* mockup chrome */
+.deck-nav{position:sticky;top:0;z-index:50;background:var(--card);border-bottom:1px solid var(--border);padding:.5rem 1rem;display:flex;gap:.25rem 1rem;flex-wrap:wrap;font-size:.8125rem}
+.deck-nav strong{margin-right:.5rem}
+.deck{max-width:1100px;margin:0 auto;padding:1.5rem 1rem 4rem;display:grid;gap:3rem;grid-template-columns:minmax(0,1fr)}
+.screen{scroll-margin-top:6rem}[id]{scroll-margin-top:6rem}
+.screen>h2{font-size:1.25rem;font-weight:600;margin-bottom:.25rem}
+.screen>.lede{font-size:.875rem;color:var(--muted-foreground);margin-bottom:1rem;max-width:70ch}
+.variant-label{font-size:.75rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted-foreground);margin:1.5rem 0 .5rem}
+.frame{border:1px dashed var(--input);border-radius:.75rem;padding:1rem;background:var(--background)}
+.stack{display:grid;gap:1rem}
+.cols{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));align-items:start}
+
+/* app components (mirror Tailwind classes of the real components) */
+.muted{color:var(--muted-foreground)}
+.xs{font-size:.75rem}.sm{font-size:.875rem}
+.card{display:flex;flex-direction:column;gap:1rem;border:1px solid var(--border);border-radius:.75rem;background:var(--card);color:var(--card-foreground);padding:1.25rem 1.5rem;box-shadow:0 1px 2px #0000000d}
+.card h3{font-size:1.125rem;font-weight:600;line-height:1.2}
+.card .desc{font-size:.875rem;color:var(--muted-foreground)}
+.card.tight{gap:.75rem;padding:1rem}
+.item{border:1px solid var(--border);border-radius:.75rem;background:var(--card);padding:1rem;display:grid;gap:.5rem}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
+.grow{flex:1;min-width:0}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;height:2.25rem;padding:0 1rem;border-radius:.375rem;font:inherit;font-size:.875rem;font-weight:500;white-space:nowrap;border:1px solid transparent;background:var(--primary);color:var(--primary-foreground);cursor:pointer;text-decoration:none}
+.btn.outline{background:var(--card);color:var(--foreground);border-color:var(--input)}
+.btn.secondary{background:var(--secondary);color:var(--secondary-foreground)}
+.btn.ghost{background:transparent;color:var(--foreground)}
+.stack>*,.cols>*{min-width:0}
+.btn{max-width:100%;white-space:normal;text-align:center;height:auto;min-height:2.25rem;padding-block:.25rem}
+.btn.sm{min-height:2rem;padding:0 .75rem;gap:.375rem}
+.btn.lg{min-height:2.5rem;padding:0 1.5rem}
+.btn.block{width:100%}
+.btn[aria-disabled=true],.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.wrap{white-space:normal;text-align:center;height:auto;min-height:2.5rem;padding-block:.5rem}
+.badge{display:inline-flex;align-items:center;gap:.25rem;border:1px solid transparent;border-radius:.375rem;padding:.125rem .5rem;font-size:.75rem;font-weight:500;white-space:nowrap;width:fit-content}
+.badge.default{background:var(--primary);color:var(--primary-foreground)}
+.badge.secondary{background:var(--secondary);color:var(--secondary-foreground)}
+.badge.outline{border-color:var(--border);color:var(--foreground)}
+.badge.success{background:var(--success);color:var(--success-foreground)}
+.badge.warning{background:var(--warning);color:var(--warning-foreground)}
+.badge.destructive{background:var(--destructive);color:var(--destructive-foreground)}
+.badge.dashed{border:1px dashed var(--muted-foreground);color:var(--muted-foreground)}
+.input,.select,.textarea{display:block;width:100%;height:2.25rem;border:1px solid var(--input);border-radius:.375rem;background:var(--card);color:var(--foreground);padding:.25rem .75rem;font:inherit;font-size:.875rem;box-shadow:0 1px 2px #0000000d}
+.textarea{height:auto;min-height:4.5rem;padding:.5rem .75rem}
+.label{font-size:.875rem;font-weight:500;line-height:1}
+.field{display:grid;gap:.5rem}
+.check{display:flex;gap:.5rem;align-items:flex-start;font-size:.875rem}
+.check input{width:1rem;height:1rem;margin:.2rem 0 0;accent-color:var(--primary);flex:none}
+.banner{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;border:1px solid var(--amber-bd);background:var(--amber-bg);color:var(--amber-fg);border-radius:.375rem;padding:.5rem .75rem;font-size:.875rem}
+.banner .grow{flex:1 1 14rem}
+.banner.err{border-color:color-mix(in oklch,var(--destructive) 40%,transparent);background:color-mix(in oklch,var(--destructive) 10%,transparent);color:var(--destructive)}
+.banner.info{border-color:var(--border);background:var(--accent);color:var(--accent-foreground)}
+.banner.ok{border-color:color-mix(in oklch,var(--success) 40%,transparent);background:color-mix(in oklch,var(--success) 10%,transparent);color:var(--foreground)}
+.banner.ok svg{color:var(--success)}
+.callout{border:1px solid var(--primary);border-left-width:4px;border-radius:.5rem;background:var(--accent);color:var(--accent-foreground);padding:.75rem 1rem;display:flex;gap:.75rem;align-items:flex-start;font-size:.9375rem}
+.callout strong{font-weight:600}
+.tabs{display:inline-flex;height:2.25rem;align-items:center;border-radius:.5rem;background:var(--muted);padding:.25rem;color:var(--muted-foreground);max-width:100%;overflow-x:auto}
+.tabs span{display:inline-flex;align-items:center;height:100%;padding:0 .75rem;border-radius:.375rem;font-size:.875rem;font-weight:500;white-space:nowrap}
+.tabs .on{background:var(--card);color:var(--foreground);box-shadow:0 1px 2px #0000001a}
+.kv{display:grid;grid-template-columns:minmax(7rem,10rem) 1fr;gap:.375rem 1rem;font-size:.875rem}
+.kv dt{color:var(--muted-foreground)}
+.kv dd{overflow-wrap:anywhere}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.8125rem}
+.preview{border:1px solid var(--border);border-radius:.375rem;background:var(--muted);padding:.75rem;font-size:.8125rem;line-height:1.5;max-height:9rem;overflow:auto;overflow-wrap:anywhere}
+.sep{border:0;border-top:1px solid var(--border);margin:0}
+.diff{border-left:3px solid var(--warning);padding-left:.5rem}
+
+/* stepper */
+.steps{display:flex;flex-wrap:wrap;gap:.5rem 0;font-size:.875rem}
+.steps li{display:flex;align-items:center;gap:.5rem;padding-right:.75rem;margin-right:.75rem;position:relative}
+.steps li:not(:last-child)::after{content:"";width:1.25rem;border-top:1px solid var(--input)}
+.steps .n{display:inline-grid;place-items:center;width:1.5rem;height:1.5rem;border-radius:50%;border:1px solid var(--input);font-size:.75rem;font-weight:600}
+.steps .done .n{background:var(--secondary);border-color:var(--secondary)}
+.steps [aria-current=step]{font-weight:600}
+.steps [aria-current=step] .n{background:var(--primary);color:var(--primary-foreground);border-color:var(--primary)}
+.steps .todo{color:var(--muted-foreground)}
+
+/* app shell (first screen only) */
+.shell{border:1px solid var(--border);border-radius:.75rem;overflow:hidden;background:var(--background)}
+.shell-h{display:flex;align-items:center;gap:1rem;height:3.5rem;padding:0 1rem;border-bottom:1px solid var(--border);background:var(--card)}
+.shell-b{display:flex}
+.shell-n{width:12rem;flex:none;background:var(--sidebar);color:var(--sidebar-foreground);border-right:1px solid var(--border);padding:.75rem;display:grid;gap:.25rem;align-content:start;font-size:.875rem}
+.shell-n span{display:flex;gap:.5rem;align-items:center;padding:.5rem .75rem;border-radius:.375rem}
+.shell-n .on{background:var(--accent);color:var(--accent-foreground);font-weight:500}
+.shell-m{flex:1;min-width:0;padding:1.5rem}
+.rail{display:grid;gap:1.5rem;grid-template-columns:1fr 20rem}
+.rail>.apply{order:2}
+@media (max-width:900px){.shell-n{display:none}.rail{grid-template-columns:1fr}.rail>.apply{order:-1}.shell-m{padding:1rem}}
+
+/* timeline entry tag line */
+.tl-tag{display:inline-flex;gap:.25rem;align-items:center;font-size:.75rem;color:var(--success);font-weight:500}
+.tl-time{margin-left:auto;font-size:.75rem;color:var(--muted-foreground)}
+
+/* dialog */
+.scrim{background:var(--scrim);padding:2rem 1rem;border-radius:.75rem;display:grid;place-items:center}
+.dialog{width:100%;max-width:32rem;border:1px solid var(--border);border-radius:.75rem;background:var(--popover);color:var(--card-foreground);box-shadow:0 10px 30px #0006;padding:1.5rem;display:grid;gap:1rem;position:relative}
+.dialog h3{font-size:1.125rem;font-weight:600;line-height:1.1;padding-right:1.5rem}
+.dialog .x{position:absolute;top:1rem;right:1rem;color:var(--muted-foreground)}
+.dialog .foot{display:flex;gap:.5rem;justify-content:flex-end;flex-wrap:wrap}
+@media (max-width:480px){.dialog .foot{flex-direction:column-reverse}.dialog .foot .btn{width:100%}}
+
+/* history list */
+.hist{display:grid;gap:.5rem;font-size:.875rem}
+.hist li{display:grid;grid-template-columns:auto 1fr;gap:.5rem .75rem;align-items:baseline}
+.hist time{color:var(--muted-foreground);font-size:.75rem;white-space:nowrap}
+
+/* extension popup */
+.popup{width:320px;max-width:100%;border:1px solid var(--x-border);border-radius:8px;background:var(--x-bg);color:var(--x-fg);font:13px/1.4 system-ui,sans-serif;padding:12px 14px;box-shadow:0 4px 14px #0003}
+.popup h4{margin:0 0 4px;font-size:15px}
+.popup .hint{margin:0 0 10px;color:var(--x-muted);font-size:12px}
+.popup button{font:inherit;padding:6px 10px;border:1px solid var(--x-border);border-radius:6px;background:transparent;color:var(--x-fg);cursor:pointer}
+.popup button.primary{width:100%;padding:8px 10px;border-color:var(--x-accent);background:var(--x-accent);color:var(--x-accent-fg);font-weight:600}
+.popup button[disabled]{opacity:.6;cursor:default}
+.popup .st{min-height:1.4em;margin:8px 0}
+.popup .st.success{color:var(--x-ok)}.popup .st.info{color:var(--x-info)}.popup .st.error{color:var(--x-err)}
+.popup dl{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:0 0 10px;font-size:12px}
+.popup dt{color:var(--x-muted)}.popup dd{margin:0;overflow-wrap:anywhere}
+.popup .gap{height:8px}
+.popup .sec{margin-top:10px;padding-top:10px;border-top:1px solid var(--x-border)}
+.popup .stack-b{display:grid;gap:6px}
+.popup ul{margin:0 0 8px;padding-left:16px;list-style:disc;font-size:12px}
+.popup svg.i{width:13px;height:13px;vertical-align:-2px}
+.pcap{font-size:.75rem;color:var(--muted-foreground);margin-top:.5rem}
+
+/* wireframe notes */
+.legend{font-size:.8125rem;color:var(--muted-foreground);display:flex;gap:1rem;flex-wrap:wrap}
+@media (prefers-reduced-motion:no-preference){.spin{animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<defs>
+<symbol id="check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+<symbol id="checks" viewBox="0 0 24 24"><path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/></symbol>
+<symbol id="pencil" viewBox="0 0 24 24"><path d="M21.17 6.81a1 1 0 0 0-3.99-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/></symbol>
+<symbol id="clip" viewBox="0 0 24 24"><rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></symbol>
+<symbol id="ext" viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+<symbol id="help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></symbol>
+<symbol id="ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></symbol>
+<symbol id="octx" viewBox="0 0 24 24"><path d="m15 9-6 6"/><path d="m9 9 6 6"/><path d="M2.586 16.726A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2h6.624a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586z"/></symbol>
+<symbol id="archive" viewBox="0 0 24 24"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></symbol>
+<symbol id="warn" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+<symbol id="mail" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></symbol>
+<symbol id="file" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></symbol>
+<symbol id="info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+<symbol id="shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+<symbol id="dl" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
+<symbol id="back" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></symbol>
+<symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+<symbol id="loader" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></symbol>
+<symbol id="x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+<symbol id="trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+<symbol id="list" viewBox="0 0 24 24"><path d="M3 12h.01M3 18h.01M3 6h.01M8 12h13M8 18h13M8 6h13"/></symbol>
+<symbol id="camera" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/></symbol>
+</defs>
+</svg>
+
+<nav class="deck-nav" aria-label="Mockup screens">
+  <strong>Assisted apply mockups</strong>
+  <a href="#s-panel">1 Apply panel</a>
+  <a href="#s-chips">2 Status chips</a>
+  <a href="#s-resume">3 Resume step</a>
+  <a href="#s-details">4 Details step</a>
+  <a href="#s-review">5 Review gate</a>
+  <a href="#s-review-states">6 Review states</a>
+  <a href="#s-handoff">7 Handoff</a>
+  <a href="#s-attest">8 Attest dialog</a>
+  <a href="#s-detail">9 Submission detail</a>
+  <a href="#s-timeline">10 Timeline</a>
+  <a href="#s-popup">11 Extension</a>
+  <a href="#s-settings">12 Settings</a>
+</nav>
+
+<main class="deck">
+
+<p class="banner info" role="note"><span class="grow">These mockups are the design as written on 2026-10-27, not the screens as built. <a href="ux-design.md#what-the-build-changed">What the build changed</a> lists the differences. All data here is invented.</span></p>
+
+<!-- ============ 1. APPLY PANEL ============ -->
+<section class="screen" id="s-panel" aria-labelledby="h-panel">
+  <h2 id="h-panel">1. Apply panel on the opportunity page</h2>
+  <p class="lede">A card at the top of the right rail of the Timeline tab (same column as Next steps; first on phones). Matches OpportunityDetail.tsx (rail grid-cols-[1fr_20rem]) and NextStepsPanel.tsx (Card). All invented data.</p>
+
+  <div class="shell" role="group" aria-label="Opportunity page, Ready state in context">
+    <div class="shell-h"><strong>Opportun</strong><span class="muted sm" style="margin-left:auto">Light / dark follows your system</span></div>
+    <div class="shell-b">
+      <div class="shell-n" aria-hidden="true"><span>Dashboard</span><span class="on">Pipeline</span><span>Discovery</span><span>Resumes</span><span>Inbox</span><span>Contacts</span><span>Settings</span></div>
+      <div class="shell-m stack" style="gap:1.5rem">
+        <div class="stack" style="gap:.75rem">
+          <a class="row sm muted" style="text-decoration:none;gap:.25rem" href="#s-panel"><svg class="i"><use href="#back"/></svg>Pipeline</a>
+          <div class="row" style="justify-content:space-between;align-items:flex-start;gap:1rem">
+            <div style="display:grid;gap:.25rem">
+              <span class="sm muted" style="font-weight:500">Northwind Example Co.</span>
+              <h1 style="font-size:1.5rem;font-weight:600;letter-spacing:-.01em;line-height:1.25">Senior Platform Engineer</h1>
+              <span class="sm muted">Remote (US)</span>
+            </div>
+            <div class="row"><span class="btn outline sm">Interested</span><span class="sm muted">Priority</span><span class="select" style="width:7rem">Normal</span></div>
+          </div>
+        </div>
+        <div class="tabs" role="tablist" aria-label="Opportunity sections"><span class="on" role="tab" aria-selected="true">Timeline</span><span role="tab">Details</span><span role="tab">Resume</span><span role="tab">Communications</span><span role="tab">Referrals</span></div>
+        <div class="rail">
+          <div class="stack"><div class="item"><span class="sm muted">Composer and timeline render here (unchanged).</span></div></div>
+          <aside class="apply stack" aria-label="Assisted apply">
+            <section class="card tight" aria-labelledby="ap1">
+              <div class="row" style="justify-content:space-between"><h3 id="ap1" style="font-size:1rem">Apply</h3></div>
+              <dl class="kv" style="grid-template-columns:5.5rem 1fr"><dt>Where</dt><dd>Example ATS (jobs.example.com)</dd><dt>Req. id</dt><dd class="mono">REQ-2041</dd><dt>Resume</dt><dd>Platform Eng, tailored (Final)</dd></dl>
+              <p class="sm muted">You will review everything, then fill in and submit the form on the ATS yourself.</p>
+              <a class="btn block" href="#s-resume">Apply on Example ATS</a>
+              <a class="sm" href="#s-explainer" style="width:fit-content">How this works</a>
+            </section>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="variant-label">Other states of the Apply card (rail width, 20rem)</h3>
+  <div class="cols">
+    <section class="card tight" aria-labelledby="ne1"><h3 id="ne1" style="font-size:1rem">Apply</h3>
+      <a class="btn block" aria-disabled="true" aria-describedby="ne1r" href="#s-panel" tabindex="0">Apply on Example ATS</a>
+      <p id="ne1r" class="sm row" style="gap:.5rem;align-items:flex-start;flex-wrap:nowrap"><svg class="i muted" style="margin-top:.2rem"><use href="#info"/></svg><span>Attach a final resume first. <a href="#s-panel">Go to Resume tab</a></span></p>
+      <p class="xs muted">Not eligible: no final resume linked. The reason is always shown in text, never only in a disabled button.</p></section>
+    <section class="card tight" aria-labelledby="ne2"><h3 id="ne2" style="font-size:1rem">Apply</h3>
+      <a class="btn block" aria-disabled="true" aria-describedby="ne2r" href="#s-panel">Apply on an ATS</a>
+      <p id="ne2r" class="sm row" style="gap:.5rem;align-items:flex-start;flex-wrap:nowrap"><svg class="i muted" style="margin-top:.2rem"><use href="#info"/></svg><span>We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.</span></p>
+      <p class="xs muted">Not eligible: no ATS identified.</p></section>
+    <section class="card tight" aria-labelledby="ip1"><h3 id="ip1" style="font-size:1rem">Apply</h3>
+      <div class="row"><span class="badge secondary"><svg class="i s"><use href="#clip"/></svg>Reviewed</span><span class="xs muted">Review valid until 14:42</span></div>
+      <p class="sm">Your review is saved. Nothing has been sent anywhere.</p>
+      <a class="btn block wrap" href="#s-review">Continue to open Example ATS</a>
+      <a class="sm" href="#s-panel" style="width:fit-content">Cancel this application</a>
+      <p class="xs muted">In progress (Draft / Reviewed).</p></section>
+    <section class="card tight" aria-labelledby="ip2"><h3 id="ip2" style="font-size:1rem">Apply</h3>
+      <div class="row"><span class="badge secondary"><svg class="i s"><use href="#ext"/></svg>Opened on ATS</span><span class="xs muted">Opened 35 min ago</span></div>
+      <p class="sm">Finish the form on Example ATS and press its own Submit button. Then tell Opportun.</p>
+      <div class="row"><a class="btn" href="#s-attest">I submitted it</a><a class="btn outline" href="#s-handoff">Instructions</a></div>
+      <p class="xs muted">In progress (handed off).</p></section>
+    <section class="card tight" aria-labelledby="dn1"><h3 id="dn1" style="font-size:1rem">Apply</h3>
+      <div class="row"><span class="badge default"><svg class="i s"><use href="#check"/></svg>Submitted</span><span class="xs muted">Oct 27, 2026</span></div>
+      <p class="sm row" style="gap:.5rem"><svg class="i muted"><use href="#clock"/></svg>Waiting for a confirmation email</p>
+      <a class="btn outline block" href="#s-detail">View submission</a>
+      <p class="xs muted">Done: submitted, window open.</p></section>
+    <section class="card tight" aria-labelledby="dn2"><h3 id="dn2" style="font-size:1rem">Apply</h3>
+      <div class="row"><span class="badge success"><svg class="i s"><use href="#checks"/></svg>Confirmed</span><span class="xs muted">Oct 27, 2026</span></div>
+      <p class="sm">Confirmation email received.</p>
+      <div class="row"><a class="btn outline" href="#s-detail">View submission</a><a class="btn ghost" href="#s-panel">Apply again...</a></div>
+      <p class="xs muted">Done. Re-apply is a quiet link, not a button.</p></section>
+    <section class="card tight" aria-labelledby="dl1"><h3 id="dl1" style="font-size:1rem">Apply</h3>
+      <a class="btn block" aria-disabled="true" aria-describedby="dl1r" href="#s-panel">Apply on Example ATS</a>
+      <div id="dl1r" class="banner" role="status"><svg class="i"><use href="#clock"/></svg><span class="grow">You have reviewed 10 applications in the last 24 hours, which is the limit. You can start another after 09:14 tomorrow.</span></div>
+      <p class="xs muted">Daily limit. Shown as a plain limit, never as a counter or goal.</p></section>
+  </div>
+
+  <h3 class="variant-label" id="s-explainer">"How this works" explainer (Dialog, same as ConfirmDialog shell)</h3>
+  <div class="scrim"><div class="dialog" role="dialog" aria-labelledby="ex-t" aria-modal="true">
+    <svg class="i x"><use href="#x"/></svg>
+    <h3 id="ex-t">How Assisted apply works</h3>
+    <p class="sm muted">Opportun cannot apply to a job for you, and does not try to. You do the applying, Opportun keeps the record.</p>
+    <ol class="sm" style="display:grid;gap:.5rem;padding-left:1.25rem;list-style:decimal">
+      <li><strong>You choose a resume.</strong> Opportun saves an exact copy so the record shows what you used.</li>
+      <li><strong>You review.</strong> You check the resume, your details and your answers on one screen.</li>
+      <li><strong>You open the real form.</strong> It opens in a new tab on the employer's own application site.</li>
+      <li><strong>You press that site's Submit button.</strong> Only you can do this.</li>
+      <li><strong>You tell Opportun.</strong> It then adds the application to your timeline and watches for a confirmation email.</li>
+    </ol>
+    <p class="sm muted">Opportun never sends anything to the application site, never logs in there, and never applies to more than one job at a time.</p>
+    <div class="foot"><span class="btn">Got it</span></div>
+  </div></div>
+</section>
+
+<!-- ============ 2. CHIPS ============ -->
+<section class="screen" id="s-chips" aria-labelledby="h-chips">
+  <h2 id="h-chips">2. Submission status chips</h2>
+  <p class="lede">New SubmissionStatusChip wraps the existing Badge variants (components/ui/badge.tsx). Every status has a distinct icon and its own text; colour is only a third cue. The chip carries a visually hidden prefix "Submission status:".</p>
+  <div class="frame stack">
+    <ul class="cols" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,17rem),1fr))">
+      <li class="item"><span class="badge outline"><svg class="i s"><use href="#pencil"/></svg><span class="sr">Submission status: </span>Draft</span><span class="xs muted">You are preparing it. Nothing is final.</span></li>
+      <li class="item"><span class="badge secondary"><svg class="i s"><use href="#clip"/></svg><span class="sr">Submission status: </span>Reviewed</span><span class="xs muted">You checked it. The real form is not open yet.</span></li>
+      <li class="item"><span class="badge secondary"><svg class="i s"><use href="#ext"/></svg><span class="sr">Submission status: </span>Opened on ATS</span><span class="xs muted">The form was opened. Opportun does not know if you submitted.</span></li>
+      <li class="item"><span class="badge default"><svg class="i s"><use href="#check"/></svg><span class="sr">Submission status: </span>Submitted</span><span class="xs muted">You told Opportun you pressed Submit.</span></li>
+      <li class="item"><span class="badge success"><svg class="i s"><use href="#checks"/></svg><span class="sr">Submission status: </span>Confirmed</span><span class="xs muted">A confirmation email or page backs it up.</span></li>
+      <li class="item"><span class="badge warning"><svg class="i s"><use href="#help"/></svg><span class="sr">Submission status: </span>No confirmation seen</span><span class="xs muted">Not a failure. Many employers send nothing.</span></li>
+      <li class="item"><span class="badge destructive"><svg class="i s"><use href="#ban"/></svg><span class="sr">Submission status: </span>ATS refused</span><span class="xs muted">The application site rejected the form.</span></li>
+      <li class="item"><span class="badge destructive"><svg class="i s"><use href="#octx"/></svg><span class="sr">Submission status: </span>Failed</span><span class="xs muted">It could not be completed. Nothing was submitted.</span></li>
+      <li class="item"><span class="badge outline dashed"><svg class="i s"><use href="#archive"/></svg><span class="sr">Submission status: </span>Abandoned</span><span class="xs muted">You stopped before submitting.</span></li>
+    </ul>
+    <p class="xs muted">Forced-colours / greyscale check: the nine chips differ by icon shape and label, and Abandoned also differs by dashed border.</p>
+  </div>
+</section>
+
+<!-- ============ 3. RESUME STEP ============ -->
+<section class="screen" id="s-resume" aria-labelledby="h-resume">
+  <h2 id="h-resume">3. Apply flow, step 1: Resume</h2>
+  <p class="lede">A full page at /opportunities/:id/apply (not a dialog), in the Card idiom of OpportunityResumeTab.tsx. Stepper is an ordered list with aria-current="step".</p>
+  <div class="frame stack" style="gap:1.25rem">
+    <a class="row sm muted" style="text-decoration:none;gap:.25rem" href="#s-panel"><svg class="i"><use href="#back"/></svg>Senior Platform Engineer</a>
+    <div class="stack" style="gap:.25rem"><h1 style="font-size:1.5rem;font-weight:600;letter-spacing:-.01em">Apply to Northwind Example Co.</h1><p class="sm muted">Senior Platform Engineer, REQ-2041, on Example ATS</p></div>
+    <ol class="steps" aria-label="Progress">
+      <li aria-current="step"><span class="n">1</span>Resume</li><li class="todo"><span class="n">2</span>Details</li><li class="todo"><span class="n">3</span>Review</li><li class="todo"><span class="n">4</span>Open Example ATS</li>
+    </ol>
+    <div class="callout" role="note"><svg class="i" style="margin-top:.2rem"><use href="#shield"/></svg><p><strong>Opportun will not submit this.</strong> You will press the submit button on jobs.example.com yourself.</p></div>
+
+    <section class="card" aria-labelledby="rs-h">
+      <div><h3 id="rs-h">Choose the resume to use</h3><p class="desc">Only resumes marked Final can be used. The copy is saved now, so later edits will not change what you applied with.</p></div>
+      <div class="field"><label class="label" for="rsel">Resume</label>
+        <select id="rsel" class="select"><option>Platform Eng, tailored for Northwind (Tailored, Final)</option></select></div>
+      <h4 class="sm" style="font-weight:600">Saved copy</h4>
+    </section>
+
+    <div class="cols">
+      <div>
+        <p class="variant-label" style="margin-top:0">Preparing</p>
+        <div class="item" role="status" aria-live="polite"><div class="row"><svg class="i spin"><use href="#loader"/></svg><span class="sm">Preparing your resume file...</span></div><p class="xs muted">This usually takes a few seconds. You can keep reading.</p><span class="btn sm outline" aria-disabled="true" style="width:fit-content">Next: Details</span></div>
+      </div>
+      <div>
+        <p class="variant-label" style="margin-top:0">Ready</p>
+        <div class="item"><div class="row"><svg class="i muted"><use href="#file"/></svg><strong class="sm">Sam-Rivera-Platform-Eng.pdf</strong><span class="badge success"><svg class="i s"><use href="#check"/></svg>Ready</span></div>
+          <dl class="kv"><dt>Type, size</dt><dd>PDF, 142 KB</dd><dt>Fingerprint</dt><dd class="mono">3fa9c1d2</dd><dt>Saved</dt><dd>Oct 27, 2026 14:12</dd></dl>
+          <div class="preview" tabindex="0" role="region" aria-label="Resume text preview">Sam Rivera. Senior platform engineer. Eight years building internal developer platforms... (scrollable text preview)</div>
+          <div class="row"><span class="btn outline sm"><svg class="i"><use href="#dl"/></svg>Download copy</span><a class="btn sm" href="#s-details">Next: Details</a></div></div>
+      </div>
+      <div>
+        <p class="variant-label" style="margin-top:0">Could not export</p>
+        <div class="item"><div class="banner err" role="alert" style="background:transparent"><svg class="i"><use href="#octx"/></svg><span class="grow">Opportun could not save a PDF of this resume. Google Docs did not return the file (permission needed).</span></div>
+          <p class="sm">You can still apply: download or export the file yourself, then attach it on the application site.</p>
+          <div class="row"><span class="btn sm">Try again</span><span class="btn outline sm">I will attach it myself</span></div></div>
+      </div>
+      <div>
+        <p class="variant-label" style="margin-top:0">Resume is not Final</p>
+        <div class="banner" role="status"><svg class="i"><use href="#warn"/></svg><span class="grow">This resume is still In review. Mark it Final to use it here.</span><span class="btn outline sm">Open resume</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4. DETAILS ============ -->
+<section class="screen" id="s-details" aria-labelledby="h-details">
+  <h2 id="h-details">4. Apply flow, step 2: Details</h2>
+  <p class="lede">Fields come from your profile and can be edited for this application only. AI drafts are inert until you accept each one.</p>
+  <div class="frame stack" style="gap:1.25rem">
+    <ol class="steps" aria-label="Progress"><li class="done"><span class="n"><svg class="i s"><use href="#check"/></svg></span>Resume</li><li aria-current="step"><span class="n">2</span>Details</li><li class="todo"><span class="n">3</span>Review</li><li class="todo"><span class="n">4</span>Open Example ATS</li></ol>
+    <section class="card" aria-labelledby="dt-h">
+      <div><h3 id="dt-h">Your details</h3><p class="desc">Used to fill the form. Changes here apply to this application only, not to your profile.</p></div>
+      <div class="cols">
+        <div class="field"><label class="label" for="f1">Full name</label><input id="f1" class="input" value="Sam Rivera"></div>
+        <div class="field"><label class="label" for="f2">Email</label><input id="f2" class="input" value="sam.rivera@example.com"></div>
+        <div class="field"><label class="label" for="f3">Phone</label><input id="f3" class="input" value="+1 555 0100"></div>
+        <div class="field"><label class="label" for="f4">Location</label><input id="f4" class="input" value="Denver, CO"></div>
+        <div class="field diff"><label class="label" for="f5">Work authorisation</label><input id="f5" class="input" value="Authorised to work in the US, no sponsorship"><span class="xs"><svg class="i s" style="vertical-align:-1px"><use href="#pencil"/></svg> Differs from your profile (profile says: Authorised to work in the US)</span></div>
+        <div class="field"><label class="label" for="f6">Website</label><input id="f6" class="input" value="https://samrivera.example.com"></div>
+      </div>
+    </section>
+    <section class="card" aria-labelledby="qs-h">
+      <div><h3 id="qs-h">Questions on this form</h3><p class="desc">Example ATS publishes these questions. Answer the ones you want to prefill. Anything left empty you answer on the site.</p></div>
+      <div class="field"><label class="label" for="q1">Why do you want to work at Northwind Example Co.? <span class="muted" style="font-weight:400">(required, long text)</span></label>
+        <textarea id="q1" class="textarea">I want to work on internal platforms where reliability is a product feature...</textarea>
+        <div class="row xs muted"><span class="badge outline">Typed by you</span></div></div>
+      <div class="field"><label class="label" for="q2">Describe a system you migrated. <span class="muted" style="font-weight:400">(optional)</span></label>
+        <div class="item" style="background:var(--muted)"><div class="row"><span class="badge secondary">AI draft</span><span class="xs muted">Draft, not used until you accept it</span></div><p class="sm">Led the move of a deployment pipeline from scripts to a declarative platform...</p>
+          <div class="row"><span class="btn sm outline">Accept draft</span><span class="btn sm ghost">Edit first</span><span class="btn sm ghost">Discard</span></div></div></div>
+      <div class="field"><span class="label">Are you legally able to work in the US?</span><div class="row sm"><label class="check"><input type="radio" name="r" checked> Yes</label><label class="check"><input type="radio" name="r"> No</label></div></div>
+    </section>
+    <div class="row" style="justify-content:space-between"><span class="btn outline">Back</span><a class="btn" href="#s-review">Next: Review</a></div>
+    <p class="xs muted">Variant for other sites: the card reads "This site asks its own questions. You will answer them on the form before you press its Submit button."</p>
+  </div>
+</section>
+
+<!-- ============ 5. REVIEW ============ -->
+<section class="screen" id="s-review" aria-labelledby="h-review">
+  <h2 id="h-review">5. Apply flow, step 3: Review (the gate)</h2>
+  <p class="lede">One screen, nothing collapsed, reads top to bottom like the form itself. One acknowledgment, one deliberate button that names its consequence. No second "are you sure". No ticking timer.</p>
+  <div class="frame stack" style="gap:1.25rem">
+    <ol class="steps" aria-label="Progress"><li class="done"><span class="n"><svg class="i s"><use href="#check"/></svg></span>Resume</li><li class="done"><span class="n"><svg class="i s"><use href="#check"/></svg></span>Details</li><li aria-current="step"><span class="n">3</span>Review</li><li class="todo"><span class="n">4</span>Open Example ATS</li></ol>
+    <div class="stack" style="gap:.25rem"><h1 style="font-size:1.5rem;font-weight:600;letter-spacing:-.01em">Check everything before you open the form</h1><p class="sm muted">This is what Opportun will help you put on the form. Nothing leaves Opportun from this page.</p></div>
+    <div class="callout" role="note"><svg class="i" style="margin-top:.2rem"><use href="#shield"/></svg><p><strong>Opportun will not submit this.</strong> You will press the submit button on <span class="mono">jobs.example.com</span>.</p></div>
+
+    <section class="card tight" aria-labelledby="rv1"><h3 id="rv1" style="font-size:1rem">Where it goes</h3>
+      <dl class="kv"><dt>Application site</dt><dd>Example ATS</dd><dt>Company, role</dt><dd>Northwind Example Co., Senior Platform Engineer</dd><dt>Requisition</dt><dd class="mono">REQ-2041</dd><dt>Address</dt><dd class="mono">https://jobs.example.com/northwind/2041/apply</dd><dt></dt><dd class="xs muted">Opens in a new tab.</dd></dl></section>
+    <section class="card tight" aria-labelledby="rv2"><h3 id="rv2" style="font-size:1rem">Resume</h3>
+      <div class="row"><svg class="i muted"><use href="#file"/></svg><strong class="sm">Sam-Rivera-Platform-Eng.pdf</strong><span class="xs muted mono">3fa9c1d2</span></div>
+      <div class="preview" tabindex="0" role="region" aria-label="Resume text preview">Sam Rivera. Senior platform engineer. Eight years building internal developer platforms... (full text, scrollable)</div></section>
+    <section class="card tight" aria-labelledby="rv3"><h3 id="rv3" style="font-size:1rem">Your details</h3>
+      <dl class="kv"><dt>Full name</dt><dd>Sam Rivera</dd><dt>Email</dt><dd>sam.rivera@example.com</dd><dt>Phone</dt><dd>+1 555 0100</dd><dt>Location</dt><dd>Denver, CO</dd><dt>Work authorisation</dt><dd>Authorised to work in the US, no sponsorship <span class="badge outline">Edited for this application</span></dd><dt>Website</dt><dd>https://samrivera.example.com</dd></dl></section>
+    <section class="card tight" aria-labelledby="rv4"><h3 id="rv4" style="font-size:1rem">Your answers</h3>
+      <dl class="kv" style="grid-template-columns:1fr"><dt>Why do you want to work at Northwind Example Co.?</dt><dd>I want to work on internal platforms where reliability is a product feature...</dd>
+      <dt>Describe a system you migrated.</dt><dd class="muted"><span class="badge secondary">Not used</span> You did not accept the AI draft, so this is left blank.</dd>
+      <dt>Are you legally able to work in the US?</dt><dd>Yes</dd></dl>
+      <p class="xs muted">Anything else the site asks, you answer on the form.</p></section>
+
+    <section class="card" aria-labelledby="gate-h" style="border-color:var(--primary);border-width:2px">
+      <h3 id="gate-h" style="font-size:1rem">Ready to open the form?</h3>
+      <label class="check"><input type="checkbox" id="ack" aria-describedby="ack-h"><span>I have read the resume and my answers, and I will press Submit myself on jobs.example.com.</span></label>
+      <div class="row">
+        <button class="btn lg wrap" aria-disabled="true" aria-describedby="ack-h" style="font-family:inherit">Confirm review and open jobs.example.com</button>
+        <span class="btn outline lg">Back</span><span class="btn ghost lg">Cancel application</span>
+      </div>
+      <p id="ack-h" class="xs muted">Tick the box to continue. Your review stays valid until 14:42 today, and you can review again after that.</p>
+      <p class="xs muted">3 of 10 reviews used in the last 24 hours.</p>
+    </section>
+    <p class="xs muted">Mockup shows the unticked state. Ticked: the button loses aria-disabled and gains no new colour; it is not auto-focused.</p>
+  </div>
+</section>
+
+<!-- ============ 6. REVIEW STATES ============ -->
+<section class="screen" id="s-review-states" aria-labelledby="h-rs">
+  <h2 id="h-rs">6. Review gate: banners and blocking states</h2>
+  <p class="lede">All use the PostingStateBanner pattern (amber, role="status") or FormError (role="alert") from the existing app. Each says what happened, what it means, and the one thing to do.</p>
+  <div class="frame stack">
+    <div><p class="variant-label" style="margin-top:0">Duplicate warning (above the destination card)</p>
+      <div class="banner" role="status"><svg class="i"><use href="#warn"/></svg><span class="grow"><strong>You already applied to this role.</strong> You submitted REQ-2041 on Oct 20, 2026 (Confirmed). Applying twice can look like a mistake to the employer.</span></div>
+      <div class="field" style="margin-top:.75rem;max-width:34rem"><label class="label" for="rr">Why are you applying again? <span class="muted" style="font-weight:400">(required)</span></label><input id="rr" class="input" placeholder="e.g. The role was re-posted with new duties"><span class="xs muted">Saved on the submission. Not shared with anyone.</span></div></div>
+    <div><p class="variant-label">Stale review</p>
+      <div class="banner" role="status"><svg class="i"><use href="#warn"/></svg><span class="grow"><strong>Something changed while you were reviewing.</strong> Your resume choice was updated, so your earlier review no longer counts. Check the highlighted part, then confirm again.</span></div>
+      <div class="item diff" style="margin-top:.75rem"><span class="sm"><span class="badge warning"><svg class="i s"><use href="#pencil"/></svg>Changed</span> Resume: now Sam-Rivera-Platform-Eng-v2.pdf (was Sam-Rivera-Platform-Eng.pdf)</span></div></div>
+    <div><p class="variant-label">Expired review</p>
+      <div class="banner" role="status"><svg class="i"><use href="#clock"/></svg><span class="grow"><strong>Your review expired at 14:42.</strong> We ask you to review again so what you checked is what you use. Nothing was lost.</span><span class="btn sm outline">Review again</span></div></div>
+    <div><p class="variant-label">Daily limit (also blocks the Confirm button)</p>
+      <div class="banner" role="status"><svg class="i"><use href="#clock"/></svg><span class="grow"><strong>Review limit reached for today.</strong> You have reviewed 10 applications in the last 24 hours. You can confirm another after 09:14 tomorrow. Your draft is saved.</span></div></div>
+    <div><p class="variant-label">Snapshot still preparing</p>
+      <div class="banner info" role="status"><svg class="i spin"><use href="#loader"/></svg><span class="grow">Still preparing your resume file. The Confirm button turns on when it is ready.</span></div></div>
+    <div><p class="variant-label">Server error on confirm (stays on the page, focus moves to the message)</p>
+      <p role="alert" class="banner err">Could not save your review. Nothing was opened. Check your connection and try again.</p></div>
+  </div>
+</section>
+
+<!-- ============ 7. HANDOFF ============ -->
+<section class="screen" id="s-handoff" aria-labelledby="h-ho">
+  <h2 id="h-ho">7. Apply flow, step 4: Open Example ATS</h2>
+  <p class="lede">The page the user returns to. It stays useful if the tab was closed or the pop-up was blocked. Two states of the instruction card: with the extension, and without.</p>
+  <div class="frame stack" style="gap:1.25rem">
+    <ol class="steps" aria-label="Progress"><li class="done"><span class="n"><svg class="i s"><use href="#check"/></svg></span>Resume</li><li class="done"><span class="n"><svg class="i s"><use href="#check"/></svg></span>Details</li><li class="done"><span class="n"><svg class="i s"><use href="#check"/></svg></span>Review</li><li aria-current="step"><span class="n">4</span>Open Example ATS</li></ol>
+    <div class="banner ok" role="status"><svg class="i"><use href="#check"/></svg><span class="grow">The form opened in a new tab. Opportun has not submitted anything and cannot see that page.</span></div>
+    <div class="cols">
+      <section class="card" aria-labelledby="ho1">
+        <h3 id="ho1">On the application site</h3>
+        <ol class="sm" style="display:grid;gap:.75rem;padding-left:1.25rem;list-style:decimal">
+          <li><strong>Fill the form.</strong> With the Opportun extension: open it on that page and choose Prefill. Without it: type or paste your details from the Review screen.</li>
+          <li><strong>Attach your resume.</strong> Use the saved copy below.<div style="margin-top:.5rem"><span class="btn outline sm"><svg class="i"><use href="#dl"/></svg>Download Sam-Rivera-Platform-Eng.pdf</span></div></li>
+          <li><strong>Answer any other questions</strong> the site asks.</li>
+          <li><strong>Press the site's own Submit button.</strong> Only you can do this.</li>
+        </ol>
+        <p class="sm">Did the tab not open? <a href="#s-handoff">Open jobs.example.com</a> (opens in a new tab).</p>
+      </section>
+      <section class="card" aria-labelledby="ho2">
+        <h3 id="ho2">When you are done</h3>
+        <p class="desc">Opportun cannot tell whether you submitted. It only records what you tell it.</p>
+        <a class="btn lg" href="#s-attest">I submitted it</a>
+        <span class="btn outline lg">I did not submit it</span>
+        <p class="xs muted">Opened 4 minutes ago. There is no deadline here: come back whenever you finish.</p>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 8. ATTEST ============ -->
+<section class="screen" id="s-attest" aria-labelledby="h-at">
+  <h2 id="h-at">8. Attest dialog</h2>
+  <p class="lede">Native Dialog (components/ui/dialog.tsx). Primary button is the default variant, not destructive, and its label states the claim. Focus starts on the date field heading region, not on the confirm button.</p>
+  <div class="scrim"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="at-t" aria-describedby="at-d">
+    <svg class="i x"><use href="#x"/></svg>
+    <h3 id="at-t">Record that you submitted this application?</h3>
+    <p id="at-d" class="sm muted">Opportun cannot see the application site, so this is your word. Only continue if you pressed Submit and the site accepted the form.</p>
+    <div class="field"><label class="label" for="when">When did you submit?</label><input id="when" class="input" type="datetime-local" value="2026-10-27T14:31"></div>
+    <div class="stack" style="gap:.5rem"><span class="sm" style="font-weight:600">This will add:</span>
+      <ul class="sm" style="display:grid;gap:.375rem;padding-left:1.25rem;list-style:disc"><li>An Application entry on the timeline (resume and answered questions listed, no field values).</li><li>"Submitted to Example ATS / Northwind Example Co." on the resume Sam-Rivera-Platform-Eng.pdf.</li><li>A watch for a confirmation email from jobs.example.com or northwind.example.com for 3 days.</li></ul></div>
+    <label class="check"><input type="checkbox" checked> Move this opportunity to Applied</label>
+    <div class="foot"><span class="btn outline">Not yet</span><span class="btn">Yes, I submitted it</span></div>
+  </div></div>
+</section>
+
+<!-- ============ 9. DETAIL ============ -->
+<section class="screen" id="s-detail" aria-labelledby="h-det">
+  <h2 id="h-det">9. Submission detail with evidence</h2>
+  <p class="lede">Route /opportunities/:id/submissions/:sid, also linked from the timeline entry. Shown in two states: Confirmed (email evidence) and No confirmation seen.</p>
+  <div class="frame stack" style="gap:1.25rem">
+    <a class="row sm muted" style="text-decoration:none;gap:.25rem" href="#s-panel"><svg class="i"><use href="#back"/></svg>Senior Platform Engineer</a>
+    <div class="row" style="justify-content:space-between;align-items:flex-start"><div class="stack" style="gap:.25rem"><h1 style="font-size:1.5rem;font-weight:600;letter-spacing:-.01em">Application to Northwind Example Co.</h1><p class="sm muted">Example ATS, REQ-2041. You reported submitting it on Oct 27, 2026 at 14:31.</p></div>
+      <span class="badge success"><svg class="i s"><use href="#checks"/></svg><span class="sr">Submission status: </span>Confirmed</span></div>
+
+    <div class="cols" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr))">
+      <div class="stack">
+        <section class="card tight" aria-labelledby="ev-h"><h3 id="ev-h" style="font-size:1rem">Evidence</h3>
+          <p class="xs muted">What backs up your report. Opportun checks the sender and role, but cannot prove an email is genuine.</p>
+          <div class="item"><div class="row"><span class="badge outline"><svg class="i s"><use href="#mail"/></svg>Confirmation email</span><span class="xs muted" style="margin-left:auto">Oct 27, 2026 14:33</span></div>
+            <p class="sm"><strong>We received your application</strong></p><p class="xs muted">From no-reply@jobs.example.com</p>
+            <p class="sm muted">Thanks for applying to Senior Platform Engineer at Northwind Example Co. ...</p>
+            <div class="row xs"><span class="muted">Matched on:</span><span class="badge secondary">Sender domain</span><span class="badge secondary">Role title</span><span class="badge secondary">Requisition id</span></div>
+            <div class="row"><span class="btn outline sm">Open email</span><span class="btn ghost sm">Not this application (unlink)</span></div></div>
+        </section>
+        <section class="card tight" aria-labelledby="tr-h"><h3 id="tr-h" style="font-size:1rem">History</h3>
+          <ol class="hist">
+            <li><span class="badge success"><svg class="i s"><use href="#checks"/></svg>Confirmed</span><span><time>Oct 27, 14:33</time> by email match</span></li>
+            <li><span class="badge default"><svg class="i s"><use href="#check"/></svg>Submitted</span><span><time>Oct 27, 14:31</time> reported by you</span></li>
+            <li><span class="badge secondary"><svg class="i s"><use href="#ext"/></svg>Opened on ATS</span><span><time>Oct 27, 14:18</time> by you</span></li>
+            <li><span class="badge secondary"><svg class="i s"><use href="#clip"/></svg>Reviewed</span><span><time>Oct 27, 14:12</time> by you</span></li>
+          </ol></section>
+      </div>
+      <div class="stack">
+        <section class="card tight" aria-labelledby="sr-h"><h3 id="sr-h" style="font-size:1rem">Resume used</h3>
+          <div class="row"><svg class="i muted"><use href="#file"/></svg><strong class="sm">Sam-Rivera-Platform-Eng.pdf</strong><span class="xs muted mono">3fa9c1d2</span></div>
+          <div class="row"><span class="btn outline sm"><svg class="i"><use href="#dl"/></svg>Download copy</span><span class="btn ghost sm">Preview text</span></div></section>
+        <section class="card tight" aria-labelledby="fa-h"><h3 id="fa-h" style="font-size:1rem">What you filled in</h3>
+          <dl class="kv"><dt>Full name</dt><dd>Sam Rivera</dd><dt>Email</dt><dd>sam.rivera@example.com</dd><dt>Location</dt><dd>Denver, CO</dd><dt>Answered</dt><dd>2 questions</dd></dl></section>
+      </div>
+    </div>
+
+    <h3 class="variant-label">Same page, No confirmation seen (after 3 days)</h3>
+    <div class="stack">
+      <div class="row" style="justify-content:space-between"><p class="sm"><strong>Application to Northwind Example Co.</strong> <span class="muted">submitted Oct 27, 2026</span></p><span class="badge warning"><svg class="i s"><use href="#help"/></svg><span class="sr">Submission status: </span>No confirmation seen</span></div>
+      <div class="banner" role="status"><svg class="i"><use href="#help"/></svg><span class="grow"><strong>No confirmation seen yet.</strong> This is not a failure. Many employers send nothing, and some emails land in spam. Opportun looked for 3 days.</span></div>
+      <section class="card tight" aria-labelledby="oa-h"><h3 id="oa-h" style="font-size:1rem">What happened?</h3>
+        <div class="row"><span class="btn outline">I saw a confirmation</span><span class="btn outline">Record confirmation page</span><span class="btn outline">The site refused it</span><span class="btn ghost">Dismiss</span></div>
+        <p class="xs muted">"Record confirmation page" needs the Opportun extension, open on the thank-you page. "Dismiss" keeps the submission as it is and closes the next step.</p></section>
+    </div>
+
+    <h3 class="variant-label">Same page, Waiting (window open)</h3>
+    <div class="banner info" role="status"><svg class="i"><use href="#clock"/></svg><span class="grow">Waiting for a confirmation. Most employers send an email within minutes to a few days. Opportun will look until Oct 30.</span></div>
+  </div>
+</section>
+
+<!-- ============ 10. TIMELINE ============ -->
+<section class="screen" id="s-timeline" aria-labelledby="h-tl">
+  <h2 id="h-tl">10. Timeline entries</h2>
+  <p class="lede">Same li shell as TimelineList.tsx (rounded-xl border bg-card p-4, Badge + summary + time). Newest first. New content only: the ATS badge, resume line, and the confirmation tag.</p>
+  <ol class="stack" style="gap:.75rem" aria-label="Timeline">
+    <li class="item"><div class="row"><span class="badge secondary">Next step</span><span class="sm" style="font-weight:500">Check whether your application to Northwind Example Co. was received</span><span class="tl-time">Due Oct 30</span></div></li>
+    <li class="item"><div class="row"><span class="badge outline"><svg class="i s"><use href="#mail"/></svg>Email</span><span class="sm" style="font-weight:500">We received your application</span><time class="tl-time">Oct 27, 2026, 2:33 PM</time></div>
+      <p class="xs muted">From no-reply@jobs.example.com</p><p class="sm muted">Thanks for applying to Senior Platform Engineer at Northwind Example Co. ...</p>
+      <span class="tl-tag"><svg class="i s"><use href="#checks"/></svg>Confirms your application</span></li>
+    <li class="item"><div class="row"><span class="badge secondary">Application</span><span class="sm" style="font-weight:500">Applied via Example ATS: Senior Platform Engineer</span><time class="tl-time">Oct 27, 2026, 2:31 PM</time></div>
+      <div class="row xs"><span class="badge default"><svg class="i s"><use href="#check"/></svg>Submitted</span><span class="muted">Basis: you reported submitting this</span></div>
+      <p class="sm muted">Resume: Sam-Rivera-Platform-Eng.pdf (3fa9c1d2), saved copy attached. Answered: "Why do you want to work at Northwind Example Co.?", "Are you legally able to work in the US?"</p>
+      <div class="row sm"><a href="#s-detail">View submission</a><a href="#s-timeline" class="row" style="gap:.25rem">https://jobs.example.com/northwind/2041<svg class="i s"><use href="#ext"/></svg></a></div></li>
+    <li class="item"><div class="row"><span class="badge outline"><svg class="i s"><use href="#list"/></svg>Stage</span><span class="sm" style="font-weight:500">Interested to Applied</span><time class="tl-time">Oct 27, 2026, 2:31 PM</time></div><p class="sm muted">Applied via assisted submission</p></li>
+  </ol>
+  <h3 class="variant-label">Other evidence entries</h3>
+  <ol class="stack" style="gap:.75rem" aria-label="More timeline entries">
+    <li class="item"><div class="row"><span class="badge secondary">Captured page</span><span class="sm" style="font-weight:500">Confirmation page recorded (jobs.example.com)</span><time class="tl-time">Oct 27, 2026, 2:32 PM</time></div><p class="sm muted">Thank you for applying. We will review your application and be in touch... (text kept whole, collapsible)</p></li>
+    <li class="item"><div class="row"><span class="badge secondary">Note</span><span class="sm" style="font-weight:500">Marked confirmed by you (no evidence attached)</span><time class="tl-time">Oct 28, 2026, 9:02 AM</time></div></li>
+    <li class="item"><div class="row"><span class="badge secondary">Note</span><span class="sm" style="font-weight:500">The application site refused the form</span><time class="tl-time">Oct 27, 2026, 2:40 PM</time></div><p class="sm muted">Your note: "It said I had already applied with this email." The stage was not changed.</p></li>
+  </ol>
+</section>
+
+<!-- ============ 11. EXTENSION ============ -->
+<section class="screen" id="s-popup" aria-labelledby="h-px">
+  <h2 id="h-px">11. Extension popup states</h2>
+  <p class="lede">320px wide, popup.css tokens, one line of status (role="status") from render.ts. The existing "Capture this page" button stays; Assisted apply adds a second, quieter section only when an application is handed off.</p>
+  <div class="cols" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))">
+    <div><div class="popup"><h4>Opportun</h4><p class="hint">Nothing is read until you click a button.</p>
+      <button class="primary" disabled>Capture this page</button>
+      <div class="sec"><strong>Assisted apply</strong><p class="st info" role="status" style="margin:4px 0 0">No application is ready. Start Assisted apply in Opportun first.</p><p class="hint" style="margin:6px 0 0">The extension cannot start or review an application.</p></div></div>
+      <p class="pcap">A. No application ready</p></div>
+
+    <div><div class="popup"><h4>Opportun</h4><p class="hint">Ready to fill this page. It will not click anything.</p>
+      <dl><dt>Company</dt><dd>Northwind Example Co.</dd><dt>Role</dt><dd>Senior Platform Engineer</dd><dt>Site</dt><dd>jobs.example.com <span style="color:var(--x-ok)"><svg class="i"><use href="#check"/></svg> matches</span></dd><dt>Resume</dt><dd>Sam-Rivera-Platform-Eng.pdf</dd><dt>Fields</dt><dd>9 will be filled</dd></dl>
+      <button class="primary">Prefill from Opportun</button></div>
+      <p class="pcap">B. Ready on this page</p></div>
+
+    <div><div class="popup"><h4>Opportun</h4>
+      <p class="st error" role="status" style="margin-top:0">Wrong page. Nothing was filled.</p>
+      <dl><dt>Expected</dt><dd>jobs.example.com</dd><dt>This page</dt><dd>careers.example.net</dd></dl>
+      <p class="hint">Open the form from Opportun's Open Example ATS step, then try again.</p>
+      <button class="primary" disabled>Prefill from Opportun</button></div>
+      <p class="pcap">C. Wrong page</p></div>
+
+    <div><div class="popup"><h4>Opportun</h4>
+      <p class="st success" role="status" style="margin-top:0"><svg class="i"><use href="#check"/></svg> Filled 8 fields. Review the form, then press the site's Submit button.</p>
+      <p class="hint" style="margin:0 0 4px">Left for you:</p><ul><li>Phone: the field is locked on this site</li><li>Resume: attach it yourself</li></ul>
+      <div class="stack-b"><button>Download resume copy</button><button class="primary">I submitted this</button></div>
+      <p class="hint" style="margin:6px 0 0">Press this only after the site accepted your form.</p></div>
+      <p class="pcap">D. Prefilled (with skipped fields)</p></div>
+
+    <div><div class="popup"><h4>Opportun</h4>
+      <p class="st error" role="status" style="margin-top:0">This form's layout is not supported. Nothing was filled.</p>
+      <p class="hint">Use your Review screen in Opportun to copy the details across.</p>
+      <button class="primary" disabled>Prefill from Opportun</button></div>
+      <p class="pcap">E. Unsupported layout</p></div>
+
+    <div><div class="popup"><h4>Opportun</h4><p class="hint">Is this the thank-you page?</p>
+      <dl><dt>Page</dt><dd>jobs.example.com/northwind/2041/thanks</dd><dt>Text</dt><dd>1,204 characters will be saved</dd></dl>
+      <button class="primary">Record confirmation page</button></div>
+      <p class="pcap">F. Record confirmation page</p></div>
+
+    <div><div class="popup"><h4>Opportun</h4>
+      <p class="st error" role="status" style="margin-top:0">This token cannot use Assisted apply. Create one with that permission under Settings &gt; Integrations &gt; Extensions and Connectors.</p>
+      <button class="primary" disabled>Prefill from Opportun</button></div>
+      <p class="pcap">G. Token missing the Assisted apply permission</p></div>
+  </div>
+</section>
+
+<!-- ============ 12. SETTINGS ============ -->
+<section class="screen" id="s-settings" aria-labelledby="h-set">
+  <h2 id="h-set">12. Settings additions</h2>
+  <p class="lede">Card idiom of routes/settings/-devices.tsx (DevicesCard) and its create-token Dialog with scope checkboxes.</p>
+  <div class="cols">
+    <section class="card" aria-labelledby="st1">
+      <div><h3 id="st1">Applications</h3><p class="desc">Controls for Assisted apply. Opportun never submits for you; these set how it helps you keep track.</p></div>
+      <label class="check"><input type="checkbox" checked> Show Assisted apply on opportunities</label>
+      <div class="field"><label class="label" for="cap">Reviews allowed per 24 hours</label><input id="cap" class="input" type="number" value="10" style="max-width:8rem" aria-describedby="cap-h"><span id="cap-h" class="xs muted">You can lower this, up to the limit your server sets (25). A lower limit helps you stay deliberate.</span></div>
+      <div class="field"><label class="label" for="fu">Look for a confirmation for (days)</label><input id="fu" class="input" type="number" value="3" style="max-width:8rem"><span class="xs muted">After this, Opportun marks it "No confirmation seen" and adds a next step. Nothing is sent.</span></div>
+      <div class="field"><span class="label">Senders that count as a confirmation</span>
+        <ul class="sm" style="display:grid;gap:.25rem"><li class="row"><span class="mono grow">jobs.example.com</span><span class="badge outline">Built in</span></li><li class="row"><span class="mono grow">noreply.example.org</span><span class="badge secondary">Added by you</span><span class="btn ghost sm">Remove</span></li></ul>
+        <div class="row"><input class="input" style="max-width:16rem" aria-label="Sender domain to add" placeholder="example.com"><span class="btn outline sm">Add</span></div></div>
+      <div><span class="btn">Save</span></div>
+    </section>
+    <div class="scrim" style="align-self:start"><div class="dialog" role="dialog" aria-labelledby="tk" aria-modal="true">
+      <svg class="i x"><use href="#x"/></svg>
+      <h3 id="tk">Create a device token</h3>
+      <p class="sm muted">The token is shown once. It only does what the permissions below allow.</p>
+      <div class="field"><label class="label" for="tn">Name</label><input id="tn" class="input" value="Work laptop browser"></div>
+      <fieldset style="border:0;padding:0;margin:0;display:grid;gap:.5rem"><legend class="label" style="margin-bottom:.5rem">Permissions</legend>
+        <label class="check"><input type="checkbox"> Apple Mail connector <span class="muted">(mail:push)</span></label>
+        <label class="check"><input type="checkbox" checked> Browser capture <span class="muted">(capture:push)</span></label>
+        <label class="check"><input type="checkbox" checked aria-describedby="aa-h"> Assisted apply <span class="muted">(apply:assist)</span></label>
+        <p id="aa-h" class="xs muted" style="padding-left:1.5rem">Lets the extension read the one application you have already reviewed and opened, and tell Opportun you submitted it. It cannot start or review an application.</p></fieldset>
+      <div class="foot"><span class="btn outline">Cancel</span><span class="btn">Create token</span></div>
+    </div></div>
+  </div>
+</section>
+
+</main>
+</body>
+</html>
