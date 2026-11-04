@@ -34,6 +34,7 @@ export const companyKeys = {
   suggestions: ['companies', 'suggestions'] as const,
   followed: ['companies', { status: 'followed' }] as const,
   denied: ['companies', { status: 'denied' }] as const,
+  network: (showDenied: boolean) => ['companies', 'network', { showDenied }] as const,
 };
 
 const enc = encodeURIComponent;
@@ -221,6 +222,75 @@ export function useSetCareersUrl() {
     onSettled: () =>
       Promise.all([
         qc.invalidateQueries({ queryKey: companyKeys.followed }),
+        qc.invalidateQueries({ queryKey: discoveryKeys.sources }),
+      ]),
+  });
+}
+
+/** found: a board is recorded; not_found: detection found none; not_checked: never run. */
+export type BoardState = 'found' | 'not_found' | 'not_checked';
+
+/** One company the user has a current contact at (https://github.com/bgoleno/opportun/issues/216),
+ *  as GET /discovery/network-companies returns it (apps/server/src/routes/networkCompanies.ts). */
+export interface NetworkCompany {
+  company: CompanyView;
+  board: BoardState;
+  contactCount: number;
+  /** 1 acquaintance, 2 know well, 3 close; null when no contact here has a strength set. */
+  strongestStrength: number | null;
+  /** Strongest first. */
+  contacts: { id: string; name: string; strength: number | null }[];
+}
+
+/** The companies in the user's network, read from their own contacts: no AI call. */
+export function useNetworkCompanies(showDenied: boolean) {
+  return useQuery({
+    queryKey: companyKeys.network(showDenied),
+    queryFn: () =>
+      api<{ items: NetworkCompany[] }>(
+        `/discovery/network-companies${showDenied ? '?showDenied=true' : ''}`,
+      ),
+  });
+}
+
+/** Follows a company that was never suggested, as accepting a suggestion does: the server
+ *  follows it and queues its board detection. A denied company is refused (company_denied). */
+export function useFollowCompany() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (c: CompanyView) =>
+      api<CompanyView>(`/companies/${enc(c.id)}/follow`, { method: 'POST' }),
+    onSuccess: (_res, c) => toast({ title: 'Following', description: c.name, variant: 'success' }),
+    onError: (err) =>
+      toast({
+        title: 'Not followed',
+        description:
+          err instanceof ApiError && err.code === 'company_denied'
+            ? 'That company is denied. Undo the denial first.'
+            : errorMessage(err),
+        variant: 'destructive',
+      }),
+    onSettled: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: ['companies'] }),
+        qc.invalidateQueries({ queryKey: discoveryKeys.sources }),
+      ]),
+  });
+}
+
+/** Denies a company from the network list. It was never a suggestion, so this sets the status
+ *  directly, as the deny-by-name form does; Undo in Denied companies reverses it. */
+export function useDenyNetworkCompany() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (c: CompanyView) =>
+      api<CompanyView>(`/companies/${enc(c.id)}`, { method: 'PATCH', body: { status: 'denied' } }),
+    onSuccess: (_res, c) => toast({ title: 'Denied', description: c.name }),
+    onError: (err) =>
+      toast({ title: 'Not denied', description: errorMessage(err), variant: 'destructive' }),
+    onSettled: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: ['companies'] }),
         qc.invalidateQueries({ queryKey: discoveryKeys.sources }),
       ]),
   });
