@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "6c9fd226-b5ab-4326-a035-df61eb5b49ad",
+  "id": "1377b693-474c-4eb9-9ff6-1f022b40193b",
   "prevId": "69dbd69f-3a4d-4905-a0b4-56f2cad814e8",
   "tables": {
     "activities": {
@@ -3793,6 +3793,14 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'[]'"
+        },
+        "title_variants_needed": {
+          "name": "title_variants_needed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
         },
         "locations": {
           "name": "locations",

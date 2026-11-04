@@ -286,6 +286,12 @@ export const roleTargets = sqliteTable(
     keywords: json<string[]>('keywords').notNull().default([]),
     /** Equivalent job titles for the discovery pre-filter (#217); AI-made, user-editable. */
     titleVariants: json<string[]>('title_variants').notNull().default([]),
+    /**
+     * Whether this target still wants a list from the AI (#217): true until one is written, and
+     * again after a new name or title family. A list the user saves, an empty one included, sets
+     * it false, so a call already under way cannot overwrite it and the sweep leaves it alone.
+     */
+    titleVariantsNeeded: bool('title_variants_needed').notNull().default(true),
     locations: json<string[]>('locations').notNull().default([]),
     remotePref: text('remote_pref', { enum: REMOTE_PREFS }).notNull().default('any'),
     compMin: integer('comp_min'),

@@ -102,7 +102,9 @@ export const RankOutputSchema = z.object({
  * trims, de-duplicates and keeps at most 40, so a longer or shorter answer is still usable.
  */
 export const TitleVariantsOutputSchema = z.object({
-  titles: z.array(z.string().min(1).max(200)).max(80),
+  // Loose on purpose: one long or blank title must not fail the whole answer, because
+  // cleanTitleVariants (apps/server) trims, cuts and drops what it needs to before storing.
+  titles: z.array(z.string().max(2000)).max(80),
 });
 
 export const RefineOutputSchema = z.object({

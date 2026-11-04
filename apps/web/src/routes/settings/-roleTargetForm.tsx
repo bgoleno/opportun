@@ -9,7 +9,7 @@ import {
   SENIORITY_LEVELS,
   seniorityLabel,
 } from '@opportun/core';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { FormError } from '@/components/FormError';
@@ -166,14 +166,21 @@ export function RoleTargetForm(props: {
     resolver: zodResolver(RoleTargetFormSchema),
     defaultValues: toFormValues(props.initial),
   });
-  const { errors, isSubmitting } = form.formState;
+  const { errors, isSubmitting, dirtyFields } = form.formState;
+
+  // The AI's list arrives after the target is saved, so one may land while this form is open, or
+  // just after it opens from a list loaded earlier. Show it, unless the user has typed their own.
+  const initialVariants = toFormValues(props.initial).titleVariants;
+  const variantsEdited = dirtyFields.titleVariants === true;
+  useEffect(() => {
+    if (!variantsEdited) form.resetField('titleVariants', { defaultValue: initialVariants });
+  }, [form, initialVariants, variantsEdited]);
 
   const submit = form.handleSubmit(async (payload) => {
     setFormError(null);
     try {
       const { titleVariants, ...rest } = payload;
-      const edited = form.formState.dirtyFields.titleVariants === true;
-      await props.onSubmit(edited ? { ...rest, titleVariants } : rest);
+      await props.onSubmit(variantsEdited ? { ...rest, titleVariants } : rest);
     } catch (err) {
       setFormError(applyServerError(err, form.setError, FIELDS));
     }
@@ -224,7 +231,7 @@ export function RoleTargetForm(props: {
       <FormField
         label="Title variants"
         error={errors.titleVariants?.message}
-        hint="One title per line, up to 40. Discovery compares posting titles with these. Opportun asks the AI for a new list when you add a target or change its name or title family, replacing this one."
+        hint="One title per line, up to 40. Discovery compares posting titles with these. Opportun asks the AI for a list when you add a target, and for a new one when you change its name or title family. Until then a list you save or clear stays as you left it."
       >
         {(p) => <Textarea {...p} rows={5} {...form.register('titleVariants')} />}
       </FormField>

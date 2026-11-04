@@ -41,7 +41,7 @@ export const RoleTargetBaseSchema = z.object({
   /**
    * Job titles equivalent to this target's (#217): made by one AI call when the target is created
    * or its name or title family changes, and editable. The discovery pre-filter matches against
-   * them. Empty until made (or when AI is not set up): the name and title family still count.
+   * them. Empty until made, or if the user cleared it: the name and title family still count.
    */
   titleVariants: z.array(z.string()).default([]),
   locations: z.array(z.string()).default([]),

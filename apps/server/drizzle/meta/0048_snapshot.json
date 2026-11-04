@@ -1,8 +1,8 @@
 {
-  "id": "1dda0161-44dd-430e-b5e8-25bfed04597f",
-  "prevId": "6c9fd226-b5ab-4326-a035-df61eb5b49ad",
   "version": "6",
   "dialect": "sqlite",
+  "id": "fba6dabc-23c9-4640-ad29-414a1a2ecb13",
+  "prevId": "1377b693-474c-4eb9-9ff6-1f022b40193b",
   "tables": {
     "activities": {
       "name": "activities",
@@ -107,28 +107,28 @@
         "activities_user_id_users_id_fk": {
           "name": "activities_user_id_users_id_fk",
           "tableFrom": "activities",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "activities_opportunity_id_opportunities_id_fk": {
           "name": "activities_opportunity_id_opportunities_id_fk",
           "tableFrom": "activities",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "opportunity_id"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -444,8 +444,8 @@
             "user_id",
             "opportunity_id"
           ],
-          "where": "\"application_submissions\".\"status\" IN ('draft', 'reviewed', 'handed_off')",
-          "isUnique": true
+          "isUnique": true,
+          "where": "\"application_submissions\".\"status\" IN ('draft', 'reviewed', 'handed_off')"
         },
         "application_submissions_requisition_idx": {
           "name": "application_submissions_requisition_idx",
@@ -462,119 +462,119 @@
         "application_submissions_user_id_users_id_fk": {
           "name": "application_submissions_user_id_users_id_fk",
           "tableFrom": "application_submissions",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "application_submissions_opportunity_id_opportunities_id_fk": {
           "name": "application_submissions_opportunity_id_opportunities_id_fk",
           "tableFrom": "application_submissions",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "opportunity_id"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "application_submissions_resume_id_resumes_id_fk": {
           "name": "application_submissions_resume_id_resumes_id_fk",
           "tableFrom": "application_submissions",
+          "tableTo": "resumes",
           "columnsFrom": [
             "resume_id"
           ],
-          "tableTo": "resumes",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         },
         "application_submissions_resume_attachment_id_attachments_id_fk": {
           "name": "application_submissions_resume_attachment_id_attachments_id_fk",
           "tableFrom": "application_submissions",
+          "tableTo": "attachments",
           "columnsFrom": [
             "resume_attachment_id"
           ],
-          "tableTo": "attachments",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         },
         "application_submissions_confirmation_comm_id_communications_id_fk": {
           "name": "application_submissions_confirmation_comm_id_communications_id_fk",
           "tableFrom": "application_submissions",
+          "tableTo": "communications",
           "columnsFrom": [
             "confirmation_comm_id"
           ],
-          "tableTo": "communications",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         },
         "application_submissions_submitted_activity_id_activities_id_fk": {
           "name": "application_submissions_submitted_activity_id_activities_id_fk",
           "tableFrom": "application_submissions",
+          "tableTo": "activities",
           "columnsFrom": [
             "submitted_activity_id"
           ],
-          "tableTo": "activities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         },
         "application_submissions_confirmation_activity_id_activities_id_fk": {
           "name": "application_submissions_confirmation_activity_id_activities_id_fk",
           "tableFrom": "application_submissions",
+          "tableTo": "activities",
           "columnsFrom": [
             "confirmation_activity_id"
           ],
-          "tableTo": "activities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         },
         "application_submissions_followup_next_step_id_next_steps_id_fk": {
           "name": "application_submissions_followup_next_step_id_next_steps_id_fk",
           "tableFrom": "application_submissions",
+          "tableTo": "next_steps",
           "columnsFrom": [
             "followup_next_step_id"
           ],
-          "tableTo": "next_steps",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         },
         "application_submissions_reapply_of_application_submissions_id_fk": {
           "name": "application_submissions_reapply_of_application_submissions_id_fk",
           "tableFrom": "application_submissions",
+          "tableTo": "application_submissions",
           "columnsFrom": [
             "reapply_of"
           ],
-          "tableTo": "application_submissions",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -668,28 +668,28 @@
         "attachments_user_id_users_id_fk": {
           "name": "attachments_user_id_users_id_fk",
           "tableFrom": "attachments",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "attachments_opportunity_id_opportunities_id_fk": {
           "name": "attachments_opportunity_id_opportunities_id_fk",
           "tableFrom": "attachments",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "opportunity_id"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -762,15 +762,15 @@
         "audit_log_user_id_users_id_fk": {
           "name": "audit_log_user_id_users_id_fk",
           "tableFrom": "audit_log",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1009,41 +1009,41 @@
         "communications_user_id_users_id_fk": {
           "name": "communications_user_id_users_id_fk",
           "tableFrom": "communications",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "communications_opportunity_id_opportunities_id_fk": {
           "name": "communications_opportunity_id_opportunities_id_fk",
           "tableFrom": "communications",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "opportunity_id"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         },
         "communications_contact_id_network_contacts_id_fk": {
           "name": "communications_contact_id_network_contacts_id_fk",
           "tableFrom": "communications",
+          "tableTo": "network_contacts",
           "columnsFrom": [
             "contact_id"
           ],
-          "tableTo": "network_contacts",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1182,15 +1182,15 @@
         "companies_user_id_users_id_fk": {
           "name": "companies_user_id_users_id_fk",
           "tableFrom": "companies",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1284,15 +1284,15 @@
         "device_tokens_user_id_users_id_fk": {
           "name": "device_tokens_user_id_users_id_fk",
           "tableFrom": "device_tokens",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1458,54 +1458,54 @@
         "discovery_results_user_id_users_id_fk": {
           "name": "discovery_results_user_id_users_id_fk",
           "tableFrom": "discovery_results",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "discovery_results_run_id_discovery_runs_id_fk": {
           "name": "discovery_results_run_id_discovery_runs_id_fk",
           "tableFrom": "discovery_results",
+          "tableTo": "discovery_runs",
           "columnsFrom": [
             "run_id"
           ],
-          "tableTo": "discovery_runs",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "discovery_results_opportunity_id_opportunities_id_fk": {
           "name": "discovery_results_opportunity_id_opportunities_id_fk",
           "tableFrom": "discovery_results",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "opportunity_id"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         },
         "discovery_results_source_communication_id_communications_id_fk": {
           "name": "discovery_results_source_communication_id_communications_id_fk",
           "tableFrom": "discovery_results",
+          "tableTo": "communications",
           "columnsFrom": [
             "source_communication_id"
           ],
-          "tableTo": "communications",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1592,41 +1592,41 @@
         "discovery_runs_user_id_users_id_fk": {
           "name": "discovery_runs_user_id_users_id_fk",
           "tableFrom": "discovery_runs",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "discovery_runs_source_id_discovery_sources_id_fk": {
           "name": "discovery_runs_source_id_discovery_sources_id_fk",
           "tableFrom": "discovery_runs",
+          "tableTo": "discovery_sources",
           "columnsFrom": [
             "source_id"
           ],
-          "tableTo": "discovery_sources",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "discovery_runs_role_target_id_role_targets_id_fk": {
           "name": "discovery_runs_role_target_id_role_targets_id_fk",
           "tableFrom": "discovery_runs",
+          "tableTo": "role_targets",
           "columnsFrom": [
             "role_target_id"
           ],
-          "tableTo": "role_targets",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1744,41 +1744,41 @@
         "discovery_sources_user_id_users_id_fk": {
           "name": "discovery_sources_user_id_users_id_fk",
           "tableFrom": "discovery_sources",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "discovery_sources_role_target_id_role_targets_id_fk": {
           "name": "discovery_sources_role_target_id_role_targets_id_fk",
           "tableFrom": "discovery_sources",
+          "tableTo": "role_targets",
           "columnsFrom": [
             "role_target_id"
           ],
-          "tableTo": "role_targets",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         },
         "discovery_sources_company_id_companies_id_fk": {
           "name": "discovery_sources_company_id_companies_id_fk",
           "tableFrom": "discovery_sources",
+          "tableTo": "companies",
           "columnsFrom": [
             "company_id"
           ],
-          "tableTo": "companies",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -1883,54 +1883,54 @@
         "dismissal_feedback_user_id_users_id_fk": {
           "name": "dismissal_feedback_user_id_users_id_fk",
           "tableFrom": "dismissal_feedback",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "dismissal_feedback_opportunity_id_opportunities_id_fk": {
           "name": "dismissal_feedback_opportunity_id_opportunities_id_fk",
           "tableFrom": "dismissal_feedback",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "opportunity_id"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         },
         "dismissal_feedback_result_id_discovery_results_id_fk": {
           "name": "dismissal_feedback_result_id_discovery_results_id_fk",
           "tableFrom": "dismissal_feedback",
+          "tableTo": "discovery_results",
           "columnsFrom": [
             "result_id"
           ],
-          "tableTo": "discovery_results",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         },
         "dismissal_feedback_communication_id_communications_id_fk": {
           "name": "dismissal_feedback_communication_id_communications_id_fk",
           "tableFrom": "dismissal_feedback",
+          "tableTo": "communications",
           "columnsFrom": [
             "communication_id"
           ],
-          "tableTo": "communications",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2071,8 +2071,8 @@
             "kind",
             "dedupe_key"
           ],
-          "where": "\"jobs\".\"dedupe_key\" IS NOT NULL AND \"jobs\".\"status\" IN ('pending', 'running')",
-          "isUnique": true
+          "isUnique": true,
+          "where": "\"jobs\".\"dedupe_key\" IS NOT NULL AND \"jobs\".\"status\" IN ('pending', 'running')"
         },
         "jobs_user_id_idx": {
           "name": "jobs_user_id_idx",
@@ -2086,15 +2086,15 @@
         "jobs_user_id_users_id_fk": {
           "name": "jobs_user_id_users_id_fk",
           "tableFrom": "jobs",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2192,15 +2192,15 @@
         "mail_filter_rules_user_id_users_id_fk": {
           "name": "mail_filter_rules_user_id_users_id_fk",
           "tableFrom": "mail_filter_rules",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2327,28 +2327,28 @@
         "network_contacts_user_id_users_id_fk": {
           "name": "network_contacts_user_id_users_id_fk",
           "tableFrom": "network_contacts",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "network_contacts_current_company_id_companies_id_fk": {
           "name": "network_contacts_current_company_id_companies_id_fk",
           "tableFrom": "network_contacts",
+          "tableTo": "companies",
           "columnsFrom": [
             "current_company_id"
           ],
-          "tableTo": "companies",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2442,28 +2442,28 @@
         "next_steps_user_id_users_id_fk": {
           "name": "next_steps_user_id_users_id_fk",
           "tableFrom": "next_steps",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "next_steps_opportunity_id_opportunities_id_fk": {
           "name": "next_steps_opportunity_id_opportunities_id_fk",
           "tableFrom": "next_steps",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "opportunity_id"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2544,15 +2544,15 @@
         "oauth_accounts_user_id_users_id_fk": {
           "name": "oauth_accounts_user_id_users_id_fk",
           "tableFrom": "oauth_accounts",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2776,8 +2776,8 @@
             "user_id",
             "dedupe_key"
           ],
-          "where": "\"opportunities\".\"dedupe_key\" IS NOT NULL",
-          "isUnique": true
+          "isUnique": true,
+          "where": "\"opportunities\".\"dedupe_key\" IS NOT NULL"
         },
         "opportunities_user_possible_dup_idx": {
           "name": "opportunities_user_possible_dup_idx",
@@ -2792,54 +2792,54 @@
         "opportunities_user_id_users_id_fk": {
           "name": "opportunities_user_id_users_id_fk",
           "tableFrom": "opportunities",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "opportunities_company_id_companies_id_fk": {
           "name": "opportunities_company_id_companies_id_fk",
           "tableFrom": "opportunities",
+          "tableTo": "companies",
           "columnsFrom": [
             "company_id"
           ],
-          "tableTo": "companies",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "opportunities_role_target_id_role_targets_id_fk": {
           "name": "opportunities_role_target_id_role_targets_id_fk",
           "tableFrom": "opportunities",
+          "tableTo": "role_targets",
           "columnsFrom": [
             "role_target_id"
           ],
-          "tableTo": "role_targets",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         },
         "opportunities_possible_duplicate_of_opportunities_id_fk": {
           "name": "opportunities_possible_duplicate_of_opportunities_id_fk",
           "tableFrom": "opportunities",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "possible_duplicate_of"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -2942,41 +2942,41 @@
         "opportunity_dedupe_candidates_user_id_users_id_fk": {
           "name": "opportunity_dedupe_candidates_user_id_users_id_fk",
           "tableFrom": "opportunity_dedupe_candidates",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "opportunity_dedupe_candidates_opportunity_id_a_opportunities_id_fk": {
           "name": "opportunity_dedupe_candidates_opportunity_id_a_opportunities_id_fk",
           "tableFrom": "opportunity_dedupe_candidates",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "opportunity_id_a"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "opportunity_dedupe_candidates_opportunity_id_b_opportunities_id_fk": {
           "name": "opportunity_dedupe_candidates_opportunity_id_b_opportunities_id_fk",
           "tableFrom": "opportunity_dedupe_candidates",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "opportunity_id_b"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3063,15 +3063,15 @@
         "profiles_user_id_users_id_fk": {
           "name": "profiles_user_id_users_id_fk",
           "tableFrom": "profiles",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3191,36 +3191,36 @@
             "task_key",
             "version"
           ],
-          "where": "\"prompts\".\"user_id\" IS NULL",
-          "isUnique": true
+          "isUnique": true,
+          "where": "\"prompts\".\"user_id\" IS NULL"
         }
       },
       "foreignKeys": {
         "prompts_user_id_users_id_fk": {
           "name": "prompts_user_id_users_id_fk",
           "tableFrom": "prompts",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "prompts_parent_id_prompts_id_fk": {
           "name": "prompts_parent_id_prompts_id_fk",
           "tableFrom": "prompts",
+          "tableTo": "prompts",
           "columnsFrom": [
             "parent_id"
           ],
-          "tableTo": "prompts",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3279,41 +3279,41 @@
         "resume_match_reports_user_id_users_id_fk": {
           "name": "resume_match_reports_user_id_users_id_fk",
           "tableFrom": "resume_match_reports",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "resume_match_reports_resume_id_resumes_id_fk": {
           "name": "resume_match_reports_resume_id_resumes_id_fk",
           "tableFrom": "resume_match_reports",
+          "tableTo": "resumes",
           "columnsFrom": [
             "resume_id"
           ],
-          "tableTo": "resumes",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "resume_match_reports_opportunity_id_opportunities_id_fk": {
           "name": "resume_match_reports_opportunity_id_opportunities_id_fk",
           "tableFrom": "resume_match_reports",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "opportunity_id"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -3403,15 +3403,15 @@
         "resume_rules_user_id_users_id_fk": {
           "name": "resume_rules_user_id_users_id_fk",
           "tableFrom": "resume_rules",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3507,54 +3507,54 @@
         "resume_sends_user_id_users_id_fk": {
           "name": "resume_sends_user_id_users_id_fk",
           "tableFrom": "resume_sends",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "resume_sends_opportunity_id_opportunities_id_fk": {
           "name": "resume_sends_opportunity_id_opportunities_id_fk",
           "tableFrom": "resume_sends",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "opportunity_id"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "resume_sends_resume_id_resumes_id_fk": {
           "name": "resume_sends_resume_id_resumes_id_fk",
           "tableFrom": "resume_sends",
+          "tableTo": "resumes",
           "columnsFrom": [
             "resume_id"
           ],
-          "tableTo": "resumes",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "resume_sends_submission_id_application_submissions_id_fk": {
           "name": "resume_sends_submission_id_application_submissions_id_fk",
           "tableFrom": "resume_sends",
+          "tableTo": "application_submissions",
           "columnsFrom": [
             "submission_id"
           ],
-          "tableTo": "application_submissions",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3684,41 +3684,41 @@
         "resumes_user_id_users_id_fk": {
           "name": "resumes_user_id_users_id_fk",
           "tableFrom": "resumes",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "resumes_opportunity_id_opportunities_id_fk": {
           "name": "resumes_opportunity_id_opportunities_id_fk",
           "tableFrom": "resumes",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "opportunity_id"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         },
         "resumes_parent_resume_id_resumes_id_fk": {
           "name": "resumes_parent_resume_id_resumes_id_fk",
           "tableFrom": "resumes",
+          "tableTo": "resumes",
           "columnsFrom": [
             "parent_resume_id"
           ],
-          "tableTo": "resumes",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -3793,6 +3793,14 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'[]'"
+        },
+        "title_variants_needed": {
+          "name": "title_variants_needed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
         },
         "locations": {
           "name": "locations",
@@ -3874,28 +3882,28 @@
         "role_targets_user_id_users_id_fk": {
           "name": "role_targets_user_id_users_id_fk",
           "tableFrom": "role_targets",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "role_targets_discovery_prompt_id_prompts_id_fk": {
           "name": "role_targets_discovery_prompt_id_prompts_id_fk",
           "tableFrom": "role_targets",
+          "tableTo": "prompts",
           "columnsFrom": [
             "discovery_prompt_id"
           ],
-          "tableTo": "prompts",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -4003,15 +4011,15 @@
         "secrets_user_id_users_id_fk": {
           "name": "secrets_user_id_users_id_fk",
           "tableFrom": "secrets",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -4107,15 +4115,15 @@
         "sessions_user_id_users_id_fk": {
           "name": "sessions_user_id_users_id_fk",
           "tableFrom": "sessions",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -4167,15 +4175,15 @@
         "settings_user_id_users_id_fk": {
           "name": "settings_user_id_users_id_fk",
           "tableFrom": "settings",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -4256,28 +4264,28 @@
         "stage_history_user_id_users_id_fk": {
           "name": "stage_history_user_id_users_id_fk",
           "tableFrom": "stage_history",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "stage_history_opportunity_id_opportunities_id_fk": {
           "name": "stage_history_opportunity_id_opportunities_id_fk",
           "tableFrom": "stage_history",
+          "tableTo": "opportunities",
           "columnsFrom": [
             "opportunity_id"
           ],
-          "tableTo": "opportunities",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -4328,15 +4336,15 @@
         "sync_state_user_id_users_id_fk": {
           "name": "sync_state_user_id_users_id_fk",
           "tableFrom": "sync_state",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -4433,28 +4441,28 @@
         "tailoring_sessions_user_id_users_id_fk": {
           "name": "tailoring_sessions_user_id_users_id_fk",
           "tableFrom": "tailoring_sessions",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "tailoring_sessions_resume_id_resumes_id_fk": {
           "name": "tailoring_sessions_resume_id_resumes_id_fk",
           "tableFrom": "tailoring_sessions",
+          "tableTo": "resumes",
           "columnsFrom": [
             "resume_id"
           ],
-          "tableTo": "resumes",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -4597,28 +4605,28 @@
         "task_runs_user_id_users_id_fk": {
           "name": "task_runs_user_id_users_id_fk",
           "tableFrom": "task_runs",
+          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
-          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "cascade"
+          "onDelete": "cascade",
+          "onUpdate": "no action"
         },
         "task_runs_prompt_id_prompts_id_fk": {
           "name": "task_runs_prompt_id_prompts_id_fk",
           "tableFrom": "task_runs",
+          "tableTo": "prompts",
           "columnsFrom": [
             "prompt_id"
           ],
-          "tableTo": "prompts",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "set null"
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -4733,9 +4741,9 @@
   "views": {},
   "enums": {},
   "_meta": {
-    "columns": {},
     "schemas": {},
-    "tables": {}
+    "tables": {},
+    "columns": {}
   },
   "internal": {
     "indexes": {}

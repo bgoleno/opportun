@@ -26,7 +26,7 @@ import {
 } from '../lib/deniedCompanies';
 import { HttpError } from '../lib/errors';
 import { sanitizePosting } from '../lib/postingSanitize';
-import { prefilter, type PrefilterVerdict } from '../lib/prefilter';
+import { isBoardSource, prefilter, type PrefilterVerdict } from '../lib/prefilter';
 import type { Exec, UserCtx } from '../repos/base';
 import {
   createRun,
@@ -179,9 +179,6 @@ async function suppressForDenylist(
 
 /** The pre-filter's verdict on one posting (#217), against the targets its source ranks for. */
 type Judge = (posting: NormalizedPosting) => PrefilterVerdict | null;
-
-/** An ATS board: the sources the pre-filter judges (#217). Mail, MCP and captures are not. */
-const isBoardSource = (kind: string): boolean => kind.startsWith('ats_');
 
 /**
  * The verdict for a board's postings: against the source's own role target when it has one, as

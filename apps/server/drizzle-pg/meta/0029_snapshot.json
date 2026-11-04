@@ -1,5 +1,5 @@
 {
-  "id": "57760eae-6be6-426f-b197-ac319b549fe9",
+  "id": "101dc9f6-c734-4b65-ac67-a87fbbeb9230",
   "prevId": "0b529b23-f549-49fc-9fd4-e99b7c48707b",
   "version": "7",
   "dialect": "postgresql",
@@ -4165,6 +4165,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'[]'::jsonb"
+        },
+        "title_variants_needed": {
+          "name": "title_variants_needed",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
         },
         "locations": {
           "name": "locations",

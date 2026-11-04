@@ -131,6 +131,64 @@ describe('the location rule', () => {
       outcome: 'filtered',
       rule: 'location',
     });
+    // A place the target names still counts, even beside the word remote.
+    expect(prefilter(posting({ location: 'Remote or Austin' }), [onsite])?.outcome).toBe('pass');
+  });
+
+  // tl's review of https://github.com/bgoleno/opportun/pull/226: a rule filters only when the
+  // posting names a place that is clearly not one of the target's.
+  it.each([
+    ['United States', 'Austin, TX'],
+    ['US', 'New York, NY'],
+    ['USA', 'Berlin, Germany'],
+    ['California', 'San Francisco, CA'],
+    ['Texas', 'Austin, TX'],
+    ['TX', 'Austin, TX'],
+    ['Europe', 'Berlin, Germany'],
+    ['Bay Area', 'Oakland, CA'],
+    ['San Francisco Bay Area', 'San Francisco, CA'],
+    ['New York City', 'New York, NY'],
+    ['NYC', 'New York, NY'],
+    ['SF', 'San Francisco, CA'],
+    ['Greater Seattle Area', 'Seattle, WA'],
+    ['Research Triangle Park', 'Research Triangle, NC'],
+    ['Austin', 'Multiple locations'],
+    ['Austin', 'United States'],
+    ['Austin', 'USA'],
+    ['Austin', 'Hybrid'],
+    ['Austin', 'Various'],
+    ['Austin', 'Texas, United States'],
+    ['Remote', 'Berlin, Germany'],
+    ['Austin', 'Austin, TX; Boston, MA'],
+    ['Austin', 'Boston, MA or Austin, TX'],
+  ])('keeps it: target %s, posting %s', (place, location) => {
+    expect(prefilter(posting({ location }), [target({ locations: [place] })])?.outcome).toBe(
+      'pass',
+    );
+  });
+
+  it.each([
+    ['Austin', 'Boston, MA'],
+    ['Austin, TX', 'Berlin, Germany'],
+    ['San Francisco', 'San Diego, CA'],
+    ['New York City', 'Boston, MA'],
+    ['New York', 'Newark, NJ'],
+    ['NYC', 'Austin, TX'],
+    ['Los Angeles', 'Las Vegas, NV'],
+    ['Austin', 'New York, NY'],
+    ['Austin', 'Hybrid - Boston'],
+    // A known miss, accepted: the filter has no idea which towns surround a city.
+    ['Seattle', 'Bellevue, WA'],
+  ])('filters it: target %s, posting %s', (place, location) => {
+    expect(prefilter(posting({ location }), [target({ locations: [place] })])).toMatchObject({
+      outcome: 'filtered',
+      rule: 'location',
+    });
+  });
+
+  it('one broad place among a target’s places means it filters on no location', () => {
+    const both = target({ locations: ['Austin', 'Germany'] });
+    expect(prefilter(posting({ location: 'Boston, MA' }), [both])?.outcome).toBe('pass');
   });
 });
 

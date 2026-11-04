@@ -175,12 +175,15 @@ export async function profileRoutes(app: FastifyInstance): Promise<void> {
     { schema: { body: RoleTargetCreate, response: { 201: RoleTargetBaseSchema } } },
     async (req, reply) => {
       const ctx = app.requireUser(req);
+      const titleVariants = cleanTitleVariants(req.body.titleVariants);
+      // Its title variants come from one AI call (#217), unless the user wrote their own.
+      const needed = titleVariants.length === 0;
       const created = await createRoleTarget(db, ctx, {
         ...req.body,
-        titleVariants: cleanTitleVariants(req.body.titleVariants),
+        titleVariants,
+        titleVariantsNeeded: needed,
       });
-      // Its title variants come from one AI call (#217), unless the user wrote their own.
-      if (created.titleVariants.length === 0) await queueTitleVariants(db, ctx, created.id);
+      if (needed) await queueTitleVariants(db, ctx, created);
       return reply.code(201).send(created);
     },
   );
@@ -201,17 +204,20 @@ export async function profileRoutes(app: FastifyInstance): Promise<void> {
       const current = await getRoleTarget(db, ctx, req.params.id);
       MergedRanges.parse({ ...current, ...req.body });
       const { titleVariants, ...rest } = req.body;
-      const updated = await updateRoleTarget(db, ctx, req.params.id, {
-        ...rest,
-        ...(titleVariants === undefined
-          ? {}
-          : { titleVariants: cleanTitleVariants(titleVariants) }),
-      });
-      // A new name or title family means new variants (#217), unless this edit wrote them.
+      // A new name or title family means new variants (#217), unless this edit wrote them. A list
+      // the user saves, an empty one included, is theirs: no call under way may overwrite it.
       const renamed =
         (rest.name !== undefined && rest.name !== current.name) ||
         (rest.titleFamily !== undefined && rest.titleFamily !== current.titleFamily);
-      if (renamed && titleVariants === undefined) await queueTitleVariants(db, ctx, updated.id);
+      const updated = await updateRoleTarget(db, ctx, req.params.id, {
+        ...rest,
+        ...(titleVariants !== undefined
+          ? { titleVariants: cleanTitleVariants(titleVariants), titleVariantsNeeded: false }
+          : renamed
+            ? { titleVariantsNeeded: true }
+            : {}),
+      });
+      if (renamed && titleVariants === undefined) await queueTitleVariants(db, ctx, updated);
       return updated;
     },
   );
