@@ -1,6 +1,11 @@
-// Discovery companies (FR-D8, FR-D9): the suggestion queue, the followed companies with their
-// job board detection state, and the companies denied directly or from a suggestion (#199).
+// Discovery companies (FR-D8, FR-D9): the companies in the user's network
+// (https://github.com/bgoleno/opportun/issues/216), the suggestion queue, the followed companies
+// with their job board detection state, and the companies denied directly or from a suggestion
+// (#199).
+import { useId, useState } from 'react';
 import { FormError } from '@/components/FormError';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 import { errorMessage } from '@/lib/api';
 import {
   useAcceptCompany,
@@ -8,8 +13,11 @@ import {
   useDeniedCompanies,
   useDenyCompany,
   useDenyCompanyByName,
+  useDenyNetworkCompany,
   useDetectAts,
+  useFollowCompany,
   useFollowedCompanies,
+  useNetworkCompanies,
   useSetCareersUrl,
   useUndenyCompany,
 } from './companiesApi';
@@ -19,6 +27,7 @@ import {
   FollowedCompanyRow,
   SuggestionCard,
 } from './CompanyCard';
+import { NetworkCompanyRow } from './NetworkCompanyRow';
 
 export function CompaniesManager() {
   const suggestions = useCompanySuggestions();
@@ -30,6 +39,11 @@ export function CompaniesManager() {
   const undeny = useUndenyCompany();
   const detect = useDetectAts();
   const careers = useSetCareersUrl();
+  const [showDenied, setShowDenied] = useState(false);
+  const network = useNetworkCompanies(showDenied);
+  const follow = useFollowCompany();
+  const denyNetwork = useDenyNetworkCompany();
+  const showDeniedId = useId();
 
   return (
     <div className="grid min-w-0 gap-8">
@@ -41,6 +55,51 @@ export function CompaniesManager() {
           busy={denyByName.isPending}
           onDeny={(name) => denyByName.mutateAsync(name)}
         />
+      </section>
+
+      <section className="grid gap-3" aria-labelledby="network-companies-heading">
+        <h2 id="network-companies-heading" className="text-lg font-semibold">
+          In your network
+        </h2>
+        <p className="max-w-prose text-sm text-muted-foreground">
+          Companies where someone in your contacts works now, read from your own contacts.
+        </p>
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id={showDeniedId}
+            checked={showDenied}
+            onCheckedChange={(v) => setShowDenied(v === true)}
+          />
+          <Label htmlFor={showDeniedId} className="text-sm font-normal">
+            Show denied
+          </Label>
+        </div>
+        {network.error ? <FormError message={errorMessage(network.error)} /> : null}
+        {network.isPending ? <p className="text-sm text-muted-foreground">Loading...</p> : null}
+        {network.data !== undefined && network.data.items.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            None yet. Add your contacts' current companies under Network to see them here.
+          </p>
+        ) : null}
+        <ul className="grid gap-3" aria-label="Companies in your network">
+          {(network.data?.items ?? []).map((item) => {
+            const c = item.company;
+            const busy =
+              (follow.isPending && follow.variables?.id === c.id) ||
+              (denyNetwork.isPending && denyNetwork.variables?.id === c.id) ||
+              (undeny.isPending && undeny.variables?.id === c.id);
+            return (
+              <NetworkCompanyRow
+                key={c.id}
+                item={item}
+                busy={busy}
+                onFollow={() => follow.mutate(c)}
+                onDeny={() => denyNetwork.mutate(c)}
+                onUndeny={() => undeny.mutate(c)}
+              />
+            );
+          })}
+        </ul>
       </section>
 
       <section className="grid gap-3" aria-labelledby="company-suggestions-heading">
