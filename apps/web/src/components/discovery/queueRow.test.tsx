@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formatDate } from '@/lib/opportunities';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { fetchAllPendingResultIds, type DiscoveryResult } from './api';
@@ -27,6 +27,7 @@ function result(over: Partial<DiscoveryResult> & { id: string }): DiscoveryResul
     aiScore: 80,
     aiRationale: 'Strong match on platform work.',
     rankSkipReason: null,
+    rankDeferredAt: null,
     resolution: 'full',
     resolvedSourceRef: null,
     disposition: 'pending',
@@ -200,7 +201,6 @@ describe('QueueRow: why a result was not ranked (#210)', () => {
     );
 
   for (const [reason, words] of [
-    ['budget_exceeded', "Not ranked: today's AI budget was spent"],
     ['no_key', 'Not ranked: AI is not set up (Settings > AI)'],
     ['provider_error', 'Not ranked: the AI provider was unavailable'],
     ['invalid_output', "Not ranked: the AI's answer could not be used"],
@@ -212,6 +212,47 @@ describe('QueueRow: why a result was not ranked (#210)', () => {
     });
   }
 
+  // The budget (#214): a waiting posting says so in words that stay true across a day boundary.
+  describe('waiting for the discovery budget', () => {
+    const DAY = 86_400_000;
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('an unscored posting says "Waiting for budget", today and after the day has ended', () => {
+      const deferredAt = Math.floor(NOW / DAY) * DAY + 3_600_000;
+      vi.useFakeTimers({ now: deferredAt, toFake: ['Date'] });
+      const first = row({ aiScore: null, rankDeferredAt: deferredAt });
+      expect(screen.getByText('Waiting for budget')).toBeInTheDocument();
+      expect(first.container).not.toHaveTextContent(/today|Not ranked/i);
+      first.unmount();
+      vi.setSystemTime(deferredAt + DAY);
+      const next = row({ aiScore: null, rankDeferredAt: deferredAt });
+      expect(screen.getByText('Waiting for budget')).toBeInTheDocument();
+      expect(next.container).not.toHaveTextContent(/today|Not ranked/i);
+    });
+
+    it('a scored result waiting for a new ranking says the score may change, never "Not ranked"', () => {
+      const { container } = row({ aiScore: 70, rankDeferredAt: NOW });
+      expect(
+        screen.getByText('Score may change: a new ranking is waiting for budget'),
+      ).toBeInTheDocument();
+      expect(container).not.toHaveTextContent('Not ranked');
+      expect(screen.queryByText('Waiting for budget')).toBeNull();
+    });
+
+    it('a stored budget reason from before the wait existed still never says "today\'s"', () => {
+      const { container } = row({ aiScore: null, rankSkipReason: 'budget_exceeded' });
+      expect(screen.getByText('Waiting for budget')).toBeInTheDocument();
+      expect(container).not.toHaveTextContent(/today/i);
+    });
+  });
+
+  it('a scored result with a stored reason never says "Not ranked"', () => {
+    const { container } = row({ aiScore: 70, rankSkipReason: 'provider_error' });
+    expect(container).not.toHaveTextContent('Not ranked');
+  });
+
   it('a result never sent for ranking shows nothing new', () => {
     const { container } = row({ rankSkipReason: null });
     expect(container).not.toHaveTextContent('Not ranked');
@@ -219,8 +260,18 @@ describe('QueueRow: why a result was not ranked (#210)', () => {
 
   it('a location group says why for its primary member', () => {
     const [group] = groupResults([
-      result({ id: 'g1', dedupeKey: 'acme|role|a', rankSkipReason: 'budget_exceeded' }),
-      result({ id: 'g2', dedupeKey: 'acme|role|b', rankSkipReason: 'budget_exceeded' }),
+      result({
+        id: 'g1',
+        dedupeKey: 'acme|role|a',
+        rankSkipReason: 'provider_error',
+        aiScore: null,
+      }),
+      result({
+        id: 'g2',
+        dedupeKey: 'acme|role|b',
+        rankSkipReason: 'provider_error',
+        aiScore: null,
+      }),
     ]);
     render(
       <ul>
@@ -235,7 +286,7 @@ describe('QueueRow: why a result was not ranked (#210)', () => {
         />
       </ul>,
     );
-    expect(screen.getAllByText("Not ranked: today's AI budget was spent")).toHaveLength(1);
+    expect(screen.getAllByText('Not ranked: the AI provider was unavailable')).toHaveLength(1);
   });
 });
 
