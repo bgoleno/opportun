@@ -7,7 +7,7 @@ import { runStructured } from '@opportun/ai';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { companies, discoverySources, jobs, taskRuns } from '../src/db/schema';
+import { companies, discoverySources, jobs, networkContacts, taskRuns } from '../src/db/schema';
 import { ATS_DETECT_KIND } from '../src/jobs/atsDetect';
 import type { safeFetch } from '../src/lib/safeFetch';
 import type { UserCtx } from '../src/repos/base';
@@ -77,6 +77,15 @@ async function setCompany(
   await app.db.update(companies).set(values).where(eq(companies.id, id)).run();
 }
 
+/** Writes a contact's company straight to the table: no route can link across users. */
+async function pointContactAt(app: FastifyInstance, contactId: string, currentCompanyId: string) {
+  await app.db
+    .update(networkContacts)
+    .set({ currentCompanyId })
+    .where(eq(networkContacts.id, contactId))
+    .run();
+}
+
 describe('#216 criterion 1: every company with a current contact, once', () => {
   it('with its contact count and the strongest strength, most contacts first', async () => {
     const { app, a, b } = await boot();
@@ -115,6 +124,47 @@ describe('#216 criterion 1: every company with a current contact, once', () => {
     const items = await list(a);
     expect(items.map((i) => i.company.name)).toEqual(['Contoso']);
     expect(items[0]!.strongestStrength).toBeNull();
+  });
+});
+
+describe('the list order and each user filter on its own (#211 items 4 and 5)', () => {
+  it('most contacts first, then the strongest, then the name', async () => {
+    const { app, a } = await boot();
+    // Four, not three: only a pair tied on both count and strength can show the name's sort.
+    // Beta is created before Alpha, so without the name's sort it would come first.
+    await contact(app, a, 'Riley Sample', 'Zeta Holdings', 1);
+    await contact(app, a, 'Morgan Example', 'Zeta Holdings', 1);
+    await contact(app, a, 'Casey Placeholder', 'Middle Works', 3);
+    await contact(app, a, 'Jordan Test', 'Beta Labs', 2);
+    await contact(app, a, 'Avery Demo', 'Alpha Labs', 2);
+    expect((await list(a)).map((i) => i.company.name)).toEqual([
+      'Zeta Holdings',
+      'Middle Works',
+      'Alpha Labs',
+      'Beta Labs',
+    ]);
+  });
+
+  it("the contact filter: another user's contact at this user's company is not counted", async () => {
+    const { app, a, b } = await boot();
+    await contact(app, a, 'Riley Sample', 'Contoso', 1);
+    const id = await companyId(app, a, 'Contoso');
+    const stray = await contact(app, b, 'Quinn Mock', null, 3);
+    await pointContactAt(app, stray.id, id);
+    const items = await list(a);
+    expect(items.map((i) => [i.company.name, i.contactCount, i.strongestStrength])).toEqual([
+      ['Contoso', 1, 1],
+    ]);
+    expect(items[0]!.contacts.map((p) => p.name)).toEqual(['Riley Sample']);
+  });
+
+  it("the company filter: a contact pointing at another user's company does not list it", async () => {
+    const { app, a, b } = await boot();
+    await contact(app, a, 'Riley Sample', 'Contoso', 1);
+    await contact(app, b, 'Quinn Mock', 'Fabrikam', 3);
+    const stray = await contact(app, a, 'Morgan Example', null, 2);
+    await pointContactAt(app, stray.id, await companyId(app, b, 'Fabrikam'));
+    expect((await list(a)).map((i) => i.company.name)).toEqual(['Contoso']);
   });
 });
 
@@ -177,6 +227,22 @@ describe('#216 criterion 3: Follow does what accepting a suggestion does', () =>
       .where(and(eq(jobs.kind, ATS_DETECT_KIND), eq(jobs.userId, a.userId)))
       .all();
     expect(queued).toHaveLength(1);
+  });
+
+  it('a company whose last detection found no board: detection is queued again (#211 item 2)', async () => {
+    const { app, a } = await boot();
+    await contact(app, a, 'Riley Sample', 'Contoso', 3);
+    const id = await companyId(app, a, 'Contoso');
+    await setCompany(app, id, { atsKind: 'none' });
+    const res = await follow(a, id);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json<{ status: string }>().status).toBe('followed');
+    const queued = await app.db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.kind, ATS_DETECT_KIND), eq(jobs.userId, a.userId)))
+      .all();
+    expect(queued.map((j) => j.payload)).toEqual([{ companyId: id }]);
   });
 
   it('with a board already found, following enables its source, as accept does', async () => {
