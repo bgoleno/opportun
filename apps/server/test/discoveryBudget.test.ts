@@ -392,6 +392,165 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
     });
   });
 
+  describe('the no-key reason ends when a key works (qa and tl on #230)', () => {
+    const addKey = async (c: TestClient) => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no network in this test')));
+      const res = await c.request({
+        method: 'POST',
+        url: '/api/v1/secrets',
+        payload: { kind: 'ai_api_key', label: 'openai', value: 'made-up-key-for-a-test' },
+      });
+      expect(res.statusCode, res.body).toBe(201);
+    };
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+    const noSweepDue = (app: FastifyInstance) =>
+      app.db
+        .delete(jobs)
+        .where(and(eq(jobs.kind, RANK_WAITING_SWEEP_KIND), eq(jobs.status, 'pending')))
+        .run();
+    /** Postings waiting, then a drain finds no key: every card says so. */
+    async function markedNoKey(app: FastifyInstance, c: TestClient, count: number) {
+      const today = await waitingPostings(app, c, count);
+      vi.setSystemTime(today + DAY + 60_000);
+      vi.mocked(runStructured).mockRejectedValue(new AiUnavailableError('no_key'));
+      await drainWaitingResults(app.db, ctxOf(c));
+      vi.mocked(runStructured).mockReset();
+      expect((await results(app, c)).every((r) => r.rankSkipReason === 'no_key')).toBe(true);
+      return today;
+    }
+
+    it('qa’s sequence: the key added, then new postings every day: older ones first', async () => {
+      const { app, a } = await boot();
+      // A budget of 2 calls, smaller than the 3 new postings' spend each day.
+      const today = await markedNoKey(app, a, 4);
+      const { titles } = providerCharges(app, a);
+      await addKey(a);
+      expect((await results(app, a)).map((r) => r.rankSkipReason)).toEqual([
+        null,
+        null,
+        null,
+        null,
+      ]);
+      await noSweepDue(app);
+      await discover(app, a, 3, 100);
+      expect(titles).toEqual(['Engineer 004', 'Engineer 003']);
+      vi.setSystemTime(today + 2 * DAY + 10_000);
+      await noSweepDue(app);
+      await discover(app, a, 3, 200);
+      expect(titles).toEqual(['Engineer 004', 'Engineer 003', 'Engineer 002', 'Engineer 001']);
+      vi.setSystemTime(today + 3 * DAY + 10_000);
+      await noSweepDue(app);
+      await discover(app, a, 3, 300);
+      expect(titles.slice(4).every((t) => /Engineer 10\d/.test(t))).toBe(true);
+      const after = await byTitle(app, a);
+      expect(
+        ['Engineer 004', 'Engineer 003', 'Engineer 002', 'Engineer 001'].map(
+          (t) => after.get(t)!.aiScore,
+        ),
+      ).toEqual([60, 60, 60, 60]);
+      expect([...after.values()].some((r) => r.rankSkipReason === 'no_key')).toBe(false);
+    });
+
+    it('adding a key queues a drain when there is room, and it ranks what waits', async () => {
+      const { app, a } = await boot();
+      await markedNoKey(app, a, 2);
+      await noSweepDue(app);
+      await addKey(a);
+      const queued = await app.db.select().from(jobs).where(eq(jobs.kind, RANK_WAITING_KIND)).all();
+      expect(queued.filter((j) => j.status === 'pending')).toHaveLength(1);
+      const { titles } = providerCharges(app, a);
+      await app.jobs.drain();
+      expect(titles).toEqual(['Engineer 002', 'Engineer 001']);
+    });
+
+    it('with no room, adding a key still corrects the cards, and queues no drain', async () => {
+      const { app, a } = await boot();
+      await markedNoKey(app, a, 2);
+      await noSweepDue(app);
+      await spend(app, a, 1);
+      await app.db.delete(jobs).where(eq(jobs.kind, RANK_WAITING_KIND)).run();
+      await addKey(a);
+      expect((await results(app, a)).map((r) => r.rankSkipReason)).toEqual([null, null]);
+      expect(
+        await app.db.select().from(jobs).where(eq(jobs.kind, RANK_WAITING_KIND)).all(),
+      ).toEqual([]);
+    });
+
+    it('adding a key leaves another user’s cards alone, and another kind of secret does nothing', async () => {
+      const { app, a, b } = await boot();
+      await markedNoKey(app, a, 1);
+      await addKey(b);
+      expect((await results(app, a))[0]!.rankSkipReason).toBe('no_key');
+      const other = await a.request({
+        method: 'POST',
+        url: '/api/v1/secrets',
+        payload: { kind: 'oauth_token', label: 'not-a-key', value: 'made-up-value-for-a-test' },
+      });
+      expect(other.statusCode, other.body).toBe(201);
+      expect((await results(app, a))[0]!.rankSkipReason).toBe('no_key');
+    });
+
+    it('a key that comes back another way: the first ranking on any path corrects the cards', async () => {
+      const { app, a } = await boot();
+      await markedNoKey(app, a, 3);
+      await noSweepDue(app);
+      const { titles } = providerCharges(app, a);
+      // A rank job, not a drain: no key was added, so nothing has cleared the reason yet.
+      await discover(app, a, 1, 100);
+      expect(titles).toEqual(['Engineer 100']);
+      expect((await byTitle(app, a)).get('Engineer 003')).toMatchObject({
+        rankSkipReason: null,
+        rankDeferredAt: expect.any(Number),
+      });
+      // So the backlog holds the next new posting back again.
+      await noSweepDue(app);
+      await discover(app, a, 1, 200);
+      expect(titles.slice(0, 2)).toEqual(['Engineer 100', 'Engineer 003']);
+    });
+
+    it('while the key is still missing, a new posting says so and queues no drain', async () => {
+      const { app, a } = await boot();
+      await markedNoKey(app, a, 2);
+      await noSweepDue(app);
+      vi.mocked(runStructured).mockRejectedValue(new AiUnavailableError('no_key'));
+      await discover(app, a, 1, 100);
+      expect((await byTitle(app, a)).get('Engineer 100')).toMatchObject({
+        rankSkipReason: 'no_key',
+        rankDeferredAt: null,
+      });
+      expect(vi.mocked(runStructured)).toHaveBeenCalledOnce();
+      expect(
+        await app.db.select().from(jobs).where(eq(jobs.kind, RANK_WAITING_KIND)).all(),
+      ).toEqual([]);
+    });
+  });
+
+  it('a posting an outage touched gets its place back the next day: new postings cannot starve it', async () => {
+    const { app, a } = await boot();
+    const today = await waitingPostings(app, a, 1);
+    vi.setSystemTime(today + DAY + 60_000);
+    providerFailsFor(app, a, ['Engineer 001']);
+    await drainWaitingResults(app.db, ctxOf(a));
+    expect((await results(app, a))[0]!.rankSkipReason).toBe('provider_error');
+    // The provider is back. A source just after the next UTC day starts, before any sweep, with a
+    // budget of 2 calls smaller than its 3 new postings' spend.
+    vi.setSystemTime(today + 2 * DAY + 10_000);
+    await app.db
+      .delete(jobs)
+      .where(and(eq(jobs.kind, RANK_WAITING_SWEEP_KIND), eq(jobs.status, 'pending')))
+      .run();
+    const { titles } = providerCharges(app, a);
+    await discover(app, a, 3, 100);
+    expect(titles[0]).toBe('Engineer 001');
+    expect((await byTitle(app, a)).get('Engineer 001')).toMatchObject({
+      aiScore: 60,
+      rankSkipReason: null,
+      rankDeferredAt: null,
+    });
+  });
+
   it('a budget refusal on a waiting posting drops its old reason and keeps its first time', async () => {
     const { app, a } = await boot();
     const today = await waitingPostings(app, a, 1);
