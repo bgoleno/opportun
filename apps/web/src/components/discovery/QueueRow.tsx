@@ -36,20 +36,21 @@ const SKIP_WORDS = new Map<RankSkipReason, string>([
 
 /**
  * What the card says about ranking (#210, #214). A posting waiting for the discovery budget says
- * so, in words that stay true after the day ends: it is ranked on a later budget day. A result
+ * so, in words that stay true after the day ends: it is ranked on a later budget day. If its real
+ * problem is something else, such as no key, the card says that instead (tl on #230). A result
  * with a score is ranked, so it never reads "Not ranked" (tl on #213); if a new ranking of it is
  * waiting, it says the score may change.
  */
 export function rankLine(
   r: Pick<DiscoveryResult, 'aiScore' | 'rankSkipReason' | 'rankDeferredAt'>,
 ): string | null {
-  if (r.rankDeferredAt !== null) {
-    return r.aiScore === null
-      ? 'Waiting for budget'
+  if (r.aiScore !== null) {
+    return r.rankDeferredAt === null
+      ? null
       : 'Score may change: a new ranking is waiting for budget';
   }
-  if (r.aiScore !== null || r.rankSkipReason === null) return null;
-  return SKIP_WORDS.get(r.rankSkipReason) ?? null;
+  if (r.rankSkipReason !== null) return SKIP_WORDS.get(r.rankSkipReason) ?? null;
+  return r.rankDeferredAt === null ? null : 'Waiting for budget';
 }
 
 export function RankLine({ result }: { result: DiscoveryResult }) {
@@ -250,6 +251,8 @@ export function QueueGroupRow(props: {
   const p = primary.posting;
   const label = resultLabel(primary);
   const n = group.members.length;
+  // The card speaks for its first member, the best scored, and one waiting may be further down.
+  const waiting = group.members.filter((m) => m.rankDeferredAt !== null).length;
   return (
     <li
       data-result-id={rowKey(group)}
@@ -282,6 +285,11 @@ export function QueueGroupRow(props: {
         <DiscoveredLine at={firstDiscoveredAt(group)} />
       </div>
       <RankLine result={primary} />
+      {primary.rankDeferredAt === null && waiting > 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {waiting} of {n} locations {waiting === 1 ? 'is' : 'are'} waiting for budget
+        </p>
+      ) : null}
       <ul
         className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground"
         aria-label="Locations"

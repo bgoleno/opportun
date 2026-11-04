@@ -45,6 +45,8 @@ export interface JobContext {
   services: Partial<JobServices>;
   /** Stores progress or an outcome on the job row (jobs.result). */
   setResult(value: unknown): Promise<void>;
+  /** The runner is shutting down. A job that loops over a long list stops between items. */
+  stopping(): boolean;
 }
 
 export interface JobHandler<P> {

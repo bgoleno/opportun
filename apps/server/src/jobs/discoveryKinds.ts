@@ -6,6 +6,8 @@
 export const DISCOVERY_RUN_KIND = 'discovery.run';
 /** Ranks one stored result; payload {resultId}. */
 export const DISCOVERY_RANK_KIND = 'discovery.rank';
+/** Ranks one user's postings waiting for the discovery budget; no payload. */
+export const RANK_WAITING_KIND = 'discovery.rank_waiting';
 /** Resolves one partial lead against ATS sources; payload {resultId}. */
 export const LEAD_RESOLVE_KIND = 'discovery.lead_resolve';
 /**

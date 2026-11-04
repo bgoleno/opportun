@@ -20,6 +20,7 @@ import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
 import {
   getResult,
+  hasOlderWaitingResult,
   setRankDeferred,
   setRanking,
   setRankSkip,
@@ -28,10 +29,26 @@ import {
 import { discoveryBudgetHasRoom } from '../repos/discoveryBudget';
 import { resolveDiscoveryPrompt } from '../repos/profile';
 import { roleTargetLine, roleTargetsText } from './classify';
-import { DISCOVERY_RANK_KIND, MULTI_POSTED_PREFIX, MULTI_POSTED_SCORE_CAP } from './discoveryKinds';
+import {
+  DISCOVERY_RANK_KIND,
+  MULTI_POSTED_PREFIX,
+  MULTI_POSTED_SCORE_CAP,
+  RANK_WAITING_KIND,
+} from './discoveryKinds';
 import type { JobHandler } from './registry';
+import { enqueue } from './runner';
 
 export { DISCOVERY_RANK_KIND };
+
+/** One unfinished drain per user: a second enqueue while one is queued or running does nothing. */
+export async function enqueueRankWaiting(db: Db, ctx: UserCtx): Promise<void> {
+  await enqueue(
+    db,
+    RANK_WAITING_KIND,
+    {},
+    { dedupeKey: `${RANK_WAITING_KIND}:${ctx.userId}`, userId: ctx.userId },
+  );
+}
 
 /** {score 0-100, rationale, disqualifiers}; defined once in @opportun/ai (the router validates). */
 export const RankOutputSchema = AiRankOutputSchema;
@@ -149,8 +166,19 @@ export const discoveryRankJob: JobHandler<z.infer<typeof PayloadSchema>> = {
   maxAttempts: 3,
   async run(db, payload, ctx) {
     if (ctx.userId === null) throw new Error(`${DISCOVERY_RANK_KIND} needs a user`);
-    await ctx.setResult(
-      await rankResult(db, { userId: ctx.userId, isAdmin: false }, payload.resultId),
-    );
+    const user: UserCtx = { userId: ctx.userId, isAdmin: false };
+    // While older postings wait for budget, a new one goes behind them (criterion 3 on #214, tl on
+    // #230). Otherwise a source that runs just after the UTC day starts can spend the day's budget
+    // before the sweep, every day, and the older ones wait for ever. This lives in the job and not
+    // in rankResult because the drain calls rankResult directly: its own calls must go ahead. A
+    // posting joining during a running drain is not on that drain's list, and the next hourly
+    // sweep takes it.
+    if (await hasOlderWaitingResult(db, user, payload.resultId)) {
+      await setRankDeferred(db, user, payload.resultId);
+      if (await discoveryBudgetHasRoom(db, user)) await enqueueRankWaiting(db, user);
+      await ctx.setResult({ status: 'skipped', reason: 'behind_older_waiting' });
+      return;
+    }
+    await ctx.setResult(await rankResult(db, user, payload.resultId));
   },
 };

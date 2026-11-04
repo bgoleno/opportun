@@ -17,6 +17,9 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
+  or,
+  sql,
   type SQL,
 } from 'drizzle-orm';
 import { z } from 'zod';
@@ -676,8 +679,9 @@ export async function setRankSkip(
 
 /**
  * The result waits for the discovery budget (#214): it is ranked on a later budget day, oldest
- * first (jobs/discoveryRankWaiting.ts). A second refusal keeps the first time. A scored result
- * keeps its score while its re-rank waits. Like a skip, this leaves updatedAt alone.
+ * first (jobs/discoveryRankWaiting.ts). A second refusal keeps the first time, and drops any older
+ * reason, since the budget is what holds it now. A scored result keeps its score while its re-rank
+ * waits. Like a skip, this leaves updatedAt alone.
  */
 export async function setRankDeferred(
   exec: Exec,
@@ -687,8 +691,11 @@ export async function setRankDeferred(
 ): Promise<void> {
   await exec
     .update(discoveryResults)
-    .set({ rankDeferredAt: now, rankSkipReason: null })
-    .where(and(ownedResult(ctx, id), isNull(discoveryResults.rankDeferredAt)))
+    .set({
+      rankDeferredAt: sql`coalesce(${discoveryResults.rankDeferredAt}, ${now})`,
+      rankSkipReason: null,
+    })
+    .where(ownedResult(ctx, id))
     .run();
 }
 
@@ -706,15 +713,95 @@ const waitingForBudget = and(
   eq(discoveryResults.disposition, 'pending'),
 );
 
-/** The caller's results waiting for budget, oldest first (#218 brings pre-filter scores). */
+/**
+ * The caller's results waiting for budget, in the order a drain takes them: oldest first (#218
+ * brings pre-filter scores), but a posting that failed its last turn, or one that already has a
+ * score, goes behind those still unranked. Otherwise a few postings the provider always refuses
+ * would be first in line on every drain, and the backlog behind them would never be reached. A
+ * failure keeps its place by date among the others, so each gets its turn again.
+ */
 export async function listWaitingResultIds(exec: Exec, ctx: UserCtx): Promise<string[]> {
   const rows = await exec
     .select({ id: discoveryResults.id })
     .from(discoveryResults)
     .where(and(eq(discoveryResults.userId, ctx.userId), waitingForBudget))
-    .orderBy(asc(discoveryResults.createdAt), asc(discoveryResults.id))
+    .orderBy(
+      sql`case when ${discoveryResults.rankSkipReason} is null and ${discoveryResults.aiScore} is null then 0 else 1 end`,
+      asc(discoveryResults.createdAt),
+      asc(discoveryResults.id),
+    )
     .all();
   return rows.map((r) => r.id);
+}
+
+/**
+ * Whether a posting older than this pending one is still in line for budget. One that failed its
+ * last turn has had it, and does not hold up new postings. Same order as listWaitingResultIds.
+ */
+export async function hasOlderWaitingResult(
+  exec: Exec,
+  ctx: UserCtx,
+  id: string,
+): Promise<boolean> {
+  const self = await exec
+    .select({
+      createdAt: discoveryResults.createdAt,
+      disposition: discoveryResults.disposition,
+    })
+    .from(discoveryResults)
+    .where(ownedResult(ctx, id))
+    .get();
+  if (self === undefined || self.disposition !== 'pending') return false;
+  const older = await exec
+    .select({ id: discoveryResults.id })
+    .from(discoveryResults)
+    .where(
+      and(
+        eq(discoveryResults.userId, ctx.userId),
+        waitingForBudget,
+        isNull(discoveryResults.rankSkipReason),
+        or(
+          lt(discoveryResults.createdAt, self.createdAt),
+          and(eq(discoveryResults.createdAt, self.createdAt), lt(discoveryResults.id, id)),
+        ),
+      ),
+    )
+    .limit(1)
+    .get();
+  return older !== undefined;
+}
+
+/**
+ * No key means nothing behind this posting can be ranked either: every unscored waiting card says
+ * so at once, with no further call to find that out. A scored one keeps its score and no reason.
+ */
+export async function setWaitingNoKey(exec: Exec, ctx: UserCtx): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankSkipReason: 'no_key' })
+    .where(
+      and(
+        eq(discoveryResults.userId, ctx.userId),
+        waitingForBudget,
+        isNull(discoveryResults.aiScore),
+      ),
+    )
+    .run();
+}
+
+/** A call got through, so a key works: no waiting card should still say AI is not set up. */
+export async function clearWaitingNoKey(exec: Exec, ctx: UserCtx): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankSkipReason: null })
+    .where(
+      and(
+        eq(discoveryResults.userId, ctx.userId),
+        waitingForBudget,
+        eq(discoveryResults.rankSkipReason, 'no_key'),
+      ),
+    )
+    .run();
 }
 
 /** How many of the caller's results wait for budget. Each is one row, so each counts once. */

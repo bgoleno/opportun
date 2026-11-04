@@ -8,33 +8,27 @@
 // one query, and queues work only for a user with postings waiting and room in the budget. Each
 // user's drain ranks one posting at a time, so it adds one call in flight at most, and it stops as
 // soon as the budget is spent. Until #218 brings pre-filter scores, oldest first means by date.
+// listWaitingResultIds has the order, and why a posting that failed goes behind the others.
 import type { FastifyBaseLogger } from 'fastify';
 import { z } from 'zod';
 import type { Db } from '../db/client';
 import type { UserCtx } from '../repos/base';
 import {
   clearRankDeferred,
+  clearWaitingNoKey,
   listWaitingResultIds,
+  setWaitingNoKey,
   usersWithWaitingResults,
 } from '../repos/discovery';
 import { discoveryBudgetHasRoom } from '../repos/discoveryBudget';
-import { rankResult } from './discoveryRank';
+import { enqueueRankWaiting, rankResult } from './discoveryRank';
+import { RANK_WAITING_KIND } from './discoveryKinds';
 import { requireService, type JobHandler } from './registry';
-import { enqueue } from './runner';
 
-export const RANK_WAITING_KIND = 'discovery.rank_waiting';
+export { enqueueRankWaiting, RANK_WAITING_KIND };
+
 export const RANK_WAITING_SWEEP_KIND = 'discovery.rank_waiting_sweep';
 export const RANK_WAITING_SWEEP_CRON = '5 * * * *';
-
-/** One unfinished drain per user: a second enqueue while one is queued or running does nothing. */
-export async function enqueueRankWaiting(db: Db, ctx: UserCtx): Promise<void> {
-  await enqueue(
-    db,
-    RANK_WAITING_KIND,
-    {},
-    { dedupeKey: `${RANK_WAITING_KIND}:${ctx.userId}`, userId: ctx.userId },
-  );
-}
 
 /** Queues a drain for each user with postings waiting and room in their budget today. */
 export async function sweepWaitingResults(db: Db): Promise<{ queued: number }> {
@@ -49,46 +43,76 @@ export async function sweepWaitingResults(db: Db): Promise<{ queued: number }> {
   return { queued };
 }
 
+/**
+ * Provider errors in a row that count as an outage. Any one error can be about that posting alone
+ * (a local model's context limit, a gateway's content filter), so a drain moves on after one; a
+ * run of them is probably true of everything behind them too, so it stops spending calls on them.
+ */
+const OUTAGE_AFTER_ERRORS = 3;
+
 export interface DrainOutcome {
   ranked: number;
   /** Threw on this posting: it keeps waiting, and those behind it still go. */
   failed: number;
   /** Why the drain stopped early; everything not yet ranked keeps waiting. */
-  stopped: 'budget_exceeded' | 'no_key' | 'provider_error' | null;
+  stopped: 'budget_exceeded' | 'no_key' | 'provider_error' | 'shutdown' | null;
 }
 
 /** Ranks the caller's waiting postings, oldest first, until they run out or the budget does. */
 export async function drainWaitingResults(
   db: Db,
   ctx: UserCtx,
-  log?: FastifyBaseLogger,
+  opts: { log?: FastifyBaseLogger; stopping?: () => boolean } = {},
 ): Promise<DrainOutcome> {
   const outcome: DrainOutcome = { ranked: 0, failed: 0, stopped: null };
+  let errorsInARow = 0;
   for (const id of await listWaitingResultIds(db, ctx)) {
+    // A backlog can take hours, and the runner's stop waits for the job in flight: shutting down
+    // waits for this one call, as it does for any other job. The rest keep waiting.
+    if (opts.stopping?.() === true) {
+      outcome.stopped = 'shutdown';
+      return outcome;
+    }
     let run;
     try {
       run = await rankResult(db, ctx, id);
     } catch (err) {
       // One posting must not hold back the ones behind it; the next sweep tries it again.
-      log?.error({ err, resultId: id }, 'ranking a waiting posting failed');
+      opts.log?.error({ err, resultId: id }, 'ranking a waiting posting failed');
       outcome.failed += 1;
       continue;
     }
     if (run.status === 'ranked') {
       outcome.ranked += 1;
+      errorsInARow = 0;
+      if (outcome.ranked === 1) await clearWaitingNoKey(db, ctx);
       continue;
     }
     // Not this posting's fault, and true of the ones behind it too: they all keep waiting.
-    if (
-      run.reason === 'budget_exceeded' ||
-      run.reason === 'no_key' ||
-      run.reason === 'provider_error'
-    ) {
+    if (run.reason === 'budget_exceeded') {
       outcome.stopped = run.reason;
       return outcome;
     }
-    // It cannot be ranked (the model's answer was unusable, no prompt, or it was decided
-    // meanwhile), so it no longer waits for budget. Its card says why, as #210 does.
+    if (run.reason === 'no_key') {
+      await setWaitingNoKey(db, ctx);
+      outcome.stopped = run.reason;
+      return outcome;
+    }
+    // It keeps waiting with the reason on its card, and goes behind the others next time.
+    if (run.reason === 'provider_error') {
+      errorsInARow += 1;
+      if (errorsInARow >= OUTAGE_AFTER_ERRORS) {
+        outcome.stopped = run.reason;
+        return outcome;
+      }
+      continue;
+    }
+    // Decided since the list was read, or gone. A dismissed posting already does not wait, and its
+    // wait must survive: Undo puts it back in line (tl on #230).
+    if (run.reason === 'not_pending' || run.reason === 'missing') continue;
+    errorsInARow = 0;
+    // It cannot be ranked, so it no longer waits for budget. An unusable answer says why on its
+    // card, as #210 does. No prompt sets no reason, as it does for any posting ranked without one.
     await clearRankDeferred(db, ctx, id);
   }
   return outcome;
@@ -104,7 +128,7 @@ export const rankWaitingJob: JobHandler<Record<string, never>> = {
       await drainWaitingResults(
         db,
         { userId: ctx.userId, isAdmin: false },
-        requireService(ctx, 'log'),
+        { log: requireService(ctx, 'log'), stopping: ctx.stopping },
       ),
     );
   },
