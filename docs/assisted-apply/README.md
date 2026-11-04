@@ -29,12 +29,16 @@ https://github.com/bgoleno/opportun/issues/79 and the milestone issues it lists.
   matrix, the user flow and how NG-3 is enforced in the server, the data model and state machine,
   timeline integration and confirmation matching, the API, security and privacy, testing, and the
   milestones.
-- Part B, the UX design (screens, status chips, extension popup states, accessibility, edge
-  cases) and its HTML mockups, follows in the next change under #122.
+- [ux-design.md](ux-design.md), Part B: the UX designer's design. The screens, status chips,
+  extension popup states, accessibility and edge cases.
+- [ux-mockups.html](ux-mockups.html): Part B's mockups, with invented data. Download it and open
+  it in a browser.
 
-Both were written on 2026-10-27 outside the repository and moved here under #122, with the
-references the Tech Lead listed on #79 updated to main at 3a2b3bd. Part A's section "What the
-build changed" lists where the code departed from the design; where they differ, the code wins.
+Both parts were written on 2026-10-27 outside the repository and moved here under #122, with the
+references the Tech Lead listed on #79 updated to main at 3a2b3bd. Each part has a section "What
+the build changed" that lists where the code departed from the design, checked at 3a2b3bd for Part
+A and d97dd45 for Part B; where they differ, the code wins. The mockups show the design, not the
+screens as built.
 
 ## Why it works this way
 
@@ -56,9 +60,9 @@ Decisions 1 to 8 were the open questions in Part A section 10.2; the owner answe
 | 4   | Prefill ships only for an ATS whose terms check finds nothing prohibiting user-side autofill. **Replaced by 11.**                                                                                  | 2026-10-28       |
 | 5   | Daily review ceiling: 10 per rolling 24 hours by default, instance ceiling 25, users can only lower it                                                                                             | 2026-10-28       |
 | 6   | Re-applying to the same requisition is allowed, with a typed reason                                                                                                                                | 2026-10-28       |
-| 7   | Named "Assisted apply" and "Apply on <ATS>", not "Submit to ATS"                                                                                                                                   | 2026-10-28       |
+| 7   | Named "Assisted apply" and "Apply on \<ATS>", not "Submit to ATS"                                                                                                                                  | 2026-10-28       |
 | 8   | Hidden entirely on the demo                                                                                                                                                                        | 2026-10-28       |
-| 9   | The review step shows a static "valid until <time>", not a countdown (Part B, for WCAG 2.2.1); Part A's countdown is dropped                                                                       | 2026-11-01, #79  |
+| 9   | The review step shows a static "valid until \<time>", not a countdown (Part B, for WCAG 2.2.1); Part A's countdown is dropped                                                                      | 2026-11-01, #79  |
 | 10  | Opportun's existing server-side Workday reads (job list and job detail on a company's own myworkdayjobs.com host) stay as they are                                                                 | 2026-11-02, #113 |
 | 11  | Vendor terms are not a gate on prefill, after reading the terms findings. Whether prefill works on a real form (M0 item 2) still decides each ATS                                                  | 2026-11-02, #113 |
 | 12  | When a posting changes while a draft is open, the draft keeps its destination, a reviewed draft goes back to draft, and the screens explain the change                                             | 2026-11-02, #144 |
