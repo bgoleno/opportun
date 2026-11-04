@@ -3,7 +3,7 @@
 Opportun has no tagged releases yet; while it is in beta, `main` is the only supported
 version (see [SECURITY.md](SECURITY.md)). Entries are grouped by milestone (requirements
 section 7, [docs/requirements.md](docs/requirements.md)), newest first, dated by when the
-milestone's work was merged. Each links the implementation plan it was built from.
+milestone's work was merged.
 
 ## Unreleased
 
@@ -143,9 +143,7 @@ checksums, the search index rebuilt for the same entities, and every vault secre
 decrypted again; it never touches the SQLite file, which stays the rollback. The compose
 file gained an opt-in `postgres` profile, and docs/install.md section 15 covers when to
 choose Postgres, the cutover and the rollback (writes made on Postgres after a cutover do
-not flow back). Plan:
-[iteration 4](docs/superpowers/plans/2026-10-18-iteration-4-postgres.md), decision:
-[ADR-4](docs/adr/0004-postgres.md).
+not flow back). Decision: [ADR-4](docs/adr/0004-postgres.md).
 
 ## M5: Hardening and reach (2026-10-17)
 
@@ -162,23 +160,19 @@ instead of Google Docs (FR-R7). Discovery reads Workday boards through their pub
 candidate-experience endpoints, with posting links recognized without a network call and
 Workday's weekly service window treated as transient (FR-D10). The Postgres option was
 assessed: the database construction seam is in place and the port itself is planned for
-iteration 4 ([ADR-4 amendment](docs/adr/0004-postgres.md)). Plan:
-[iteration 3](docs/superpowers/plans/2026-10-17-iteration-3-m5.md).
+iteration 4 ([ADR-4 amendment](docs/adr/0004-postgres.md)).
 
 ## Attach a posting (2026-10-17)
 
 An opportunity tracked without its job description can get one with **Find posting**: from
 an ATS link in its linked messages, or from the company's job board, detected first if
-needed, with a search over the whole board when the match is not unique (FR-O1). Plan:
-[attach posting](docs/superpowers/plans/2026-10-16-attach-posting.md), design:
-[spec](docs/superpowers/specs/2026-10-16-attach-posting-design.md).
+needed, with a search over the whole board when the match is not unique (FR-O1).
 
 ## M4: Network (2026-10-16)
 
 Contacts arrive from the LinkedIn data export (connections and messages), are mapped to
 companies, and are ranked by AI as referral candidates for each opportunity; referral asks
-are tracked and appear on the opportunity's timeline. Plan:
-[iteration 2](docs/superpowers/plans/2026-10-16-iteration-2-m3-m4.md).
+are tracked and appear on the opportunity's timeline.
 
 ## M3: Discovery (2026-10-16)
 
@@ -187,14 +181,14 @@ user's own MCP connectors, LinkedIn and Indeed job alert emails, manual capture)
 scheduled runs, AI ranking against role targets with an editable prompt, dismissal
 learning through reviewed prompt changes, AI company suggestions with job board
 detection, lead resolution to the canonical ATS posting, and a keyboard-driven review
-queue. Plan: [iteration 2](docs/superpowers/plans/2026-10-16-iteration-2-m3-m4.md).
+queue.
 
 ## M2: Communications (2026-10-15)
 
 Read-only Gmail ingestion with cursor recovery, AI classification of recruiter mail,
 automatic linking to opportunities with proposed stage transitions, broadcast-spam and
 role-mismatch filtering, solicitations turned into tracked opportunities, and a unified
-inbox. Plan: [iteration 1](docs/superpowers/plans/2026-10-15-iteration-1-m1-m2.md).
+inbox.
 
 ## M1: MVP tracker (2026-10-15)
 
@@ -202,4 +196,3 @@ Accounts and sessions, profile and role targets, the opportunity pipeline with t
 notes and documents, base and tailored resumes in the user's own Google Docs with an
 iterative AI tailoring workspace and personal resume rules, CSV and zip-pack import and a
 full export, nightly SQLite snapshots, and a single-container deployment behind Caddy.
-Plan: [iteration 1](docs/superpowers/plans/2026-10-15-iteration-1-m1-m2.md).
