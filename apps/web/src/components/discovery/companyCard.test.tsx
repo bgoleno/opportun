@@ -81,6 +81,7 @@ describe('CompaniesManager', () => {
       'GET /companies/suggestions': { items: [ACME, GLOBEX], total: 2 },
       'GET /companies': companiesByStatus,
       'GET /discovery/sources': { items: [], total: 0 },
+      'GET /discovery/network-companies': { items: [] },
       ...extra,
     });
   }

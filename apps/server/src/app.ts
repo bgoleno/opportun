@@ -85,6 +85,7 @@ import { communicationRoutes } from './routes/communications';
 import { companyRoutes } from './routes/companies';
 import { companySuggestionRoutes } from './routes/companySuggestions';
 import { networkRoutes } from './routes/network';
+import { networkCompanyRoutes } from './routes/networkCompanies';
 import { dashboardRoutes } from './routes/dashboard';
 import { deviceTokenRoutes } from './routes/deviceTokens';
 import { discoveryRoutes } from './routes/discovery';
@@ -503,6 +504,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       await api.register(profileRoutes);
       await api.register(companyRoutes);
       await api.register(companySuggestionRoutes);
+      await api.register(networkCompanyRoutes);
       await api.register(opportunityRoutes);
       await api.register(opportunityPostingRoutes);
       await api.register(activityRoutes);
