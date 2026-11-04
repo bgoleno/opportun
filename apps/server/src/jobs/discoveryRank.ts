@@ -19,6 +19,7 @@ import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
 import {
+  clearWaitingNoKey,
   getResult,
   hasOlderWaitingResult,
   setRankDeferred,
@@ -155,6 +156,9 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
     aiScore: score,
     aiRationale: storedRationale(out, multiPosted),
   });
+  // However the key came back: adding one clears this too, but a policy change to a provider that
+  // has one does not pass through there.
+  await clearWaitingNoKey(db, ctx);
   return { status: 'ranked', score };
 }
 

@@ -465,6 +465,14 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
       expect(titles).toEqual(['Engineer 002', 'Engineer 001']);
     });
 
+    it('with nothing waiting, adding a key queues no drain', async () => {
+      const { app, a } = await boot();
+      await addKey(a);
+      expect(
+        await app.db.select().from(jobs).where(eq(jobs.kind, RANK_WAITING_KIND)).all(),
+      ).toEqual([]);
+    });
+
     it('with no room, adding a key still corrects the cards, and queues no drain', async () => {
       const { app, a } = await boot();
       await markedNoKey(app, a, 2);

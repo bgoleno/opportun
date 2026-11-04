@@ -41,6 +41,7 @@ import { removeSchedule, setSchedule, userCronProblem } from '../jobs/runner';
 import type { Db, Exec, UserCtx } from './base';
 import { getOpportunity } from './opportunities';
 import { countWhere, orderBy, sortColumns, type ListOpts, type Page } from './list';
+import { startOfUtcDay } from './taskRuns';
 import { runCount, withTransaction } from '../db/client';
 
 export type DiscoverySourceRow = typeof discoverySources.$inferSelect;
@@ -714,19 +715,37 @@ const waitingForBudget = and(
 );
 
 /**
- * The caller's results waiting for budget, in the order a drain takes them: oldest first (#218
- * brings pre-filter scores), but a posting that failed its last turn, or one that already has a
- * score, goes behind those still unranked. Otherwise a few postings the provider always refuses
- * would be first in line on every drain, and the backlog behind them would never be reached. A
- * failure keeps its place by date among the others, so each gets its turn again.
+ * Waiting postings still in line for a turn. A posting the provider refused today has had today's
+ * turn, or a few that always fail would be first on every drain and the backlog behind them would
+ * never be reached. On a later budget day it is back in line by date, or new postings could spend
+ * each day's budget ahead of it for ever. A no-key reason is not in line: it holds nothing up while
+ * the key is missing, and it ends when a key works (clearWaitingNoKey).
  */
-export async function listWaitingResultIds(exec: Exec, ctx: UserCtx): Promise<string[]> {
+const inLineForBudget = (now: number) =>
+  or(
+    isNull(discoveryResults.rankSkipReason),
+    and(
+      eq(discoveryResults.rankSkipReason, 'provider_error'),
+      lt(discoveryResults.rankDeferredAt, startOfUtcDay(now)),
+    ),
+  );
+
+/**
+ * The caller's results waiting for budget, in the order a drain takes them: oldest first (#218
+ * brings pre-filter scores), with those still unranked and in line ahead of the rest. The others,
+ * a posting refused today or one that already has a score, keep their order by date behind them.
+ */
+export async function listWaitingResultIds(
+  exec: Exec,
+  ctx: UserCtx,
+  now: number = Date.now(),
+): Promise<string[]> {
   const rows = await exec
     .select({ id: discoveryResults.id })
     .from(discoveryResults)
     .where(and(eq(discoveryResults.userId, ctx.userId), waitingForBudget))
     .orderBy(
-      sql`case when ${discoveryResults.rankSkipReason} is null and ${discoveryResults.aiScore} is null then 0 else 1 end`,
+      sql`case when ${and(inLineForBudget(now), isNull(discoveryResults.aiScore))} then 0 else 1 end`,
       asc(discoveryResults.createdAt),
       asc(discoveryResults.id),
     )
@@ -734,14 +753,12 @@ export async function listWaitingResultIds(exec: Exec, ctx: UserCtx): Promise<st
   return rows.map((r) => r.id);
 }
 
-/**
- * Whether a posting older than this pending one is still in line for budget. One that failed its
- * last turn has had it, and does not hold up new postings. Same order as listWaitingResultIds.
- */
+/** Whether a posting older than this pending one is still in line for budget. */
 export async function hasOlderWaitingResult(
   exec: Exec,
   ctx: UserCtx,
   id: string,
+  now: number = Date.now(),
 ): Promise<boolean> {
   const self = await exec
     .select({
@@ -759,7 +776,7 @@ export async function hasOlderWaitingResult(
       and(
         eq(discoveryResults.userId, ctx.userId),
         waitingForBudget,
-        isNull(discoveryResults.rankSkipReason),
+        inLineForBudget(now),
         or(
           lt(discoveryResults.createdAt, self.createdAt),
           and(eq(discoveryResults.createdAt, self.createdAt), lt(discoveryResults.id, id)),
@@ -769,6 +786,20 @@ export async function hasOlderWaitingResult(
     .limit(1)
     .get();
   return older !== undefined;
+}
+
+/** The provider refused this waiting posting: today's turn is used (inLineForBudget). */
+export async function setRankTurnUsed(
+  exec: Exec,
+  ctx: UserCtx,
+  id: string,
+  now: number = Date.now(),
+): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankDeferredAt: now })
+    .where(and(ownedResult(ctx, id), isNotNull(discoveryResults.rankDeferredAt)))
+    .run();
 }
 
 /**
@@ -789,7 +820,10 @@ export async function setWaitingNoKey(exec: Exec, ctx: UserCtx): Promise<void> {
     .run();
 }
 
-/** A call got through, so a key works: no waiting card should still say AI is not set up. */
+/**
+ * A key works: it was added, or a call got through. No waiting card should still say AI is not set
+ * up, and those postings are back in line, so new ones go behind them again.
+ */
 export async function clearWaitingNoKey(exec: Exec, ctx: UserCtx): Promise<void> {
   await exec
     .update(discoveryResults)

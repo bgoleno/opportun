@@ -5,12 +5,15 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { SECRET_KINDS } from '../db/schema';
 import { enqueueClassifyBackfill } from '../jobs/classifyBackfill';
+import { enqueueRankWaiting } from '../jobs/discoveryRankWaiting';
 import { audit } from '../lib/audit';
 import {
   deleteKeyValidation,
   KeyValidationSchema,
   validateAndStoreAiKey,
 } from '../lib/aiKeyValidate';
+import { clearWaitingNoKey, countWaitingResults } from '../repos/discovery';
+import { discoveryBudgetHasRoom } from '../repos/discoveryBudget';
 import {
   deleteSecret,
   getSecretMeta,
@@ -89,6 +92,13 @@ export async function secretRoutes(app: FastifyInstance): Promise<void> {
       // Messages synced before the user had an AI key were never classified.
       if (kind !== 'ai_api_key') return reply.code(201).send(meta);
       await enqueueClassifyBackfill(db, ctx);
+      // Postings waiting behind a missing key: their cards must not still say AI is not set up,
+      // and with room in the budget they need not wait for the sweep. If this key does not work,
+      // the drain finds that out and says so.
+      await clearWaitingNoKey(db, ctx);
+      if ((await countWaitingResults(db, ctx)) > 0 && (await discoveryBudgetHasRoom(db, ctx))) {
+        await enqueueRankWaiting(db, ctx);
+      }
       // Validate on add. The key is stored either way; a failure (or a provider outage) shows
       // up as ok=false with a sanitized reason, never as a failed create.
       const validation = await validateAndStoreAiKey(db, ctx, id).catch(() => ({

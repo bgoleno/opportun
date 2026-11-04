@@ -15,8 +15,8 @@ import type { Db } from '../db/client';
 import type { UserCtx } from '../repos/base';
 import {
   clearRankDeferred,
-  clearWaitingNoKey,
   listWaitingResultIds,
+  setRankTurnUsed,
   setWaitingNoKey,
   usersWithWaitingResults,
 } from '../repos/discovery';
@@ -85,7 +85,6 @@ export async function drainWaitingResults(
     if (run.status === 'ranked') {
       outcome.ranked += 1;
       errorsInARow = 0;
-      if (outcome.ranked === 1) await clearWaitingNoKey(db, ctx);
       continue;
     }
     // Not this posting's fault, and true of the ones behind it too: they all keep waiting.
@@ -98,8 +97,9 @@ export async function drainWaitingResults(
       outcome.stopped = run.reason;
       return outcome;
     }
-    // It keeps waiting with the reason on its card, and goes behind the others next time.
+    // It keeps waiting with the reason on its card, behind the others for the rest of the day.
     if (run.reason === 'provider_error') {
+      await setRankTurnUsed(db, ctx, id);
       errorsInARow += 1;
       if (errorsInARow >= OUTAGE_AFTER_ERRORS) {
         outcome.stopped = run.reason;
