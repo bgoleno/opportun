@@ -49,3 +49,17 @@ pg-test-report.json
 # nothing after. Do not collapse these two lines into one.
 /.claude/worktrees/
 /.claude/worktrees
+# Files agent tools generate in a clone. A clone's own .git/info/exclude does not travel to the
+# next clone, so they are listed here. The bare form matches a file, a directory or a symlink
+# alike, which is why these need one line each. They are listed by name, not as /.claude/*, so
+# files meant to be shared (settings.json, skills, agents, agent-memory) can still be tracked.
+/.claude/agent-memory-local
+/.claude/agent-registry.json
+/.claude/assistant-daemon-state.json
+/.claude/checkpoints
+/.claude/first-run
+/.claude/mailbox
+/.claude/routines/.state
+/.claude/scheduled_tasks.json
+/.claude/scheduled_tasks.lock
+/.claude/settings.local.json
