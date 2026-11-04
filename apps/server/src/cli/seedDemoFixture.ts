@@ -71,6 +71,21 @@ export interface DemoCompany {
 }
 
 /** A mix of ats_kind values so the ATS and careers-page surfaces are actually exercised. */
+/**
+ * The seeded role target's title variants (#217), written by hand so that no reset leaves a target
+ * wanting a list: the nightly sweep would otherwise spend the operator's AI key on every account.
+ */
+export const DEMO_TITLE_VARIANTS: readonly string[] = [
+  'Software Engineer',
+  'Backend Engineer',
+  'Backend Software Engineer',
+  'Platform Engineer',
+  'Software Developer',
+  'Distributed Systems Engineer',
+  'Infrastructure Engineer',
+  'Server Engineer',
+];
+
 export const DEMO_COMPANIES: readonly DemoCompany[] = [
   {
     id: '01a16262-25da-7993-b4a8-f461eccbb2df',

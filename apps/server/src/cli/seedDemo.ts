@@ -113,6 +113,7 @@ import {
   DEMO_RESUME_BASE_TEXT,
   DEMO_RESUME_BASE_TITLE,
   DEMO_TAILORED_RESUMES,
+  DEMO_TITLE_VARIANTS,
   DEMO_USERS,
 } from './seedDemoFixture';
 
@@ -461,6 +462,8 @@ async function seedOneUserData(
       seniorityMin: 5,
       industries: [],
       keywords: ['platform', 'backend', 'distributed systems'],
+      titleVariants: [...DEMO_TITLE_VARIANTS],
+      titleVariantsNeeded: false,
       locations: ['Remote (US)'],
       remotePref: 'remote',
       compMin: 170_000,
