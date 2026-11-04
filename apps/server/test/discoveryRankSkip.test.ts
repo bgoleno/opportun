@@ -1,6 +1,6 @@
 // Why a posting was not ranked (https://github.com/bgoleno/opportun/issues/210, tl's slice 2 on
 // #190): a skipped ranking keeps the router's reason on the result until it is ranked, and
-// Settings counts budget refusals. Whether or when a skipped posting is ranked is not changed.
+// Settings counts budget refusals. A budget refusal itself now waits (#214, discoveryBudget.test.ts).
 import { AiUnavailableError, runStructured, type AiUnavailableReason } from '@opportun/ai';
 import {
   newId,

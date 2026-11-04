@@ -54,6 +54,12 @@ _Editing one task's model. Set prices for a model without a list price, such as 
 - **Daily budget**: each task may spend $5.00 per UTC day by estimated cost; once reached,
   that task's calls stop until the next day. The page shows the limit; there is no editor
   for it in the app yet.
+- **Discovery budget**: dollars a day for ranking discovered postings, $1.00 unless you change
+  it, on the same UTC day. When it runs out, postings are not skipped: each card says "Waiting for
+  budget", and they are ranked on the next budget day, oldest first. Raising it starts ranking
+  what waits right away. The usage card shows today's spend against it and how many postings wait.
+  The per-task limit above stays as a hard stop behind it, so a budget above $5.00 still stops
+  there.
 - **Unpriced models** (local or gateway models) count at the highest listed price unless you
   enter the policy's own prices, so they still count toward the budget.
 - **Usage** shows calls, tokens and estimated cost per task per day for the last 7, 30 or 90

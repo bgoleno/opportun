@@ -235,6 +235,20 @@ describe('#214 criterion 2 and 5: running out defers, never skips', () => {
     expect(r!.rankDeferredAt).toEqual(expect.any(Number));
   });
 
+  it('a posting that failed earlier and then waits drops the old reason', async () => {
+    const { app, a } = await boot();
+    vi.mocked(runStructured).mockRejectedValueOnce(new AiUnavailableError('provider_error'));
+    await discover(app, a);
+    const [r] = await results(app, a);
+    expect(r!.rankSkipReason).toBe('provider_error');
+    await spend(app, a, 1);
+    await enqueue(app.db, DISCOVERY_RANK_KIND, { resultId: r!.id }, { userId: a.userId });
+    await app.jobs.drain();
+    const [after] = await results(app, a);
+    expect(after).toMatchObject({ rankSkipReason: null });
+    expect(after!.rankDeferredAt).toEqual(expect.any(Number));
+  });
+
   it('other refusals are not budget: the reason is kept and nothing waits', async () => {
     const { app, a } = await boot();
     vi.mocked(runStructured).mockRejectedValueOnce(new AiUnavailableError('provider_error'));
@@ -379,6 +393,17 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
     );
     expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({ ranked: 0 });
     expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
+  });
+
+  it("another user's waiting postings are not counted, and not ranked", async () => {
+    const { app, a, b } = await boot();
+    const today = await waitingPostings(app, a, 2);
+    expect((await getBudget(b)).waiting).toBe(0);
+    vi.setSystemTime(today + DAY + 60_000);
+    providerCharges(app, b);
+    expect(await drainWaitingResults(app.db, ctxOf(b))).toMatchObject({ ranked: 0, failed: 0 });
+    expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
+    expect((await getBudget(a)).waiting).toBe(2);
   });
 
   it("the sweep is per user: another user's room does not rank this user's postings", async () => {
