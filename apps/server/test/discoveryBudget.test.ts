@@ -446,11 +446,7 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
     const today = await waitingPostings(app, a, 5);
     await writeDiscoveryBudget(app.db, ctxOf(a), 1);
     vi.setSystemTime(today + DAY + 60_000);
-    const { titles } = providerFailsFor(app, a, [
-      'Engineer 005',
-      'Engineer 004',
-      'Engineer 002',
-    ]);
+    const { titles } = providerFailsFor(app, a, ['Engineer 005', 'Engineer 004', 'Engineer 002']);
     expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({ ranked: 2, stopped: null });
     expect(titles).toHaveLength(5);
   });
@@ -508,11 +504,7 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
         .run();
     }
     vi.setSystemTime(today + DAY + 60_000);
-    const { titles } = providerFailsFor(app, a, [
-      'Engineer 004',
-      'Engineer 003',
-      'Engineer 002',
-    ]);
+    const { titles } = providerFailsFor(app, a, ['Engineer 004', 'Engineer 003', 'Engineer 002']);
     expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({ ranked: 1 });
     expect(titles[0]).toBe('Engineer 001');
   });
