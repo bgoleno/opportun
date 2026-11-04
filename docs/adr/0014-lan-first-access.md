@@ -4,8 +4,7 @@
   bind default after the owner's own conversion to Docker showed the loopback default
   reproduces the exact failure this ADR exists to prevent.
 - **Deciders:** the owner (owner), recorded while designing in-app extension downloads.
-- **Related:** `docs/superpowers/specs/2026-10-18-extension-downloads-design.md`, ADR-10 (Apple
-  Mail connector), C-1 (no automated LinkedIn retrieval).
+- **Related:** ADR-10 (Apple Mail connector), C-1 (no automated LinkedIn retrieval).
 - **Amended 2026-10-22 (issue #333):** decision 2's per-request `Secure` derivation depends on
   which proxies are trusted for `X-Forwarded-*`. That trust is no longer the broad
   `['loopback','linklocal','uniquelocal']` default this ADR was written against (which let any
