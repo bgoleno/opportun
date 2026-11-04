@@ -14,12 +14,12 @@ opportun-connector watch [--interval 15]    # sync every N minutes until Ctrl-C
 ## Security
 
 - **Token scope**: the connector authenticates with a device token that has only the
-  `mail:push` scope, created in Settings > Integrations > Devices (password-confirmed and
-  shown once). That scope can call exactly one route, `POST /api/v1/connector/mail/batch`;
-  it cannot read mail, contacts or anything else back.
-- **Revocation**: revoking the token in Settings > Integrations > Devices cuts the
-  connector off on its next request. It then exits with code 3 and says to create a new
-  token and re-run `init` (under the launchd agent it is restarted and fails the same way
+  `mail:push` scope, created in Settings > Integrations > Extensions and Connectors
+  (password-confirmed and shown once). That scope can call exactly one route,
+  `POST /api/v1/connector/mail/batch`; it cannot read mail, contacts or anything else back.
+- **Revocation**: revoking the token in Settings > Integrations > Extensions and Connectors
+  cuts the connector off on its next request. It then exits with code 3 and says to create a
+  new token and re-run `init` (under the launchd agent it is restarted and fails the same way
   every 15 minutes until then). Detection has latency: a sync with no new mail sends no
   request at all, so a revoked token is only noticed at the first sync that has mail to
   push. Nothing is sent with it in the meantime, so this is a reporting delay, not a leak.

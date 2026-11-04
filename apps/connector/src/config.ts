@@ -7,7 +7,7 @@ import { ConnectorError, EXIT, redact, type ConnectorIo } from './types';
 export interface ConnectorConfig {
   /** Origin (plus any reverse-proxy path) of the Opportun server, no trailing slash. */
   serverUrl: string;
-  /** A device token with the mail:push scope (Settings > Integrations > Devices). */
+  /** A mail:push device token (Settings > Integrations > Extensions and Connectors). */
   token: string;
   /** Mail mailboxes to read: "Inbox", a mailbox name, or "Account/Mailbox". */
   mailboxes: string[];
@@ -85,7 +85,7 @@ export function checkToken(token: string): string {
   if (!TOKEN_SHAPE.test(t)) {
     throw new ConnectorError(
       'That is not a device token: they start with odt_ and are 47 characters long. ' +
-        'Create one in Opportun under Settings > Integrations > Devices.',
+        'Create one in Opportun under Settings > Integrations > Extensions and Connectors.',
       EXIT.USAGE,
     );
   }
