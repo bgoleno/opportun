@@ -28,15 +28,33 @@ export const resultLabel = (r: DiscoveryResult): string =>
 
 /** Why a result is unscored, in the user's words (#210); none for one never sent to the AI. */
 const SKIP_WORDS = new Map<RankSkipReason, string>([
-  ['budget_exceeded', "Not ranked: today's AI budget was spent"],
+  ['budget_exceeded', 'Waiting for budget'],
   ['no_key', 'Not ranked: AI is not set up (Settings > AI)'],
   ['provider_error', 'Not ranked: the AI provider was unavailable'],
   ['invalid_output', "Not ranked: the AI's answer could not be used"],
 ]);
 
-export function RankSkipLine({ reason }: { reason: RankSkipReason | null }) {
-  if (reason === null) return null;
-  return <p className="text-sm text-muted-foreground">{SKIP_WORDS.get(reason)}</p>;
+/**
+ * What the card says about ranking (#210, #214). A posting waiting for the discovery budget says
+ * so, in words that stay true after the day ends: it is ranked on a later budget day. A result
+ * with a score is ranked, so it never reads "Not ranked" (tl on #213); if a new ranking of it is
+ * waiting, it says the score may change.
+ */
+export function rankLine(
+  r: Pick<DiscoveryResult, 'aiScore' | 'rankSkipReason' | 'rankDeferredAt'>,
+): string | null {
+  if (r.rankDeferredAt !== null) {
+    return r.aiScore === null
+      ? 'Waiting for budget'
+      : 'Score may change: a new ranking is waiting for budget';
+  }
+  if (r.aiScore !== null || r.rankSkipReason === null) return null;
+  return SKIP_WORDS.get(r.rankSkipReason) ?? null;
+}
+
+export function RankLine({ result }: { result: DiscoveryResult }) {
+  const line = rankLine(result);
+  return line === null ? null : <p className="text-sm text-muted-foreground">{line}</p>;
 }
 
 export function ScoreBadge({ score }: { score: number | null }) {
@@ -167,7 +185,7 @@ export function QueueRow(props: {
         <span className="text-sm [overflow-wrap:anywhere] text-muted-foreground">{p.company}</span>
         <DiscoveredLine at={r.createdAt} />
       </div>
-      <RankSkipLine reason={r.rankSkipReason} />
+      <RankLine result={r} />
       {r.aiRationale ? (
         <p className="text-sm break-words">
           <span className="text-muted-foreground">Why: </span>
@@ -263,7 +281,7 @@ export function QueueGroupRow(props: {
         <span className="text-sm [overflow-wrap:anywhere] text-muted-foreground">{p.company}</span>
         <DiscoveredLine at={firstDiscoveredAt(group)} />
       </div>
-      <RankSkipLine reason={primary.rankSkipReason} />
+      <RankLine result={primary} />
       <ul
         className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground"
         aria-label="Locations"
