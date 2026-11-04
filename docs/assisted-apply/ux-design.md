@@ -14,7 +14,8 @@ https://github.com/bgoleno/opportun. "Q1" to "Q8" are the open questions in Part
 the [README](README.md#decisions) records how each was answered.
 
 Paths below are relative to `apps/web/src` unless they start with `packages/`. `popup.css` and
-`render.ts` are in `packages/extension/src`, and `popup.html` is in `packages/extension`.
+`render.ts` are in `packages/extension/src`, and `popup.html` is in `packages/extension`. A bare
+file name, such as `TimelineList.tsx`, is the only file of that name in the repository.
 
 ---
 
