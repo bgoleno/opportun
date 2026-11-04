@@ -373,7 +373,7 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
 
   it('once a key works, no waiting card still says AI is not set up', async () => {
     const { app, a } = await boot();
-    const today = await waitingPostings(app, a, 3);
+    const today = await waitingPostings(app, a, 4);
     vi.setSystemTime(today + DAY + 60_000);
     vi.mocked(runStructured).mockRejectedValue(new AiUnavailableError('no_key'));
     await drainWaitingResults(app.db, ctxOf(a));
@@ -383,7 +383,8 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
       ranked: 2,
       stopped: 'budget_exceeded',
     });
-    expect(titles).toEqual(['Engineer 003', 'Engineer 002']);
+    expect(titles).toEqual(['Engineer 004', 'Engineer 003']);
+    // Engineer 002 was refused for budget, which clears its own reason. This one was not reached.
     expect((await byTitle(app, a)).get('Engineer 001')).toMatchObject({
       aiScore: null,
       rankSkipReason: null,
@@ -438,6 +439,20 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
       rankSkipReason: 'provider_error',
       rankDeferredAt: expect.any(Number),
     });
+  });
+
+  it('a ranking between errors means no outage: errors must be in a row to stop the drain', async () => {
+    const { app, a } = await boot();
+    const today = await waitingPostings(app, a, 5);
+    await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+    vi.setSystemTime(today + DAY + 60_000);
+    const { titles } = providerFailsFor(app, a, [
+      'Engineer 005',
+      'Engineer 004',
+      'Engineer 002',
+    ]);
+    expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({ ranked: 2, stopped: null });
+    expect(titles).toHaveLength(5);
   });
 
   it('more failing postings than an outage takes cannot block the backlog for ever', async () => {
@@ -564,10 +579,13 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
       const { app, a } = await boot();
       const today = await waitingPostings(app, a, 1);
       vi.setSystemTime(today + DAY + 60_000);
-      providerFailsFor(app, a, ['Engineer 001']);
+      const { titles } = providerFailsFor(app, a, ['Engineer 001']);
       await drainWaitingResults(app.db, ctxOf(a));
+      titles.length = 0;
       await noSweepDue(app);
       await discover(app, a, 1, 100);
+      // Ranked by its own job: no drain ran, so the failed posting was not tried again.
+      expect(titles).toEqual(['Engineer 100']);
       expect((await byTitle(app, a)).get('Engineer 100')).toMatchObject({
         aiScore: 60,
         rankDeferredAt: null,

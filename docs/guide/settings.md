@@ -56,8 +56,10 @@ _Editing one task's model. Set prices for a model without a list price, such as 
   for it in the app yet.
 - **Discovery budget**: dollars a day for ranking discovered postings, $1.00 unless you change
   it, on the same UTC day. When it runs out, postings are not skipped: each card says "Waiting for
-  budget", and they are ranked on the next budget day, oldest first. Raising it starts ranking
-  what waits right away. The usage card shows today's spend against it and how many postings wait.
+  budget", and they are ranked on the next budget day, oldest first. While older postings wait, a
+  new one waits behind them. A posting the AI provider refuses says so on its card, keeps waiting,
+  and is tried again after the others. With no AI key, every waiting card says so until you add
+  one. Raising the budget starts ranking what waits right away. The usage card shows today's spend against it and how many postings wait.
   The per-task limit above stays as a hard stop behind it, so a budget above $5.00 still stops
   there.
 - **Unpriced models** (local or gateway models) count at the highest listed price unless you
