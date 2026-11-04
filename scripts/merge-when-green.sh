@@ -8,8 +8,8 @@
 # reporting in one place, and the pin to the reviewed head commit described below. GitHub's
 # auto-merge is turned off in the repository settings.
 #
-# It was written when protection was unavailable on a private repository's plan, after #43
-# merged with sixteen checks still queued. That gap is closed; the convenience is not.
+# It was written before that protection was in place, after a pull request merged with sixteen
+# checks still queued. That gap is closed; the convenience is not.
 #
 # Usage: scripts/merge-when-green.sh <pr-number> <head-sha>
 #

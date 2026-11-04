@@ -100,13 +100,10 @@ jobs:
       # are pure -- and one of them checks the matcher against grep itself, so the step needs
       # grep on PATH and nothing else.
       - name: Test collect-identifiers.mjs
-        # Guarded on the file existing, not only on the dialect leg. The script and its test are
-        # both `export-ignore` in .gitattributes, so neither is present in the published snapshot,
-        # while this workflow file IS (.github is not export-ignored and should not be: the public
-        # tree benefits from the same CI). Without this guard the step runs `node --test` against an
-        # absent file over there and fails the sqlite leg on every push, which it did from
-        # publication until this guard was added. `hashFiles` returns an empty string when nothing
-        # matches, and checkout has already run by this point.
+        # Guarded on the file existing, not only on the dialect leg. The script and its test are not
+        # in this repository, and without this guard the step runs `node --test` against an absent
+        # file and fails the sqlite leg on every push. `hashFiles` returns an empty string when
+        # nothing matches, and checkout has already run by this point.
         if: matrix.db == 'sqlite' && hashFiles('scripts/collect-identifiers.test.mjs') != ''
         run: node --test scripts/collect-identifiers.test.mjs
 
