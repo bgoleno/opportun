@@ -10,7 +10,7 @@ agreed, and the milestone issues (section 9) record what each PR builds.
 Numbers such as #79 or #124 in this folder are issues and pull requests in this repository,
 https://github.com/bgoleno/opportun.
 
-Author: tech lead. Date of vendor-documentation reads: 2026-10-27. Paths below are relative to `apps/server/src` unless they start with `docs/`, `packages/` or `apps/`. The references the Tech Lead listed on #79 were updated against main at 3a2b3bd on 2026-11-03 (see [README.md](README.md)); other line numbers are as read on 2026-10-27 and drift, so search for the named symbol.
+Author: tech lead. Date of vendor-documentation reads: 2026-10-27. Paths below are relative to `apps/server/src` unless they start with `docs/`, `packages/`, `apps/` or `test/`; `test/` means `apps/server/test/`. The references the Tech Lead listed on #79 were updated against main at 3a2b3bd on 2026-11-03 (see [README.md](README.md)); other line numbers are as read on 2026-10-27 and drift, so search for the named symbol.
 
 Conventions for evidence: **OBSERVED** means I read it in the repo or on the vendor page named. **INFERRED** means my reading of what observed facts imply. **UNVERIFIED** means I could not confirm it from an official source and nothing here depends on it being true without a spike.
 
@@ -20,7 +20,8 @@ Conventions for evidence: **OBSERVED** means I read it in the repo or on the ven
 
 The sections below are the design as agreed. Building it departed from them in these ways, checked in the code at 3a2b3bd. The list is not exhaustive: the code was not compared with this document line by line.
 
-- **Timeline kind for a confirmation page (5.2, 7.7).** A captured confirmation page is a `confirmation_page` activity, not `capture`, so the posting readers never take it as the job's capture or send it to AI (#188).
+- **Timeline kind for a confirmation page (4.6, 5.2, 6.2, 7.3, 7.7, 9, 11.4).** A captured confirmation page is a `confirmation_page` activity, not `capture`, so the posting readers never take it as the job's capture or send it to AI (#188).
+- **The resume's record of a send (3.3, 5.2, 11.2).** "I submitted it" adds a `resume_sends` row, one per application, so a resume sent before keeps its earlier sends. It does not write `status` or `submittedTo` on the resume row, which those sections describe (#158, #164).
 - **Snapshot state (4.3, 4.4, 6.3).** A draft stays `draft` while its snapshot is prepared; the columns `snapshot_state` (pending, ready, unsupported, failed) and `snapshot_error` carry the outcome, and choosing the resume again is the retry (#131). The design's `failed` with `snapshot_failed` is not how a failed export is recorded.
 - **Extra columns (4.2).** `reapply_reason`, `followup_next_step_id` and `posting_changed_at`.
 - **Posting changes (owner decision, 2026-11-02, #144).** When an opportunity's posting changes while a draft is open, the draft keeps its destination, a reviewed draft goes back to draft, and the screens explain the change.
@@ -28,7 +29,9 @@ The sections below are the design as agreed. Building it departed from them in t
 - **Device token reach (3.3, 3.4, 7.4, 7.7, 11.6).** The extension's Set up flow can mint one token holding both `capture:push` and `apply:assist`, and each route checks its own scope (#182). An `apply:assist` token reads the fields, answers and resume snapshot of a handed-off attempt. It can look up the id, title and company of a submitted application for a page on its board, limited to 10 per 15 minutes (#199), and record that application's confirmation page. It still cannot start, review or hand off an application. The page check is the same board and the same job id on a recognised ATS host, not origin and path.
 - **Session routes (6.1).** `POST /submissions/:id/unlink-confirmation` is its own route (#173).
 - **Follow-up job (5.5, 6.3).** `submissions.followup` runs hourly while the feature is on, and the window is a fixed 3 days: there is no `OPPORTUN_SUBMISSION_FOLLOWUP_DAYS`.
-- **Daily review cap (3.4, 11.6).** The instance ceiling is set with `OPPORTUN_DAILY_REVIEW_CAP`. A user's own lower limit is a card on **Settings > Profile**; the **Settings > Applications** card (11.6) was not built.
+- **Daily review cap (3.4, 11.6).** The instance ceiling is set with `OPPORTUN_DAILY_REVIEW_CAP`. A user's own lower limit is a card on **Settings > Profile**; the **Settings > Applications** card (11.6) was not built. The cap counts `submission.reviewed` audit events, not `reviewed_at` rows.
+- **ATS sender domains (5.3, 11.6).** `ATS_SENDER_DOMAINS` is a code constant, not a config list or a setting, and it is empty until the owner supplies the observed list (M0 item 4). While it is empty, signal B holds only for a sender under the company's own domain.
+- **Withheld fields (6.2).** A stored detail field that fails today's checks is left out of the fill, and the extension is told only its key, so the user fills it by hand (#196, #201).
 - **Detail fields (3.3, 4.2).** First name, last name, LinkedIn and website are their own detail fields, checked by the server, so the extension never splits a full name or free-text links (#184).
 - **Web routes (Part B).** The apply flow is at `/opportunities/:id/apply` and the detail page at `/opportunities/:id/applications/:submissionId`.
 - **Prefill scope (9, 10.3).** At 3a2b3bd the filler covers Greenhouse only, on `job-boards.greenhouse.io` and `boards.greenhouse.io` (#187).
@@ -59,7 +62,7 @@ Reasons for the recommendation: it is the only path that honours NG-3 without a 
 Two honest limits to carry into the product conversation:
 
 1. In Option 2 and 3 the "ATS response" is not an HTTP response Opportun sees. It is (a) what the user observes and attests, (b) the confirmation page if they capture it, (c) a confirmation email if one arrives. The state machine (section 4) is built around that.
-2. There is currently no resume file export in the server. `DocumentStore` only offers `readText` (`adapters/documentStore.ts` line 58, interface `DocumentStore`), and the `local_file` store is plain text only (`adapters/localFile.ts` line 33, `const MIME = 'text/plain'`). ATS forms expect pdf/doc/docx (Greenhouse lists pdf, doc, docx, txt, rtf). An export capability is a prerequisite (section 4.4, open question Q2).
+2. On 2026-10-27 there was no resume file export in the server; it has been built since (#127, see 4.4). At that date the only read `DocumentStore` offered was `readText` (`adapters/documentStore.ts` line 58, interface `DocumentStore`), and the `local_file` store was plain text only (`adapters/localFile.ts` line 33, `const MIME = 'text/plain'`). ATS forms expect pdf/doc/docx (Greenhouse lists pdf, doc, docx, txt, rtf). An export capability was a prerequisite (section 4.4, open question Q2).
 
 ---
 
@@ -260,9 +263,9 @@ Goal: the timeline stays truthful after the Google Doc (or Reactive Resume docum
 
 ### 4.6 Other schema touches
 
-- `device_tokens` scopes: add `'apply:assist'` to `DEVICE_TOKEN_SCOPES` (`db/schema.shared.ts`; the column is text so no migration, but `routes/deviceTokens.ts` and the settings UI list must show it). The scope grants only the device routes in 6.2. On main the token card is **Extensions and Connectors**, the scope labels are "Apple Mail connector" and "Browser capture", and the extension's own Set up flow (`apps/web/src/routes/settings/-extensionSetup.tsx`) creates `capture:push` tokens: `apply:assist` needs adding both to the create-token form and to that Set up flow.
+- `device_tokens` scopes: `'apply:assist'` is in `DEVICE_TOKEN_SCOPES` (`db/schema.shared.ts`; the column is text so no migration). The scope grants only the device routes in 6.2. As built (#185, on #182), the token card **Extensions and Connectors** has a third label, "Assisted apply", and the extension's own Set up flow (`apps/web/src/routes/settings/-extensionSetup.tsx`) can mint one token holding both `capture:push` and `apply:assist`. Both offer the scope only where the feature is on, and `routes/deviceTokens.ts` refuses it anywhere else.
 - `COMM_CLASSIFICATIONS` (`packages/core/src/schemas/communication.ts` lines 4–12) is **not** extended in v1: confirmation matching is deterministic and sets the link without involving the AI classifier (5.3). Adding an `application_receipt` class later means changing the AI output schema and prompt in `packages/ai`, which is out of scope.
-- No new `ACTIVITY_KINDS` (5.2 reuses `application`, `capture`, `note`).
+- `ACTIVITY_KINDS` gains one value as built, `confirmation_page` (see [What the build changed](#what-the-build-changed)). The design planned none, with 5.2 reusing `application`, `capture` and `note`.
 - `lib/exporter.ts` and the SQLite-to-Postgres copy plan (`db/copyPlan.ts`) enumerate tables; both must include `application_submissions` (the conformance and copy-plan tests will fail if forgotten, which is the intended safety net). The contacts table is now `network_contacts`; use that name in both.
 
 ---
@@ -413,7 +416,7 @@ New event names, same dotted style as the existing ones (`auth.login`, `device_t
 Current extension guarantees, OBSERVED at 3a2b3bd in `packages/extension/README.md` and `packages/extension/src/manifest.ts`: no background worker, no content scripts, `activeTab` + `scripting`, host access only to the two capture sites (`https://www.linkedin.com/*` and `https://www.indeed.com/*`) plus the user's own server origin granted at runtime, default CSP, and a unit test (`packages/extension/test/manifest.test.ts`) enforcing the manifest. Capture goes through a per-site registry (`packages/extension/src/canonical.ts`; server `lib/captureSites.ts` and `lib/captureRecognizers.ts`). Keep all of it:
 
 - **No new host permissions.** `activeTab` grants access to the current tab after the user's click, so the manifest does not need ATS hosts: `host_permissions` stays LinkedIn plus Indeed. The test that pins `host_permissions` and the absence of content scripts stays and must keep passing.
-- **Injected function is a pure filler** (like `src/extract.ts`, whose comment at lines 1–17 explains that `executeScript` serialises the function with `toString()`). A new unit test asserts that the injected source contains no `click(`, `submit(`, `requestSubmit`, `dispatchEvent(new Event('submit'`, `form.submit`, `fetch(`, `XMLHttpRequest`, `sendBeacon`, `WebSocket`. Same style as the mail connector's "fails if the script grows a write" test (`apps/connector/README.md`, Read-only section).
+- **Injected function is a pure filler** (like `packages/extension/src/extract.ts`, whose comment at lines 1–17 explains that `executeScript` serialises the function with `toString()`). A new unit test asserts that the injected source contains no `click(`, `submit(`, `requestSubmit`, `dispatchEvent(new Event('submit'`, `form.submit`, `fetch(`, `XMLHttpRequest`, `sendBeacon`, `WebSocket`. Same style as the mail connector's "fails if the script grows a write" test (`apps/connector/README.md`, Read-only section).
 - **Destination pinning.** The popup refuses to fill unless the tab is the posting pinned on the submission. The design said the URL's origin and path match `destination_url`; as built, it is the same board and the same job id on a recognised ATS host (see Device token reach in [What the build changed](#what-the-build-changed)). This stops prefilling PII into a lookalike site if the user lands on the wrong tab. (The `gh_jid` alternative goes with career-page destinations; see 7.2.)
 - **No human imitation** (sec, on the M0 terms findings; recorded on #120). The extension never synthesizes human-like input (no simulated typing or pointer events to keep a bot score up), never touches or answers a captcha, and never submits. It sets field values the user can see, on an explicit click, and stops. sec's ruling on the M3 design (#120): a native value setter followed by one bubbling `input` and one `change` on that element sets a visible value and is not simulated typing, and the `DataTransfer` resume attach is allowed too.
 - **File inputs.** Setting a file input from bytes uses `DataTransfer` in the page context. Feasibility across the four ATS forms is UNVERIFIED; if it fails, the fallback is the "Download resume snapshot" button and the user picks the file in the ATS's own dialog.
@@ -566,7 +569,7 @@ Every screen, state and component the designer needs, with the data each shows. 
 
 ### 11.4 Timeline rendering
 
-- **Application entry** (existing `application` activity style, `web/src/lib/opportunities.ts` line 151 labels it "Application"): title, ATS badge, resume name with hash prefix and "snapshot attached" link, answered question labels, basis line "You reported submitting this".
+- **Application entry** (existing `application` activity style, `apps/web/src/lib/opportunities.ts` line 151 labels it "Application"): title, ATS badge, resume name with hash prefix and "snapshot attached" link, answered question labels, basis line "You reported submitting this".
 - **Confirmation email entry** (existing communication item) gains a small "Confirms your application" tag when it is the submission's `confirmation_comm_id`.
 - **Confirmation page entry** (existing `capture` activity style) titled "Confirmation page recorded".
 - **Next step entry** "Check whether your application to <company> was received".
@@ -593,7 +596,7 @@ Data and states the popup shows: not configured (existing); **No application rea
 
 ## Appendix A: Evidence index (repo, observed)
 
-- NG-3, NG-2, NG-5: `docs/requirements.md` lines 43–59. C-1/C-2/C-4: lines 515–541. NFR-SEC2/4/6/7/11: lines 404–424. NFR-PRV4/5: lines 444–462. FR-R3: line 106. FR-M2/M7: lines 276, 291. FR-D10 Workday: lines 225–249. Prior art (auto-apply rejected): lines 595, 626.
+- NG-3, NG-2, NG-5: `docs/requirements.md` lines 43–59. C-1/C-2/C-4: lines 569, 586 and 598. NFR-SEC2/4/6/7/11: lines 404–424. NFR-PRV4/5: lines 444–462. FR-R3: line 106. FR-M2/M7: lines 276, 291. FR-D10 Workday: lines 225–249. Prior art (auto-apply rejected): lines 595, 626.
 - Design: `docs/design.md` resumes (190–204), security (481–520), background processing (522–536), "NG-3 is the backstop" (543), decision log (711 onward). Line numbers here as of 2026-10-27 except the backstop and decision log (3a2b3bd).
 - Adapters: `adapters/sources/index.ts` (registration), `greenhouse.ts` (host line 10), `lever.ts`, `ashby.ts`, `workday.ts`, `atsCommon.ts`. `adapters/documentStore.ts` (interface), `adapters/localFile.ts`.
 - Schema: `db/schema.sqlite.ts` `users` 75, `secrets` 171, `auditLog` 192, `profiles` 250, `companies` 309–322, `opportunities` 340 (`ats_job_ref` 379), `stageHistory` 440, `activities` 460, `nextSteps` 484, `attachments` 505, `resumes` 538, `communications` 828 (`ats_job_refs` 871), `jobs` 902. Twin: `db/schema.pg.ts` (same tables), shared `db/schema.shared.ts`, dispatcher `db/schema.ts`.
@@ -603,7 +606,7 @@ Data and states the popup shows: not configured (existing); **No application rea
 - Resumes: `repos/resumes.ts` `updateResume` 247; `routes/resumes.ts` 95–131 (schemas), 256 (PATCH).
 - Jobs: `jobs/runner.ts` (`enqueue` 140, `EnqueueOptions` 64, schedules 520+), `jobs/registry.ts`, `jobs/attachmentSweep.ts` (50).
 - Security: `lib/safeFetch.ts` (`PROHIBITED_HOSTS` 94, `PAGE_FETCH_PROHIBITED_HOSTS` 111, `ATS_ALLOW_HOSTS` 131), `lib/secretBox.ts` (`putSecret` 128), `lib/audit.ts` (redaction 7–27), `plugins/security.ts` (CSRF 34, 60–66, 124), `lib/deviceTokens.ts` (`requireDeviceToken` 193, `deviceRoute` 211), `lib/rateLimit.ts` (26), `lib/reauth.ts`, `routes/connectorCapture.ts` (177), `lib/captureSites.ts` (51), `config.ts` (80–84, 433), `app.ts` (354, 448–464).
-- Extension: `packages/extension/README.md`, `src/manifest.ts`, `src/extract.ts`, `test/manifest.test.ts`. Apple Mail connector (not the browser extension): `apps/connector/README.md`.
+- Extension: `packages/extension/README.md`, `packages/extension/src/manifest.ts`, `packages/extension/src/extract.ts`, `packages/extension/test/manifest.test.ts`. Apple Mail connector (not the browser extension): `apps/connector/README.md`.
 - Tests to extend: `apps/server/test/isolation.ts`, `schemaConformance.test.ts`, `copyPlan.test.ts`, `safeFetch.test.ts` (672), `connectorCapture.test.ts`.
 
 ## Appendix B: What I did not do or verify
