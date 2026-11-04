@@ -1,8 +1,7 @@
 # ADR-4 (amended): Postgres backend alongside SQLite
 
-- **Status:** Accepted. Original decision 2026-10-15 ("SQLite default, Postgres later"); amended 2026-10-17: the Postgres port is ordered by the owner and executes as iteration 4. Implemented 2026-10-17 (iteration 4): Postgres ships as a beta backend; decision 6 is the copy tool in `apps/server/src/cli/copyToPostgres.ts` (runbook in docs/install.md section 15). Decision 5 deviates as recorded in the plan (application-side tokenizing, no generated column, no `ts_headline`).
+- **Status:** Accepted. Original decision 2026-10-15 ("SQLite default, Postgres later"); amended 2026-10-17: the Postgres port is ordered by the owner and executes as iteration 4. Implemented 2026-10-17 (iteration 4): Postgres ships as a beta backend; decision 6 is the copy tool in `apps/server/src/cli/copyToPostgres.ts` (runbook in docs/install.md section 15). Decision 5 deviates: application-side tokenizing, no generated column, no `ts_headline`.
 - **Deciders:** the owner (owner), recorded by the iteration 3 Task 18 implementer.
-- **Plan:** `docs/superpowers/plans/2026-10-18-iteration-4-postgres.md`
 
 ## Context
 
