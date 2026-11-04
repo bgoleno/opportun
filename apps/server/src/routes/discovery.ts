@@ -38,6 +38,7 @@ import {
 import { createOpportunity, getOpportunity, mergeOpportunities } from '../repos/opportunities';
 import { dismissalFeedback } from '../db/schema';
 import { sourceLabel } from '../lib/sourceLabels';
+import { discoveryCostFigures } from '../repos/discoveryFigures';
 import { IdParams, listQuery, optionalText, pageOf } from './common';
 import { OpportunityView } from './opportunities';
 import { withTransaction } from '../db/client';
@@ -216,6 +217,34 @@ function httpLink(url: string | null | undefined): string | null {
     return null;
   }
 }
+
+const TokenSpreadSchema = z.object({ median: z.number(), p90: z.number() }).nullable();
+
+/** GET /discovery/cost-figures (#209): see repos/discoveryFigures.ts for each figure. */
+const CostFiguresSchema = z.object({
+  rank: z.array(
+    z.object({
+      days: z.number().int(),
+      calls: z.number().int(),
+      errors: z.number().int(),
+      inputTokens: TokenSpreadSchema,
+      outputTokens: TokenSpreadSchema,
+      avgCostUsd: z.number().nullable(),
+      totalCostUsd: z.number(),
+    }),
+  ),
+  sources: z.array(
+    z.object({
+      sourceId: z.string(),
+      kind: z.string(),
+      openJobs: z.number().nullable(),
+      newPerDay: z.number().nullable(),
+      days: z.number().int(),
+      rankCallsPerDay: z.number().nullable(),
+      costPerDayUsd: z.number().nullable(),
+    }),
+  ),
+});
 
 export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
@@ -669,6 +698,13 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // ---- sources -------------------------------------------------------------
+
+  // Ranking cost and each board's posting volume (#209): read-only, the caller's own records.
+  api.get(
+    '/discovery/cost-figures',
+    { schema: { response: { 200: CostFiguresSchema } } },
+    async (req) => await discoveryCostFigures(db, app.requireUser(req)),
+  );
 
   api.get(
     '/discovery/sources',
