@@ -78,19 +78,36 @@ test('an empty change set matches nothing', () => {
   assert.deepEqual(matchingSecurityPaths([]), []);
 });
 
-// https://github.com/bgoleno/opportun/issues/248: changes to these got no automatic flag, and the
+// https://github.com/bgoleno/opportun/issues/248 and
+// https://github.com/bgoleno/opportun/issues/252: changes to these got no automatic flag, and the
 // need for a security review was caught by hand. Each must still exist, because a glob left behind
 // by a rename stops matching without any error, which is the same miss again.
-const ISSUE_248_FILES = [
+const FLAGGED_FILES = [
   'apps/server/src/plugins/security.ts',
   'apps/server/src/routes/secrets.ts',
   'apps/server/src/routes/deviceTokens.ts',
   'apps/server/src/routes/connectorApply.ts',
   'apps/server/src/lib/aiProviderFetch.ts',
   'apps/server/src/lib/audit.ts',
+  'apps/server/src/routes/connectorMail.ts',
+  'apps/server/src/routes/connectorCapture.ts',
+  'apps/server/src/lib/aiKeyValidate.ts',
+  'apps/server/src/lib/google.ts',
+  'apps/server/src/lib/registration.ts',
+  'apps/connector/src/cli.ts',
+  'apps/connector/src/config.ts',
+  'apps/connector/src/push.ts',
+  'apps/connector/src/nodeIo.ts',
+  'apps/connector/src/types.ts',
+  'packages/extension/src/settings.ts',
+  'packages/extension/src/api.ts',
+  'packages/extension/src/confirmation.ts',
+  'packages/extension/src/prefill.ts',
+  'packages/extension/src/popupController.ts',
+  '.github/scripts/security-paths.mjs',
 ];
 
-for (const file of ISSUE_248_FILES) {
+for (const file of FLAGGED_FILES) {
   test(`flags ${file}`, () => {
     assert.ok(
       existsSync(new URL(`../../${file}`, import.meta.url)),
@@ -109,6 +126,16 @@ const NOT_SENSITIVE = [
   'apps/server/src/lib/csv.ts',
   'apps/server/src/lib/textSignals.ts',
   'apps/web/src/routes/settings/security.tsx',
+  'apps/connector/src/normalize.ts',
+  // real files with the same name as a connector or extension file above, which is why those
+  // are listed by exact path: **/config.ts or **/api.ts would take these in
+  'apps/server/src/config.ts',
+  'apps/server/src/routes/settings.ts',
+  'apps/server/test/api.ts',
+  'apps/web/src/components/ai/api.ts',
+  'packages/ai/src/types.ts',
+  // outside CONTRIBUTING.md's four categories, decided on issue 252
+  'apps/server/src/lib/storage.ts',
   // made-up names one step away from them
   'apps/server/src/plugins/requestLogger.ts',
   'apps/server/src/plugins/securityHeaders.ts',
