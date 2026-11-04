@@ -8,8 +8,10 @@ the only supported version (see [SECURITY.md](SECURITY.md)).
 - Standard flow: issue first for anything non-trivial, then a focused PR.
 - TypeScript, strict mode; tests accompany behavior changes; CI must be green
   (tests, typecheck, lint, security scans).
-- Security-sensitive areas (auth, crypto, adapters, fetchers) get extra review;
-  see [SECURITY.md](SECURITY.md) for how to report vulnerabilities privately.
+- Security-sensitive areas (auth, crypto, adapters, fetchers, the extension's permissions
+  and the CI workflows) get extra review. The files are listed in
+  [`.github/scripts/security-paths.mjs`](.github/scripts/security-paths.mjs). See
+  [SECURITY.md](SECURITY.md) for how to report vulnerabilities privately.
 - **Review the docs.** [docs/requirements.md](docs/requirements.md) and
   [docs/design.md](docs/design.md) describe what Opportun is meant to do. Open an issue for
   anything that seems wrong, missing, unclear, or over-engineered. Reference requirement IDs
