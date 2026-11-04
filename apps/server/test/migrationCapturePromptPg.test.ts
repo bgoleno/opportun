@@ -37,6 +37,7 @@ async function chainBefore(tag: string): Promise<string> {
 interface PromptRow {
   id: string;
   userId: string | null;
+  taskKey: string;
   body: string;
   version: string;
   active: boolean;
@@ -45,7 +46,7 @@ interface PromptRow {
 const promptsOf = async (pool: pg.Pool, where: string, params: unknown[] = []) =>
   (
     await pool.query<PromptRow>(
-      `SELECT id, user_id AS "userId", body, version::text AS version, is_active AS active
+      `SELECT id, user_id AS "userId", task_key AS "taskKey", body, version::text AS version, is_active AS active
          FROM prompts WHERE ${where} ORDER BY id`,
       params,
     )
@@ -98,7 +99,16 @@ describe.runIf(livePgUrl !== undefined)('0022 capture.linkedin verbatim on Postg
         ]);
         expect(mine).toHaveLength(1);
         expect(mine[0]!.body).toBe(before!.body);
-        expect(await promptsOf(pool, `task_key <> 'capture.linkedin'`)).toEqual(othersBefore);
+        // The other prompts are as they were. The chain runs to the end, so a later migration may
+        // add a system default for a task that had none (as migrations.test.ts's 0040 test allows).
+        const known = new Set(othersBefore.map((r) => r.id));
+        const othersAfter = await promptsOf(pool, `task_key <> 'capture.linkedin'`);
+        expect(othersAfter.filter((r) => known.has(r.id))).toEqual(othersBefore);
+        const tasksBefore = new Set(othersBefore.map((r) => r.taskKey));
+        for (const added of othersAfter.filter((r) => !known.has(r.id))) {
+          expect(added.userId, added.taskKey).toBeNull();
+          expect(tasksBefore.has(added.taskKey), added.taskKey).toBe(false);
+        }
 
         // Re-running 0022 itself changes nothing.
         const sql = await readFile(join(MIGRATIONS_PG_DIR, `${TAG}.sql`), 'utf8');
