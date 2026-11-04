@@ -15,12 +15,18 @@ const read = (path: string, base: URL = CONNECTOR) => readFileSync(new URL(path,
 /** Rejoins a message split across string pieces and a doc line wrapped inside the name. */
 const asRead = (text: string) => text.replace(/['"`]\s*\+\s*['"`]/g, '').replace(/\s+/g, ' ');
 
-/** Every place named under Settings or Integrations other than PLACE. macOS's own is allowed. */
+/**
+ * Every use of a word places are named with, outside PLACE. It matches the words, not a separator,
+ * so "the Devices page" and "Settings/Integrations/Devices" fail too. macOS's System Settings is
+ * allowed. An ordinary use such as "other devices" fails as well: that false alarm is expected, so
+ * reword the message rather than loosen this. A place named with none of these words, such as "the
+ * Connectors card", still passes.
+ */
 const wrongPlaces = (text: string) =>
   asRead(text)
     .split(PLACE)
     .join('')
-    .match(/(?<!System )Settings >[^.,;)]*|Integrations >[^.,;)]*/g) ?? [];
+    .match(/(?<!System )\bSettings\b|\bIntegrations\b|\bDevices\b/gi) ?? [];
 
 const SCANNED = [
   'README.md',
@@ -32,6 +38,7 @@ const SCANNED = [
 describe('the place connector messages send a user to', () => {
   it('is what the app shows: the Integrations tab and its card', () => {
     expect(read('route.tsx', SETTINGS_ROUTES)).toContain("label: 'Integrations'");
+    expect(read('integrations.tsx', SETTINGS_ROUTES)).toContain('<DevicesCard');
     expect(read('-devices.tsx', SETTINGS_ROUTES)).toContain(
       '<CardTitle>Extensions and Connectors</CardTitle>',
     );
@@ -56,6 +63,13 @@ describe('the place connector messages send a user to', () => {
     ['a name split across string pieces', "'under Settings > ' +\n  'Integrations > Devices.'"],
     ['a name wrapped across doc lines', 'under Settings >\nIntegrations > Devices.'],
     ['the card without Settings', 'Create one under Integrations > Devices.'],
+    ['the old card in plain words', 'Create one on the Devices page in Settings.'],
+    ['the tab in plain words', 'Create one on the Integrations tab of Settings.'],
+    ['ASCII arrows', 'Create one under Settings -> Integrations -> Devices.'],
+    ['arrows', 'Create one under Settings → Integrations → Devices.'],
+    ['slashes', 'Create one under Settings/Integrations/Devices.'],
+    ['lower case', 'Create one under settings > integrations > devices.'],
+    ['a level below the place', `Create one under ${PLACE} > Devices.`],
   ])('the check catches %s', (_label, text) => {
     expect(wrongPlaces(text)).not.toEqual([]);
   });
