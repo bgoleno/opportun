@@ -1,6 +1,7 @@
 // The rank_deferred_at migration (https://github.com/bgoleno/opportun/issues/214) on an upgrade
-// path: a pending posting a budget refusal left unranked joins the wait, so the budget alone
-// leaves nothing unranked, and a scored result loses any "not ranked" reason (tl on #213). The
+// path: a posting a budget refusal left unranked joins the wait, so the budget alone leaves nothing
+// unranked; a dismissed one too, so that restoring it finds it waiting (tl on #230). A scored
+// result loses any "not ranked" reason (tl on #213). The
 // same SQL runs on both engines; each is tested on its own chain. All data is made up.
 import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -55,7 +56,7 @@ const SEEDS: Seed[] = [
   { id: 'plain', disposition: 'pending', score: 80, reason: null },
 ];
 const EXPECTED = [
-  { id: 'dismissed', deferred: null, reason: 'budget_exceeded' },
+  { id: 'dismissed', deferred: CREATED, reason: null },
   { id: 'outage', deferred: null, reason: 'provider_error' },
   { id: 'plain', deferred: null, reason: null },
   { id: 'scored-budget', deferred: null, reason: null },

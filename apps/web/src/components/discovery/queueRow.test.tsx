@@ -248,6 +248,29 @@ describe('QueueRow: why a result was not ranked (#210)', () => {
     });
   });
 
+  it.each([
+    ['no_key', 'Not ranked: AI is not set up (Settings > AI)'],
+    ['provider_error', 'Not ranked: the AI provider was unavailable'],
+  ] as const)('a waiting posting whose real problem is %s says so', (rankSkipReason, line) => {
+    const { container } = render(
+      <ul>
+        <QueueRow
+          result={result({ id: 'r', aiScore: null, rankSkipReason, rankDeferredAt: NOW })}
+          selected={false}
+          stale={false}
+          onSelect={vi.fn()}
+          onAccept={vi.fn()}
+          onDismiss={vi.fn()}
+          onOpen={vi.fn()}
+          checked={false}
+          onToggleChecked={vi.fn()}
+        />
+      </ul>,
+    );
+    expect(screen.getByText(line)).toBeInTheDocument();
+    expect(container).not.toHaveTextContent('Waiting for budget');
+  });
+
   it('a scored result with a stored reason never says "Not ranked"', () => {
     const { container } = row({ aiScore: 70, rankSkipReason: 'provider_error' });
     expect(container).not.toHaveTextContent('Not ranked');
@@ -287,6 +310,51 @@ describe('QueueRow: why a result was not ranked (#210)', () => {
       </ul>,
     );
     expect(screen.getAllByText('Not ranked: the AI provider was unavailable')).toHaveLength(1);
+  });
+});
+
+describe('QueueGroupRow: a member waiting for budget (tl on #230)', () => {
+  const renderGroup = (members: DiscoveryResult[]) => {
+    const [group] = groupResults(members);
+    return render(
+      <ul>
+        <QueueGroupRow
+          group={group!}
+          selected={false}
+          stale={false}
+          onSelect={vi.fn()}
+          onAcceptAll={vi.fn()}
+          onDismissAll={vi.fn()}
+          onOpen={vi.fn()}
+        />
+      </ul>,
+    );
+  };
+
+  it('says how many locations wait when the best-scored one does not', () => {
+    renderGroup([
+      result({ id: 'g1', dedupeKey: 'acme|role|a', aiScore: 80 }),
+      result({ id: 'g2', dedupeKey: 'acme|role|b', aiScore: null, rankDeferredAt: NOW }),
+      result({ id: 'g3', dedupeKey: 'acme|role|c', aiScore: null, rankDeferredAt: NOW }),
+    ]);
+    expect(screen.getByText('2 of 3 locations are waiting for budget')).toBeInTheDocument();
+  });
+
+  it('adds nothing when the first member already says it is waiting', () => {
+    const { container } = renderGroup([
+      result({ id: 'g1', dedupeKey: 'acme|role|a', aiScore: null, rankDeferredAt: NOW }),
+      result({ id: 'g2', dedupeKey: 'acme|role|b', aiScore: null, rankDeferredAt: NOW }),
+    ]);
+    expect(screen.getAllByText('Waiting for budget')).toHaveLength(1);
+    expect(container).not.toHaveTextContent('locations are waiting');
+  });
+
+  it('adds nothing when no member waits', () => {
+    const { container } = renderGroup([
+      result({ id: 'g1', dedupeKey: 'acme|role|a', aiScore: 80 }),
+      result({ id: 'g2', dedupeKey: 'acme|role|b', aiScore: 70 }),
+    ]);
+    expect(container).not.toHaveTextContent(/waiting/i);
   });
 });
 

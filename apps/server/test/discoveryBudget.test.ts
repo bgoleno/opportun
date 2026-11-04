@@ -59,24 +59,29 @@ const posting = (i: number): NormalizedPosting => ({
 });
 
 /** Stores `count` postings, and leaves their rank jobs queued. */
-async function discoverQueued(app: FastifyInstance, c: TestClient, count: number): Promise<void> {
+async function discoverQueued(
+  app: FastifyInstance,
+  c: TestClient,
+  count: number,
+  first = 1,
+): Promise<void> {
   registerSource({
     kind: 'ats_lever',
     async *fetchPostings() {
-      for (let i = 1; i <= count; i++) yield { posting: posting(i), nextCursor: null };
+      for (let i = first; i < first + count; i++) yield { posting: posting(i), nextCursor: null };
     },
   } satisfies DiscoverySource);
   const src = await createSource(app.db, ctxOf(c), {
     kind: 'ats_lever',
-    config: { org: 'initech' },
+    config: { org: `initech-${first}` },
     roleTargetId: null,
   });
   await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: c.userId });
   await runNextJob(app.db, { services: app.jobs.services });
 }
 
-async function discover(app: FastifyInstance, c: TestClient, count = 1): Promise<void> {
-  await discoverQueued(app, c, count);
+async function discover(app: FastifyInstance, c: TestClient, count = 1, first = 1): Promise<void> {
+  await discoverQueued(app, c, count, first);
   await app.jobs.drain();
 }
 
@@ -336,20 +341,302 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
     expect((await getBudget(a)).waiting).toBe(0);
   });
 
-  it('a provider outage or a missing key stops the drain, and everything keeps waiting', async () => {
+  /** The provider refuses these titles, and answers and charges for the rest. */
+  function providerFailsFor(app: FastifyInstance, c: TestClient, failing: string[]) {
+    const titles: string[] = [];
+    vi.mocked(runStructured).mockImplementation(async (_deps, _task, opts) => {
+      const title = /Title: (.*)/.exec(opts.system)?.[1] ?? '';
+      titles.push(title);
+      if (failing.includes(title)) throw new AiUnavailableError('provider_error');
+      await spend(app, c, CALL_USD);
+      return { score: 60, rationale: 'A fair match.', disqualifiers: [] } as never;
+    });
+    return { titles };
+  }
+  const byTitle = async (app: FastifyInstance, c: TestClient) =>
+    new Map((await results(app, c)).map((r) => [r.posting.title, r]));
+
+  it('a missing key stops the drain at once, and every waiting card says why', async () => {
     const { app, a } = await boot();
     const today = await waitingPostings(app, a, 3);
     vi.setSystemTime(today + DAY + 60_000);
-    for (const reason of ['provider_error', 'no_key'] as const) {
-      vi.mocked(runStructured).mockReset();
-      vi.mocked(runStructured).mockRejectedValue(new AiUnavailableError(reason));
-      expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({
-        ranked: 0,
-        stopped: reason,
-      });
-      expect(vi.mocked(runStructured)).toHaveBeenCalledOnce();
-      expect((await getBudget(a)).waiting).toBe(3);
+    vi.mocked(runStructured).mockRejectedValue(new AiUnavailableError('no_key'));
+    expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({
+      ranked: 0,
+      stopped: 'no_key',
+    });
+    expect(vi.mocked(runStructured)).toHaveBeenCalledOnce();
+    expect((await getBudget(a)).waiting).toBe(3);
+    const after = await results(app, a);
+    expect(after.map((r) => r.rankSkipReason)).toEqual(['no_key', 'no_key', 'no_key']);
+  });
+
+  it('once a key works, no waiting card still says AI is not set up', async () => {
+    const { app, a } = await boot();
+    const today = await waitingPostings(app, a, 3);
+    vi.setSystemTime(today + DAY + 60_000);
+    vi.mocked(runStructured).mockRejectedValue(new AiUnavailableError('no_key'));
+    await drainWaitingResults(app.db, ctxOf(a));
+    vi.mocked(runStructured).mockReset();
+    const { titles } = providerCharges(app, a);
+    expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({
+      ranked: 2,
+      stopped: 'budget_exceeded',
+    });
+    expect(titles).toEqual(['Engineer 003', 'Engineer 002']);
+    expect((await byTitle(app, a)).get('Engineer 001')).toMatchObject({
+      aiScore: null,
+      rankSkipReason: null,
+      rankDeferredAt: expect.any(Number),
+    });
+  });
+
+  it('a budget refusal on a waiting posting drops its old reason and keeps its first time', async () => {
+    const { app, a } = await boot();
+    const today = await waitingPostings(app, a, 1);
+    const [before] = await results(app, a);
+    vi.setSystemTime(today + DAY + 60_000);
+    vi.mocked(runStructured).mockRejectedValue(new AiUnavailableError('no_key'));
+    await drainWaitingResults(app.db, ctxOf(a));
+    expect((await results(app, a))[0]!.rankSkipReason).toBe('no_key');
+    await spend(app, a, 1);
+    expect(await rankResult(app.db, ctxOf(a), before!.id)).toMatchObject({
+      reason: 'budget_exceeded',
+    });
+    expect((await results(app, a))[0]).toMatchObject({
+      rankSkipReason: null,
+      rankDeferredAt: before!.rankDeferredAt,
+    });
+  });
+
+  it('a provider outage stops the drain after a few errors in a row, and everything keeps waiting', async () => {
+    const { app, a } = await boot();
+    const today = await waitingPostings(app, a, 5);
+    vi.setSystemTime(today + DAY + 60_000);
+    vi.mocked(runStructured).mockRejectedValue(new AiUnavailableError('provider_error'));
+    expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({
+      ranked: 0,
+      stopped: 'provider_error',
+    });
+    expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(3);
+    expect((await getBudget(a)).waiting).toBe(5);
+  });
+
+  it('one posting that always gets a provider error does not hold back the ones behind it', async () => {
+    const { app, a } = await boot();
+    const today = await waitingPostings(app, a, 3);
+    await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+    vi.setSystemTime(today + DAY + 60_000);
+    providerFailsFor(app, a, ['Engineer 003']);
+    expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({ ranked: 2, stopped: null });
+    expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({ ranked: 0, stopped: null });
+    const after = await byTitle(app, a);
+    expect(after.get('Engineer 002')).toMatchObject({ aiScore: 60, rankDeferredAt: null });
+    expect(after.get('Engineer 001')).toMatchObject({ aiScore: 60, rankDeferredAt: null });
+    expect(after.get('Engineer 003')).toMatchObject({
+      aiScore: null,
+      rankSkipReason: 'provider_error',
+      rankDeferredAt: expect.any(Number),
+    });
+  });
+
+  it('more failing postings than an outage takes cannot block the backlog for ever', async () => {
+    const { app, a } = await boot();
+    const today = await waitingPostings(app, a, 6);
+    await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+    vi.setSystemTime(today + DAY + 60_000);
+    const { titles } = providerFailsFor(app, a, [
+      'Engineer 006',
+      'Engineer 005',
+      'Engineer 004',
+      'Engineer 003',
+    ]);
+    expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({
+      ranked: 0,
+      stopped: 'provider_error',
+    });
+    expect(titles).toEqual(['Engineer 006', 'Engineer 005', 'Engineer 004']);
+    // The next drain takes the postings that have not failed first, so the good ones get ranked.
+    titles.length = 0;
+    expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({ ranked: 2 });
+    expect(titles.slice(0, 3)).toEqual(['Engineer 003', 'Engineer 002', 'Engineer 001']);
+    expect((await getBudget(a)).waiting).toBe(4);
+  });
+
+  it('a posting that failed is ranked once the provider recovers, and loses the reason', async () => {
+    const { app, a } = await boot();
+    const today = await waitingPostings(app, a, 2);
+    vi.setSystemTime(today + DAY + 60_000);
+    providerFailsFor(app, a, ['Engineer 002']);
+    await drainWaitingResults(app.db, ctxOf(a));
+    expect((await byTitle(app, a)).get('Engineer 002')!.rankSkipReason).toBe('provider_error');
+    vi.setSystemTime(today + 2 * DAY + 60_000);
+    providerFailsFor(app, a, []);
+    await drainWaitingResults(app.db, ctxOf(a));
+    expect((await byTitle(app, a)).get('Engineer 002')).toMatchObject({
+      aiScore: 60,
+      rankSkipReason: null,
+      rankDeferredAt: null,
+    });
+  });
+
+  it('scored postings whose new ranking keeps failing do not hold back an unscored one', async () => {
+    const { app, a } = await boot();
+    const today = await waitingPostings(app, a, 4);
+    await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+    for (const r of await results(app, a)) {
+      if (r.posting.title === 'Engineer 001') continue;
+      await app.db
+        .update(discoveryResults)
+        .set({ aiScore: 50 })
+        .where(eq(discoveryResults.id, r.id))
+        .run();
     }
+    vi.setSystemTime(today + DAY + 60_000);
+    const { titles } = providerFailsFor(app, a, [
+      'Engineer 004',
+      'Engineer 003',
+      'Engineer 002',
+    ]);
+    expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({ ranked: 1 });
+    expect(titles[0]).toBe('Engineer 001');
+  });
+
+  describe('new postings do not go ahead of older waiting ones (tl on #230)', () => {
+    /**
+     * Moving the clock makes the sweep the runner had already scheduled overdue, and it would run
+     * first. In the case under test the source runs before the day's first sweep, so none is due.
+     */
+    const noSweepDue = (app: FastifyInstance) =>
+      app.db
+        .delete(jobs)
+        .where(and(eq(jobs.kind, RANK_WAITING_SWEEP_KIND), eq(jobs.status, 'pending')))
+        .run();
+
+    it('a new posting joins the wait, and the drain it queues ranks the older ones first', async () => {
+      const { app, a } = await boot();
+      const today = await waitingPostings(app, a, 3);
+      vi.setSystemTime(today + DAY + 60_000);
+      const { titles } = providerCharges(app, a);
+      await noSweepDue(app);
+      await discover(app, a, 1, 100);
+      expect(titles).toEqual(['Engineer 003', 'Engineer 002']);
+      const after = await byTitle(app, a);
+      expect(after.get('Engineer 100')).toMatchObject({
+        aiScore: null,
+        rankDeferredAt: expect.any(Number),
+      });
+      expect((await getBudget(a)).waiting).toBe(2);
+    });
+
+    it('sources that run just after the UTC day starts cannot starve older ones, day after day', async () => {
+      const { app, a } = await boot();
+      const today = await waitingPostings(app, a, 4);
+      const { titles } = providerCharges(app, a);
+      vi.setSystemTime(today + DAY + 10_000);
+      await noSweepDue(app);
+      await discover(app, a, 3, 100);
+      expect(titles).toEqual(['Engineer 004', 'Engineer 003']);
+      vi.setSystemTime(today + 2 * DAY + 10_000);
+      await noSweepDue(app);
+      await discover(app, a, 3, 200);
+      expect(titles).toEqual(['Engineer 004', 'Engineer 003', 'Engineer 002', 'Engineer 001']);
+      vi.setSystemTime(today + 3 * DAY + 10_000);
+      await noSweepDue(app);
+      await discover(app, a, 3, 300);
+      // Now the first day's new postings, still ahead of the ones that came after them.
+      expect(titles.slice(4).every((t) => /Engineer 10\d/.test(t))).toBe(true);
+      expect(titles).toHaveLength(6);
+    });
+
+    it('with no room, a new posting joins the wait and no drain is queued', async () => {
+      const { app, a } = await boot();
+      await waitingPostings(app, a, 1);
+      await noSweepDue(app);
+      await discover(app, a, 1, 100);
+      expect((await getBudget(a)).waiting).toBe(2);
+      expect(
+        await app.db.select().from(jobs).where(eq(jobs.kind, RANK_WAITING_KIND)).all(),
+      ).toEqual([]);
+    });
+
+    it('a posting that already failed its turn does not keep new postings waiting', async () => {
+      const { app, a } = await boot();
+      const today = await waitingPostings(app, a, 1);
+      vi.setSystemTime(today + DAY + 60_000);
+      providerFailsFor(app, a, ['Engineer 001']);
+      await drainWaitingResults(app.db, ctxOf(a));
+      await noSweepDue(app);
+      await discover(app, a, 1, 100);
+      expect((await byTitle(app, a)).get('Engineer 100')).toMatchObject({
+        aiScore: 60,
+        rankDeferredAt: null,
+      });
+    });
+  });
+
+  it('shutting down during a drain waits for the call in flight, not the whole backlog', async () => {
+    const { app, a } = await boot();
+    const today = await waitingPostings(app, a, 5);
+    await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+    vi.setSystemTime(today + DAY + 60_000);
+    await sweepWaitingResults(app.db);
+    let callStarted!: () => void;
+    const inCall = new Promise<void>((resolve) => (callStarted = resolve));
+    let finishCall!: () => void;
+    const held = new Promise<void>((resolve) => (finishCall = resolve));
+    vi.mocked(runStructured).mockImplementation(async () => {
+      callStarted();
+      await held;
+      return { score: 60, rationale: 'A fair match.', disqualifiers: [] } as never;
+    });
+    const runner = startRunner(app.db, {
+      services: app.jobs.services,
+      workers: 1,
+      intervalMs: 5,
+    });
+    await inCall;
+    const stopped = runner.stop();
+    finishCall();
+    await stopped;
+    expect(vi.mocked(runStructured)).toHaveBeenCalledOnce();
+    // Nothing is lost: the rest keep waiting for the next sweep.
+    expect((await getBudget(a)).waiting).toBe(4);
+  });
+
+  it('a posting dismissed while a drain runs keeps its wait, and waits again when restored', async () => {
+    const { app, a } = await boot();
+    const today = await waitingPostings(app, a, 2);
+    const newer = (await byTitle(app, a)).get('Engineer 001')!;
+    vi.setSystemTime(today + DAY + 60_000);
+    vi.mocked(runStructured).mockImplementationOnce(async () => {
+      await setDisposition(app.db, ctxOf(a), newer.id, 'dismissed');
+      return { score: 60, rationale: 'A fair match.', disqualifiers: [] } as never;
+    });
+    expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({ ranked: 1 });
+    expect((await getBudget(a)).waiting).toBe(0);
+    await setDisposition(app.db, ctxOf(a), newer.id, 'pending');
+    expect((await getBudget(a)).waiting).toBe(1);
+  });
+
+  it('a dismissed result the migration moved to the wait is ranked after Undo', async () => {
+    const { app, a } = await boot();
+    const today = await waitingPostings(app, a, 1);
+    const [r] = await results(app, a);
+    // What the migration leaves for a result dismissed after a budget refusal.
+    await setDisposition(app.db, ctxOf(a), r!.id, 'dismissed');
+    vi.setSystemTime(today + DAY + 60_000);
+    const undo = await a.request({
+      method: 'POST',
+      url: '/api/v1/discovery/results/bulk-undo-dismiss',
+      payload: { ids: [r!.id] },
+    });
+    expect(undo.statusCode, undo.body).toBe(200);
+    expect((await getBudget(a)).waiting).toBe(1);
+    providerCharges(app, a);
+    await sweepWaitingResults(app.db);
+    await app.jobs.drain();
+    expect((await results(app, a))[0]).toMatchObject({ aiScore: 60, rankDeferredAt: null });
   });
 
   it('a posting the model cannot rank stops waiting, and the ones behind it go on', async () => {
