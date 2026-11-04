@@ -6,6 +6,7 @@ import { PolicyEditor } from '@/components/ai/PolicyEditor';
 import { ProposedRefinement } from '@/components/ai/ProposedRefinement';
 import { PromptEditor } from '@/components/ai/promptEditor';
 import { ProviderKeysCard } from '@/components/ai/ProviderKeysCard';
+import { RankCostCard } from '@/components/ai/RankCostCard';
 import { RankSkipsLine } from '@/components/ai/RankSkips';
 import { UsageTable } from '@/components/ai/UsageTable';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -42,6 +43,7 @@ function AiSettings() {
           <RankSkipsLine />
         </CardContent>
       </Card>
+      <RankCostCard />
       <PromptsCard />
     </div>
   );
