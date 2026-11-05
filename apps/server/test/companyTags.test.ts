@@ -223,6 +223,9 @@ describe('#220 criterion 1: tagging', () => {
     ['NAICS 5132', '5132'],
     ['5132: Software Publishers', '5132'],
     ['  5132  ', '5132'],
+    // A year comes first, and it is not a code: the code after it is the answer (sec and tl).
+    ['NAICS 2022 5132', '5132'],
+    ['NAICS 2022: 5132 Software Publishers', '5132'],
   ])('reads the code out of %j', async (answer, code) => {
     const { app, a } = await boot();
     await suggested(app, a, 'Wordy');
@@ -231,7 +234,7 @@ describe('#220 criterion 1: tagging', () => {
     expect((await rowOf(app, a, 'Wordy')).naicsCode).toBe(code);
   });
 
-  it.each(['541511', '54', '9999', 'unknown', 'Software Publishers', 'NAICS 9999'])(
+  it.each(['541511', '54', '9999', 'unknown', 'Software Publishers', 'NAICS 9999', 'NAICS 2022'])(
     'finds no code in %j, so that company could not be placed',
     async (answer) => {
       const { app, a } = await boot();
