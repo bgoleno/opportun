@@ -24,6 +24,7 @@ import { discoveryResults, opportunities } from '../db/schema';
 import { POSTING_RECONCILE_KIND } from '../jobs/discoveryKinds';
 import { enqueue } from '../jobs/runner';
 import { sanitizePosting } from './postingSanitize';
+import { racePoint } from './racePoints';
 import { postingIdentity, siteLabel } from './captureSites';
 import { sourceLabel } from './sourceLabels';
 import { descriptionFingerprint } from './postingFingerprint';
@@ -408,6 +409,7 @@ export async function resolveCapture(
   const posting = sanitizePosting(input.posting);
   const identity = postingIdentity(posting);
   const match = await findMatch(db, ctx, posting);
+  await racePoint('captureResolve.matched.locked');
   const [primary, ...rest] = match.leads;
 
   let opportunity = match.opportunity;

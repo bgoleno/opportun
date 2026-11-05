@@ -27,6 +27,7 @@ import {
 import { HttpError } from '../lib/errors';
 import { sanitizePosting } from '../lib/postingSanitize';
 import { isBoardSource, prefilter, type PrefilterVerdict } from '../lib/prefilter';
+import { racePoint } from '../lib/racePoints';
 import type { Exec, UserCtx } from '../repos/base';
 import {
   clearBelowCut,
@@ -237,6 +238,7 @@ async function ingest(
     await lockScope(tx, `discovery.ingest:${ctx.userId}`);
     const check = await checkDuplicate(tx, ctx, key, sourceId, posting.externalId);
     if (check === 'duplicate') return 'duplicate';
+    await racePoint('discovery.ingest.locked');
     const partial = posting.descriptionMd == null || posting.descriptionMd === '';
     const verdict = judge === null ? null : judge(posting);
     const result = await insertResult(tx, ctx, {
