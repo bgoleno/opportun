@@ -12,6 +12,7 @@ function source(over: Partial<DiscoverySource> & { id: string }): DiscoverySourc
     kind: 'ats_greenhouse',
     config: { org: 'initech' },
     enabled: true,
+    prefilterEnabled: true,
     scheduleCron: '0 7 * * *',
     roleTargetId: null,
     companyId: null,
@@ -237,6 +238,35 @@ describe('SourcesManager', () => {
       const patch = calls.find((c) => c.method === 'PATCH');
       expect(patch?.body).toEqual({ enabled: true, scheduleCron: null, roleTargetId: null });
     });
+  });
+
+  // #218: a switch per board. The others are never filtered, so they have nothing to switch.
+  it('a board has a pre-filter switch, which patches only that', async () => {
+    const user = userEvent.setup();
+    const { calls } = mockApi({
+      ...base,
+      'PATCH /discovery/sources/s-gh': { ...GH, prefilterEnabled: false },
+    });
+    renderWithProviders(<SourcesManager />);
+    const box = await screen.findByRole('checkbox', { name: 'Greenhouse initech pre-filter' });
+    expect(box).toBeChecked();
+    await user.click(box);
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ prefilterEnabled: false }),
+    );
+  });
+
+  it('a source that is not a board has no pre-filter switch', async () => {
+    mockApi({
+      ...base,
+      'GET /discovery/sources': {
+        items: [source({ id: 's-mcp', kind: 'mcp', config: { server: 'x', tool: 'y' } })],
+        total: 1,
+      },
+    });
+    renderWithProviders(<SourcesManager />);
+    await screen.findByRole('checkbox', { name: /enabled/ });
+    expect(screen.queryByRole('checkbox', { name: /pre-filter/ })).not.toBeInTheDocument();
   });
 
   it('enable toggle patches enabled; run now enqueues; history lists runs', async () => {

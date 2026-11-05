@@ -651,6 +651,8 @@ export const discoverySources = sqliteTable(
      */
     config: json<Record<string, unknown>>('config').notNull().default({}),
     enabled: bool('enabled').notNull().default(true),
+    /** Off: this board's postings are still judged, and all ranked (#218). Boards only. */
+    prefilterEnabled: bool('prefilter_enabled').notNull().default(true),
     scheduleCron: text('schedule_cron'),
     /** Results from this source are ranked against this role target (null: none). */
     roleTargetId: text('role_target_id').references(() => roleTargets.id, {

@@ -176,6 +176,7 @@ export function SourcesManager() {
                 <TableHead>Last run</TableHead>
                 <TableHead>Next run</TableHead>
                 <TableHead>Enabled</TableHead>
+                <TableHead>Pre-filter</TableHead>
                 <TableHead>
                   <span className="sr-only">Actions</span>
                 </TableHead>
@@ -237,6 +238,22 @@ export function SourcesManager() {
                         }
                         className="size-4 accent-primary"
                       />
+                    </TableCell>
+                    <TableCell>
+                      {s.kind.startsWith('ats_') ? (
+                        <input
+                          type="checkbox"
+                          aria-label={`${name} pre-filter`}
+                          checked={s.prefilterEnabled}
+                          onChange={(e) =>
+                            update.mutate({
+                              id: s.id,
+                              patch: { prefilterEnabled: e.currentTarget.checked },
+                            })
+                          }
+                          className="size-4 accent-primary"
+                        />
+                      ) : null}
                     </TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-1">

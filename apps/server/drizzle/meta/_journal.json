@@ -365,6 +365,13 @@
       "when": 1794800000000,
       "tag": "0051_discovery_industry_profile_prompt",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "6",
+      "when": 1794900000000,
+      "tag": "0052_discovery_prefilter_switch",
+      "breakpoints": true
     }
   ]
 }

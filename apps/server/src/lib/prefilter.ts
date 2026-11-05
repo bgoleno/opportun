@@ -2,9 +2,10 @@
 // on #190): whether a new board posting is worth a ranking call, judged in process from its
 // title, location and remote setting against the user's role targets. Pure, no AI and no I/O.
 //
-// Shadow mode: the verdict is stored on the result and measured (its recall on the user's own
-// accepted postings), and acts on nothing. Every posting is still ranked as before; N2b (#218)
-// turns it on once the recall holds.
+// The verdict is stored on the result and measured (its recall on the user's own accepted
+// postings). Until that recall holds it acts on nothing: every posting is ranked as before. Once it
+// holds, a filtered posting gets no ranking call and waits for Rank anyway (#218, the owner's
+// decision 5 on #190). prefilterRecall in repos/discovery.ts is the gate.
 //
 // Built for recall (a missed good posting costs more than a wasted call): a rule only filters on
 // what the posting clearly states. A posting with no location, or one naming no particular place,
@@ -19,6 +20,14 @@ import type {
 
 /** An ATS board: the sources the pre-filter judges. Mail, MCP and captures are not. */
 export const isBoardSource = (kind: string): boolean => kind.startsWith('ats_');
+
+/** The bar for acting on the verdicts: at least 95% of at least 20 of the user's own positives. */
+export const PREFILTER_ON_RECALL_PERCENT = 95;
+export const PREFILTER_ON_POSITIVES = 20;
+
+/** Whether recall holds. In whole numbers, so 94.9% cannot round its way over the bar. */
+export const prefilterHolds = (kept: number, positives: number): boolean =>
+  positives >= PREFILTER_ON_POSITIVES && kept * 100 >= positives * PREFILTER_ON_RECALL_PERCENT;
 
 /** A title passes when its score (0 to 1) is at least this. */
 export const TITLE_PASS_SCORE = 0.5;

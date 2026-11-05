@@ -1,0 +1,1 @@
+ALTER TABLE `discovery_sources` ADD `prefilter_enabled` integer DEFAULT true NOT NULL;

@@ -659,7 +659,7 @@ describe('GET /discovery/prefilter/recall (#217 criterion 3)', () => {
 
   it('with nothing accepted yet: no figure, and a count of zero', async () => {
     const { a } = await boot();
-    expect(await recall(a)).toEqual({ positives: 0, kept: 0, recall: null });
+    expect(await recall(a)).toMatchObject({ positives: 0, kept: 0, recall: null });
   });
 
   it('counts accepted board postings: kept over all of them, the caller’s only', async () => {
@@ -676,17 +676,17 @@ describe('GET /discovery/prefilter/recall (#217 criterion 3)', () => {
     ]);
     for (const id of ['kept-1', 'kept-2', 'kept-3', 'missed']) await decide(app, a, id, 'accepted');
     await decide(app, a, 'no', 'dismissed');
-    expect(await recall(a)).toEqual({ positives: 4, kept: 3, recall: 0.75 });
+    expect(await recall(a)).toMatchObject({ positives: 4, kept: 3, recall: 0.75 });
     // With a target of its own to judge against, another user still sees none of these.
     await platformTarget(app, b);
-    expect(await recall(b)).toEqual({ positives: 0, kept: 0, recall: null });
+    expect(await recall(b)).toMatchObject({ positives: 0, kept: 0, recall: null });
   });
 
   it('with no role target to judge against, an accepted posting is not counted', async () => {
     const { app, a } = await boot();
     await runBoard(app, a, [post({ externalId: 'unjudged' })]); // no role target yet
     await decide(app, a, 'unjudged', 'accepted');
-    expect(await recall(a)).toEqual({ positives: 0, kept: 0, recall: null });
+    expect(await recall(a)).toMatchObject({ positives: 0, kept: 0, recall: null });
   });
 
   it('counts a decision from before the filter, with no stored outcome (tl, blocking 5)', async () => {
@@ -700,7 +700,7 @@ describe('GET /discovery/prefilter/recall (#217 criterion 3)', () => {
     await decide(app, a, 'old-kept', 'accepted');
     await decide(app, a, 'old-missed', 'accepted');
     await platformTarget(app, a);
-    expect(await recall(a)).toEqual({ positives: 2, kept: 1, recall: 0.5 });
+    expect(await recall(a)).toMatchObject({ positives: 2, kept: 1, recall: 0.5 });
   });
 
   it('moves when the user edits a list, whatever was stored at ingest', async () => {
@@ -708,14 +708,14 @@ describe('GET /discovery/prefilter/recall (#217 criterion 3)', () => {
     const made = await platformTarget(app, a);
     await runBoard(app, a, [post({ externalId: 'missed', title: 'Office Coordinator' })]);
     await decide(app, a, 'missed', 'accepted');
-    expect(await recall(a)).toEqual({ positives: 1, kept: 0, recall: 0 });
+    expect(await recall(a)).toMatchObject({ positives: 1, kept: 0, recall: 0 });
     const res = await a.request({
       method: 'PATCH',
       url: `/api/v1/role-targets/${made.id}`,
       payload: { titleVariants: ['Office Coordinator'] },
     });
     expect(res.statusCode, res.body).toBe(200);
-    expect(await recall(a)).toEqual({ positives: 1, kept: 1, recall: 1 });
+    expect(await recall(a)).toMatchObject({ positives: 1, kept: 1, recall: 1 });
   });
 
   it('judges by the source’s own target, ignores inactive ones, and only board sources', async () => {
@@ -751,7 +751,7 @@ describe('GET /discovery/prefilter/recall (#217 criterion 3)', () => {
     await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: manual.id }, { userId: a.userId });
     await app.jobs.drain();
     for (const id of ['any', 'own', 'off', 'not-board']) await decide(app, a, id, 'accepted');
-    expect(await recall(a)).toEqual({ positives: 3, kept: 1, recall: 1 / 3 });
+    expect(await recall(a)).toMatchObject({ positives: 3, kept: 1, recall: 1 / 3 });
   });
 
   it('needs a session', async () => {

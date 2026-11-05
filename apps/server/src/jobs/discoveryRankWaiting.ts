@@ -7,7 +7,7 @@
 // day is UTC, so an hourly sweep is what makes "the next budget day" true in every zone; it costs
 // one query, and queues work only for a user with postings waiting and room in the budget. Each
 // user's drain ranks one posting at a time, so it adds one call in flight at most, and it stops as
-// soon as the budget is spent. Until #218 brings pre-filter scores, oldest first means by date.
+// soon as the budget is spent. The best pre-filter match goes first, then the oldest:
 // listWaitingResultIds has the order, and why a posting that failed goes behind the others.
 import type { FastifyBaseLogger } from 'fastify';
 import { z } from 'zod';

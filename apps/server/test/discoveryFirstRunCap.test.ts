@@ -412,6 +412,7 @@ describe('#215 criterion 2: the rest', () => {
       duplicates: 0,
       invalid: 0,
       suppressed: 0,
+      filtered: 0,
     });
     expect((await figuresFor(app, a, s.id))?.openJobs).toBe(30);
   });

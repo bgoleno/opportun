@@ -34,9 +34,10 @@ import {
   opportunities,
   roleTargets,
 } from '../db/schema';
-import { jsonText, likePrefix } from '../db/dialect';
+import { descNullsLast, jsonText, likePrefix } from '../db/dialect';
 import { HttpError, notFound } from '../lib/errors';
-import { isBoardSource, prefilter, type PrefilterVerdict } from '../lib/prefilter';
+import { isBoardSource, prefilter, prefilterHolds, type PrefilterVerdict } from '../lib/prefilter';
+import { PREFILTER_ON_POSITIVES, PREFILTER_ON_RECALL_PERCENT } from '../lib/prefilter';
 import { DISCOVERY_RUN_KIND } from '../jobs/discoveryKinds';
 import { removeSchedule, setSchedule, userCronProblem } from '../jobs/runner';
 import type { Db, Exec, UserCtx } from './base';
@@ -96,6 +97,7 @@ export interface SourceInput {
   kind: SourceKind;
   config?: Record<string, unknown> | undefined;
   enabled?: boolean | undefined;
+  prefilterEnabled?: boolean | undefined;
   scheduleCron?: string | null | undefined;
   roleTargetId?: string | null | undefined;
   companyId?: string | null | undefined;
@@ -220,6 +222,7 @@ export async function createSource(
         kind: input.kind,
         config,
         enabled: input.enabled ?? true,
+        prefilterEnabled: input.prefilterEnabled ?? true,
         scheduleCron: input.scheduleCron ?? null,
         roleTargetId: input.roleTargetId ?? null,
         companyId: input.companyId ?? null,
@@ -270,6 +273,9 @@ export async function updateSource(
       .set({
         ...(config === undefined ? {} : { config }),
         ...(patch.enabled === undefined ? {} : { enabled: patch.enabled }),
+        ...(patch.prefilterEnabled === undefined
+          ? {}
+          : { prefilterEnabled: patch.prefilterEnabled }),
         ...(patch.scheduleCron === undefined ? {} : { scheduleCron: patch.scheduleCron }),
         ...(patch.roleTargetId === undefined ? {} : { roleTargetId: patch.roleTargetId }),
         ...(patch.companyId === undefined ? {} : { companyId: patch.companyId }),
@@ -686,10 +692,21 @@ const RecallPostingSchema = z.object({
  * new one from its source would be: against that source's own role target, else every active one.
  * A posting with no target to judge against is not counted. Recall is null with none yet.
  */
-export async function prefilterRecall(
-  exec: Exec,
-  ctx: UserCtx,
-): Promise<{ positives: number; kept: number; recall: number | null }> {
+export interface PrefilterStatus {
+  /** Accepted board postings it could judge: what recall is based on. */
+  positives: number;
+  kept: number;
+  recall: number | null;
+  /** Whether recall holds, so that board sources act on the verdicts (#218). */
+  on: boolean;
+  neededRecall: number;
+  neededPositives: number;
+  /** Postings it judged when they arrived, and those it filtered: the share it would remove. */
+  judged: number;
+  filtered: number;
+}
+
+export async function prefilterRecall(exec: Exec, ctx: UserCtx): Promise<PrefilterStatus> {
   const accepted = await exec
     .select({
       posting: discoveryResults.posting,
@@ -723,7 +740,28 @@ export async function prefilterRecall(
     positives += 1;
     if (verdict.outcome === 'pass') kept += 1;
   }
-  return { positives, kept, recall: positives === 0 ? null : kept / positives };
+  // Stored verdicts, as judged when each posting arrived, where recall above is worked out live
+  // against today's role targets: after a target is edited the two can disagree.
+  const verdicts = await exec
+    .select({ outcome: discoveryResults.prefilterOutcome, n: count() })
+    .from(discoveryResults)
+    .where(
+      and(eq(discoveryResults.userId, ctx.userId), isNotNull(discoveryResults.prefilterOutcome)),
+    )
+    .groupBy(discoveryResults.prefilterOutcome)
+    .all();
+  const tally = (outcome: string) => Number(verdicts.find((v) => v.outcome === outcome)?.n ?? 0);
+  const filtered = tally('filtered');
+  return {
+    positives,
+    kept,
+    recall: positives === 0 ? null : kept / positives,
+    on: prefilterHolds(kept, positives),
+    neededRecall: PREFILTER_ON_RECALL_PERCENT / 100,
+    neededPositives: PREFILTER_ON_POSITIVES,
+    judged: tally('pass') + filtered,
+    filtered,
+  };
 }
 
 /**
@@ -775,6 +813,12 @@ export async function clearRankDeferred(exec: Exec, ctx: UserCtx, id: string): P
     .run();
 }
 
+/**
+ * A posting the pre-filter passed, then one it never judged, then one it filtered: it must not go
+ * ahead of a job alert, which the owner's decision 5 on #190 says is never filtered.
+ */
+const verdictOrder = sql`case ${discoveryResults.prefilterOutcome} when 'pass' then 0 when 'filtered' then 2 else 1 end`;
+
 const waitingForBudget = and(
   isNotNull(discoveryResults.rankDeferredAt),
   eq(discoveryResults.disposition, 'pending'),
@@ -798,9 +842,12 @@ const inLineForBudget = (now: number) =>
   );
 
 /**
- * The caller's results waiting for budget, in the order a drain takes them: oldest first (#218
- * brings pre-filter scores), with those still unranked and in line ahead of the rest. The others,
- * a posting refused today or one that already has a score, keep their order by date behind them.
+ * The caller's results waiting for budget, in the order a drain takes them. Those still unranked
+ * and in line come first, or a posting refused today could lead every drain on its title alone.
+ * Then the best pre-filter match (#218, the owner's decision 2 on #190): one that passed, one it
+ * never judged, then one it filtered, since the score is the title's alone and a perfect title in
+ * the wrong place is no best match, then by score, then oldest. Best first can starve: with more good new postings
+ * each day than the budget ranks, a poor older one can wait for as long as that lasts.
  */
 export async function listWaitingResultIds(
   exec: Exec,
@@ -813,6 +860,8 @@ export async function listWaitingResultIds(
     .where(and(eq(discoveryResults.userId, ctx.userId), waitingForBudget))
     .orderBy(
       sql`case when ${and(inLineForBudget(now), isNull(discoveryResults.aiScore))} then 0 else 1 end`,
+      verdictOrder,
+      descNullsLast(discoveryResults.prefilterScore),
       asc(discoveryResults.createdAt),
       asc(discoveryResults.id),
     )
@@ -1008,10 +1057,10 @@ export async function hasSucceededRun(
 }
 
 /**
- * The source's postings below the first-run cut (#215), in the order they are sent: newest posting
- * first, and those with no date last. #218 changes this to the best pre-filter matches. Sorted
- * here because the date is inside the posting's JSON, and comes back as text on both engines. A
- * decided posting is not listed: it has nothing left to rank for.
+ * The source's postings below the first-run cut (#215), in the order they are sent: the best
+ * pre-filter match first (#218), as in listWaitingResultIds, then the newest posting, and those
+ * with no date last. Sorted here because the date is inside the posting's JSON, and comes back as
+ * text on both engines. A decided posting is not listed: it has nothing left to rank for.
  */
 export async function listBelowCut(
   exec: Exec,
@@ -1022,6 +1071,8 @@ export async function listBelowCut(
     .select({
       id: discoveryResults.id,
       resolution: discoveryResults.resolution,
+      outcome: discoveryResults.prefilterOutcome,
+      score: discoveryResults.prefilterScore,
       postedAt: jsonText(discoveryResults.posting, 'postedAt'),
     })
     .from(discoveryResults)
@@ -1038,10 +1089,33 @@ export async function listBelowCut(
     .all();
   const postedAt = (r: { postedAt: string | null }): number =>
     r.postedAt === null ? Number.NEGATIVE_INFINITY : Number(r.postedAt);
+  const verdictRank = (r: { outcome: string | null }): number =>
+    r.outcome === 'pass' ? 0 : r.outcome === 'filtered' ? 2 : 1;
   return rows
-    .map((r, order) => ({ ...r, order, at: postedAt(r) }))
-    .sort((x, y) => (x.at === y.at ? x.order - y.order : y.at - x.at))
+    .map((r, order) => ({ ...r, order, at: postedAt(r), rank: verdictRank(r), s: r.score ?? -1 }))
+    .sort(
+      (x, y) => x.rank - y.rank || y.s - x.s || (x.at === y.at ? x.order - y.order : y.at - x.at),
+    )
     .map(({ id, resolution }) => ({ id, resolution }));
+}
+
+/**
+ * The posting is on its way to ranking, so it no longer says the filter held it. Only that reason
+ * goes, and only while it is pending: dismissed as it was sent, it needs the reason if Undo brings
+ * it back. As clearBelowCut.
+ */
+export async function clearFiltered(exec: Exec, ctx: UserCtx, id: string): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankSkipReason: null })
+    .where(
+      and(
+        ownedResult(ctx, id),
+        eq(discoveryResults.disposition, 'pending'),
+        eq(discoveryResults.rankSkipReason, 'filtered'),
+      ),
+    )
+    .run();
 }
 
 /**

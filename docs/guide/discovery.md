@@ -44,7 +44,8 @@ what they cost at the last 30 days' average cost per call. A board's first run b
 board, so it is left out: after only one run, those figures say "no data yet".
 
 **A new board's first run.** The first time a company board runs successfully, Opportun ranks only
-its 25 newest postings, so adding a large board does not send all of it to the AI at once. The rest
+its 25 best matches, judged by the [pre-filter](#the-pre-filter) and then the newest, so adding a
+large board does not send all of it to the AI at once. The rest
 are stored and shown in the queue as **Not ranked: below the cut**. To rank them, choose **Rank
 these** on that source's row in the Sources table. It shows how many there are and the estimated
 cost, based on your average cost per ranking call over the last 30 days, before anything runs. Once
@@ -52,6 +53,26 @@ you confirm, they go through your [discovery budget](settings.md#models-and-budg
 posting, so any that do not fit today wait for a later budget day. Later runs of that board are not
 capped, and a large Workday board brings in its postings over several runs, so those runs can still
 fill the budget for a while.
+
+### The pre-filter
+
+Before a company board's new posting goes to the AI, Opportun compares its title, place and remote
+setting with your role targets, with no AI call and no cost. It only rules a posting out on what the
+posting clearly states.
+
+At first it only measures. Once you have accepted at least 20 job board postings and it would have
+kept at least 95% of them, it turns on by itself: a posting it rules out gets no AI call, and its
+card says **Filtered** and why, with **Rank anyway**. **Settings > AI > Discovery pre-filter** says
+whether it is on and why not, and the share of postings it would filter. It is checked at the start of
+each run, so if the figure falls back below the bar, new postings are ranked again; those already
+filtered stay filtered until you send them.
+
+The figure can read high once it is on, because you rarely accept a posting with no score. A filtered
+posting you accept anyway counts against it.
+
+To turn it off for one board, clear **Pre-filter** on that board's row in the Sources table. Its new
+postings are then all ranked; any it already holds stay held until you choose **Rank anyway**. Job
+alert emails are never filtered.
 
 ### Where to look
 
@@ -121,8 +142,11 @@ An unscored result can say why, in a line on its card:
 
 - **Waiting for budget**: it is ranked when your [discovery budget](settings.md#models-and-budgets)
   has room.
-- **Not ranked: below the cut**: a board's first run ranks only its 25 newest postings. **Rank
-  these** on the [Sources](#add-a-board-source) tab sends the rest.
+- **Filtered: title**, **Filtered: remote** or **Filtered: location**: the
+  [pre-filter](#the-pre-filter) judged it clearly not a fit, so it was not sent to the AI. **Rank
+  anyway** on the card sends it.
+- **Not ranked: below the cut**: a board's first run ranks only its 25 best matches. **Rank these**
+  on the [Sources](#add-a-board-source) tab sends the rest.
 - **Not ranked: AI is not set up (Settings > AI)**: there is no AI key to rank it with.
 - **Not ranked: the AI provider rejected your key. Add a working key, or press Validate once it works, in Settings > AI**: the provider refused the key, so the app has stopped its hourly tries. Adding a working key, or pressing **Validate** on this one once it works, starts ranking what waits. So does a change to the Discovery ranking model, or a new posting that ranks.
 - **Not ranked: the AI provider was unavailable** or **Not ranked: the AI's answer could not be
@@ -148,14 +172,11 @@ role target is judged against all your role targets in that one call). A busy bo
 your sources if needed. The score is the model reading your role target and the posting text; it misses things a posting leaves
 out, so skim the low scorers occasionally.
 
-**The title pre-filter (measuring only).** Each new posting from a job board also gets a
-pass or filtered verdict from a cheap, local check: does its title match your role target, and
-does its stated location and remote setting fit? It needs no AI call per posting and, for now,
-changes nothing: every posting is still ranked. **Decided** shows how often it would keep the
-job board postings you accepted, with the count, so you can judge it before it is ever turned on.
-That figure is worked out each time against your current role targets, so it includes postings you
-accepted before this existed, and it moves when you edit a target. Postings from job-alert emails
-are not checked.
+**The title pre-filter.** Each new posting from a job board also gets a pass or filtered verdict from
+a cheap, local check, as [The pre-filter](#the-pre-filter) describes. **Decided** shows how often it
+would keep the job board postings you accepted, with the count. That figure is worked out each time
+against your current role targets, so it includes postings you accepted before this existed, and it
+moves when you edit a target. Postings from job-alert emails are not checked.
 
 The location check is deliberately lenient. It filters a posting only when it names a place that
 is clearly not one of yours. A posting saying "Multiple locations" or "United States" is kept, and

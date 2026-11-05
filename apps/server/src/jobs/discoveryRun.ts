@@ -30,12 +30,15 @@ import { isBoardSource, prefilter, type PrefilterVerdict } from '../lib/prefilte
 import type { Exec, UserCtx } from '../repos/base';
 import {
   clearBelowCut,
+  clearFiltered,
   createRun,
   finishRun,
+  getResult,
   getSourceRow,
   hasSucceededRun,
   insertResult,
   listBelowCut,
+  prefilterRecall,
   saveSourceCursor,
   setDisposition,
   setSourceStatus,
@@ -76,6 +79,8 @@ export interface RunStats {
    *  (issue #199) -- counted separately from `inserted` so a run's own history shows this
    *  rather than folding it into an undifferentiated insert count. */
   suppressed: number;
+  /** Of `inserted`, those the pre-filter held: stored, and no ranking call (#218). */
+  filtered: number;
 }
 
 type DuplicateCheck = 'duplicate' | 'multi_posted' | 'new';
@@ -219,6 +224,7 @@ async function ingest(
   sourceCompanyId: string | null,
   posting: NormalizedPosting,
   judge: Judge | null,
+  filterActs: boolean,
   holdBelowCut: boolean,
   sourceCommunicationId?: string,
 ): Promise<DiscoveryResultView | 'duplicate'> {
@@ -232,16 +238,23 @@ async function ingest(
     const check = await checkDuplicate(tx, ctx, key, sourceId, posting.externalId);
     if (check === 'duplicate') return 'duplicate';
     const partial = posting.descriptionMd == null || posting.descriptionMd === '';
+    const verdict = judge === null ? null : judge(posting);
     const result = await insertResult(tx, ctx, {
       runId,
       posting,
       dedupeKey: key,
       resolution: partial ? 'needs_capture' : 'full',
       aiRationale: check === 'multi_posted' ? MULTI_POSTED_PREFIX : null,
-      rankSkipReason: holdBelowCut ? 'below_cut' : null,
+      // Filtered goes first: below the cut it would be sent by Rank these, and ranked unasked.
+      rankSkipReason:
+        filterActs && verdict?.outcome === 'filtered'
+          ? 'filtered'
+          : holdBelowCut
+            ? 'below_cut'
+            : null,
       ...(sourceCommunicationId === undefined ? {} : { sourceCommunicationId }),
-      // Shadow mode (#217): stored and measured; what is ranked below does not depend on it.
-      prefilter: judge === null ? null : judge(posting),
+      // Stored and measured either way (#217).
+      prefilter: verdict,
     });
     const denied = matchDeniedCompany(await loadDeniedCompanies(tx, ctx), sourceCompanyId, posting);
     return denied === undefined ? result : await suppressForDenylist(tx, ctx, result, denied);
@@ -288,6 +301,19 @@ export async function rankBelowCut(
 }
 
 /**
+ * Rank anyway (#218): a posting the pre-filter held goes the way any new posting goes, so the budget
+ * and its wait apply. Queued before the reason goes, as rankBelowCut. Returns how many it sent: none
+ * if it is not held any more, so a second press does nothing and needs no error.
+ */
+export async function rankAnyway(db: Db, ctx: UserCtx, id: string): Promise<number> {
+  const result = await getResult(db, ctx, id);
+  if (result.disposition !== 'pending' || result.rankSkipReason !== 'filtered') return 0;
+  await enqueueFollowUps(db, ctx, result);
+  await clearFiltered(db, ctx, id);
+  return 1;
+}
+
+/**
  * The one path every posting takes into the queue, whatever its source: sanitize, re-validate,
  * dedupe, store, queue follow-ups. Updates `stats` and collects stored results in `inserted`. A
  * posting held below the cut is stored the same way and queues nothing yet.
@@ -302,6 +328,7 @@ async function ingestRaw(
   stats: RunStats,
   inserted: DiscoveryResultView[],
   judge: Judge | null,
+  filterActs: boolean,
   holdBelowCut: boolean,
   sourceCommunicationId?: string,
 ): Promise<void> {
@@ -318,6 +345,7 @@ async function ingestRaw(
     sourceCompanyId,
     parsed.data,
     judge,
+    filterActs,
     holdBelowCut,
     sourceCommunicationId,
   );
@@ -331,7 +359,11 @@ async function ingestRaw(
   } else {
     stats.inserted += 1;
     inserted.push(outcome);
-    if (!holdBelowCut) await enqueueFollowUps(db, ctx, outcome);
+    if (outcome.rankSkipReason === 'filtered') {
+      stats.filtered += 1;
+    } else if (!holdBelowCut) {
+      await enqueueFollowUps(db, ctx, outcome);
+    }
   }
 }
 
@@ -354,7 +386,14 @@ export async function insertLeads(
 ): Promise<{ runId: string; stats: RunStats; inserted: DiscoveryResultView[] }> {
   const run = await createRun(db, ctx, { sourceId });
   const source = await getSourceRow(db, ctx, sourceId);
-  const stats: RunStats = { fetched: 0, inserted: 0, duplicates: 0, invalid: 0, suppressed: 0 };
+  const stats: RunStats = {
+    fetched: 0,
+    inserted: 0,
+    duplicates: 0,
+    invalid: 0,
+    suppressed: 0,
+    filtered: 0,
+  };
   const inserted: DiscoveryResultView[] = [];
   for (const posting of postings) {
     stats.fetched += 1;
@@ -369,6 +408,7 @@ export async function insertLeads(
       inserted,
       // Job-alert emails are never pre-filtered (owner's decision 5 on #190).
       null,
+      false,
       // A job alert is not a board, so no first-run cap either.
       false,
       sourceCommunicationId,
@@ -434,7 +474,14 @@ export async function runDiscoverySource(
   if (!source.enabled) return { status: 'skipped', reason: 'disabled' };
 
   const run = await createRun(db, ctx, { sourceId: source.id });
-  const stats: RunStats = { fetched: 0, inserted: 0, duplicates: 0, invalid: 0, suppressed: 0 };
+  const stats: RunStats = {
+    fetched: 0,
+    inserted: 0,
+    duplicates: 0,
+    invalid: 0,
+    suppressed: 0,
+    filtered: 0,
+  };
   const inserted: DiscoveryResultView[] = [];
   const { config, cursor } = splitConfig(source);
   let lastCursor: unknown = cursor;
@@ -452,6 +499,10 @@ export async function runDiscoverySource(
     const judge = isBoardSource(source.kind)
       ? await prefilterJudge(db, ctx, source.roleTargetId)
       : null;
+    // At each run's start, against the user's decisions as they stand now: it does not latch, so
+    // recall falling back below the bar returns new postings to shadow mode (#218).
+    const filterActs =
+      judge !== null && source.prefilterEnabled && (await prefilterRecall(db, ctx)).on;
     for await (const item of adapter.fetchPostings(runSctx, config, cursor)) {
       stats.fetched += 1;
       lastCursor = item.nextCursor;
@@ -466,6 +517,7 @@ export async function runDiscoverySource(
         stats,
         inserted,
         judge,
+        filterActs,
         firstRun,
       );
     }

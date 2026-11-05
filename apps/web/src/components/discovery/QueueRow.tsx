@@ -5,11 +5,13 @@
 import type { RankSkipReason, Resolution } from '@opportun/core';
 import { Check, ExternalLink, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { FormError } from '@/components/FormError';
 import { Button } from '@/components/ui/button';
+import { errorMessage } from '@/lib/api';
 import { Checkbox } from '@/components/ui/checkbox';
 import { formatDate, safeHttpUrl } from '@/lib/opportunities';
 import { cn } from '@/lib/utils';
-import { resolutionLabel, sourceKindLabel, type DiscoveryResult } from './api';
+import { resolutionLabel, sourceKindLabel, useRankAnyway, type DiscoveryResult } from './api';
 import { rowKey, type ResultGroup } from './groupResults';
 import { firstDiscoveredAt } from './queueOrder';
 
@@ -47,15 +49,35 @@ const SKIP_WORDS = new Map<RankSkipReason, string>([
  * waiting, it says the score may change.
  */
 export function rankLine(
-  r: Pick<DiscoveryResult, 'aiScore' | 'rankSkipReason' | 'rankDeferredAt'>,
+  r: Pick<DiscoveryResult, 'aiScore' | 'rankSkipReason' | 'rankDeferredAt' | 'prefilterRule'>,
 ): string | null {
   if (r.aiScore !== null) {
     return r.rankDeferredAt === null
       ? null
       : 'Score may change: a new ranking is waiting for budget';
   }
+  if (r.rankSkipReason === 'filtered') return `Filtered: ${r.prefilterRule ?? 'pre-filter'}`;
   if (r.rankSkipReason !== null) return SKIP_WORDS.get(r.rankSkipReason) ?? null;
   return r.rankDeferredAt === null ? null : 'Waiting for budget';
+}
+
+/** Sends one posting the pre-filter held (#218). Only on a card that says it was held. */
+function RankAnyway({ result, label }: { result: DiscoveryResult; label: string }) {
+  const rank = useRankAnyway();
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={rank.isPending}
+        onClick={() => rank.mutate(result.id)}
+        aria-label={`Rank anyway: ${label}`}
+      >
+        Rank anyway
+      </Button>
+      {rank.error ? <FormError message={errorMessage(rank.error)} /> : null}
+    </>
+  );
 }
 
 export function RankLine({ result }: { result: DiscoveryResult }) {
@@ -216,6 +238,7 @@ export function QueueRow(props: {
           <X aria-hidden="true" />
           Dismiss
         </Button>
+        {r.rankSkipReason === 'filtered' ? <RankAnyway result={r} label={label} /> : null}
         {href !== null ? (
           <Button asChild size="sm" variant="outline">
             <a
@@ -334,6 +357,9 @@ export function QueueGroupRow(props: {
           <X aria-hidden="true" />
           Dismiss all {n}
         </Button>
+        {primary.rankSkipReason === 'filtered' ? (
+          <RankAnyway result={primary} label={label} />
+        ) : null}
       </div>
     </li>
   );

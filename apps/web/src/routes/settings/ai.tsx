@@ -7,6 +7,7 @@ import { ProposedRefinement } from '@/components/ai/ProposedRefinement';
 import { PromptEditor } from '@/components/ai/promptEditor';
 import { ProviderKeysCard } from '@/components/ai/ProviderKeysCard';
 import { DiscoveryBudgetCard, DiscoveryBudgetLine } from '@/components/ai/DiscoveryBudget';
+import { PrefilterCard } from '@/components/discovery/PrefilterRecall';
 import { RankCostCard } from '@/components/ai/RankCostCard';
 import { RankSkipsLine } from '@/components/ai/RankSkips';
 import { UsageTable } from '@/components/ai/UsageTable';
@@ -35,6 +36,7 @@ function AiSettings() {
         </CardContent>
       </Card>
       <DiscoveryBudgetCard />
+      <PrefilterCard />
       <Card>
         <CardHeader>
           <CardTitle>Usage</CardTitle>

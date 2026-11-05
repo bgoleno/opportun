@@ -18,7 +18,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { hasSource } from '../adapters/discoverySource';
 import { DISCOVERY_RUN_KIND } from '../jobs/discoveryKinds';
-import { rankBelowCut } from '../jobs/discoveryRun';
+import { rankAnyway, rankBelowCut } from '../jobs/discoveryRun';
 import { enqueue } from '../jobs/runner';
 import { HttpError, duplicate } from '../lib/errors';
 import { createActivity } from '../repos/activities';
@@ -94,6 +94,13 @@ const PrefilterRecallSchema = z.object({
   kept: z.number().int(),
   /** kept / positives, 0 to 1; null with none yet. */
   recall: z.number().nullable(),
+  /** Whether recall holds, so that board sources act on the verdicts (#218). */
+  on: z.boolean(),
+  neededRecall: z.number(),
+  neededPositives: z.number().int(),
+  /** Postings it judged when they arrived, and those it filtered. */
+  judged: z.number().int(),
+  filtered: z.number().int(),
 });
 
 const ResultListQuery = listQuery([...RESULT_SORTS.keys()]).extend({
@@ -191,6 +198,7 @@ const SourceSchema = z.object({
   kind: z.enum(DISCOVERY_SOURCE_KINDS),
   config: z.record(z.string(), z.unknown()),
   enabled: z.boolean(),
+  prefilterEnabled: z.boolean(),
   scheduleCron: z.string().nullable(),
   roleTargetId: z.string().nullable(),
   companyId: z.string().nullable(),
@@ -204,13 +212,21 @@ const SourceSchema = z.object({
 const sourceFields = {
   config: z.record(z.string().max(100), z.unknown()),
   enabled: z.boolean(),
+  prefilterEnabled: z.boolean(),
   scheduleCron: optionalText(100),
   roleTargetId: z.string().min(1).max(64).nullable(),
   companyId: z.string().min(1).max(64).nullable(),
 };
 const SourceCreate = z
   .object({ kind: z.enum(DISCOVERY_SOURCE_KINDS), ...sourceFields })
-  .partial({ config: true, enabled: true, scheduleCron: true, roleTargetId: true, companyId: true })
+  .partial({
+    config: true,
+    enabled: true,
+    prefilterEnabled: true,
+    scheduleCron: true,
+    roleTargetId: true,
+    companyId: true,
+  })
   .strict();
 const SourcePatch = z.object(sourceFields).partial().strict();
 const SourceListQuery = listQuery([...SOURCE_SORTS.keys()]).extend({
@@ -809,6 +825,21 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       const ctx = app.requireUser(req);
       const source = await getSourceRow(db, ctx, req.params.id);
       const queued = await rankBelowCut(db, ctx, source.id, req.body.count);
+      return reply.code(202).send({ queued });
+    },
+  );
+
+  // Rank anyway (#218): one the pre-filter held. 404 for anything but the caller's own.
+  api.post(
+    '/discovery/results/:id/rank-anyway',
+    {
+      schema: {
+        params: IdParams,
+        response: { 202: z.object({ queued: z.number().int() }) },
+      },
+    },
+    async (req, reply) => {
+      const queued = await rankAnyway(db, app.requireUser(req), req.params.id);
       return reply.code(202).send({ queued });
     },
   );

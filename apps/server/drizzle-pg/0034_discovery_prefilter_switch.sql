@@ -1,0 +1,1 @@
+ALTER TABLE "discovery_sources" ADD COLUMN "prefilter_enabled" boolean DEFAULT true NOT NULL;
