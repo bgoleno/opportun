@@ -735,4 +735,197 @@ describe('job runner concurrency', () => {
     await runner.stop();
     expect(finished).toBe(2);
   });
+
+  // https://github.com/bgoleno/opportun/issues/263: the pool used to look for work only when every
+  // job had ended, so a job queued during a long one waited for it, with workers free.
+  describe('a job queued while another runs', () => {
+    /** Long enough for a worker with nothing to claim to have stopped looking. */
+    const settle = () => new Promise((r) => setTimeout(r, 100));
+
+    it('does not wait for it', async () => {
+      const { db } = await freshDb();
+      const started: string[] = [];
+      const held = deferred();
+      gate('test.par.a', started, held.promise);
+      gate('test.par.b', started, Promise.resolve());
+      await enqueue(db, 'test.par.a', {});
+      const runner = startRunner(db, { workers: 2, intervalMs: 5 });
+      try {
+        await until(() => started.includes('test.par.a'));
+        await settle();
+        await enqueue(db, 'test.par.b', {});
+        await until(() => started.includes('test.par.b'));
+      } finally {
+        held.resolve();
+        await runner.stop();
+      }
+    });
+
+    it('does not wait for a long Gmail sync, at the default workers and limits', async () => {
+      const { db } = await freshDb();
+      const started: string[] = [];
+      const held = deferred();
+      gate('gmail.sync', started, held.promise);
+      gate('test.par.b', started, Promise.resolve());
+      await enqueue(db, 'gmail.sync', {});
+      const runner = startRunner(db, { intervalMs: 5 });
+      try {
+        await until(() => started.includes('gmail.sync'));
+        await settle();
+        await enqueue(db, 'test.par.b', {});
+        await until(() => started.includes('test.par.b'));
+        // And the sync's own ceiling still holds on a later look.
+        await enqueue(db, 'gmail.sync', { second: true });
+        await settle();
+        expect(started.filter((k) => k === 'gmail.sync')).toHaveLength(1);
+      } finally {
+        held.resolve();
+        await runner.stop();
+      }
+    });
+
+    it('never runs more than the pool at once, however many looks it takes', async () => {
+      const { db } = await freshDb();
+      const started: string[] = [];
+      const held = deferred();
+      gate('test.par.a', started, held.promise);
+      await enqueue(db, 'test.par.a', { n: 1 });
+      const runner = startRunner(db, { workers: 2, intervalMs: 5 });
+      try {
+        await until(() => started.length === 1);
+        await settle();
+        await enqueue(db, 'test.par.a', { n: 2 });
+        await enqueue(db, 'test.par.a', { n: 3 });
+        await until(() => started.length === 2);
+        await settle();
+        expect(started).toHaveLength(2);
+      } finally {
+        held.resolve();
+        await runner.stop();
+      }
+    });
+
+    it('a capped kind queued while the same kind runs stays pending until the first ends', async () => {
+      const { db } = await freshDb();
+      const started: string[] = [];
+      const held = deferred();
+      gate('test.capped', started, held.promise);
+      gate('test.par.b', started, Promise.resolve());
+      await enqueue(db, 'test.capped', { n: 1 });
+      const runner = startRunner(db, {
+        workers: 3,
+        intervalMs: 5,
+        kindLimits: { 'test.capped': 1 },
+      });
+      const capped = () => started.filter((k) => k === 'test.capped').length;
+      try {
+        await until(() => capped() === 1);
+        await settle();
+        const second = await enqueue(db, 'test.capped', { n: 2 });
+        // The uncapped kind proves the pool looked after the second one was queued.
+        await enqueue(db, 'test.par.b', {});
+        await until(() => started.includes('test.par.b'));
+        await settle();
+        expect(capped()).toBe(1);
+        expect((await jobRow(db, second)).status).toBe('pending');
+        held.resolve();
+        await until(() => capped() === 2);
+      } finally {
+        held.resolve();
+        await runner.stop();
+      }
+    });
+
+    it('a rejected claim leaks no worker slot: a later look runs jobs at the full count', async () => {
+      const { db } = await freshDb();
+      const started: string[] = [];
+      const held = deferred();
+      gate('test.par.a', started, held.promise);
+      let toReject = 0;
+      const errors: unknown[] = [];
+      const runner = startRunner(db, {
+        workers: 3,
+        intervalMs: 5,
+        // The claim reads the clock first, so a throw here rejects it the way a database error does.
+        now: () => {
+          if (toReject > 0) {
+            toReject -= 1;
+            throw new Error('claim rejected');
+          }
+          return Date.now();
+        },
+        onError: (err) => errors.push(err),
+      });
+      try {
+        await enqueue(db, 'test.par.a', { n: 1 });
+        await until(() => started.length === 1);
+        await settle();
+        // More than the two free workers' one look each, so every free slot is rejected at least once.
+        toReject = 6;
+        await until(() => toReject === 0);
+        expect(errors).toHaveLength(6);
+        await enqueue(db, 'test.par.a', { n: 2 });
+        await enqueue(db, 'test.par.a', { n: 3 });
+        await until(() => started.length === 3);
+      } finally {
+        toReject = 0;
+        held.resolve();
+        await runner.stop();
+      }
+    });
+
+    it('stop() waits for every job, whichever look started it, and no new job starts', async () => {
+      const { db } = await freshDb();
+      const started: string[] = [];
+      const first = deferred();
+      const later = deferred();
+      let laterFinished = false;
+      gate('test.par.a', started, first.promise);
+      gate('test.par.c', started, Promise.resolve());
+      registerJob({
+        kind: 'test.par.b',
+        payloadSchema: z.object({}).passthrough(),
+        maxAttempts: 1,
+        run: async () => {
+          started.push('test.par.b');
+          await later.promise;
+          laterFinished = true;
+        },
+      });
+      await enqueue(db, 'test.par.a', {});
+      const runner = startRunner(db, { workers: 3, intervalMs: 5 });
+      try {
+        await until(() => started.includes('test.par.a'));
+        await settle();
+        await enqueue(db, 'test.par.b', {});
+        await until(() => started.includes('test.par.b'));
+      } catch (err) {
+        // The main path stops the runner itself, so a failure here has to.
+        first.resolve();
+        later.resolve();
+        await runner.stop();
+        throw err;
+      }
+
+      let stopFinished = false;
+      const stopping = runner.stop().then(() => {
+        stopFinished = true;
+      });
+      const queued = await enqueue(db, 'test.par.c', {});
+      await settle();
+      expect(stopFinished).toBe(false);
+
+      // The first job ends with the later one still held, and its worker must not take the new job.
+      first.resolve();
+      await settle();
+      expect(stopFinished).toBe(false);
+      expect(started).not.toContain('test.par.c');
+
+      later.resolve();
+      await stopping;
+      expect(laterFinished).toBe(true);
+      expect(started).not.toContain('test.par.c');
+      expect((await jobRow(db, queued)).status).toBe('pending');
+    });
+  });
 });
