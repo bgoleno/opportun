@@ -31,6 +31,10 @@ const SKIP_WORDS = new Map<RankSkipReason, string>([
   ['budget_exceeded', 'Waiting for budget'],
   ['no_key', 'Not ranked: AI is not set up (Settings > AI)'],
   ['provider_error', 'Not ranked: the AI provider was unavailable'],
+  [
+    'key_rejected',
+    'Not ranked: the AI provider rejected your key. Add a working key or check it again in Settings > AI',
+  ],
   ['invalid_output', "Not ranked: the AI's answer could not be used"],
 ]);
 

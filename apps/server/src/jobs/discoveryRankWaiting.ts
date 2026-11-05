@@ -15,9 +15,13 @@ import type { Db } from '../db/client';
 import type { UserCtx } from '../repos/base';
 import {
   clearRankDeferred,
+  clearWaitingKeyReasons,
+  countWaitingResults,
   listWaitingResultIds,
   setRankTurnUsed,
+  setWaitingKeyRejected,
   setWaitingNoKey,
+  usersWithRejectedKey,
   usersWithWaitingResults,
 } from '../repos/discovery';
 import { discoveryBudgetHasRoom } from '../repos/discoveryBudget';
@@ -30,10 +34,18 @@ export { enqueueRankWaiting, RANK_WAITING_KIND };
 export const RANK_WAITING_SWEEP_KIND = 'discovery.rank_waiting_sweep';
 export const RANK_WAITING_SWEEP_CRON = '5 * * * *';
 
-/** Queues a drain for each user with postings waiting and room in their budget today. */
+/**
+ * Queues a drain for each user with postings waiting and room in their budget today, except one
+ * whose key the provider rejected: a failed call costs nothing, so the budget would never stop
+ * those calls, and each one sends a posting (https://github.com/bgoleno/opportun/issues/261). A hard
+ * stop, not a slower retry. A provider that is merely out never answers 401, so it keeps being
+ * tried. resumeAfterKeyChange ends the stop, and so does a new posting that ranks.
+ */
 export async function sweepWaitingResults(db: Db): Promise<{ queued: number }> {
   let queued = 0;
+  const stopped = await usersWithRejectedKey(db);
   for (const userId of await usersWithWaitingResults(db)) {
+    if (stopped.has(userId)) continue;
     const ctx: UserCtx = { userId, isAdmin: false };
     if (await discoveryBudgetHasRoom(db, ctx)) {
       await enqueueRankWaiting(db, ctx);
@@ -41,6 +53,19 @@ export async function sweepWaitingResults(db: Db): Promise<{ queued: number }> {
     }
   }
   return { queued };
+}
+
+/**
+ * Something about the user's key changed: postings waiting behind a missing or rejected key must no
+ * longer say so, and with room in the budget they need not wait for the sweep. If the key still does
+ * not work, the drain finds that out and says so, at the cost of one call. That also makes a re-check
+ * of a key the ranking does not use harmless.
+ */
+export async function resumeAfterKeyChange(db: Db, ctx: UserCtx): Promise<void> {
+  await clearWaitingKeyReasons(db, ctx);
+  if ((await countWaitingResults(db, ctx)) > 0 && (await discoveryBudgetHasRoom(db, ctx))) {
+    await enqueueRankWaiting(db, ctx);
+  }
 }
 
 /**
@@ -55,7 +80,7 @@ export interface DrainOutcome {
   /** Threw on this posting: it keeps waiting, and those behind it still go. */
   failed: number;
   /** Why the drain stopped early; everything not yet ranked keeps waiting. */
-  stopped: 'budget_exceeded' | 'no_key' | 'provider_error' | 'shutdown' | null;
+  stopped: 'budget_exceeded' | 'no_key' | 'key_rejected' | 'provider_error' | 'shutdown' | null;
 }
 
 /**
@@ -105,6 +130,12 @@ export async function drainWaitingResults(
       }
       if (run.reason === 'no_key') {
         await setWaitingNoKey(db, ctx);
+        outcome.stopped = run.reason;
+        return outcome;
+      }
+      // The first is enough, unlike a provider error: a 401 is about the key, not this posting.
+      if (run.reason === 'key_rejected') {
+        await setWaitingKeyRejected(db, ctx);
         outcome.stopped = run.reason;
         return outcome;
       }

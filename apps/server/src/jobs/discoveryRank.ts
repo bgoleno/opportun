@@ -19,10 +19,11 @@ import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
 import {
-  clearWaitingNoKey,
+  clearWaitingKeyReasons,
   getResult,
   hasOlderWaitingResult,
   setRankDeferred,
+  setRankKeyRejected,
   setRanking,
   setRankSkip,
   type DiscoveryResultView,
@@ -142,6 +143,12 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
       await setRankDeferred(db, ctx, resultId);
       return { status: 'skipped', reason: err.reason };
     }
+    // The provider refused the key. It joins the wait, so it is ranked once a key works, with
+    // the reason on its card.
+    if (err instanceof AiUnavailableError && err.keyRejected) {
+      await setRankKeyRejected(db, ctx, resultId);
+      return { status: 'skipped', reason: 'key_rejected' };
+    }
     // No key, or the provider is down: leave it unranked for manual triage, and keep why on the
     // result so its card can say so (#210).
     if (err instanceof AiUnavailableError) {
@@ -158,7 +165,7 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
   });
   // However the key came back: adding one clears this too, but a policy change to a provider that
   // has one does not pass through there.
-  await clearWaitingNoKey(db, ctx);
+  await clearWaitingKeyReasons(db, ctx);
   return { status: 'ranked', score };
 }
 

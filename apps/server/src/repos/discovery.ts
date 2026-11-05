@@ -781,8 +781,9 @@ const waitingForBudget = and(
  * Waiting postings still in line for a turn. A posting the provider refused today has had today's
  * turn, or a few that always fail would be first on every drain and the backlog behind them would
  * never be reached. On a later budget day it is back in line by date, or new postings could spend
- * each day's budget ahead of it for ever. A no-key reason is not in line: it holds nothing up while
- * the key is missing, and it ends when a key works (clearWaitingNoKey).
+ * each day's budget ahead of it for ever. A no-key or rejected-key reason is not in line: it holds
+ * nothing up while the key is missing or refused, and it ends when a key works
+ * (clearWaitingKeyReasons).
  */
 const inLineForBudget = (now: number) =>
   or(
@@ -887,7 +888,7 @@ export async function setWaitingNoKey(exec: Exec, ctx: UserCtx): Promise<void> {
  * A key works: it was added, or a call got through. No waiting card should still say AI is not set
  * up, and those postings are back in line, so new ones go behind them again.
  */
-export async function clearWaitingNoKey(exec: Exec, ctx: UserCtx): Promise<void> {
+export async function clearWaitingKeyReasons(exec: Exec, ctx: UserCtx): Promise<void> {
   await exec
     .update(discoveryResults)
     .set({ rankSkipReason: null })
@@ -895,9 +896,49 @@ export async function clearWaitingNoKey(exec: Exec, ctx: UserCtx): Promise<void>
       and(
         eq(discoveryResults.userId, ctx.userId),
         waitingForBudget,
-        eq(discoveryResults.rankSkipReason, 'no_key'),
+        inArray(discoveryResults.rankSkipReason, ['no_key', 'key_rejected']),
       ),
     )
+    .run();
+}
+
+/**
+ * The provider rejected the caller's key, so every unscored posting waiting says so, and the sweep
+ * passes this user over (usersWithRejectedKey). A scored posting is never marked: it is ranked, so
+ * it must never read "Not ranked" (tl on #213).
+ */
+export async function setWaitingKeyRejected(exec: Exec, ctx: UserCtx): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankSkipReason: 'key_rejected' })
+    .where(
+      and(
+        eq(discoveryResults.userId, ctx.userId),
+        waitingForBudget,
+        isNull(discoveryResults.aiScore),
+      ),
+    )
+    .run();
+}
+
+/**
+ * A rank job got a rejected key: the posting joins the wait with the reason, written together
+ * because setRankDeferred clears the reason. Joining is what gets it ranked once a key works: the
+ * ways back and the drain only reach waiting postings. A scored posting keeps its score, unmarked.
+ */
+export async function setRankKeyRejected(
+  exec: Exec,
+  ctx: UserCtx,
+  id: string,
+  now: number = Date.now(),
+): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({
+      rankSkipReason: 'key_rejected',
+      rankDeferredAt: sql`coalesce(${discoveryResults.rankDeferredAt}, ${now})`,
+    })
+    .where(and(ownedResult(ctx, id), isNull(discoveryResults.aiScore)))
     .run();
 }
 
@@ -912,6 +953,20 @@ export async function countWaitingResults(exec: Exec, ctx: UserCtx): Promise<num
 }
 
 /** The users with a result waiting for budget (the sweep's list). */
+/**
+ * Users with any waiting posting marked key_rejected. Any, not all: scored postings are never
+ * marked, so one waiting would otherwise keep the sweep calling every hour. Every way back clears
+ * every mark, so one mark means the stop is on.
+ */
+export async function usersWithRejectedKey(exec: Exec): Promise<Set<string>> {
+  const rows = await exec
+    .selectDistinct({ userId: discoveryResults.userId })
+    .from(discoveryResults)
+    .where(and(waitingForBudget, eq(discoveryResults.rankSkipReason, 'key_rejected')))
+    .all();
+  return new Set(rows.map((r) => r.userId));
+}
+
 export async function usersWithWaitingResults(exec: Exec): Promise<string[]> {
   const rows = await exec
     .selectDistinct({ userId: discoveryResults.userId })
