@@ -61,8 +61,14 @@ const onlyEarlierTables = (after: Record<string, number>, before: Record<string,
  * Rows after the upgrade, on the columns they had before it. The upgrade runs the whole chain,
  * so a later migration may add a column to a compared table (discovery_results.rank_skip_reason,
  * https://github.com/bgoleno/opportun/issues/210). Such a column must be null on every kept row,
- * which this checks; this test is about 0038 keeping rows, not about later columns.
+ * which this checks, or hold the default named here; this test is about 0038 keeping rows, not
+ * about later columns.
  */
+const LATER_COLUMNS_DEFAULT_ON = new Set([
+  // On for every source, so a board acts on the pre-filter once it holds (#218).
+  'discovery_sources.prefilter_enabled',
+]);
+
 function onlyEarlierColumns(
   after: Record<string, unknown[]>,
   before: Record<string, unknown[]>,
@@ -78,7 +84,11 @@ function onlyEarlierColumns(
         rows.map((row) => {
           const entries = Object.entries(row as Row);
           for (const [column, value] of entries) {
-            if (!keep.has(column)) expect(value, `${table}.${column}`).toBeNull();
+            if (keep.has(column)) continue;
+            const name = `${table}.${column}`;
+            // A boolean reads as 1 on SQLite and true on Postgres.
+            if (LATER_COLUMNS_DEFAULT_ON.has(name)) expect(Boolean(value), name).toBe(true);
+            else expect(value, name).toBeNull();
           }
           return Object.fromEntries(entries.filter(([column]) => keep.has(column)));
         }),

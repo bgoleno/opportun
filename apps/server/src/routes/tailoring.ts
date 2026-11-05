@@ -94,7 +94,7 @@ function toSessionView(s: SessionRow): z.infer<typeof SessionView> {
 }
 
 /** The 503 for an AI failure; a provider_error on an expired stored key carries keyHint. */
-async function aiUnavailable(
+export async function aiUnavailable(
   db: Db,
   ctx: UserCtx,
   task: TaskKey,

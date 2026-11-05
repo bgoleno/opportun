@@ -49,6 +49,8 @@ import {
   type Participant,
   type SubmissionAnswer,
   type SubmissionFields,
+  INDUSTRY_SOURCES,
+  NAICS_TIERS,
 } from '@opportun/core';
 import {
   type AtsJobRefRecord,
@@ -799,6 +801,28 @@ export const dismissalFeedback = sqliteTable(
     index('dismissal_feedback_user_id_idx').on(t.userId),
     index('dismissal_feedback_user_kind_at_idx').on(t.userId, t.kind, t.at),
   ],
+);
+
+/**
+ * The user's industry profile (https://github.com/bgoleno/opportun/issues/219): NAICS 2022 codes
+ * from the table in @opportun/core, proposed by the discovery.industry_profile task or added by
+ * the user. Only a confirmed row counts.
+ */
+export const industryProfile = sqliteTable(
+  'industry_profile',
+  {
+    id: id(),
+    userId: userRef(),
+    naicsCode: text('naics_code').notNull(),
+    tier: text('tier', { enum: NAICS_TIERS }).notNull(),
+    source: text('source', { enum: INDUSTRY_SOURCES }).notNull(),
+    /** The model's one line; null on a row the user added. */
+    reason: text('reason'),
+    confirmed: bool('confirmed').notNull().default(false),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('industry_profile_user_code_uq').on(t.userId, t.naicsCode)],
 );
 
 /** The cost ledger (FR-A5) aggregates this table. Never stores raw prompts. */

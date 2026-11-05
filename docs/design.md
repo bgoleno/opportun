@@ -253,6 +253,8 @@ either opportunity cannot re-propose a pair the user already rejected.
   (`pending` | `accepted` | `dismissed`), opportunity_id (when accepted).
 - **dismissal_feedback**: id, user_id, opportunity_id/result_id, reason, note, at.
   Input to the prompt-refinement task (FR-D6).
+- **industry_profile**: id, user_id, naics_code, tier (core | similar | adjacent), source
+  (resume | target | user), reason, confirmed. One row per user and code (#219).
 - **task_runs**: id, user_id, task_key, provider, model, prompt_id/version,
   input_tokens, output_tokens, est_cost, duration_ms, status, error. The cost ledger
   (FR-A5) is an aggregate over this table.
@@ -298,18 +300,19 @@ Each AI feature is a **task**: `{ task_key, description, default_prompt,
 default_policy, input_schema, output_schema }`, registered in `packages/ai`.
 Launch tasks:
 
-| task_key                 | Purpose                                                        | Default policy shape                     |
-| ------------------------ | -------------------------------------------------------------- | ---------------------------------------- |
-| resume.tailor            | Interactive tailoring chat (FR-R4)                             | most capable configured model, streaming |
-| discovery.rank           | Score posting vs role target (FR-D4)                           | mid-tier model, batched                  |
-| discovery.refine_prompt  | Propose prompt edits from dismissals (FR-D6)                   | capable model, scheduled                 |
-| discovery.title_variants | List equivalent titles for one role target (#217)              | mid-tier; on create/rename, or nightly   |
-| comms.classify           | Classify, outreach-filter, and link messages (FR-M2, FR-M8)    | small/fast model, batched                |
-| opportunity.dedupe       | Duplicate and multi-recruiter repost detection (FR-O7, FR-O10) | small model after cheap heuristics       |
-| referral.rationale       | Rank referral candidates (FR-C3)                               | mid-tier model                           |
-| capture.extract          | Parse pasted job posting into fields (FR-D1)                   | small model, structured output           |
-| resume.match             | Score resume vs job description with gap report (FR-R8)        | mid-tier model, structured output        |
-| company.suggest          | Propose fitting companies from resume + role targets (FR-D8)   | capable model, scheduled                 |
+| task_key                   | Purpose                                                             | Default policy shape                     |
+| -------------------------- | ------------------------------------------------------------------- | ---------------------------------------- |
+| resume.tailor              | Interactive tailoring chat (FR-R4)                                  | most capable configured model, streaming |
+| discovery.rank             | Score posting vs role target (FR-D4)                                | mid-tier model, batched                  |
+| discovery.industry_profile | NAICS industries to look in, from base resume + role targets (#219) | mid-tier; only when the user asks        |
+| discovery.refine_prompt    | Propose prompt edits from dismissals (FR-D6)                        | capable model, scheduled                 |
+| discovery.title_variants   | List equivalent titles for one role target (#217)                   | mid-tier; on create/rename, or nightly   |
+| comms.classify             | Classify, outreach-filter, and link messages (FR-M2, FR-M8)         | small/fast model, batched                |
+| opportunity.dedupe         | Duplicate and multi-recruiter repost detection (FR-O7, FR-O10)      | small model after cheap heuristics       |
+| referral.rationale         | Rank referral candidates (FR-C3)                                    | mid-tier model                           |
+| capture.extract            | Parse pasted job posting into fields (FR-D1)                        | small model, structured output           |
+| resume.match               | Score resume vs job description with gap report (FR-R8)             | mid-tier model, structured output        |
+| company.suggest            | Propose fitting companies from resume + role targets (FR-D8)        | capable model, scheduled                 |
 
 The **router** resolves `task_key → {provider, model, params}` from user settings
 overlaid on defaults, acquires the decrypted key, enforces per-task token ceilings

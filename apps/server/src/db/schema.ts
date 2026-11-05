@@ -49,6 +49,7 @@ export const discoverySources = t.discoverySources;
 export const discoveryRuns = t.discoveryRuns;
 export const discoveryResults = t.discoveryResults;
 export const dismissalFeedback = t.dismissalFeedback;
+export const industryProfile = t.industryProfile;
 export const mailFilterRules = t.mailFilterRules;
 export const taskRuns = t.taskRuns;
 export const networkContacts = t.networkContacts;

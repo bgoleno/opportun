@@ -230,7 +230,21 @@
       "idx": 32,
       "version": "7",
       "when": 1794700000000,
-      "tag": "0032_discovery_prefilter_switch",
+      "tag": "0032_industry_profile",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1794800000000,
+      "tag": "0033_discovery_industry_profile_prompt",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1794900000000,
+      "tag": "0034_discovery_prefilter_switch",
       "breakpoints": true
     }
   ]

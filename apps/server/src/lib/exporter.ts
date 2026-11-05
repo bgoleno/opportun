@@ -56,6 +56,7 @@ const USER_TABLES: UserTable[] = [
   schema.discoveryRuns,
   schema.discoveryResults,
   schema.dismissalFeedback,
+  schema.industryProfile,
   // The user's mail filter rules travel with the export: restoring without them would
   // silently reopen every sender they had blocked.
   schema.mailFilterRules,

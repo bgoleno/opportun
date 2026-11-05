@@ -72,6 +72,7 @@ import {
 import { SNAPSHOT_RECONCILE_CRON, SNAPSHOT_RECONCILE_JOB_KIND } from './jobs/submissionSnapshot';
 import { activityRoutes } from './routes/activities';
 import { aiRoutes } from './routes/ai';
+import { industryProfileRoutes } from './routes/industryProfile';
 import { attachmentRoutes } from './routes/attachments';
 import { backupRoutes } from './routes/backups';
 import { authRoutes } from './routes/auth';
@@ -528,6 +529,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       await api.register(reactiveResumeRoutes);
       await api.register(tailoringRoutes);
       await api.register(discoveryRoutes);
+      await api.register(industryProfileRoutes);
       await api.register(captureRoutes);
       await api.register(connectorCaptureRoutes);
       // Assisted apply prefill's device routes (#182); they 404 unless the feature is on.

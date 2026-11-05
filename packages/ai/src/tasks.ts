@@ -37,6 +37,7 @@ const RankInput = vars('role_target', 'posting_untrusted');
 const RefineInput = vars('current_prompt', 'feedback_summary');
 /** One role target, as the user wrote it (#217): the titles it means, to expand into variants. */
 const TitleVariantsInput = vars('role_target');
+const IndustryProfileInput = vars('resume_untrusted', 'role_targets', 'naics_table');
 /** Stage 2's gate: the sender, the subject and a 500-character head of the body, fenced. */
 const TriageInput = vars('message_untrusted');
 const ClassifyInput = vars('role_targets', 'open_opportunities_untrusted', 'message_untrusted');
@@ -105,6 +106,24 @@ export const TitleVariantsOutputSchema = z.object({
   // Loose on purpose: one long or blank title must not fail the whole answer, because
   // cleanTitleVariants (apps/server) trims, cuts and drops what it needs to before storing.
   titles: z.array(z.string().max(2000)).max(80),
+});
+
+/**
+ * The industries a person should look in (https://github.com/bgoleno/opportun/issues/219). The
+ * code is any text here: the caller checks it against the NAICS table and drops any other, so one
+ * made-up code does not fail the whole answer. 30 are asked for; more than this is not an answer.
+ */
+export const IndustryProfileOutputSchema = z.object({
+  industries: z
+    .array(
+      z.object({
+        code: z.string().max(20),
+        tier: z.enum(['core', 'similar', 'adjacent']),
+        source: z.enum(['resume', 'target']),
+        reason: z.string().max(2000),
+      }),
+    )
+    .max(80),
 });
 
 export const RefineOutputSchema = z.object({
@@ -273,6 +292,12 @@ export const TASKS: Record<TaskKey, TaskDef<any, any>> = {
     'Lists 20 to 40 job titles equivalent to one role target, for the discovery pre-filter.',
     TitleVariantsInput,
     TitleVariantsOutputSchema,
+  ),
+  'discovery.industry_profile': def(
+    'discovery.industry_profile',
+    'Lists NAICS industries to look in, from one base resume and the role targets, each with a tier and a reason.',
+    IndustryProfileInput,
+    IndustryProfileOutputSchema,
   ),
   'discovery.refine_prompt': def(
     'discovery.refine_prompt',

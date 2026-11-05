@@ -1,7 +1,7 @@
 // Discovery companies (FR-D8, FR-D9): the companies in the user's network
-// (https://github.com/bgoleno/opportun/issues/216), the suggestion queue, the followed companies
-// with their job board detection state, and the companies denied directly or from a suggestion
-// (#199).
+// (https://github.com/bgoleno/opportun/issues/216), where to look (#219), the suggestion queue,
+// the followed companies with their job board detection state, and the companies denied directly
+// or from a suggestion (#199).
 import { useId, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -27,6 +27,7 @@ import {
   FollowedCompanyRow,
   SuggestionCard,
 } from './CompanyCard';
+import { IndustryProfilePanel } from './IndustryProfilePanel';
 import { NetworkCompanyRow } from './NetworkCompanyRow';
 
 export function CompaniesManager() {
@@ -47,6 +48,8 @@ export function CompaniesManager() {
 
   return (
     <div className="grid min-w-0 gap-8">
+      <IndustryProfilePanel />
+
       <section className="grid gap-3" aria-labelledby="deny-company-heading">
         <h2 id="deny-company-heading" className="text-lg font-semibold">
           Deny a company

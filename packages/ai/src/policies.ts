@@ -12,6 +12,8 @@ export const DEFAULT_POLICIES: Readonly<Record<TaskKey, Readonly<ModelPolicy>>> 
   'discovery.rank': { provider: 'anthropic', model: SONNET, maxOutputTokens: 4_000 },
   // One call per role target when it is created or its title changes (#217, tl's 4.4).
   'discovery.title_variants': { provider: 'anthropic', model: SONNET, maxOutputTokens: 2_000 },
+  // One call when the user asks, over a resume and a 308-line table (#219); up to 30 short rows.
+  'discovery.industry_profile': { provider: 'anthropic', model: SONNET, maxOutputTokens: 4_000 },
   'discovery.refine_prompt': { provider: 'anthropic', model: SONNET, maxOutputTokens: 4_000 },
   // Stage 2 of the mail funnel: one yes/no question about a sender, a subject and 500
   // characters, asked on every message Stage 1 positively passed. Cheapest capable model.
