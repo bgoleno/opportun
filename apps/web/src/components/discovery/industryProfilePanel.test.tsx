@@ -125,23 +125,91 @@ describe('Where to look (#219)', () => {
     expect(await screen.findByText('No new industries came back')).toBeInTheDocument();
   });
 
-  it.each([
-    ['no_key', /AI is not set up/],
-    ['budget_exceeded', /discovery budget/],
-    ['provider_error', /provider was unavailable/],
-    ['invalid_output', /could not be used/],
-  ])('when the call fails with %s it says why', async (reason, words) => {
-    mockApi({
-      [`GET ${URL}`]: { items: [] },
-      [`POST ${URL}/suggest`]: () => ({
-        status: 503,
-        body: { error: { code: 'ai_unavailable', reason } },
-      }),
-    });
+  /** Presses Suggest industries against this answer, and returns what the panel says. */
+  async function failureMessage(answer: unknown) {
+    mockApi({ [`GET ${URL}`]: { items: [] }, [`POST ${URL}/suggest`]: answer });
     const user = userEvent.setup();
     await openPanel(user);
     await user.click(await screen.findByRole('button', { name: 'Suggest industries' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(words);
+    const alert = await screen.findByRole('alert');
+    // Never a code: no snake_case word, and not the fallback that prints one (#277).
+    expect(alert.textContent).not.toMatch(/[a-z]+_[a-z]+|Request failed|Internal server error/);
+    return alert;
+  }
+
+  const aiFailure = (body: Record<string, unknown>) => () => ({
+    status: 503,
+    body: { error: { code: 'ai_unavailable', ...body } },
+  });
+
+  it.each([
+    ['no_key', /AI is not set up\. Add a key in Settings > AI/],
+    ['budget_exceeded', /budget is spent.*next budget day.*discovery budget in Settings > AI/],
+    ['provider_error', /provider was unavailable.*Try again later/],
+    ['invalid_output', /answer could not be used.*Try again/],
+    ['no_prompt', /prompt for this is missing.*updated/],
+    ['something_new', /could not be made.*Try again later/],
+  ])('when the call fails with %s it says what happened and what to do', async (reason, words) => {
+    expect(await failureMessage(aiFailure({ reason }))).toHaveTextContent(words);
+  });
+
+  it('a rejected key says so and points to Settings > AI, and does not say to wait', async () => {
+    const alert = await failureMessage(aiFailure({ reason: 'key_rejected' }));
+    expect(alert).toHaveTextContent(/AI provider rejected your key/);
+    expect(alert).toHaveTextContent(/Add a working key in Settings > AI/);
+    expect(alert).not.toHaveTextContent(/later/);
+  });
+
+  it('a key that has expired says when, points to Settings > AI, and does not say to wait', async () => {
+    const alert = await failureMessage(
+      aiFailure({ reason: 'provider_error', keyHint: 'the stored key expired on 2026-05-01' }),
+    );
+    expect(alert).toHaveTextContent(/the stored key expired on 2026-05-01/);
+    expect(alert).toHaveTextContent(/Add a working key in Settings > AI/);
+    expect(alert).not.toHaveTextContent(/later/);
+  });
+
+  it.each([
+    ['google_not_configured', /Connect your Google account in Settings > Integrations/],
+    ['google_not_connected', /Connect your Google account in Settings > Integrations/],
+    ['google_reauth_required', /Reconnect in Settings > Integrations/],
+    ['reactive_resume_not_connected', /Connect Reactive Resume in Settings > Integrations/],
+    ['not_found', /Check that it still opens under Resumes/],
+    ['read_failed', /Check that it still opens under Resumes/],
+    ['reactive_resume_error', /Check that it still opens under Resumes/],
+  ])(
+    'a base resume that cannot be read (%s) names it, and says what to do',
+    async (reason, fix) => {
+      const alert = await failureMessage(() => ({
+        status: 409,
+        body: { error: { code: 'resume_unreadable', reason, title: 'Sam Base CV' } },
+      }));
+      expect(alert).toHaveTextContent('Could not read your base resume, "Sam Base CV".');
+      expect(alert).toHaveTextContent(fix);
+    },
+  );
+
+  it('a server failure says so, without its wording', async () => {
+    const alert = await failureMessage(() => ({
+      status: 500,
+      body: { error: { code: 'server_error', message: 'Internal server error' } },
+    }));
+    expect(alert).toHaveTextContent(/Something went wrong on the server/);
+  });
+
+  it('a session that has ended keeps its own plain words', async () => {
+    const alert = await failureMessage(() => ({
+      status: 401,
+      body: { error: { code: 'unauthorized' } },
+    }));
+    expect(alert).toHaveTextContent('You are signed out.');
+  });
+
+  it('no answer at all says the server could not be reached', async () => {
+    const alert = await failureMessage(() => {
+      throw new TypeError('Failed to fetch');
+    });
+    expect(alert).toHaveTextContent(/Could not reach the server/);
   });
 
   it('with nothing to read it says what to add', async () => {
@@ -155,7 +223,9 @@ describe('Where to look (#219)', () => {
     const user = userEvent.setup();
     await openPanel(user);
     await user.click(await screen.findByRole('button', { name: 'Suggest industries' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/base resume or a role target/);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /Add a base resume or a role target first/,
+    );
   });
 
   it('Confirm makes a row count', async () => {
