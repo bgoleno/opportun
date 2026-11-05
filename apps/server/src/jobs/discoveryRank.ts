@@ -175,8 +175,9 @@ export const discoveryRankJob: JobHandler<z.infer<typeof PayloadSchema>> = {
     // #230). Otherwise a source that runs just after the UTC day starts can spend the day's budget
     // before the sweep, every day, and the older ones wait for ever. This lives in the job and not
     // in rankResult because the drain calls rankResult directly: its own calls must go ahead. A
-    // posting joining during a running drain is not on that drain's list, and the next hourly
-    // sweep takes it.
+    // posting joining during a running drain is taken by that drain when it reads its list again.
+    // One small window remains: a job that defers after the drain's last read, before its row is
+    // finished, dedupes onto it, and the next hourly sweep takes that posting.
     if (await hasOlderWaitingResult(db, user, payload.resultId)) {
       await setRankDeferred(db, user, payload.resultId);
       if (await discoveryBudgetHasRoom(db, user)) await enqueueRankWaiting(db, user);
