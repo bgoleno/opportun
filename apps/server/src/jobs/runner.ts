@@ -338,7 +338,7 @@ export async function recoverStaleJobs(db: Db): Promise<number> {
 }
 
 export interface Runner {
-  /** Stops polling and resolves once the in-flight job (if any) has finished. */
+  /** Stops polling and starting jobs, and resolves once every running job has finished. */
   stop(): Promise<void>;
 }
 
@@ -360,7 +360,6 @@ export function startRunner(
   const workerId = opts.workerId ?? defaultWorkerId;
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
-  let inFlight: Promise<void> | undefined;
 
   /** How many jobs of each kind are running right now, for the per-kind ceilings. */
   const activeByKind = new Map<string, number>();
@@ -421,19 +420,25 @@ export function startRunner(
     timer = setTimeout(tick, delay);
     timer.unref();
   };
-  const track = (work: Promise<void>) => {
-    inFlight = work.finally(() => {
-      inFlight = undefined;
-      if (!stopped) schedule(interval);
-    });
-  };
+  /** The worker loops running now, counted as each starts: at most `workers`. None rejects. */
+  const loops = new Set<Promise<void>>();
+  /**
+   * Starts a loop for each free worker, and looks again on every interval whatever is running. A
+   * worker with nothing to claim ends, and a job can run for hours (a drain, a long sync), so waiting
+   * for the pool to go idle would leave a job queued meanwhile behind that one, with workers free
+   * (https://github.com/bgoleno/opportun/issues/263).
+   */
   function tick(): void {
-    // Every worker swallows its own failures, so this resolves when the pool is idle.
-    track(Promise.all(Array.from({ length: workers }, () => workerLoop())).then(() => undefined));
+    if (stopped) return;
+    for (let i = loops.size; i < workers; i++) {
+      const loop: Promise<void> = workerLoop().finally(() => loops.delete(loop));
+      loops.add(loop);
+    }
+    schedule(interval);
   }
   // Startup work starts now (stop() waits for it): orphaned jobs go back to pending, then
   // schedules materialize; the first poll follows immediately.
-  inFlight = (async () => {
+  const startup = (async () => {
     try {
       await recoverStaleJobs(db);
       await safeMaterialize(db, clock(), opts);
@@ -441,7 +446,6 @@ export function startRunner(
       opts.onError?.(err);
     }
   })().finally(() => {
-    inFlight = undefined;
     if (!stopped) schedule(0);
   });
 
@@ -449,7 +453,9 @@ export function startRunner(
     async stop() {
       stopped = true;
       if (timer !== undefined) clearTimeout(timer);
-      await inFlight;
+      // Nothing starts a loop from here: the timer is gone, and startup schedules none once stopped.
+      await startup;
+      await Promise.all(loops);
     },
   };
 }
