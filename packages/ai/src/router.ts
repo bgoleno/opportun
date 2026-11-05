@@ -2,9 +2,11 @@
 // the per-task daily budget, load the key, call the provider, and record exactly one
 // TaskRunRecord, whether the call succeeded or failed.
 import {
+  APICallError,
   generateText,
   NoObjectGeneratedError,
   Output,
+  RetryError,
   streamText,
   type LanguageModel,
   type LanguageModelUsage,
@@ -57,6 +59,12 @@ function errorDetail(err: unknown, apiKey: string | undefined): string {
   return sanitizeDetail(raw, apiKey);
 }
 
+/** Whether a call ended on a 401. After retries the SDK reports what it ended on as lastError. */
+function isKeyRejected(err: unknown): boolean {
+  const last = RetryError.isInstance(err) ? err.lastError : err;
+  return APICallError.isInstance(last) && last.statusCode === 401;
+}
+
 class Run {
   private readonly started = Date.now();
   private recorded = false;
@@ -97,9 +105,13 @@ class Run {
   }
 
   /** Records the failure and returns the error to throw. */
-  async fail(reason: AiUnavailableReason, detail?: string): Promise<AiUnavailableError> {
+  async fail(
+    reason: AiUnavailableReason,
+    detail?: string,
+    opts: { keyRejected?: boolean } = {},
+  ): Promise<AiUnavailableError> {
     await this.record('error', detail === undefined ? reason : `${reason}: ${detail}`);
-    return new AiUnavailableError(reason, detail);
+    return new AiUnavailableError(reason, detail, opts);
   }
 }
 
@@ -169,7 +181,9 @@ export async function runStructured<T>(
         if (attempt < MAX_ATTEMPTS) continue;
         throw await run.fail('invalid_output');
       }
-      throw await run.fail('provider_error', errorDetail(err, apiKey));
+      throw await run.fail('provider_error', errorDetail(err, apiKey), {
+        keyRejected: isKeyRejected(err),
+      });
     }
     // Outside the try: a ledger failure is not a provider failure.
     await run.record('ok');

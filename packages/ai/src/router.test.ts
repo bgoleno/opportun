@@ -1,5 +1,5 @@
 import type { LanguageModelV4GenerateResult, LanguageModelV4StreamPart } from '@ai-sdk/provider';
-import { simulateReadableStream } from 'ai';
+import { APICallError, RetryError, simulateReadableStream } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -251,6 +251,75 @@ describe('runStructured', () => {
     expect(h.runs[0]!.status).toBe('error');
     expect(h.runs[0]!.error).toMatch(/^provider_error/);
     expect(JSON.stringify(h.runs)).not.toContain(KEY);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/261: a discovery drain stops on this and an outage
+  // does not. The reason stays provider_error, so nothing else that reads it changes.
+  describe('a key the provider rejects', () => {
+    const apiError = (statusCode: number) =>
+      new APICallError({
+        message: `HTTP ${statusCode}`,
+        url: 'https://provider.example.com/v1/messages',
+        requestBodyValues: {},
+        statusCode,
+        // No backoff in a test: what the SDK does after retrying is the RetryError cases.
+        isRetryable: false,
+      });
+    const failingWith = async (thrown: unknown) => {
+      const model = new MockLanguageModelV4({
+        doGenerate: async () => {
+          throw thrown;
+        },
+      });
+      const h = harness({ model });
+      const err = await runStructured(h.deps, 'resume.match', call).catch((e: unknown) => e);
+      return err as AiUnavailableError;
+    };
+
+    it('a 401 says so, still as a provider_error', async () => {
+      const err = await failingWith(apiError(401));
+      expect(err).toBeInstanceOf(AiUnavailableError);
+      expect(err.reason).toBe('provider_error');
+      expect(err.keyRejected).toBe(true);
+    });
+
+    it('a 401 after retries, reported as a RetryError, says so too', async () => {
+      const err = await failingWith(
+        new RetryError({
+          message: 'retries',
+          reason: 'errorNotRetryable',
+          errors: [apiError(503), apiError(401)],
+        }),
+      );
+      expect(err.reason).toBe('provider_error');
+      expect(err.keyRejected).toBe(true);
+    });
+
+    for (const status of [400, 403, 404, 429, 500, 503]) {
+      it(`a ${status} does not`, async () => {
+        expect((await failingWith(apiError(status))).keyRejected).toBe(false);
+      });
+    }
+
+    it('a failure with no status does not, whatever its message says', async () => {
+      expect((await failingWith(new Error('401 invalid x-api-key'))).keyRejected).toBe(false);
+    });
+
+    it('retries that ended on another status do not, even after a 401', async () => {
+      const err = await failingWith(
+        new RetryError({
+          message: 'retries',
+          reason: 'maxRetriesExceeded',
+          errors: [apiError(401), apiError(503)],
+        }),
+      );
+      expect(err.keyRejected).toBe(false);
+    });
+
+    it('an error made without the flag has it false', () => {
+      expect(new AiUnavailableError('provider_error').keyRejected).toBe(false);
+      expect(new AiUnavailableError('no_key').keyRejected).toBe(false);
+    });
   });
 
   it('every call records exactly one run, successes and failures alike', async () => {

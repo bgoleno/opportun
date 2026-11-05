@@ -103,6 +103,7 @@ An unscored result can say why, in a line on its card:
 - **Not ranked: below the cut**: a board's first run ranks only its 25 newest postings. **Rank
   these** on the [Sources](#add-a-board-source) tab sends the rest.
 - **Not ranked: AI is not set up (Settings > AI)**: there is no AI key to rank it with.
+- **Not ranked: the AI provider rejected your key. Add a working key, or press Validate once it works, in Settings > AI**: the provider refused the key, so the app has stopped its hourly tries. Adding a working key, or pressing **Validate** on this one once it works, starts ranking what waits. So does a change to the Discovery ranking model, or a new posting that ranks.
 - **Not ranked: the AI provider was unavailable** or **Not ranked: the AI's answer could not be
   used**: the call failed.
 
