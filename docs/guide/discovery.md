@@ -43,6 +43,16 @@ last run and, over the last 14 days, its new postings a day, the ranking calls t
 what they cost at the last 30 days' average cost per call. A board's first run brings in the whole
 board, so it is left out: after only one run, those figures say "no data yet".
 
+**A new board's first run.** The first time a company board runs successfully, Opportun ranks only
+its 25 newest postings, so adding a large board does not send all of it to the AI at once. The rest
+are stored and shown in the queue as **Not ranked: below the cut**. To rank them, choose **Rank
+these** on that source's row in the Sources table. It shows how many there are and the estimated
+cost, based on your average cost per ranking call over the last 30 days, before anything runs. Once
+you confirm, they go through your [discovery budget](settings.md#models-and-budgets) like any other
+posting, so any that do not fit today wait for a later budget day. Later runs of that board are not
+capped, and a large Workday board brings in its postings over several runs, so those runs can still
+fill the budget for a while.
+
 ### Follow companies
 
 The **Companies** tab offers companies to follow from two places.
@@ -90,6 +100,8 @@ An unscored result can say why, in a line on its card:
 
 - **Waiting for budget**: it is ranked when your [discovery budget](settings.md#models-and-budgets)
   has room.
+- **Not ranked: below the cut**: a board's first run ranks only its 25 newest postings. **Rank
+  these** on the [Sources](#add-a-board-source) tab sends the rest.
 - **Not ranked: AI is not set up (Settings > AI)**: there is no AI key to rank it with.
 - **Not ranked: the AI provider was unavailable** or **Not ranked: the AI's answer could not be
   used**: the call failed.

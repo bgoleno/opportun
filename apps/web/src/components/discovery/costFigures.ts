@@ -26,6 +26,10 @@ export interface SourceVolumeFigures {
   days: number;
   rankCallsPerDay: number | null;
   costPerDayUsd: number | null;
+  /** Postings waiting below the first-run cut for the user to send (#215). */
+  belowCut: number;
+  /** What sending them would cost at the 30-day average cost per call; null with no average. */
+  belowCutCostUsd: number | null;
 }
 
 export interface CostFigures {
@@ -33,9 +37,11 @@ export interface CostFigures {
   sources: SourceVolumeFigures[];
 }
 
+export const costFiguresKey = ['discovery', 'cost-figures'] as const;
+
 export function useCostFigures() {
   return useQuery({
-    queryKey: ['discovery', 'cost-figures'] as const,
+    queryKey: costFiguresKey,
     queryFn: () => api<CostFigures>('/discovery/cost-figures'),
   });
 }

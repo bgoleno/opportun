@@ -21,7 +21,7 @@ import {
   RANK_WAITING_SWEEP_KIND,
   sweepWaitingResults,
 } from '../src/jobs/discoveryRankWaiting';
-import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
+import { DISCOVERY_RUN_KIND, FIRST_RUN_RANK_CAP } from '../src/jobs/discoveryRun';
 import { enqueue, readSchedules, runNextJob, startRunner } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import {
@@ -1068,7 +1068,8 @@ describe('#214 criterion 4: the limit holds', () => {
     const { app, a } = await boot();
     const BUDGET_CALLS = 3;
     const WORKERS = 4;
-    const QUEUE = 30;
+    // All of a board's first run that goes to ranking (#215), and far more than the budget.
+    const QUEUE = FIRST_RUN_RANK_CAP;
     await writeDiscoveryBudget(app.db, ctxOf(a), BUDGET_CALLS * CALL_USD);
     const { titles } = providerCharges(app, a);
     await discoverQueued(app, a, QUEUE);

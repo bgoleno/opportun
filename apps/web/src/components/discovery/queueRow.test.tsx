@@ -204,6 +204,7 @@ describe('QueueRow: why a result was not ranked (#210)', () => {
     ['no_key', 'Not ranked: AI is not set up (Settings > AI)'],
     ['provider_error', 'Not ranked: the AI provider was unavailable'],
     ['invalid_output', "Not ranked: the AI's answer could not be used"],
+    ['below_cut', 'Not ranked: below the cut'],
   ] as const) {
     it(`says so for ${reason}`, () => {
       row({ rankSkipReason: reason });
