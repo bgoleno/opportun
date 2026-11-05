@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { mockApi, renderWithProviders } from '@/test/render';
 import { useAcceptResult } from './api';
-import { PrefilterRecallLine, prefilterRecallText } from './PrefilterRecall';
+import { PrefilterCard, PrefilterRecallLine, prefilterRecallText } from './PrefilterRecall';
 
 describe('prefilterRecallText', () => {
   it('gives the figure with the count it is based on, and says it is only measuring', () => {
@@ -22,10 +22,83 @@ describe('prefilterRecallText', () => {
     expect(prefilterRecallText({ positives: 20, kept: 20, recall: 1 })).toContain('(100%)');
   });
 
+  it('on, it no longer says it is only measuring', () => {
+    const text = prefilterRecallText({ positives: 20, kept: 19, recall: 0.95, on: true });
+    expect(text).not.toContain('measuring only');
+    expect(text).toContain('on for your job boards');
+    expect(text).toContain('19 of the 20');
+  });
+
   it('with nothing accepted yet, gives no figure', () => {
     expect(prefilterRecallText({ positives: 0, kept: 0, recall: null })).toBe(
       'Title pre-filter (measuring only, it filters nothing yet): no accepted job board postings to measure it on yet.',
     );
+  });
+});
+
+// #218: on, or why not, and what it saves.
+describe('PrefilterCard', () => {
+  const status = (over = {}) => ({
+    positives: 0,
+    kept: 0,
+    recall: null,
+    on: false,
+    neededRecall: 0.95,
+    neededPositives: 20,
+    judged: 0,
+    filtered: 0,
+    ...over,
+  });
+  const card = async (over = {}) => {
+    mockApi({ 'GET /discovery/prefilter/recall': status(over) });
+    renderWithProviders(<PrefilterCard />);
+    return await screen.findByTestId('prefilter-status');
+  };
+
+  it('with too few decided, says it is only measuring, and how many it needs', async () => {
+    const line = await card({ positives: 8, kept: 8, recall: 1 });
+    expect(line).toHaveTextContent(/measuring only/i);
+    expect(line).toHaveTextContent('8 of the 20');
+  });
+
+  it('with enough decided and too few kept, says the figure and the bar', async () => {
+    const line = await card({ positives: 20, kept: 18, recall: 0.9 });
+    expect(line).toHaveTextContent(/measuring only/i);
+    expect(line).toHaveTextContent('90%');
+    expect(line).toHaveTextContent('95%');
+  });
+
+  it('with nothing decided, says so', async () => {
+    expect(await card()).toHaveTextContent(/measuring only/i);
+  });
+
+  it('on: says so, and that the figure can read high from here', async () => {
+    const line = await card({ positives: 20, kept: 19, recall: 0.95, on: true });
+    expect(line).toHaveTextContent(/on for your job boards/i);
+    expect(line).toHaveTextContent('95%');
+    expect(screen.getByTestId('prefilter-caveat')).toHaveTextContent(/read high/i);
+  });
+
+  it('shows the share it would remove, in shadow mode as well', async () => {
+    await card({ judged: 300, filtered: 240 });
+    expect(screen.getByTestId('prefilter-share')).toHaveTextContent(
+      'Of the 300 postings judged when they arrived, it filtered 240 (80%).',
+    );
+  });
+
+  it('one that removes almost nothing reads as that', async () => {
+    await card({ judged: 300, filtered: 3 });
+    expect(screen.getByTestId('prefilter-share')).toHaveTextContent('(1%)');
+  });
+
+  it('with nothing judged yet, gives no share', async () => {
+    await card();
+    expect(screen.getByTestId('prefilter-share')).toHaveTextContent(/not judged a posting yet/i);
+  });
+
+  it('says job alerts are never filtered', async () => {
+    await card();
+    expect(screen.getByText(/job alert emails are never filtered/i)).toBeInTheDocument();
   });
 });
 

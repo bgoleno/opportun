@@ -181,6 +181,104 @@ describe('QueueRow', () => {
   });
 });
 
+// #218: the pre-filter held it. It says which rule, and Rank anyway sends it.
+describe('QueueRow: a posting the pre-filter held', () => {
+  const held = (over: Partial<DiscoveryResult> = {}) =>
+    result({
+      id: 'r1',
+      aiScore: null,
+      aiRationale: null,
+      rankSkipReason: 'filtered',
+      prefilterRule: 'title',
+      ...over,
+    });
+  const row = (r: DiscoveryResult) =>
+    renderWithProviders(
+      <ul>
+        <QueueRow
+          result={r}
+          selected={false}
+          stale={false}
+          onSelect={vi.fn()}
+          onAccept={vi.fn()}
+          onDismiss={vi.fn()}
+          onOpen={vi.fn()}
+          checked={false}
+          onToggleChecked={vi.fn()}
+        />
+      </ul>,
+    );
+
+  for (const rule of ['title', 'remote', 'location'] as const) {
+    it(`says Filtered: ${rule}`, () => {
+      mockApi({});
+      row(held({ prefilterRule: rule }));
+      expect(screen.getByText(`Filtered: ${rule}`)).toBeInTheDocument();
+    });
+  }
+
+  it('Rank anyway posts for this result', async () => {
+    const user = userEvent.setup();
+    const { calls } = mockApi({
+      'POST /discovery/results/r1/rank-anyway': () => ({ status: 202, body: { queued: 1 } }),
+    });
+    row(held());
+    await user.click(
+      screen.getByRole('button', { name: 'Rank anyway: Staff Engineer at Initech' }),
+    );
+    await waitFor(() =>
+      expect(calls.some((c) => c.path === '/discovery/results/r1/rank-anyway')).toBe(true),
+    );
+  });
+
+  it('a failed Rank anyway says so', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'POST /discovery/results/r1/rank-anyway': () => ({ status: 500, body: {} }),
+    });
+    row(held());
+    await user.click(screen.getByRole('button', { name: /Rank anyway/ }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+  });
+
+  it('a posting that was not held has no Rank anyway', () => {
+    mockApi({});
+    row(result({ id: 'r1', prefilterOutcome: 'filtered', prefilterRule: 'title' }));
+    expect(screen.queryByRole('button', { name: /Rank anyway/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Filtered:/)).not.toBeInTheDocument();
+  });
+
+  it('a group shows it for its primary', async () => {
+    const user = userEvent.setup();
+    const { calls } = mockApi({
+      'POST /discovery/results/g1/rank-anyway': () => ({ status: 202, body: { queued: 1 } }),
+    });
+    const [group] = groupResults([
+      held({ id: 'g1', dedupeKey: 'acme|role|b' }),
+      held({ id: 'g2', dedupeKey: 'acme|role|b' }),
+    ]);
+    renderWithProviders(
+      <ul>
+        <QueueGroupRow
+          group={group!}
+          selected={false}
+          stale={false}
+          onSelect={vi.fn()}
+          onAcceptAll={vi.fn()}
+          onDismissAll={vi.fn()}
+          onOpen={vi.fn()}
+          checked={false}
+          onToggleChecked={vi.fn()}
+        />
+      </ul>,
+    );
+    await user.click(screen.getByRole('button', { name: /Rank anyway/ }));
+    await waitFor(() =>
+      expect(calls.some((c) => c.path === '/discovery/results/g1/rank-anyway')).toBe(true),
+    );
+  });
+});
+
 // #210: a result the AI did not rank says why, in plain words; one never sent says nothing.
 describe('QueueRow: why a result was not ranked (#210)', () => {
   const row = (over: Partial<DiscoveryResult>) =>
