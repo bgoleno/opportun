@@ -687,51 +687,166 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
     });
   });
 
-  // One batch can fail every night (a gateway refusing one name, say). It must not hold up the rest.
-  it('a provider error on one batch moves on, so the batches behind it are tagged', async () => {
-    const { app, a } = await boot();
-    for (let i = 1; i <= 25; i++) await suggested(app, a, `C${String(i).padStart(2, '0')}`);
-    vi.mocked(runStructured)
-      .mockRejectedValueOnce(new AiUnavailableError('provider_error'))
-      .mockImplementation(async (_deps, _task, opts) => {
-        const refs = refsIn((opts as { system: string }).system);
-        return { tags: refs.map((ref) => ({ ref, code: '5132' })) } as never;
+  // One batch can fail every night (a gateway refusing one name, say). It must not hold up the rest,
+  // nor the 19 that share its batch, which would re-form the same batch every night.
+  describe('a batch the provider refuses', () => {
+    const REFUSED = new AiUnavailableError('provider_error');
+    /** The provider refuses any call holding this name, and tags everything else. */
+    function refuses(name: string): void {
+      vi.mocked(runStructured).mockImplementation(async (_deps, _task, opts) => {
+        const system = (opts as { system: string }).system;
+        if (system.includes(`name: ${name}\n`)) throw REFUSED;
+        return { tags: refsIn(system).map((ref) => ({ ref, code: '5132' })) } as never;
       });
-    expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
-      tagged: 5,
-      calls: 2,
-      failed: 1,
-      stopped: null,
-    });
-    expect((await rowOf(app, a, 'C01')).industryAt).toBeNull();
-    expect((await rowOf(app, a, 'C25')).naicsCode).toBe('5132');
-  });
+    }
+    const named = (i: number) => `C${String(i).padStart(2, '0')}`;
 
-  it('three provider errors in a row are an outage, and it stops spending calls', async () => {
-    const { app, a } = await boot();
-    for (let i = 1; i <= 100; i++) await suggested(app, a, `C${i}`);
-    vi.mocked(runStructured).mockRejectedValue(new AiUnavailableError('provider_error'));
-    expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
-      tagged: 0,
-      calls: 3,
-      failed: 3,
-      stopped: 'provider_error',
+    it('one refused name among 46 tags the other 45, and is not marked as tried', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 46; i++) await suggested(app, a, named(i));
+      refuses('C07');
+      // The first batch, then each of its 20 alone, then the two batches behind it.
+      expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+        tagged: 45,
+        calls: 23,
+        failed: 2,
+        stopped: null,
+      });
+      const refused = await rowOf(app, a, 'C07');
+      expect(refused).toMatchObject({ naicsCode: null, industrySource: null, industryAt: null });
+      expect((await rowOf(app, a, 'C06')).naicsCode).toBe('5132');
+      expect((await rowOf(app, a, 'C08')).naicsCode).toBe('5132');
+      expect((await rowOf(app, a, 'C46')).naicsCode).toBe('5132');
     });
-    expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(3);
-  });
 
-  it('a success in between starts the count of errors in a row again', async () => {
-    const { app, a } = await boot();
-    for (let i = 1; i <= 100; i++) await suggested(app, a, `C${i}`);
-    const fail = new AiUnavailableError('provider_error');
-    vi.mocked(runStructured)
-      .mockRejectedValueOnce(fail)
-      .mockRejectedValueOnce(fail)
-      .mockResolvedValueOnce({ tags: [] } as never)
-      .mockRejectedValueOnce(fail)
-      .mockRejectedValueOnce(fail);
-    const run = await tagCompanies(app.db, ctxOf(a));
-    expect(run).toMatchObject({ calls: 5, failed: 4, stopped: null });
+    it('a company that fails alone is asked once the next night, not twice', async () => {
+      const { app, a } = await boot();
+      await suggested(app, a, 'Alone');
+      refuses('Alone');
+      expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+        tagged: 0,
+        calls: 1,
+        failed: 1,
+        stopped: null,
+      });
+    });
+
+    it('a passing error during the single calls marks nobody, and the next run tags them', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 3; i++) await suggested(app, a, named(i));
+      vi.mocked(runStructured)
+        .mockRejectedValueOnce(REFUSED)
+        .mockRejectedValueOnce(REFUSED)
+        .mockRejectedValueOnce(REFUSED)
+        .mockRejectedValueOnce(REFUSED);
+      expect((await tagCompanies(app.db, ctxOf(a))).stopped).toBe('provider_error');
+      expect((await rowOf(app, a, 'C01')).industryAt).toBeNull();
+      expect((await rowOf(app, a, 'C03')).industryAt).toBeNull();
+      tagsEverything();
+      expect((await tagCompanies(app.db, ctxOf(a))).tagged).toBe(3);
+    });
+
+    it('an outage stops after 4 calls: the batch, then three alone', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 100; i++) await suggested(app, a, `C${i}`);
+      vi.mocked(runStructured).mockRejectedValue(REFUSED);
+      expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+        tagged: 0,
+        calls: 4,
+        failed: 4,
+        stopped: 'provider_error',
+      });
+      expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(4);
+    });
+
+    it('a success among the single calls starts the count of errors in a row again', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 6; i++) await suggested(app, a, named(i));
+      vi.mocked(runStructured)
+        .mockRejectedValueOnce(REFUSED) // the batch
+        .mockRejectedValueOnce(REFUSED) // C01
+        .mockRejectedValueOnce(REFUSED) // C02
+        .mockResolvedValueOnce({ tags: [{ ref: 'c1', code: '5132' }] } as never) // C03
+        .mockRejectedValueOnce(REFUSED) // C04
+        .mockRejectedValueOnce(REFUSED) // C05
+        .mockResolvedValueOnce({ tags: [{ ref: 'c1', code: '5132' }] } as never); // C06
+      expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+        tagged: 2,
+        calls: 7,
+        failed: 5,
+        stopped: null,
+      });
+    });
+
+    it('a rejected key during the single calls stops at once', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 5; i++) await suggested(app, a, named(i));
+      vi.mocked(runStructured)
+        .mockRejectedValueOnce(REFUSED)
+        .mockRejectedValueOnce(
+          new AiUnavailableError('provider_error', 'unauthorized', { keyRejected: true }),
+        );
+      expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+        tagged: 0,
+        calls: 2,
+        failed: 2,
+        stopped: 'key_rejected',
+      });
+    });
+
+    it('no key during the single calls stops at once', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 5; i++) await suggested(app, a, named(i));
+      vi.mocked(runStructured)
+        .mockRejectedValueOnce(REFUSED)
+        .mockRejectedValueOnce(new AiUnavailableError('no_key'));
+      expect((await tagCompanies(app.db, ctxOf(a))).stopped).toBe('no_key');
+      expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(2);
+    });
+
+    it('the budget stops the run during the single calls', async () => {
+      const { app, a } = await boot();
+      await writeDiscoveryBudget(app.db, ctxOf(a), 0.02);
+      for (let i = 1; i <= 5; i++) await suggested(app, a, named(i));
+      vi.mocked(runStructured)
+        .mockRejectedValueOnce(REFUSED)
+        .mockImplementationOnce(async () => {
+          await spend(app, a, 0.02);
+          return { tags: [{ ref: 'c1', code: '5132' }] } as never;
+        });
+      expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+        tagged: 1,
+        calls: 2,
+        failed: 1,
+        stopped: 'budget_exceeded',
+      });
+    });
+
+    it('shutdown stops the run during the single calls', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 5; i++) await suggested(app, a, named(i));
+      vi.mocked(runStructured).mockRejectedValueOnce(REFUSED);
+      tagsEverything();
+      vi.mocked(runStructured).mockRejectedValueOnce(REFUSED);
+      let polls = 0;
+      const run = await tagCompanies(app.db, ctxOf(a), { stopping: () => (polls += 1) > 2 });
+      expect(run.stopped).toBe('shutdown');
+      expect(run.calls).toBe(2);
+    });
+
+    it('each single call sends that company alone', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 2; i++) await suggested(app, a, named(i));
+      vi.mocked(runStructured).mockRejectedValueOnce(REFUSED);
+      tagsEverything();
+      vi.mocked(runStructured).mockRejectedValueOnce(REFUSED);
+      await tagCompanies(app.db, ctxOf(a));
+      expect(refsIn(systemOf(0))).toEqual(['c1', 'c2']);
+      expect(refsIn(systemOf(1))).toEqual(['c1']);
+      expect(systemOf(1)).toContain('name: C01');
+      expect(systemOf(2)).toContain('name: C02');
+      expect(systemOf(2)).not.toContain('name: C01');
+    });
   });
 
   it('an unusable answer moves on to the next batch, and those wait for another night', async () => {

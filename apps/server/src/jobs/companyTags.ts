@@ -202,14 +202,10 @@ export async function tagCompanies(
     .orderBy(asc(companies.createdAt), asc(companies.id))
     .limit(MAX_COMPANIES_PER_RUN)
     .all();
-  for (let at = 0; at < candidates.length; at += COMPANY_TAGS_BATCH) {
-    if (opts.stopping?.() === true) return { ...run, stopped: 'shutdown' };
-    // Spend is on the ledger when a call ends, and these go one at a time, so a run passes the
-    // budget by one call at most.
-    if (!(await discoveryBudgetHasRoom(db, ctx))) return { ...run, stopped: 'budget_exceeded' };
-    const batch = candidates.slice(at, at + COMPANY_TAGS_BATCH);
+  /** One call. Null if it worked, or why not: what the callers below decide on. */
+  const ask = async (batch: readonly Candidate[]): Promise<AiUnavailableError | null> => {
+    run.calls += 1;
     try {
-      run.calls += 1;
       const answer = await runStructured(await buildAiDeps(db, ctx), COMPANY_TAGS_KIND, {
         system: renderPrompt(prompt.body, {
           companies_untrusted: await batchText(db, ctx, batch),
@@ -220,22 +216,72 @@ export async function tagCompanies(
         promptId: prompt.id,
       });
       run.tagged += await storeTags(db, ctx, batch, answer);
-      errorsInARow = 0;
+      return null;
     } catch (err) {
       if (!(err instanceof AiUnavailableError)) throw err;
       run.failed += 1;
-      // Not this batch's fault, and true of every batch behind it too.
-      if (err.keyRejected) return { ...run, stopped: 'key_rejected' };
-      if (err.reason === 'no_key' || err.reason === 'budget_exceeded') {
-        return { ...run, stopped: err.reason };
-      }
-      // About this batch, as far as anyone can tell: those behind it may be fine.
-      if (err.reason === 'provider_error') {
-        errorsInARow += 1;
-        if (errorsInARow >= OUTAGE_AFTER_ERRORS) return { ...run, stopped: err.reason };
-      } else {
-        errorsInARow = 0;
-      }
+      return err;
+    }
+  };
+
+  /** Why not to make another call, if there is a reason. Spend reaches the ledger when a call ends,
+   *  and these go one at a time, so a run passes the budget by one call at most. */
+  const stopBefore = async (): Promise<CompanyTagsRun['stopped']> => {
+    if (opts.stopping?.() === true) return 'shutdown';
+    return (await discoveryBudgetHasRoom(db, ctx)) ? null : 'budget_exceeded';
+  };
+
+  /** Why this failure ends the run, if it does: true of every call behind it too. */
+  const stopAfter = (err: AiUnavailableError): CompanyTagsRun['stopped'] => {
+    if (err.keyRejected) return 'key_rejected';
+    return err.reason === 'no_key' || err.reason === 'budget_exceeded' ? err.reason : null;
+  };
+
+  /** A call that holds one company alone: its error counts towards an outage. */
+  const askAlone = async (company: Candidate): Promise<CompanyTagsRun['stopped']> => {
+    const err = await ask([company]);
+    if (err === null || err.reason !== 'provider_error') errorsInARow = 0;
+    if (err === null) return null;
+    const stop = stopAfter(err);
+    if (stop !== null) return stop;
+    if (err.reason === 'provider_error') {
+      errorsInARow += 1;
+      if (errorsInARow >= OUTAGE_AFTER_ERRORS) return err.reason;
+    }
+    return null;
+  };
+
+  for (let at = 0; at < candidates.length; at += COMPANY_TAGS_BATCH) {
+    const batch = candidates.slice(at, at + COMPANY_TAGS_BATCH);
+    const before = await stopBefore();
+    if (before !== null) return { ...run, stopped: before };
+    if (batch.length === 1) {
+      const stop = await askAlone(batch[0] as Candidate);
+      if (stop !== null) return { ...run, stopped: stop };
+      continue;
+    }
+    const err = await ask(batch);
+    if (err === null) {
+      errorsInARow = 0;
+      continue;
+    }
+    const stop = stopAfter(err);
+    if (stop !== null) return { ...run, stopped: stop };
+    if (err.reason !== 'provider_error') {
+      // An unusable answer: those behind it may be fine, and this batch is tried the next night.
+      errorsInARow = 0;
+      continue;
+    }
+    // Refused, perhaps for one name in it. The list starts from the same place each night, so this
+    // batch would re-form every night and its other companies would never be tagged: ask each alone.
+    // The batch itself does not count towards an outage, and each single call does, so a real outage
+    // stops after 4 calls. One that fails alone is not marked as tried: marking is for good, and a
+    // passing error such as a rate limit must not do that to a healthy company.
+    for (const company of batch) {
+      const beforeOne = await stopBefore();
+      if (beforeOne !== null) return { ...run, stopped: beforeOne };
+      const stopOne = await askAlone(company);
+      if (stopOne !== null) return { ...run, stopped: stopOne };
     }
   }
   return run;
