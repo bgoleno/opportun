@@ -2,13 +2,13 @@
 
 - **Status:** Accepted 2026-10-28 (owner decisions on https://github.com/bgoleno/opportun/issues/79).
   Recorded 2026-11-02 with the M2a milestone (https://github.com/bgoleno/opportun/issues/118).
-- **Deciders:** the owner, on the Tech Lead's design (linked from #79).
+- **Deciders:** the owner, on the Tech Lead's design ([docs/assisted-apply/](../assisted-apply/README.md)).
 - **Related:** NG-3 and its clarifying note, FR-X (requirements 5.11), C-2, C-6, NFR-SEC7.
 
 ## Context
 
 Users asked for Opportun to "submit to the ATS" for an opportunity they track. The design
-(Part A section 2 of the document linked from #79) read each recognised ATS's documentation:
+([Part A section 2](../assisted-apply/technical-design.md#2-ats-capability-matrix)) read each recognised ATS's documentation:
 Greenhouse, Lever, Ashby and Workday. Each one's application-submission API needs a key the
 employer issues. A candidate has no such key, and submitting without one would mean driving the
 ATS's form from the server, which C-2 (each source's terms and limits) rules out. NG-3 already
