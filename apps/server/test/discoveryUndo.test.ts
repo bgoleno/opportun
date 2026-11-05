@@ -384,6 +384,65 @@ describe('#274: Undo with the rank job still to come', () => {
   });
 });
 
+// tl on https://github.com/bgoleno/opportun/pull/283: a lead has the same two hazards as a posting.
+describe('#274: a partial lead', () => {
+  async function dismissedLead(app: FastifyInstance, c: TestClient) {
+    await storedWithJobsQueued(app, c, [post('Partial', { descriptionMd: null })]);
+    const id = await idOf(app, c, 'Partial');
+    await dismiss(c, id);
+    return id;
+  }
+
+  // It may have read the posting as dismissed, and ends with no rank job. A new lead job would
+  // dedupe onto it, and the posting would be stranded. Ranked as it is beats not ranked at all.
+  it('a lead job already running does not count: it joins the wait', async () => {
+    const { app, a } = await boot();
+    const id = await dismissedLead(app, a);
+    await app.db
+      .update(jobs)
+      .set({ status: 'running' })
+      .where(eq(jobs.dedupeKey, `${LEAD_RESOLVE_KIND}:${id}`))
+      .run();
+
+    await undo(a, [id]);
+    expect((await results(app, a))[0]!.rankDeferredAt).toEqual(expect.any(Number));
+    expect(await pendingJobs(app, a, RANK_WAITING_KIND)).toHaveLength(1);
+    expect(await pendingJobs(app, a, LEAD_RESOLVE_KIND)).toEqual([]);
+  });
+
+  it('a lead job still to come is left to run, with no wait', async () => {
+    const { app, a } = await boot();
+    const id = await dismissedLead(app, a);
+    expect(await pendingJobs(app, a, LEAD_RESOLVE_KIND)).toHaveLength(1);
+
+    await undo(a, [id]);
+    expect(await pendingJobs(app, a, LEAD_RESOLVE_KIND)).toHaveLength(1);
+    expect((await results(app, a))[0]!.rankDeferredAt).toBeNull();
+    expect(await pendingJobs(app, a, RANK_WAITING_KIND)).toEqual([]);
+  });
+
+  // Been through resolution, stayed partial, and its rank job is queued. A new lead job could
+  // queue a second ranking once the first has finished, and be paid for twice.
+  it('with a rank job still to come it is left to that, not sent back to resolution', async () => {
+    const { app, a } = await boot();
+    const id = await dismissedLead(app, a);
+    await app.db.delete(jobs).where(eq(jobs.kind, LEAD_RESOLVE_KIND)).run();
+    await enqueue(
+      app.db,
+      DISCOVERY_RANK_KIND,
+      { resultId: id },
+      { dedupeKey: `${DISCOVERY_RANK_KIND}:${id}`, userId: a.userId },
+    );
+
+    await undo(a, [id]);
+    expect(await pendingJobs(app, a, LEAD_RESOLVE_KIND)).toEqual([]);
+    expect(await pendingJobs(app, a, DISCOVERY_RANK_KIND)).toHaveLength(1);
+    expect((await results(app, a))[0]!.rankDeferredAt).toBeNull();
+    await app.jobs.drain();
+    expect(ranked).toEqual(['Partial']);
+  });
+});
+
 describe('#274: what already says why, or needs nothing, stays as it is', () => {
   /** A dismissed posting, as `over` leaves it, with no job. */
   async function dismissedRow(
