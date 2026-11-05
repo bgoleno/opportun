@@ -52,6 +52,7 @@ import { readUserSetting, writeUserSetting } from '../repos/userSettings';
 import { requireService, type JobHandler } from './registry';
 import { enqueue, userCronProblem } from './runner';
 import type { Exec } from '../db/client';
+import { racePoint } from '../lib/racePoints';
 
 export const ATS_DETECT_KIND = 'company.ats_detect'; // payload {companyId}
 export const ATS_REVERIFY_KIND = 'company.ats_reverify';
@@ -406,6 +407,7 @@ async function ensureBoardSource(
     (s) =>
       s.kind === board.kind && boardOfSource(s.kind, splitConfig(s).config)?.slug === board.slug,
   );
+  await racePoint('atsDetect.board_source.locked');
   let sourceId: string;
   if (same === undefined) {
     sourceId = (
