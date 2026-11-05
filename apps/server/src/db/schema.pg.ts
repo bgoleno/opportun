@@ -671,7 +671,10 @@ export const discoveryResults = pgTable(
     prefilterScore: doublePrecision('prefilter_score'),
     /** Why ranking was skipped, until it is ranked (#210); null otherwise. */
     rankSkipReason: text('rank_skip_reason', { enum: RANK_SKIP_REASONS }),
-    /** When ranking first waited for the discovery budget (#214), until it is ranked; else null. */
+    /**
+     * When ranking began waiting for the discovery budget (#214), or when a provider failure last
+     * used its turn (setRankTurnUsed); null when it is not waiting.
+     */
     rankDeferredAt: int('rank_deferred_at'),
     resolution: text('resolution', { enum: RESOLUTIONS }).notNull(),
     resolvedSourceRef: text('resolved_source_ref'),

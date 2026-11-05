@@ -33,7 +33,10 @@ export interface DiscoveryResult {
   aiRationale: string | null;
   /** Why ranking was skipped (#210), until it is ranked; null otherwise. */
   rankSkipReason: RankSkipReason | null;
-  /** When ranking began waiting for the discovery budget (#214); null when it is not. */
+  /**
+   * When ranking began waiting for the discovery budget (#214), or when a provider failure last
+   * used its turn; null when it is not waiting.
+   */
   rankDeferredAt: number | null;
   resolution: Resolution;
   resolvedSourceRef: string | null;
