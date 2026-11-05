@@ -74,6 +74,36 @@ describe('CompanyIndustry (#220)', () => {
     expect(calls.find((c) => c.method === 'PUT')?.path).toBe(URL);
   });
 
+  it('a closed row builds no picker, and opening it does, so a long list stays light', async () => {
+    mockApi({});
+    const user = userEvent.setup();
+    renderWithProviders(<CompanyIndustry company={company()} />);
+    const summary = await screen.findByText('Industry: not tagged yet');
+    expect(document.querySelector('select')).toBeNull();
+    await user.click(summary);
+    expect(document.querySelectorAll('select')).toHaveLength(1);
+    await user.click(summary);
+    expect(document.querySelector('select')).toBeNull();
+  });
+
+  it.each(['followed', 'denied'] as const)(
+    'a %s company with no tag does not promise one: only candidates are tagged',
+    async (status) => {
+      mockApi({});
+      renderWithProviders(<CompanyIndustry company={company({ status })} />);
+      expect(await screen.findByText('Industry: not set')).toBeInTheDocument();
+      expect(screen.queryByText(/not tagged yet/)).toBeNull();
+    },
+  );
+
+  it('a followed company that was tagged keeps showing its tag', async () => {
+    mockApi({});
+    renderWithProviders(
+      <CompanyIndustry company={company({ status: 'followed', naicsCode: '5132' })} />,
+    );
+    expect(await screen.findByText('Industry: Software Publishers')).toBeInTheDocument();
+  });
+
   it('a failed save says so', async () => {
     mockApi({
       [`PUT ${URL}`]: () => ({ status: 500, body: { error: { code: 'server_error' } } }),
@@ -88,7 +118,9 @@ describe('CompanyIndustry (#220)', () => {
 
   it('a name with markup labels the control as plain text', async () => {
     mockApi({});
+    const user = userEvent.setup();
     renderWithProviders(<CompanyIndustry company={company({ name: '<b>Bold</b>' })} />);
+    await user.click(await screen.findByText('Industry: not tagged yet'));
     expect(await screen.findByLabelText('Industry of <b>Bold</b>')).toBeInTheDocument();
     expect(document.querySelector('b')).toBeNull();
   });

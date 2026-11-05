@@ -17,6 +17,8 @@ import {
 import {
   COMPANY_TAGS_BATCH,
   COMPANY_TAGS_KIND,
+  COMPANY_TAGS_SWEEP_CRON,
+  COMPANY_TAGS_SWEEP_KIND,
   sweepCompanyTags,
   tagCompanies,
 } from '../src/jobs/companyTags';
@@ -26,6 +28,7 @@ import { createCompany } from '../src/repos/companies';
 import { createRun, createSource } from '../src/repos/discovery';
 import { discoverySpentTodayUsd, writeDiscoveryBudget } from '../src/repos/discoveryBudget';
 import { getActivePrompt } from '../src/repos/prompts';
+import { enqueue, readSchedules } from '../src/jobs/runner';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 
@@ -145,7 +148,7 @@ describe('#220 criterion 1: tagging', () => {
 
     const run = await tagCompanies(app.db, ctxOf(a));
 
-    expect(run).toEqual({ tagged: 42, calls: 3, stopped: null });
+    expect(run).toEqual({ tagged: 42, calls: 3, failed: 0, stopped: null });
     expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(3);
     expect(vi.mocked(runStructured).mock.calls[0]?.[1]).toBe('discovery.company_tags');
     expect([0, 1, 2].map((call) => refsIn(systemOf(call)).length)).toEqual([20, 20, 2]);
@@ -171,7 +174,12 @@ describe('#220 criterion 1: tagging', () => {
       .run();
     tagsEverything();
 
-    expect(await tagCompanies(app.db, ctxOf(a))).toEqual({ tagged: 0, calls: 0, stopped: null });
+    expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+      tagged: 0,
+      calls: 0,
+      failed: 0,
+      stopped: null,
+    });
     expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
     expect(await sweepCompanyTags(app.db)).toBe(0);
   });
@@ -250,6 +258,59 @@ describe('#220 criterion 1: tagging', () => {
   });
 });
 
+/** The stop #275 leaves when the provider refuses a key: a waiting posting marked key_rejected. */
+async function markRejectedKey(app: FastifyInstance, c: TestClient) {
+  const source = await createSource(app.db, ctxOf(c), {
+    kind: 'ats_lever',
+    config: { org: `org-${newId()}` },
+  });
+  const run = await createRun(app.db, ctxOf(c), { sourceId: source.id });
+  await app.db
+    .insert(discoveryResults)
+    .values({
+      id: newId(),
+      userId: c.userId,
+      runId: run.id,
+      posting: { company: 'x', title: 'y' } as never,
+      dedupeKey: newId(),
+      resolution: 'full',
+      rankDeferredAt: 1,
+      rankSkipReason: 'key_rejected',
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    .run();
+}
+
+describe('#220 it really runs', () => {
+  it('the sweep is on the schedule, nightly', async () => {
+    const { app } = await boot();
+    const schedules = await readSchedules(app.db);
+    expect(schedules.find((x) => x.kind === COMPANY_TAGS_SWEEP_KIND)?.schedule).toEqual({
+      cron: COMPANY_TAGS_SWEEP_CRON,
+      enabled: true,
+    });
+    expect(COMPANY_TAGS_SWEEP_CRON).toBe('45 5 * * *');
+  });
+
+  it('the sweep job, through the job runner, ends with a tag', async () => {
+    const { app, a } = await boot();
+    await suggested(app, a, 'From The Queue');
+    await putSecret(app.db, ctxOf(a), 'ai_api_key', 'anthropic', 'sk-test-sweep-value');
+    tagsEverything('5132');
+
+    await enqueue(app.db, COMPANY_TAGS_SWEEP_KIND, {});
+    await app.jobs.drain();
+
+    expect(await rowOf(app, a, 'From The Queue')).toMatchObject({
+      naicsCode: '5132',
+      industrySource: 'ai',
+    });
+    const ran = await app.db.select().from(jobs).where(eq(jobs.kind, COMPANY_TAGS_KIND)).all();
+    expect(ran.map((j) => j.status)).toEqual(['done']);
+  });
+});
+
 describe('#220 the nightly sweep', () => {
   const addKey = (app: FastifyInstance, c: TestClient) =>
     putSecret(app.db, ctxOf(c), 'ai_api_key', 'anthropic', 'sk-test-sweep-value');
@@ -273,6 +334,14 @@ describe('#220 the nightly sweep', () => {
     ).toEqual([]);
   });
 
+  it('a key the provider rejected queues nothing, so 20 names do not go out each night', async () => {
+    const { app, a } = await boot();
+    await suggested(app, a, 'Waits For A Key');
+    await addKey(app, a);
+    await markRejectedKey(app, a);
+    expect(await sweepCompanyTags(app.db)).toBe(0);
+  });
+
   it('over the budget it queues nothing', async () => {
     const { app, a } = await boot();
     await suggested(app, a, 'Waits');
@@ -290,7 +359,12 @@ describe('#220 criterion 2: kept, and corrected', () => {
     await tagCompanies(app.db, ctxOf(a));
     vi.mocked(runStructured).mockClear();
     tagsEverything('5415');
-    expect(await tagCompanies(app.db, ctxOf(a))).toEqual({ tagged: 0, calls: 0, stopped: null });
+    expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+      tagged: 0,
+      calls: 0,
+      failed: 0,
+      stopped: null,
+    });
     expect((await rowOf(app, a, 'Once')).naicsCode).toBe('5132');
   });
 
@@ -536,7 +610,7 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
       return { tags: refs.map((ref) => ({ ref, code: '5132' })) } as never;
     });
     const run = await tagCompanies(app.db, ctxOf(a));
-    expect(run).toEqual({ tagged: 20, calls: 1, stopped: 'budget_exceeded' });
+    expect(run).toEqual({ tagged: 20, calls: 1, failed: 0, stopped: 'budget_exceeded' });
     expect((await rowOf(app, a, 'C21')).industryAt).toBeNull();
   });
 
@@ -547,12 +621,13 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
     expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
       tagged: 0,
       calls: 0,
+      failed: 0,
       stopped: 'budget_exceeded',
     });
     expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
   });
 
-  it.each(['no_key', 'provider_error', 'budget_exceeded'] as const)(
+  it.each(['no_key', 'budget_exceeded'] as const)(
     '%s stops the run after one call, with nothing marked',
     async (reason) => {
       const { app, a } = await boot();
@@ -561,11 +636,73 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
       expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
         tagged: 0,
         calls: 1,
+        failed: 1,
         stopped: reason,
       });
       expect((await rowOf(app, a, 'C1')).industryAt).toBeNull();
     },
   );
+
+  it('a rejected key stops the run at once: the batches behind it would fare no better', async () => {
+    const { app, a } = await boot();
+    for (let i = 1; i <= 45; i++) await suggested(app, a, `C${i}`);
+    vi.mocked(runStructured).mockRejectedValue(
+      new AiUnavailableError('provider_error', 'unauthorized', { keyRejected: true }),
+    );
+    expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+      tagged: 0,
+      calls: 1,
+      failed: 1,
+      stopped: 'key_rejected',
+    });
+  });
+
+  // One batch can fail every night (a gateway refusing one name, say). It must not hold up the rest.
+  it('a provider error on one batch moves on, so the batches behind it are tagged', async () => {
+    const { app, a } = await boot();
+    for (let i = 1; i <= 25; i++) await suggested(app, a, `C${String(i).padStart(2, '0')}`);
+    vi.mocked(runStructured)
+      .mockRejectedValueOnce(new AiUnavailableError('provider_error'))
+      .mockImplementation(async (_deps, _task, opts) => {
+        const refs = refsIn((opts as { system: string }).system);
+        return { tags: refs.map((ref) => ({ ref, code: '5132' })) } as never;
+      });
+    expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+      tagged: 5,
+      calls: 2,
+      failed: 1,
+      stopped: null,
+    });
+    expect((await rowOf(app, a, 'C01')).industryAt).toBeNull();
+    expect((await rowOf(app, a, 'C25')).naicsCode).toBe('5132');
+  });
+
+  it('three provider errors in a row are an outage, and it stops spending calls', async () => {
+    const { app, a } = await boot();
+    for (let i = 1; i <= 100; i++) await suggested(app, a, `C${i}`);
+    vi.mocked(runStructured).mockRejectedValue(new AiUnavailableError('provider_error'));
+    expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+      tagged: 0,
+      calls: 3,
+      failed: 3,
+      stopped: 'provider_error',
+    });
+    expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(3);
+  });
+
+  it('a success in between starts the count of errors in a row again', async () => {
+    const { app, a } = await boot();
+    for (let i = 1; i <= 100; i++) await suggested(app, a, `C${i}`);
+    const fail = new AiUnavailableError('provider_error');
+    vi.mocked(runStructured)
+      .mockRejectedValueOnce(fail)
+      .mockRejectedValueOnce(fail)
+      .mockResolvedValueOnce({ tags: [] } as never)
+      .mockRejectedValueOnce(fail)
+      .mockRejectedValueOnce(fail);
+    const run = await tagCompanies(app.db, ctxOf(a));
+    expect(run).toMatchObject({ calls: 5, failed: 4, stopped: null });
+  });
 
   it('an unusable answer moves on to the next batch, and those wait for another night', async () => {
     const { app, a } = await boot();
@@ -576,7 +713,12 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
         const refs = refsIn((opts as { system: string }).system);
         return { tags: refs.map((ref) => ({ ref, code: '5132' })) } as never;
       });
-    expect(await tagCompanies(app.db, ctxOf(a))).toEqual({ tagged: 5, calls: 2, stopped: null });
+    expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+      tagged: 5,
+      calls: 2,
+      failed: 1,
+      stopped: null,
+    });
     expect((await rowOf(app, a, 'C01')).industryAt).toBeNull();
     expect((await rowOf(app, a, 'C25')).naicsCode).toBe('5132');
   });
@@ -587,6 +729,6 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
     tagsEverything();
     let polls = 0;
     const run = await tagCompanies(app.db, ctxOf(a), { stopping: () => (polls += 1) > 1 });
-    expect(run).toEqual({ tagged: 20, calls: 1, stopped: 'shutdown' });
+    expect(run).toEqual({ tagged: 20, calls: 1, failed: 0, stopped: 'shutdown' });
   });
 });

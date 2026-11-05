@@ -32,6 +32,7 @@ import {
 import { buildAiDeps } from '../lib/ai';
 import { line } from '../lib/promptText';
 import type { UserCtx } from '../repos/base';
+import { usersWithRejectedKey } from '../repos/discovery';
 import { discoveryBudgetHasRoom } from '../repos/discoveryBudget';
 import { getActivePrompt } from '../repos/prompts';
 import type { JobHandler } from './registry';
@@ -49,6 +50,12 @@ const MAX_TITLES = 10;
 const TITLES_LOOKED_AT = 50;
 /** A night's most for one user. The budget normally stops it far sooner. */
 const MAX_COMPANIES_PER_RUN = 2000;
+/**
+ * Provider errors in a row that count as an outage. Any one can be about that batch alone (a gateway
+ * refusing one company's name), so a run moves on after one, as the ranking drain does: otherwise
+ * that batch would stop everything behind it, every night, with nothing to say so.
+ */
+const OUTAGE_AFTER_ERRORS = 3;
 
 const NAICS_TABLE_TEXT = NAICS_2022_INDUSTRY_GROUPS.map((g) => `${g.code} ${g.title}`).join('\n');
 
@@ -161,8 +168,17 @@ async function storeTags(
 export interface CompanyTagsRun {
   tagged: number;
   calls: number;
+  /** Calls that gave nothing to store: those companies are asked about the next night. */
+  failed: number;
   /** Why it stopped early; what is left is asked about the next night. */
-  stopped: 'budget_exceeded' | 'no_key' | 'provider_error' | 'no_prompt' | 'shutdown' | null;
+  stopped:
+    | 'budget_exceeded'
+    | 'no_key'
+    | 'key_rejected'
+    | 'provider_error'
+    | 'no_prompt'
+    | 'shutdown'
+    | null;
 }
 
 /** Tags the caller's candidates, a batch at a time, until they or the budget run out. */
@@ -171,7 +187,8 @@ export async function tagCompanies(
   ctx: UserCtx,
   opts: { stopping?: () => boolean } = {},
 ): Promise<CompanyTagsRun> {
-  const run: CompanyTagsRun = { tagged: 0, calls: 0, stopped: null };
+  const run: CompanyTagsRun = { tagged: 0, calls: 0, failed: 0, stopped: null };
+  let errorsInARow = 0;
   const prompt = await getActivePrompt(db, ctx, COMPANY_TAGS_KIND);
   if (prompt === undefined) return { ...run, stopped: 'no_prompt' };
   const candidates = await db
@@ -199,12 +216,22 @@ export async function tagCompanies(
         promptId: prompt.id,
       });
       run.tagged += await storeTags(db, ctx, batch, answer);
+      errorsInARow = 0;
     } catch (err) {
       if (!(err instanceof AiUnavailableError)) throw err;
-      // This batch's answer was unusable: those behind it may be fine, and it is tried next night.
-      if (err.reason === 'invalid_output') continue;
-      // True of every batch behind it too.
-      return { ...run, stopped: err.reason };
+      run.failed += 1;
+      // Not this batch's fault, and true of every batch behind it too.
+      if (err.keyRejected) return { ...run, stopped: 'key_rejected' };
+      if (err.reason === 'no_key' || err.reason === 'budget_exceeded') {
+        return { ...run, stopped: err.reason };
+      }
+      // About this batch, as far as anyone can tell: those behind it may be fine.
+      if (err.reason === 'provider_error') {
+        errorsInARow += 1;
+        if (errorsInARow >= OUTAGE_AFTER_ERRORS) return { ...run, stopped: err.reason };
+      } else {
+        errorsInARow = 0;
+      }
     }
   }
   return run;
@@ -229,8 +256,11 @@ export async function sweepCompanyTags(db: Db): Promise<number> {
     .from(companies)
     .where(untaggedCandidates(db))
     .all();
+  // A key the provider has refused would only send 20 names to be refused again each night.
+  const rejected = await usersWithRejectedKey(db);
   let queued = 0;
   for (const { userId } of owners) {
+    if (rejected.has(userId)) continue;
     const ctx: UserCtx = { userId, isAdmin: false };
     if (!(await hasKey(db, ctx)) || !(await discoveryBudgetHasRoom(db, ctx))) continue;
     await enqueue(

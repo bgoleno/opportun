@@ -134,7 +134,7 @@ export const IndustryProfileOutputSchema = z.object({
  * the caller drops an unknown ref or a code not in the table, so one bad row does not fail the batch.
  */
 export const CompanyTagsOutputSchema = z.object({
-  tags: z.array(z.object({ ref: z.string().max(20), code: z.string().max(20) })).max(60),
+  tags: z.array(z.object({ ref: z.string().max(200), code: z.string().max(200) })).max(60),
 });
 
 export const RefineOutputSchema = z.object({
