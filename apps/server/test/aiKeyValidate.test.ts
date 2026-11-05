@@ -109,7 +109,7 @@ describe('openai keys', () => {
   });
 
   it('a rejected key is still stored, reported invalid, and its error never echoes the key', async () => {
-    const { app, a } = await boot();
+    const { app, a } = await boot({ logLevel: 'trace' });
     await putPolicy(a, 'comms.classify', { provider: 'openai', model: 'gpt-5.5-mini' });
     fetchMock.mockResolvedValue(
       json(401, { error: { message: `Incorrect API key provided: ${KEY}` } }),
@@ -126,6 +126,9 @@ describe('openai keys', () => {
     expect(list.body).not.toContain(KEY);
     const settingsRows = await queryAll(app, `SELECT value FROM settings`);
     expect(JSON.stringify(settingsRows)).not.toContain(KEY);
+    // This test's own request is in the log, so the next line cannot pass on an empty one: at the
+    // harness's default `silent` level it did (https://github.com/bgoleno/opportun/issues/258).
+    expect(logs.text()).toContain('/api/v1/secrets');
     expect(logs.text()).not.toContain(KEY);
   });
 
