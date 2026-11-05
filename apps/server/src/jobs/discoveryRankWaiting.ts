@@ -90,7 +90,14 @@ export interface DrainOutcome {
   /** Threw on this posting: it keeps waiting, and those behind it still go. */
   failed: number;
   /** Why the drain stopped early; everything not yet ranked keeps waiting. */
-  stopped: 'budget_exceeded' | 'no_key' | 'key_rejected' | 'provider_error' | 'shutdown' | null;
+  stopped:
+    | 'budget_exceeded'
+    | 'no_key'
+    | 'key_rejected'
+    | 'key_changed'
+    | 'provider_error'
+    | 'shutdown'
+    | null;
 }
 
 /**
@@ -150,9 +157,16 @@ export async function drainWaitingResults(
         return outcome;
       }
       // A 401 from before the key changed: the next read tries it with the new key. If that is
-      // refused too, the call began after the change, so this comes round only per key change.
+      // refused too, the call began after the change, so the stop comes back. This compares two
+      // clock readings, and a stored time ahead of the clock would look stale every time, so it
+      // counts as an error too, or a drain could call for ever with nothing done by anyone.
       if (run.reason === 'key_changed') {
         tried.delete(id);
+        errorsInARow += 1;
+        if (errorsInARow >= OUTAGE_AFTER_ERRORS) {
+          outcome.stopped = run.reason;
+          return outcome;
+        }
         continue;
       }
       // It keeps waiting with the reason on its card, behind the others for the rest of the day.
