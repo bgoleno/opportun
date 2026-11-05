@@ -223,10 +223,16 @@ describe('#267: overlapping runs of one source', () => {
     const { app, a } = await boot();
     board(COUNT, inLockstep());
     const src = await aSource(app, a);
-    await queueRun(app, a, src.id, 'now');
-    await queueRun(app, a, src.id, 'scheduled');
+    const ids = [
+      await queueRun(app, a, src.id, 'now'),
+      await queueRun(app, a, src.id, 'scheduled'),
+    ];
 
     await Promise.all([startRun(app), startRun(app)]);
+
+    // runNextJob does not reject when a job fails, and one run dying would still leave these counts.
+    const runs = await app.db.select().from(jobs).where(inArray(jobs.id, ids)).all();
+    expect(runs.map((r) => r.status)).toEqual(['done', 'done']);
 
     const rows = await app.db
       .select({ reason: discoveryResults.rankSkipReason })
