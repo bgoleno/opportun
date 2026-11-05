@@ -153,6 +153,8 @@ export interface RunOptions {
   random?: () => number;
   workerId?: string;
   services?: Partial<JobServices>;
+  /** Whether the runner is shutting down; passed to handlers as ctx.stopping. */
+  stopping?: () => boolean;
   /** Failures outside a handler (e.g. the database went away). */
   onError?: (err: unknown) => void;
 }
@@ -259,6 +261,7 @@ async function processJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<vo
     attempt: job.attempts,
     maxAttempts: job.maxAttempts,
     services: opts.services ?? {},
+    stopping: opts.stopping ?? (() => false),
     async setResult(value) {
       await db
         .update(jobs)
@@ -404,7 +407,7 @@ export function startRunner(
       }
       if (job === undefined) return;
       try {
-        await processJob(db, job, opts);
+        await processJob(db, job, { ...opts, stopping: () => stopped });
         await safeMaterialize(db, clock(), opts);
       } catch (err) {
         opts.onError?.(err);

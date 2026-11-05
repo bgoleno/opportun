@@ -1,6 +1,6 @@
 // Why a posting was not ranked (https://github.com/bgoleno/opportun/issues/210, tl's slice 2 on
 // #190): a skipped ranking keeps the router's reason on the result until it is ranked, and
-// Settings counts budget refusals. Whether or when a skipped posting is ranked is not changed.
+// Settings counts budget refusals. A budget refusal itself now waits (#214, discoveryBudget.test.ts).
 import { AiUnavailableError, runStructured, type AiUnavailableReason } from '@opportun/ai';
 import {
   newId,
@@ -73,7 +73,8 @@ describe('a skipped ranking keeps why (#210)', () => {
     expectTypeOf<RankSkipReason>().toEqualTypeOf<AiUnavailableReason>();
   });
 
-  for (const reason of RANK_SKIP_REASONS) {
+  // budget_exceeded no longer ends as a skip: the posting waits (#214, discoveryBudget.test.ts).
+  for (const reason of RANK_SKIP_REASONS.filter((r) => r !== 'budget_exceeded')) {
     it(`records ${reason}, and the result stays unranked and pending`, async () => {
       const { app, a } = await boot();
       vi.mocked(runStructured).mockRejectedValueOnce(new AiUnavailableError(reason));
@@ -91,7 +92,7 @@ describe('a skipped ranking keeps why (#210)', () => {
         url: '/api/v1/discovery/results?disposition=pending',
       });
       expect(listed.json().items[0].rankSkipReason).toBe(reason);
-      // Nothing is retried or deferred: one ranking job, done, skipped (decision 2 stays out).
+      // Not a budget refusal, so nothing is retried or deferred: one ranking job, done, skipped.
       const ranks = await rankJobs(app);
       expect(ranks).toHaveLength(1);
       expect(ranks[0]).toMatchObject({ status: 'done', result: { status: 'skipped', reason } });
@@ -100,10 +101,10 @@ describe('a skipped ranking keeps why (#210)', () => {
 
   it('ranking it later clears the reason', async () => {
     const { app, a } = await boot();
-    vi.mocked(runStructured).mockRejectedValueOnce(new AiUnavailableError('budget_exceeded'));
+    vi.mocked(runStructured).mockRejectedValueOnce(new AiUnavailableError('provider_error'));
     await discover(app, a);
     const skipped = await onlyResult(app, a);
-    expect(skipped.rankSkipReason).toBe('budget_exceeded');
+    expect(skipped.rankSkipReason).toBe('provider_error');
 
     vi.mocked(runStructured).mockResolvedValueOnce({
       score: 64,

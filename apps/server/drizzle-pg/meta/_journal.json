@@ -218,6 +218,13 @@
       "when": 1794500000000,
       "tag": "0030_discovery_title_variants_prompt",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1794600000000,
+      "tag": "0031_discovery_rank_deferred",
+      "breakpoints": true
     }
   ]
 }

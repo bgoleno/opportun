@@ -64,6 +64,11 @@ const ResultSchema = z.object({
   prefilterScore: z.number().nullable(),
   /** Why ranking was skipped (#210), until the result is ranked; null otherwise. */
   rankSkipReason: z.enum(RANK_SKIP_REASONS).nullable(),
+  /**
+   * When its ranking began waiting for the discovery budget (#214), or when a provider failure
+   * last used its turn; null when it is not waiting.
+   */
+  rankDeferredAt: z.number().int().nullable(),
   resolution: z.enum(RESOLUTIONS),
   resolvedSourceRef: z.string().nullable(),
   disposition: z.enum(DISPOSITIONS),

@@ -83,7 +83,7 @@ reason, the start of the description, the pay if listed, and a link to the posti
 
 _The review queue, ranked against the "Staff platform" role target. The selected result has a blue outline._
 
-**Cost and limits.** Ranking is one `discovery.rank` call per new posting (a source with no
+**Cost and limits.** Ranking spends from your [discovery budget](settings.md#models-and-budgets); over it a posting waits for the next budget day rather than being skipped, and a scored posting waiting to be ranked again says its score may change. Ranking is one `discovery.rank` call per new posting (a source with no
 role target is judged against all your role targets in that one call). A busy board on a daily schedule can mean dozens of calls a day; watch
 **Settings > AI > Usage** for the first week and narrow your sources if needed. The score is
 the model reading your role target and the posting text; it misses things a posting leaves

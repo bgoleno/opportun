@@ -62,7 +62,9 @@ export type PrefilterRule = (typeof PREFILTER_RULES)[number];
  * Why a result was not ranked (https://github.com/bgoleno/opportun/issues/210): the AI router's
  * own AiUnavailableError reason (@opportun/ai), kept on the result until it is ranked. No key or
  * no provider set up, the task's daily budget spent, the provider failing, or its answer unusable.
- * Null for a ranked result and for one never sent for ranking.
+ * Null for a ranked result and for one never sent for ranking. The server no longer stores
+ * budget_exceeded on a pending result: over budget it waits instead (rank_deferred_at, #214). A
+ * result stored before that keeps the code, so it stays here.
  */
 export const RANK_SKIP_REASONS = [
   'no_key',

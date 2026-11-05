@@ -27,7 +27,7 @@ import {
 import { audit } from '../lib/audit';
 import { listSecrets } from '../lib/secretBox';
 import { HttpError } from '../lib/errors';
-import { requireUser } from '../repos/base';
+import { requireUser, type UserCtx } from '../repos/base';
 import {
   acceptProposal,
   activatePrompt,
@@ -36,6 +36,16 @@ import {
   getPromptVersion,
   listPromptVersions,
 } from '../repos/prompts';
+import { countWaitingResults } from '../repos/discovery';
+import {
+  discoveryBudgetHasRoom,
+  discoverySpentTodayUsd,
+  MAX_DISCOVERY_DAILY_USD,
+  MIN_DISCOVERY_DAILY_USD,
+  readDiscoveryBudget,
+  writeDiscoveryBudget,
+} from '../repos/discoveryBudget';
+import { enqueueRankWaiting } from '../jobs/discoveryRankWaiting';
 import { rankBudgetSkips, usageRollup } from '../repos/taskRuns';
 import { IdParams } from './common';
 
@@ -76,6 +86,15 @@ const CreatePromptBody = z
 const RankSkipsSchema = z.object({
   today: z.number().int(),
   last7Days: z.number().int(),
+});
+const DiscoveryBudgetSchema = z.object({
+  dailyUsd: z.number(),
+  spentTodayUsd: z.number(),
+  waiting: z.number().int(),
+  perTaskDailyUsd: z.number(),
+});
+const DiscoveryBudgetBody = z.object({
+  dailyUsd: z.number().min(MIN_DISCOVERY_DAILY_USD).max(MAX_DISCOVERY_DAILY_USD),
 });
 const UsageQuery = z.object({ days: z.coerce.number().int().min(1).max(366).default(30) });
 const UsageMetrics = {
@@ -342,7 +361,42 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     async (req) => await usageRollup(db, requireUser(req), req.query.days),
   );
 
-  // Postings whose ranking the daily budget refused (#210): counts only, from task_runs.
+  // The discovery budget (#214): dollars a day, today's spend against it, and what waits for it.
+  const discoveryBudgetView = async (ctx: UserCtx) => ({
+    dailyUsd: await readDiscoveryBudget(db, ctx),
+    spentTodayUsd: await discoverySpentTodayUsd(db, ctx),
+    waiting: await countWaitingResults(db, ctx),
+    perTaskDailyUsd: (await readBudget(db, ctx)).perTaskDailyUsd,
+  });
+
+  api.get(
+    '/ai/discovery-budget',
+    { schema: { response: { 200: DiscoveryBudgetSchema } } },
+    async (req) => await discoveryBudgetView(requireUser(req)),
+  );
+
+  api.put(
+    '/ai/discovery-budget',
+    { schema: { body: DiscoveryBudgetBody, response: { 200: DiscoveryBudgetSchema } } },
+    async (req) => {
+      const ctx = requireUser(req);
+      await writeDiscoveryBudget(db, ctx, req.body.dailyUsd);
+      await audit(db, 'ai.discovery_budget.updated', {
+        userId: ctx.userId,
+        ip: req.ip,
+        detail: { dailyUsd: req.body.dailyUsd },
+      });
+      // A raised budget has room today: what waits need not wait for the next sweep.
+      const view = await discoveryBudgetView(ctx);
+      if (view.waiting > 0 && (await discoveryBudgetHasRoom(db, ctx))) {
+        await enqueueRankWaiting(db, ctx);
+      }
+      return view;
+    },
+  );
+
+  // Calls the per-task hard stop refused (#210, #214): counts of refusals from task_runs, so one
+  // posting refused twice counts twice. The postings waiting for budget are counted above.
   api.get(
     '/ai/usage/rank-skips',
     { schema: { response: { 200: RankSkipsSchema } } },

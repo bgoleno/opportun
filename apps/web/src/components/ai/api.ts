@@ -333,3 +333,32 @@ export function useDiscardProposal(taskKey: string) {
     onSettled: () => qc.invalidateQueries({ queryKey: aiKeys.prompts(taskKey) }),
   });
 }
+
+/** The discovery budget (#214): dollars a day, today's spend, and the postings waiting for it. */
+export interface DiscoveryBudget {
+  dailyUsd: number;
+  spentTodayUsd: number;
+  waiting: number;
+  perTaskDailyUsd: number;
+}
+
+export const discoveryBudgetKey = ['ai', 'discovery-budget'] as const;
+
+export function useDiscoveryBudget() {
+  return useQuery({
+    queryKey: discoveryBudgetKey,
+    queryFn: () => api<DiscoveryBudget>('/ai/discovery-budget'),
+  });
+}
+
+export function useSetDiscoveryBudget() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (dailyUsd: number) =>
+      api<DiscoveryBudget>('/ai/discovery-budget', { method: 'PUT', body: { dailyUsd } }),
+    onSuccess: (data) => {
+      qc.setQueryData(discoveryBudgetKey, data);
+      toast({ title: 'Discovery budget saved', variant: 'success' });
+    },
+  });
+}

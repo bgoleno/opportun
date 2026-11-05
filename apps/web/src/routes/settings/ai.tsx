@@ -6,6 +6,7 @@ import { PolicyEditor } from '@/components/ai/PolicyEditor';
 import { ProposedRefinement } from '@/components/ai/ProposedRefinement';
 import { PromptEditor } from '@/components/ai/promptEditor';
 import { ProviderKeysCard } from '@/components/ai/ProviderKeysCard';
+import { DiscoveryBudgetCard, DiscoveryBudgetLine } from '@/components/ai/DiscoveryBudget';
 import { RankCostCard } from '@/components/ai/RankCostCard';
 import { RankSkipsLine } from '@/components/ai/RankSkips';
 import { UsageTable } from '@/components/ai/UsageTable';
@@ -33,6 +34,7 @@ function AiSettings() {
           <PolicyEditor />
         </CardContent>
       </Card>
+      <DiscoveryBudgetCard />
       <Card>
         <CardHeader>
           <CardTitle>Usage</CardTitle>
@@ -40,6 +42,7 @@ function AiSettings() {
         </CardHeader>
         <CardContent className="grid gap-3">
           <UsageTable />
+          <DiscoveryBudgetLine />
           <RankSkipsLine />
         </CardContent>
       </Card>

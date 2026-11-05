@@ -32,6 +32,7 @@ const LEAD: DiscoveryResult = {
   aiScore: null,
   aiRationale: null,
   rankSkipReason: null,
+  rankDeferredAt: null,
   resolution: 'needs_capture',
   resolvedSourceRef: null,
   disposition: 'pending',

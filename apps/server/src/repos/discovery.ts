@@ -8,7 +8,20 @@ import {
   type RankSkipReason,
   type Resolution,
 } from '@opportun/core';
-import { and, asc, count, eq, getTableColumns, inArray, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  eq,
+  getTableColumns,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import { z } from 'zod';
 import { SOURCE_CONFIG_SCHEMAS, type SourceKind } from '../adapters/discoverySource';
 import {
@@ -29,6 +42,7 @@ import { removeSchedule, setSchedule, userCronProblem } from '../jobs/runner';
 import type { Db, Exec, UserCtx } from './base';
 import { getOpportunity } from './opportunities';
 import { countWhere, orderBy, sortColumns, type ListOpts, type Page } from './list';
+import { startOfUtcDay } from './taskRuns';
 import { runCount, withTransaction } from '../db/client';
 
 export type DiscoverySourceRow = typeof discoverySources.$inferSelect;
@@ -643,10 +657,10 @@ export async function setRanking(
   ranking: { aiScore: number | null; aiRationale: string | null },
 ): Promise<DiscoveryResultView> {
   await getResult(exec, ctx, id);
-  // Ranked now, so any earlier reason it was not is cleared (#210).
+  // Ranked now, so any earlier reason it was not, and any wait for budget, is cleared (#210, #214).
   await exec
     .update(discoveryResults)
-    .set({ ...ranking, rankSkipReason: null, updatedAt: Date.now() })
+    .set({ ...ranking, rankSkipReason: null, rankDeferredAt: null, updatedAt: Date.now() })
     .where(ownedResult(ctx, id))
     .run();
   return await getResult(exec, ctx, id);
@@ -711,8 +725,8 @@ export async function prefilterRecall(
 
 /**
  * Records why ranking was skipped (#210): the AI router's reason, shown on the result's card
- * until it is ranked. Only the reason is written: the score, the rationale, and whether or when
- * it is ranked again are unchanged (that is the owner's decision 2 on #190).
+ * until it is ranked. Only the reason is written. A result that already has a score keeps none:
+ * it is ranked, so it must never read "not ranked" (tl on #213).
  */
 export async function setRankSkip(
   exec: Exec,
@@ -723,8 +737,188 @@ export async function setRankSkip(
   await exec
     .update(discoveryResults)
     .set({ rankSkipReason: reason })
+    .where(and(ownedResult(ctx, id), isNull(discoveryResults.aiScore)))
+    .run();
+}
+
+/**
+ * The result waits for the discovery budget (#214): it is ranked on a later budget day, oldest
+ * first (jobs/discoveryRankWaiting.ts). A second refusal keeps the first time, and drops any older
+ * reason, since the budget is what holds it now. A scored result keeps its score while its re-rank
+ * waits. Like a skip, this leaves updatedAt alone.
+ */
+export async function setRankDeferred(
+  exec: Exec,
+  ctx: UserCtx,
+  id: string,
+  now: number = Date.now(),
+): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({
+      rankDeferredAt: sql`coalesce(${discoveryResults.rankDeferredAt}, ${now})`,
+      rankSkipReason: null,
+    })
     .where(ownedResult(ctx, id))
     .run();
+}
+
+/** The result stops waiting for budget, without being ranked. */
+export async function clearRankDeferred(exec: Exec, ctx: UserCtx, id: string): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankDeferredAt: null })
+    .where(ownedResult(ctx, id))
+    .run();
+}
+
+const waitingForBudget = and(
+  isNotNull(discoveryResults.rankDeferredAt),
+  eq(discoveryResults.disposition, 'pending'),
+);
+
+/**
+ * Waiting postings still in line for a turn. A posting the provider refused today has had today's
+ * turn, or a few that always fail would be first on every drain and the backlog behind them would
+ * never be reached. On a later budget day it is back in line by date, or new postings could spend
+ * each day's budget ahead of it for ever. A no-key reason is not in line: it holds nothing up while
+ * the key is missing, and it ends when a key works (clearWaitingNoKey).
+ */
+const inLineForBudget = (now: number) =>
+  or(
+    isNull(discoveryResults.rankSkipReason),
+    and(
+      eq(discoveryResults.rankSkipReason, 'provider_error'),
+      lt(discoveryResults.rankDeferredAt, startOfUtcDay(now)),
+    ),
+  );
+
+/**
+ * The caller's results waiting for budget, in the order a drain takes them: oldest first (#218
+ * brings pre-filter scores), with those still unranked and in line ahead of the rest. The others,
+ * a posting refused today or one that already has a score, keep their order by date behind them.
+ */
+export async function listWaitingResultIds(
+  exec: Exec,
+  ctx: UserCtx,
+  now: number = Date.now(),
+): Promise<string[]> {
+  const rows = await exec
+    .select({ id: discoveryResults.id })
+    .from(discoveryResults)
+    .where(and(eq(discoveryResults.userId, ctx.userId), waitingForBudget))
+    .orderBy(
+      sql`case when ${and(inLineForBudget(now), isNull(discoveryResults.aiScore))} then 0 else 1 end`,
+      asc(discoveryResults.createdAt),
+      asc(discoveryResults.id),
+    )
+    .all();
+  return rows.map((r) => r.id);
+}
+
+/** Whether a posting older than this pending one is still in line for budget. */
+export async function hasOlderWaitingResult(
+  exec: Exec,
+  ctx: UserCtx,
+  id: string,
+  now: number = Date.now(),
+): Promise<boolean> {
+  const self = await exec
+    .select({
+      createdAt: discoveryResults.createdAt,
+      disposition: discoveryResults.disposition,
+    })
+    .from(discoveryResults)
+    .where(ownedResult(ctx, id))
+    .get();
+  if (self === undefined || self.disposition !== 'pending') return false;
+  const older = await exec
+    .select({ id: discoveryResults.id })
+    .from(discoveryResults)
+    .where(
+      and(
+        eq(discoveryResults.userId, ctx.userId),
+        waitingForBudget,
+        inLineForBudget(now),
+        or(
+          lt(discoveryResults.createdAt, self.createdAt),
+          and(eq(discoveryResults.createdAt, self.createdAt), lt(discoveryResults.id, id)),
+        ),
+      ),
+    )
+    .limit(1)
+    .get();
+  return older !== undefined;
+}
+
+/** The provider refused this waiting posting: today's turn is used (inLineForBudget). */
+export async function setRankTurnUsed(
+  exec: Exec,
+  ctx: UserCtx,
+  id: string,
+  now: number = Date.now(),
+): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankDeferredAt: now })
+    .where(and(ownedResult(ctx, id), isNotNull(discoveryResults.rankDeferredAt)))
+    .run();
+}
+
+/**
+ * No key means nothing behind this posting can be ranked either: every unscored waiting card says
+ * so at once, with no further call to find that out. A scored one keeps its score and no reason.
+ */
+export async function setWaitingNoKey(exec: Exec, ctx: UserCtx): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankSkipReason: 'no_key' })
+    .where(
+      and(
+        eq(discoveryResults.userId, ctx.userId),
+        waitingForBudget,
+        isNull(discoveryResults.aiScore),
+      ),
+    )
+    .run();
+}
+
+/**
+ * A key works: it was added, or a call got through. No waiting card should still say AI is not set
+ * up, and those postings are back in line, so new ones go behind them again.
+ */
+export async function clearWaitingNoKey(exec: Exec, ctx: UserCtx): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankSkipReason: null })
+    .where(
+      and(
+        eq(discoveryResults.userId, ctx.userId),
+        waitingForBudget,
+        eq(discoveryResults.rankSkipReason, 'no_key'),
+      ),
+    )
+    .run();
+}
+
+/** How many of the caller's results wait for budget. Each is one row, so each counts once. */
+export async function countWaitingResults(exec: Exec, ctx: UserCtx): Promise<number> {
+  const row = await exec
+    .select({ n: count() })
+    .from(discoveryResults)
+    .where(and(eq(discoveryResults.userId, ctx.userId), waitingForBudget))
+    .get();
+  return Number(row?.n ?? 0);
+}
+
+/** The users with a result waiting for budget (the sweep's list). */
+export async function usersWithWaitingResults(exec: Exec): Promise<string[]> {
+  const rows = await exec
+    .selectDistinct({ userId: discoveryResults.userId })
+    .from(discoveryResults)
+    .where(waitingForBudget)
+    .all();
+  return rows.map((r) => r.userId);
 }
 
 /** Stores a lead's resolution and, when resolved, the posting filled from the ATS. */

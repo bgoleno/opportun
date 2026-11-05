@@ -1,6 +1,7 @@
-// How many postings discovery did not rank because the task's daily AI budget was spent
+// How often the per-task daily hard stop refused a discovery ranking call
 // (https://github.com/bgoleno/opportun/issues/210): counts only, read from the AI run ledger.
-// The budget itself and whether a skipped posting is ranked later are not changed here.
+// These are refusals, not postings: a posting that waits for budget and is refused again counts
+// again (tl on #213). The postings waiting are counted once each in DiscoveryBudget.tsx (#214).
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 
@@ -18,15 +19,16 @@ export function useRankSkips() {
   });
 }
 
-const postings = (n: number): string => (n === 1 ? '1 posting' : `${n} postings`);
+const times = (n: number): string => (n === 1 ? '1 time' : `${n} times`);
 
 export function RankSkipsLine() {
   const { data } = useRankSkips();
   if (data === undefined) return null;
   return (
     <p className="max-w-prose text-sm text-muted-foreground" data-testid="rank-skips">
-      Discovery ranking skipped because the daily budget was spent: {postings(data.today)} today,{' '}
-      {postings(data.last7Days)} in the last 7 days. Days are UTC, as the budget&apos;s are.
+      Ranking calls refused by the per-task daily limit: {times(data.today)} today,{' '}
+      {times(data.last7Days)} in the last 7 days. One posting can be refused more than once. Days
+      are UTC, as the budget&apos;s are.
     </p>
   );
 }

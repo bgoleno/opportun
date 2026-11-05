@@ -29,6 +29,7 @@ function result(over: Partial<DiscoveryResult> & { id: string }): DiscoveryResul
     aiScore: 80,
     aiRationale: null,
     rankSkipReason: null,
+    rankDeferredAt: null,
     resolution: 'full',
     resolvedSourceRef: null,
     disposition: 'dismissed',
