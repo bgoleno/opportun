@@ -406,13 +406,17 @@ describe('POST /connector/apply/:id/confirmation (#121)', () => {
   });
 
   it('keeps the page text out of every audit entry, job and log line', async () => {
-    const { app, a } = await boot(ON);
+    logs.lines.length = 0;
+    const { app, a } = await boot({ ...ON, logLevel: 'trace' });
     const s = await submittedAttempt(app, a);
     const t = await token(a, ['apply:assist']);
     expect((await record(app, t, s.id, page(thanksOn(s.ats)))).statusCode).toBe(200);
     await app.jobs.drain();
     expect(JSON.stringify(await app.db.select().from(auditLog).all())).not.toContain(SENTINEL);
     expect(JSON.stringify(await app.db.select().from(jobs).all())).not.toContain(SENTINEL);
+    // This test's own request is in the log, so the next line cannot pass on an empty one: at the
+    // harness's default `silent` level it did (https://github.com/bgoleno/opportun/issues/240).
+    expect(logs.text()).toContain(`/api/v1/connector/apply/${s.id}/confirmation`);
     expect(logs.text()).not.toContain(SENTINEL);
   });
 
@@ -619,7 +623,8 @@ describe("tl's rulings from qa on #188: another job, and a deleted copy", () => 
 
 describe('GET /connector/apply/confirmable (tl on #121)', () => {
   it('names the one submitted application the page may confirm, and nothing else of it', async () => {
-    const { app, a } = await boot(ON);
+    logs.lines.length = 0;
+    const { app, a } = await boot({ ...ON, logLevel: 'trace' });
     const s = await submittedAttempt(app, a, { fields: { email: 'applicant@example.com' } });
     const t = await token(a, ['apply:assist']);
     const TAB_SECRET = `${thanksOn(s.ats)}?token=lookup-secret-9`;
@@ -635,8 +640,12 @@ describe('GET /connector/apply/confirmable (tl on #121)', () => {
       reason: null,
     });
     expect(res.body).not.toContain('applicant@example.com');
-    // The page's address is in no log line, and the audit keeps its host only.
+    // The page's address is in no log line, and the audit keeps its host only. This request's
+    // redacted line is in the log, so the check after it cannot pass on an empty one: at the
+    // harness's default `silent` level it did (https://github.com/bgoleno/opportun/issues/240).
+    expect(logs.text()).toContain('/api/v1/connector/apply/confirmable?[redacted]');
     expect(logs.text()).not.toContain('lookup-secret-9');
+    expect(logs.text()).not.toContain(thanksOn(s.ats));
     expect(
       loggedUrl(`/api/v1/connector/apply/confirmable?url=${encodeURIComponent(TAB_SECRET)}`),
     ).toBe('/api/v1/connector/apply/confirmable?[redacted]');
