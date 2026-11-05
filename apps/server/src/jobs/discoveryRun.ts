@@ -266,7 +266,7 @@ async function ingest(
  * sources first, and lead resolution then queues its ranking (FR-D7); a full posting is ranked
  * right away (FR-D4).
  */
-async function enqueueFollowUps(
+export async function enqueueFollowUps(
   db: Db,
   ctx: UserCtx,
   result: Pick<DiscoveryResultView, 'id' | 'resolution'>,
