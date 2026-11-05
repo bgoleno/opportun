@@ -9,7 +9,7 @@ import { dedupeKey, newId, NormalizedPostingSchema, type NormalizedPosting } fro
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { getSource, SourceConfigError, type SourceContext } from '../adapters/discoverySource';
-import { withTransaction, type Db } from '../db/client';
+import { lockScope, withTransaction, type Db } from '../db/client';
 import { jsonText } from '../db/dialect';
 import {
   discoveryResults,
@@ -224,6 +224,11 @@ async function ingest(
 ): Promise<DiscoveryResultView | 'duplicate'> {
   const key = dedupeKey(posting.company, posting.title, posting.location);
   return await withTransaction(db, async (tx) => {
+    // discovery_results has no unique index, and two runs of a source can overlap: on Postgres this
+    // lock is all that keeps them from both passing the check. It is the user's, not the source's,
+    // because the check also looks across their other sources (multi_posted).
+    // https://github.com/bgoleno/opportun/issues/267
+    await lockScope(tx, `discovery.ingest:${ctx.userId}`);
     const check = await checkDuplicate(tx, ctx, key, sourceId, posting.externalId);
     if (check === 'duplicate') return 'duplicate';
     const partial = posting.descriptionMd == null || posting.descriptionMd === '';

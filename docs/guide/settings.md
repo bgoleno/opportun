@@ -65,7 +65,12 @@ _Editing one task's model. Set prices for a model without a list price, such as 
 - **Unpriced models** (local or gateway models) count at the highest listed price unless you
   enter the policy's own prices, so they still count toward the budget.
 - **Usage** shows calls, tokens and estimated cost per task per day for the last 7, 30 or 90
-  days. These are estimates from list prices: your provider's bill is the real number.
+  days. These are estimates from list prices: your provider's bill is the real number. A line
+  under the table counts the ranking calls refused by the per-task daily limit, today and in the
+  last 7 days; one posting can be refused more than once.
+- **Discovery ranking cost** shows the calls that score discovered postings, for the last 7 and
+  30 days: how many, the input and output tokens per call as median / 90th percentile over the
+  calls that ranked, the cost per call, and the total cost, which includes calls that failed.
 
 ## Prompts
 
