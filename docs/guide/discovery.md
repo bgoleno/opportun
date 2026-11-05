@@ -110,7 +110,7 @@ proposes companies worth following, based on your role targets and past decision
 reason. **Follow** one and Opportun looks for its job board; **Deny** it and it is not suggested
 again.
 
-![The Companies tab. In your network lists Initech, with Priya Example and Sam Example named under You know 2 people here and Follow and Deny buttons, and Globex, marked Following with no board found. Suggested companies lists Pied Piper with its reason and Follow and Deny buttons](images/discovery-companies.png)
+![The Companies tab. At the top, Where to look is collapsed and shows 1 confirmed, 2 to review. In your network lists Initech, with Priya Example and Sam Example named under You know 2 people here and Follow and Deny buttons, and Globex, marked Following with no board found. Suggested companies lists Pied Piper with its reason and Follow and Deny buttons](images/discovery-companies.png)
 
 _The Companies tab, with invented contacts. Following a company starts job board detection._
 
