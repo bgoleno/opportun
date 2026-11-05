@@ -20,11 +20,11 @@ import {
   type IndustryRow,
 } from './companiesApi';
 
-const TIER_LABELS: Record<NaicsTier, string> = {
-  core: 'Core',
-  similar: 'Similar',
-  adjacent: 'Adjacent',
-};
+const TIER_LABELS = new Map<NaicsTier, string>([
+  ['core', 'Core'],
+  ['similar', 'Similar'],
+  ['adjacent', 'Adjacent'],
+]);
 
 const SOURCE_LABELS = new Map<string, string>([
   ['resume', 'From your resume'],
@@ -133,7 +133,7 @@ function AddIndustry({ taken }: { taken: ReadonlySet<string> }) {
         >
           {NAICS_TIERS.map((t) => (
             <option key={t} value={t}>
-              {TIER_LABELS[t]}
+              {TIER_LABELS.get(t)}
             </option>
           ))}
         </Select>
@@ -190,11 +190,11 @@ export function IndustryProfilePanel() {
         {NAICS_TIERS.map((tier) => {
           const inTier = rows.filter((r) => r.tier === tier);
           if (inTier.length === 0) return null;
-          const label = `${TIER_LABELS[tier]} industries`;
+          const name = TIER_LABELS.get(tier);
           return (
             <section key={tier} className="grid min-w-0 gap-2">
-              <h3 className="text-sm font-semibold">{TIER_LABELS[tier]}</h3>
-              <ul className="grid min-w-0 gap-2" aria-label={label}>
+              <h3 className="text-sm font-semibold">{name}</h3>
+              <ul className="grid min-w-0 gap-2" aria-label={`${name} industries`}>
                 {inTier.map((r) => (
                   <IndustryChip key={r.code} row={r} />
                 ))}
