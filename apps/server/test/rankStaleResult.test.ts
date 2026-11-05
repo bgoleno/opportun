@@ -370,6 +370,44 @@ describe('a posting whose text changes during a ranking call', () => {
       expect(outcome.ranked).toBe(1);
     });
 
+    it('a new resolution with the same text is not new text, so the score lands', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const id = await waitingLead(app, a);
+      const call = provider((n) => n === 1);
+
+      const drain = drainWaitingResults(app.db, ctx);
+      await call.started;
+      await setResolution(app.db, ctx, id, {
+        resolution: 'resolved_ats',
+        resolvedSourceRef: 'gh-1',
+      });
+      call.release();
+      await drain;
+
+      expect((await getResult(app.db, ctx, id)).aiScore).toBe(FROM_THE_LEAD);
+    });
+
+    it('new text with the same resolution is new text, so the score is refused', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const id = await waitingLead(app, a);
+      const call = provider((n) => n === 1);
+
+      const drain = drainWaitingResults(app.db, ctx);
+      await call.started;
+      const current = await getResult(app.db, ctx, id);
+      await setResolution(app.db, ctx, id, {
+        resolution: current.resolution,
+        resolvedSourceRef: null,
+        posting: { ...current.posting, descriptionMd: CAPTURED_TEXT },
+      });
+      call.release();
+      await drain;
+
+      expect((await getResult(app.db, ctx, id)).aiScore).toBeNull();
+    });
+
     it('a reason written to the waiting postings changes no text, so the score lands', async () => {
       const { app, a } = await boot();
       const ctx = ctxOf(a);
