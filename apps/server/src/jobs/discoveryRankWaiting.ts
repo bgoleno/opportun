@@ -9,26 +9,33 @@
 // user's drain ranks one posting at a time, so it adds one call in flight at most, and it stops as
 // soon as the budget is spent. The best pre-filter match goes first, then the oldest:
 // listWaitingResultIds has the order, and why a posting that failed goes behind the others.
+import { and, eq } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import { z } from 'zod';
 import { withTransaction, type Db } from '../db/client';
+import { jobs } from '../db/schema';
+import { HttpError } from '../lib/errors';
 import type { UserCtx } from '../repos/base';
 import {
   clearRankDeferred,
   clearWaitingKeyReasons,
   countWaitingResults,
+  getResult,
   listWaitingResultIds,
   setRankTurnUsed,
+  setRankWaitingIfUnranked,
   setWaitingNoKey,
   usersWithRejectedKey,
   usersWithWaitingResults,
+  type DiscoveryResultView,
 } from '../repos/discovery';
 import {
   discoveryBudgetHasRoom,
   keyChangeScope,
   writeKeyChangedAt,
 } from '../repos/discoveryBudget';
-import { enqueueRankWaiting, rankResult } from './discoveryRank';
+import { DISCOVERY_RANK_KIND, enqueueRankWaiting, rankResult } from './discoveryRank';
+import { enqueueFollowUps } from './discoveryRun';
 import { RANK_WAITING_KIND } from './discoveryKinds';
 import { requireService, type JobHandler } from './registry';
 
@@ -76,6 +83,49 @@ export async function resumeAfterKeyChange(db: Db, ctx: UserCtx): Promise<void> 
   if ((await countWaitingResults(db, ctx)) > 0 && (await discoveryBudgetHasRoom(db, ctx))) {
     await enqueueRankWaiting(db, ctx);
   }
+}
+
+/**
+ * Postings just restored by Undo (https://github.com/bgoleno/opportun/issues/274). A rank job that
+ * ran while one was dismissed ended without ranking it, and a denylisted one never had a job, so
+ * with no reason, no wait and no job nothing would ever rank it. Call after the restore has
+ * committed, so a job claimed from here on sees it pending.
+ *
+ * It joins the budget wait, with a drain queued if there is room: the wait lives on the result, so
+ * it does not depend on a job, and it brings the budget and every way of saying why. A new rank job
+ * would not do: it could dedupe onto one already running that has read the posting as dismissed. A
+ * pending rank job is left to run, or the posting would be ranked twice. Anything with a score, a
+ * reason or a wait already says what it needs to.
+ */
+export async function resumeAfterUndo(db: Db, ctx: UserCtx, ids: string[]): Promise<void> {
+  let joined = false;
+  for (const id of ids) {
+    let result: DiscoveryResultView;
+    try {
+      result = await getResult(db, ctx, id);
+    } catch (err) {
+      // Gone since the restore committed, with its source. The restore still happened.
+      if (err instanceof HttpError && err.statusCode === 404) continue;
+      throw err;
+    }
+    if (result.disposition !== 'pending') continue;
+    if (result.aiScore !== null || result.rankSkipReason !== null) continue;
+    if (result.rankDeferredAt !== null) continue;
+    if (result.resolution === 'needs_capture') {
+      // Ranking waits for the lead to be as complete as it will get.
+      await enqueueFollowUps(db, ctx, result);
+      continue;
+    }
+    const pendingJob = await db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(eq(jobs.dedupeKey, `${DISCOVERY_RANK_KIND}:${id}`), eq(jobs.status, 'pending')))
+      .get();
+    if (pendingJob !== undefined) continue;
+    await setRankWaitingIfUnranked(db, ctx, id);
+    joined = true;
+  }
+  if (joined && (await discoveryBudgetHasRoom(db, ctx))) await enqueueRankWaiting(db, ctx);
 }
 
 /**

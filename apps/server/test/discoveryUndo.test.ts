@@ -14,8 +14,8 @@ import { registerSource, resetSources } from '../src/adapters/discoverySource';
 import { discoveryResults, jobs, taskRuns } from '../src/db/schema';
 import { LEAD_RESOLVE_KIND } from '../src/jobs/discoveryKinds';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
-import { RANK_WAITING_KIND } from '../src/jobs/discoveryRankWaiting';
-import { DISCOVERY_RUN_KIND, resumeAfterUndo } from '../src/jobs/discoveryRun';
+import { RANK_WAITING_KIND, resumeAfterUndo } from '../src/jobs/discoveryRankWaiting';
+import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import { enqueue, runNextJob } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import {
