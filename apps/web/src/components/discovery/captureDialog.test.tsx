@@ -33,6 +33,8 @@ const LEAD: DiscoveryResult = {
   aiRationale: null,
   rankSkipReason: null,
   rankDeferredAt: null,
+  prefilterOutcome: null,
+  prefilterRule: null,
   resolution: 'needs_capture',
   resolvedSourceRef: null,
   disposition: 'pending',

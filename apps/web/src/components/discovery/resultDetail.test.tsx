@@ -38,6 +38,8 @@ const lead = (over: Partial<DiscoveryResult> = {}): DiscoveryResult =>
     aiRationale: 'Matches the platform engineering target, and the comp band fits.',
     rankSkipReason: null,
     rankDeferredAt: null,
+    prefilterOutcome: null,
+    prefilterRule: null,
     resolution: 'full',
     resolvedSourceRef: null,
     disposition: 'pending',

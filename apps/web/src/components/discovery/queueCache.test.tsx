@@ -33,6 +33,8 @@ function result(id: string, aiScore: number, createdAt: number): DiscoveryResult
     aiRationale: null,
     rankSkipReason: null,
     rankDeferredAt: null,
+    prefilterOutcome: null,
+    prefilterRule: null,
     resolution: 'full',
     resolvedSourceRef: null,
     disposition: 'pending',

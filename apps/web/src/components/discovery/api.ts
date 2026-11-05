@@ -10,6 +10,8 @@ import type {
   Disposition,
   DismissReason,
   NormalizedPosting,
+  PrefilterOutcome,
+  PrefilterRule,
   RankSkipReason,
   Resolution,
 } from '@opportun/core';
@@ -34,6 +36,9 @@ export interface DiscoveryResult {
   aiRationale: string | null;
   /** Why ranking was skipped (#210), until it is ranked; null otherwise. */
   rankSkipReason: RankSkipReason | null;
+  /** What the pre-filter said when it arrived; null if it did not judge it (#217). */
+  prefilterOutcome: PrefilterOutcome | null;
+  prefilterRule: PrefilterRule | null;
   /**
    * When ranking began waiting for the discovery budget (#214), or when a provider failure last
    * used its turn; null when it is not waiting.
@@ -61,6 +66,8 @@ export interface DiscoverySource {
   kind: DiscoverySourceKind;
   config: Record<string, unknown>;
   enabled: boolean;
+  /** Off: this board's postings are all ranked, whatever the pre-filter says (#218). */
+  prefilterEnabled: boolean;
   scheduleCron: string | null;
   roleTargetId: string | null;
   companyId: string | null;
@@ -85,6 +92,7 @@ export interface SourceInput {
   kind?: DiscoverySourceKind;
   config?: Record<string, unknown>;
   enabled?: boolean;
+  prefilterEnabled?: boolean;
   scheduleCron?: string | null;
   roleTargetId?: string | null;
 }
@@ -623,6 +631,19 @@ export function useRunSource() {
     mutationFn: (id: string) =>
       api<{ jobId: string }>(`/discovery/sources/${enc(id)}/run`, { method: 'POST' }),
     onSuccess: (_res, id) => qc.invalidateQueries({ queryKey: discoveryKeys.runs(id) }),
+  });
+}
+
+/** Rank anyway (#218): sends one posting the pre-filter held, through the budget like any other. */
+export function useRankAnyway() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api<{ queued: number }>(`/discovery/results/${enc(id)}/rank-anyway`, { method: 'POST' }),
+    onSuccess: async () => {
+      // Its card stops saying "Filtered".
+      await qc.invalidateQueries({ queryKey: discoveryKeys.queue });
+    },
   });
 }
 

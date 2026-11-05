@@ -10,6 +10,7 @@ const SOURCE: DiscoverySource = {
   kind: 'mcp',
   config: { tool: 'jobs', transport: 'stdio', command: 'mcp-jobs' },
   enabled: true,
+  prefilterEnabled: true,
   scheduleCron: null,
   roleTargetId: null,
   companyId: null,

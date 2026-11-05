@@ -28,6 +28,8 @@ function result(over: Partial<DiscoveryResult> & { id: string }): DiscoveryResul
     aiRationale: 'Strong match on platform work.',
     rankSkipReason: null,
     rankDeferredAt: null,
+    prefilterOutcome: null,
+    prefilterRule: null,
     resolution: 'full',
     resolvedSourceRef: null,
     disposition: 'pending',
@@ -210,10 +212,10 @@ describe('QueueRow: a posting the pre-filter held', () => {
     );
 
   for (const rule of ['title', 'remote', 'location'] as const) {
-    it(`says Filtered: ${rule}`, () => {
+    it(`says Filtered: ${rule}`, async () => {
       mockApi({});
       row(held({ prefilterRule: rule }));
-      expect(screen.getByText(`Filtered: ${rule}`)).toBeInTheDocument();
+      expect(await screen.findByText(`Filtered: ${rule}`)).toBeInTheDocument();
     });
   }
 
@@ -224,7 +226,7 @@ describe('QueueRow: a posting the pre-filter held', () => {
     });
     row(held());
     await user.click(
-      screen.getByRole('button', { name: 'Rank anyway: Staff Engineer at Initech' }),
+      await screen.findByRole('button', { name: 'Rank anyway: Staff Engineer at Initech' }),
     );
     await waitFor(() =>
       expect(calls.some((c) => c.path === '/discovery/results/r1/rank-anyway')).toBe(true),
@@ -237,13 +239,14 @@ describe('QueueRow: a posting the pre-filter held', () => {
       'POST /discovery/results/r1/rank-anyway': () => ({ status: 500, body: {} }),
     });
     row(held());
-    await user.click(screen.getByRole('button', { name: /Rank anyway/ }));
+    await user.click(await screen.findByRole('button', { name: /Rank anyway/ }));
     expect(await screen.findByRole('alert')).toBeInTheDocument();
   });
 
-  it('a posting that was not held has no Rank anyway', () => {
+  it('a posting that was not held has no Rank anyway', async () => {
     mockApi({});
     row(result({ id: 'r1', prefilterOutcome: 'filtered', prefilterRule: 'title' }));
+    await screen.findByRole('button', { name: /^Accept/ });
     expect(screen.queryByRole('button', { name: /Rank anyway/ })).not.toBeInTheDocument();
     expect(screen.queryByText(/Filtered:/)).not.toBeInTheDocument();
   });
@@ -267,12 +270,10 @@ describe('QueueRow: a posting the pre-filter held', () => {
           onAcceptAll={vi.fn()}
           onDismissAll={vi.fn()}
           onOpen={vi.fn()}
-          checked={false}
-          onToggleChecked={vi.fn()}
         />
       </ul>,
     );
-    await user.click(screen.getByRole('button', { name: /Rank anyway/ }));
+    await user.click(await screen.findByRole('button', { name: /Rank anyway/ }));
     await waitFor(() =>
       expect(calls.some((c) => c.path === '/discovery/results/g1/rank-anyway')).toBe(true),
     );
