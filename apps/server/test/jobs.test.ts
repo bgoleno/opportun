@@ -1,10 +1,11 @@
 // Durable job runner (NFR-OPS4, design section 8): claim, retry with backoff, dead letters,
 // dedupe, graceful stop, the scheduler, and the /jobs API.
 import { eq } from 'drizzle-orm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { Db } from '../src/db/client';
 import { exec } from './db';
+import { pauseAt } from './race';
 import { jobs, settings, users } from '../src/db/schema';
 import { registerJob, unregisterJob } from '../src/jobs/registry';
 import {
@@ -872,6 +873,76 @@ describe('job runner concurrency', () => {
         held.resolve();
         await runner.stop();
       }
+    });
+
+    describe('a claim in flight when stop() is called (tl on #265)', () => {
+      /** The worker has asked for a job; stop() is called before it gets the answer. */
+      async function stopDuringClaim(
+        db: Db,
+        started: string[],
+        onError?: (err: unknown) => void,
+        beforeAnswer?: () => void,
+      ): Promise<string> {
+        gate('test.par.a', started, Promise.resolve());
+        const id = await enqueue(db, 'test.par.a', {});
+        const claim = pauseAt('jobs.claim');
+        const runner = startRunner(db, {
+          workers: 2,
+          intervalMs: 5,
+          ...(onError === undefined ? {} : { onError }),
+        });
+        await claim.reached;
+        const stopping = runner.stop();
+        beforeAnswer?.();
+        claim.release();
+        await stopping;
+        return id;
+      }
+
+      it('the job does not start, and goes back as if it had never been claimed', async () => {
+        const { db } = await freshDb();
+        const started: string[] = [];
+        const id = await stopDuringClaim(db, started);
+        expect(started).toEqual([]);
+        expect(await jobRow(db, id)).toMatchObject({
+          status: 'pending',
+          attempts: 0,
+          lockedBy: null,
+          lockedAt: null,
+        });
+
+        // Nothing is lost: the next start runs it, as its first attempt.
+        const next = startRunner(db, { workers: 2, intervalMs: 5 });
+        await until(() => started.length === 1);
+        await next.stop();
+        expect(await jobRow(db, id)).toMatchObject({ status: 'done', attempts: 1 });
+      });
+
+      it('if it cannot go back, the failure is reported and the next start recovers it', async () => {
+        const { db } = await freshDb();
+        const started: string[] = [];
+        const errors: unknown[] = [];
+        const id = await stopDuringClaim(
+          db,
+          started,
+          (err) => errors.push(err),
+          () => {
+            // Only the put-back writes through db.update between here and the end of stop().
+            vi.spyOn(db, 'update').mockImplementationOnce(() => {
+              throw new Error('write failed');
+            });
+          },
+        );
+        vi.restoreAllMocks();
+        expect(started).toEqual([]);
+        expect(errors).toHaveLength(1);
+        expect((await jobRow(db, id)).status).toBe('running');
+
+        const next = startRunner(db, { workers: 2, intervalMs: 5 });
+        await until(() => started.length === 1);
+        await next.stop();
+        expect((await jobRow(db, id)).status).toBe('done');
+      });
     });
 
     it('stop() waits for every job, whichever look started it, and no new job starts', async () => {
