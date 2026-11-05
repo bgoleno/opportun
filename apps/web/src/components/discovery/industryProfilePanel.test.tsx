@@ -160,6 +160,15 @@ describe('Where to look (#219)', () => {
     expect(alert).not.toHaveTextContent(/later/);
   });
 
+  it('an expired key the provider rejects still says when it expired', async () => {
+    const alert = await failureMessage(
+      aiFailure({ reason: 'key_rejected', keyHint: 'the stored key expired on 2026-05-01' }),
+    );
+    expect(alert).toHaveTextContent(
+      'The AI provider rejected your key: the stored key expired on 2026-05-01. Add a working key in Settings > AI, then try again.',
+    );
+  });
+
   it('a key that has expired says when, points to Settings > AI, and does not say to wait', async () => {
     const alert = await failureMessage(
       aiFailure({ reason: 'provider_error', keyHint: 'the stored key expired on 2026-05-01' }),
@@ -188,6 +197,21 @@ describe('Where to look (#219)', () => {
       expect(alert).toHaveTextContent(fix);
     },
   );
+
+  it('a long unbroken title can wrap, so it does not widen a phone-width page', async () => {
+    // The class is all jsdom can see. What it does was measured in Chromium at 320 (qa on #281).
+    const alert = await failureMessage(() => ({
+      status: 409,
+      body: {
+        error: {
+          code: 'resume_unreadable',
+          reason: 'not_found',
+          title: 'SamExampleBaseResume2026FinalV7.docx',
+        },
+      },
+    }));
+    expect(alert).toHaveClass('[overflow-wrap:anywhere]');
+  });
 
   it('a server failure says so, without its wording', async () => {
     const alert = await failureMessage(() => ({

@@ -40,10 +40,11 @@ const KEY_FIX = 'Add a working key in Settings > AI, then try again.';
 
 /** Why the AI call did not work, and what to do. A problem with the key will not pass with time. */
 function aiFailure(reason: unknown, keyHint: unknown): string {
-  if (reason === 'key_rejected') return `The AI provider rejected your key. ${KEY_FIX}`;
-  if (typeof keyHint === 'string' && keyHint !== '') {
-    return `The AI provider could not be used: ${keyHint}. ${KEY_FIX}`;
+  const hint = typeof keyHint === 'string' && keyHint !== '' ? keyHint : null;
+  if (reason === 'key_rejected') {
+    return `The AI provider rejected your key${hint === null ? '' : `: ${hint}`}. ${KEY_FIX}`;
   }
+  if (hint !== null) return `The AI provider could not be used: ${hint}. ${KEY_FIX}`;
   switch (reason) {
     case 'no_key':
       return 'AI is not set up. Add a key in Settings > AI, then try again.';
@@ -217,7 +218,10 @@ export function IndustryProfilePanel() {
             {suggest.isPending ? 'Suggesting...' : 'Suggest industries'}
           </Button>
         </div>
-        {suggest.error ? <FormError message={suggestError(suggest.error)} /> : null}
+        {suggest.error ? (
+          // The message can hold a resume's title, which can be one long unbroken filename.
+          <FormError className="[overflow-wrap:anywhere]" message={suggestError(suggest.error)} />
+        ) : null}
         {profile.error ? <FormError message={errorMessage(profile.error)} /> : null}
         {NAICS_TIERS.map((tier) => {
           const inTier = rows.filter((r) => r.tier === tier);
