@@ -335,7 +335,7 @@ async function liveDuplicateId(exec: Exec, ctx: UserCtx, key: string): Promise<s
   return holder !== undefined && holder.stage !== 'dismissed' ? holder.id : undefined;
 }
 
-export async function getOpportunity(db: Db, ctx: UserCtx, id: string): Promise<OpportunityView> {
+export async function getOpportunity(db: Exec, ctx: UserCtx, id: string): Promise<OpportunityView> {
   return await getViewSync(db, ctx, id);
 }
 
@@ -395,7 +395,7 @@ export async function listOpportunities(
  * guarantees dedupeKey equality can never recover it later.
  */
 export async function createOpportunity(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   input: CreateOpportunityInput,
   opts: { force?: boolean } = {},
