@@ -37,9 +37,9 @@ The full security design is [docs/design.md](docs/design.md), section 7. In shor
 - **Controls**: Argon2id passwords with an optional pepper; optional TOTP two-factor
   sign-in; hashed, expiring sessions; every query scoped to its user; CSRF tokens for
   the browser and scoped, revocable bearer device tokens for the Apple Mail connector and
-  the capture extension (a device token can submit data but cannot enumerate or fetch
-  stored records; its responses only acknowledge what was submitted and whether it
-  matched an existing record); a strict Content Security Policy; AES-256-GCM encryption of
+  the capture extension (what each scope can read is listed under
+  [What a device token can read](#what-a-device-token-can-read) below); a strict Content
+  Security Policy; AES-256-GCM encryption of
   stored secrets under a master key kept outside the database; untrusted content fenced in
   AI prompts, including model output derived from it (the tailoring match report is fenced
   as `match_report_untrusted` before it reenters a later prompt), with no AI output
@@ -59,6 +59,35 @@ The full security design is [docs/design.md](docs/design.md), section 7. In shor
 - **Assumed trusted**: the host, and whoever administers it. Anyone who controls the
   server process, the `data/` directory and `master.key` can read everything on the
   instance.
+
+### What a device token can read
+
+A device token works only on the routes for its scopes, only on its owner's data, and never
+on a route that needs a signed-in session. This is what someone holding a stolen token can
+read. A token can hold more than one scope: the extension's Set up flow can create one token
+with both `capture:push` and `apply:assist`.
+
+- **`mail:push`** (the Apple Mail connector): nothing stored. It submits messages, and its
+  response gives only how many were stored and how many were new.
+- **`capture:push`** (the capture extension): no stored content. It submits a captured page,
+  and its response says what happened: whether a record was created, the ids of the records
+  involved, whether AI refined the capture, and the stage the capture moved an opportunity
+  to, if any. It cannot enumerate or fetch records.
+- **`apply:assist`** (the capture extension, for assisted apply): stored application data.
+  This is the only scope that reads stored records, and it applies only with assisted apply
+  switched on (`OPPORTUN_SUBMISSIONS=1`, never on the demo). With it off, this scope cannot
+  be created and its routes answer 404 whatever a token's scopes, so the two scopes above are
+  all a device token can do. With it on, a token with this scope can:
+  - read the application handed off to a posting it names: the field values and answers the
+    user reviewed, the role title, company and destination, and the resume copy;
+  - look up an application from a page on the same ATS board: the id, role title and company
+    of one the user said they submitted, or otherwise a reason code, which can show that an
+    application exists there (10 lookups per token per 15 minutes);
+  - record a confirmation page for an application the user said they submitted, which adds
+    the page's text to the timeline and marks the application confirmed.
+
+  It cannot list applications, and it cannot start, review or hand off an application or
+  record "I submitted it". Its routes share a limit of 60 requests per token per 15 minutes.
 
 ## Deliberate deviations
 
@@ -138,7 +167,7 @@ since it was not a deliberate choice.)
 - The application is designed to sit behind a TLS-terminating reverse proxy. Running
   it in plain HTTP on the public internet is unsupported.
 - A lost or stolen device (a Mac running the connector, a browser with the extension):
-  revoke its token under Settings > Integrations > Devices; it is refused from its next
-  request.
+  revoke its token under Settings > Integrations > Extensions and Connectors; it is refused
+  from its next request.
 - Feedback on the security design is welcome via normal issues as long as no concrete
   exploitable deployment is involved.
