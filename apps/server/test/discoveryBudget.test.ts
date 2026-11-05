@@ -12,7 +12,7 @@ import {
   resetSources,
   type DiscoverySource,
 } from '../src/adapters/discoverySource';
-import { discoveryResults, jobs, taskRuns } from '../src/db/schema';
+import { auditLog, discoveryResults, jobs, taskRuns } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND, enqueueRankWaiting, rankResult } from '../src/jobs/discoveryRank';
 import {
   drainWaitingResults,
@@ -1036,6 +1036,25 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
       expect(await drainsQueued(app, b)).toBe(1);
     });
 
+    // sec on https://github.com/bgoleno/opportun/pull/275: one user's dead key must not stop another
+    // user's ranking, whoever was waiting first.
+    it('both users waiting, and a rejected key of one: the other is untouched', async () => {
+      const { app, a, b } = await boot();
+      const today = await waitingPostings(app, a, 2);
+      await waitingPostings(app, b, 2);
+      await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+      await writeDiscoveryBudget(app.db, ctxOf(b), 1);
+      vi.setSystemTime(today + DAY + 60_000);
+      vi.mocked(runStructured).mockRejectedValue(rejected());
+      await drainWaitingResults(app.db, ctxOf(a));
+
+      expect(await reasons(app, a)).toEqual(['key_rejected', 'key_rejected']);
+      expect(await reasons(app, b)).toEqual([null, null]);
+      expect(await sweepWaitingResults(app.db)).toEqual({ queued: 1 });
+      expect(await drainsQueued(app, a)).toBe(0);
+      expect(await drainsQueued(app, b)).toBe(1);
+    });
+
     it('a later budget day does not bring them back in line', async () => {
       const { app, a } = await boot();
       const today = await stopped(app, a, 2);
@@ -1279,6 +1298,56 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
         await addKeyId(a);
         expect(await reasons(app, a)).toEqual([null, null]);
         expect(await drainsQueued(app, a)).toBe(0);
+      });
+
+      // sec on https://github.com/bgoleno/opportun/pull/275: the action has happened, so it is on
+      // the record even if what follows it fails. Resuming starts with a write through db.update.
+      describe('the audit row comes first, if resuming fails', () => {
+        const audited = async (app: FastifyInstance, c: TestClient, event: string) =>
+          (
+            await app.db
+              .select({ id: auditLog.id })
+              .from(auditLog)
+              .where(and(eq(auditLog.userId, c.userId), eq(auditLog.event, event)))
+              .all()
+          ).length;
+        const resumingFails = (app: FastifyInstance) =>
+          vi.spyOn(app.db, 'update').mockImplementationOnce(() => {
+            throw new Error('write failed');
+          });
+        afterEach(() => {
+          vi.restoreAllMocks();
+        });
+
+        it('a key deleted', async () => {
+          const { app, a } = await boot();
+          const id = await addKeyId(a);
+          const failing = resumingFails(app);
+          const res = await a.request({ method: 'DELETE', url: `/api/v1/secrets/${id}` });
+          expect(failing).toHaveBeenCalled();
+          expect(res.statusCode).toBe(500);
+          expect(await audited(app, a, 'secret.deleted')).toBe(1);
+        });
+
+        it('a ranking policy set', async () => {
+          const { app, a } = await boot();
+          const failing = resumingFails(app);
+          const res = await putPolicy(a, 'discovery.rank');
+          expect(failing).toHaveBeenCalled();
+          expect(res.statusCode).toBe(500);
+          expect(await audited(app, a, 'ai.policy.updated')).toBe(1);
+        });
+
+        it('a re-check that succeeds', async () => {
+          const { app, a } = await boot();
+          const id = await addKeyId(a);
+          vi.stubGlobal('fetch', modelList(200));
+          const failing = resumingFails(app);
+          const res = await recheck(a, id);
+          expect(failing).toHaveBeenCalled();
+          expect(res.statusCode).toBe(500);
+          expect(await audited(app, a, 'ai.key.validated')).toBe(1);
+        });
       });
 
       it('with nothing waiting: a re-check queues no drain', async () => {

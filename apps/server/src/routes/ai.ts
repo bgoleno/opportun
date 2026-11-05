@@ -291,13 +291,13 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
         policy.provider === 'openai_compatible' ? policy : { ...policy, baseUrl: undefined };
       if (stored.baseUrl === undefined) delete stored.baseUrl;
       await writePolicyOverride(db, ctx, taskKey, stored);
-      // Ranking may now use another provider, whose key works.
-      if (taskKey === DISCOVERY_RANK_KIND) await resumeAfterKeyChange(db, ctx);
       await audit(db, 'ai.policy.updated', {
         userId: ctx.userId,
         ip: req.ip,
         detail: { taskKey, provider: stored.provider, model: stored.model },
       });
+      // Ranking may now use another provider, whose key works.
+      if (taskKey === DISCOVERY_RANK_KIND) await resumeAfterKeyChange(db, ctx);
       return {
         taskKey,
         // eslint-disable-next-line security/detect-object-injection -- taskKey is a TaskKey
@@ -349,13 +349,13 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
     async (req) => {
       const ctx = requireUser(req);
       const result = await validateAndStoreAiKey(db, ctx, req.params.secretId);
-      // The way back for a key the provider rejected and has since restored: the card says so.
-      if (result.ok) await resumeAfterKeyChange(db, ctx);
       await audit(db, 'ai.key.validated', {
         userId: ctx.userId,
         ip: req.ip,
         detail: { id: req.params.secretId, provider: result.provider, ok: result.ok },
       });
+      // The way back for a key the provider rejected and has since restored: the card says so.
+      if (result.ok) await resumeAfterKeyChange(db, ctx);
       return result;
     },
   );

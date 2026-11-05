@@ -134,13 +134,13 @@ export async function secretRoutes(app: FastifyInstance): Promise<void> {
       const ctx = requireUser(req);
       const removed = await deleteSecret(db, ctx, req.params.id);
       await deleteKeyValidation(db, ctx, removed.id);
-      // An older key of that provider is now the one in use, or there is none and a drain says so.
-      if (removed.kind === 'ai_api_key') await resumeAfterKeyChange(db, ctx);
       await audit(db, 'secret.deleted', {
         userId: ctx.userId,
         ip: req.ip,
         detail: { id: removed.id, kind: removed.kind, label: removed.label },
       });
+      // An older key of that provider is now the one in use, or there is none and a drain says so.
+      if (removed.kind === 'ai_api_key') await resumeAfterKeyChange(db, ctx);
       return reply.code(204).send(null);
     },
   );
