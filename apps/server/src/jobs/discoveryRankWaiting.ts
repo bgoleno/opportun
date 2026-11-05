@@ -36,7 +36,7 @@ import {
 } from '../repos/discoveryBudget';
 import { DISCOVERY_RANK_KIND, enqueueRankWaiting, rankResult } from './discoveryRank';
 import { enqueueFollowUps } from './discoveryRun';
-import { RANK_WAITING_KIND } from './discoveryKinds';
+import { LEAD_RESOLVE_KIND, RANK_WAITING_KIND } from './discoveryKinds';
 import { requireService, type JobHandler } from './registry';
 
 export { enqueueRankWaiting, RANK_WAITING_KIND };
@@ -85,6 +85,13 @@ export async function resumeAfterKeyChange(db: Db, ctx: UserCtx): Promise<void> 
   }
 }
 
+const hasJob = async (db: Db, dedupeKey: string, status: 'pending' | 'running'): Promise<boolean> =>
+  (await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(and(eq(jobs.dedupeKey, dedupeKey), eq(jobs.status, status)))
+    .get()) !== undefined;
+
 /**
  * Postings just restored by Undo (https://github.com/bgoleno/opportun/issues/274). A rank job that
  * ran while one was dismissed ended without ranking it, and a denylisted one never had a job, so
@@ -111,17 +118,16 @@ export async function resumeAfterUndo(db: Db, ctx: UserCtx, ids: string[]): Prom
     if (result.disposition !== 'pending') continue;
     if (result.aiScore !== null || result.rankSkipReason !== null) continue;
     if (result.rankDeferredAt !== null) continue;
-    if (result.resolution === 'needs_capture') {
-      // Ranking waits for the lead to be as complete as it will get.
+    if (await hasJob(db, `${DISCOVERY_RANK_KIND}:${id}`, 'pending')) continue;
+    // Ranking waits for a lead to be as complete as it will get. Not if its lead job is running: that
+    // may have read it as dismissed, and would end with no rank job, with a new one deduped onto it.
+    if (
+      result.resolution === 'needs_capture' &&
+      !(await hasJob(db, `${LEAD_RESOLVE_KIND}:${id}`, 'running'))
+    ) {
       await enqueueFollowUps(db, ctx, result);
       continue;
     }
-    const pendingJob = await db
-      .select({ id: jobs.id })
-      .from(jobs)
-      .where(and(eq(jobs.dedupeKey, `${DISCOVERY_RANK_KIND}:${id}`), eq(jobs.status, 'pending')))
-      .get();
-    if (pendingJob !== undefined) continue;
     await setRankWaitingIfUnranked(db, ctx, id);
     joined = true;
   }
