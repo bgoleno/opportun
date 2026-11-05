@@ -115,10 +115,17 @@ export type AiUnavailableReason =
  */
 export class AiUnavailableError extends Error {
   readonly reason: AiUnavailableReason;
+  /**
+   * The provider answered 401, so this key is refused and trying again will not help. The reason
+   * stays provider_error, so a caller that does not look here sees no change. A 403 is not this: it
+   * can be a refusal of one model or region (https://github.com/bgoleno/opportun/issues/261).
+   */
+  readonly keyRejected: boolean;
 
-  constructor(reason: AiUnavailableReason, detail?: string) {
+  constructor(reason: AiUnavailableReason, detail?: string, opts: { keyRejected?: boolean } = {}) {
     super(detail === undefined || detail === '' ? reason : `${reason}: ${detail}`);
     this.name = 'AiUnavailableError';
     this.reason = reason;
+    this.keyRejected = opts.keyRejected === true;
   }
 }

@@ -25,7 +25,7 @@ export const budgetKey = (userId: string): string => `ai_budget:${userId}`;
 
 const BudgetSchema = z.object({ perTaskDailyUsd: z.number().nonnegative().max(10_000) });
 
-export async function readSetting(db: Db, ctx: UserCtx, key: string): Promise<unknown> {
+export async function readSetting(db: Exec, ctx: UserCtx, key: string): Promise<unknown> {
   return (
     await db
       .select({ value: settings.value })

@@ -66,12 +66,15 @@ export type PrefilterRule = (typeof PREFILTER_RULES)[number];
  * budget_exceeded on a pending result: over budget it waits instead (rank_deferred_at, #214). A
  * result stored before that keeps the code, so it stays here. below_cut is not the router's: a
  * board's first run ranks only so many, and the rest wait for the user to send them
- * (https://github.com/bgoleno/opportun/issues/215).
+ * (https://github.com/bgoleno/opportun/issues/215). key_rejected is the router's provider_error
+ * with its keyRejected flag: the provider refused the key, so the hourly sweep stops calling
+ * (https://github.com/bgoleno/opportun/issues/261).
  */
 export const RANK_SKIP_REASONS = [
   'no_key',
   'budget_exceeded',
   'provider_error',
+  'key_rejected',
   'invalid_output',
   'below_cut',
 ] as const;

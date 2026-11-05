@@ -22,6 +22,23 @@ export const DISCOVERY_BUDGET_TASKS = [
 ] as const satisfies readonly TaskKey[];
 
 const settingKey = (userId: string): string => `discovery_budget:${userId}`;
+const keyChangedKey = (userId: string): string => `discovery_key_changed:${userId}`;
+
+/**
+ * Serializes noting a key change and clearing the marks with checking for one and marking, so a 401
+ * landing during a way back is either cleared by it or sees it, and never marks after it.
+ */
+export const keyChangeScope = (ctx: UserCtx): string => `discovery.key:${ctx.userId}`;
+
+/** When the caller's key last changed, for telling a stale 401 (#261); 0 if it never has. */
+export async function readKeyChangedAt(exec: Exec, ctx: UserCtx): Promise<number> {
+  const parsed = z.number().safeParse(await readSetting(exec, ctx, keyChangedKey(ctx.userId)));
+  return parsed.success ? parsed.data : 0;
+}
+
+export async function writeKeyChangedAt(exec: Exec, ctx: UserCtx, at: number): Promise<void> {
+  await writeSetting(exec, ctx, keyChangedKey(ctx.userId), at);
+}
 
 const StoredBudget = z.object({
   dailyUsd: z.number().min(MIN_DISCOVERY_DAILY_USD).max(MAX_DISCOVERY_DAILY_USD),

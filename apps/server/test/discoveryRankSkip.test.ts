@@ -69,15 +69,22 @@ const rankJobs = (app: FastifyInstance) =>
   app.db.select().from(jobs).where(eq(jobs.kind, DISCOVERY_RANK_KIND)).all();
 
 describe('a skipped ranking keeps why (#210)', () => {
-  it('the codes are exactly the router’s own reasons, and the first-run cut (#215)', () => {
-    expectTypeOf<Exclude<RankSkipReason, 'below_cut'>>().toEqualTypeOf<AiUnavailableReason>();
+  // below_cut is not the router's (#215); key_rejected is its provider_error with a flag (#261).
+  it('the codes are exactly the router’s own reasons, the first-run cut and key_rejected', () => {
+    expectTypeOf<
+      Exclude<RankSkipReason, 'below_cut' | 'key_rejected'>
+    >().toEqualTypeOf<AiUnavailableReason>();
+    expect(RANK_SKIP_REASONS).toContain('key_rejected');
   });
 
   // budget_exceeded no longer ends as a skip: the posting waits (#214, discoveryBudget.test.ts).
-  // below_cut is not the router's: discoveryFirstRunCap.test.ts has it.
-  for (const reason of RANK_SKIP_REASONS.filter(
-    (r) => r !== 'budget_exceeded' && r !== 'below_cut',
-  )) {
+  // below_cut is not the router's: discoveryFirstRunCap.test.ts has it. key_rejected needs the
+  // router's flag: discoveryBudget.test.ts has it.
+  const routerReasons = RANK_SKIP_REASONS.filter(
+    (r): r is Exclude<RankSkipReason, 'budget_exceeded' | 'below_cut' | 'key_rejected'> =>
+      r !== 'budget_exceeded' && r !== 'below_cut' && r !== 'key_rejected',
+  );
+  for (const reason of routerReasons) {
     it(`records ${reason}, and the result stays unranked and pending`, async () => {
       const { app, a } = await boot();
       vi.mocked(runStructured).mockRejectedValueOnce(new AiUnavailableError(reason));
