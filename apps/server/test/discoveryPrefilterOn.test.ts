@@ -19,6 +19,7 @@ import { DISCOVERY_RUN_KIND, insertLeads } from '../src/jobs/discoveryRun';
 import { enqueue } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import {
+  clearFiltered,
   createRun,
   createSource,
   insertResult,
@@ -27,6 +28,7 @@ import {
   listWaitingResultIds,
   setDisposition,
   setRankDeferred,
+  setRankSkip,
 } from '../src/repos/discovery';
 import { writeDiscoveryBudget } from '../src/repos/discoveryBudget';
 import { createRoleTarget } from '../src/repos/profile';
@@ -194,6 +196,40 @@ describe('#218 criterion 1: turned on', () => {
     expect(by.get(GOOD)).toMatchObject({ aiScore: 60, rankSkipReason: null });
   });
 
+  // A first run holds everything until it has succeeded, so this is the path most postings take.
+  it('on a later run of a board: a filtered posting gets no rank job, and one that passes does', async () => {
+    const { app, a } = await boot();
+    await filterOn(app, a);
+    const postings: NormalizedPosting[] = [];
+    const src = await aBoard(app, a, postings);
+    const runIt = async () => {
+      await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: a.userId });
+      await app.jobs.drain();
+    };
+    await runIt();
+    postings.push(post(GOOD), post(BAD));
+    await runIt();
+
+    expect(ranked).toEqual([GOOD]);
+    expect(await rankJobs(app, a)).toHaveLength(1);
+    expect((await byTitle(app, a)).get(BAD)!.rankSkipReason).toBe('filtered');
+  });
+
+  it('on a later run in shadow mode: a filtered posting is still ranked', async () => {
+    const { app, a } = await boot();
+    await aTarget(app, a);
+    const postings: NormalizedPosting[] = [];
+    const src = await aBoard(app, a, postings);
+    const runIt = async () => {
+      await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: a.userId });
+      await app.jobs.drain();
+    };
+    await runIt();
+    postings.push(post(BAD));
+    await runIt();
+    expect(ranked).toEqual([BAD]);
+  });
+
   for (const [rule, over, posting] of [
     ['remote', { remotePref: 'remote' }, post(GOOD, { remote: false })],
     ['location', { locations: ['Austin, TX'] }, post(GOOD, { location: 'Berlin, Germany' })],
@@ -318,6 +354,29 @@ describe('#218 criterion 1: turned on', () => {
       expect(ranked).toEqual([]);
       await setDisposition(app.db, ctxOf(a), held.id, 'pending');
       expect((await results(app, a))[0]!.rankSkipReason).toBe('filtered');
+    });
+
+    // The order rankBelowCut uses: queued, then the reason goes. A dismissal between the two is not
+    // something a test can place, so this is the second step on its own.
+    it('dismissed as it was sent, the reason stays for Undo', async () => {
+      const { app, a } = await boot();
+      await filterOn(app, a);
+      await runBoard(app, a, [post(BAD)]);
+      const held = (await results(app, a))[0]!;
+      await setDisposition(app.db, ctxOf(a), held.id, 'dismissed');
+      await clearFiltered(app.db, ctxOf(a), held.id);
+      await setDisposition(app.db, ctxOf(a), held.id, 'pending');
+      expect((await results(app, a))[0]!.rankSkipReason).toBe('filtered');
+    });
+
+    it('a newer reason written by its job is not cleared', async () => {
+      const { app, a } = await boot();
+      await filterOn(app, a);
+      await runBoard(app, a, [post(BAD)]);
+      const held = (await results(app, a))[0]!;
+      await setRankSkip(app.db, ctxOf(a), held.id, 'provider_error');
+      await clearFiltered(app.db, ctxOf(a), held.id);
+      expect((await results(app, a))[0]!.rankSkipReason).toBe('provider_error');
     });
 
     it('another user gets a 404, and nothing is queued', async () => {
