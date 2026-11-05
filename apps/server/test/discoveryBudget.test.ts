@@ -1266,6 +1266,10 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
         expect(res.statusCode, res.body).toBe(201);
         expect(await reasons(app, a)).toEqual(['key_rejected', 'key_rejected']);
         expect(await drainsQueued(app, a)).toBe(0);
+        const gone = await a.request({ method: 'DELETE', url: `/api/v1/secrets/${secretId(res)}` });
+        expect(gone.statusCode, gone.body).toBe(204);
+        expect(await reasons(app, a)).toEqual(['key_rejected', 'key_rejected']);
+        expect(await drainsQueued(app, a)).toBe(0);
       });
 
       it('with no room in the budget: the cards clear, and no drain until there is', async () => {
