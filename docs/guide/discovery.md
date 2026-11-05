@@ -41,7 +41,7 @@ delete it.
 Below the table, **Posting volume and ranking cost** shows each company board's open jobs at its
 last run and, over the last 14 days, its new postings a day, the ranking calls that means, and
 what they cost at the last 30 days' average cost per call. A board's first run brings in the whole
-board, so it is left out: a board that has only run once says "no data yet".
+board, so it is left out: after only one run, those figures say "no data yet".
 
 ### Follow companies
 
