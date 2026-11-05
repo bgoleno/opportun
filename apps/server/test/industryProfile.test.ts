@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { industryProfile, resumes, taskRuns } from '../src/db/schema';
+import { HttpError } from '../src/lib/errors';
 import type { UserCtx } from '../src/repos/base';
 import { createCompany } from '../src/repos/companies';
 import { discoverySpentTodayUsd } from '../src/repos/discoveryBudget';
@@ -253,6 +254,56 @@ describe('#219 criterion 2: Suggest industries', () => {
       expect((await list(a)).map((r) => r.code)).toEqual(['5132']);
     },
   );
+
+  it('a rejected key says so: it is a 401, flagged by the router, whose reason is provider_error', async () => {
+    const { app, a } = await boot();
+    await baseResume(app, a);
+    vi.mocked(runStructured).mockRejectedValue(
+      new AiUnavailableError('provider_error', 'unauthorized', { keyRejected: true }),
+    );
+    const res = await suggest(a);
+    expect(res.statusCode, res.body).toBe(503);
+    expect(res.json()).toMatchObject({ error: { code: 'ai_unavailable', reason: 'key_rejected' } });
+  });
+
+  describe('a base resume that cannot be read', () => {
+    it.each([
+      [
+        'Google not configured',
+        new HttpError(409, 'google_not_configured'),
+        'google_not_configured',
+      ],
+      ['Google not connected', new HttpError(409, 'google_not_connected'), 'google_not_connected'],
+      [
+        'Reactive Resume not connected',
+        new HttpError(409, 'reactive_resume_not_connected'),
+        'reactive_resume_not_connected',
+      ],
+      ['a file that is gone', new HttpError(404, 'not_found'), 'not_found'],
+      ['a store that throws', new Error('secret detail from the store'), 'read_failed'],
+    ])('%s: says which, with no call and nothing changed', async (_name, thrown, reason) => {
+      const { app, a } = await boot();
+      const resume = await baseResume(app, a);
+      answer({ code: '5132' });
+      await suggest(a);
+      vi.mocked(runStructured).mockClear();
+      vi.mocked(app.localFileStore.readText).mockRejectedValue(thrown);
+
+      const res = await suggest(a);
+
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json()).toEqual({
+        error: {
+          code: 'resume_unreadable',
+          reason,
+          title: resume.title,
+        },
+      });
+      expect(res.body).not.toContain('secret detail');
+      expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
+      expect((await list(a)).map((r) => r.code)).toEqual(['5132']);
+    });
+  });
 
   it('over the discovery budget it says so, and the provider is not called', async () => {
     const { app, a } = await boot();
