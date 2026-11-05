@@ -13,6 +13,7 @@ import {
   type DiscoverySource,
 } from '../src/adapters/discoverySource';
 import { discoveryResults, jobs, roleTargets, taskRuns } from '../src/db/schema';
+import { LEAD_RESOLVE_KIND } from '../src/jobs/discoveryKinds';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { drainWaitingResults } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND, insertLeads } from '../src/jobs/discoveryRun';
@@ -159,6 +160,12 @@ const rankJobs = async (app: FastifyInstance, c: TestClient) =>
     .from(jobs)
     .where(and(eq(jobs.kind, DISCOVERY_RANK_KIND), eq(jobs.userId, c.userId)))
     .all();
+const jobsOfKind = async (app: FastifyInstance, c: TestClient, kind: string) =>
+  await app.db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(and(eq(jobs.kind, kind), eq(jobs.userId, c.userId)))
+    .all();
 const rankAnyway = (c: TestClient, id: string) =>
   c.request({ method: 'POST', url: `/api/v1/discovery/results/${id}/rank-anyway` });
 const status = async (c: TestClient) => {
@@ -281,6 +288,19 @@ describe('#218 criterion 1: turned on', () => {
         // What the filter said stays, so a miss can be seen.
         prefilterOutcome: 'filtered',
       });
+    });
+
+    it('on a partial lead it queues lead resolution, which then ranks it', async () => {
+      const { app, a } = await boot();
+      await filterOn(app, a);
+      await runBoard(app, a, [post(BAD, { descriptionMd: null })]);
+      const held = (await results(app, a))[0]!;
+      expect(held).toMatchObject({ rankSkipReason: 'filtered', resolution: 'needs_capture' });
+      expect(await jobsOfKind(app, a, LEAD_RESOLVE_KIND)).toEqual([]);
+
+      expect((await rankAnyway(a, held.id)).json<{ queued: number }>().queued).toBe(1);
+      expect(await jobsOfKind(app, a, LEAD_RESOLVE_KIND)).toHaveLength(1);
+      expect(await rankJobs(app, a)).toEqual([]);
     });
 
     it('over budget it waits like any other posting', async () => {
@@ -595,8 +615,9 @@ describe('#218 criterion 4: the best pre-filter scores go first', () => {
     const titleOf = new Map((await results(app, a)).map((r) => [r.id, r.posting.title]));
     expect((await listWaitingResultIds(app.db, ctxOf(a))).map((id) => titleOf.get(id))).toEqual([
       'half a title',
-      'perfect title elsewhere',
+      // Never judged, such as a job alert, which the filter does not rule out (decision 5).
       'no verdict',
+      'perfect title elsewhere',
     ]);
   });
 
@@ -692,8 +713,8 @@ describe('#218 criterion 4: the best pre-filter scores go first', () => {
       old,
       undated,
       low,
-      elsewhere.id,
       none,
+      elsewhere.id,
     ]);
   });
 });
@@ -770,6 +791,61 @@ describe('#218 criterion 6: the share it would remove', () => {
     await decided(app, a, 20);
     await runBoard(app, a, [post(BAD)]);
     expect(await status(a)).toMatchObject({ on: true, judged: 5, filtered: 4 });
+  });
+
+  // tl on https://github.com/bgoleno/opportun/pull/280: the Sources card must show the saving. The
+  // first run is left out of these figures, so this needs a later one.
+  it('the Sources card counts ranking calls without what it filtered', async () => {
+    const { app, a } = await boot();
+    await filterOn(app, a);
+    const postings: NormalizedPosting[] = [];
+    const src = await aBoard(app, a, postings);
+    const runIt = async () => {
+      await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: a.userId });
+      await app.jobs.drain();
+    };
+    await runIt();
+    postings.push(post(GOOD), ...Array.from({ length: 9 }, () => post(BAD)));
+    await runIt();
+
+    const res = await a.request({ method: 'GET', url: '/api/v1/discovery/cost-figures' });
+    expect(res.statusCode, res.body).toBe(200);
+    const row = res
+      .json<{
+        sources: { sourceId: string; newPerDay: number; rankCallsPerDay: number }[];
+      }>()
+      .sources.find((s) => s.sourceId === src.id)!;
+    expect(row.newPerDay).toBeCloseTo(10, 5);
+    expect(row.rankCallsPerDay).toBeCloseTo(1, 5);
+    expect(ranked).toEqual([GOOD]);
+
+    const runs = await a.request({
+      method: 'GET',
+      url: `/api/v1/discovery/sources/${src.id}/runs`,
+    });
+    const stats = runs
+      .json<{ items: { stats: { inserted: number; filtered: number } }[] }>()
+      .items.map((r) => r.stats);
+    expect(stats).toContainEqual(expect.objectContaining({ inserted: 10, filtered: 9 }));
+  });
+
+  it('with the filter in shadow mode, every stored posting is still a ranking call', async () => {
+    const { app, a } = await boot();
+    await aTarget(app, a);
+    const postings: NormalizedPosting[] = [];
+    const src = await aBoard(app, a, postings);
+    const runIt = async () => {
+      await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: a.userId });
+      await app.jobs.drain();
+    };
+    await runIt();
+    postings.push(post(GOOD), post(BAD));
+    await runIt();
+    const res = await a.request({ method: 'GET', url: '/api/v1/discovery/cost-figures' });
+    const row = res
+      .json<{ sources: { sourceId: string; rankCallsPerDay: number }[] }>()
+      .sources.find((s) => s.sourceId === src.id)!;
+    expect(row.rankCallsPerDay).toBeCloseTo(2, 5);
   });
 
   it('what was never judged does not count, nor another user’s', async () => {
