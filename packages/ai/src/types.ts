@@ -8,6 +8,7 @@ export const TASK_KEYS = [
   'discovery.rank',
   'discovery.refine_prompt',
   'discovery.title_variants',
+  'discovery.industry_profile',
   'comms.triage',
   'comms.classify',
   'opportunity.dedupe',

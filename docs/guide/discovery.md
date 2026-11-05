@@ -53,6 +53,27 @@ posting, so any that do not fit today wait for a later budget day. Later runs of
 capped, and a large Workday board brings in its postings over several runs, so those runs can still
 fill the budget for a while.
 
+### Where to look
+
+**Where to look**, at the top of the **Companies** tab, is your industry profile: the industries
+worth looking for companies in, from the [NAICS 2022](https://www.census.gov/naics/) list at its
+4-digit level. It is collapsed until you open it, and its heading shows how many are confirmed and
+how many wait for you.
+
+**Suggest industries** makes one `discovery.industry_profile` AI call, and only when you press it.
+It sends your AI provider the text of your base resume (the one you changed last) and, for each
+active role target, its title family, industries and keywords. It sends nothing about your contacts,
+companies or opportunities. The call counts against your
+[discovery budget](settings.md#models-and-budgets), and over it the button tells you instead of
+calling.
+
+Each suggestion has a tier (**Core**, an industry you have worked in; **Similar**, in the same
+sector as a core one; **Adjacent**, in another sector but closely tied to a core one), a one-line
+reason, and where it was read from. Only codes on the NAICS list are kept. A suggestion does not
+count until you press **Confirm**. **Remove** takes a row away, and **Add** puts in any industry from
+the list, confirmed. Asking again replaces what you have not confirmed and leaves what you have. A
+removed industry can come back if a later suggestion proposes it again.
+
 ### Follow companies
 
 The **Companies** tab offers companies to follow from two places.

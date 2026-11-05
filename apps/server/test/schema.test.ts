@@ -20,6 +20,7 @@ const EXPECTED_TABLES = [
   'discovery_runs',
   'discovery_sources',
   'dismissal_feedback',
+  'industry_profile',
   'jobs',
   'mail_filter_rules',
   'network_contacts',

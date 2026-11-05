@@ -122,6 +122,7 @@ export const TABLE_EXPORTS = [
   'discoveryRuns',
   'discoveryResults',
   'dismissalFeedback',
+  'industryProfile',
   'mailFilterRules',
   'taskRuns',
   'networkContacts',

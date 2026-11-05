@@ -98,6 +98,18 @@ export async function listResumes(
   return { items, total: await countWhere(db, resumes, where) };
 }
 
+/** The base resume changed last, if the user has one that is not archived. */
+export async function latestBaseResume(db: Db, ctx: UserCtx): Promise<ResumeRow | undefined> {
+  return await db
+    .select()
+    .from(resumes)
+    .where(
+      and(eq(resumes.userId, ctx.userId), eq(resumes.kind, 'base'), isNull(resumes.archivedAt)),
+    )
+    .orderBy(desc(resumes.updatedAt), desc(resumes.id))
+    .get();
+}
+
 export async function getResume(db: Db, ctx: UserCtx, id: string): Promise<ResumeRow> {
   const row = await db
     .select()

@@ -143,6 +143,18 @@ export const MOCK_TITLE_VARIANTS = [
   'Senior Backend Engineer',
 ] as const;
 
+/** The industries discovery.industry_profile answers with (#219), the same for every user. */
+export const MOCK_INDUSTRY_PROFILE = [
+  { code: '5132', tier: 'core', source: 'resume', reason: 'The resume shows software work.' },
+  { code: '5415', tier: 'similar', source: 'resume', reason: 'The same kind of work for clients.' },
+  {
+    code: '5182',
+    tier: 'adjacent',
+    source: 'target',
+    reason: 'Hosts what software companies run.',
+  },
+];
+
 /** The one company company.suggest proposes (its board is a fixture in mockSources.ts). */
 export const SUGGESTED_COMPANY = {
   name: 'Pied Piper',
@@ -218,6 +230,8 @@ function structured(task: string, promptText: string): Record<string, unknown> {
       return { suggestions: [SUGGESTED_COMPANY] };
     case 'integration.diagnose':
       return { explanation: 'Mock answer.', fix: 'Mock fix.' };
+    case 'discovery.industry_profile':
+      return { industries: [...MOCK_INDUSTRY_PROFILE] };
     case 'discovery.title_variants':
       // A fixed, made-up list: enough to show the variants and match the fixture postings.
       return { titles: [...MOCK_TITLE_VARIANTS] };
