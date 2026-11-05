@@ -197,6 +197,36 @@ describe('#219 criterion 2: Suggest industries', () => {
     expect(rows.find((r) => r.code === '5222')).toMatchObject({ confirmed: false });
   });
 
+  it("asking again leaves another user's rows alone, confirmed or not", async () => {
+    const { app, a, b } = await boot();
+    await baseResume(app, b);
+    answer({ code: '5132', reason: 'Unconfirmed, theirs.' }, { code: '5415', reason: 'Theirs.' });
+    await suggest(b);
+    expect((await confirm(b, '5415')).statusCode).toBe(200);
+
+    await baseResume(app, a);
+    answer({ code: '2211', reason: 'Mine.' });
+    expect((await suggest(a)).statusCode).toBe(200);
+
+    expect((await list(b)).map((r) => r.code).sort()).toEqual(['5132', '5415']);
+    expect((await list(a)).map((r) => r.code)).toEqual(['2211']);
+  });
+
+  it('a code another user has does not stop this user having it', async () => {
+    const { app, a, b } = await boot();
+    await baseResume(app, b);
+    answer({ code: '5132', reason: 'Theirs.' });
+    await suggest(b);
+    await confirm(b, '5132');
+
+    await baseResume(app, a);
+    answer({ code: '5132', reason: 'Mine.' });
+    const res = await suggest(a);
+    expect(res.json<{ suggested: number }>().suggested).toBe(1);
+    expect(await list(a)).toEqual([expect.objectContaining({ code: '5132', reason: 'Mine.' })]);
+    expect(await list(b)).toEqual([expect.objectContaining({ code: '5132', reason: 'Theirs.' })]);
+  });
+
   it('an answer with nothing usable leaves the unconfirmed rows there', async () => {
     const { app, a } = await boot();
     await baseResume(app, a);
@@ -518,6 +548,56 @@ describe('#219 criterion 4: what it sends', () => {
       expect(`${opts.system}\n${opts.prompt}`, marker).not.toContain(marker);
     }
     expect(opts.system).not.toContain('123456');
+  });
+
+  // The test above seeds one user, so it cannot see these: another user's resume or role target
+  // reaching this user's provider is what criterion 4 is there to stop.
+  it("holds nothing of another user's, even when their resume is the newer", async () => {
+    const { app, a, b } = await boot();
+    const readText = vi
+      .spyOn(app.localFileStore, 'readText')
+      .mockImplementation(async (_ctx, ref) =>
+        ref === mine.docRef ? RESUME_TEXT : 'MARKER-B-RESUME',
+      );
+    const base = (c: TestClient) =>
+      insertResume(app.db, ctxOf(c), {
+        kind: 'base',
+        title: 'Base',
+        store: 'local_file',
+        docRef: newId(),
+        opportunityId: null,
+        parentResumeId: null,
+      });
+    const mine = await base(a);
+    const theirs = await base(b);
+    await app.db.update(resumes).set({ updatedAt: 1000 }).where(eq(resumes.id, mine.id)).run();
+    await app.db.update(resumes).set({ updatedAt: 2000 }).where(eq(resumes.id, theirs.id)).run();
+    await target(app, a, { titleFamily: 'Staff Engineer' });
+    await target(app, b, {
+      titleFamily: 'MARKER-B-TITLE',
+      industries: ['MARKER-B-INDUSTRY'],
+      keywords: ['MARKER-B-KEYWORD'],
+    });
+    answer({ code: '5132' });
+
+    expect((await suggest(a)).statusCode).toBe(200);
+
+    expect(readText).toHaveBeenCalledTimes(1);
+    expect(readText.mock.calls[0]?.[0]).toMatchObject({ userId: a.userId });
+    expect(readText.mock.calls[0]?.[1]).toBe(mine.docRef);
+    const { system } = vi.mocked(runStructured).mock.calls[0]?.[2] as { system: string };
+    expect(system).toContain(RESUME_TEXT);
+    expect(system).toContain('Staff Engineer');
+    expect(system).not.toContain('MARKER-B');
+  });
+
+  it('with only another user holding a resume and a target there is nothing to read', async () => {
+    const { app, a, b } = await boot();
+    await baseResume(app, b);
+    await target(app, b);
+    expect((await suggest(a)).statusCode).toBe(422);
+    expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
+    expect(vi.mocked(app.localFileStore.readText)).not.toHaveBeenCalled();
   });
 
   it('fences the resume, so its text cannot pass as instructions', async () => {
