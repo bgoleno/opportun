@@ -245,7 +245,10 @@ either opportunity cannot re-propose a pair the user already rejected.
 - **discovery_runs**: id, source_id, role_target_id, started_at, finished_at, stats
   (JSON), error.
 - **discovery_results**: id, run_id, normalized posting (JSON), dedupe_key, ai_score,
-  ai_rationale, resolution (`full` | `resolved_ats` | `needs_capture`),
+  ai_rationale, prefilter_outcome (`pass` | `filtered`), prefilter_rule (`title` | `location` |
+  `remote`), prefilter_score, rank_skip_reason (`no_key` | `budget_exceeded` | `provider_error` |
+  `invalid_output`), rank_deferred_at (set while a ranking waits for the discovery budget),
+  resolution (`full` | `resolved_ats` | `needs_capture`),
   resolved_source_ref (ATS posting reference when resolved), disposition
   (`pending` | `accepted` | `dismissed`), opportunity_id (when accepted).
 - **dismissal_feedback**: id, user_id, opportunity_id/result_id, reason, note, at.
