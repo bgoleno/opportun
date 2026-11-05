@@ -4,11 +4,13 @@
 // it on a board. The real route completes the lead here, and real jobs rank it. The provider is
 // mocked, and its score says which text it was given. Every posting is made up.
 import { runStructured } from '@opportun/ai';
+import { newId } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { discoveryResults, jobs } from '../src/db/schema';
-import { DISCOVERY_RANK_KIND, RANK_WAITING_KIND } from '../src/jobs/discoveryRank';
+import { discoveryResults, jobs, taskRuns } from '../src/db/schema';
+import { RANK_WAITING_KIND } from '../src/jobs/discoveryKinds';
+import { DISCOVERY_RANK_KIND, POSTING_CHANGED, rankResult } from '../src/jobs/discoveryRank';
 import { drainWaitingResults } from '../src/jobs/discoveryRankWaiting';
 import { insertLeads } from '../src/jobs/discoveryRun';
 import { enqueue, runNextJob } from '../src/jobs/runner';
@@ -23,6 +25,7 @@ import {
 } from '../src/repos/discovery';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { pauseAt } from './race';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -249,6 +252,82 @@ describe('a posting whose text changes during a ranking call', () => {
     expect(after.aiScore).toBe(FROM_THE_CAPTURE);
     expect(after.rankDeferredAt).toBeNull();
     expect(await queued(app, RANK_WAITING_KIND)).toHaveLength(0);
+  });
+
+  it('over budget, a rank job from the old text joins the wait and queues no drain', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const id = await lead(app, a);
+    const call = provider((n) => n === 1);
+
+    await startRankJob(app, a, id);
+    const job = runJob(app);
+    await call.started;
+    await captureIt(app, a, id);
+    // Well past the default budget, as a call on the ledger.
+    await app.db
+      .insert(taskRuns)
+      .values({
+        id: newId(),
+        userId: a.userId,
+        taskKey: DISCOVERY_RANK_KIND,
+        provider: 'openai',
+        model: 'placeholder-model',
+        inputTokens: 100,
+        outputTokens: 10,
+        estCost: 5,
+        fallbackPricing: false,
+        durationMs: 1,
+        status: 'ok',
+        error: null,
+        createdAt: Date.now(),
+      })
+      .run();
+    call.release();
+    await job;
+
+    expect((await getResult(app.db, ctx, id)).rankDeferredAt).not.toBeNull();
+    expect(await queued(app, RANK_WAITING_KIND)).toHaveLength(0);
+  });
+
+  it('text changing just after the ranking read it is caught too', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const id = await waitingLead(app, a);
+    provider();
+    const pause = pauseAt('discoveryRank.basis_read');
+
+    const drain = drainWaitingResults(app.db, ctx);
+    await pause.reached;
+    const current = await getResult(app.db, ctx, id);
+    await setResolution(app.db, ctx, id, {
+      resolution: 'resolved_ats',
+      resolvedSourceRef: 'gh-1',
+      posting: { ...current.posting, descriptionMd: CAPTURED_TEXT },
+    });
+    pause.release();
+    await drain;
+
+    // The call was given the new text, but read the basis before it: refused, never stored wrong.
+    expect((await getResult(app.db, ctx, id)).aiScore).toBeNull();
+  });
+
+  it('a refused call still shows the key works, so waiting cards stop saying it does not', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const id = await waitingLead(app, a);
+    const behind = await waitingLead(app, a, 'Other Engineer');
+    const call = provider((n) => n === 1);
+
+    const job = rankResult(app.db, ctx, id);
+    await call.started;
+    await captureIt(app, a, id);
+    await setWaitingNoKey(app.db, ctx);
+    expect((await getResult(app.db, ctx, behind)).rankSkipReason).toBe('no_key');
+    call.release();
+    expect(await job).toEqual({ status: 'skipped', reason: POSTING_CHANGED });
+
+    expect((await getResult(app.db, ctx, behind)).rankSkipReason).toBeNull();
   });
 
   it('a lead job finding the posting on a board counts as new text too', async () => {

@@ -35,9 +35,10 @@ import { arr, ATS_MAX_BYTES, obj } from '../adapters/sources/atsCommon';
 import { GREENHOUSE_HOST } from '../adapters/sources/greenhouse';
 import { LEVER_HOST } from '../adapters/sources/lever';
 import { fetchWorkdayPage, workdayBoard } from '../adapters/sources/workday';
-import type { Db } from '../db/client';
+import { withTransaction, type Db, type Exec } from '../db/client';
 import { companies, discoverySources } from '../db/schema';
 import { HttpError } from '../lib/errors';
+import { racePoint } from '../lib/racePoints';
 import { FetchBlockedError } from '../lib/safeFetch';
 import type { UserCtx } from '../repos/base';
 import { getCompany, type Company } from '../repos/companies';
@@ -51,8 +52,6 @@ import {
 import { readUserSetting, writeUserSetting } from '../repos/userSettings';
 import { requireService, type JobHandler } from './registry';
 import { enqueue, userCronProblem } from './runner';
-import type { Exec } from '../db/client';
-import { racePoint } from '../lib/racePoints';
 
 export const ATS_DETECT_KIND = 'company.ats_detect'; // payload {companyId}
 export const ATS_REVERIFY_KIND = 'company.ats_reverify';
@@ -372,7 +371,7 @@ export async function discoveryDefaultCron(exec: Exec, ctx: UserCtx): Promise<st
 
 /** The company's ATS discovery sources. */
 async function companyAtsSources(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   companyId: string,
 ): Promise<DiscoverySourceRow[]> {
@@ -401,38 +400,49 @@ async function ensureBoardSource(
   company: Company,
   board: AtsBoard,
 ): Promise<string> {
-  const existing = await companyAtsSources(db, ctx, company.id);
-  const enabled = company.status === 'followed';
-  const same = existing.find(
-    (s) =>
-      s.kind === board.kind && boardOfSource(s.kind, splitConfig(s).config)?.slug === board.slug,
+  // discovery_sources has no unique index, and two detections of one company can overlap:
+  // posting.reconcile detects inline, outside company.ats_detect's key, so two opportunities at one
+  // company can get here together. Only this lock keeps both from reading no source and creating
+  // one (https://github.com/bgoleno/opportun/issues/268). It is the company's, like the check.
+  return await withTransaction(
+    db,
+    async (tx) => {
+      const existing = await companyAtsSources(tx, ctx, company.id);
+      const enabled = company.status === 'followed';
+      const same = existing.find(
+        (s) =>
+          s.kind === board.kind &&
+          boardOfSource(s.kind, splitConfig(s).config)?.slug === board.slug,
+      );
+      await racePoint('atsDetect.board_source.locked');
+      let sourceId: string;
+      if (same === undefined) {
+        sourceId = (
+          await createSource(tx, ctx, {
+            kind: board.kind,
+            config: boardConfig(board),
+            enabled,
+            scheduleCron: await discoveryDefaultCron(tx, ctx),
+            companyId: company.id,
+          })
+        ).id;
+      } else {
+        sourceId = same.id;
+        const patch: SourcePatch = {};
+        if (same.enabled !== enabled) patch.enabled = enabled;
+        if (enabled && same.scheduleCron === null)
+          patch.scheduleCron = await discoveryDefaultCron(tx, ctx);
+        if (Object.keys(patch).length > 0) await updateSource(tx, ctx, same.id, patch);
+      }
+      for (const other of existing) {
+        if (other.id !== sourceId && other.enabled) {
+          await updateSource(tx, ctx, other.id, { enabled: false });
+        }
+      }
+      return sourceId;
+    },
+    { scope: `discovery.board_source:${company.id}` },
   );
-  await racePoint('atsDetect.board_source.locked');
-  let sourceId: string;
-  if (same === undefined) {
-    sourceId = (
-      await createSource(db, ctx, {
-        kind: board.kind,
-        config: boardConfig(board),
-        enabled,
-        scheduleCron: await discoveryDefaultCron(db, ctx),
-        companyId: company.id,
-      })
-    ).id;
-  } else {
-    sourceId = same.id;
-    const patch: SourcePatch = {};
-    if (same.enabled !== enabled) patch.enabled = enabled;
-    if (enabled && same.scheduleCron === null)
-      patch.scheduleCron = await discoveryDefaultCron(db, ctx);
-    if (Object.keys(patch).length > 0) await updateSource(db, ctx, same.id, patch);
-  }
-  for (const other of existing) {
-    if (other.id !== sourceId && other.enabled) {
-      await updateSource(db, ctx, other.id, { enabled: false });
-    }
-  }
-  return sourceId;
 }
 
 /** Records a verified board on the company row and as its discovery source. */

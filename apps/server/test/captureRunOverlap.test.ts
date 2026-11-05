@@ -17,6 +17,7 @@ import { enqueue, runNextJob } from '../src/jobs/runner';
 import { resolveCapture } from '../src/lib/captureResolve';
 import type { UserCtx } from '../src/repos/base';
 import { createSource } from '../src/repos/discovery';
+import { getOpportunity } from '../src/repos/opportunities';
 import { useApi } from './api';
 import { sqliteOnly } from './db';
 import type { TestClient } from './isolation';
@@ -175,6 +176,19 @@ describe('a capture and a board run on one posting', () => {
     expect(second.createdOpportunity).toBe(false);
     expect(await rowsOf(app, a)).toHaveLength(1);
     expect(await opportunitiesOf(app, a)).toHaveLength(1);
+  });
+
+  it('two captures both past the look move the stage once, and neither fails', async () => {
+    const { app, a } = await boot();
+    const [first, second] = await heldApart(
+      app,
+      'captureResolve.advance.locked',
+      () => capture(app, a),
+      () => capture(app, a),
+    );
+    expect(first.stageMovedTo).toBe('interested');
+    expect(second.stageMovedTo).toBeNull();
+    expect((await getOpportunity(app.db, ctxOf(a), first.opportunityId)).stage).toBe('interested');
   });
 
   it('a capture after the run has finished completes the row, with no waiting', async () => {

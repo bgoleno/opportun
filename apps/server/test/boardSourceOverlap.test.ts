@@ -25,7 +25,7 @@ const ctxOf = (c: TestClient): UserCtx => ({ userId: c.userId, isAdmin: false })
 afterEach(() => resetSources());
 
 const POINT = 'atsDetect.board_source.locked';
-const LEVER_HIT = 'https://api.lever.co/v0/postings/initech?mode=json&limit=1';
+const LEVER = 'https://api.lever.co/v0/postings/';
 const LEVER_JOBS = '[{"id":"abc-1","text":"Staff Platform Engineer"}]';
 
 const sctx: SourceContext = {
@@ -34,7 +34,7 @@ const sctx: SourceContext = {
     sleep: async () => undefined,
     resolve: async () => ['93.184.216.34'],
     request: async (target) => {
-      const hit = target.url.href === LEVER_HIT;
+      const hit = target.url.href.startsWith(LEVER);
       return {
         status: hit ? 200 : 404,
         headers: {},
@@ -142,12 +142,11 @@ describe('two detections of one company at once', () => {
     onSlowTransaction(() => undefined);
     const company = await followed(app, ctx);
     const otherCompany = await followed(app, ctx, 'Initech Two');
-    const otherSctx = sctx;
     const pause = pauseAt(POINT);
 
     const first = detectAts(app.db, ctx, company.id, sctx);
     await pause.reached;
-    const second = detectAts(app.db, ctx, otherCompany.id, otherSctx);
+    const second = detectAts(app.db, ctx, otherCompany.id, sctx);
     const seen = await settledOrWaiting(app, second, pause);
     pause.release();
     await Promise.all([first, second]);
