@@ -1,7 +1,7 @@
 // The discovery budget in Settings > AI (https://github.com/bgoleno/opportun/issues/214, the
 // owner's decision 2 on #190): dollars a day, default $1.00. When it runs out, postings wait and
-// are ranked on the next budget day; nothing is skipped. Under AI usage, today's spend against it
-// and how many postings wait. Days are UTC, as the budget's are.
+// are ranked on a later budget day, the best matches first; none is dropped. Under AI usage,
+// today's spend against it and how many postings wait. Days are UTC, as the budget's are.
 import { useState, type FormEvent } from 'react';
 import { FormError } from '@/components/FormError';
 import { Button } from '@/components/ui/button';
@@ -75,8 +75,9 @@ function BudgetForm(props: { dailyUsd: number; perTaskDailyUsd: number }) {
       <FormError message={error} />
       <p className="max-w-prose text-xs text-muted-foreground">
         Covers ranking discovered postings and suggesting industries. When it runs out, postings
-        wait and are ranked on the next budget day, oldest first: nothing is skipped. Suggesting
-        industries says so instead of calling. Days are UTC. The{' '}
+        wait and are ranked on the next budget day, the best matches first, then the oldest. None is
+        dropped, but while better new postings keep arriving a poorer older one can keep waiting.
+        Suggesting industries says so instead of calling. Days are UTC. The{' '}
         {dollars.format(props.perTaskDailyUsd)} per task per day stays as a hard stop behind it.
       </p>
     </form>

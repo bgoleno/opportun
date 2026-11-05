@@ -63,7 +63,7 @@ posting clearly states.
 At first it only measures. Once you have accepted at least 20 job board postings and it would have
 kept at least 95% of them, it turns on by itself: a posting it rules out gets no AI call, and its
 card says **Filtered** and why, with **Rank anyway**. **Settings > AI > Discovery pre-filter** says
-whether it is on and why not, and the share of postings it filtered. It is checked at the start of
+whether it is on and why not, and the share of postings it would filter. It is checked at the start of
 each run, so if the figure falls back below the bar, new postings are ranked again; those already
 filtered stay filtered until you send them.
 

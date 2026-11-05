@@ -37,11 +37,11 @@ describe('DiscoveryBudgetCard', () => {
     ).toBeInTheDocument();
   });
 
-  it('shows the budget, says nothing is skipped, and names the hard stop', async () => {
+  it('shows the budget, says none is dropped, and names the hard stop', async () => {
     mockApi({ 'GET /ai/discovery-budget': BUDGET });
     renderWithProviders(<DiscoveryBudgetCard />);
     expect(await screen.findByLabelText('Dollars a day')).toHaveValue('1.00');
-    expect(screen.getByText(/nothing is skipped/)).toHaveTextContent(
+    expect(screen.getByText(/None is dropped/)).toHaveTextContent(
       'The $5.00 per task per day stays as a hard stop behind it.',
     );
   });
@@ -91,5 +91,24 @@ describe('DiscoveryBudgetCard', () => {
     await screen.findByLabelText('Dollars a day');
     await user.click(screen.getByRole('button', { name: 'Save' }));
     expect(await screen.findByRole('alert')).toBeInTheDocument();
+  });
+
+  // #218: not oldest first any more, and the order can make a poorer posting wait.
+  it('says the best matches go first, and that a poorer one can keep waiting', async () => {
+    mockApi({
+      'GET /ai/discovery-budget': {
+        dailyUsd: 1,
+        spentTodayUsd: 0,
+        waiting: 0,
+        perTaskDailyUsd: 5,
+      },
+    });
+    renderWithProviders(<DiscoveryBudgetCard />);
+    expect(await screen.findByText(/the best matches first, then the oldest/)).toBeInTheDocument();
+    const words = screen.getByText(/the best matches first, then the oldest/);
+    expect(words).toHaveTextContent(
+      'while better new postings keep arriving a poorer older one can keep waiting',
+    );
+    expect(words).not.toHaveTextContent(/oldest first|nothing is skipped/);
   });
 });

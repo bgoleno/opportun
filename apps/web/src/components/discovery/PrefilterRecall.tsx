@@ -48,7 +48,7 @@ export function prefilterRecallText({
   const prefix =
     on === true
       ? 'Title pre-filter (on for your job boards)'
-      : 'Title pre-filter (measuring only, it filters nothing yet)';
+      : 'Title pre-filter (measuring only, new postings are not filtered)';
   if (recall === null) {
     return `${prefix}: no accepted job board postings to measure it on yet.`;
   }
@@ -63,16 +63,20 @@ export function prefilterStatusText(s: PrefilterRecall): string {
     return `On for your job boards: judged against your role targets as they are now, it would have kept ${s.kept} of the ${s.positives} job board postings you accepted (${percentKept(s.kept, s.positives)}%).`;
   }
   if (s.positives < s.neededPositives) {
-    return `Measuring only, it filters nothing yet: you have accepted ${s.positives} of the ${s.neededPositives} job board postings it needs, and it must keep at least ${needed}% of them.`;
+    return `Measuring only, new postings are not filtered: you have accepted ${s.positives} of the ${s.neededPositives} job board postings it needs, and it must keep at least ${needed}% of them.`;
   }
-  return `Measuring only, it filters nothing yet: judged against your role targets as they are now, it would have kept ${s.kept} of the ${s.positives} job board postings you accepted (${percentKept(s.kept, s.positives)}%), and it needs at least ${needed}%.`;
+  return `Measuring only, new postings are not filtered: judged against your role targets as they are now, it would have kept ${s.kept} of the ${s.positives} job board postings you accepted (${percentKept(s.kept, s.positives)}%), and it needs at least ${needed}%.`;
 }
 
 /** What it saves (#218 criterion 6). Recall alone cannot show that: passing everything scores 100%. */
 export function prefilterShareText({ judged, filtered }: PrefilterRecall): string {
   if (judged === 0) return 'It has not judged a posting yet.';
-  const postings = judged === 1 ? 'posting' : 'postings';
-  return `Of the ${judged} ${postings} judged when they arrived, it filtered ${filtered} (${Math.round((filtered * 100) / judged)}%).`;
+  // "Would": true whether it is on or only measuring, of postings it may not have acted on.
+  const judgedWhen =
+    judged === 1
+      ? '1 posting judged when it arrived'
+      : `${judged} postings judged when they arrived`;
+  return `Of the ${judgedWhen}, it would filter ${filtered} (${Math.round((filtered * 100) / judged)}%).`;
 }
 
 export function PrefilterCard() {

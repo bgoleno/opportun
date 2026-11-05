@@ -8,7 +8,7 @@ import { PrefilterCard, PrefilterRecallLine, prefilterRecallText } from './Prefi
 describe('prefilterRecallText', () => {
   it('gives the figure with the count it is based on, and says it is only measuring', () => {
     expect(prefilterRecallText({ positives: 20, kept: 19, recall: 0.95 })).toBe(
-      'Title pre-filter (measuring only, it filters nothing yet): it would have kept 19 of the 20 job board postings you accepted (95%).',
+      'Title pre-filter (measuring only, new postings are not filtered): it would have kept 19 of the 20 job board postings you accepted (95%).',
     );
     expect(prefilterRecallText({ positives: 1, kept: 0, recall: 0 })).toContain(
       'kept 0 of the 1 job board posting you accepted (0%)',
@@ -31,7 +31,7 @@ describe('prefilterRecallText', () => {
 
   it('with nothing accepted yet, gives no figure', () => {
     expect(prefilterRecallText({ positives: 0, kept: 0, recall: null })).toBe(
-      'Title pre-filter (measuring only, it filters nothing yet): no accepted job board postings to measure it on yet.',
+      'Title pre-filter (measuring only, new postings are not filtered): no accepted job board postings to measure it on yet.',
     );
   });
 });
@@ -82,8 +82,22 @@ describe('PrefilterCard', () => {
   it('shows the share it would remove, in shadow mode as well', async () => {
     await card({ judged: 300, filtered: 240 });
     expect(screen.getByTestId('prefilter-share')).toHaveTextContent(
-      'Of the 300 postings judged when they arrived, it filtered 240 (80%).',
+      'Of the 300 postings judged when they arrived, it would filter 240 (80%).',
     );
+  });
+
+  it('one posting reads as one', async () => {
+    await card({ judged: 1, filtered: 1 });
+    expect(screen.getByTestId('prefilter-share')).toHaveTextContent(
+      'Of the 1 posting judged when it arrived, it would filter 1 (100%).',
+    );
+  });
+
+  // qa: after falling back, cards still read "Filtered: title", so "nothing" would not be true.
+  it('while measuring, it speaks of new postings, not of nothing', async () => {
+    const line = await card({ positives: 20, kept: 18, recall: 0.9 });
+    expect(line).toHaveTextContent('new postings are not filtered');
+    expect(line).not.toHaveTextContent('nothing');
   });
 
   it('one that removes almost nothing reads as that', async () => {
