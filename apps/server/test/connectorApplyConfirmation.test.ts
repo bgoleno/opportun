@@ -645,6 +645,7 @@ describe('GET /connector/apply/confirmable (tl on #121)', () => {
     // harness's default `silent` level it did (https://github.com/bgoleno/opportun/issues/240).
     expect(logs.text()).toContain('/api/v1/connector/apply/confirmable?[redacted]');
     expect(logs.text()).not.toContain('lookup-secret-9');
+    expect(logs.text()).not.toContain(thanksOn(s.ats));
     expect(
       loggedUrl(`/api/v1/connector/apply/confirmable?url=${encodeURIComponent(TAB_SECRET)}`),
     ).toBe('/api/v1/connector/apply/confirmable?[redacted]');
