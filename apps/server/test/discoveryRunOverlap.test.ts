@@ -5,16 +5,20 @@
 // runNextJob starts each run here, so the overlap does not depend on when the pool looks for work.
 // The provider is mocked and every posting is made up.
 import { runStructured } from '@opportun/ai';
-import type { NormalizedPosting } from '@opportun/core';
+import { newId, type NormalizedPosting } from '@opportun/core';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerSource, resetSources } from '../src/adapters/discoverySource';
 import { withTransaction } from '../src/db/client';
 import { onSlowTransaction } from '../src/db/gate';
-import { discoveryResults, jobs } from '../src/db/schema';
+import { discoveryResults, discoveryRuns, jobs } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
-import { DISCOVERY_RUN_KIND, MULTI_POSTED_PREFIX } from '../src/jobs/discoveryRun';
+import {
+  DISCOVERY_RUN_KIND,
+  FIRST_RUN_RANK_CAP,
+  MULTI_POSTED_PREFIX,
+} from '../src/jobs/discoveryRun';
 import { enqueue, runNextJob } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import { createSource } from '../src/repos/discovery';
@@ -78,6 +82,28 @@ const aSource = (app: FastifyInstance, c: TestClient, org = 'initech') =>
     roleTargetId: null,
   });
 
+/**
+ * A source past its first run, so every posting is ranked: a first run sends only so many
+ * (https://github.com/bgoleno/opportun/issues/215), and 'two first runs' below covers that.
+ */
+async function aSourceThatHasRun(app: FastifyInstance, c: TestClient) {
+  const source = await aSource(app, c);
+  const at = Date.now() - 86_400_000;
+  await app.db
+    .insert(discoveryRuns)
+    .values({
+      id: newId(),
+      userId: c.userId,
+      sourceId: source.id,
+      startedAt: at,
+      finishedAt: at,
+      stats: null,
+      error: null,
+    })
+    .run();
+  return source;
+}
+
 /** Queues a run the way Run now does; `key` keeps a second one from being deduped into the first. */
 const queueRun = (
   app: FastifyInstance,
@@ -140,7 +166,7 @@ describe('#267: overlapping runs of one source', () => {
     const COUNT = 40;
     const { app, a } = await boot();
     board(COUNT, inLockstep());
-    const src = await aSource(app, a);
+    const src = await aSourceThatHasRun(app, a);
     const ids = [
       await queueRun(app, a, src.id, 'now'),
       await queueRun(app, a, src.id, 'scheduled'),
@@ -166,7 +192,7 @@ describe('#267: overlapping runs of one source', () => {
         await secondStarted;
       }
     });
-    const src = await aSource(app, a);
+    const src = await aSourceThatHasRun(app, a);
     const first = await queueRun(app, a, src.id, 'scheduled');
     const firstRun = startRun(app);
     await midway;
@@ -175,6 +201,31 @@ describe('#267: overlapping runs of one source', () => {
     await Promise.all([firstRun, startRun(app)]);
 
     await expectEachPostingOnce(app, a, [first, second], COUNT);
+  });
+
+  it('two first runs in lockstep: each posting stored once, and 25 sent between them', async () => {
+    const COUNT = 40;
+    const { app, a } = await boot();
+    board(COUNT, inLockstep());
+    const src = await aSource(app, a);
+    await queueRun(app, a, src.id, 'now');
+    await queueRun(app, a, src.id, 'scheduled');
+
+    await Promise.all([startRun(app), startRun(app)]);
+
+    const rows = await app.db
+      .select({ reason: discoveryResults.rankSkipReason })
+      .from(discoveryResults)
+      .where(eq(discoveryResults.userId, a.userId))
+      .all();
+    expect(rows).toHaveLength(COUNT);
+    expect(rows.filter((r) => r.reason === 'below_cut')).toHaveLength(COUNT - FIRST_RUN_RANK_CAP);
+    const rankJobs = await app.db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(eq(jobs.kind, DISCOVERY_RANK_KIND), eq(jobs.userId, a.userId)))
+      .all();
+    expect(rankJobs).toHaveLength(FIRST_RUN_RANK_CAP);
   });
 
   it('two sources with the same postings: one of each pair is the multi-posted one', async () => {
@@ -203,6 +254,36 @@ describe('#267: overlapping runs of one source', () => {
   // What the scope holds back, and what it must not. SQLite's write gate holds back everything, so
   // this is about the lock Postgres takes.
   describe.runIf(!sqliteOnly)('the lock, on Postgres', () => {
+    it('a first run waits for the first-run lock before it decides whether it was first', async () => {
+      const { app, a } = await boot();
+      onSlowTransaction(() => undefined);
+      board(1);
+      const src = await aSource(app, a);
+      let letGo!: () => void;
+      const held = new Promise<void>((resolve) => (letGo = resolve));
+      let locked!: () => void;
+      const hasLock = new Promise<void>((resolve) => (locked = resolve));
+      const holder = withTransaction(
+        app.db,
+        async () => {
+          locked();
+          await held;
+        },
+        { scope: `discovery.first_run:${src.id}` },
+      );
+      try {
+        await hasLock;
+        await queueRun(app, a, src.id, 'now');
+        const run = startRun(app);
+        expect(await settledOrWaiting(app, run)).toBe('waiting');
+        letGo();
+        await run;
+      } finally {
+        letGo();
+        await holder;
+      }
+    });
+
     it('holds back that user’s runs and no other user’s', async () => {
       const { app, a, b } = await boot();
       // A transaction left open across event-loop turns on purpose.

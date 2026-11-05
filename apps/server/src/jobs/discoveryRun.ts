@@ -483,13 +483,20 @@ export async function runDiscoverySource(
     }
     throw err;
   }
-  // A run of this source that started alongside this one may have got there first (a schedule and
-  // Run now each have a job of their own). It sent the 25, so this one sends none.
-  const sendFirstCut = firstRun && !(await hasSucceededRun(db, ctx, source.id));
-  await withTransaction(db, async (tx) => {
+  const sendFirstCut = await withTransaction(db, async (tx) => {
+    // A run of this source alongside this one may have got there first (a schedule and Run now each
+    // have a job of their own, #267). It sends the 25, so this one sends none. Under a lock and in
+    // the transaction that records this run, or on Postgres two could each see no run yet, and send
+    // 50 between them.
+    let isFirstToFinish = false;
+    if (firstRun) {
+      await lockScope(tx, `discovery.first_run:${source.id}`);
+      isFirstToFinish = !(await hasSucceededRun(tx, ctx, source.id));
+    }
     if (advanced) await saveSourceCursor(tx, ctx, source.id, lastCursor);
     await finishRun(tx, ctx, run.id, { stats: { ...stats } });
     await setSourceStatus(tx, ctx, source.id, 'ok', null);
+    return isFirstToFinish;
   });
   // After the run is recorded: a stop in between leaves postings below the cut for the user to
   // send, where the other order would let a retry send a second 25.
