@@ -218,10 +218,7 @@ export function IndustryProfilePanel() {
             {suggest.isPending ? 'Suggesting...' : 'Suggest industries'}
           </Button>
         </div>
-        {suggest.error ? (
-          // The message can hold a resume's title, which can be one long unbroken filename.
-          <FormError className="[overflow-wrap:anywhere]" message={suggestError(suggest.error)} />
-        ) : null}
+        {suggest.error ? <FormError message={suggestError(suggest.error)} /> : null}
         {profile.error ? <FormError message={errorMessage(profile.error)} /> : null}
         {NAICS_TIERS.map((tier) => {
           const inTier = rows.filter((r) => r.tier === tier);
