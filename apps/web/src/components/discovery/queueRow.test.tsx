@@ -203,6 +203,10 @@ describe('QueueRow: why a result was not ranked (#210)', () => {
   for (const [reason, words] of [
     ['no_key', 'Not ranked: AI is not set up (Settings > AI)'],
     ['provider_error', 'Not ranked: the AI provider was unavailable'],
+    [
+      'key_rejected',
+      'Not ranked: the AI provider rejected your key. Add a working key or check it again in Settings > AI',
+    ],
     ['invalid_output', "Not ranked: the AI's answer could not be used"],
   ] as const) {
     it(`says so for ${reason}`, () => {
@@ -251,6 +255,10 @@ describe('QueueRow: why a result was not ranked (#210)', () => {
   it.each([
     ['no_key', 'Not ranked: AI is not set up (Settings > AI)'],
     ['provider_error', 'Not ranked: the AI provider was unavailable'],
+    [
+      'key_rejected',
+      'Not ranked: the AI provider rejected your key. Add a working key or check it again in Settings > AI',
+    ],
   ] as const)('a waiting posting whose real problem is %s says so', (rankSkipReason, line) => {
     const { container } = render(
       <ul>

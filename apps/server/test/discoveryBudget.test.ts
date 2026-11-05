@@ -932,6 +932,383 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
     });
   });
 
+  // https://github.com/bgoleno/opportun/issues/261, tl's ruling at
+  // https://github.com/bgoleno/opportun/issues/261#issuecomment-6653083102.
+  describe('a key the provider rejects', () => {
+    const rejected = () =>
+      new AiUnavailableError('provider_error', 'HTTP 401', { keyRejected: true });
+    const noSweepDue = (app: FastifyInstance) =>
+      app.db
+        .delete(jobs)
+        .where(and(eq(jobs.kind, RANK_WAITING_SWEEP_KIND), eq(jobs.status, 'pending')))
+        .run();
+    const reasons = async (app: FastifyInstance, c: TestClient) =>
+      (await results(app, c)).map((r) => r.rankSkipReason);
+    const drainsQueued = async (app: FastifyInstance, c: TestClient) =>
+      (
+        await app.db
+          .select({ id: jobs.id })
+          .from(jobs)
+          .where(
+            and(
+              eq(jobs.kind, RANK_WAITING_KIND),
+              eq(jobs.userId, c.userId),
+              eq(jobs.status, 'pending'),
+            ),
+          )
+          .all()
+      ).length;
+    /** `count` postings waiting, on a day with room in the budget, and the first drain rejected. */
+    async function stopped(app: FastifyInstance, c: TestClient, count: number) {
+      const today = await waitingPostings(app, c, count);
+      await writeDiscoveryBudget(app.db, ctxOf(c), 1);
+      vi.setSystemTime(today + DAY + 60_000);
+      vi.mocked(runStructured).mockRejectedValue(rejected());
+      expect(await drainWaitingResults(app.db, ctxOf(c))).toMatchObject({
+        ranked: 0,
+        stopped: 'key_rejected',
+      });
+      vi.mocked(runStructured).mockClear();
+      await noSweepDue(app);
+      return today;
+    }
+    /** The provider now answers, and the postings are ranked. */
+    const providerWorks = () =>
+      vi.mocked(runStructured).mockResolvedValue({
+        score: 60,
+        rationale: 'A fair match.',
+        disqualifiers: [],
+      } as never);
+
+    it('the drain stops at the first, every waiting card says why, and nothing is lost', async () => {
+      const { app, a } = await boot();
+      const today = await waitingPostings(app, a, 3);
+      await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+      vi.setSystemTime(today + DAY + 60_000);
+      vi.mocked(runStructured).mockRejectedValue(rejected());
+      expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({
+        ranked: 0,
+        stopped: 'key_rejected',
+      });
+      expect(vi.mocked(runStructured)).toHaveBeenCalledOnce();
+      for (const r of await results(app, a)) {
+        expect(r).toMatchObject({
+          rankSkipReason: 'key_rejected',
+          aiScore: null,
+          disposition: 'pending',
+          rankDeferredAt: expect.any(Number),
+        });
+      }
+      expect((await getBudget(a)).waiting).toBe(3);
+    });
+
+    it('an outage marks nothing, and the sweep keeps trying', async () => {
+      const { app, a } = await boot();
+      const today = await waitingPostings(app, a, 3);
+      await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+      vi.setSystemTime(today + DAY + 60_000);
+      vi.mocked(runStructured).mockRejectedValue(new AiUnavailableError('provider_error'));
+      await drainWaitingResults(app.db, ctxOf(a));
+      expect(await reasons(app, a)).not.toContain('key_rejected');
+      expect(await sweepWaitingResults(app.db)).toEqual({ queued: 1 });
+
+      // And it recovers with nothing done by the user, on the next budget day.
+      vi.setSystemTime(today + 2 * DAY + 60_000);
+      providerWorks();
+      await drainWaitingResults(app.db, ctxOf(a));
+      expect((await results(app, a)).map((r) => r.aiScore)).toEqual([60, 60, 60]);
+    });
+
+    it('the sweep passes over that user, and no other', async () => {
+      const { app, a, b } = await boot();
+      const today = await stopped(app, a, 2);
+      expect(await sweepWaitingResults(app.db)).toEqual({ queued: 0 });
+      expect(await drainsQueued(app, a)).toBe(0);
+
+      vi.setSystemTime(today);
+      await spend(app, b, 2 * CALL_USD);
+      await writeDiscoveryBudget(app.db, ctxOf(b), 2 * CALL_USD);
+      await discover(app, b, 1);
+      expect((await results(app, b))[0]!.rankDeferredAt).not.toBeNull();
+      vi.setSystemTime(today + DAY + 60_000);
+      expect(await sweepWaitingResults(app.db)).toEqual({ queued: 1 });
+      expect(await drainsQueued(app, a)).toBe(0);
+      expect(await drainsQueued(app, b)).toBe(1);
+    });
+
+    it('a later budget day does not bring them back in line', async () => {
+      const { app, a } = await boot();
+      const today = await stopped(app, a, 2);
+      vi.setSystemTime(today + 5 * DAY);
+      expect(await sweepWaitingResults(app.db)).toEqual({ queued: 0 });
+    });
+
+    it('with a scored posting waiting too, any marked one still stops the sweep', async () => {
+      const { app, a } = await boot();
+      const today = await waitingPostings(app, a, 2);
+      await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+      const scored = (await byTitle(app, a)).get('Engineer 002')!;
+      await setRanking(app.db, ctxOf(a), scored.id, { aiScore: 40, aiRationale: 'Older score.' });
+      await setRankDeferred(app.db, ctxOf(a), scored.id);
+      vi.setSystemTime(today + DAY + 60_000);
+      vi.mocked(runStructured).mockRejectedValue(rejected());
+      await drainWaitingResults(app.db, ctxOf(a));
+
+      const after = await byTitle(app, a);
+      expect(after.get('Engineer 002')).toMatchObject({ aiScore: 40, rankSkipReason: null });
+      expect(after.get('Engineer 001')!.rankSkipReason).toBe('key_rejected');
+      expect(await sweepWaitingResults(app.db)).toEqual({ queued: 0 });
+    });
+
+    // A known limit, tl's ruling: a scored posting is never marked, so nothing says the stop is on.
+    it('with only scored postings waiting, one call a sweep and no more', async () => {
+      const { app, a } = await boot();
+      const today = await waitingPostings(app, a, 1);
+      await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+      const only = (await results(app, a))[0]!;
+      await setRanking(app.db, ctxOf(a), only.id, { aiScore: 40, aiRationale: 'Older score.' });
+      await setRankDeferred(app.db, ctxOf(a), only.id);
+      vi.setSystemTime(today + DAY + 60_000);
+      vi.mocked(runStructured).mockRejectedValue(rejected());
+      expect(await sweepWaitingResults(app.db)).toEqual({ queued: 1 });
+      expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({
+        stopped: 'key_rejected',
+      });
+      expect(vi.mocked(runStructured)).toHaveBeenCalledOnce();
+      expect((await results(app, a))[0]).toMatchObject({ aiScore: 40, rankSkipReason: null });
+    });
+
+    it('a rank job that gets it joins the wait, so the posting is ranked once a key works', async () => {
+      const { app, a } = await boot();
+      vi.mocked(runStructured).mockRejectedValue(rejected());
+      await discover(app, a, 1);
+      expect((await results(app, a))[0]).toMatchObject({
+        rankSkipReason: 'key_rejected',
+        aiScore: null,
+        rankDeferredAt: expect.any(Number),
+      });
+      providerWorks();
+      await addKey(a);
+      await app.jobs.drain();
+      expect((await results(app, a))[0]).toMatchObject({
+        aiScore: 60,
+        rankSkipReason: null,
+        rankDeferredAt: null,
+      });
+    });
+
+    // Known limit D in tl's ruling, and the way back: each new posting is one call.
+    it('during the stop a new posting makes one call, and its success ends the stop', async () => {
+      const { app, a } = await boot();
+      await stopped(app, a, 2);
+      vi.mocked(runStructured).mockRejectedValue(rejected());
+      await discover(app, a, 1, 100);
+      expect(vi.mocked(runStructured)).toHaveBeenCalledOnce();
+      expect((await byTitle(app, a)).get('Engineer 100')!.rankSkipReason).toBe('key_rejected');
+      await noSweepDue(app);
+      expect(await sweepWaitingResults(app.db)).toEqual({ queued: 0 });
+
+      providerWorks();
+      await discover(app, a, 1, 200);
+      expect((await byTitle(app, a)).get('Engineer 200')!.aiScore).toBe(60);
+      expect(await reasons(app, a)).not.toContain('key_rejected');
+      await noSweepDue(app);
+      expect(await sweepWaitingResults(app.db)).toEqual({ queued: 1 });
+      await app.jobs.drain();
+      expect([...(await byTitle(app, a)).values()].map((r) => r.aiScore)).toEqual(
+        expect.arrayContaining([60, 60, 60, 60]),
+      );
+      expect((await getBudget(a)).waiting).toBe(0);
+    });
+
+    describe('the ways back', () => {
+      const secretId = (res: { json: <T>() => T }) => res.json<{ id: string }>().id;
+      /** Adds an OpenAI key. Its validation fails here, with the network off. */
+      const addKeyId = async (c: TestClient) => {
+        const res = await c.request({
+          method: 'POST',
+          url: '/api/v1/secrets',
+          payload: { kind: 'ai_api_key', label: 'openai', value: 'made-up-key-for-a-test' },
+        });
+        expect(res.statusCode, res.body).toBe(201);
+        return secretId(res);
+      };
+      const recheck = (c: TestClient, id: string) =>
+        c.request({ method: 'POST', url: `/api/v1/ai/keys/${id}/validate` });
+      const modelList = (status: number) =>
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify(status === 200 ? { data: [] } : { error: 'bad key' }), {
+            status,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      const putPolicy = (c: TestClient, task: string) =>
+        c.request({
+          method: 'PUT',
+          url: `/api/v1/ai/policies/${task}`,
+          payload: { provider: 'openai', model: 'placeholder-model', maxOutputTokens: 500 },
+        });
+
+      beforeEach(() => {
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no network in this test')));
+      });
+      afterEach(() => {
+        vi.unstubAllGlobals();
+      });
+
+      /** Cards clear, a drain is queued, and it ranks them all: no posting was lost. */
+      async function resumed(app: FastifyInstance, c: TestClient, count: number) {
+        expect(await reasons(app, c)).toEqual(Array.from({ length: count }, () => null));
+        expect(await drainsQueued(app, c)).toBe(1);
+        providerWorks();
+        await app.jobs.drain();
+        const after = await results(app, c);
+        expect(after.map((r) => r.aiScore)).toEqual(Array.from({ length: count }, () => 60));
+        expect((await getBudget(c)).waiting).toBe(0);
+      }
+
+      it('a key added', async () => {
+        const { app, a } = await boot();
+        await stopped(app, a, 2);
+        await addKeyId(a);
+        await noSweepDue(app);
+        await resumed(app, a, 2);
+      });
+
+      it('a re-check in Settings that succeeds', async () => {
+        const { app, a } = await boot();
+        await stopped(app, a, 2);
+        const id = await addKeyId(a);
+        await rejectedAgain(app, a);
+        vi.stubGlobal('fetch', modelList(200));
+        const res = await recheck(a, id);
+        expect(res.statusCode, res.body).toBe(200);
+        expect(res.json<{ ok: boolean }>().ok).toBe(true);
+        await noSweepDue(app);
+        await resumed(app, a, 2);
+      });
+
+      it('a re-check that fails clears nothing and queues nothing', async () => {
+        const { app, a } = await boot();
+        await stopped(app, a, 2);
+        const id = await addKeyId(a);
+        await rejectedAgain(app, a);
+        vi.stubGlobal('fetch', modelList(401));
+        const res = await recheck(a, id);
+        expect(res.json<{ ok: boolean }>().ok).toBe(false);
+        expect(await reasons(app, a)).toEqual(['key_rejected', 'key_rejected']);
+        expect(await drainsQueued(app, a)).toBe(0);
+      });
+
+      it('another user’s re-check leaves this user stopped', async () => {
+        const { app, a, b } = await boot();
+        await stopped(app, a, 2);
+        const id = await addKeyId(b);
+        vi.stubGlobal('fetch', modelList(200));
+        expect((await recheck(b, id)).statusCode).toBe(200);
+        expect(await reasons(app, a)).toEqual(['key_rejected', 'key_rejected']);
+        expect(await drainsQueued(app, a)).toBe(0);
+      });
+
+      it('a ranking policy set or removed', async () => {
+        const { app, a } = await boot();
+        await stopped(app, a, 2);
+        const put = await putPolicy(a, 'discovery.rank');
+        expect(put.statusCode, put.body).toBe(200);
+        await noSweepDue(app);
+        expect(await reasons(app, a)).toEqual([null, null]);
+        expect(await drainsQueued(app, a)).toBe(1);
+
+        // Stopped again by that drain, then the override goes.
+        vi.mocked(runStructured).mockRejectedValue(rejected());
+        await app.jobs.drain();
+        expect(await reasons(app, a)).toEqual(['key_rejected', 'key_rejected']);
+        const del = await a.request({
+          method: 'DELETE',
+          url: '/api/v1/ai/policies/discovery.rank',
+        });
+        expect(del.statusCode, del.body).toBe(204);
+        await noSweepDue(app);
+        await resumed(app, a, 2);
+      });
+
+      it('another task’s policy leaves them stopped', async () => {
+        const { app, a } = await boot();
+        await stopped(app, a, 2);
+        const put = await putPolicy(a, 'resume.match');
+        expect(put.statusCode, put.body).toBe(200);
+        const del = await a.request({ method: 'DELETE', url: '/api/v1/ai/policies/resume.match' });
+        expect(del.statusCode, del.body).toBe(204);
+        expect(await reasons(app, a)).toEqual(['key_rejected', 'key_rejected']);
+        expect(await drainsQueued(app, a)).toBe(0);
+      });
+
+      // Deleting the newest key puts an older one in use, or leaves none and the card says that.
+      it('a key deleted', async () => {
+        const { app, a } = await boot();
+        await stopped(app, a, 2);
+        const id = await addKeyId(a);
+        await rejectedAgain(app, a);
+        const res = await a.request({ method: 'DELETE', url: `/api/v1/secrets/${id}` });
+        expect(res.statusCode, res.body).toBe(204);
+        await noSweepDue(app);
+        await resumed(app, a, 2);
+      });
+
+      it('another kind of secret leaves them stopped', async () => {
+        const { app, a } = await boot();
+        await stopped(app, a, 2);
+        const res = await a.request({
+          method: 'POST',
+          url: '/api/v1/secrets',
+          payload: { kind: 'device_token', label: 'a device', value: 'made-up-token' },
+        });
+        expect(res.statusCode, res.body).toBe(201);
+        expect(await reasons(app, a)).toEqual(['key_rejected', 'key_rejected']);
+        expect(await drainsQueued(app, a)).toBe(0);
+      });
+
+      it('with no room in the budget: the cards clear, and no drain until there is', async () => {
+        const { app, a } = await boot();
+        await stopped(app, a, 2);
+        await spend(app, a, 1);
+        await addKeyId(a);
+        expect(await reasons(app, a)).toEqual([null, null]);
+        expect(await drainsQueued(app, a)).toBe(0);
+      });
+
+      it('with nothing waiting: a re-check queues no drain', async () => {
+        const { app, a } = await boot();
+        const id = await addKeyId(a);
+        vi.stubGlobal('fetch', modelList(200));
+        expect((await recheck(a, id)).statusCode).toBe(200);
+        expect(await drainsQueued(app, a)).toBe(0);
+      });
+
+      /** Adding the key resumed them. The key that was added is rejected too: stopped again. */
+      async function rejectedAgain(app: FastifyInstance, c: TestClient) {
+        vi.mocked(runStructured).mockRejectedValue(rejected());
+        await noSweepDue(app);
+        await app.jobs.drain();
+        vi.mocked(runStructured).mockClear();
+        await noSweepDue(app);
+        expect(await reasons(app, c)).toEqual(['key_rejected', 'key_rejected']);
+        expect(await drainsQueued(app, c)).toBe(0);
+      }
+    });
+
+    const addKey = async (c: TestClient) => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no network in this test')));
+      const res = await c.request({
+        method: 'POST',
+        url: '/api/v1/secrets',
+        payload: { kind: 'ai_api_key', label: 'openai', value: 'made-up-key-for-a-test' },
+      });
+      vi.unstubAllGlobals();
+      expect(res.statusCode, res.body).toBe(201);
+    };
+  });
+
   it('a posting dismissed while a drain runs keeps its wait, and waits again when restored', async () => {
     const { app, a } = await boot();
     const today = await waitingPostings(app, a, 2);
