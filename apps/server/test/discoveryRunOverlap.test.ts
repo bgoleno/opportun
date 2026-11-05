@@ -19,7 +19,7 @@ import {
   FIRST_RUN_RANK_CAP,
   MULTI_POSTED_PREFIX,
 } from '../src/jobs/discoveryRun';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { enqueue, runNextJob, startRunner } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import { createSource } from '../src/repos/discovery';
 import { useApi } from './api';
@@ -72,6 +72,30 @@ function inLockstep(): BeforePosting {
       return;
     }
     await new Promise<void>((resolve) => waiting.set(i, resolve));
+  };
+}
+
+/** The first run stops after `stored` postings until a second run has started. */
+function firstWaitsForSecondAfter(stored: number): {
+  midway: Promise<void>;
+  before: BeforePosting;
+  /** Lets the first run go without a second, so a failing test can still stop the runner. */
+  letFirstGo: () => void;
+} {
+  let reachedMidway!: () => void;
+  const midway = new Promise<void>((resolve) => (reachedMidway = resolve));
+  let secondAsked!: () => void;
+  const secondStarted = new Promise<void>((resolve) => (secondAsked = resolve));
+  return {
+    midway,
+    letFirstGo: () => secondAsked(),
+    before: async (run, i) => {
+      if (run === 2) secondAsked();
+      if (run === 1 && i === stored + 1) {
+        reachedMidway();
+        await secondStarted;
+      }
+    },
   };
 }
 
@@ -181,17 +205,8 @@ describe('#267: overlapping runs of one source', () => {
     const COUNT = 60;
     const STORED_BEFORE_SECOND = 15;
     const { app, a } = await boot();
-    let reachedMidway!: () => void;
-    const midway = new Promise<void>((resolve) => (reachedMidway = resolve));
-    let secondAsked!: () => void;
-    const secondStarted = new Promise<void>((resolve) => (secondAsked = resolve));
-    board(COUNT, async (run, i) => {
-      if (run === 2) secondAsked();
-      if (run === 1 && i === STORED_BEFORE_SECOND + 1) {
-        reachedMidway();
-        await secondStarted;
-      }
-    });
+    const { midway, before } = firstWaitsForSecondAfter(STORED_BEFORE_SECOND);
+    board(COUNT, before);
     const src = await aSourceThatHasRun(app, a);
     const first = await queueRun(app, a, src.id, 'scheduled');
     const firstRun = startRun(app);
@@ -226,6 +241,39 @@ describe('#267: overlapping runs of one source', () => {
       .where(and(eq(jobs.kind, DISCOVERY_RANK_KIND), eq(jobs.userId, a.userId)))
       .all();
     expect(rankJobs).toHaveLength(FIRST_RUN_RANK_CAP);
+  });
+
+  // What https://github.com/bgoleno/opportun/issues/263 makes reachable: the pool picks up Run now
+  // during a scheduled run, where it used to wait for that run to end.
+  it('through the real runner, with the second queued during the first', async () => {
+    const COUNT = 60;
+    const { app, a } = await boot();
+    const { midway, before, letFirstGo } = firstWaitsForSecondAfter(15);
+    board(COUNT, before);
+    const src = await aSource(app, a);
+    const first = await queueRun(app, a, src.id, 'scheduled');
+    const runner = startRunner(app.db, { services: app.jobs.services, intervalMs: 5 });
+    let second: string;
+    try {
+      await midway;
+      second = await queueRun(app, a, src.id, 'now');
+      const end = performance.now() + 15_000;
+      for (;;) {
+        const runs = await app.db
+          .select({ status: jobs.status })
+          .from(jobs)
+          .where(inArray(jobs.id, [first, second]))
+          .all();
+        if (runs.every((r) => r.status === 'done')) break;
+        if (performance.now() > end) throw new Error('the two runs did not finish');
+        await new Promise((r) => setTimeout(r, 5));
+      }
+    } finally {
+      letFirstGo();
+      await runner.stop();
+    }
+
+    await expectEachPostingOnce(app, a, [first, second], COUNT);
   });
 
   it('two sources with the same postings: one of each pair is the multi-posted one', async () => {

@@ -58,64 +58,75 @@ export interface DrainOutcome {
   stopped: 'budget_exceeded' | 'no_key' | 'provider_error' | 'shutdown' | null;
 }
 
-/** Ranks the caller's waiting postings, oldest first, until they run out or the budget does. */
+/**
+ * Ranks the caller's waiting postings, oldest first, until they run out or the budget does. Reads
+ * the list again when it is done, because a rank job that runs during a drain goes behind the older
+ * postings and its enqueue dedupes onto this drain: only this drain can pick it up, short of the
+ * next sweep (https://github.com/bgoleno/opportun/issues/263). Each posting gets one try per drain:
+ * one the provider refused still waits, and would otherwise come straight back on the next read.
+ */
 export async function drainWaitingResults(
   db: Db,
   ctx: UserCtx,
   opts: { log?: FastifyBaseLogger; stopping?: () => boolean } = {},
 ): Promise<DrainOutcome> {
   const outcome: DrainOutcome = { ranked: 0, failed: 0, stopped: null };
+  const tried = new Set<string>();
   let errorsInARow = 0;
-  for (const id of await listWaitingResultIds(db, ctx)) {
-    // A backlog can take hours, and the runner's stop waits for the job in flight: shutting down
-    // waits for this one call, as it does for any other job. The rest keep waiting.
-    if (opts.stopping?.() === true) {
-      outcome.stopped = 'shutdown';
-      return outcome;
-    }
-    let run;
-    try {
-      run = await rankResult(db, ctx, id);
-    } catch (err) {
-      // One posting must not hold back the ones behind it; the next sweep tries it again.
-      opts.log?.error({ err, resultId: id }, 'ranking a waiting posting failed');
-      outcome.failed += 1;
-      continue;
-    }
-    if (run.status === 'ranked') {
-      outcome.ranked += 1;
-      errorsInARow = 0;
-      continue;
-    }
-    // Not this posting's fault, and true of the ones behind it too: they all keep waiting.
-    if (run.reason === 'budget_exceeded') {
-      outcome.stopped = run.reason;
-      return outcome;
-    }
-    if (run.reason === 'no_key') {
-      await setWaitingNoKey(db, ctx);
-      outcome.stopped = run.reason;
-      return outcome;
-    }
-    // It keeps waiting with the reason on its card, behind the others for the rest of the day.
-    if (run.reason === 'provider_error') {
-      await setRankTurnUsed(db, ctx, id);
-      errorsInARow += 1;
-      if (errorsInARow >= OUTAGE_AFTER_ERRORS) {
+  for (;;) {
+    const ids = (await listWaitingResultIds(db, ctx)).filter((id) => !tried.has(id));
+    if (ids.length === 0) return outcome;
+    for (const id of ids) {
+      // A backlog can take hours, and the runner's stop waits for the job in flight: shutting down
+      // waits for this one call, as it does for any other job. The rest keep waiting.
+      if (opts.stopping?.() === true) {
+        outcome.stopped = 'shutdown';
+        return outcome;
+      }
+      tried.add(id);
+      let run;
+      try {
+        run = await rankResult(db, ctx, id);
+      } catch (err) {
+        // One posting must not hold back the ones behind it; the next sweep tries it again.
+        opts.log?.error({ err, resultId: id }, 'ranking a waiting posting failed');
+        outcome.failed += 1;
+        continue;
+      }
+      if (run.status === 'ranked') {
+        outcome.ranked += 1;
+        errorsInARow = 0;
+        continue;
+      }
+      // Not this posting's fault, and true of the ones behind it too: they all keep waiting.
+      if (run.reason === 'budget_exceeded') {
         outcome.stopped = run.reason;
         return outcome;
       }
-      continue;
+      if (run.reason === 'no_key') {
+        await setWaitingNoKey(db, ctx);
+        outcome.stopped = run.reason;
+        return outcome;
+      }
+      // It keeps waiting with the reason on its card, behind the others for the rest of the day.
+      if (run.reason === 'provider_error') {
+        await setRankTurnUsed(db, ctx, id);
+        errorsInARow += 1;
+        if (errorsInARow >= OUTAGE_AFTER_ERRORS) {
+          outcome.stopped = run.reason;
+          return outcome;
+        }
+        continue;
+      }
+      // Decided since the list was read, or gone. A dismissed posting already does not wait, and
+      // its wait must survive: Undo puts it back in line (tl on #230).
+      if (run.reason === 'not_pending' || run.reason === 'missing') continue;
+      errorsInARow = 0;
+      // It cannot be ranked, so it no longer waits for budget. An unusable answer says why on its
+      // card, as #210 does. No prompt sets no reason, as it does for any posting ranked without one.
+      await clearRankDeferred(db, ctx, id);
     }
-    // Decided since the list was read, or gone. A dismissed posting already does not wait, and its
-    // wait must survive: Undo puts it back in line (tl on #230).
-    if (run.reason === 'not_pending' || run.reason === 'missing') continue;
-    errorsInARow = 0;
-    // It cannot be ranked, so it no longer waits for budget. An unusable answer says why on its
-    // card, as #210 does. No prompt sets no reason, as it does for any posting ranked without one.
-    await clearRankDeferred(db, ctx, id);
   }
-  return outcome;
 }
 
 export const rankWaitingJob: JobHandler<Record<string, never>> = {
