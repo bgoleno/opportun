@@ -14,6 +14,7 @@ import { claimNextJob, type ClaimedJob } from '../db/dialect';
 import { HttpError } from '../lib/errors';
 import { jobs, settings } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
+import { RANK_WAITING_KIND } from './discoveryKinds';
 import { getJobHandler, type JobContext, type JobHandler, type JobServices } from './registry';
 
 export const DEFAULT_MAX_ATTEMPTS = 5;
@@ -34,14 +35,18 @@ const DEFAULT_WORKERS = 4;
  * makes several live calls out to whichever ATS vendor it's probing (Greenhouse, Lever, Ashby
  * or Workday), and it went from firing 7 times ever to firing on most enrich attempts that find
  * a careers page -- capped at 2 so a cluster of new companies can't hit one vendor from every
- * worker at once. Everything absent is limited only by the pool, which is the point: a user's
- * import no longer waits behind a long sync.
+ * worker at once. `discovery.rank_waiting` (https://github.com/bgoleno/opportun/issues/260) holds
+ * its worker through a user's whole backlog and there is one per user, so a few users with backlogs
+ * would otherwise take the pool: capped at 2, which leaves workers free at the default pool of 4.
+ * With OPPORTUN_JOB_WORKERS at 2 or fewer, drains can still fill the pool. Everything absent is
+ * limited only by the pool, which is the point: a user's import no longer waits behind a long sync.
  */
 export const DEFAULT_KIND_LIMITS: Readonly<Record<string, number>> = {
   'gmail.sync': 1,
   'gmail.sync_all': 1,
   backup: 1,
   'company.ats_detect': 2,
+  [RANK_WAITING_KIND]: 2,
 };
 
 function envWorkers(): number {
