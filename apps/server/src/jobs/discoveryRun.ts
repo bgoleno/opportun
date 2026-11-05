@@ -16,6 +16,7 @@ import {
   discoveryRuns,
   dismissalFeedback,
   opportunities,
+  roleTargets,
   users,
 } from '../db/schema';
 import {
@@ -25,6 +26,7 @@ import {
 } from '../lib/deniedCompanies';
 import { HttpError } from '../lib/errors';
 import { sanitizePosting } from '../lib/postingSanitize';
+import { isBoardSource, prefilter, type PrefilterVerdict } from '../lib/prefilter';
 import type { Exec, UserCtx } from '../repos/base';
 import {
   createRun,
@@ -175,6 +177,26 @@ async function suppressForDenylist(
   return await setDisposition(tx, ctx, result.id, 'dismissed');
 }
 
+/** The pre-filter's verdict on one posting (#217), against the targets its source ranks for. */
+type Judge = (posting: NormalizedPosting) => PrefilterVerdict | null;
+
+/**
+ * The verdict for a board's postings: against the source's own role target when it has one, as
+ * ranking does, else against every active one. Read once per run.
+ */
+async function prefilterJudge(db: Db, ctx: UserCtx, roleTargetId: string | null): Promise<Judge> {
+  const targets = await db
+    .select()
+    .from(roleTargets)
+    .where(
+      roleTargetId === null
+        ? and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.active, true))
+        : and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.id, roleTargetId)),
+    )
+    .all();
+  return (posting) => prefilter(posting, targets);
+}
+
 /** Stores one sanitized posting unless it is a duplicate, then immediately dismisses it if its
  *  company matched the user's denylist (`sourceCompanyId`: the source's own linked company,
  *  when it is a per-company board tracker; see deniedCompanies.ts for the full match order). */
@@ -185,6 +207,7 @@ async function ingest(
   sourceId: string,
   sourceCompanyId: string | null,
   posting: NormalizedPosting,
+  judge: Judge | null,
   sourceCommunicationId?: string,
 ): Promise<DiscoveryResultView | 'duplicate'> {
   const key = dedupeKey(posting.company, posting.title, posting.location);
@@ -199,6 +222,8 @@ async function ingest(
       resolution: partial ? 'needs_capture' : 'full',
       aiRationale: check === 'multi_posted' ? MULTI_POSTED_PREFIX : null,
       ...(sourceCommunicationId === undefined ? {} : { sourceCommunicationId }),
+      // Shadow mode (#217): stored and measured; what is ranked below does not depend on it.
+      prefilter: judge === null ? null : judge(posting),
     });
     const denied = matchDeniedCompany(await loadDeniedCompanies(tx, ctx), sourceCompanyId, posting);
     return denied === undefined ? result : await suppressForDenylist(tx, ctx, result, denied);
@@ -233,6 +258,7 @@ async function ingestRaw(
   raw: NormalizedPosting,
   stats: RunStats,
   inserted: DiscoveryResultView[],
+  judge: Judge | null,
   sourceCommunicationId?: string,
 ): Promise<void> {
   const parsed = NormalizedPostingSchema.safeParse(sanitizePosting(raw));
@@ -247,6 +273,7 @@ async function ingestRaw(
     sourceId,
     sourceCompanyId,
     parsed.data,
+    judge,
     sourceCommunicationId,
   );
   if (outcome === 'duplicate') {
@@ -295,6 +322,8 @@ export async function insertLeads(
       posting,
       stats,
       inserted,
+      // Job-alert emails are never pre-filtered (owner's decision 5 on #190).
+      null,
       sourceCommunicationId,
     );
   }
@@ -370,11 +399,24 @@ export async function runDiscoverySource(
       ...sctx,
       knownExternalIds: async (ids) => await knownExternalIds(db, ctx, source.id, ids),
     };
+    const judge = isBoardSource(source.kind)
+      ? await prefilterJudge(db, ctx, source.roleTargetId)
+      : null;
     for await (const item of adapter.fetchPostings(runSctx, config, cursor)) {
       stats.fetched += 1;
       lastCursor = item.nextCursor;
       advanced = true;
-      await ingestRaw(db, ctx, run.id, source.id, source.companyId, item.posting, stats, inserted);
+      await ingestRaw(
+        db,
+        ctx,
+        run.id,
+        source.id,
+        source.companyId,
+        item.posting,
+        stats,
+        inserted,
+        judge,
+      );
     }
   } catch (err) {
     const detail = errorText(err);

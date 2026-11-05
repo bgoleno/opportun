@@ -186,7 +186,7 @@ describe('sync', () => {
     });
     await withConfig(fs);
     expect(await main(['sync'], io)).toBe(EXIT.AUTH);
-    expect(err.join('\n')).toMatch(/Settings > Integrations > Devices/);
+    expect(err.join('\n')).toMatch(/Settings > Integrations > Extensions and Connectors/);
   });
 
   it('asks for init when there is no config', async () => {

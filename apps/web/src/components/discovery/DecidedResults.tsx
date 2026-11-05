@@ -27,6 +27,7 @@ import {
   type DecidedTab,
   type DiscoveryResult,
 } from './api';
+import { PrefilterRecallLine } from './PrefilterRecall';
 import { resultLabel, ScoreBadge } from './QueueRow';
 
 const TABS: { tab: DecidedTab; label: string; empty: string; note: string }[] = [
@@ -45,6 +46,15 @@ const TABS: { tab: DecidedTab; label: string; empty: string; note: string }[] = 
 ];
 
 export function DecidedResults() {
+  return (
+    <div className="grid grid-cols-1 gap-3">
+      <PrefilterRecallLine />
+      <DecidedTabs />
+    </div>
+  );
+}
+
+function DecidedTabs() {
   return (
     <Tabs defaultValue="dismissed">
       <TabsList>

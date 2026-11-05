@@ -1,5 +1,5 @@
 {
-  "id": "c842b2cf-e2d2-45e1-852c-d0e4843b8b47",
+  "id": "101dc9f6-c734-4b65-ac67-a87fbbeb9230",
   "prevId": "0b529b23-f549-49fc-9fd4-e99b7c48707b",
   "version": "7",
   "dialect": "postgresql",
@@ -1464,15 +1464,27 @@
           "primaryKey": false,
           "notNull": false
         },
-        "rank_skip_reason": {
-          "name": "rank_skip_reason",
+        "prefilter_outcome": {
+          "name": "prefilter_outcome",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "rank_deferred_at": {
-          "name": "rank_deferred_at",
-          "type": "bigint",
+        "prefilter_rule": {
+          "name": "prefilter_rule",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "prefilter_score": {
+          "name": "prefilter_score",
+          "type": "double precision",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rank_skip_reason": {
+          "name": "rank_skip_reason",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -1562,27 +1574,6 @@
             },
             {
               "expression": "dedupe_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "discovery_results_user_deferred_idx": {
-          "name": "discovery_results_user_deferred_idx",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "rank_deferred_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -4167,6 +4158,20 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'[]'::jsonb"
+        },
+        "title_variants": {
+          "name": "title_variants",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "title_variants_needed": {
+          "name": "title_variants_needed",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
         },
         "locations": {
           "name": "locations",

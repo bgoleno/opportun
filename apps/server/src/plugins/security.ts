@@ -36,8 +36,8 @@ export const CSRF_HEADER = 'x-csrf-token';
 
 export const SECURITY_HEADERS = {
   // img-src 'self' data: is the one loosening of default-src 'self', for the TOTP enrollment
-  // QR (a server-rendered PNG data URL; docs/superpowers/plans/2026-10-17-iteration-3-m5.md,
-  // Task 3). Scripts, styles, frames and connections stay same-origin only.
+  // QR (a server-rendered PNG data URL). Scripts, styles, frames and connections stay same-origin
+  // only.
   'content-security-policy':
     "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'",
   'x-content-type-options': 'nosniff',

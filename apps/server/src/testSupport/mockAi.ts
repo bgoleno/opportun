@@ -131,6 +131,18 @@ function rank(promptText: string): Record<string, unknown> {
   };
 }
 
+/** The titles discovery.title_variants answers with (#217), the same for every role target. */
+export const MOCK_TITLE_VARIANTS = [
+  'Platform Engineer',
+  'Senior Platform Engineer',
+  'Staff Platform Engineer',
+  'Site Reliability Engineer',
+  'Infrastructure Engineer',
+  'DevOps Engineer',
+  'Backend Engineer',
+  'Senior Backend Engineer',
+] as const;
+
 /** The one company company.suggest proposes (its board is a fixture in mockSources.ts). */
 export const SUGGESTED_COMPANY = {
   name: 'Pied Piper',
@@ -206,6 +218,9 @@ function structured(task: string, promptText: string): Record<string, unknown> {
       return { suggestions: [SUGGESTED_COMPANY] };
     case 'integration.diagnose':
       return { explanation: 'Mock answer.', fix: 'Mock fix.' };
+    case 'discovery.title_variants':
+      // A fixed, made-up list: enough to show the variants and match the fixture postings.
+      return { titles: [...MOCK_TITLE_VARIANTS] };
     default:
       return {};
   }

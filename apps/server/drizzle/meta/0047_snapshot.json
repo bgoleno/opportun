@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d2ccca8a-04c4-405f-ac59-0d80da13e1f7",
+  "id": "1377b693-474c-4eb9-9ff6-1f022b40193b",
   "prevId": "69dbd69f-3a4d-4905-a0b4-56f2cad814e8",
   "tables": {
     "activities": {
@@ -1351,16 +1351,30 @@
           "notNull": false,
           "autoincrement": false
         },
-        "rank_skip_reason": {
-          "name": "rank_skip_reason",
+        "prefilter_outcome": {
+          "name": "prefilter_outcome",
           "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
         },
-        "rank_deferred_at": {
-          "name": "rank_deferred_at",
-          "type": "integer",
+        "prefilter_rule": {
+          "name": "prefilter_rule",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "prefilter_score": {
+          "name": "prefilter_score",
+          "type": "real",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "rank_skip_reason": {
+          "name": "rank_skip_reason",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -1436,14 +1450,6 @@
           "columns": [
             "user_id",
             "dedupe_key"
-          ],
-          "isUnique": false
-        },
-        "discovery_results_user_deferred_idx": {
-          "name": "discovery_results_user_deferred_idx",
-          "columns": [
-            "user_id",
-            "rank_deferred_at"
           ],
           "isUnique": false
         }
@@ -3779,6 +3785,22 @@
           "notNull": true,
           "autoincrement": false,
           "default": "'[]'"
+        },
+        "title_variants": {
+          "name": "title_variants",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'[]'"
+        },
+        "title_variants_needed": {
+          "name": "title_variants_needed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": true
         },
         "locations": {
           "name": "locations",

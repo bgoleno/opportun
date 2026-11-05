@@ -48,6 +48,17 @@ export const RESOLUTIONS = ['full', 'resolved_ats', 'needs_capture', 'capture_fa
 export type Resolution = (typeof RESOLUTIONS)[number];
 
 /**
+ * The discovery pre-filter's verdict on a new board posting (#217, tl's proposal section 4):
+ * whether it would be worth a ranking call. Shadow mode: stored and measured, acting on nothing
+ * yet (N2b, #218, turns it on). Null for a posting from a source the filter does not judge.
+ */
+export const PREFILTER_OUTCOMES = ['pass', 'filtered'] as const;
+export type PrefilterOutcome = (typeof PREFILTER_OUTCOMES)[number];
+/** Which rule filtered it: its title, its location, or its remote setting. */
+export const PREFILTER_RULES = ['title', 'location', 'remote'] as const;
+export type PrefilterRule = (typeof PREFILTER_RULES)[number];
+
+/**
  * Why a result was not ranked (https://github.com/bgoleno/opportun/issues/210): the AI router's
  * own AiUnavailableError reason (@opportun/ai), kept on the result until it is ranked. No key or
  * no provider set up, the task's daily budget spent, the provider failing, or its answer unusable.

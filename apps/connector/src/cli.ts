@@ -113,9 +113,11 @@ async function init(io: ConnectorIo, args: string[]): Promise<ExitCode> {
 
   const tokenInput =
     values.token ??
-    (await ask('Device token (Settings > Integrations > Devices)', existing?.token ?? '', {
-      secret: true,
-    }));
+    (await ask(
+      'Device token (Settings > Integrations > Extensions and Connectors)',
+      existing?.token ?? '',
+      { secret: true },
+    ));
   const token = checkToken(tokenInput);
 
   const mailboxes =
@@ -169,7 +171,7 @@ async function init(io: ConnectorIo, args: string[]): Promise<ExitCode> {
     case 'forbidden':
       throw new ConnectorError(
         'The token was accepted but lacks the mail:push scope; create one for the Apple Mail ' +
-          'connector in Settings > Integrations > Devices and run init again.',
+          'connector in Settings > Integrations > Extensions and Connectors and run init again.',
         EXIT.AUTH,
       );
     case 'rate_limited':

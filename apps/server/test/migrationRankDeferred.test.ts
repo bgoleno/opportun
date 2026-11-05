@@ -64,9 +64,9 @@ const EXPECTED = [
   { id: 'waits', deferred: CREATED, reason: null },
 ];
 
-describe.runIf(sqliteOnly)('0047 on SQLite', () => {
+describe.runIf(sqliteOnly)('0049 on SQLite', () => {
   it('moves a pending budget refusal to the wait, and clears a scored result’s reason', async () => {
-    const partial = await chainBefore(MIGRATIONS_DIR, '0047_discovery_rank_deferred');
+    const partial = await chainBefore(MIGRATIONS_DIR, '0049_discovery_rank_deferred');
     const dataDir = await tempDir();
     const old = new Database(join(dataDir, 'opportun.db'));
     migrate(drizzle(old), { migrationsFolder: partial });
@@ -111,9 +111,9 @@ describe.runIf(sqliteOnly)('0047 on SQLite', () => {
   });
 });
 
-describe.runIf(livePgUrl !== undefined)('0029 on Postgres (live)', () => {
+describe.runIf(livePgUrl !== undefined)('0031 on Postgres (live)', () => {
   it('moves a pending budget refusal to the wait, and clears a scored result’s reason', async () => {
-    const partial = await chainBefore(MIGRATIONS_PG_DIR, '0029_discovery_rank_deferred');
+    const partial = await chainBefore(MIGRATIONS_PG_DIR, '0031_discovery_rank_deferred');
     await withScratchDatabase(async (url) => {
       const pool = new pg.Pool({ connectionString: url, max: 2 });
       try {

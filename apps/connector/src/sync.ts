@@ -28,11 +28,12 @@ const MAX_RATE_WAITS = 20;
 
 export const TOKEN_REJECTED =
   'The server rejected the device token: it was revoked, has expired or is mistyped. ' +
-  'Create a new one in Opportun under Settings > Integrations > Devices, then run ' +
-  '`opportun-connector init` again.';
+  'Create a new one in Opportun under Settings > Integrations > Extensions and Connectors, ' +
+  'then run `opportun-connector init` again.';
 const TOKEN_SCOPE =
   'The device token lacks the mail:push scope. Create a token for the Apple Mail connector in ' +
-  'Opportun under Settings > Integrations > Devices, then run `opportun-connector init` again.';
+  'Opportun under Settings > Integrations > Extensions and Connectors, then run ' +
+  '`opportun-connector init` again.';
 
 export interface SyncSummary {
   /** Messages Mail returned (a message in two mailboxes counts twice). */

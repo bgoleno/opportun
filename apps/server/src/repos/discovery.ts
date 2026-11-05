@@ -36,6 +36,7 @@ import {
 } from '../db/schema';
 import { likePrefix } from '../db/dialect';
 import { HttpError, notFound } from '../lib/errors';
+import { isBoardSource, prefilter, type PrefilterVerdict } from '../lib/prefilter';
 import { DISCOVERY_RUN_KIND } from '../jobs/discoveryKinds';
 import { removeSchedule, setSchedule, userCronProblem } from '../jobs/runner';
 import type { Db, Exec, UserCtx } from './base';
@@ -519,6 +520,8 @@ export interface ResultInput {
   aiRationale?: string | null | undefined;
   /** The message this lead was parsed out of, for a channel that delivers postings by mail. */
   sourceCommunicationId?: string | null | undefined;
+  /** The pre-filter's verdict (#217), for a board posting; absent for any other. */
+  prefilter?: PrefilterVerdict | null | undefined;
 }
 
 export async function insertResult(
@@ -540,6 +543,9 @@ export async function insertResult(
       resolution: input.resolution,
       aiRationale: input.aiRationale ?? null,
       sourceCommunicationId: input.sourceCommunicationId ?? null,
+      prefilterOutcome: input.prefilter?.outcome ?? null,
+      prefilterRule: input.prefilter?.rule ?? null,
+      prefilterScore: input.prefilter?.score ?? null,
       createdAt: now,
       updatedAt: now,
     })
@@ -658,6 +664,63 @@ export async function setRanking(
     .where(ownedResult(ctx, id))
     .run();
   return await getResult(exec, ctx, id);
+}
+
+/** The parts of a stored posting the recall figure reads; an older shape is simply not counted. */
+const RecallPostingSchema = z.object({
+  title: z.string(),
+  location: z.string().nullish(),
+  remote: z.boolean().nullish(),
+});
+
+/**
+ * How the pre-filter would have done on what the user decided (#217, tl's proposal 4.3): of the
+ * postings they accepted from job boards, how many it keeps. Accepted (moved to the pipeline) is
+ * the only "wanted" a result records.
+ *
+ * Worked out now rather than read from the verdict stored at ingest, so decisions from before the
+ * filter count, and an edited list or role target moves the figure. Each posting is judged as a
+ * new one from its source would be: against that source's own role target, else every active one.
+ * A posting with no target to judge against is not counted. Recall is null with none yet.
+ */
+export async function prefilterRecall(
+  exec: Exec,
+  ctx: UserCtx,
+): Promise<{ positives: number; kept: number; recall: number | null }> {
+  const accepted = await exec
+    .select({
+      posting: discoveryResults.posting,
+      kind: discoverySources.kind,
+      roleTargetId: discoverySources.roleTargetId,
+    })
+    .from(discoveryResults)
+    .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
+    .innerJoin(discoverySources, eq(discoverySources.id, discoveryRuns.sourceId))
+    .where(
+      and(eq(discoveryResults.userId, ctx.userId), eq(discoveryResults.disposition, 'accepted')),
+    )
+    .all();
+  const targets = await exec
+    .select()
+    .from(roleTargets)
+    .where(eq(roleTargets.userId, ctx.userId))
+    .all();
+  const active = targets.filter((t) => t.active);
+  let positives = 0;
+  let kept = 0;
+  for (const { posting, kind, roleTargetId } of accepted) {
+    if (!isBoardSource(kind)) continue;
+    const parsed = RecallPostingSchema.safeParse(posting);
+    if (!parsed.success) continue;
+    const verdict = prefilter(
+      parsed.data,
+      roleTargetId === null ? active : targets.filter((t) => t.id === roleTargetId),
+    );
+    if (verdict === null) continue;
+    positives += 1;
+    if (verdict.outcome === 'pass') kept += 1;
+  }
+  return { positives, kept, recall: positives === 0 ? null : kept / positives };
 }
 
 /**

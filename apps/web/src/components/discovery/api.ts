@@ -104,8 +104,11 @@ const enc = encodeURIComponent;
 export const DECIDED_TABS = ['dismissed', 'accepted'] as const;
 export type DecidedTab = (typeof DECIDED_TABS)[number];
 
-/** The prefix of both decided-results tabs, for invalidating them together. */
-const DECIDED_PREFIX = ['discovery', 'results', 'decided'] as const;
+/**
+ * The prefix of both decided-results tabs and the pre-filter's recall line, for invalidating them
+ * together: each changes when a result is decided.
+ */
+export const DECIDED_PREFIX = ['discovery', 'results', 'decided'] as const;
 
 export const discoveryKeys = {
   queue: ['discovery', 'results', 'pending'] as const,

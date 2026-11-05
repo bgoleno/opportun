@@ -11,6 +11,7 @@ import { promptVariables, TASK_PROMPT_VARS } from '@opportun/ai';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { cleanTitleVariants, MAX_TITLE_VARIANTS, queueTitleVariants } from '../jobs/titleVariants';
 import {
   createResumeRule,
   createRoleTarget,
@@ -60,6 +61,8 @@ const roleTargetFields = {
   industries: StringList,
   keywords: StringList,
   locations: StringList,
+  /** The user's own list (#217); trimmed and de-duplicated as stored, at most 40. */
+  titleVariants: z.array(z.string().trim().min(1).max(200)).max(MAX_TITLE_VARIANTS),
   remotePref: z.enum(REMOTE_PREFS),
   compMin: Money,
   compMax: Money,
@@ -88,6 +91,7 @@ const RoleTargetCreate = z
     industries: StringList.default([]),
     keywords: StringList.default([]),
     locations: StringList.default([]),
+    titleVariants: z.array(z.string().trim().min(1).max(200)).max(MAX_TITLE_VARIANTS).default([]),
     remotePref: z.enum(REMOTE_PREFS).default('any'),
     active: z.boolean().default(true),
   })
@@ -169,8 +173,19 @@ export async function profileRoutes(app: FastifyInstance): Promise<void> {
   api.post(
     '/role-targets',
     { schema: { body: RoleTargetCreate, response: { 201: RoleTargetBaseSchema } } },
-    async (req, reply) =>
-      reply.code(201).send(await createRoleTarget(db, app.requireUser(req), req.body)),
+    async (req, reply) => {
+      const ctx = app.requireUser(req);
+      const titleVariants = cleanTitleVariants(req.body.titleVariants);
+      // Its title variants come from one AI call (#217), unless the user wrote their own.
+      const needed = titleVariants.length === 0;
+      const created = await createRoleTarget(db, ctx, {
+        ...req.body,
+        titleVariants,
+        titleVariantsNeeded: needed,
+      });
+      if (needed) await queueTitleVariants(db, ctx, created);
+      return reply.code(201).send(created);
+    },
   );
 
   api.get(
@@ -188,7 +203,22 @@ export async function profileRoutes(app: FastifyInstance): Promise<void> {
       const ctx = app.requireUser(req);
       const current = await getRoleTarget(db, ctx, req.params.id);
       MergedRanges.parse({ ...current, ...req.body });
-      return updateRoleTarget(db, ctx, req.params.id, req.body);
+      const { titleVariants, ...rest } = req.body;
+      // A new name or title family means new variants (#217), unless this edit wrote them. A list
+      // the user saves, an empty one included, is theirs: no call under way may overwrite it.
+      const renamed =
+        (rest.name !== undefined && rest.name !== current.name) ||
+        (rest.titleFamily !== undefined && rest.titleFamily !== current.titleFamily);
+      const updated = await updateRoleTarget(db, ctx, req.params.id, {
+        ...rest,
+        ...(titleVariants !== undefined
+          ? { titleVariants: cleanTitleVariants(titleVariants), titleVariantsNeeded: false }
+          : renamed
+            ? { titleVariantsNeeded: true }
+            : {}),
+      });
+      if (renamed && titleVariants === undefined) await queueTitleVariants(db, ctx, updated);
+      return updated;
     },
   );
 

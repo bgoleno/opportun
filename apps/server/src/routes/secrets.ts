@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { SECRET_KINDS } from '../db/schema';
 import { enqueueClassifyBackfill } from '../jobs/classifyBackfill';
 import { enqueueRankWaiting } from '../jobs/discoveryRankWaiting';
+import { sweepTitleVariantsFor } from '../jobs/titleVariants';
 import { audit } from '../lib/audit';
 import {
   deleteKeyValidation,
@@ -99,6 +100,8 @@ export async function secretRoutes(app: FastifyInstance): Promise<void> {
       if ((await countWaitingResults(db, ctx)) > 0 && (await discoveryBudgetHasRoom(db, ctx))) {
         await enqueueRankWaiting(db, ctx);
       }
+      // Role targets whose title variants could not be made without one (#217).
+      await sweepTitleVariantsFor(db, ctx);
       // Validate on add. The key is stored either way; a failure (or a provider outage) shows
       // up as ok=false with a sanitized reason, never as a failed create.
       const validation = await validateAndStoreAiKey(db, ctx, id).catch(() => ({
