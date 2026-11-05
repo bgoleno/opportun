@@ -27,6 +27,16 @@ describe('DiscoveryBudgetLine', () => {
 });
 
 describe('DiscoveryBudgetCard', () => {
+  it('names everything it covers (#219)', async () => {
+    mockApi({
+      'GET /ai/discovery-budget': { dailyUsd: 1, spentTodayUsd: 0, waiting: 0, perTaskDailyUsd: 5 },
+    });
+    renderWithProviders(<DiscoveryBudgetCard />);
+    expect(
+      await screen.findByText(/Covers ranking discovered postings and suggesting industries\./),
+    ).toBeInTheDocument();
+  });
+
   it('shows the budget, says nothing is skipped, and names the hard stop', async () => {
     mockApi({ 'GET /ai/discovery-budget': BUDGET });
     renderWithProviders(<DiscoveryBudgetCard />);

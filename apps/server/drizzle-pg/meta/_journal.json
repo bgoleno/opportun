@@ -225,6 +225,20 @@
       "when": 1794600000000,
       "tag": "0031_discovery_rank_deferred",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1794700000000,
+      "tag": "0032_industry_profile",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1794800000000,
+      "tag": "0033_discovery_industry_profile_prompt",
+      "breakpoints": true
     }
   ]
 }

@@ -4,7 +4,7 @@
 //
 // Company names and suggestion rationales come from the model or third parties: components
 // render them as plain text, never as markdown or HTML.
-import type { CompanyStatus } from '@opportun/core';
+import type { CompanyStatus, NaicsTier } from '@opportun/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/toast';
 import { api, ApiError, errorMessage } from '@/lib/api';
@@ -251,6 +251,70 @@ export function useNetworkCompanies(showDenied: boolean) {
         `/discovery/network-companies${showDenied ? '?showDenied=true' : ''}`,
       ),
   });
+}
+
+/** One row of the user's industry profile (#219). The reason is the model's text. */
+export interface IndustryRow {
+  code: string;
+  title: string;
+  tier: NaicsTier;
+  source: string;
+  reason: string | null;
+  confirmed: boolean;
+}
+
+const INDUSTRY_PROFILE_URL = '/discovery/industry-profile';
+const industryProfileKey = ['discovery', 'industry-profile'] as const;
+
+export function useIndustryProfile() {
+  return useQuery({
+    queryKey: industryProfileKey,
+    queryFn: () => api<{ items: IndustryRow[] }>(INDUSTRY_PROFILE_URL),
+  });
+}
+
+export function useSuggestIndustries() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api<{ suggested: number; items: IndustryRow[] }>(`${INDUSTRY_PROFILE_URL}/suggest`, {
+        method: 'POST',
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: industryProfileKey }),
+  });
+}
+
+/** After a change to a row: what failed goes to a toast, and the list is read again either way. */
+function useIndustryChange<V>(fn: (vars: V) => Promise<unknown>, failed: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onError: (err) =>
+      toast({ title: failed, description: errorMessage(err), variant: 'destructive' }),
+    onSettled: () => qc.invalidateQueries({ queryKey: industryProfileKey }),
+  });
+}
+
+export function useConfirmIndustry() {
+  return useIndustryChange(
+    (code: string) => api(`${INDUSTRY_PROFILE_URL}/${enc(code)}/confirm`, { method: 'POST' }),
+    'Not confirmed',
+  );
+}
+
+export function useRemoveIndustry() {
+  return useIndustryChange(
+    (code: string) => api(`${INDUSTRY_PROFILE_URL}/${enc(code)}`, { method: 'DELETE' }),
+    'Not removed',
+  );
+}
+
+export function useAddIndustry() {
+  return useIndustryChange(
+    (body: { code: string; tier: NaicsTier }) =>
+      api(INDUSTRY_PROFILE_URL, { method: 'POST', body }),
+    'Not added',
+  );
 }
 
 /** Follows a company that was never suggested, as accepting a suggestion does: the server

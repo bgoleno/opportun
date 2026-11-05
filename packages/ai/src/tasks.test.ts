@@ -95,6 +95,7 @@ describe('TASKS registry', () => {
       'resume.match',
       'discovery.rank',
       'discovery.refine_prompt',
+      'discovery.industry_profile',
       'referral.rationale',
       'company.suggest',
     ] as const) {
@@ -288,6 +289,8 @@ describe('TASKS registry', () => {
     'role_target',
     'current_prompt',
     'feedback_summary',
+    // The static NAICS table from @opportun/core: no user, third party or model writes it.
+    'naics_table',
   ]);
 
   it('every task variable is fenced or explicitly trusted', () => {

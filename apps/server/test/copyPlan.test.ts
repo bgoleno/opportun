@@ -67,6 +67,7 @@ describe('copy plan', () => {
       'resume_match_reports',
       'discovery_sources',
       'discovery_runs',
+      'industry_profile',
       'mail_filter_rules',
       'task_runs',
       'network_contacts',
