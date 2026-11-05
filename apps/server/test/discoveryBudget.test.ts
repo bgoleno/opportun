@@ -31,7 +31,11 @@ import {
   setRankDeferred,
   setRanking,
 } from '../src/repos/discovery';
-import { DEFAULT_DISCOVERY_DAILY_USD, writeDiscoveryBudget } from '../src/repos/discoveryBudget';
+import {
+  DEFAULT_DISCOVERY_DAILY_USD,
+  writeDiscoveryBudget,
+  writeKeyChangedAt,
+} from '../src/repos/discoveryBudget';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 import { holdAt } from './race';
@@ -1437,6 +1441,52 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
           });
           expect(titles).toEqual(['Engineer 002', 'Engineer 001']);
           expect(await reasons(app, a)).toEqual(['key_rejected', 'key_rejected']);
+        });
+
+        // sec on https://github.com/bgoleno/opportun/pull/275: staleness compares two clock readings.
+        // With the stored time ahead of the clock every 401 looks stale, with nothing done by anyone.
+        it('a stored time ahead of the clock: at most three calls in a drain, and they keep waiting', async () => {
+          const { app, a } = await boot();
+          const today = await waitingPostings(app, a, 5);
+          await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+          vi.setSystemTime(today + DAY + 60_000);
+          await writeKeyChangedAt(app.db, ctxOf(a), Date.now() + 3_000);
+          let calls = 0;
+          vi.mocked(runStructured).mockImplementation(async () => {
+            calls += 1;
+            // Not a rejection: without a bound the drain would go on for ever, so this ends it.
+            if (calls > 20) throw new Error('still calling');
+            throw rejected();
+          });
+          expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({
+            ranked: 0,
+            stopped: 'key_changed',
+          });
+          expect(calls).toBe(3);
+          expect((await getBudget(a)).waiting).toBe(5);
+          expect(await reasons(app, a)).not.toContain('key_rejected');
+        });
+
+        it('a stale 401 then a ranking: the count starts again', async () => {
+          const { app, a } = await boot();
+          const today = await waitingPostings(app, a, 4);
+          await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+          vi.setSystemTime(today + DAY + 60_000);
+          await writeKeyChangedAt(app.db, ctxOf(a), Date.now() + 3_000);
+          let calls = 0;
+          vi.mocked(runStructured).mockImplementation(async () => {
+            calls += 1;
+            if (calls % 3 === 0) {
+              return { score: 60, rationale: 'A fair match.', disqualifiers: [] } as never;
+            }
+            if (calls > 40) throw new Error('still calling');
+            throw rejected();
+          });
+          expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({
+            ranked: 4,
+            stopped: null,
+          });
+          expect((await getBudget(a)).waiting).toBe(0);
         });
 
         it('a key changed before the call began says nothing: the 401 marks them', async () => {
