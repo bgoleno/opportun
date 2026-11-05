@@ -14,7 +14,7 @@ import { withTransaction } from '../src/db/client';
 import { onSlowTransaction } from '../src/db/gate';
 import { discoveryResults, jobs } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
-import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
+import { DISCOVERY_RUN_KIND, MULTI_POSTED_PREFIX } from '../src/jobs/discoveryRun';
 import { enqueue, runNextJob } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import { createSource } from '../src/repos/discovery';
@@ -57,10 +57,24 @@ function board(count: number, before: BeforePosting = async () => undefined): vo
   });
 }
 
-const aSource = (app: FastifyInstance, c: TestClient) =>
+/** Neither of two runs gets a posting until the other has asked for the same one. */
+function inLockstep(): BeforePosting {
+  const waiting = new Map<number, () => void>();
+  return async (_run, i) => {
+    const other = waiting.get(i);
+    if (other !== undefined) {
+      waiting.delete(i);
+      other();
+      return;
+    }
+    await new Promise<void>((resolve) => waiting.set(i, resolve));
+  };
+}
+
+const aSource = (app: FastifyInstance, c: TestClient, org = 'initech') =>
   createSource(app.db, ctxOf(c), {
     kind: 'ats_lever',
-    config: { org: 'initech' },
+    config: { org },
     roleTargetId: null,
   });
 
@@ -125,17 +139,7 @@ describe('#267: overlapping runs of one source', () => {
   it('in lockstep, each checking for each posting while the other does', async () => {
     const COUNT = 40;
     const { app, a } = await boot();
-    // Neither run gets a posting until the other has asked for the same one.
-    const waiting = new Map<number, () => void>();
-    board(COUNT, async (_run, i) => {
-      const other = waiting.get(i);
-      if (other !== undefined) {
-        waiting.delete(i);
-        other();
-        return;
-      }
-      await new Promise<void>((resolve) => waiting.set(i, resolve));
-    });
+    board(COUNT, inLockstep());
     const src = await aSource(app, a);
     const ids = [
       await queueRun(app, a, src.id, 'now'),
@@ -173,10 +177,33 @@ describe('#267: overlapping runs of one source', () => {
     await expectEachPostingOnce(app, a, [first, second], COUNT);
   });
 
+  it('two sources with the same postings: one of each pair is the multi-posted one', async () => {
+    const COUNT = 20;
+    const { app, a } = await boot();
+    board(COUNT, inLockstep());
+    const one = await aSource(app, a, 'initech');
+    const other = await aSource(app, a, 'initech-careers');
+    await queueRun(app, a, one.id, 'now');
+    await queueRun(app, a, other.id, 'now');
+
+    await Promise.all([startRun(app), startRun(app)]);
+
+    const rows = await app.db
+      .select({ posting: discoveryResults.posting, rationale: discoveryResults.aiRationale })
+      .from(discoveryResults)
+      .where(eq(discoveryResults.userId, a.userId))
+      .all();
+    expect(rows).toHaveLength(2 * COUNT);
+    const multiPosted = rows.filter((r) => r.rationale === MULTI_POSTED_PREFIX);
+    expect(multiPosted.map((r) => r.posting.title).sort()).toEqual(
+      Array.from({ length: COUNT }, (_, i) => posting(i + 1).title),
+    );
+  });
+
   // What the scope holds back, and what it must not. SQLite's write gate holds back everything, so
   // this is about the lock Postgres takes.
   describe.runIf(!sqliteOnly)('the lock, on Postgres', () => {
-    it('holds back that user’s runs, of any source, and no other user’s', async () => {
+    it('holds back that user’s runs and no other user’s', async () => {
       const { app, a, b } = await boot();
       // A transaction left open across event-loop turns on purpose.
       onSlowTransaction(() => undefined);
