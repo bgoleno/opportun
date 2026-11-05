@@ -34,7 +34,7 @@ import {
   opportunities,
   roleTargets,
 } from '../db/schema';
-import { likePrefix } from '../db/dialect';
+import { jsonText, likePrefix } from '../db/dialect';
 import { HttpError, notFound } from '../lib/errors';
 import { isBoardSource, prefilter, type PrefilterVerdict } from '../lib/prefilter';
 import { DISCOVERY_RUN_KIND } from '../jobs/discoveryKinds';
@@ -518,6 +518,8 @@ export interface ResultInput {
   dedupeKey: string | null;
   resolution: Resolution;
   aiRationale?: string | null | undefined;
+  /** A posting a board's first run holds below the cut (#215) starts with its reason. */
+  rankSkipReason?: RankSkipReason | null | undefined;
   /** The message this lead was parsed out of, for a channel that delivers postings by mail. */
   sourceCommunicationId?: string | null | undefined;
   /** The pre-filter's verdict (#217), for a board posting; absent for any other. */
@@ -542,6 +544,7 @@ export async function insertResult(
       dedupeKey: input.dedupeKey,
       resolution: input.resolution,
       aiRationale: input.aiRationale ?? null,
+      rankSkipReason: input.rankSkipReason ?? null,
       sourceCommunicationId: input.sourceCommunicationId ?? null,
       prefilterOutcome: input.prefilter?.outcome ?? null,
       prefilterRule: input.prefilter?.rule ?? null,
@@ -974,6 +977,88 @@ export async function usersWithWaitingResults(exec: Exec): Promise<string[]> {
     .where(waitingForBudget)
     .all();
   return rows.map((r) => r.userId);
+}
+
+/**
+ * Whether this source has a run that finished without an error. A board's first run is the first
+ * that does (#215): the same run #209's figures treat as its backfill. One that failed may have
+ * stored postings, and its retries are still the first run.
+ */
+export async function hasSucceededRun(
+  exec: Exec,
+  ctx: UserCtx,
+  sourceId: string,
+): Promise<boolean> {
+  const row = await exec
+    .select({ id: discoveryRuns.id })
+    .from(discoveryRuns)
+    .where(
+      and(
+        eq(discoveryRuns.userId, ctx.userId),
+        eq(discoveryRuns.sourceId, sourceId),
+        isNotNull(discoveryRuns.finishedAt),
+        isNull(discoveryRuns.error),
+      ),
+    )
+    .limit(1)
+    .get();
+  return row !== undefined;
+}
+
+/**
+ * The source's postings below the first-run cut (#215), in the order they are sent: newest posting
+ * first, and those with no date last. #218 changes this to the best pre-filter matches. Sorted
+ * here because the date is inside the posting's JSON, and comes back as text on both engines. A
+ * decided posting is not listed: it has nothing left to rank for.
+ */
+export async function listBelowCut(
+  exec: Exec,
+  ctx: UserCtx,
+  sourceId: string,
+): Promise<{ id: string; resolution: Resolution }[]> {
+  const rows = await exec
+    .select({
+      id: discoveryResults.id,
+      resolution: discoveryResults.resolution,
+      postedAt: jsonText(discoveryResults.posting, 'postedAt'),
+    })
+    .from(discoveryResults)
+    .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
+    .where(
+      and(
+        eq(discoveryResults.userId, ctx.userId),
+        eq(discoveryRuns.sourceId, sourceId),
+        eq(discoveryResults.disposition, 'pending'),
+        eq(discoveryResults.rankSkipReason, 'below_cut'),
+      ),
+    )
+    .orderBy(asc(discoveryResults.createdAt), asc(discoveryResults.id))
+    .all();
+  const postedAt = (r: { postedAt: string | null }): number =>
+    r.postedAt === null ? Number.NEGATIVE_INFINITY : Number(r.postedAt);
+  return rows
+    .map((r, order) => ({ ...r, order, at: postedAt(r) }))
+    .sort((x, y) => (x.at === y.at ? x.order - y.order : y.at - x.at))
+    .map(({ id, resolution }) => ({ id, resolution }));
+}
+
+/**
+ * The posting is on its way to ranking, so it is no longer below the cut. Only that reason goes: a
+ * job already queued may have written a newer one. Only while it is pending: dismissed as it was
+ * sent, its job ends without ranking it, and it needs the reason if Undo brings it back.
+ */
+export async function clearBelowCut(exec: Exec, ctx: UserCtx, id: string): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankSkipReason: null })
+    .where(
+      and(
+        ownedResult(ctx, id),
+        eq(discoveryResults.disposition, 'pending'),
+        eq(discoveryResults.rankSkipReason, 'below_cut'),
+      ),
+    )
+    .run();
 }
 
 /** Stores a lead's resolution and, when resolved, the posting filled from the ATS. */

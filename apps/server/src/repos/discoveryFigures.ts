@@ -4,8 +4,8 @@
 // hand. Read-only over task_runs and discovery_runs, scoped to the caller: no AI call, no
 // outbound request, nothing stored. The arithmetic runs here, not in SQL, so it reads the same on
 // SQLite and Postgres.
-import { and, asc, desc, eq, gte, inArray, isNotNull } from 'drizzle-orm';
-import { discoveryRuns, discoverySources, taskRuns } from '../db/schema';
+import { and, asc, count, desc, eq, gte, inArray, isNotNull } from 'drizzle-orm';
+import { discoveryResults, discoveryRuns, discoverySources, taskRuns } from '../db/schema';
 import type { Db, UserCtx } from './base';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -49,6 +49,10 @@ export interface SourceVolume {
   rankCallsPerDay: number | null;
   /** newPerDay times the 30-day average cost per call; null when either is unknown. */
   costPerDayUsd: number | null;
+  /** Postings waiting below the first-run cut for the user to send (#215). */
+  belowCut: number;
+  /** What sending them would cost at the 30-day average cost per call; null with no average. */
+  belowCutCostUsd: number | null;
 }
 
 export interface DiscoveryCostFigures {
@@ -152,6 +156,21 @@ export async function discoveryCostFigures(
     .orderBy(desc(discoveryRuns.startedAt))
     .all();
 
+  const belowCutRows = await db
+    .select({ sourceId: discoveryRuns.sourceId, n: count() })
+    .from(discoveryResults)
+    .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
+    .where(
+      and(
+        eq(discoveryResults.userId, ctx.userId),
+        eq(discoveryResults.disposition, 'pending'),
+        eq(discoveryResults.rankSkipReason, 'below_cut'),
+      ),
+    )
+    .groupBy(discoveryRuns.sourceId)
+    .all();
+  const belowCutOf = new Map(belowCutRows.map((r) => [r.sourceId, Number(r.n)]));
+
   return {
     rank,
     sources: sources.map((s): SourceVolume => {
@@ -166,6 +185,7 @@ export async function discoveryCostFigures(
       const backfill = succeeded.at(-1);
       const later =
         backfill === undefined ? [] : own.filter((r) => r.startedAt > backfill.startedAt);
+      const belowCut = belowCutOf.get(s.id) ?? 0;
       const none = {
         sourceId: s.id,
         kind: s.kind,
@@ -174,6 +194,8 @@ export async function discoveryCostFigures(
         days: 0,
         rankCallsPerDay: null,
         costPerDayUsd: null,
+        belowCut,
+        belowCutCostUsd: costPerCall === null ? null : belowCut * costPerCall,
       };
       if (backfill === undefined || later.length === 0) return none;
       const start = Math.max(now - VOLUME_DAYS * DAY_MS, backfill.startedAt);

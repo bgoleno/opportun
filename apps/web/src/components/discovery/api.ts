@@ -19,6 +19,7 @@ import type { PromptVersion } from '@/components/ai/api';
 import { toast } from '@/components/ui/toast';
 import { api, errorMessage } from '@/lib/api';
 import { qk, type Page } from '@/lib/opportunities';
+import { costFiguresKey } from './costFigures';
 
 export interface DiscoveryResult {
   id: string;
@@ -622,6 +623,25 @@ export function useRunSource() {
     mutationFn: (id: string) =>
       api<{ jobId: string }>(`/discovery/sources/${enc(id)}/run`, { method: 'POST' }),
     onSuccess: (_res, id) => qc.invalidateQueries({ queryKey: discoveryKeys.runs(id) }),
+  });
+}
+
+/** Rank these (#215): sends a source's postings below the first-run cut through the budget. */
+export function useRankBelowCut() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, count }: { id: string; count: number }) =>
+      api<{ queued: number }>(`/discovery/sources/${enc(id)}/rank-below-cut`, {
+        method: 'POST',
+        body: { count },
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: costFiguresKey }),
+        // Their cards stop saying "below the cut".
+        qc.invalidateQueries({ queryKey: discoveryKeys.queue }),
+      ]);
+    },
   });
 }
 
