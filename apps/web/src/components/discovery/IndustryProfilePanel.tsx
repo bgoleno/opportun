@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { toast } from '@/components/ui/toast';
+import { resumeErrorMessage } from '@/components/resume/api';
 import { ApiError, errorMessage } from '@/lib/api';
 import {
   useAddIndustry,
@@ -35,24 +36,56 @@ const SOURCE_LABELS = new Map<string, string>([
 /** By title: nobody looks an industry up by its code. */
 const BY_TITLE = [...NAICS_2022_INDUSTRY_GROUPS].sort((x, y) => x.title.localeCompare(y.title));
 
-/** Why the call did not happen or did not work, in the user's words. */
+const KEY_FIX = 'Add a working key in Settings > AI, then try again.';
+
+/** Why the AI call did not work, and what to do. A problem with the key will not pass with time. */
+function aiFailure(reason: unknown, keyHint: unknown): string {
+  const hint = typeof keyHint === 'string' && keyHint !== '' ? keyHint : null;
+  if (reason === 'key_rejected') {
+    return `The AI provider rejected your key${hint === null ? '' : `: ${hint}`}. ${KEY_FIX}`;
+  }
+  if (hint !== null) return `The AI provider could not be used: ${hint}. ${KEY_FIX}`;
+  switch (reason) {
+    case 'no_key':
+      return 'AI is not set up. Add a key in Settings > AI, then try again.';
+    case 'budget_exceeded':
+      return "Today's AI budget is spent, so nothing was sent. Try again on the next budget day, or raise the discovery budget in Settings > AI.";
+    case 'invalid_output':
+      return "The AI's answer could not be used, so nothing changed. Try again.";
+    case 'provider_error':
+      return 'The AI provider was unavailable, so nothing changed. Try again later.';
+    case 'no_prompt':
+      return 'The prompt for this is missing, so nothing was sent. Whoever runs this Opportun needs to check it is fully updated.';
+    default:
+      return 'The AI call could not be made, so nothing changed. Try again later.';
+  }
+}
+
+/** What failed, in the user's words, and what to do. The server's codes never reach the page. */
 function suggestError(err: unknown): string {
-  if (err instanceof ApiError && err.code === 'no_profile_input') {
-    return 'Add a base resume or a role target first: there is nothing to read yet.';
+  if (!(err instanceof ApiError)) {
+    return 'Could not reach the server. Check your connection, then try again.';
   }
-  if (err instanceof ApiError && err.code === 'ai_unavailable') {
-    switch (err.details.reason) {
-      case 'no_key':
-        return 'AI is not set up (Settings > AI).';
-      case 'budget_exceeded':
-        return "Today's discovery budget is spent. Try again on the next budget day, or raise it in Settings > AI.";
-      case 'invalid_output':
-        return "The AI's answer could not be used. Try again.";
-      default:
-        return 'The AI provider was unavailable. Try again later.';
+  switch (err.code) {
+    case 'no_profile_input':
+      return 'Add a base resume or a role target first: there is nothing to read yet.';
+    case 'resume_unreadable': {
+      // The store's code picks the fix, in the words the Resumes pages already use for it.
+      const fix = resumeErrorMessage(new ApiError(err.status, String(err.details.reason)));
+      return `Could not read your base resume, "${String(err.details.title)}". ${
+        fix ?? 'Check that it still opens under Resumes, then try again.'
+      }`;
     }
+    case 'ai_unavailable':
+      return aiFailure(err.details.reason, err.details.keyHint);
+    // Already in plain words, and about the session rather than this call.
+    case 'csrf':
+    case 'rate_limited':
+    case 'unauthorized':
+      return errorMessage(err);
+    default:
+      return 'Something went wrong on the server. Try again, and if it keeps happening, whoever runs this Opportun can check its log.';
   }
-  return errorMessage(err);
 }
 
 function IndustryChip({ row }: { row: IndustryRow }) {

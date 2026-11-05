@@ -60,14 +60,37 @@ export async function industryProfileRoutes(app: FastifyInstance): Promise<void>
     async (req) => {
       const ctx = requireUser(req);
       const base = await latestBaseResume(db, ctx);
+      // A store has many ways to fail, in its own codes. The panel asked for a resume, so it is told
+      // that this is what failed, with the store's code to pick the fix by. Only a code goes out:
+      // anything else a store throws is in the log, not the answer.
       const readResume =
-        base === undefined ? null : () => storeFor(app, base.store).readText(ctx, base.docRef);
+        base === undefined
+          ? null
+          : async () => {
+              try {
+                return await storeFor(app, base.store).readText(ctx, base.docRef);
+              } catch (err) {
+                req.log.warn({ err, resumeId: base.id }, 'could not read the base resume');
+                throw new HttpError(409, 'resume_unreadable', undefined, {
+                  reason: err instanceof HttpError ? err.code : 'read_failed',
+                  title: base.title,
+                });
+              }
+            };
       try {
         const { suggested } = await suggestIndustries(db, ctx, readResume);
         return { suggested, items: (await listIndustryProfile(db, ctx)).map(view) };
       } catch (err) {
         if (err instanceof AiUnavailableError) {
-          throw await aiUnavailable(db, ctx, 'discovery.industry_profile', err);
+          const http = await aiUnavailable(db, ctx, 'discovery.industry_profile', err);
+          // The router keeps a 401 as provider_error, with a flag. Trying again later will not help
+          // with a rejected key, so here it is a reason of its own, as on a queue card (#275).
+          throw err.keyRejected
+            ? new HttpError(http.statusCode, http.code, undefined, {
+                ...http.details,
+                reason: 'key_rejected',
+              })
+            : http;
         }
         throw err;
       }
