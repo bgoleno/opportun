@@ -43,7 +43,7 @@ beforeEach(() => {
 });
 
 const systemOf = (call = 0): string =>
-  (vi.mocked(runStructured).mock.calls[call]?.[2] as { system: string }).system;
+  (vi.mocked(runStructured).mock.calls.at(call)?.[2] as { system: string }).system;
 
 const refsIn = (system: string): string[] =>
   [...system.matchAll(/^ref: (c\d+)$/gm)].map(([, ref]) => ref ?? '');
