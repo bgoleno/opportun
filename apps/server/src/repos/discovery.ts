@@ -904,6 +904,29 @@ export async function hasOlderWaitingResult(
   return older !== undefined;
 }
 
+/**
+ * Joins the wait, unless a ranking landed since the caller looked: a rank job that was running can
+ * finish at any moment, and its score must not read as a re-rank waiting.
+ */
+export async function setRankWaitingIfUnranked(
+  exec: Exec,
+  ctx: UserCtx,
+  id: string,
+  now: number = Date.now(),
+): Promise<void> {
+  await exec
+    .update(discoveryResults)
+    .set({ rankDeferredAt: now })
+    .where(
+      and(
+        ownedResult(ctx, id),
+        isNull(discoveryResults.aiScore),
+        isNull(discoveryResults.rankDeferredAt),
+      ),
+    )
+    .run();
+}
+
 /** The provider refused this waiting posting: today's turn is used (inLineForBudget). */
 export async function setRankTurnUsed(
   exec: Exec,
