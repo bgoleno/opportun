@@ -217,6 +217,33 @@ describe('#220 criterion 1: tagging', () => {
     expect(systemOf()).not.toMatch(/name: (Two|Three)/);
   });
 
+  // Marking one as tried is for good, so a right code in a wordy answer must not be lost to it.
+  it.each([
+    ['5132 Software Publishers', '5132'],
+    ['NAICS 5132', '5132'],
+    ['5132: Software Publishers', '5132'],
+    ['  5132  ', '5132'],
+  ])('reads the code out of %j', async (answer, code) => {
+    const { app, a } = await boot();
+    await suggested(app, a, 'Wordy');
+    vi.mocked(runStructured).mockResolvedValue({ tags: [{ ref: 'c1', code: answer }] } as never);
+    expect((await tagCompanies(app.db, ctxOf(a))).tagged).toBe(1);
+    expect((await rowOf(app, a, 'Wordy')).naicsCode).toBe(code);
+  });
+
+  it.each(['541511', '54', '9999', 'unknown', 'Software Publishers', 'NAICS 9999'])(
+    'finds no code in %j, so that company could not be placed',
+    async (answer) => {
+      const { app, a } = await boot();
+      await suggested(app, a, 'Wordy');
+      vi.mocked(runStructured).mockResolvedValue({ tags: [{ ref: 'c1', code: answer }] } as never);
+      expect((await tagCompanies(app.db, ctxOf(a))).tagged).toBe(0);
+      const row = await rowOf(app, a, 'Wordy');
+      expect(row.naicsCode).toBeNull();
+      expect(row.industryAt).not.toBeNull();
+    },
+  );
+
   it('a repeated ref takes its first answer', async () => {
     const { app, a } = await boot();
     await suggested(app, a, 'One');

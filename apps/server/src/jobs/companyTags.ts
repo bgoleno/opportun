@@ -141,8 +141,11 @@ async function storeTags(
   const now = Date.now();
   let tagged = 0;
   for (const [i, company] of batch.entries()) {
-    const code = codes.get(`c${i + 1}`);
-    if (code === undefined) continue;
+    const answered = codes.get(`c${i + 1}`);
+    if (answered === undefined) continue;
+    // A model can say "NAICS 5132" or "5132 Software Publishers". Trying is for good, so a right
+    // code in a wordy answer must not be lost. Only a whole 4-digit number counts, in the table.
+    const code = /(?<!\d)\d{4}(?!\d)/.exec(answered)?.[0] ?? '';
     const known = isNaicsCode(code);
     // updatedAt stays: a tag is not the user's edit, and company.suggest lists by it.
     await db
