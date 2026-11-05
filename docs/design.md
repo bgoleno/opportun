@@ -252,9 +252,9 @@ either opportunity cannot re-propose a pair the user already rejected.
   resolved_source_ref (ATS posting reference when resolved), disposition
   (`pending` | `accepted` | `dismissed`), opportunity_id (when accepted).
 - **dismissal_feedback**: id, user_id, opportunity_id/result_id, reason, note, at.
+  Input to the prompt-refinement task (FR-D6).
 - **industry_profile**: id, user_id, naics_code, tier (core | similar | adjacent), source
   (resume | target | user), reason, confirmed. One row per user and code (#219).
-  Input to the prompt-refinement task (FR-D6).
 - **task_runs**: id, user_id, task_key, provider, model, prompt_id/version,
   input_tokens, output_tokens, est_cost, duration_ms, status, error. The cost ledger
   (FR-A5) is an aggregate over this table.
