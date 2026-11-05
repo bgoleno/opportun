@@ -170,4 +170,118 @@ describe('RoleTargetForm', () => {
     await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(2));
     expect(onSubmit).not.toHaveBeenCalled();
   });
+
+  // A list field's text becomes an array, so an entry's error sits on `keywords.1`, not on
+  // `keywords`. Each case puts the bad entry second, so the errors array starts with a hole.
+  describe.each([
+    {
+      label: 'Industries',
+      key: 'industries',
+      separator: ', ',
+      tooLong: 'Keep each entry under 200 characters',
+      maxEntries: 100,
+      tooMany: /100/,
+    },
+    {
+      label: 'Keywords',
+      key: 'keywords',
+      separator: ', ',
+      tooLong: 'Keep each entry under 200 characters',
+      maxEntries: 100,
+      tooMany: /100/,
+    },
+    {
+      label: 'Locations',
+      key: 'locations',
+      separator: ', ',
+      tooLong: 'Keep each entry under 200 characters',
+      maxEntries: 100,
+      tooMany: /100/,
+    },
+    {
+      label: 'Title variants',
+      key: 'titleVariants',
+      separator: '\n',
+      tooLong: 'Keep each title under 200 characters',
+      maxEntries: 40,
+      tooMany: /40 titles/,
+    },
+  ] as const)('$label refuses a bad value out loud', (field) => {
+    const LIST_LABELS = ['Industries', 'Keywords', 'Locations', 'Title variants'];
+
+    function expectOnlyThisFieldInvalid() {
+      for (const label of LIST_LABELS) {
+        expect(screen.getByLabelText(label)).toHaveAttribute(
+          'aria-invalid',
+          label === field.label ? 'true' : 'false',
+        );
+      }
+    }
+
+    it('shows an over-long entry on the field and sends nothing', async () => {
+      const user = userEvent.setup();
+      const onSubmit = vi.fn();
+      render(<RoleTargetForm onSubmit={onSubmit} submitLabel="Save" />);
+      await fillRequired(user);
+      await user.click(screen.getByLabelText(field.label));
+      await user.paste(['fine', 'x'.repeat(201)].join(field.separator));
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() =>
+        expect(screen.getByLabelText(field.label)).toHaveAttribute('aria-invalid', 'true'),
+      );
+      expect(screen.getByLabelText(field.label)).toHaveAccessibleDescription(
+        expect.stringContaining(field.tooLong),
+      );
+      expect(screen.getByRole('alert')).toHaveTextContent(field.tooLong);
+      expectOnlyThisFieldInvalid();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('shows too many entries on the field and sends nothing', async () => {
+      const user = userEvent.setup();
+      const onSubmit = vi.fn();
+      render(<RoleTargetForm onSubmit={onSubmit} submitLabel="Save" />);
+      await fillRequired(user);
+      await user.click(screen.getByLabelText(field.label));
+      const entries = Array.from({ length: field.maxEntries + 1 }, (_, i) => `entry ${i}`);
+      await user.paste(entries.join(field.separator));
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() =>
+        expect(screen.getByLabelText(field.label)).toHaveAttribute('aria-invalid', 'true'),
+      );
+      expect(screen.getByRole('alert')).toHaveTextContent(field.tooMany);
+      expectOnlyThisFieldInvalid();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('clears the error once the entry fits, and then Save sends it', async () => {
+      const user = userEvent.setup();
+      const onSubmit = vi.fn<(p: RoleTargetPayload) => Promise<void>>().mockResolvedValue();
+      render(<RoleTargetForm onSubmit={onSubmit} submitLabel="Save" />);
+      await fillRequired(user);
+      await user.click(screen.getByLabelText(field.label));
+      await user.paste(['fine', 'x'.repeat(201)].join(field.separator));
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() =>
+        expect(screen.getByLabelText(field.label)).toHaveAttribute('aria-invalid', 'true'),
+      );
+
+      await user.clear(screen.getByLabelText(field.label));
+      await user.click(screen.getByLabelText(field.label));
+      // The limit is unchanged: 200 characters is still accepted.
+      await user.paste(['fine', 'x'.repeat(200)].join(field.separator));
+      await waitFor(() =>
+        expect(screen.getByLabelText(field.label)).toHaveAttribute('aria-invalid', 'false'),
+      );
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({
+        [field.key]: ['fine', 'x'.repeat(200)],
+      });
+    });
+  });
 });
