@@ -253,8 +253,6 @@ export function useNetworkCompanies(showDenied: boolean) {
   });
 }
 
-/** Follows a company that was never suggested, as accepting a suggestion does: the server
- *  follows it and queues its board detection. A denied company is refused (company_denied). */
 /** One row of the user's industry profile (#219). The reason is the model's text. */
 export interface IndustryRow {
   code: string;
@@ -319,6 +317,8 @@ export function useAddIndustry() {
   );
 }
 
+/** Follows a company that was never suggested, as accepting a suggestion does: the server
+ *  follows it and queues its board detection. A denied company is refused (company_denied). */
 export function useFollowCompany() {
   const qc = useQueryClient();
   return useMutation({
