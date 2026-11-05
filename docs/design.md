@@ -153,8 +153,8 @@ requires it (FR-S5).
 
 - **companies**: id, user_id, name, domain, careers_url, status (`suggested` |
   `followed` | `denied` | `none`), suggestion_rationale, ats_kind, ats_ref (org
-  slug), ats_verified_at, notes. Denied companies are kept so they are never
-  re-suggested (FR-D8).
+  slug), ats_verified_at, notes, naics_code, industry_source (`ai` | `user`), industry_at
+  (#220). Denied companies are kept so they are never re-suggested (FR-D8).
 - **opportunities**: id, user_id, company_id, role_target_id (nullable), title,
   description_md, posting_url, source_kind, source_ref, location, remote, comp_note,
   stage, stage_detail (round label), dismissed_reason, priority,
@@ -306,6 +306,7 @@ Launch tasks:
 | resume.tailor              | Interactive tailoring chat (FR-R4)                                  | most capable configured model, streaming |
 | discovery.rank             | Score posting vs role target (FR-D4)                                | mid-tier model, batched                  |
 | discovery.industry_profile | NAICS industries to look in, from base resume + role targets (#219) | mid-tier; only when the user asks        |
+| discovery.company_tags     | NAICS tag for each candidate company, about 20 a call (#220)        | small model, batched, nightly            |
 | discovery.refine_prompt    | Propose prompt edits from dismissals (FR-D6)                        | capable model, scheduled                 |
 | discovery.title_variants   | List equivalent titles for one role target (#217)                   | mid-tier; on create/rename, or nightly   |
 | comms.classify             | Classify, outreach-filter, and link messages (FR-M2, FR-M8)         | small/fast model, batched                |

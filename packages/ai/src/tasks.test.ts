@@ -102,6 +102,7 @@ describe('TASKS registry', () => {
       expect(TASKS[k].defaultPolicy.model).toBe('claude-sonnet-5-5');
     }
     for (const k of [
+      'discovery.company_tags',
       'comms.classify',
       'capture.extract',
       'capture.linkedin',

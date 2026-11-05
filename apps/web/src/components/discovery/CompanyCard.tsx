@@ -5,6 +5,7 @@
 import { Check, ExternalLink, RefreshCw, Undo2, X } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { FormError } from '@/components/FormError';
+import { CompanyIndustry } from './CompanyIndustry';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -129,6 +130,7 @@ export function SuggestionCard(props: {
           {c.suggestionRationale}
         </p>
       ) : null}
+      <CompanyIndustry company={c} />
       <div className="flex flex-wrap items-center gap-2">
         <Button
           size="sm"

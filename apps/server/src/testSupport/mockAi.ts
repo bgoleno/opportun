@@ -230,6 +230,11 @@ function structured(task: string, promptText: string): Record<string, unknown> {
       return { suggestions: [SUGGESTED_COMPANY] };
     case 'integration.diagnose':
       return { explanation: 'Mock answer.', fix: 'Mock fix.' };
+    case 'discovery.company_tags':
+      // Every company in the batch, as a software publisher; its refs are c1, c2 and so on.
+      return {
+        tags: [...promptText.matchAll(/^ref: (c\d+)$/gm)].map((m) => ({ ref: m[1], code: '5132' })),
+      };
     case 'discovery.industry_profile':
       return { industries: [...MOCK_INDUSTRY_PROFILE] };
     case 'discovery.title_variants':

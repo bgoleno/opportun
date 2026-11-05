@@ -33,7 +33,9 @@ describe('DiscoveryBudgetCard', () => {
     });
     renderWithProviders(<DiscoveryBudgetCard />);
     expect(
-      await screen.findByText(/Covers ranking discovered postings and suggesting industries\./),
+      await screen.findByText(
+        /Covers ranking discovered postings, suggesting industries and tagging companies\./,
+      ),
     ).toBeInTheDocument();
   });
 

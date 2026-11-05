@@ -50,6 +50,7 @@ import {
   type SubmissionAnswer,
   type SubmissionFields,
   INDUSTRY_SOURCES,
+  INDUSTRY_TAG_SOURCES,
   NAICS_TIERS,
 } from '@opportun/core';
 import {
@@ -348,6 +349,14 @@ export const companies = sqliteTable(
      *  row's opportunities until then, the same way it would for a brand-new company whose
      *  heuristic has not run yet. */
     companyMatchKey: text('company_match_key'),
+    /**
+     * A NAICS 2022 industry group, from the discovery.company_tags task or the user's correction
+     * (#220). industry_at set with no code means the model was asked and could not place it. Set
+     * either way, the task does not ask again, so a correction is never overwritten.
+     */
+    naicsCode: text('naics_code'),
+    industrySource: text('industry_source', { enum: INDUSTRY_TAG_SOURCES }),
+    industryAt: integer('industry_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
