@@ -13,7 +13,7 @@ import {
   type DiscoverySource,
 } from '../src/adapters/discoverySource';
 import { discoveryResults, jobs, taskRuns } from '../src/db/schema';
-import { DISCOVERY_RANK_KIND, rankResult } from '../src/jobs/discoveryRank';
+import { DISCOVERY_RANK_KIND, enqueueRankWaiting, rankResult } from '../src/jobs/discoveryRank';
 import {
   drainWaitingResults,
   RANK_WAITING_KIND,
@@ -24,7 +24,13 @@ import {
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import { enqueue, readSchedules, runNextJob, startRunner } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
-import { createSource, listResults, setDisposition, setRanking } from '../src/repos/discovery';
+import {
+  createSource,
+  listResults,
+  setDisposition,
+  setRankDeferred,
+  setRanking,
+} from '../src/repos/discovery';
 import { DEFAULT_DISCOVERY_DAILY_USD, writeDiscoveryBudget } from '../src/repos/discoveryBudget';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
@@ -779,6 +785,151 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
     expect(vi.mocked(runStructured)).toHaveBeenCalledOnce();
     // Nothing is lost: the rest keep waiting for the next sweep.
     expect((await getBudget(a)).waiting).toBe(4);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/263 criterion 7, qa's finding on
+  // https://github.com/bgoleno/opportun/pull/265: rank jobs now run during a drain, so they defer
+  // behind it, and its enqueue dedupes onto it. Only the drain can pick them up.
+  describe('a posting that joins the wait while a drain runs', () => {
+    /** The newest posting is not waiting yet. The first provider call makes it join. */
+    async function joinsDuringFirstCall(app: FastifyInstance, c: TestClient, title: string) {
+      const joiner = (await byTitle(app, c)).get(title)!;
+      await app.db
+        .update(discoveryResults)
+        .set({ rankDeferredAt: null })
+        .where(eq(discoveryResults.id, joiner.id))
+        .run();
+      const provider = vi.mocked(runStructured).getMockImplementation()!;
+      let joined = false;
+      vi.mocked(runStructured).mockImplementation(async (...args) => {
+        if (!joined) {
+          joined = true;
+          await setRankDeferred(app.db, ctxOf(c), joiner.id);
+        }
+        return provider(...args);
+      });
+    }
+
+    it('a board run during a real drain: that drain ranks its postings, after the older ones', async () => {
+      const { app, a } = await boot();
+      const today = await waitingPostings(app, a, 3);
+      await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+      vi.setSystemTime(today + DAY + 60_000);
+      // Only this drain and what follows: nothing else a day's jump has made due.
+      await app.db.delete(jobs).where(eq(jobs.status, 'pending')).run();
+      const { titles } = providerCharges(app, a);
+      const provider = vi.mocked(runStructured).getMockImplementation()!;
+      let callStarted!: () => void;
+      const inCall = new Promise<void>((resolve) => (callStarted = resolve));
+      let finishCall!: () => void;
+      const held = new Promise<void>((resolve) => (finishCall = resolve));
+      vi.mocked(runStructured).mockImplementationOnce(async (...args) => {
+        callStarted();
+        await held;
+        return provider(...args);
+      });
+      await enqueueRankWaiting(app.db, ctxOf(a));
+      const runner = startRunner(app.db, { services: app.jobs.services, intervalMs: 5 });
+      const until = async (cond: () => Promise<boolean>) => {
+        const end = performance.now() + 5000;
+        while (!(await cond())) {
+          if (performance.now() > end) throw new Error('timed out waiting');
+          await new Promise((r) => setTimeout(r, 5));
+        }
+      };
+      try {
+        await inCall;
+        await discoverQueued(app, a, 2, 100);
+        // Both rank jobs have run and gone behind the older postings, with the drain still held.
+        await until(
+          async () =>
+            [...(await byTitle(app, a)).values()].filter(
+              (r) => r.posting.title.startsWith('Engineer 10') && r.rankDeferredAt !== null,
+            ).length === 2,
+        );
+        finishCall();
+        await until(async () => (await getBudget(a)).waiting === 0);
+      } finally {
+        finishCall();
+        await runner.stop();
+      }
+      expect(titles.slice(0, 3)).toEqual(['Engineer 003', 'Engineer 002', 'Engineer 001']);
+      expect(titles.slice(3).sort()).toEqual(['Engineer 100', 'Engineer 101']);
+      const drains = await app.db.select().from(jobs).where(eq(jobs.kind, RANK_WAITING_KIND)).all();
+      expect(drains.map((j) => j.status)).toEqual(['done']);
+    });
+
+    it('it is ranked once the list is done, and the drain then ends', async () => {
+      const { app, a } = await boot();
+      const today = await waitingPostings(app, a, 3);
+      await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+      vi.setSystemTime(today + DAY + 60_000);
+      const { titles } = providerCharges(app, a);
+      await joinsDuringFirstCall(app, a, 'Engineer 001');
+      expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({
+        ranked: 3,
+        stopped: null,
+      });
+      expect(titles).toEqual(['Engineer 003', 'Engineer 002', 'Engineer 001']);
+    });
+
+    it('a posting the provider refuses is tried once in that drain, on either read', async () => {
+      const { app, a } = await boot();
+      const today = await waitingPostings(app, a, 3);
+      await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+      vi.setSystemTime(today + DAY + 60_000);
+      const { titles } = providerFailsFor(app, a, ['Engineer 003', 'Engineer 001']);
+      await joinsDuringFirstCall(app, a, 'Engineer 001');
+      expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({
+        ranked: 1,
+        stopped: null,
+      });
+      expect(titles).toEqual(['Engineer 003', 'Engineer 002', 'Engineer 001']);
+    });
+
+    it('over budget the drain stops at once, and it keeps waiting', async () => {
+      const { app, a } = await boot();
+      const today = await waitingPostings(app, a, 3);
+      vi.setSystemTime(today + DAY + 60_000);
+      const { titles } = providerCharges(app, a);
+      await joinsDuringFirstCall(app, a, 'Engineer 001');
+      // A budget of 2 calls: the two older postings use it, so the second read finds no room.
+      expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({
+        ranked: 2,
+        stopped: 'budget_exceeded',
+      });
+      expect(titles).toEqual(['Engineer 003', 'Engineer 002']);
+      expect((await byTitle(app, a)).get('Engineer 001')).toMatchObject({
+        aiScore: null,
+        rankDeferredAt: expect.any(Number),
+      });
+    });
+
+    it('errors in a row carry across reads, so an outage still stops the drain', async () => {
+      const { app, a } = await boot();
+      const today = await waitingPostings(app, a, 3);
+      await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+      vi.setSystemTime(today + DAY + 60_000);
+      providerFailsFor(app, a, ['Engineer 003', 'Engineer 002', 'Engineer 001']);
+      await joinsDuringFirstCall(app, a, 'Engineer 001');
+      expect(await drainWaitingResults(app.db, ctxOf(a))).toMatchObject({
+        ranked: 0,
+        stopped: 'provider_error',
+      });
+    });
+
+    it('a shutdown stops the drain before the next read’s postings', async () => {
+      const { app, a } = await boot();
+      const today = await waitingPostings(app, a, 3);
+      await writeDiscoveryBudget(app.db, ctxOf(a), 1);
+      vi.setSystemTime(today + DAY + 60_000);
+      const { titles } = providerCharges(app, a);
+      await joinsDuringFirstCall(app, a, 'Engineer 001');
+      expect(
+        await drainWaitingResults(app.db, ctxOf(a), { stopping: () => titles.length >= 2 }),
+      ).toMatchObject({ ranked: 2, stopped: 'shutdown' });
+      expect(titles).toEqual(['Engineer 003', 'Engineer 002']);
+    });
   });
 
   it('a posting dismissed while a drain runs keeps its wait, and waits again when restored', async () => {
