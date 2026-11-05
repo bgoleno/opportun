@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { MergeDialog } from '@/components/opportunity/MergeDialog';
@@ -30,17 +30,18 @@ function company(over: Partial<CompanyView> & { id: string; name: string }): Com
 const HOSTILE = '<script>window.__pwned = true</script><img src=x onerror="window.__pwned=1">';
 
 describe('SuggestionCard', () => {
-  it('renders a hostile name and rationale inert, as text', () => {
+  it('renders a hostile name and rationale inert, as text', async () => {
     const c = company({
       id: 'c-h',
       name: 'Evil <b>Corp</b>',
       suggestionRationale: `**bold** [x](javascript:alert(1)) ${HOSTILE}`,
     });
-    const { container } = render(
+    const { container } = renderWithProviders(
       <ul>
         <SuggestionCard company={c} onAccept={vi.fn()} onDeny={vi.fn()} />
       </ul>,
     );
+    await screen.findByText('Evil <b>Corp</b>');
     expect(container.querySelector('script, img, b, strong, a')).toBeNull();
     expect((window as unknown as { __pwned?: unknown }).__pwned).toBeUndefined();
     expect(container).toHaveTextContent('Evil <b>Corp</b>');

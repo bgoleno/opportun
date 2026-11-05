@@ -45,6 +45,7 @@ import {
 } from '../src/db/schema';
 import { createStorage } from '../src/lib/storage';
 import { runDemoReset } from '../src/jobs/demoReset';
+import { COMPANY_TAGS_KIND, sweepCompanyTags } from '../src/jobs/companyTags';
 import {
   cleanTitleVariants,
   sweepTitleVariants,
@@ -243,6 +244,13 @@ describe('seedDemo', () => {
         .get();
       expect(row?.value).toEqual({ perTaskDailyUsd: 0.25 });
     }
+  });
+
+  // The same key: a demo company that counted as a candidate would spend each night (#220).
+  it('seeded companies are not candidates, so the nightly company tags sweep calls no AI', async () => {
+    await seedDemo(db, CREDS, Date.UTC(2026, 9, 1), TEST_ENV);
+    expect(await sweepCompanyTags(db)).toBe(0);
+    expect(await db.select().from(jobs).where(eq(jobs.kind, COMPANY_TAGS_KIND)).all()).toEqual([]);
   });
 
   // The operator's key is stored for each account and every reset re-creates the targets, so a

@@ -34,7 +34,9 @@ const SOURCE_LABELS = new Map<string, string>([
 ]);
 
 /** By title: nobody looks an industry up by its code. */
-const BY_TITLE = [...NAICS_2022_INDUSTRY_GROUPS].sort((x, y) => x.title.localeCompare(y.title));
+export const NAICS_BY_TITLE = [...NAICS_2022_INDUSTRY_GROUPS].sort((x, y) =>
+  x.title.localeCompare(y.title),
+);
 
 const KEY_FIX = 'Add a working key in Settings > AI, then try again.';
 
@@ -150,7 +152,7 @@ function AddIndustry({ taken }: { taken: ReadonlySet<string> }) {
           onChange={(e) => setCode(e.currentTarget.value)}
         >
           <option value="">Choose an industry</option>
-          {BY_TITLE.filter((g) => !taken.has(g.code)).map((g) => (
+          {NAICS_BY_TITLE.filter((g) => !taken.has(g.code)).map((g) => (
             <option key={g.code} value={g.code}>
               {g.title} ({g.code})
             </option>

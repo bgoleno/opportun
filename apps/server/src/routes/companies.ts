@@ -7,7 +7,7 @@
 //
 // Following a company (status 'followed', by PATCH or by accepting a suggestion) enables its
 // board's discovery source on the user's default cron; any other status disables it (FR-D5).
-import { COMPANY_STATUSES, CompanySchema } from '@opportun/core';
+import { COMPANY_STATUSES, CompanySchema, isNaicsCode } from '@opportun/core';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -21,12 +21,14 @@ import {
   syncFollowedCompany,
 } from '../jobs/atsDetect';
 import { countPendingFromCompany } from '../lib/deniedCompanies';
+import { HttpError } from '../lib/errors';
 import type { UserCtx } from '../repos/base';
 import {
   COMPANY_SORTS,
   createCompany,
   getCompany,
   listCompanies,
+  setCompanyIndustry,
   updateCompany,
   type Company,
 } from '../repos/companies';
@@ -133,6 +135,27 @@ export async function companyRoutes(app: FastifyInstance): Promise<void> {
       // FR-D5: a status change starts or stops polling the company's board.
       if (req.body.status !== undefined) await syncFollowedCompany(db, ctx, company);
       return await companyView(db, ctx, company);
+    },
+  );
+
+  // The user's correction of a company's industry (#220): only a code from the table, and it stands.
+  api.put(
+    '/companies/:id/industry',
+    {
+      schema: {
+        params: IdParams,
+        body: z.object({ code: z.string().max(20) }),
+        response: { 200: CompanyViewSchema },
+      },
+    },
+    async (req) => {
+      if (!isNaicsCode(req.body.code)) throw new HttpError(422, 'unknown_naics_code');
+      const ctx = app.requireUser(req);
+      return await companyView(
+        db,
+        ctx,
+        await setCompanyIndustry(db, ctx, req.params.id, req.body.code),
+      );
     },
   );
 

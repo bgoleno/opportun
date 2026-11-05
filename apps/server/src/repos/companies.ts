@@ -136,6 +136,26 @@ export async function createCompany(db: Db, ctx: UserCtx, input: CompanyInput): 
   });
 }
 
+/**
+ * The user's own industry for a company (#220). It stands from then on: the tagging task writes only
+ * to a company with no industry_at. The caller has checked the code against the table.
+ */
+export async function setCompanyIndustry(
+  db: Db,
+  ctx: UserCtx,
+  id: string,
+  code: string,
+): Promise<Company> {
+  const now = Date.now();
+  await db
+    .update(companies)
+    .set({ naicsCode: code, industrySource: 'user', industryAt: now, updatedAt: now })
+    .where(and(eq(companies.id, id), eq(companies.userId, ctx.userId)))
+    .run();
+  // Another user's company, or none: nothing changed above, and this is the 404.
+  return await getCompany(db, ctx, id);
+}
+
 export async function updateCompany(
   db: Db,
   ctx: UserCtx,

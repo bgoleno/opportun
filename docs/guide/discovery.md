@@ -106,6 +106,16 @@ to see their names. **Follow** one and Opportun looks for its job board, and it 
 denied** to see it here again, with **Undo**. If the list is empty, add your contacts' current
 companies under [Network](network.md).
 
+**Industry tags.** Each suggested company, and each company in your network that you have not
+followed or denied, gets an industry from the [NAICS 2022](https://www.census.gov/naics/) list. A
+nightly `discovery.company_tags` run asks your AI provider about 20 companies at a time, on a cheap
+model, and it counts against your [discovery budget](settings.md#models-and-budgets): over it, the
+rest wait for a later night. Each call sends the company's name, its domain, and up to 10 job titles
+from postings already stored from its board. So the names of companies in your network do go to your
+provider; nothing about your contacts does, and no board is fetched for this. A tag is created once
+and kept. Open **Industry** on a row to correct it, and your choice stands. A company the model could
+not place says so, and is not asked about again, though you can still set one.
+
 **Suggested companies** comes from the `company.suggest` task, which once a week (Tuesdays)
 proposes companies worth following, based on your role targets and past decisions, each with its
 reason. **Follow** one and Opportun looks for its job board; **Deny** it and it is not suggested

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { INDUSTRY_TAG_SOURCES } from '../naics';
 import { COMPANY_STATUSES, IdSchema, TimestampSchema } from './common';
 
 export const OPPORTUNITY_STAGES = [
@@ -140,6 +141,12 @@ export const CompanySchema = z.object({
   atsRef: z.string().nullish(),
   atsVerifiedAt: TimestampSchema.nullish(),
   notes: z.string().nullish(),
+  /** A NAICS 2022 industry group (#220); null when untagged, or the model could not place it. */
+  naicsCode: z.string().nullish(),
+  /** Who set the code: the model, or the user's correction, which is never overwritten. */
+  industrySource: z.enum(INDUSTRY_TAG_SOURCES).nullish(),
+  /** When it was tagged or tried: set means it is not asked about again. */
+  industryAt: TimestampSchema.nullish(),
   createdAt: TimestampSchema,
   updatedAt: TimestampSchema,
 });

@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { NetworkCompany } from './companiesApi';
 import { AtsStatusChip } from './CompanyCard';
+import { CompanyIndustry } from './CompanyIndustry';
 
 const STRENGTH_LABELS = new Map([
   [3, 'Close'],
@@ -79,6 +80,7 @@ export function NetworkCompanyRow(props: {
           ))}
         </ul>
       </details>
+      <CompanyIndustry company={c} />
       {c.status === 'denied' ? (
         <div className="flex flex-wrap items-center gap-2">
           <Button

@@ -520,10 +520,15 @@ async function expectNetworkRowsFit(page: Page): Promise<void> {
   const openPeople = async (count: number) => {
     for (let i = 0; i < count; i += 1) {
       const row = rows.nth(i);
-      if ((await row.locator('details').getAttribute('open')) === null) {
-        await row.locator('summary').click();
+      // Its people, and its industry with the long picker in it (#220): both must fit, open.
+      const sections = row.locator('details');
+      for (let j = 0; j < (await sections.count()); j += 1) {
+        if ((await sections.nth(j).getAttribute('open')) === null) {
+          await sections.nth(j).locator('summary').click();
+        }
       }
       await expect(row.getByText(UNBROKEN).first()).toBeVisible();
+      await expect(row.getByLabel(/^Industry of /)).toBeVisible();
     }
   };
   await openPeople(2);

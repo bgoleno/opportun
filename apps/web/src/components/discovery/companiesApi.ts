@@ -4,7 +4,7 @@
 //
 // Company names and suggestion rationales come from the model or third parties: components
 // render them as plain text, never as markdown or HTML.
-import type { CompanyStatus, NaicsTier } from '@opportun/core';
+import type { CompanyStatus, IndustryTagSource, NaicsTier } from '@opportun/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from '@/components/ui/toast';
 import { api, ApiError, errorMessage } from '@/lib/api';
@@ -24,6 +24,11 @@ export interface CompanyView {
   atsRef?: string | null;
   atsVerifiedAt?: number | null;
   notes?: string | null;
+  /** A NAICS 2022 industry group (#220); null when untagged, or the model could not place it. */
+  naicsCode?: string | null;
+  industrySource?: IndustryTagSource | null;
+  /** Set once it was tagged or tried. */
+  industryAt?: number | null;
   atsDetectPending: boolean;
   needsCareersUrl: boolean;
   createdAt: number;
@@ -250,6 +255,22 @@ export function useNetworkCompanies(showDenied: boolean) {
       api<{ items: NetworkCompany[] }>(
         `/discovery/network-companies${showDenied ? '?showDenied=true' : ''}`,
       ),
+  });
+}
+
+/** The user's correction of a company's industry (#220), which then stands. */
+export function useSetCompanyIndustry() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, code }: { id: string; code: string }) =>
+      api<CompanyView>(`/companies/${enc(id)}/industry`, { method: 'PUT', body: { code } }),
+    onError: (err) =>
+      toast({
+        title: 'Industry not saved',
+        description: errorMessage(err),
+        variant: 'destructive',
+      }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['companies'] }),
   });
 }
 
