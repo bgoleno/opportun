@@ -579,6 +579,28 @@ describe('#215 criterion 3: Rank these', () => {
     expect(after?.rankSkipReason).toBe('no_key');
   });
 
+  it('a posting dismissed as it is sent stays below the cut, so Undo can still send it', async () => {
+    const { app, a } = await boot();
+    feedSource({ postings: range(1, 26).map((i) => posting(i)) });
+    const s = await board(app, a);
+    await runOnce(app, a, s.id);
+    const [held] = (await results(app, a)).filter((r) => r.rankSkipReason === 'below_cut');
+    // Dismissed after the list was read and before the reason goes: its job will end not_pending.
+    setRaceHook(async (point) => {
+      if (point !== 'jobs.enqueue') return;
+      await setDisposition(app.db, ctxOf(a), held!.id, 'dismissed');
+    });
+    try {
+      await rankBelowCut(app.db, ctxOf(a), s.id, 5);
+    } finally {
+      setRaceHook(undefined);
+    }
+    await setDisposition(app.db, ctxOf(a), held!.id, 'pending');
+    const after = (await results(app, a)).find((r) => r.id === held!.id);
+    expect(after?.rankSkipReason).toBe('below_cut');
+    expect((await figuresFor(app, a, s.id))?.belowCut).toBe(1);
+  });
+
   it("another user's source is not found, and nothing of theirs moves", async () => {
     const { app, a, b } = await boot();
     feedSource({ postings: range(1, 30).map((i) => posting(i)) });

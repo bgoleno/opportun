@@ -989,13 +989,20 @@ export async function listBelowCut(
 
 /**
  * The posting is on its way to ranking, so it is no longer below the cut. Only that reason goes: a
- * job already queued may have written a newer one.
+ * job already queued may have written a newer one. Only while it is pending: dismissed as it was
+ * sent, its job ends without ranking it, and it needs the reason if Undo brings it back.
  */
 export async function clearBelowCut(exec: Exec, ctx: UserCtx, id: string): Promise<void> {
   await exec
     .update(discoveryResults)
     .set({ rankSkipReason: null })
-    .where(and(ownedResult(ctx, id), eq(discoveryResults.rankSkipReason, 'below_cut')))
+    .where(
+      and(
+        ownedResult(ctx, id),
+        eq(discoveryResults.disposition, 'pending'),
+        eq(discoveryResults.rankSkipReason, 'below_cut'),
+      ),
+    )
     .run();
 }
 
