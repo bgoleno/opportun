@@ -42,6 +42,8 @@ import {
   type SourceInput,
 } from './api';
 import { AlertSendersList } from './AlertSenders';
+import { useCostFigures } from './costFigures';
+import { RankBelowCut } from './RankBelowCut';
 import { editableConfig, SourceForm } from './SourceForm';
 
 const isUserManaged = (s: DiscoverySource): boolean => isAtsKind(s.kind) || s.kind === 'mcp';
@@ -98,6 +100,10 @@ export function SourcesManager() {
   const [pendingDelete, setPendingDelete] = useState<DiscoverySource | null>(null);
   const [alertSendersOpen, setAlertSendersOpen] = useState(false);
   const targetName = new Map((roleTargets.data?.items ?? []).map((t) => [t.id, t.name]));
+  // Only for Rank these: if these figures do not load, the sources still list without it.
+  const figures = useCostFigures();
+  const volumeOf = new Map((figures.data?.sources ?? []).map((v) => [v.sourceId, v]));
+  const avgCostUsd = figures.data?.rank.find((r) => r.days === 30)?.avgCostUsd ?? null;
 
   function close() {
     setEditing(null);
@@ -178,6 +184,7 @@ export function SourcesManager() {
             <TableBody>
               {items.map((s) => {
                 const name = `${sourceKindLabel(s.kind)} ${sourceSummary(s)}`;
+                const volume = volumeOf.get(s.id);
                 return (
                   <TableRow key={s.id}>
                     <TableCell>
@@ -186,6 +193,15 @@ export function SourcesManager() {
                         <span className="max-w-64 truncate text-xs text-muted-foreground">
                           {sourceSummary(s)}
                         </span>
+                        {volume !== undefined && volume.belowCut > 0 ? (
+                          <RankBelowCut
+                            sourceId={s.id}
+                            sourceName={name}
+                            count={volume.belowCut}
+                            costUsd={volume.belowCutCostUsd}
+                            avgCostUsd={avgCostUsd}
+                          />
+                        ) : null}
                       </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">

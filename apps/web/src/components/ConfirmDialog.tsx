@@ -12,7 +12,8 @@ import {
 import { errorMessage } from '@/lib/api';
 
 /**
- * "Are you sure?" for destructive actions. Closes only on success: a rejected `onConfirm`
+ * "Are you sure?" for destructive actions, and for any other that needs a yes first (say so with
+ * confirmVariant, so it does not read as a warning). Closes only on success: a rejected `onConfirm`
  * leaves the dialog open with the failure shown in it, rather than closing as if it had
  * worked and leaving the outcome to a toast the person may not connect to this dialog.
  */
@@ -22,6 +23,7 @@ export function ConfirmDialog(props: {
   title: string;
   description: string;
   confirmLabel: string;
+  confirmVariant?: 'default' | 'destructive';
   onConfirm: () => Promise<void> | void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -45,7 +47,7 @@ export function ConfirmDialog(props: {
             Cancel
           </Button>
           <Button
-            variant="destructive"
+            variant={props.confirmVariant ?? 'destructive'}
             disabled={busy}
             onClick={async () => {
               setBusy(true);

@@ -29,10 +29,13 @@ import { sanitizePosting } from '../lib/postingSanitize';
 import { isBoardSource, prefilter, type PrefilterVerdict } from '../lib/prefilter';
 import type { Exec, UserCtx } from '../repos/base';
 import {
+  clearBelowCut,
   createRun,
   finishRun,
   getSourceRow,
+  hasSucceededRun,
   insertResult,
+  listBelowCut,
   saveSourceCursor,
   setDisposition,
   setSourceStatus,
@@ -51,6 +54,14 @@ import { requireService, type JobHandler } from './registry';
 import { enqueue } from './runner';
 
 export { DISCOVERY_RUN_KIND, MULTI_POSTED_PREFIX, MULTI_POSTED_SCORE_CAP, sourceScheduleName };
+
+/**
+ * The most postings a board's first run sends for ranking
+ * (https://github.com/bgoleno/opportun/issues/215): a first run brings in the whole board, and
+ * ranking all of it could take the budget for days. The rest wait below the cut until the user
+ * sends them, having seen the count and the cost.
+ */
+export const FIRST_RUN_RANK_CAP = 25;
 
 /** Attempts per run: a failing board is retried with backoff, then the job is parked. */
 export const DISCOVERY_RUN_MAX_ATTEMPTS = 3;
@@ -208,6 +219,7 @@ async function ingest(
   sourceCompanyId: string | null,
   posting: NormalizedPosting,
   judge: Judge | null,
+  holdBelowCut: boolean,
   sourceCommunicationId?: string,
 ): Promise<DiscoveryResultView | 'duplicate'> {
   const key = dedupeKey(posting.company, posting.title, posting.location);
@@ -221,6 +233,7 @@ async function ingest(
       dedupeKey: key,
       resolution: partial ? 'needs_capture' : 'full',
       aiRationale: check === 'multi_posted' ? MULTI_POSTED_PREFIX : null,
+      rankSkipReason: holdBelowCut ? 'below_cut' : null,
       ...(sourceCommunicationId === undefined ? {} : { sourceCommunicationId }),
       // Shadow mode (#217): stored and measured; what is ranked below does not depend on it.
       prefilter: judge === null ? null : judge(posting),
@@ -235,7 +248,11 @@ async function ingest(
  * sources first, and lead resolution then queues its ranking (FR-D7); a full posting is ranked
  * right away (FR-D4).
  */
-async function enqueueFollowUps(db: Db, ctx: UserCtx, result: DiscoveryResultView): Promise<void> {
+async function enqueueFollowUps(
+  db: Db,
+  ctx: UserCtx,
+  result: Pick<DiscoveryResultView, 'id' | 'resolution'>,
+): Promise<void> {
   const kind = result.resolution === 'needs_capture' ? LEAD_RESOLVE_KIND : DISCOVERY_RANK_KIND;
   await enqueue(
     db,
@@ -246,8 +263,29 @@ async function enqueueFollowUps(db: Db, ctx: UserCtx, result: DiscoveryResultVie
 }
 
 /**
+ * Sends up to `limit` of a source's postings below the cut, newest first, the way any new posting
+ * goes: from here on the budget and its wait apply. Queued before the reason goes, so a stop between
+ * the two leaves a posting with a job and a stale reason, which the job clears, and never one with
+ * no reason and no job, which nothing would ever rank. Returns how many it sent.
+ */
+export async function rankBelowCut(
+  db: Db,
+  ctx: UserCtx,
+  sourceId: string,
+  limit: number,
+): Promise<number> {
+  const held = (await listBelowCut(db, ctx, sourceId)).slice(0, limit);
+  for (const result of held) {
+    await enqueueFollowUps(db, ctx, result);
+    await clearBelowCut(db, ctx, result.id);
+  }
+  return held.length;
+}
+
+/**
  * The one path every posting takes into the queue, whatever its source: sanitize, re-validate,
- * dedupe, store, queue follow-ups. Updates `stats` and collects stored results in `inserted`.
+ * dedupe, store, queue follow-ups. Updates `stats` and collects stored results in `inserted`. A
+ * posting held below the cut is stored the same way and queues nothing yet.
  */
 async function ingestRaw(
   db: Db,
@@ -259,6 +297,7 @@ async function ingestRaw(
   stats: RunStats,
   inserted: DiscoveryResultView[],
   judge: Judge | null,
+  holdBelowCut: boolean,
   sourceCommunicationId?: string,
 ): Promise<void> {
   const parsed = NormalizedPostingSchema.safeParse(sanitizePosting(raw));
@@ -274,6 +313,7 @@ async function ingestRaw(
     sourceCompanyId,
     parsed.data,
     judge,
+    holdBelowCut,
     sourceCommunicationId,
   );
   if (outcome === 'duplicate') {
@@ -286,7 +326,7 @@ async function ingestRaw(
   } else {
     stats.inserted += 1;
     inserted.push(outcome);
-    await enqueueFollowUps(db, ctx, outcome);
+    if (!holdBelowCut) await enqueueFollowUps(db, ctx, outcome);
   }
 }
 
@@ -324,6 +364,8 @@ export async function insertLeads(
       inserted,
       // Job-alert emails are never pre-filtered (owner's decision 5 on #190).
       null,
+      // A job alert is not a board, so no first-run cap either.
+      false,
       sourceCommunicationId,
     );
   }
@@ -392,6 +434,9 @@ export async function runDiscoverySource(
   const { config, cursor } = splitConfig(source);
   let lastCursor: unknown = cursor;
   let advanced = false;
+  // A first run holds everything until it has succeeded (#215): only then is the board's newest
+  // known, and a failed attempt sends nothing, so retries cannot add up past the cap.
+  const firstRun = isBoardSource(source.kind) && !(await hasSucceededRun(db, ctx, source.id));
   try {
     await assertMayRun(db, source.userId, source.kind, config);
     const adapter = getSource(source.kind);
@@ -416,6 +461,7 @@ export async function runDiscoverySource(
         stats,
         inserted,
         judge,
+        firstRun,
       );
     }
   } catch (err) {
@@ -432,11 +478,17 @@ export async function runDiscoverySource(
     }
     throw err;
   }
+  // A run of this source that started alongside this one may have got there first (a schedule and
+  // Run now each have a job of their own). It sent the 25, so this one sends none.
+  const sendFirstCut = firstRun && !(await hasSucceededRun(db, ctx, source.id));
   await withTransaction(db, async (tx) => {
     if (advanced) await saveSourceCursor(tx, ctx, source.id, lastCursor);
     await finishRun(tx, ctx, run.id, { stats: { ...stats } });
     await setSourceStatus(tx, ctx, source.id, 'ok', null);
   });
+  // After the run is recorded: a stop in between leaves postings below the cut for the user to
+  // send, where the other order would let a retry send a second 25.
+  if (sendFirstCut) await rankBelowCut(db, ctx, source.id, FIRST_RUN_RANK_CAP);
   return { status: 'done', runId: run.id, stats, inserted };
 }
 

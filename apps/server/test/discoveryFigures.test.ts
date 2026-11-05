@@ -199,6 +199,8 @@ describe('#209: each board source, over the last 14 days', () => {
       days: 0,
       rankCallsPerDay: null,
       costPerDayUsd: null,
+      belowCut: 0,
+      belowCutCostUsd: 0,
     });
   });
 
@@ -214,6 +216,8 @@ describe('#209: each board source, over the last 14 days', () => {
       days: 0,
       rankCallsPerDay: null,
       costPerDayUsd: null,
+      belowCut: 0,
+      belowCutCostUsd: null,
     });
   });
 

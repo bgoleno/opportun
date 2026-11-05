@@ -64,13 +64,16 @@ export type PrefilterRule = (typeof PREFILTER_RULES)[number];
  * no provider set up, the task's daily budget spent, the provider failing, or its answer unusable.
  * Null for a ranked result and for one never sent for ranking. The server no longer stores
  * budget_exceeded on a pending result: over budget it waits instead (rank_deferred_at, #214). A
- * result stored before that keeps the code, so it stays here.
+ * result stored before that keeps the code, so it stays here. below_cut is not the router's: a
+ * board's first run ranks only so many, and the rest wait for the user to send them
+ * (https://github.com/bgoleno/opportun/issues/215).
  */
 export const RANK_SKIP_REASONS = [
   'no_key',
   'budget_exceeded',
   'provider_error',
   'invalid_output',
+  'below_cut',
 ] as const;
 export type RankSkipReason = (typeof RANK_SKIP_REASONS)[number];
 

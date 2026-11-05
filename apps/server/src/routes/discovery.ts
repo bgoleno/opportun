@@ -18,6 +18,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { hasSource } from '../adapters/discoverySource';
 import { DISCOVERY_RUN_KIND } from '../jobs/discoveryKinds';
+import { rankBelowCut } from '../jobs/discoveryRun';
 import { enqueue } from '../jobs/runner';
 import { HttpError, duplicate } from '../lib/errors';
 import { createActivity } from '../repos/activities';
@@ -261,9 +262,14 @@ const CostFiguresSchema = z.object({
       days: z.number().int(),
       rankCallsPerDay: z.number().nullable(),
       costPerDayUsd: z.number().nullable(),
+      belowCut: z.number().int(),
+      belowCutCostUsd: z.number().nullable(),
     }),
   ),
 });
+
+/** How many the user agreed to send, having seen the count and the cost (#215). */
+const RankBelowCutBody = z.object({ count: z.number().int().min(1).max(1_000_000) });
 
 export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
@@ -782,6 +788,28 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
         { dedupeKey: `${DISCOVERY_RUN_KIND}:now:${source.id}`, userId: ctx.userId },
       );
       return reply.code(202).send({ jobId });
+    },
+  );
+
+  /**
+   * Rank these (#215): sends this source's postings below the first-run cut through the budget, and
+   * no more than the count the user confirmed: a retry of a failing first run can add to them while
+   * the dialog is open. A stale count sends the newest that many, and the rest stay for next time.
+   */
+  api.post(
+    '/discovery/sources/:id/rank-below-cut',
+    {
+      schema: {
+        params: IdParams,
+        body: RankBelowCutBody,
+        response: { 202: z.object({ queued: z.number().int() }) },
+      },
+    },
+    async (req, reply) => {
+      const ctx = app.requireUser(req);
+      const source = await getSourceRow(db, ctx, req.params.id);
+      const queued = await rankBelowCut(db, ctx, source.id, req.body.count);
+      return reply.code(202).send({ queued });
     },
   );
 
