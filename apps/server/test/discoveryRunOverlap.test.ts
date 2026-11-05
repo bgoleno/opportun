@@ -250,7 +250,7 @@ describe('#267: overlapping runs of one source', () => {
     const { app, a } = await boot();
     const { midway, before, letFirstGo } = firstWaitsForSecondAfter(15);
     board(COUNT, before);
-    const src = await aSource(app, a);
+    const src = await aSourceThatHasRun(app, a);
     const first = await queueRun(app, a, src.id, 'scheduled');
     const runner = startRunner(app.db, { services: app.jobs.services, intervalMs: 5 });
     let second: string;
