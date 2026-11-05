@@ -89,6 +89,30 @@ role target is judged against all your role targets in that one call). A busy bo
 the model reading your role target and the posting text; it misses things a posting leaves
 out, so skim the low scorers occasionally.
 
+**The title pre-filter (measuring only).** Each new posting from a job board also gets a
+pass or filtered verdict from a cheap, local check: does its title match your role target, and
+does its stated location and remote setting fit? It needs no AI call per posting and, for now,
+changes nothing: every posting is still ranked. **Decided** shows how often it would keep the
+job board postings you accepted, with the count, so you can judge it before it is ever turned on.
+That figure is worked out each time against your current role targets, so it includes postings you
+accepted before this existed, and it moves when you edit a target. Postings from job-alert emails
+are not checked.
+
+The location check is deliberately lenient. It filters a posting only when it names a place that
+is clearly not one of yours. A posting saying "Multiple locations" or "United States" is kept, and
+a target with a country, state or region among its locations (such as "Texas" or "Europe") filters
+on no location at all. It does not know which towns surround a city, so a target of "Seattle" would
+still filter a posting in "Bellevue, WA".
+
+It compares titles with each role target's **title variants** (**Settings > Role targets**):
+20 to 40 equivalent titles, made by one `discovery.title_variants` AI call when you add a target
+or change its name or title family. That call sends the target's name, title family, seniority
+range and keywords, and nothing else. A target with no list yet, because it is older than this
+feature or the call found no AI key or budget, gets its call when you add a key or in a nightly
+sweep, without you doing anything. You can edit the list, and a list you save or clear stays as
+you left it, even if a call was already running. A new name or title family replaces it with a
+fresh one, unless you edit the list in the same save.
+
 ## Decided results
 
 Accepting or dismissing a result keeps a later sighting of the same job (same company, title

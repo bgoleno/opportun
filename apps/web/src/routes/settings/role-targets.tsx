@@ -54,6 +54,7 @@ function toPayload(t: RoleTarget): RoleTargetPayload {
     industries: t.industries,
     keywords: t.keywords,
     locations: t.locations,
+    titleVariants: t.titleVariants,
     remotePref: t.remotePref,
     compMin: t.compMin ?? null,
     compMax: t.compMax ?? null,
@@ -84,6 +85,11 @@ export function RoleTargetsSettings() {
   }
 
   const items = list.data?.items ?? [];
+  // The target being edited as it stands now: its AI-made list may arrive while the form is open.
+  const editingTarget =
+    editing?.mode === 'edit'
+      ? (items.find((t) => t.id === editing.target.id) ?? editing.target)
+      : null;
 
   return (
     <Card>
@@ -170,7 +176,11 @@ export function RoleTargetsSettings() {
                           variant="ghost"
                           label={`Edit ${t.name}`}
                           disabled={pending}
-                          onClick={() => setEditing({ mode: 'edit', target: t })}
+                          onClick={() => {
+                            setEditing({ mode: 'edit', target: t });
+                            // Its title variants are made in the background, after the save.
+                            void list.refetch();
+                          }}
                         >
                           <Pencil aria-hidden="true" />
                         </IconButton>
@@ -208,7 +218,7 @@ export function RoleTargetsSettings() {
           {editing !== null ? (
             <RoleTargetForm
               key={editing.mode === 'edit' ? editing.target.id : 'new'}
-              {...(editing.mode === 'edit' ? { initial: toPayload(editing.target) } : {})}
+              {...(editingTarget !== null ? { initial: toPayload(editingTarget) } : {})}
               submitLabel={editing.mode === 'edit' ? 'Save changes' : 'Add role target'}
               onSubmit={save}
               onCancel={() => setEditing(null)}

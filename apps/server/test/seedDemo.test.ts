@@ -27,21 +27,29 @@ import {
   DEMO_RESUME_BASE_SUMMARY,
   DEMO_RESUME_BASE_TEXT,
   DEMO_TAILORED_RESUMES,
+  DEMO_TITLE_VARIANTS,
   DEMO_USERS,
 } from '../src/cli/seedDemoFixture';
 import { rawAll, type Db } from '../src/db/client';
 import {
   communications,
   companies,
+  jobs,
   opportunities,
   resumeMatchReports,
   resumes,
+  roleTargets,
   secrets,
   settings,
   users,
 } from '../src/db/schema';
 import { createStorage } from '../src/lib/storage';
 import { runDemoReset } from '../src/jobs/demoReset';
+import {
+  cleanTitleVariants,
+  sweepTitleVariants,
+  TITLE_VARIANTS_KIND,
+} from '../src/jobs/titleVariants';
 import type { UserCtx } from '../src/repos/base';
 import { listContacts } from '../src/repos/contacts';
 import { getOpportunity } from '../src/repos/opportunities';
@@ -235,6 +243,24 @@ describe('seedDemo', () => {
         .get();
       expect(row?.value).toEqual({ perTaskDailyUsd: 0.25 });
     }
+  });
+
+  // The operator's key is stored for each account and every reset re-creates the targets, so a
+  // target wanting a list would spend on that key each night with nobody there (tl on #226).
+  it('seeded role targets have a list, so the nightly title variants sweep calls no AI', async () => {
+    await seedDemo(db, CREDS, Date.UTC(2026, 9, 1), TEST_ENV);
+    // First: this fails with the account count, proving the sweep finds the seeded key.
+    expect(await sweepTitleVariants(db)).toBe(0);
+    const targets = await db.select().from(roleTargets).all();
+    expect(targets).toHaveLength(DEMO_USERS.length);
+    for (const target of targets) {
+      expect(target.titleVariantsNeeded).toBe(false);
+      expect(target.titleVariants).toEqual(cleanTitleVariants(DEMO_TITLE_VARIANTS));
+      expect(target.titleVariants.length).toBeGreaterThan(0);
+    }
+    expect(
+      await db.select().from(jobs).where(eq(jobs.kind, TITLE_VARIANTS_KIND)).all(),
+    ).toHaveLength(0);
   });
 
   it('every demo company is followed, so it is reachable in the Discovery > Companies UI', async () => {

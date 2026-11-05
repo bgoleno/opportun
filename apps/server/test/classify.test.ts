@@ -118,7 +118,12 @@ describe('comms.classify job', () => {
     await a.request({
       method: 'POST',
       url: '/api/v1/role-targets',
-      payload: { name: 'Staff platform', titleFamily: 'Platform Engineer' },
+      // A list of its own, so creating it queues no title-variants AI call (#217).
+      payload: {
+        titleVariants: ['Platform Engineer'],
+        name: 'Staff platform',
+        titleFamily: 'Platform Engineer',
+      },
     });
     await createOpportunity(app.db, ctxOf(a), {
       companyName: 'Globex',
