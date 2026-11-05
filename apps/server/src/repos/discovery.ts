@@ -892,13 +892,15 @@ export async function setWaitingNoKey(exec: Exec, ctx: UserCtx): Promise<void> {
  * up, and those postings are back in line, so new ones go behind them again.
  */
 export async function clearWaitingKeyReasons(exec: Exec, ctx: UserCtx): Promise<void> {
+  // Whatever the disposition: a dismissed posting's wait survives for Undo (tl on #230), and its
+  // reason must not, or Undo would turn a rejected key's stop back on with a working key.
   await exec
     .update(discoveryResults)
     .set({ rankSkipReason: null })
     .where(
       and(
         eq(discoveryResults.userId, ctx.userId),
-        waitingForBudget,
+        isNotNull(discoveryResults.rankDeferredAt),
         inArray(discoveryResults.rankSkipReason, ['no_key', 'key_rejected']),
       ),
     )
@@ -925,7 +927,7 @@ export async function setWaitingKeyRejected(exec: Exec, ctx: UserCtx): Promise<v
 }
 
 /**
- * A rank job got a rejected key: the posting joins the wait with the reason, written together
+ * A ranking got a rejected key: the posting joins the wait with the reason, written together
  * because setRankDeferred clears the reason. Joining is what gets it ranked once a key works: the
  * ways back and the drain only reach waiting postings. A scored posting keeps its score, unmarked.
  */
@@ -955,7 +957,6 @@ export async function countWaitingResults(exec: Exec, ctx: UserCtx): Promise<num
   return Number(row?.n ?? 0);
 }
 
-/** The users with a result waiting for budget (the sweep's list). */
 /**
  * Users with any waiting posting marked key_rejected. Any, not all: scored postings are never
  * marked, so one waiting would otherwise keep the sweep calling every hour. Every way back clears
@@ -970,6 +971,7 @@ export async function usersWithRejectedKey(exec: Exec): Promise<Set<string>> {
   return new Set(rows.map((r) => r.userId));
 }
 
+/** The users with a result waiting for budget (the sweep's list). */
 export async function usersWithWaitingResults(exec: Exec): Promise<string[]> {
   const rows = await exec
     .selectDistinct({ userId: discoveryResults.userId })

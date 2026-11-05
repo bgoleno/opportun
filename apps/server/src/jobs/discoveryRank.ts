@@ -12,7 +12,7 @@ import {
 import type { NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import type { Db } from '../db/client';
+import { withTransaction, type Db } from '../db/client';
 import { roleTargets } from '../db/schema';
 import { buildAiDeps } from '../lib/ai';
 import { HttpError } from '../lib/errors';
@@ -24,11 +24,12 @@ import {
   hasOlderWaitingResult,
   setRankDeferred,
   setRankKeyRejected,
+  setWaitingKeyRejected,
   setRanking,
   setRankSkip,
   type DiscoveryResultView,
 } from '../repos/discovery';
-import { discoveryBudgetHasRoom } from '../repos/discoveryBudget';
+import { discoveryBudgetHasRoom, keyChangeScope, readKeyChangedAt } from '../repos/discoveryBudget';
 import { resolveDiscoveryPrompt } from '../repos/profile';
 import { roleTargetLine, roleTargetsText } from './classify';
 import {
@@ -126,6 +127,8 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
       : roleTargetLine(target);
 
   let out: RankOutput;
+  // Before the key is read for this call.
+  const callBegan = Date.now();
   try {
     out = await runStructured(await buildAiDeps(db, ctx), 'discovery.rank', {
       system: renderPrompt(resolved.prompt.body, {
@@ -143,11 +146,23 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
       await setRankDeferred(db, ctx, resultId);
       return { status: 'skipped', reason: err.reason };
     }
-    // The provider refused the key. It joins the wait, so it is ranked once a key works, with
-    // the reason on its card.
+    // The provider refused the key. It joins the wait, so it is ranked once a key works, and every
+    // waiting card says why. But a call that began before the latest key change says nothing about
+    // the new key (qa and tl on #275): it marks nothing, and it is tried again with that key.
     if (err instanceof AiUnavailableError && err.keyRejected) {
-      await setRankKeyRejected(db, ctx, resultId);
-      return { status: 'skipped', reason: 'key_rejected' };
+      const stale = await withTransaction(
+        db,
+        async (tx) => {
+          if ((await readKeyChangedAt(tx, ctx)) > callBegan) return true;
+          await setRankKeyRejected(tx, ctx, resultId);
+          await setWaitingKeyRejected(tx, ctx);
+          return false;
+        },
+        { scope: keyChangeScope(ctx) },
+      );
+      if (!stale) return { status: 'skipped', reason: 'key_rejected' };
+      await setRankDeferred(db, ctx, resultId);
+      return { status: 'skipped', reason: 'key_changed' };
     }
     // No key, or the provider is down: leave it unranked for manual triage, and keep why on the
     // result so its card can say so (#210).
@@ -191,6 +206,11 @@ export const discoveryRankJob: JobHandler<z.infer<typeof PayloadSchema>> = {
       await ctx.setResult({ status: 'skipped', reason: 'behind_older_waiting' });
       return;
     }
-    await ctx.setResult(await rankResult(db, user, payload.resultId));
+    const run = await rankResult(db, user, payload.resultId);
+    // It joined the wait, and nothing else would rank it before the next sweep.
+    if (run.status === 'skipped' && run.reason === 'key_changed') {
+      if (await discoveryBudgetHasRoom(db, user)) await enqueueRankWaiting(db, user);
+    }
+    await ctx.setResult(run);
   },
 };

@@ -11,7 +11,7 @@
 // listWaitingResultIds has the order, and why a posting that failed goes behind the others.
 import type { FastifyBaseLogger } from 'fastify';
 import { z } from 'zod';
-import type { Db } from '../db/client';
+import { withTransaction, type Db } from '../db/client';
 import type { UserCtx } from '../repos/base';
 import {
   clearRankDeferred,
@@ -19,12 +19,15 @@ import {
   countWaitingResults,
   listWaitingResultIds,
   setRankTurnUsed,
-  setWaitingKeyRejected,
   setWaitingNoKey,
   usersWithRejectedKey,
   usersWithWaitingResults,
 } from '../repos/discovery';
-import { discoveryBudgetHasRoom } from '../repos/discoveryBudget';
+import {
+  discoveryBudgetHasRoom,
+  keyChangeScope,
+  writeKeyChangedAt,
+} from '../repos/discoveryBudget';
 import { enqueueRankWaiting, rankResult } from './discoveryRank';
 import { RANK_WAITING_KIND } from './discoveryKinds';
 import { requireService, type JobHandler } from './registry';
@@ -38,7 +41,7 @@ export const RANK_WAITING_SWEEP_CRON = '5 * * * *';
  * Queues a drain for each user with postings waiting and room in their budget today, except one
  * whose key the provider rejected: a failed call costs nothing, so the budget would never stop
  * those calls, and each one sends a posting (https://github.com/bgoleno/opportun/issues/261). A hard
- * stop, not a slower retry. A provider that is merely out never answers 401, so it keeps being
+ * stop, not a slower retry. A provider that is merely out rarely answers 401, so it keeps being
  * tried. resumeAfterKeyChange ends the stop, and so does a new posting that ranks.
  */
 export async function sweepWaitingResults(db: Db): Promise<{ queued: number }> {
@@ -62,7 +65,14 @@ export async function sweepWaitingResults(db: Db): Promise<{ queued: number }> {
  * of a key the ranking does not use harmless.
  */
 export async function resumeAfterKeyChange(db: Db, ctx: UserCtx): Promise<void> {
-  await clearWaitingKeyReasons(db, ctx);
+  await withTransaction(
+    db,
+    async (tx) => {
+      await writeKeyChangedAt(tx, ctx, Date.now());
+      await clearWaitingKeyReasons(tx, ctx);
+    },
+    { scope: keyChangeScope(ctx) },
+  );
   if ((await countWaitingResults(db, ctx)) > 0 && (await discoveryBudgetHasRoom(db, ctx))) {
     await enqueueRankWaiting(db, ctx);
   }
@@ -134,10 +144,16 @@ export async function drainWaitingResults(
         return outcome;
       }
       // The first is enough, unlike a provider error: a 401 is about the key, not this posting.
+      // rankResult has marked what waits.
       if (run.reason === 'key_rejected') {
-        await setWaitingKeyRejected(db, ctx);
         outcome.stopped = run.reason;
         return outcome;
+      }
+      // A 401 from before the key changed: the next read tries it with the new key. If that is
+      // refused too, the call began after the change, so this comes round only per key change.
+      if (run.reason === 'key_changed') {
+        tried.delete(id);
+        continue;
       }
       // It keeps waiting with the reason on its card, behind the others for the rest of the day.
       if (run.reason === 'provider_error') {

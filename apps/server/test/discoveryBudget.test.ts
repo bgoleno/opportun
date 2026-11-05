@@ -1420,7 +1420,10 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
             rankSkipReason: null,
             rankDeferredAt: expect.any(Number),
           });
-          expect(await drainsQueued(app, a)).toBe(0);
+          // Any status: the queue has run, so a drain queued wrongly would have finished by now.
+          expect(
+            await app.db.select().from(jobs).where(eq(jobs.kind, RANK_WAITING_KIND)).all(),
+          ).toEqual([]);
         });
 
         it('a new key refused too brings the stop back after one more call', async () => {
@@ -1489,7 +1492,7 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
       });
 
       // sec on https://github.com/bgoleno/opportun/pull/275: the action has happened, so it is on
-      // the record even if what follows it fails. Resuming starts with a write through db.update.
+      // the record even if what follows it fails.
       describe('the audit row comes first, if resuming fails', () => {
         const audited = async (app: FastifyInstance, c: TestClient, event: string) =>
           (
@@ -1499,10 +1502,14 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
               .where(and(eq(auditLog.userId, c.userId), eq(auditLog.event, event)))
               .all()
           ).length;
-        const resumingFails = (app: FastifyInstance) =>
-          vi.spyOn(app.db, 'update').mockImplementationOnce(() => {
-            throw new Error('write failed');
-          });
+        /** Resuming counts what waits, and nothing before the audit row reads a count of that name. */
+        const resumingFails = (app: FastifyInstance) => {
+          const select = app.db.select.bind(app.db);
+          return vi.spyOn(app.db, 'select').mockImplementation(((fields?: object) => {
+            if (fields !== undefined && 'n' in fields) throw new Error('read failed');
+            return select(fields as never);
+          }) as never);
+        };
         afterEach(() => {
           vi.restoreAllMocks();
         });
