@@ -387,6 +387,9 @@ describe('isolation and secrecy', () => {
         await track(status(a));
       }
       await track(save(a, 'bad-id', SECRET));
+      // This test's own request is in the log, so the next lines cannot pass on an empty one
+      // (https://github.com/bgoleno/opportun/issues/258).
+      expect(logs.text()).toContain('/api/v1/integrations/google/client');
       expect(logs.text()).not.toContain(SECRET);
       expect(logs.text()).not.toContain('super-secret');
     } finally {
