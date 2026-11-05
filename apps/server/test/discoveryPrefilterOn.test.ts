@@ -332,12 +332,17 @@ describe('#218 criterion 1: turned on', () => {
     });
 
     it('needs a session', async () => {
-      const { app } = await boot();
+      const { app, a } = await boot();
+      await filterOn(app, a);
+      await runBoard(app, a, [post(BAD)]);
+      const held = (await results(app, a))[0]!;
       const res = await app.inject({
         method: 'POST',
-        url: '/api/v1/discovery/results/nope/rank-anyway',
+        url: `/api/v1/discovery/results/${held.id}/rank-anyway`,
       });
-      expect(res.statusCode).toBe(401);
+      // The CSRF check answers first, for a POST with no cookies.
+      expect(res.statusCode).toBe(403);
+      expect((await results(app, a))[0]!.rankSkipReason).toBe('filtered');
     });
   });
 
@@ -569,7 +574,7 @@ describe('#218 criterion 4: the best pre-filter scores go first', () => {
 
   it('the first-run cap: the best 25 are ranked, not the newest, and the rest wait below it', async () => {
     const { app, a } = await boot();
-    await aTarget(app, a);
+    await aTarget(app, a, { name: GOOD, titleFamily: GOOD });
     const newest = Date.UTC(2026, 9, 1);
     const postings = [
       // Newer, and half a match.

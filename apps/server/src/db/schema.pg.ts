@@ -617,6 +617,7 @@ export const discoverySources = pgTable(
     kind: text('kind', { enum: DISCOVERY_SOURCE_KINDS }).notNull(),
     config: json<Record<string, unknown>>('config').notNull().default({}),
     enabled: bool('enabled').notNull().default(true),
+    prefilterEnabled: bool('prefilter_enabled').notNull().default(true),
     scheduleCron: text('schedule_cron'),
     roleTargetId: text('role_target_id').references(() => roleTargets.id, {
       onDelete: 'set null',

@@ -49,8 +49,9 @@ export type Resolution = (typeof RESOLUTIONS)[number];
 
 /**
  * The discovery pre-filter's verdict on a new board posting (#217, tl's proposal section 4):
- * whether it would be worth a ranking call. Shadow mode: stored and measured, acting on nothing
- * yet (N2b, #218, turns it on). Null for a posting from a source the filter does not judge.
+ * whether it would be worth a ranking call. Stored and measured always; once recall on the user's
+ * own decisions holds, a filtered one gets no ranking call (#218). Null for a posting from a source
+ * the filter does not judge.
  */
 export const PREFILTER_OUTCOMES = ['pass', 'filtered'] as const;
 export type PrefilterOutcome = (typeof PREFILTER_OUTCOMES)[number];
@@ -68,7 +69,9 @@ export type PrefilterRule = (typeof PREFILTER_RULES)[number];
  * board's first run ranks only so many, and the rest wait for the user to send them
  * (https://github.com/bgoleno/opportun/issues/215). key_rejected is the router's provider_error
  * with its keyRejected flag: the provider refused the key, so the hourly sweep stops calling
- * (https://github.com/bgoleno/opportun/issues/261).
+ * (https://github.com/bgoleno/opportun/issues/261). filtered is not the router's either: the
+ * pre-filter acted on this posting, and it waits for Rank anyway
+ * (https://github.com/bgoleno/opportun/issues/218).
  */
 export const RANK_SKIP_REASONS = [
   'no_key',
@@ -77,6 +80,7 @@ export const RANK_SKIP_REASONS = [
   'key_rejected',
   'invalid_output',
   'below_cut',
+  'filtered',
 ] as const;
 export type RankSkipReason = (typeof RANK_SKIP_REASONS)[number];
 
