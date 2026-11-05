@@ -392,25 +392,27 @@ async function stubDiscoveryResults(page: Page): Promise<void> {
  * name and domain, a suggestion whose "Why" holds a board URL, a followed company whose detected
  * board slug is long, and a denied company with an unbroken name.
  */
+const stubCompanyBase = (now: number) => ({
+  userId: 'stub-user',
+  domain: 'internationalconsolidatedplatformintelligenceholdings.example',
+  careersUrl: UNBROKEN,
+  suggestionRationale: null,
+  atsKind: null,
+  atsRef: null,
+  atsVerifiedAt: null,
+  notes: null,
+  atsDetectPending: false,
+  needsCareersUrl: false,
+  createdAt: now,
+  updatedAt: now,
+});
+
 async function stubCompanies(page: Page): Promise<void> {
   await page.route(/\/api\/v1\/companies(\/suggestions)?\?/, async (route) => {
     if (route.request().method() !== 'GET') return await route.fallback();
     const url = new URL(route.request().url());
     const now = Date.now();
-    const base = {
-      userId: 'stub-user',
-      domain: 'internationalconsolidatedplatformintelligenceholdings.example',
-      careersUrl: UNBROKEN,
-      suggestionRationale: null,
-      atsKind: null,
-      atsRef: null,
-      atsVerifiedAt: null,
-      notes: null,
-      atsDetectPending: false,
-      needsCareersUrl: false,
-      createdAt: now,
-      updatedAt: now,
-    };
+    const base = stubCompanyBase(now);
     const status = url.pathname.endsWith('/suggestions')
       ? 'suggested'
       : (url.searchParams.get('status') ?? 'followed');
@@ -440,6 +442,39 @@ async function stubCompanies(page: Page): Promise<void> {
             ];
     await route.fulfill({ json: { items, total: items.length } });
   });
+  // The "In your network" rows (https://github.com/bgoleno/opportun/issues/211 item 3): every
+  // text field unbroken, the people's names too. A denied row only with ?showDenied=true.
+  await page.route(/\/api\/v1\/discovery\/network-companies/, async (route) => {
+    if (route.request().method() !== 'GET') return await route.fallback();
+    const base = stubCompanyBase(Date.now());
+    const row = (id: string, company: Record<string, unknown>, board: string) => ({
+      company: { ...base, id, name: UNBROKEN_COMPANY, ...company },
+      board,
+      contactCount: 2,
+      strongestStrength: 3,
+      contacts: [
+        { id: `${id}-p1`, name: UNBROKEN, strength: 3 },
+        { id: `${id}-p2`, name: UNBROKEN, strength: null },
+      ],
+    });
+    const items = [
+      row('stub-net-n', { status: 'none' }, 'not_checked'),
+      row(
+        'stub-net-f',
+        {
+          status: 'followed',
+          atsKind: 'ats_lever',
+          atsRef: 'internationalconsolidatedplatformintel42',
+          atsVerifiedAt: Date.now(),
+        },
+        'found',
+      ),
+    ];
+    if (new URL(route.request().url()).searchParams.get('showDenied') === 'true') {
+      items.push(row('stub-net-d', { status: 'denied', atsKind: 'none' }, 'not_found'));
+    }
+    await route.fulfill({ json: { items } });
+  });
 }
 
 const stubTitle = (i: number) =>
@@ -454,7 +489,9 @@ const stubTitle = (i: number) =>
 async function spillsOutOfCards(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const out: string[] = [];
-    const cards = document.querySelectorAll('[data-result-id], [aria-label$="companies"] > li');
+    const cards = document.querySelectorAll(
+      '[data-result-id], [aria-label$="companies"] > li, [aria-label="Companies in your network"] > li',
+    );
     for (const card of cards) {
       const edge = card.getBoundingClientRect().right;
       for (const el of card.querySelectorAll('*')) {
@@ -471,6 +508,31 @@ async function spillsOutOfCards(page: Page): Promise<string[]> {
     }
     return out;
   });
+}
+
+/** Every "In your network" row with its people open, then with the denied row too (#211 item 3). */
+async function expectNetworkRowsFit(page: Page): Promise<void> {
+  const rows = page.getByRole('list', { name: 'Companies in your network' }).locator('> li');
+  await expect(rows).toHaveCount(2);
+  const openPeople = async (count: number) => {
+    for (let i = 0; i < count; i += 1) {
+      const row = rows.nth(i);
+      if ((await row.locator('details').getAttribute('open')) === null) {
+        await row.locator('summary').click();
+      }
+      await expect(row.getByText(UNBROKEN).first()).toBeVisible();
+    }
+  };
+  await openPeople(2);
+  await expectFits(page, 'the network rows with their people open');
+  expect(await spillsOutOfCards(page), 'text spilling out of a network row').toEqual([]);
+  await page.getByLabel('Show denied').check();
+  await expect(rows).toHaveCount(3);
+  await openPeople(3);
+  await expectFits(page, 'the network rows with a denied row');
+  expect(await spillsOutOfCards(page), 'text spilling out of a denied network row').toEqual([]);
+  // Opening the rows scrolled down, and the next tab must be on screen from the top of the page.
+  await page.evaluate(() => window.scrollTo(0, 0));
 }
 
 const DISCOVERY_TABS = [
@@ -526,6 +588,7 @@ for (const width of DISCOVERY_WIDTHS) {
         await expectFits(page, `Discovery ${name}`);
         if (name === 'Companies') {
           expect(await spillsOutOfCards(page), 'text spilling out of a company card').toEqual([]);
+          await expectNetworkRowsFit(page);
         }
         if (name === 'Decided') {
           for (const [decided, tabName] of [

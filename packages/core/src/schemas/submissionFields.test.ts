@@ -304,6 +304,20 @@ describe('submissionFieldProblem', () => {
     }
   });
 
+  it('a phone over 40 characters is refused for its length alone (#203, #211 item 1)', () => {
+    // 11 digits and only allowed separators, so the digit count and the pattern both accept it.
+    const fortyOne = `${'1 '.repeat(10)}${'-'.repeat(20)}1`;
+    expect(fortyOne).toHaveLength(41);
+    expect(submissionFieldProblem({ phone: fortyOne })).toEqual({
+      field: 'phone',
+      code: 'field_phone_invalid',
+    });
+    // One separator fewer is the longest it takes.
+    const forty = `${'1 '.repeat(10)}${'-'.repeat(19)}1`;
+    expect(forty).toHaveLength(40);
+    expect(submissionFieldProblem({ phone: forty })).toBeNull();
+  });
+
   it('reports the first problem in a fixed order, whatever order the keys came in', () => {
     expect(submissionFieldProblem({ websiteUrl: 'x', firstName: '' })).toEqual({
       field: 'firstName',

@@ -64,10 +64,12 @@ token path. Passwords are hashed with Argon2id (optional pepper), two-factor sig
 available to every user, and every database query is scoped to its user. AI keys and OAuth tokens are encrypted at rest under a master key kept outside
 the database. Mail and captured LinkedIn pages are treated as hostile input: they are fenced
 in AI prompts, and no AI output sends an application, email or message without your click.
-The Apple Mail connector and the capture extension use scoped device tokens: they submit
-data and cannot enumerate or fetch stored records, their responses only acknowledge what
-was submitted and whether it matched an existing record, and they stop working the moment
-you revoke them. The server never fetches LinkedIn or Indeed pages. The
+The Apple Mail connector and the capture extension use scoped device tokens that stop
+working the moment you revoke them. Mail and capture tokens submit data and cannot enumerate
+or fetch stored records, and their responses only acknowledge what was submitted and whether
+it matched an existing record. The exception is the assisted apply scope, which exists only
+if you switch that feature on: it lets the extension read the application you handed off,
+with its answers and resume copy. The server never fetches LinkedIn or Indeed pages. The
 [security policy](SECURITY.md) covers the threat model, how to report a vulnerability, and
 the few deliberate deviations (such as the full Google Drive scope).
 
