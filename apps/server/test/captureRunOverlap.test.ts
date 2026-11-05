@@ -11,12 +11,13 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerSource, resetSources } from '../src/adapters/discoverySource';
 import { onSlowTransaction } from '../src/db/gate';
-import { discoveryResults, discoveryRuns, opportunities } from '../src/db/schema';
+import { discoveryResults, discoveryRuns, jobs, opportunities } from '../src/db/schema';
+import { drainWaitingResults } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import { enqueue, runNextJob } from '../src/jobs/runner';
 import { resolveCapture } from '../src/lib/captureResolve';
 import type { UserCtx } from '../src/repos/base';
-import { createSource } from '../src/repos/discovery';
+import { createSource, getResult, setRankDeferred } from '../src/repos/discovery';
 import { getOpportunity } from '../src/repos/opportunities';
 import { useApi } from './api';
 import { sqliteOnly } from './db';
@@ -80,13 +81,14 @@ async function runBoard(app: FastifyInstance, c: TestClient, sourceId: string): 
   await runNextJob(app.db, { services: app.jobs.services });
 }
 
-const capture = (app: FastifyInstance, c: TestClient) =>
+const capture = (app: FastifyInstance, c: TestClient, over: Partial<NormalizedPosting> = {}) =>
   resolveCapture(app.db, ctxOf(c), {
     posting: {
       ...JOB,
       descriptionMd: CAPTURE_TEXT,
       postingUrl: 'https://www.indeed.com/viewjob?jk=abc123def456',
       externalId: 'abc123def456',
+      ...over,
     },
     captureText: CAPTURE_TEXT,
     siteId: 'indeed',
@@ -189,6 +191,64 @@ describe('a capture and a board run on one posting', () => {
     expect(first.stageMovedTo).toBe('interested');
     expect(second.stageMovedTo).toBeNull();
     expect((await getOpportunity(app.db, ctxOf(a), first.opportunityId)).stage).toBe('interested');
+  });
+
+  describe('during a ranking call on the row', () => {
+    /** The board's row, waiting for budget, with a call for it parked at the provider. */
+    async function callInFlight(app: FastifyInstance, c: TestClient) {
+      const ctx = ctxOf(c);
+      const sourceId = await boardWithThePosting(app, c);
+      await runBoard(app, c, sourceId);
+      await app.db.delete(jobs).run();
+      const [row] = await rowsOf(app, c);
+      const id = row?.id as string;
+      await setRankDeferred(app.db, ctx, id);
+      let go!: () => void;
+      const released = new Promise<void>((resolve) => (go = resolve));
+      let began!: () => void;
+      const started = new Promise<void>((resolve) => (began = resolve));
+      vi.mocked(runStructured).mockImplementation(async () => {
+        began();
+        await released;
+        return { score: 60, rationale: 'A fair match.', disqualifiers: [] } as never;
+      });
+      const drain = drainWaitingResults(app.db, ctx);
+      await started;
+      return { id, drain, release: () => go() };
+    }
+
+    it('a capture that keeps the text as it is does not throw the paid score away', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const { id, drain, release } = await callInFlight(app, a);
+
+      const { resultId } = await capture(app, a);
+      release();
+      await drain;
+
+      expect(resultId).toBe(id);
+      const after = await getResult(app.db, ctx, id);
+      expect(after.disposition).toBe('accepted');
+      expect(after.posting.descriptionMd).toBe(BOARD_TEXT);
+      expect(after.aiScore).toBe(60);
+      expect(after.posting).not.toHaveProperty('remote');
+      expect(after.posting).not.toHaveProperty('compNote');
+    });
+
+    it('a capture that adds what the row lacked is new text, so that score is refused', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const { id, drain, release } = await callInFlight(app, a);
+
+      await capture(app, a, { compNote: '$150k-$180k' });
+      release();
+      await drain;
+
+      const after = await getResult(app.db, ctx, id);
+      expect(after.disposition).toBe('accepted');
+      expect(after.posting.compNote).toBe('$150k-$180k');
+      expect(after.aiScore).toBeNull();
+    });
   });
 
   it('a capture after the run has finished completes the row, with no waiting', async () => {
