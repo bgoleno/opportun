@@ -1,7 +1,7 @@
 // Device tokens and the two programs that use them (FR-M5, FR-C5), against the live server.
-// Tokens are created and revoked through Settings > Integrations > Devices; the Apple Mail
-// connector and the capture extension are played by bearer-only API calls from the test (no
-// Mac, no browser extension in CI), exactly as those programs call the server.
+// Tokens are created and revoked through Settings > Integrations > Extensions and Connectors; the
+// Apple Mail connector and the capture extension are played by bearer-only API calls from the
+// test (no Mac, no browser extension in CI), exactly as those programs call the server.
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 // The synthetic LinkedIn profile capture the server's own capture tests use.
 import { PROFILE } from '../../server/test/fixtures/capture/pages';

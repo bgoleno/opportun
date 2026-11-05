@@ -38,16 +38,30 @@ ranks against all your role targets). The Sources table shows each source's stat
 and next run, an enabled switch, and actions to run it now, see its run history, edit or
 delete it.
 
+Below the table, **Posting volume and ranking cost** shows each company board's open jobs at its
+last run and, over the last 14 days, its new postings a day, the ranking calls that means, and
+what they cost at the last 30 days' average cost per call. A board's first run brings in the whole
+board, so it is left out: after only one run, those figures say "no data yet".
+
 ### Follow companies
 
-Once a week (Tuesdays) the `company.suggest` task proposes companies worth following, based
-on your role targets and past decisions. They appear under **Suggested companies** with the
-reason. **Follow** one and Opportun looks for its job board; **Deny** it and it is not
-suggested again.
+The **Companies** tab offers companies to follow from two places.
 
-![A suggested company, Pied Piper, with its reason and Follow and Deny buttons](images/discovery-companies.png)
+**In your network** lists every company where someone in your contacts works now, read from your
+own contacts. Each one shows whether it has a job board and **You know N people here**; open that
+to see their names. **Follow** one and Opportun looks for its job board, and it then shows
+**Following**. **Deny** one and it leaves this list and joins **Denied companies**; tick **Show
+denied** to see it here again, with **Undo**. If the list is empty, add your contacts' current
+companies under [Network](network.md).
 
-_A company suggestion. Following it starts job board detection._
+**Suggested companies** comes from the `company.suggest` task, which once a week (Tuesdays)
+proposes companies worth following, based on your role targets and past decisions, each with its
+reason. **Follow** one and Opportun looks for its job board; **Deny** it and it is not suggested
+again.
+
+![The Companies tab. In your network lists Initech, with Priya Example and Sam Example named under You know 2 people here and Follow and Deny buttons, and Globex, marked Following with no board found. Suggested companies lists Pied Piper with its reason and Follow and Deny buttons](images/discovery-companies.png)
+
+_The Companies tab, with invented contacts. Following a company starts job board detection._
 
 A followed company shows the board it found (for example "Greenhouse: piedpiper") and a
 **Detect now** button; boards are re-checked weekly. The detected board becomes a source that
@@ -68,9 +82,19 @@ mailbox without alert digests, so none are shown.)
 
 ## The review queue
 
-The queue lists new results, best score first. Each shows the AI score (0 to 100), badges
-for how complete the posting is, its source, location and remote status, the AI's one-line
-reason, the start of the description, the pay if listed, and a link to the posting.
+The queue lists new results, best score first. Each shows the AI score (0 to 100) or
+**Unscored**, badges for how complete the posting is, its source, location and remote status, the
+AI's one-line reason, the start of the description, the pay if listed, and a link to the posting.
+
+An unscored result can say why, in a line on its card:
+
+- **Waiting for budget**: it is ranked when your [discovery budget](settings.md#models-and-budgets)
+  has room.
+- **Not ranked: AI is not set up (Settings > AI)**: there is no AI key to rank it with.
+- **Not ranked: the AI provider was unavailable** or **Not ranked: the AI's answer could not be
+  used**: the call failed.
+
+On any result:
 
 - **Accept** adds it to your pipeline in New. If it matches an opportunity you already
   track, you are asked to attach it there instead, or accept it anyway (see
@@ -84,9 +108,10 @@ reason, the start of the description, the pay if listed, and a link to the posti
 _The review queue, ranked against the "Staff platform" role target. The selected result has a blue outline._
 
 **Cost and limits.** Ranking spends from your [discovery budget](settings.md#models-and-budgets); over it a posting waits for the next budget day rather than being skipped, and a scored posting waiting to be ranked again says its score may change. Ranking is one `discovery.rank` call per new posting (a source with no
-role target is judged against all your role targets in that one call). A busy board on a daily schedule can mean dozens of calls a day; watch
-**Settings > AI > Usage** for the first week and narrow your sources if needed. The score is
-the model reading your role target and the posting text; it misses things a posting leaves
+role target is judged against all your role targets in that one call). A busy board on a daily schedule can mean dozens of calls a day. For the first week, watch
+**Posting volume and ranking cost** on the Sources tab, and **Usage** and
+[**Discovery ranking cost**](settings.md#models-and-budgets) under **Settings > AI**, and narrow
+your sources if needed. The score is the model reading your role target and the posting text; it misses things a posting leaves
 out, so skim the low scorers occasionally.
 
 **The title pre-filter (measuring only).** Each new posting from a job board also gets a

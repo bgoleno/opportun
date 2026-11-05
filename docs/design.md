@@ -144,8 +144,8 @@ requires it (FR-S5).
 
 - **profiles**: user_id (1:1), identity fields, links, location, work_auth.
 - **role_targets**: id, user_id, name, title_family, seniority_min/max, industries
-  (JSON), keywords (JSON), locations (JSON), remote_pref, comp_min/max, currency,
-  active, discovery_prompt_id (FK → prompts).
+  (JSON), keywords (JSON), title_variants (JSON), title_variants_needed, locations (JSON),
+  remote_pref, comp_min/max, currency, active, discovery_prompt_id (FK → prompts).
 - **resume_rules**: id, user_id, rule_text, category (style | content | redaction),
   active, sort_order. Injected into every tailoring context.
 
@@ -245,7 +245,10 @@ either opportunity cannot re-propose a pair the user already rejected.
 - **discovery_runs**: id, source_id, role_target_id, started_at, finished_at, stats
   (JSON), error.
 - **discovery_results**: id, run_id, normalized posting (JSON), dedupe_key, ai_score,
-  ai_rationale, resolution (`full` | `resolved_ats` | `needs_capture`),
+  ai_rationale, prefilter_outcome (`pass` | `filtered`), prefilter_rule (`title` | `location` |
+  `remote`), prefilter_score, rank_skip_reason (`no_key` | `budget_exceeded` | `provider_error` |
+  `invalid_output`), rank_deferred_at (set while a ranking waits for the discovery budget),
+  resolution (`full` | `resolved_ats` | `needs_capture` | `capture_failed`),
   resolved_source_ref (ATS posting reference when resolved), disposition
   (`pending` | `accepted` | `dismissed`), opportunity_id (when accepted).
 - **dismissal_feedback**: id, user_id, opportunity_id/result_id, reason, note, at.
