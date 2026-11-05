@@ -813,8 +813,11 @@ export async function clearRankDeferred(exec: Exec, ctx: UserCtx, id: string): P
     .run();
 }
 
-/** A posting the pre-filter passed, then one it filtered, then one it never judged. */
-const verdictOrder = sql`case ${discoveryResults.prefilterOutcome} when 'pass' then 0 when 'filtered' then 1 else 2 end`;
+/**
+ * A posting the pre-filter passed, then one it never judged, then one it filtered: it must not go
+ * ahead of a job alert, which the owner's decision 5 on #190 says is never filtered.
+ */
+const verdictOrder = sql`case ${discoveryResults.prefilterOutcome} when 'pass' then 0 when 'filtered' then 2 else 1 end`;
 
 const waitingForBudget = and(
   isNotNull(discoveryResults.rankDeferredAt),
@@ -841,9 +844,9 @@ const inLineForBudget = (now: number) =>
 /**
  * The caller's results waiting for budget, in the order a drain takes them. Those still unranked
  * and in line come first, or a posting refused today could lead every drain on its title alone.
- * Then the best pre-filter match (#218, the owner's decision 2 on #190): one that passed ahead of
- * one it filtered, since the score is the title's alone and a perfect title in the wrong place is
- * no best match, then by score, then oldest. Best first can starve: with more good new postings
+ * Then the best pre-filter match (#218, the owner's decision 2 on #190): one that passed, one it
+ * never judged, then one it filtered, since the score is the title's alone and a perfect title in
+ * the wrong place is no best match, then by score, then oldest. Best first can starve: with more good new postings
  * each day than the budget ranks, a poor older one can wait for as long as that lasts.
  */
 export async function listWaitingResultIds(
@@ -1087,7 +1090,7 @@ export async function listBelowCut(
   const postedAt = (r: { postedAt: string | null }): number =>
     r.postedAt === null ? Number.NEGATIVE_INFINITY : Number(r.postedAt);
   const verdictRank = (r: { outcome: string | null }): number =>
-    r.outcome === 'pass' ? 0 : r.outcome === 'filtered' ? 1 : 2;
+    r.outcome === 'pass' ? 0 : r.outcome === 'filtered' ? 2 : 1;
   return rows
     .map((r, order) => ({ ...r, order, at: postedAt(r), rank: verdictRank(r), s: r.score ?? -1 }))
     .sort(

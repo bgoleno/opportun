@@ -45,9 +45,9 @@ export interface SourceVolume {
    *  span rounded down and at least 1; 0 with no rate. The rate itself divides by the exact
    *  span (at least 1 day). */
   days: number;
-  /** Each stored posting is ranked once, so this equals newPerDay. */
+  /** Each stored posting is ranked once, except those the pre-filter held (#218). */
   rankCallsPerDay: number | null;
-  /** newPerDay times the 30-day average cost per call; null when either is unknown. */
+  /** rankCallsPerDay times the 30-day average cost per call; null when either is unknown. */
   costPerDayUsd: number | null;
   /** Postings waiting below the first-run cut for the user to send (#215). */
   belowCut: number;
@@ -210,12 +210,15 @@ export async function discoveryCostFigures(
       const days = span >= VOLUME_DAYS ? VOLUME_DAYS : Math.max(1, Math.floor(span));
       const stored = inWindow.reduce((sum, r) => sum + (statNumber(r.stats, 'inserted') ?? 0), 0);
       const newPerDay = stored / divisor;
+      // A run from before the filter acted has no such stat, and held nothing.
+      const held = inWindow.reduce((sum, r) => sum + (statNumber(r.stats, 'filtered') ?? 0), 0);
+      const rankCallsPerDay = (stored - held) / divisor;
       return {
         ...none,
         newPerDay,
         days,
-        rankCallsPerDay: newPerDay,
-        costPerDayUsd: costPerCall === null ? null : newPerDay * costPerCall,
+        rankCallsPerDay,
+        costPerDayUsd: costPerCall === null ? null : rankCallsPerDay * costPerCall,
       };
     }),
   };

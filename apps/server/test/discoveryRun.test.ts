@@ -191,6 +191,7 @@ describe('discovery.run job', () => {
       duplicates: 0,
       invalid: 0,
       suppressed: 0,
+      filtered: 0,
     });
     expect(run!.finishedAt).not.toBeNull();
     expect(run!.error).toBeNull();
@@ -208,6 +209,7 @@ describe('discovery.run job', () => {
       duplicates: 2,
       invalid: 0,
       suppressed: 0,
+      filtered: 0,
     });
   });
 
@@ -234,6 +236,7 @@ describe('discovery.run job', () => {
       duplicates: 0,
       invalid: 0,
       suppressed: 2,
+      filtered: 0,
     });
     const feedback = await app.db
       .select()

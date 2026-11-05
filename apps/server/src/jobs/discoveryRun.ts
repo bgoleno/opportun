@@ -79,6 +79,8 @@ export interface RunStats {
    *  (issue #199) -- counted separately from `inserted` so a run's own history shows this
    *  rather than folding it into an undifferentiated insert count. */
   suppressed: number;
+  /** Of `inserted`, those the pre-filter held: stored, and no ranking call (#218). */
+  filtered: number;
 }
 
 type DuplicateCheck = 'duplicate' | 'multi_posted' | 'new';
@@ -357,7 +359,9 @@ async function ingestRaw(
   } else {
     stats.inserted += 1;
     inserted.push(outcome);
-    if (!holdBelowCut && outcome.rankSkipReason !== 'filtered') {
+    if (outcome.rankSkipReason === 'filtered') {
+      stats.filtered += 1;
+    } else if (!holdBelowCut) {
       await enqueueFollowUps(db, ctx, outcome);
     }
   }
@@ -382,7 +386,14 @@ export async function insertLeads(
 ): Promise<{ runId: string; stats: RunStats; inserted: DiscoveryResultView[] }> {
   const run = await createRun(db, ctx, { sourceId });
   const source = await getSourceRow(db, ctx, sourceId);
-  const stats: RunStats = { fetched: 0, inserted: 0, duplicates: 0, invalid: 0, suppressed: 0 };
+  const stats: RunStats = {
+    fetched: 0,
+    inserted: 0,
+    duplicates: 0,
+    invalid: 0,
+    suppressed: 0,
+    filtered: 0,
+  };
   const inserted: DiscoveryResultView[] = [];
   for (const posting of postings) {
     stats.fetched += 1;
@@ -463,7 +474,14 @@ export async function runDiscoverySource(
   if (!source.enabled) return { status: 'skipped', reason: 'disabled' };
 
   const run = await createRun(db, ctx, { sourceId: source.id });
-  const stats: RunStats = { fetched: 0, inserted: 0, duplicates: 0, invalid: 0, suppressed: 0 };
+  const stats: RunStats = {
+    fetched: 0,
+    inserted: 0,
+    duplicates: 0,
+    invalid: 0,
+    suppressed: 0,
+    filtered: 0,
+  };
   const inserted: DiscoveryResultView[] = [];
   const { config, cursor } = splitConfig(source);
   let lastCursor: unknown = cursor;

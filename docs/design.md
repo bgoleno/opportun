@@ -241,13 +241,14 @@ either opportunity cannot re-propose a pair the user already rejected.
   rows, so "reset" is re-activating the seed.
 - **discovery_sources**: id, user_id, kind (`ats_greenhouse` | `ats_lever` |
   `ats_ashby` | `mcp` | `feed` | `manual`), config (JSON: org slug, MCP server +
-  tool, endpoint), enabled, schedule_cron, last_run_at.
+  tool, endpoint), enabled, prefilter_enabled (off: this board's postings are judged, and all
+  ranked), schedule_cron, last_run_at.
 - **discovery_runs**: id, source_id, role_target_id, started_at, finished_at, stats
   (JSON), error.
 - **discovery_results**: id, run_id, normalized posting (JSON), dedupe_key, ai_score,
   ai_rationale, prefilter_outcome (`pass` | `filtered`), prefilter_rule (`title` | `location` |
   `remote`), prefilter_score, rank_skip_reason (`no_key` | `budget_exceeded` | `provider_error` |
-  `invalid_output`), rank_deferred_at (set while a ranking waits for the discovery budget),
+  `key_rejected` | `invalid_output` | `below_cut` | `filtered`), rank_deferred_at (set while a ranking waits for the discovery budget),
   resolution (`full` | `resolved_ats` | `needs_capture` | `capture_failed`),
   resolved_source_ref (ATS posting reference when resolved), disposition
   (`pending` | `accepted` | `dismissed`), opportunity_id (when accepted).

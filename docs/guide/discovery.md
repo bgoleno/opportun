@@ -70,8 +70,9 @@ filtered stay filtered until you send them.
 The figure can read high once it is on, because you rarely accept a posting with no score. A filtered
 posting you accept anyway counts against it.
 
-To turn it off for one board, clear **Pre-filter** on that board's row in the Sources table. Its
-postings are then all ranked. Job alert emails are never filtered.
+To turn it off for one board, clear **Pre-filter** on that board's row in the Sources table. Its new
+postings are then all ranked; any it already holds stay held until you choose **Rank anyway**. Job
+alert emails are never filtered.
 
 ### Where to look
 
@@ -171,14 +172,11 @@ role target is judged against all your role targets in that one call). A busy bo
 your sources if needed. The score is the model reading your role target and the posting text; it misses things a posting leaves
 out, so skim the low scorers occasionally.
 
-**The title pre-filter (measuring only).** Each new posting from a job board also gets a
-pass or filtered verdict from a cheap, local check: does its title match your role target, and
-does its stated location and remote setting fit? It needs no AI call per posting and, for now,
-changes nothing: every posting is still ranked. **Decided** shows how often it would keep the
-job board postings you accepted, with the count, so you can judge it before it is ever turned on.
-That figure is worked out each time against your current role targets, so it includes postings you
-accepted before this existed, and it moves when you edit a target. Postings from job-alert emails
-are not checked.
+**The title pre-filter.** Each new posting from a job board also gets a pass or filtered verdict from
+a cheap, local check, as [The pre-filter](#the-pre-filter) describes. **Decided** shows how often it
+would keep the job board postings you accepted, with the count. That figure is worked out each time
+against your current role targets, so it includes postings you accepted before this existed, and it
+moves when you edit a target. Postings from job-alert emails are not checked.
 
 The location check is deliberately lenient. It filters a posting only when it names a place that
 is clearly not one of yours. A posting saying "Multiple locations" or "United States" is kept, and

@@ -807,16 +807,41 @@ describe('#218 criterion 6: the share it would remove', () => {
     await runIt();
     postings.push(post(GOOD), ...Array.from({ length: 9 }, () => post(BAD)));
     await runIt();
+    // The router is mocked, so this is the 30-day average cost per call: $0.50.
+    await app.db
+      .insert(taskRuns)
+      .values({
+        id: `one-call-${a.userId}`,
+        userId: a.userId,
+        taskKey: DISCOVERY_RANK_KIND,
+        provider: 'openai',
+        model: 'placeholder-model',
+        inputTokens: 1,
+        outputTokens: 1,
+        estCost: 0.5,
+        fallbackPricing: false,
+        durationMs: 1,
+        status: 'ok',
+        error: null,
+        createdAt: Date.now(),
+      })
+      .run();
 
     const res = await a.request({ method: 'GET', url: '/api/v1/discovery/cost-figures' });
     expect(res.statusCode, res.body).toBe(200);
     const row = res
       .json<{
-        sources: { sourceId: string; newPerDay: number; rankCallsPerDay: number }[];
+        sources: {
+          sourceId: string;
+          newPerDay: number;
+          rankCallsPerDay: number;
+          costPerDayUsd: number;
+        }[];
       }>()
       .sources.find((s) => s.sourceId === src.id)!;
     expect(row.newPerDay).toBeCloseTo(10, 5);
     expect(row.rankCallsPerDay).toBeCloseTo(1, 5);
+    expect(row.costPerDayUsd).toBeCloseTo(0.5, 5);
     expect(ranked).toEqual([GOOD]);
 
     const runs = await a.request({
