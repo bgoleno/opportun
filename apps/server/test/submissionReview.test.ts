@@ -601,7 +601,8 @@ describe('AC4: the whole M1 flow makes no outbound request', () => {
 
 describe('AC5: an answer value appears in no audit detail, job payload or log line', () => {
   it('the sentinel answer stays in the submission row only', async () => {
-    const { app, a } = await boot(ON);
+    logs.lines.length = 0;
+    const { app, a } = await boot({ ...ON, logLevel: 'trace' });
     const r = await reviewed(app, a);
     await handoff(a, r.id);
     const cap = await draft(app, a);
@@ -611,6 +612,9 @@ describe('AC5: an answer value appears in no audit detail, job payload or log li
     expect(JSON.stringify(audits)).not.toContain(SENTINEL);
     const jobRows = await app.db.select().from(jobs).all();
     expect(JSON.stringify(jobRows)).not.toContain(SENTINEL);
+    // This test's own request is in the log, so the next line cannot pass on an empty one: at the
+    // harness's default `silent` level it did (https://github.com/bgoleno/opportun/issues/240).
+    expect(logs.text()).toContain(`/api/v1/submissions/${r.id}`);
     expect(logs.text()).not.toContain(SENTINEL);
     // The value is there, where it belongs.
     expect(JSON.stringify((await rowOf(app, r.id))?.answers)).toContain(SENTINEL);
