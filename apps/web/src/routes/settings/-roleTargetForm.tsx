@@ -10,7 +10,7 @@ import {
   seniorityLabel,
 } from '@opportun/core';
 import { useEffect, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { type FieldError, useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { FormError } from '@/components/FormError';
 import { FormField } from '@/components/FormField';
@@ -84,6 +84,16 @@ const titleVariantsField = z
       .array(z.string().max(200, 'Keep each title under 200 characters'))
       .max(40, 'Keep the list to 40 titles or fewer'),
   );
+
+/**
+ * The message to show on a list field. The field's text is parsed into an array, so the resolver
+ * puts a bad entry's error on the element (`keywords.1`): at runtime `errors.keywords` is then a
+ * sparse array of errors with no message of its own, whatever its type says. Limits on the whole
+ * list (too many entries) and server errors are still one error on the field.
+ */
+function listFieldError(error: FieldError | undefined): string | undefined {
+  return Array.isArray(error) ? (error as FieldError[]).find(Boolean)?.message : error?.message;
+}
 
 const RoleTargetFormSchema = z
   .object({
@@ -219,18 +229,22 @@ export function RoleTargetForm(props: {
           )}
         </FormField>
       </div>
-      <FormField label="Industries" error={errors.industries?.message} hint="Comma separated.">
+      <FormField
+        label="Industries"
+        error={listFieldError(errors.industries)}
+        hint="Comma separated."
+      >
         {(p) => <Input {...p} {...form.register('industries')} />}
       </FormField>
-      <FormField label="Keywords" error={errors.keywords?.message} hint="Comma separated.">
+      <FormField label="Keywords" error={listFieldError(errors.keywords)} hint="Comma separated.">
         {(p) => <Input {...p} {...form.register('keywords')} />}
       </FormField>
-      <FormField label="Locations" error={errors.locations?.message} hint="Comma separated.">
+      <FormField label="Locations" error={listFieldError(errors.locations)} hint="Comma separated.">
         {(p) => <Input {...p} {...form.register('locations')} />}
       </FormField>
       <FormField
         label="Title variants"
-        error={errors.titleVariants?.message}
+        error={listFieldError(errors.titleVariants)}
         hint="One title per line, up to 40. Discovery compares posting titles with these. Opportun asks the AI for a list when you add a target, and for a new one when you change its name or title family. Until then a list you save or clear stays as you left it."
       >
         {(p) => <Textarea {...p} rows={5} {...form.register('titleVariants')} />}
