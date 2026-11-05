@@ -337,8 +337,26 @@ export async function recoverStaleJobs(db: Db): Promise<number> {
   );
 }
 
+/** Puts back a claimed job that never ran: pending, unlocked, and its attempt not counted. */
+async function unclaim(db: Db, job: ClaimedJob): Promise<void> {
+  await db
+    .update(jobs)
+    .set({
+      status: 'pending',
+      lockedBy: null,
+      lockedAt: null,
+      attempts: job.attempts - 1,
+      updatedAt: Date.now(),
+    })
+    .where(eq(jobs.id, job.id))
+    .run();
+}
+
 export interface Runner {
-  /** Stops polling and starting jobs, and resolves once every running job has finished. */
+  /**
+   * Stops polling and starting jobs, and resolves once every running job has finished. A job
+   * whose claim was already in flight goes back to pending instead of starting.
+   */
   stop(): Promise<void>;
 }
 
@@ -406,6 +424,12 @@ export function startRunner(
       }
       if (job === undefined) return;
       try {
+        // stop() came while the claim was in flight. Running it now would hold up the shutdown for
+        // the whole job, since stop() waits for it. If the write fails, the next start recovers it.
+        if (stopped) {
+          await unclaim(db, job);
+          return;
+        }
         await processJob(db, job, { ...opts, stopping: () => stopped });
         await safeMaterialize(db, clock(), opts);
       } catch (err) {
