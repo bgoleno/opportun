@@ -15,6 +15,7 @@ import {
   discoveryResults,
   discoveryRuns,
   dismissalFeedback,
+  jobs,
   opportunities,
   roleTargets,
   users,
@@ -41,6 +42,7 @@ import {
   prefilterRecall,
   saveSourceCursor,
   setDisposition,
+  setRankWaitingIfUnranked,
   setSourceStatus,
   sourceScheduleName,
   splitConfig,
@@ -54,6 +56,8 @@ import {
   MULTI_POSTED_SCORE_CAP,
 } from './discoveryKinds';
 import { requireService, type JobHandler } from './registry';
+import { discoveryBudgetHasRoom } from '../repos/discoveryBudget';
+import { enqueueRankWaiting } from './discoveryRank';
 import { enqueue } from './runner';
 
 export { DISCOVERY_RUN_KIND, MULTI_POSTED_PREFIX, MULTI_POSTED_SCORE_CAP, sourceScheduleName };
@@ -298,6 +302,49 @@ export async function rankBelowCut(
     await clearBelowCut(db, ctx, result.id);
   }
   return held.length;
+}
+
+/**
+ * Postings just restored by Undo (https://github.com/bgoleno/opportun/issues/274). A rank job that
+ * ran while one was dismissed ended without ranking it, and a denylisted one never had a job, so
+ * with no reason, no wait and no job nothing would ever rank it. Call after the restore has
+ * committed, so a job claimed from here on sees it pending.
+ *
+ * It joins the budget wait, with a drain queued if there is room: the wait lives on the result, so
+ * it does not depend on a job, and it brings the budget and every way of saying why. A new rank job
+ * would not do: it could dedupe onto one already running that has read the posting as dismissed. A
+ * pending rank job is left to run, or the posting would be ranked twice. Anything with a score, a
+ * reason or a wait already says what it needs to.
+ */
+export async function resumeAfterUndo(db: Db, ctx: UserCtx, ids: string[]): Promise<void> {
+  let joined = false;
+  for (const id of ids) {
+    let result: DiscoveryResultView;
+    try {
+      result = await getResult(db, ctx, id);
+    } catch (err) {
+      // Gone since the restore committed, with its source. The restore still happened.
+      if (err instanceof HttpError && err.statusCode === 404) continue;
+      throw err;
+    }
+    if (result.disposition !== 'pending') continue;
+    if (result.aiScore !== null || result.rankSkipReason !== null) continue;
+    if (result.rankDeferredAt !== null) continue;
+    if (result.resolution === 'needs_capture') {
+      // Ranking waits for the lead to be as complete as it will get.
+      await enqueueFollowUps(db, ctx, result);
+      continue;
+    }
+    const pendingJob = await db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(eq(jobs.dedupeKey, `${DISCOVERY_RANK_KIND}:${id}`), eq(jobs.status, 'pending')))
+      .get();
+    if (pendingJob !== undefined) continue;
+    await setRankWaitingIfUnranked(db, ctx, id);
+    joined = true;
+  }
+  if (joined && (await discoveryBudgetHasRoom(db, ctx))) await enqueueRankWaiting(db, ctx);
 }
 
 /**

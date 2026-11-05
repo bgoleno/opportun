@@ -15,7 +15,7 @@ import { discoveryResults, jobs, taskRuns } from '../src/db/schema';
 import { LEAD_RESOLVE_KIND } from '../src/jobs/discoveryKinds';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { RANK_WAITING_KIND } from '../src/jobs/discoveryRankWaiting';
-import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
+import { DISCOVERY_RUN_KIND, resumeAfterUndo } from '../src/jobs/discoveryRun';
 import { enqueue, runNextJob } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import {
@@ -25,6 +25,7 @@ import {
   listResults,
   setDisposition,
   setRankDeferred,
+  setRankWaitingIfUnranked,
 } from '../src/repos/discovery';
 import { writeDiscoveryBudget } from '../src/repos/discoveryBudget';
 import { useApi } from './api';
@@ -117,6 +118,14 @@ const pendingJobs = async (app: FastifyInstance, c: TestClient, kind: string) =>
     .select({ id: jobs.id })
     .from(jobs)
     .where(and(eq(jobs.kind, kind), eq(jobs.userId, c.userId), eq(jobs.status, 'pending')))
+    .all();
+
+/** Any status: a drain queued wrongly may have run and finished by the time a test looks. */
+const everyDrain = async (app: FastifyInstance, c: TestClient) =>
+  await app.db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(and(eq(jobs.kind, RANK_WAITING_KIND), eq(jobs.userId, c.userId)))
     .all();
 
 /** The budget is spent for today, so nothing can be ranked until it has room. */
@@ -428,6 +437,7 @@ describe('#274: what already says why, or needs nothing, stays as it is', () => 
     await app.jobs.drain();
     expect(ranked).toEqual([]);
     expect((await results(app, a))[0]).toMatchObject({ aiScore: 70, rankDeferredAt: null });
+    expect(await everyDrain(app, a)).toEqual([]);
   });
 
   it('one that was already waiting keeps its place, and does not move its time', async () => {
@@ -436,6 +446,8 @@ describe('#274: what already says why, or needs nothing, stays as it is', () => 
     await setRankDeferred(app.db, ctxOf(a), id, 12345);
     await undo(a, [id]);
     expect((await results(app, a))[0]!.rankDeferredAt).toBe(12345);
+    // It waits for a sweep as it did before, with nothing new queued.
+    expect(await everyDrain(app, a)).toEqual([]);
   });
 
   it('another user’s posting: not found, and nothing changes', async () => {
@@ -457,6 +469,73 @@ describe('#274: what already says why, or needs nothing, stays as it is', () => 
     expect(await undo(a, [id])).toEqual([{ id, outcome: 'already_decided' }]);
     expect((await results(app, a))[0]!.rankDeferredAt).toBeNull();
     expect(await pendingJobs(app, a, RANK_WAITING_KIND)).toEqual([]);
+  });
+
+  it('a pending posting with no job, named by mistake, does not join the wait', async () => {
+    const { app, a } = await boot();
+    const src = await createSource(app.db, ctxOf(a), {
+      kind: 'ats_lever',
+      config: { org: 'never-dismissed' },
+      roleTargetId: null,
+    });
+    const run = await createRun(app.db, ctxOf(a), { sourceId: src.id });
+    const posting = post('Never dismissed');
+    const row = await insertResult(app.db, ctxOf(a), {
+      runId: run.id,
+      posting,
+      dedupeKey: posting.externalId!,
+      resolution: 'full',
+    });
+    expect(await undo(a, [row.id])).toEqual([{ id: row.id, outcome: 'already_decided' }]);
+    expect((await results(app, a))[0]!.rankDeferredAt).toBeNull();
+    expect(await everyDrain(app, a)).toEqual([]);
+  });
+
+  // Dismissed again in the moment after the restore committed: a route test cannot place this.
+  it('dismissed again before it resumes: it stays out of the wait', async () => {
+    const { app, a } = await boot();
+    const id = await dismissedRow(app, a, 'Again');
+    await resumeAfterUndo(app.db, ctxOf(a), [id]);
+    expect((await results(app, a))[0]!.rankDeferredAt).toBeNull();
+    expect(await everyDrain(app, a)).toEqual([]);
+  });
+
+  // Its source deleted in that moment: the restore has committed, and must still read as done.
+  it('a posting gone before it resumes is passed over, and the others still resume', async () => {
+    const { app, a } = await boot();
+    const id = await dismissedRow(app, a, 'Stays');
+    await setDisposition(app.db, ctxOf(a), id, 'pending');
+    await expect(resumeAfterUndo(app.db, ctxOf(a), ['no-such-id', id])).resolves.toBeUndefined();
+    expect((await results(app, a))[0]!.rankDeferredAt).toEqual(expect.any(Number));
+  });
+
+  describe('joining the wait, on its own', () => {
+    it('a ranking that landed since is left alone', async () => {
+      const { app, a } = await boot();
+      const id = await dismissedRow(app, a, 'Ranked since');
+      await app.db
+        .update(discoveryResults)
+        .set({ aiScore: 70 })
+        .where(eq(discoveryResults.id, id))
+        .run();
+      await setRankWaitingIfUnranked(app.db, ctxOf(a), id);
+      expect((await results(app, a))[0]!.rankDeferredAt).toBeNull();
+    });
+
+    it('another user’s posting is left alone', async () => {
+      const { app, a, b } = await boot();
+      const id = await dismissedRow(app, a, 'Mine');
+      await setRankWaitingIfUnranked(app.db, ctxOf(b), id);
+      expect((await results(app, a))[0]!.rankDeferredAt).toBeNull();
+    });
+
+    it('a wait already there keeps its time', async () => {
+      const { app, a } = await boot();
+      const id = await dismissedRow(app, a, 'Waiting');
+      await setRankDeferred(app.db, ctxOf(a), id, 12345);
+      await setRankWaitingIfUnranked(app.db, ctxOf(a), id);
+      expect((await results(app, a))[0]!.rankDeferredAt).toBe(12345);
+    });
   });
 
   it('only the ones restored join the wait, in a batch with others', async () => {

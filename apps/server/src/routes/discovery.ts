@@ -18,7 +18,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { hasSource } from '../adapters/discoverySource';
 import { DISCOVERY_RUN_KIND } from '../jobs/discoveryKinds';
-import { rankAnyway, rankBelowCut } from '../jobs/discoveryRun';
+import { rankAnyway, rankBelowCut, resumeAfterUndo } from '../jobs/discoveryRun';
 import { enqueue } from '../jobs/runner';
 import { HttpError, duplicate } from '../lib/errors';
 import { createActivity } from '../repos/activities';
@@ -720,6 +720,11 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
           }),
         );
       }
+      await resumeAfterUndo(
+        db,
+        ctx,
+        results.filter((r) => r.outcome === 'restored').map((r) => r.id),
+      );
       return { results };
     },
   );
