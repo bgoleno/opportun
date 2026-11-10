@@ -31,6 +31,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { Db } from '../db/client';
 import { buildAiDeps } from '../lib/ai';
+import { captureUserLimit } from '../lib/captureLimit';
 import { rateLimit } from '../lib/rateLimit';
 import { resolveCapture } from '../lib/captureResolve';
 import {
@@ -168,8 +169,21 @@ export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void
   const perToken = rateLimit({
     limit: 30,
     windowMs: 15 * 60 * 1000,
+    reason: 'per_token',
     keyFn: (req) => requireDevice(req).tokenId,
   });
+  // The user's budget, shared with the web app's POST /capture and every other token of the
+  // user's (lib/captureLimit.ts, #272). It runs after the token's own, and gives the token back
+  // what this request spent there when it refuses: a capture that never ran must not leave the
+  // token throttled once the user's budget is back.
+  const perUser = captureUserLimit(db);
+  const perUserAfterToken: onRequestAsyncHookHandler = async function (req, reply) {
+    await (perUser as unknown as onRequestAsyncHookHandler).call(this, req, reply);
+    if (reply.sent) {
+      await perToken.refund(req);
+      return reply;
+    }
+  };
 
   api.post(
     '/connector/capture',
@@ -182,6 +196,7 @@ export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void
       onRequest: [
         requireDeviceToken('capture:push') as unknown as onRequestAsyncHookHandler,
         perToken as unknown as onRequestAsyncHookHandler,
+        perUserAfterToken,
       ],
       // 200k characters of text can exceed the 1 MiB default once JSON-escaped.
       bodyLimit: 2 * 1024 * 1024,

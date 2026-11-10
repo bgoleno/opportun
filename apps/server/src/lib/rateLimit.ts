@@ -34,8 +34,19 @@ export function rateLimit(opts: {
    * hook does, an audit write today, repeat with every refused request.
    */
   onLimited?: (req: FastifyRequest) => Promise<void> | void;
+  /**
+   * Names this limit in the 429 body, with its size, for a route behind more than one limiter
+   * (https://github.com/bgoleno/opportun/issues/272): the body is then
+   * `{ code: 'rate_limited', reason, max: limit, windowMinutes }`, so a client can say which
+   * limit it hit. Without it the body stays `{ code: 'rate_limited' }`.
+   */
+  reason?: string;
 }): RateLimiter {
-  const { keyFn, limit, windowMs, onLimited } = opts;
+  const { keyFn, limit, windowMs, onLimited, reason } = opts;
+  const refusal =
+    reason === undefined
+      ? { code: 'rate_limited' }
+      : { code: 'rate_limited', reason, max: limit, windowMinutes: windowMs / 60_000 };
   const refillPerMs = limit / windowMs;
   const buckets = new Map<string, Bucket>();
 
@@ -80,10 +91,7 @@ export function rateLimit(opts: {
           req.log.error({ err }, 'rate limit onLimited hook failed');
         }
       }
-      return reply
-        .code(429)
-        .header('retry-after', String(retryAfterSec))
-        .send({ error: { code: 'rate_limited' } });
+      return reply.code(429).header('retry-after', String(retryAfterSec)).send({ error: refusal });
     }
     bucket.tokens -= 1;
   } as RateLimiter;

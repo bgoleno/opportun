@@ -22,6 +22,7 @@ import { DISCOVERY_RANK_KIND } from '../jobs/discoveryKinds';
 import { insertLeads } from '../jobs/discoveryRun';
 import { enqueue } from '../jobs/runner';
 import { buildAiDeps, expiredKeyHint } from '../lib/ai';
+import { captureUserLimit } from '../lib/captureLimit';
 import { HttpError } from '../lib/errors';
 import { sanitizeDescriptionText, sanitizePosting } from '../lib/postingSanitize';
 import { FetchBlockedError, isPageFetchProhibited, type safeFetch } from '../lib/safeFetch';
@@ -220,7 +221,12 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
 
   api.post(
     '/capture',
-    { schema: { body: CaptureBody, response: { 200: CaptureResponse, 201: CaptureResponse } } },
+    {
+      // The user's capture budget, shared with the extension's route (lib/captureLimit.ts,
+      // #272). Spent before the body is used: no fetch, AI call or lock wait over the limit.
+      preHandler: captureUserLimit(db),
+      schema: { body: CaptureBody, response: { 200: CaptureResponse, 201: CaptureResponse } },
+    },
     async (req, reply) => {
       const ctx = app.requireUser(req);
       const { url, resultId } = req.body;
