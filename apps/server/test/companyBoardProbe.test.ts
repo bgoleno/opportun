@@ -3,12 +3,13 @@
 // open and how many of them the pre-filter passes for the user's role targets. Every request goes
 // through the real safeFetch logic over a scripted DNS table and transport, as in atsDetect.test.ts.
 import { runStructured } from '@opportun/ai';
+import { readFileSync } from 'node:fs';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetSources, type SourceContext } from '../src/adapters/discoverySource';
 import { companies, jobs } from '../src/db/schema';
-import { AtsDetectTransientError } from '../src/jobs/atsDetect';
+import { AtsDetectTransientError, detectAts } from '../src/jobs/atsDetect';
 import {
   BOARD_PROBE_KIND,
   boardProbeDedupeKey,
@@ -173,6 +174,69 @@ describe('company board probe', () => {
     const row = await rowOf(app, company.id);
     expect(row.boardProbedAt).toBeGreaterThanOrEqual(row.atsVerifiedAt! + 5_000);
     expect(row.updatedAt).toBe(row.atsVerifiedAt);
+  });
+
+  // tl on https://github.com/bgoleno/opportun/pull/295: the probe reads the company as suggested, and
+  // while it waits on the board the user presses Follow, whose own detection creates the source
+  // enabled. The probe then wrote its source from the stale status and switched it off.
+  it("a Follow while the probe is in flight leaves the followed company's board switched on", async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const company = await suggestion(app, a);
+    const { fetch: plain } = board();
+    let followed = false;
+    const racing = (async (url: string, opts: unknown) => {
+      const res = await (plain as (u: string, o: unknown) => Promise<unknown>)(url, opts);
+      if (!followed && url === DETECT_URL) {
+        followed = true;
+        await app.db
+          .update(companies)
+          .set({ status: 'followed' })
+          .where(eq(companies.id, company.id))
+          .run();
+        // The Follow's own detection, on another worker: the board source is made enabled.
+        await detectAts(app.db, ctx, company.id, { fetch: plain, log });
+        const mid = (await listSources(app.db, ctx, { limit: 50, offset: 0 })).items;
+        expect(mid.map((x) => x.enabled)).toEqual([true]);
+      }
+      return res;
+    }) as unknown as typeof plain;
+
+    await probeCompanyBoard(app.db, ctx, company.id, { fetch: racing, log });
+    expect(followed).toBe(true);
+    expect((await rowOf(app, company.id)).status).toBe('followed');
+    const after = (await listSources(app.db, ctx, { limit: 50, offset: 0 })).items;
+    expect(after.map((x) => [x.kind, x.enabled])).toEqual([['ats_greenhouse', true]]);
+  });
+
+  // A Workday listing is read in part: its total is the board's, and the matches are among the rows
+  // read (tl on #295: replacing the total with the rows read passed every test).
+  it("counts a Workday board's own total as its open jobs, though fewer rows were read", async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    await createRoleTarget(app.db, ctx, { name: 'PM', titleFamily: 'Product Manager' });
+    const HOST = 'globexnetworks.wd5.myworkdayjobs.com';
+    const company = await createCompany(app.db, ctx, {
+      name: 'Globex Networks',
+      status: 'suggested',
+      careersUrl: `https://${HOST}/globexexternalcareers`,
+    });
+    const rowsRead = JSON.parse(
+      readFileSync(new URL('./fixtures/ats/workday-jobs.json', import.meta.url), 'utf8'),
+    ) as { jobPostings: unknown[] };
+    const body = JSON.stringify({ ...rowsRead, total: 40 });
+    const jobs = `https://${HOST}/wday/cxs/globexnetworks/globexexternalcareers/jobs`;
+    const fetch = (async (url: string) => ({
+      status: url === jobs ? 200 : 404,
+      headers: new Headers(),
+      url,
+      body: Buffer.from(url === jobs ? body : '{}'),
+    })) as never;
+    const outcome = await probeCompanyBoard(app.db, ctx, company.id, { fetch, log });
+    expect(outcome).toMatchObject({ status: 'probed', kind: 'ats_workday', openJobs: 40 });
+    // Matches are among the rows read: the two product manager postings of the fixture.
+    expect(outcome).toMatchObject({ prefilterMatches: 2 });
+    expect(await rowOf(app, company.id)).toMatchObject({ boardOpenJobs: 40 });
   });
 
   it('makes only public board requests, to the providers detection already uses', async () => {

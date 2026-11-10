@@ -46,6 +46,9 @@ export const DEFAULT_KIND_LIMITS: Readonly<Record<string, number>> = {
   'gmail.sync_all': 1,
   backup: 1,
   'company.ats_detect': 2,
+  // The board probe after a company suggestion (#221) runs that same detection and then lists the
+  // board, and a weekly run queues up to 15 of them at once: the same cap, for the same reason.
+  'company.board_probe': 2,
   [RANK_WAITING_KIND]: 2,
 };
 

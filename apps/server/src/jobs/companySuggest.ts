@@ -25,8 +25,10 @@ import { companies, discoveryResults, networkContacts, users } from '../db/schem
 import { buildAiDeps } from '../lib/ai';
 import { withMatchKey } from '../repos/companies';
 import type { UserCtx } from '../repos/base';
+import { discoveryBudgetHasRoom } from '../repos/discoveryBudget';
 import { confirmedIndustryRows } from '../repos/industryProfile';
 import { getActivePrompt } from '../repos/prompts';
+import { startOfUtcDay } from '../repos/taskRuns';
 import { line } from '../lib/promptText';
 import { roleTargetsText } from './classify';
 import { enqueueBoardProbe } from './companyBoardProbe';
@@ -222,6 +224,9 @@ export type SuggestRun =
 export async function suggestCompanies(db: Db, ctx: UserCtx): Promise<SuggestRun> {
   const prompt = await getActivePrompt(db, ctx, COMPANY_SUGGEST_KIND);
   if (prompt === undefined) return { status: 'skipped', reason: 'no_prompt' };
+  // The suggestions are a discovery call: today's spend over the discovery budget leaves no room.
+  if (!(await discoveryBudgetHasRoom(db, ctx)))
+    return { status: 'skipped', reason: 'budget_exceeded' };
   let out: z.infer<typeof SuggestOutputSchema>;
   try {
     out = await runStructured(await buildAiDeps(db, ctx), COMPANY_SUGGEST_KIND, {
@@ -308,6 +313,28 @@ export async function suggestCompanies(db: Db, ctx: UserCtx): Promise<SuggestRun
 export const companySuggestDedupeKey = (userId: string): string =>
   `${COMPANY_SUGGEST_KIND}:${userId}`;
 
+const DAY_MS = 86_400_000;
+
+/**
+ * Queues the run again for the start of the next budget day, the same UTC day as the budget. Not the
+ * next week: the hourly drain of postings waiting for the budget can spend each day's budget soon
+ * after the day starts, so a weekly run could find no room every week and never run. The key names
+ * the day it is for, so the run that is itself waiting can queue the one after it.
+ */
+async function runAgainNextBudgetDay(db: Db, ctx: UserCtx): Promise<void> {
+  const next = startOfUtcDay(Date.now()) + DAY_MS;
+  await enqueue(
+    db,
+    COMPANY_SUGGEST_KIND,
+    {},
+    {
+      userId: ctx.userId,
+      runAt: next,
+      dedupeKey: `${COMPANY_SUGGEST_KIND}:day:${ctx.userId}:${next}`,
+    },
+  );
+}
+
 export const companySuggestJob: JobHandler<Record<string, never>> = {
   kind: COMPANY_SUGGEST_KIND,
   payloadSchema: z.object({}).strict() as unknown as z.ZodType<Record<string, never>>,
@@ -327,6 +354,11 @@ export const companySuggestJob: JobHandler<Record<string, never>> = {
       await ctx.setResult({ queued: ids.length });
       return;
     }
-    await ctx.setResult(await suggestCompanies(db, { userId: ctx.userId, isAdmin: false }));
+    const user: UserCtx = { userId: ctx.userId, isAdmin: false };
+    const result = await suggestCompanies(db, user);
+    await ctx.setResult(result);
+    if (result.status === 'skipped' && result.reason === 'budget_exceeded') {
+      await runAgainNextBudgetDay(db, user);
+    }
   },
 };

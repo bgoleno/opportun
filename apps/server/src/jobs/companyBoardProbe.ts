@@ -42,7 +42,8 @@ async function record(
   companyId: string,
   counts: { openJobs: number | null; prefilterMatches: number | null },
 ): Promise<void> {
-  // updatedAt stays: a probe is not the user's edit, and company.suggest lists by it.
+  // This write leaves updatedAt alone: a probe is not the user's edit. (The detection just before it
+  // records the board and moves updatedAt itself, as it does for every detection.)
   await db
     .update(companies)
     .set({

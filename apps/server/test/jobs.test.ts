@@ -657,6 +657,11 @@ describe('DEFAULT_KIND_LIMITS (issue #260)', () => {
     const { DEFAULT_KIND_LIMITS } = await import('../src/jobs/runner');
     expect(DEFAULT_KIND_LIMITS['company.ats_detect']).toBe(2);
   });
+
+  it('caps company.board_probe the same: it runs that detection and then lists the board, and a run of suggestions queues up to 15 at once (#221)', async () => {
+    const { DEFAULT_KIND_LIMITS } = await import('../src/jobs/runner');
+    expect(DEFAULT_KIND_LIMITS['company.board_probe']).toBe(2);
+  });
 });
 
 describe('job runner concurrency', () => {

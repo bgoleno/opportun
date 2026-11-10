@@ -117,7 +117,8 @@ and kept. Open **Industry** on a row to correct it, and your choice stands. A co
 not place says so, and is not asked about again until job titles arrive from its board: then it is
 asked once more, with those titles, and once more for each later arrival. You can still set one
 yourself at any time. A suggested company already has the industry it was suggested for (see below),
-so it is not asked about at all.
+so it is not asked about, unless that industry could not be read as a code from the list, in which
+case the nightly run asks as for any other company.
 
 **Suggested companies** comes from the `company.suggest` task, which once a week (Tuesdays)
 proposes companies worth following, each with its reason, the industry it was suggested for and
@@ -125,7 +126,15 @@ that industry's tier. It looks for companies in the industries you confirmed und
 [Where to look](#where-to-look), like the companies in your network and your pipeline, and it
 drops any suggestion outside those industries. Until you have confirmed an industry, it suggests as
 before, from your role targets and past decisions, and nothing is dropped. **Follow** one and
-Opportun looks for its job board; **Deny** it and it is not suggested again.
+Opportun looks for its job board; **Deny** it and it is not suggested again. The weekly call counts
+against your [discovery budget](settings.md#models-and-budgets): with no room left that day it runs
+again at the start of the next budget day, not the next week.
+
+If you edited the `company.suggest` prompt yourself, your version keeps its wording and does not
+use the new inputs until you add `{{industry_profile_untrusted}}` and
+`{{network_companies_untrusted}}` to it (or take the new default). Without the industries, most of
+the codes the model gives will be outside your confirmed industries, and those suggestions are
+dropped.
 
 **What the suggestions send.** The call sends your AI provider your role targets, your confirmed
 industries (the code, its title and tier, and the one-line reason), the names of the companies in

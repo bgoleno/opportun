@@ -6,8 +6,15 @@ import { AiUnavailableError, renderPrompt, runStructured, SuggestOutputSchema } 
 import { companyMatchKey, naicsTitle, newId } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { companies, industryProfile, jobs, networkContacts, settings } from '../src/db/schema';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  companies,
+  industryProfile,
+  jobs,
+  networkContacts,
+  settings,
+  taskRuns,
+} from '../src/db/schema';
 import { BOARD_PROBE_KIND } from '../src/jobs/companyBoardProbe';
 import { roleTargetsText } from '../src/jobs/classify';
 import { ATS_DETECT_KIND, atsDetectDedupeKey } from '../src/jobs/atsDetect';
@@ -21,6 +28,8 @@ import {
 } from '../src/jobs/companySuggest';
 import { enqueue } from '../src/jobs/runner';
 import { createCompany } from '../src/repos/companies';
+import { discoverySpentTodayUsd } from '../src/repos/discoveryBudget';
+import { startOfUtcDay } from '../src/repos/taskRuns';
 import { createRun, createSource, insertResult, setDisposition } from '../src/repos/discovery';
 import { addIndustry } from '../src/repos/industryProfile';
 import { getActivePrompt } from '../src/repos/prompts';
@@ -544,6 +553,173 @@ describe('company.suggest v2', () => {
     expect(await app.db.select().from(jobs).where(eq(jobs.kind, ATS_DETECT_KIND)).all()).toEqual(
       [],
     );
+  });
+});
+
+// https://github.com/bgoleno/opportun/pull/295 (tl): the suggestions are a discovery call too. They
+// count toward the discovery budget and are checked against it before the call, and with no room the
+// run waits for the next budget day, not the next Tuesday: the hourly drain of postings waiting for
+// the budget can spend each day's budget soon after the UTC day starts, and a weekly run that found
+// no room every week would never run.
+describe('company.suggest and the discovery budget', () => {
+  const DAY = 86_400_000;
+  /** A noon, so a test never straddles a UTC day boundary. */
+  const NOON = Date.UTC(2026, 5, 3, 12, 0, 0);
+  afterEach(() => vi.useRealTimers());
+
+  const spend = (app: FastifyInstance, c: TestClient, usd: number, taskKey = 'company.suggest') =>
+    app.db
+      .insert(taskRuns)
+      .values({
+        id: newId(),
+        userId: c.userId,
+        taskKey,
+        provider: 'anthropic',
+        model: 'placeholder-model',
+        inputTokens: 100,
+        outputTokens: 10,
+        estCost: usd,
+        fallbackPricing: false,
+        durationMs: 1,
+        status: 'ok',
+        error: null,
+        createdAt: Date.now(),
+      })
+      .run();
+
+  const pendingFor = async (app: FastifyInstance, c: TestClient) =>
+    (
+      await app.db
+        .select()
+        .from(jobs)
+        .where(
+          and(
+            eq(jobs.kind, COMPANY_SUGGEST_KIND),
+            eq(jobs.status, 'pending'),
+            eq(jobs.userId, c.userId),
+          ),
+        )
+        .all()
+    ).sort((x, y) => x.runAt - y.runAt);
+
+  it("counts a suggestion's spend toward the discovery budget", async () => {
+    const { app, a, b } = await boot();
+    await spend(app, a, 0.4);
+    await spend(app, a, 0.25, 'discovery.rank');
+    await spend(app, b, 9);
+    expect(await discoverySpentTodayUsd(app.db, ctxOf(a))).toBeCloseTo(0.65, 5);
+  });
+
+  it('makes no call when the budget is spent, and creates nothing', async () => {
+    const { app, a } = await boot();
+    await spend(app, a, 1);
+    expect(await suggestCompanies(app.db, ctxOf(a))).toEqual({
+      status: 'skipped',
+      reason: 'budget_exceeded',
+    });
+    expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
+    expect(await rows(app, a)).toEqual([]);
+  });
+
+  it("is not stopped by another user's spend", async () => {
+    const { app, a, b } = await boot();
+    await spend(app, b, 5);
+    answer({ name: 'Pied Piper' });
+    expect(await suggestCompanies(app.db, ctxOf(a))).toMatchObject({
+      status: 'suggested',
+      created: 1,
+    });
+  });
+
+  it('with no room, the run queues itself for the start of the next budget day, not the next week', async () => {
+    const { app, a } = await boot();
+    vi.useFakeTimers({ now: NOON, toFake: ['Date'] });
+    app.jobs.services.sourceFetch = noBoards;
+    await spend(app, a, 1);
+    await enqueue(app.db, COMPANY_SUGGEST_KIND, {}, { userId: a.userId });
+    await app.jobs.drain();
+    expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
+    const waiting = await pendingFor(app, a);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]!.runAt).toBe(startOfUtcDay(NOON) + DAY);
+    // The weekly schedule is not what waits: a one-off run, for this user.
+    expect(waiting[0]).toMatchObject({ userId: a.userId, payload: {} });
+  });
+
+  it('runs on the next budget day and makes its call then', async () => {
+    const { app, a } = await boot();
+    vi.useFakeTimers({ now: NOON, toFake: ['Date'] });
+    app.jobs.services.sourceFetch = noBoards;
+    await spend(app, a, 1);
+    await enqueue(app.db, COMPANY_SUGGEST_KIND, {}, { userId: a.userId });
+    await app.jobs.drain();
+    expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
+
+    // Not yet due the same day.
+    vi.setSystemTime(NOON + 6 * 3_600_000);
+    await app.jobs.drain();
+    expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
+
+    vi.setSystemTime(startOfUtcDay(NOON) + DAY + 1_000);
+    answer({ name: 'Pied Piper' });
+    await app.jobs.drain();
+    expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(1);
+    expect((await rows(app, a)).map((r) => r.name)).toEqual(['Pied Piper']);
+    expect(await pendingFor(app, a)).toEqual([]);
+  });
+
+  it('still with no room that day, it waits for the day after', async () => {
+    const { app, a } = await boot();
+    vi.useFakeTimers({ now: NOON, toFake: ['Date'] });
+    await spend(app, a, 1);
+    await enqueue(app.db, COMPANY_SUGGEST_KIND, {}, { userId: a.userId });
+    await app.jobs.drain();
+    // The next day the budget is spent again, soon after the day starts.
+    vi.setSystemTime(startOfUtcDay(NOON) + DAY + 1_000);
+    await spend(app, a, 1);
+    await app.jobs.drain();
+    expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
+    const waiting = await pendingFor(app, a);
+    expect(waiting.map((j) => j.runAt)).toEqual([startOfUtcDay(NOON) + 2 * DAY]);
+  });
+
+  it('two users out of budget on the same day each get their own run the next day', async () => {
+    const { app, a, b } = await boot();
+    vi.useFakeTimers({ now: NOON, toFake: ['Date'] });
+    await spend(app, a, 1);
+    await spend(app, b, 1);
+    await enqueue(app.db, COMPANY_SUGGEST_KIND, {}, { userId: a.userId });
+    await enqueue(app.db, COMPANY_SUGGEST_KIND, {}, { userId: b.userId });
+    await app.jobs.drain();
+    const next = startOfUtcDay(NOON) + DAY;
+    expect((await pendingFor(app, a)).map((j) => j.runAt)).toEqual([next]);
+    expect((await pendingFor(app, b)).map((j) => j.runAt)).toEqual([next]);
+  });
+
+  it('a run skipped for another reason (no key) is not queued again: only the budget waits for a day', async () => {
+    const { app, a } = await boot();
+    vi.mocked(runStructured).mockRejectedValueOnce(new AiUnavailableError('no_key'));
+    await enqueue(app.db, COMPANY_SUGGEST_KIND, {}, { userId: a.userId });
+    await app.jobs.drain();
+    expect(await pendingFor(app, a)).toEqual([]);
+  });
+
+  it("a per-task limit the router refuses on (the AI package's own budget) waits for the day too", async () => {
+    const { app, a } = await boot();
+    vi.useFakeTimers({ now: NOON, toFake: ['Date'] });
+    vi.mocked(runStructured).mockRejectedValueOnce(new AiUnavailableError('budget_exceeded'));
+    await enqueue(app.db, COMPANY_SUGGEST_KIND, {}, { userId: a.userId });
+    await app.jobs.drain();
+    expect((await pendingFor(app, a)).map((j) => j.runAt)).toEqual([startOfUtcDay(NOON) + DAY]);
+  });
+
+  it('with room it queues nothing more', async () => {
+    const { app, a } = await boot();
+    app.jobs.services.sourceFetch = noBoards;
+    answer({ name: 'Pied Piper' });
+    await enqueue(app.db, COMPANY_SUGGEST_KIND, {}, { userId: a.userId });
+    await app.jobs.drain();
+    expect(await pendingFor(app, a)).toEqual([]);
   });
 });
 

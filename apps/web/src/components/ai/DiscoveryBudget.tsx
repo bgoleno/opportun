@@ -74,12 +74,13 @@ function BudgetForm(props: { dailyUsd: number; perTaskDailyUsd: number }) {
       </div>
       <FormError message={error} />
       <p className="max-w-prose text-xs text-muted-foreground">
-        Covers ranking discovered postings, suggesting industries and tagging companies. When it
-        runs out, postings wait and are ranked on the next budget day, the best matches first, then
-        the oldest. None is dropped, but while better new postings keep arriving a poorer older one
-        can keep waiting. Suggesting industries says so instead of calling, and tagging waits for a
-        later night. Days are UTC. The {dollars.format(props.perTaskDailyUsd)} per task per day
-        stays as a hard stop behind it.
+        Covers ranking discovered postings, suggesting industries, tagging companies and suggesting
+        companies. When it runs out, postings wait and are ranked on the next budget day, the best
+        matches first, then the oldest. None is dropped, but while better new postings keep arriving
+        a poorer older one can keep waiting. Suggesting industries says so instead of calling,
+        tagging waits for a later night, and suggesting companies runs again on the next budget day.
+        Days are UTC. The {dollars.format(props.perTaskDailyUsd)} per task per day stays as a hard
+        stop behind it.
       </p>
     </form>
   );
