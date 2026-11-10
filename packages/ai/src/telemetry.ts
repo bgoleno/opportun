@@ -185,7 +185,8 @@ export class InferenceSpan {
 
   constructor(start: InferenceStart) {
     const active = context.active();
-    const userId = start.userId ?? (start.task === KEY_CHECK_TASK ? userInContext(active) : undefined);
+    const userId =
+      start.userId ?? (start.task === KEY_CHECK_TASK ? userInContext(active) : undefined);
     let parent = active;
     if (start.userId !== undefined && userInContext(active) !== start.userId) {
       // One trace belongs to one user: a call for someone else is not part of this one.
@@ -259,7 +260,8 @@ export class InferenceSpan {
     }
     if (modelId !== undefined) this.span.setAttribute(ATTR.responseModel, modelAttr(modelId));
     if (id !== undefined && isCode(id)) this.span.setAttribute(ATTR.responseId, id);
-    if (finishReason !== undefined) this.span.setAttribute(ATTR.responseFinishReasons, [finishReason]);
+    if (finishReason !== undefined)
+      this.span.setAttribute(ATTR.responseFinishReasons, [finishReason]);
     if (outcome.attempts !== undefined) this.span.setAttribute(ATTR.aiAttempts, outcome.attempts);
     if (outcome.costUsd !== undefined) this.span.setAttribute(ATTR.usageCost, outcome.costUsd);
     if (outcome.errorType !== undefined) {

@@ -38,11 +38,9 @@ const PROVIDER_FETCH = {
 };
 
 const heard: string[] = [];
-const listen =
-  (hook: string) =>
-  (): void => {
-    heard.push(hook);
-  };
+const listen = (hook: string) => (): void => {
+  heard.push(hook);
+};
 // Every hook of the SDK's Telemetry interface. The two that wrap work hand it straight back.
 const integration: Telemetry = {
   onStart: listen('onStart'),

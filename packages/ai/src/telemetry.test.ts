@@ -46,7 +46,7 @@ let provider: TracerProvider;
 
 beforeAll(() => {
   context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
-  provider = new TracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+  provider = new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter })] });
   trace.setGlobalTracerProvider(provider);
 });
 
@@ -236,7 +236,9 @@ describe('one structured call', () => {
       'gen_ai.request.model': policy.model,
       'gen_ai.response.model': 'claude-opus-5-5-20260101',
       'gen_ai.request.max_tokens': policy.maxOutputTokens,
-      ...(policy.temperature === undefined ? {} : { 'gen_ai.request.temperature': policy.temperature }),
+      ...(policy.temperature === undefined
+        ? {}
+        : { 'gen_ai.request.temperature': policy.temperature }),
       'gen_ai.output.type': 'json',
       'gen_ai.prompt.name': 'resume.tailor',
       'gen_ai.prompt.version': '3',
@@ -375,6 +377,11 @@ describe('a call that fails', () => {
       'gen_ai.response.model',
       'gen_ai.response.id',
       'gen_ai.response.finish_reasons',
+      // A refusal never reached a provider: no tokens, no attempts, no cost (the row has none either).
+      'gen_ai.usage.input_tokens',
+      'gen_ai.usage.output_tokens',
+      'opportun.ai.attempts',
+      'opportun.gen_ai.usage.cost',
     ]) {
       expect(keys).not.toContain(absent);
     }
@@ -516,7 +523,9 @@ describe('a streamed call', () => {
       'gen_ai.request.model': policy.model,
       'gen_ai.response.model': 'claude-opus-5-5-20260101',
       'gen_ai.request.max_tokens': policy.maxOutputTokens,
-      ...(policy.temperature === undefined ? {} : { 'gen_ai.request.temperature': policy.temperature }),
+      ...(policy.temperature === undefined
+        ? {}
+        : { 'gen_ai.request.temperature': policy.temperature }),
       'gen_ai.request.stream': true,
       'gen_ai.output.type': 'text',
       'gen_ai.prompt.name': 'resume.tailor',
@@ -536,6 +545,21 @@ describe('a streamed call', () => {
     expect(ttfc).toBeTypeOf('number');
     expect(ttfc as number).toBeGreaterThanOrEqual(0.015);
     expect(ttfc as number).toBeLessThan(2);
+  });
+
+  it('runs the provider request inside the span, so a request under it is its child', async () => {
+    let activeInside: string | undefined;
+    const inner = streamModel('Hello');
+    const model = new MockLanguageModelV4({
+      doStream: async (options) => {
+        activeInside = trace.getActiveSpan()?.spanContext().spanId;
+        return inner.doStream(options);
+      },
+    });
+    const h = harness({ model });
+    await drain(await streamChat(h.deps, 'resume.tailor', chatCall));
+    expect(activeInside).toBeDefined();
+    expect(activeInside).toBe(only().spanContext().spanId);
   });
 
   it('the span has ended by the time a full drain completes, even when the ledger write is slow', async () => {
@@ -644,11 +668,15 @@ describe('content is never on a span', () => {
       promptId: 'p1',
       promptVersion: '2',
     });
-    const res = await streamChat(harness({ model: streamModel(`Dear ${CANARY}`) }).deps, 'resume.tailor', {
-      system: `System ${CANARY}`,
-      messages: [{ role: 'user', content: `Please tailor for ${CANARY}` }],
-      conversationId: 'session-1',
-    });
+    const res = await streamChat(
+      harness({ model: streamModel(`Dear ${CANARY}`) }).deps,
+      'resume.tailor',
+      {
+        system: `System ${CANARY}`,
+        messages: [{ role: 'user', content: `Please tailor for ${CANARY}` }],
+        conversationId: 'session-1',
+      },
+    );
     await drain(res);
     // After harness(), which installs its own mock model: from here every call fails.
     const failing = harness().deps;
@@ -845,7 +873,9 @@ describe('a key check', () => {
   });
 
   it('takes the user from the context, when there is one', async () => {
-    vi.mocked(createLanguageModel).mockReturnValue(new MockLanguageModelV4({ doGenerate: ok('p') }));
+    vi.mocked(createLanguageModel).mockReturnValue(
+      new MockLanguageModelV4({ doGenerate: ok('p') }),
+    );
     await withUser('user-5', () => pingModel('anthropic', 'claude-haiku-5-5', KEY, PROVIDER_FETCH));
     expect(only().attributes).toMatchObject({ 'user.id': 'user-5' });
   });
