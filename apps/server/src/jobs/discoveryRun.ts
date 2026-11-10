@@ -36,7 +36,9 @@ import {
   finishRun,
   getResult,
   getSourceRow,
+  hasRunInProgress,
   hasSucceededRun,
+  hasUnfinishedRun,
   insertResult,
   listBelowCut,
   prefilterRecall,
@@ -475,10 +477,14 @@ function errorText(err: unknown): string {
 export const SKIPPED_DISABLED = 'source_disabled';
 const SKIPPED_DISABLED_TEXT = 'Skipped: the source was paused before this run started.';
 
+/** The `skipped` stat on a run that did not start because another of its source's was going (#269). */
+export const SKIPPED_IN_PROGRESS = 'run_in_progress';
+const SKIPPED_IN_PROGRESS_TEXT = 'Skipped: a run of this source was already in progress.';
+
 export type DiscoveryRunOutcome =
   | { status: 'done'; runId: string; stats: RunStats; inserted: DiscoveryResultView[] }
   | { status: 'config_error'; runId: string; stats: RunStats; error: string }
-  | { status: 'skipped'; reason: 'missing' | 'disabled' };
+  | { status: 'skipped'; reason: 'missing' | 'disabled' | 'in_progress' };
 
 /**
  * Runs one source now. Rethrows an adapter error after recording it on the run and source,
@@ -489,6 +495,8 @@ export async function runDiscoverySource(
   ctx: UserCtx,
   sourceId: string,
   sctx: SourceContext,
+  /** The discovery.run job this is, so it does not count itself as the run in progress. */
+  opts: { jobId?: string } = {},
 ): Promise<DiscoveryRunOutcome> {
   let source;
   try {
@@ -512,7 +520,30 @@ export async function runDiscoverySource(
     return { status: 'skipped', reason: 'disabled' };
   }
 
-  const run = await createRun(db, ctx, { sourceId: source.id });
+  // One run in progress per source (https://github.com/bgoleno/opportun/issues/269). Run now and the
+  // schedule queue their jobs under different keys, so the runner can start one while the other
+  // runs, and the board would be read twice at once. The run row is the mark: under the source's
+  // lock, a run that finds one unfinished while another job of this source is running does not
+  // start, and says so in the run history as a paused source's does. Both tests are needed. The
+  // row alone would let a run a crash left unfinished stop the source for good, and the job alone
+  // would let two runs claimed together each see the other and both stop, or neither.
+  await racePoint('discoveryRun.one_per_source');
+  const run = await withTransaction(db, async (tx) => {
+    await lockScope(tx, `discovery.run_source:${source.id}`);
+    if (
+      (await hasUnfinishedRun(tx, ctx, source.id)) &&
+      (await hasRunInProgress(tx, ctx, source.id, opts.jobId))
+    ) {
+      const skipped = await createRun(tx, ctx, { sourceId: source.id });
+      await finishRun(tx, ctx, skipped.id, {
+        error: SKIPPED_IN_PROGRESS_TEXT,
+        stats: { skipped: SKIPPED_IN_PROGRESS },
+      });
+      return null;
+    }
+    return await createRun(tx, ctx, { sourceId: source.id });
+  });
+  if (run === null) return { status: 'skipped', reason: 'in_progress' };
   const stats: RunStats = {
     fetched: 0,
     inserted: 0,
@@ -608,7 +639,9 @@ export const discoveryRunJob: JobHandler<z.infer<typeof PayloadSchema>> = {
       fetch: requireService(ctx, 'sourceFetch'),
       log: requireService(ctx, 'log'),
     };
-    const outcome = await runDiscoverySource(db, user, payload.sourceId, sctx);
+    const outcome = await runDiscoverySource(db, user, payload.sourceId, sctx, {
+      jobId: ctx.jobId,
+    });
     if (outcome.status === 'done') {
       await ctx.setResult({ status: outcome.status, runId: outcome.runId, stats: outcome.stats });
     } else {
