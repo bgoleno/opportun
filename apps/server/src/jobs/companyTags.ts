@@ -106,6 +106,8 @@ interface Candidate {
   id: string;
   name: string;
   domain: string | null;
+  /** When it last failed asked alone (#291): not used in a prompt, only to form the batches. */
+  failedAt?: number | null;
 }
 
 /** The batch as the prompt fences it. The ref is all the model sees of which row is which. */
@@ -155,6 +157,7 @@ async function storeTags(
         naicsCode: known ? code : null,
         industrySource: known ? 'ai' : null,
         industryAt: now,
+        industryFailedAt: null,
       })
       .where(
         and(
@@ -197,10 +200,24 @@ export async function tagCompanies(
   const prompt = await getActivePrompt(db, ctx, COMPANY_TAGS_KIND);
   if (prompt === undefined) return { ...run, stopped: 'no_prompt' };
   const candidates = await db
-    .select({ id: companies.id, name: companies.name, domain: companies.domain })
+    .select({
+      id: companies.id,
+      name: companies.name,
+      domain: companies.domain,
+      failedAt: companies.industryFailedAt,
+    })
     .from(companies)
     .where(untaggedCandidates(db, ctx.userId))
-    .orderBy(asc(companies.createdAt), asc(companies.id))
+    // Never failed first. A company the model failed on alone goes after the rest, the one that
+    // failed longest ago first, so a name it always fails on cannot stand at the head every night
+    // and stop the run on its own (#291). The CASE, not a NULLS clause: SQLite and Postgres sort a
+    // null the opposite way.
+    .orderBy(
+      sql`case when ${companies.industryFailedAt} is null then 0 else 1 end`,
+      asc(companies.industryFailedAt),
+      asc(companies.createdAt),
+      asc(companies.id),
+    )
     .limit(MAX_COMPANIES_PER_RUN)
     .all();
   /** One call. Null if it worked, or why not: what the callers below decide on. */
@@ -253,12 +270,36 @@ export async function tagCompanies(
     }
     const stop = stopAfter(err);
     if (stop !== null) return stop;
+    // Asked alone and failed: it goes after the rest tomorrow. Ordering only, so it is asked again,
+    // and a passing error (an outage's 3 calls) costs those companies nothing but their place.
+    await db
+      .update(companies)
+      .set({ industryFailedAt: Date.now() })
+      .where(
+        and(
+          eq(companies.id, company.id),
+          eq(companies.userId, ctx.userId),
+          isNull(companies.industryAt),
+        ),
+      )
+      .run();
     errorsInARow += 1;
     return errorsInARow >= OUTAGE_AFTER_ERRORS ? err.reason : null;
   };
 
-  for (let at = 0; at < candidates.length; at += COMPANY_TAGS_BATCH) {
-    const batch = candidates.slice(at, at + COMPANY_TAGS_BATCH);
+  // Batches of the companies never failed on come first, and the ones it failed on alone form
+  // batches of their own: a name it is known to fail on in a batch with healthy ones would fail the
+  // batch, and ask all of them alone, every night.
+  const batches: Candidate[][] = [];
+  for (const group of [
+    candidates.filter((c) => c.failedAt === null),
+    candidates.filter((c) => c.failedAt !== null),
+  ]) {
+    for (let at = 0; at < group.length; at += COMPANY_TAGS_BATCH) {
+      batches.push(group.slice(at, at + COMPANY_TAGS_BATCH));
+    }
+  }
+  for (const batch of batches) {
     const before = await stopBefore();
     if (before !== null) return { ...run, stopped: before };
     if (batch.length === 1) {

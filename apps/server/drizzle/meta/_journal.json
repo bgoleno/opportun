@@ -386,6 +386,13 @@
       "when": 1795100000000,
       "tag": "0054_discovery_company_tags_prompt",
       "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "6",
+      "when": 1795200000000,
+      "tag": "0055_company_industry_failed_at",
+      "breakpoints": true
     }
   ]
 }

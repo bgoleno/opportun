@@ -970,6 +970,210 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
     });
   });
 
+  // https://github.com/bgoleno/opportun/issues/291: a name the provider refuses, or answers unusably,
+  // when asked alone is asked again every night. It must not hold up the companies behind it, or the
+  // ones added since: it is asked after the rest, and the stop at 3 in a row still ends a bad night.
+  describe('a company that failed alone waits behind the rest', () => {
+    const REFUSED = new AiUnavailableError('provider_error');
+    const UNUSABLE = new AiUnavailableError('invalid_output');
+    const named = (prefix: string, i: number) => `${prefix}${String(i).padStart(2, '0')}`;
+    /** The provider fails any call holding one of these names (a batch with one in it fails too). */
+    function failsFor(names: readonly string[], error: AiUnavailableError = REFUSED): void {
+      vi.mocked(runStructured).mockImplementation(async (_deps, _task, opts) => {
+        const system = (opts as { system: string }).system;
+        if (names.some((n) => system.includes(`name: ${n}\n`))) throw error;
+        return { tags: refsIn(system).map((ref) => ({ ref, code: '5132' })) } as never;
+      });
+    }
+    const failedAt = async (app: FastifyInstance, a: TestClient, name: string) =>
+      (await rowOf(app, a, name)).industryFailedAt;
+    const namesAsked = (call: number): string[] =>
+      [...systemOf(call).matchAll(/^name: (.*)$/gm)].map(([, n]) => n ?? '');
+
+    it.each([
+      ['refused', REFUSED],
+      ['answered unusably', UNUSABLE],
+    ] as const)(
+      '3 names %s alone are learned, and from then on the others are tagged every night',
+      async (_label, error) => {
+        const { app, a } = await boot();
+        const bad = ['R01', 'R02', 'R03'];
+        for (const n of bad) await suggested(app, a, n);
+        for (let i = 1; i <= 25; i++) await suggested(app, a, named('H', i));
+        failsFor(bad, error);
+        // Night 1: the 3 at the head are asked alone, one after the other: the run stops, and they are marked.
+        const first = await tagCompanies(app.db, ctxOf(a));
+        expect(first).toMatchObject({ tagged: 0, calls: 4, stopped: error.reason });
+        for (const n of bad) {
+          expect(await failedAt(app, a, n)).not.toBeNull();
+          expect((await rowOf(app, a, n)).industryAt).toBeNull();
+        }
+        expect(await failedAt(app, a, 'H01')).toBeNull();
+        // Night 2: the other 25 are tagged first, then the 3 are asked again, after the rest.
+        vi.mocked(runStructured).mockClear();
+        const second = await tagCompanies(app.db, ctxOf(a));
+        expect(second.tagged).toBe(25);
+        expect((await rowOf(app, a, 'H25')).naicsCode).toBe('5132');
+        expect((await rowOf(app, a, 'R01')).industryAt).toBeNull();
+        expect(namesAsked(0)).toContain('H01');
+        expect(namesAsked(0)).not.toContain('R01');
+      },
+    );
+
+    it('a company added since the last run is tagged ahead of one that failed, though it is newer', async () => {
+      const { app, a } = await boot();
+      for (const n of ['R01', 'R02', 'R03']) await suggested(app, a, n);
+      failsFor(['R01', 'R02', 'R03']);
+      await tagCompanies(app.db, ctxOf(a));
+      await suggested(app, a, 'Newcomer');
+      vi.mocked(runStructured).mockClear();
+      const run = await tagCompanies(app.db, ctxOf(a));
+      expect(run.tagged).toBe(1);
+      expect(namesAsked(0)).toEqual(['Newcomer']);
+      expect((await rowOf(app, a, 'Newcomer')).naicsCode).toBe('5132');
+    });
+
+    it('a company that failed is asked again after the rest, and tagged when the provider takes it', async () => {
+      const { app, a } = await boot();
+      for (const n of ['R01', 'R02']) await suggested(app, a, n);
+      await suggested(app, a, 'H01');
+      failsFor(['R01', 'R02']);
+      await tagCompanies(app.db, ctxOf(a));
+      expect(await failedAt(app, a, 'R01')).not.toBeNull();
+      expect((await rowOf(app, a, 'H01')).naicsCode).toBe('5132');
+      await suggested(app, a, 'H02');
+      tagsEverything();
+      vi.mocked(runStructured).mockClear();
+      const run = await tagCompanies(app.db, ctxOf(a));
+      expect(run).toMatchObject({ tagged: 3, stopped: null });
+      // H02 first, then the two that failed, together in one batch.
+      expect(namesAsked(0)).toEqual(['H02']);
+      expect(namesAsked(1)).toEqual(['R01', 'R02']);
+      for (const n of ['R01', 'R02']) {
+        const row = await rowOf(app, a, n);
+        expect(row.naicsCode).toBe('5132');
+        expect(row.industryFailedAt).toBeNull();
+      }
+    });
+
+    it('the ones that failed longest ago are asked first, so 3 at a time take their turn', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 5; i++) await suggested(app, a, named('R', i));
+      // R05 failed longest ago and R01 most recently: they are not in the order they were made.
+      for (let i = 1; i <= 5; i++) {
+        await app.db
+          .update(companies)
+          .set({ industryFailedAt: 1_000_000 - i * 1000 })
+          .where(and(eq(companies.userId, a.userId), eq(companies.name, named('R', i))))
+          .run();
+      }
+      failsFor(['R01', 'R02', 'R03', 'R04', 'R05']);
+      const run = await tagCompanies(app.db, ctxOf(a));
+      expect(run).toMatchObject({ tagged: 0, calls: 4, stopped: 'provider_error' });
+      // The batch, then R05, R04, R03 alone: the 3 that failed longest ago.
+      expect(namesAsked(1)).toEqual(['R05']);
+      expect(namesAsked(2)).toEqual(['R04']);
+      expect(namesAsked(3)).toEqual(['R03']);
+      expect(await failedAt(app, a, 'R03')).toBeGreaterThan(1_000_000);
+      // R02 and R01 were not asked and keep the time they had.
+      expect(await failedAt(app, a, 'R02')).toBe(1_000_000 - 2000);
+      expect(await failedAt(app, a, 'R01')).toBe(1_000_000 - 1000);
+    });
+
+    it('an outage stops after 4 calls, marks only the 3 asked alone, and the next night tags everyone', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 100; i++) await suggested(app, a, named('C', i));
+      vi.mocked(runStructured).mockRejectedValue(REFUSED);
+      expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({
+        calls: 4,
+        stopped: 'provider_error',
+      });
+      expect(await failedAt(app, a, 'C01')).not.toBeNull();
+      expect(await failedAt(app, a, 'C03')).not.toBeNull();
+      expect(await failedAt(app, a, 'C04')).toBeNull();
+      expect((await rowOf(app, a, 'C01')).industryAt).toBeNull();
+      tagsEverything();
+      vi.mocked(runStructured).mockClear();
+      const next = await tagCompanies(app.db, ctxOf(a));
+      expect(next.tagged).toBe(100);
+      // Marked for ordering only: the 97 that were not asked alone go first.
+      expect(namesAsked(0)[0]).toBe('C04');
+      expect((await rowOf(app, a, 'C01')).naicsCode).toBe('5132');
+    });
+
+    // The run takes the first 2000 of the queue. A company that failed is at the back of it, so the
+    // longest queue never leaves a healthy company out for the sake of one the model fails on.
+    it('with more companies than a night takes, the ones that failed are the ones left out', async () => {
+      const { app, a } = await boot();
+      await suggested(app, a, 'R01');
+      await app.db
+        .update(companies)
+        .set({ industryFailedAt: 1_000 })
+        .where(and(eq(companies.userId, a.userId), eq(companies.name, 'R01')))
+        .run();
+      for (let from = 1; from <= 2000; from += 500) {
+        const now = Date.now();
+        await app.db
+          .insert(companies)
+          .values(
+            Array.from({ length: 500 }, (_, i) => ({
+              id: newId(),
+              userId: a.userId,
+              name: named('H', from + i),
+              status: 'suggested' as const,
+              createdAt: now + from + i,
+              updatedAt: now + from + i,
+            })),
+          )
+          .run();
+      }
+      failsFor(['R01']);
+      const run = await tagCompanies(app.db, ctxOf(a));
+      expect(run).toMatchObject({ tagged: 2000, stopped: null });
+      expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(100);
+      expect((await rowOf(app, a, 'R01')).industryAt).toBeNull();
+      expect(await failedAt(app, a, 'R01')).toBe(1_000);
+      expect((await rowOf(app, a, 'H2000')).naicsCode).toBe('5132');
+    });
+
+    it('a model that never answers usably still costs 4 calls a night, however many failed before', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 60; i++) await suggested(app, a, named('C', i));
+      vi.mocked(runStructured).mockRejectedValue(UNUSABLE);
+      for (let night = 1; night <= 3; night++) {
+        vi.mocked(runStructured).mockClear();
+        expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({
+          tagged: 0,
+          calls: 4,
+          stopped: 'invalid_output',
+        });
+      }
+    });
+
+    it('a rejected key, no key or the budget marks nobody', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 5; i++) await suggested(app, a, named('C', i));
+      vi.mocked(runStructured)
+        .mockRejectedValueOnce(REFUSED) // the batch
+        .mockRejectedValueOnce(
+          new AiUnavailableError('provider_error', 'unauthorized', { keyRejected: true }),
+        );
+      expect((await tagCompanies(app.db, ctxOf(a))).stopped).toBe('key_rejected');
+      for (let i = 1; i <= 5; i++) expect(await failedAt(app, a, named('C', i))).toBeNull();
+    });
+
+    it('a company failing alone is marked once, by the user it belongs to', async () => {
+      const { app, a, b } = await boot();
+      await suggested(app, a, 'Alone');
+      await suggested(app, b, 'Alone');
+      failsFor(['Alone']);
+      await tagCompanies(app.db, ctxOf(a));
+      expect(await failedAt(app, a, 'Alone')).not.toBeNull();
+      // The other user's company of the same name is not touched by this user's run.
+      expect(await failedAt(app, b, 'Alone')).toBeNull();
+    });
+  });
+
   it('an unusable answer for a whole batch asks each of them alone, and tags them', async () => {
     const { app, a } = await boot();
     for (let i = 1; i <= 25; i++) await suggested(app, a, `C${String(i).padStart(2, '0')}`);
