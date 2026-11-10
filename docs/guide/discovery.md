@@ -52,7 +52,8 @@ cost, based on your average cost per ranking call over the last 30 days, before 
 you confirm, they go through your [discovery budget](settings.md#models-and-budgets) like any other
 posting, so any that do not fit today wait for a later budget day. Later runs of that board are not
 capped, and a large Workday board brings in its postings over several runs, so those runs can still
-fill the budget for a while.
+fill the budget for a while. At the [measured cost](#the-review-queue) of about $0.008 a
+ranking call, the 25 postings of a first run are about $0.20.
 
 ### The pre-filter
 
@@ -266,6 +267,32 @@ role target is judged against all your role targets in that one call). A busy bo
 [**Discovery ranking cost**](settings.md#models-and-budgets) under **Settings > AI**, and narrow
 your sources if needed. The score is the model reading your role target and the posting text; it misses things a posting leaves
 out, so skim the low scorers occasionally.
+
+**What a call costs.** These figures were measured on 2026-11-10 on a throwaway instance with the
+default models, on 46 real public Greenhouse, Lever and Ashby postings ranked against one realistic
+role target, and one batch of 20 companies tagged. The cost is the tokens the provider reported
+times the prices in Opportun's price table on that date.
+
+| Call                                                        | Model and price per million tokens (in / out) | Input tokens (median / 90th percentile) | Output tokens (median / 90th percentile) | Estimated cost (median / 90th percentile) |
+| ----------------------------------------------------------- | --------------------------------------------- | --------------------------------------- | ---------------------------------------- | ----------------------------------------- |
+| `discovery.rank`, one posting (46 calls)                    | `claude-sonnet-5-5`, $2 / $10                 | 2,719 / 3,778                           | 235 / 257                                | $0.0079 / $0.0094                         |
+| `discovery.company_tags`, 20 companies in one call (1 call) | `claude-haiku-5-5`, $0.10 / $0.50             | 9,501                                   | 897                                      | $0.0014                                   |
+
+- **The default budget.** $1.00 a day ranks about 125 postings (about 106 if every call cost as
+  much as the 90th percentile). While a company waits for an industry tag, ranking stops at 90% of
+  the budget, which is about 114 postings.
+- **A new board's first run** ranks 25 postings, about $0.20.
+- **Tagging** costs about $0.07 per 1,000 companies, once for each company. Ranking is nearly all of
+  the cost.
+- **A backlog** drains at the same rate: 500 waiting postings take about four budget days at the
+  default.
+- **These are estimates at list price, not a bill.** Your AI provider's own console has the real
+  one. They come from one role target and three boards, so read them as a guide, not a guarantee.
+- **They change with** the model and its prices (a different model on the task, prices you set on
+  its policy, or an update to the price table), a longer role target or longer postings (more input
+  tokens, and a source with no role target sends all of them in one call), and the maximum output
+  you allow. **Discovery ranking cost** under **Settings > AI** and **Posting volume and ranking
+  cost** on the Sources tab show your own figures.
 
 **The title pre-filter.** Each new posting from a job board also gets a pass or filtered verdict from
 a cheap, local check, as [The pre-filter](#the-pre-filter) describes. **Decided** shows how often it
