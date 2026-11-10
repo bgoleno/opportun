@@ -7,6 +7,7 @@
 // and a contact's name are third-party or model text.
 import { Check, Search, Sparkles, Undo2, Users, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import type { NetworkCompany } from './companiesApi';
 import { AtsStatusChip } from './CompanyCard';
@@ -41,6 +42,12 @@ export function RecommendedRow(props: {
   /** The estimate line's figures, or null where there is nothing to say (#301). */
   estimate: Estimate | null;
   busy?: boolean;
+  /** Whether the row can be selected for Follow and Deny: a company not yet followed or denied. */
+  selectable: boolean;
+  selected: boolean;
+  /** The keyboard cursor (j and k), independent of the checkboxes (#302). */
+  cursor: boolean;
+  onSelect: (selected: boolean) => void;
   onCheckBoard: () => void;
   onFollow: () => void;
   onDeny: () => void;
@@ -60,10 +67,18 @@ export function RecommendedRow(props: {
   return (
     <li
       aria-labelledby={nameId}
-      className="grid min-w-0 gap-2 rounded-xl border bg-card p-4"
+      aria-current={props.cursor ? 'true' : undefined}
+      className={`grid min-w-0 gap-2 rounded-xl border bg-card p-4 ${props.cursor ? 'ring-2 ring-ring' : ''}`}
       data-company-id={c.id}
     >
       <div className="flex flex-wrap items-center gap-2">
+        {props.selectable ? (
+          <Checkbox
+            checked={props.selected}
+            onCheckedChange={(v) => props.onSelect(v === true)}
+            aria-label={`Select ${c.name}`}
+          />
+        ) : null}
         <span
           id={nameId}
           data-company-name
@@ -153,7 +168,7 @@ export function RecommendedRow(props: {
             variant="outline"
             disabled={props.busy}
             onClick={props.onUndeny}
-            aria-label={`Undo denying ${c.name}`}
+            aria-label={`Undo denying ${c.name} in Recommended companies`}
           >
             <Undo2 aria-hidden="true" />
             Undo
