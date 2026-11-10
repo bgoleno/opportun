@@ -267,13 +267,12 @@ export async function tagCompanies(
     }
     const stop = stopAfter(err);
     if (stop !== null) return { ...run, stopped: stop };
-    if (err.reason !== 'provider_error') {
-      // An unusable answer: those behind it may be fine, and this batch is tried the next night.
-      errorsInARow = 0;
-      continue;
-    }
-    // Refused, perhaps for one name in it. The list starts from the same place each night, so this
-    // batch would re-form every night and its other companies would never be tagged: ask each alone.
+    // The provider answered (an unusable answer): that ends a run of errors, as a good answer does.
+    // One that did not answer (provider_error) leaves the count as it was: the batch is not counted.
+    if (err.reason !== 'provider_error') errorsInARow = 0;
+    // Refused, or answered badly, perhaps because of one name in it (company names and titles are
+    // untrusted text in the prompt). The list starts from the same place each night, so this batch
+    // would re-form every night and its other companies would never be tagged: ask each alone.
     // The batch itself does not count towards an outage, and each single call does, so a real outage
     // stops after 4 calls. One that fails alone is not marked as tried: marking is for good, and a
     // passing error such as a rate limit must not do that to a healthy company.

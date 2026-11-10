@@ -778,6 +778,96 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
       });
     });
 
+    /** The model answers a call holding this name with something unusable, and tags the rest. */
+    function answersBadly(name: string): void {
+      vi.mocked(runStructured).mockImplementation(async (_deps, _task, opts) => {
+        const system = (opts as { system: string }).system;
+        if (system.includes(`name: ${name}\n`)) throw new AiUnavailableError('invalid_output');
+        return { tags: refsIn(system).map((ref) => ({ ref, code: '5132' })) } as never;
+      });
+    }
+    const TAGGED = { tags: [{ ref: 'c1', code: '5132' }] } as never;
+
+    // tl on https://github.com/bgoleno/opportun/pull/284: a name that steers the model to answer badly
+    // strands its neighbours the same way, and is the likelier of the two.
+    it('one name that gets an unusable answer among 46 tags the other 45, and is not marked', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 46; i++) await suggested(app, a, named(i));
+      answersBadly('C07');
+      expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+        tagged: 45,
+        calls: 23,
+        failed: 2,
+        stopped: null,
+      });
+      expect(await rowOf(app, a, 'C07')).toMatchObject({ naicsCode: null, industryAt: null });
+      expect((await rowOf(app, a, 'C06')).naicsCode).toBe('5132');
+      expect((await rowOf(app, a, 'C08')).naicsCode).toBe('5132');
+    });
+
+    it('an unusable answer alone does not count towards errors in a row', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 6; i++) await suggested(app, a, named(i));
+      const BAD = new AiUnavailableError('invalid_output');
+      vi.mocked(runStructured)
+        .mockRejectedValueOnce(REFUSED) // the batch
+        .mockRejectedValueOnce(BAD)
+        .mockRejectedValueOnce(BAD)
+        .mockRejectedValueOnce(BAD)
+        .mockRejectedValueOnce(BAD)
+        .mockResolvedValueOnce(TAGGED)
+        .mockResolvedValueOnce(TAGGED);
+      expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({
+        tagged: 2,
+        calls: 7,
+        stopped: null,
+      });
+    });
+
+    // The count is of calls, in a row, across batches: a batch that gets an answer ends the run of
+    // errors, so one night's few refusals in two places never add up to an outage.
+    it('a batch that succeeds starts the count of errors in a row again', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 60; i++) await suggested(app, a, named(i));
+      tagsEverything();
+      const once = vi.mocked(runStructured);
+      once.mockRejectedValueOnce(REFUSED); // batch 1
+      for (let i = 1; i <= 18; i++) once.mockResolvedValueOnce(TAGGED); // C01 to C18
+      once.mockRejectedValueOnce(REFUSED).mockRejectedValueOnce(REFUSED); // C19, C20: 2 in a row
+      // Batch 2 answers (the default), so the count is 0 again.
+      once.mockImplementationOnce(async (_deps, _task, opts) => {
+        const system = (opts as { system: string }).system;
+        return { tags: refsIn(system).map((ref) => ({ ref, code: '5132' })) } as never;
+      });
+      once.mockRejectedValueOnce(REFUSED); // batch 3
+      once.mockRejectedValueOnce(REFUSED).mockRejectedValueOnce(REFUSED); // C41, C42: 2 in a row
+      // With the count not started again, C41 would have been the third in a row and stopped it.
+      expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+        tagged: 56,
+        calls: 43,
+        failed: 6,
+        stopped: null,
+      });
+    });
+
+    it('a batch with an unusable answer starts the count of errors in a row again', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 40; i++) await suggested(app, a, named(i));
+      tagsEverything();
+      const once = vi.mocked(runStructured);
+      once.mockRejectedValueOnce(REFUSED); // batch 1
+      for (let i = 1; i <= 18; i++) once.mockResolvedValueOnce(TAGGED); // C01 to C18
+      once.mockRejectedValueOnce(REFUSED).mockRejectedValueOnce(REFUSED); // C19, C20: 2 in a row
+      once.mockRejectedValueOnce(new AiUnavailableError('invalid_output')); // batch 2: it answered
+      once.mockRejectedValueOnce(REFUSED); // C21: the first in a row, not the third
+      expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+        tagged: 37,
+        calls: 42,
+        failed: 5,
+        stopped: null,
+      });
+    });
+
     it('a rejected key during the single calls stops at once', async () => {
       const { app, a } = await boot();
       for (let i = 1; i <= 5; i++) await suggested(app, a, named(i));
@@ -849,7 +939,7 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
     });
   });
 
-  it('an unusable answer moves on to the next batch, and those wait for another night', async () => {
+  it('an unusable answer for a whole batch asks each of them alone, and tags them', async () => {
     const { app, a } = await boot();
     for (let i = 1; i <= 25; i++) await suggested(app, a, `C${String(i).padStart(2, '0')}`);
     vi.mocked(runStructured)
@@ -858,13 +948,14 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
         const refs = refsIn((opts as { system: string }).system);
         return { tags: refs.map((ref) => ({ ref, code: '5132' })) } as never;
       });
+    // The batch, then each of its 20 alone, then the 5 behind it.
     expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
-      tagged: 5,
-      calls: 2,
+      tagged: 25,
+      calls: 22,
       failed: 1,
       stopped: null,
     });
-    expect((await rowOf(app, a, 'C01')).industryAt).toBeNull();
+    expect((await rowOf(app, a, 'C01')).naicsCode).toBe('5132');
     expect((await rowOf(app, a, 'C25')).naicsCode).toBe('5132');
   });
 
