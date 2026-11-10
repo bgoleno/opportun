@@ -99,8 +99,7 @@ const DiscoveryBudgetBody = z.object({
   dailyUsd: z.number().min(MIN_DISCOVERY_DAILY_USD).max(MAX_DISCOVERY_DAILY_USD),
 });
 const UsageQuery = z.object({ days: z.coerce.number().int().min(1).max(366).default(30) });
-const UsageMetrics = {
-  taskKey: z.string(),
+const UsageSums = {
   runs: z.number().int(),
   errors: z.number().int(),
   inputTokens: z.number().int(),
@@ -108,10 +107,25 @@ const UsageMetrics = {
   estCostUsd: z.number(),
   estimated: z.boolean(),
 };
+const UsageMetrics = { taskKey: z.string(), ...UsageSums };
 const UsageSchema = z.object({
   days: z.number().int(),
   items: z.array(z.object({ day: z.string(), ...UsageMetrics })),
   totals: z.array(z.object(UsageMetrics)),
+  // By feature (#341): every feature and task, zero where nothing ran.
+  features: z.array(
+    z.object({
+      feature: z.string(),
+      label: z.string(),
+      ...UsageSums,
+      tasks: z.array(
+        z.object({
+          ...UsageMetrics,
+          models: z.array(z.object({ provider: z.string(), model: z.string(), ...UsageSums })),
+        }),
+      ),
+    }),
+  ),
 });
 
 const PolicyOut = z.object({

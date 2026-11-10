@@ -1,6 +1,7 @@
 // The AI run ledger (FR-A5): one task_runs row per router call, success or failure. It
 // stores token counts and cost only, never prompt text or keys.
 import { newId } from '@opportun/core';
+import { FEATURES, TASK_FEATURE, tasksOfFeature } from '@opportun/ai';
 import type { TaskKey, TaskRunRecord } from '@opportun/ai';
 import { and, eq, gte, sql } from 'drizzle-orm';
 import { countAll, maxBoolAsInt, utcDay } from '../db/dialect';
@@ -103,12 +104,102 @@ export interface UsageRow {
   estimated: boolean;
 }
 
+type UsageMetrics = Omit<UsageRow, 'taskKey'>;
+
+/** One model a task used in the window. */
+export interface ModelUsage extends UsageMetrics {
+  provider: string;
+  model: string;
+}
+
+export interface TaskUsage extends UsageRow {
+  /** One row per provider and model the task ran on, by model name; empty when it never ran. */
+  models: ModelUsage[];
+}
+
+export interface FeatureUsage extends UsageMetrics {
+  /** A FEATURES key, or OTHER_FEATURE for task keys no longer registered. */
+  feature: string;
+  label: string;
+  tasks: TaskUsage[];
+}
+
+/**
+ * Runs whose task key is no longer in TASK_KEYS (a task renamed or retired since): counted here so
+ * the features still add up to the ledger, and listed only when there are any.
+ */
+export const OTHER_FEATURE = { key: 'other', label: 'Other' } as const;
+
 export interface UsageRollup {
   days: number;
   /** Per task per UTC day (YYYY-MM-DD), newest day first. */
   items: (UsageRow & { day: string })[];
   /** Per task over the whole window. */
   totals: UsageRow[];
+  /**
+   * Per feature over the whole window (#341): every feature in FEATURES order, each with every
+   * one of its tasks, zero where nothing ran, then OTHER_FEATURE if any run has an unknown key.
+   */
+  features: FeatureUsage[];
+}
+
+const zeroMetrics = (): UsageMetrics => ({
+  runs: 0,
+  errors: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  estCostUsd: 0,
+  estimated: false,
+});
+
+function addMetrics(into: UsageMetrics, row: UsageMetrics): void {
+  into.runs += row.runs;
+  into.errors += row.errors;
+  into.inputTokens += row.inputTokens;
+  into.outputTokens += row.outputTokens;
+  into.estCostUsd += row.estCostUsd;
+  into.estimated ||= row.estimated;
+}
+
+/**
+ * Groups per-task-and-model rows by feature. Sums what each call cost when it ran (est_cost is
+ * written by the router at call time), so a price changed since does not change an old call's
+ * cost (#341, criterion 2): nothing here reads a price.
+ */
+export function groupByFeature(
+  rows: (UsageRow & { provider: string; model: string })[],
+): FeatureUsage[] {
+  const tasks = new Map<string, TaskUsage>();
+  const taskUsage = (taskKey: string): TaskUsage => {
+    let t = tasks.get(taskKey);
+    if (t === undefined) {
+      t = { taskKey, ...zeroMetrics(), models: [] };
+      tasks.set(taskKey, t);
+    }
+    return t;
+  };
+  for (const row of rows) {
+    const { taskKey, provider, model, ...metrics } = row;
+    const t = taskUsage(taskKey);
+    addMetrics(t, metrics);
+    t.models.push({ provider, model, ...metrics });
+  }
+  const feature = (key: string, label: string, keys: string[]): FeatureUsage => {
+    const f: FeatureUsage = { feature: key, label, ...zeroMetrics(), tasks: [] };
+    for (const k of keys) {
+      const t = taskUsage(k);
+      t.models.sort((x, y) =>
+        x.model === y.model ? x.provider.localeCompare(y.provider) : x.model.localeCompare(y.model),
+      );
+      addMetrics(f, t);
+      f.tasks.push(t);
+    }
+    return f;
+  };
+  const out = FEATURES.map((f) => feature(f.key, f.label, tasksOfFeature(f.key)));
+  const unknown = [...tasks.keys()].filter((k) => !Object.hasOwn(TASK_FEATURE, k)).sort();
+  if (unknown.length > 0) out.push(feature(OTHER_FEATURE.key, OTHER_FEATURE.label, unknown));
+  return out;
 }
 
 /** The caller's usage over the last `days` UTC days, today included. */
@@ -144,10 +235,17 @@ export async function usageRollup(
     .groupBy(taskRuns.taskKey)
     .orderBy(taskRuns.taskKey)
     .all();
+  const perModel = await db
+    .select({ ...metrics, provider: taskRuns.provider, model: taskRuns.model })
+    .from(taskRuns)
+    .where(where)
+    .groupBy(taskRuns.taskKey, taskRuns.provider, taskRuns.model)
+    .all();
   // SQLite returns max() of a boolean column as 0/1.
   return {
     days,
     items: items.map((r) => ({ ...r, estimated: Boolean(r.estimated) })),
     totals: totals.map((r) => ({ ...r, estimated: Boolean(r.estimated) })),
+    features: groupByFeature(perModel.map((r) => ({ ...r, estimated: Boolean(r.estimated) }))),
   };
 }

@@ -37,7 +37,9 @@ _Two of the three states. The screenshot instance had no real key, so it shows I
 Validating an Anthropic key sends a one-token message per model, which costs a fraction of a
 cent; OpenAI keys are checked against the free model list. An OpenAI-compatible endpoint
 without a model list cannot confirm its models, which shows as Model errors even when calls
-would work.
+would work. These checks are not counted in **Usage** (under
+[Models and budgets](#models-and-budgets)) and do not count toward any budget: Opportun keeps
+no usage or cost record of them, so your provider's bill is the only place their cost shows.
 
 ## Models and budgets
 
@@ -74,10 +76,19 @@ _Editing one task's model. Set prices for a model without a list price, such as 
   [Discovery](discovery.md#follow-companies) for exactly what each call sends.
 - **Unpriced models** (local or gateway models) count at the highest listed price unless you
   enter the policy's own prices, so they still count toward the budget.
-- **Usage** shows calls, tokens and estimated cost per task per day for the last 7, 30 or 90
-  days. These are estimates from list prices: your provider's bill is the real number. A line
-  under the table counts the ranking calls refused by the per-task daily limit, today and in the
-  last 7 days; one posting can be refused more than once.
+- **Usage** shows the AI calls of the last 7, 30 or 90 days by feature: Resume tailoring,
+  Matching, Discovery, Capture, Mail, Companies, Referrals, Duplicates and Integrations. Each
+  row gives the calls (and how many failed), input tokens, output tokens and estimated cost.
+  Every feature is listed, at zero if it has not been used in the window. Open a feature to see
+  each of its tasks, also at zero if it has not run, and the model each task ran on. A task that
+  ran on more than one model gets a row for each one. A task no longer in Opportun (renamed or
+  removed in an update) is counted under **Other**, so the total still adds up. Below the
+  features, **By day** lists each task's calls per day (UTC), when there were any. Each call
+  keeps the cost it was charged when it ran: a later change to the price table or to a model's
+  own prices changes only the calls made after it. These are estimates from list prices: your
+  provider's bill is the real number. Key checks are not counted (see above). A line under the
+  table counts the ranking calls refused by the per-task daily limit, today and in the last 7
+  days; one posting can be refused more than once.
 - **Discovery ranking cost** shows the calls that score discovered postings, for the last 7 and
   30 days: how many, the input and output tokens per call as median / 90th percentile over the
   calls that ranked, the cost per call, and the total cost, which includes calls that failed.
