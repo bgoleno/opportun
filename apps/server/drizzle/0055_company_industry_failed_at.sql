@@ -1,0 +1,1 @@
+ALTER TABLE `companies` ADD `industry_failed_at` integer;

@@ -1,0 +1,1 @@
+ALTER TABLE "companies" ADD COLUMN "industry_failed_at" bigint;

@@ -357,6 +357,13 @@ export const companies = sqliteTable(
     naicsCode: text('naics_code'),
     industrySource: text('industry_source', { enum: INDUSTRY_TAG_SOURCES }),
     industryAt: integer('industry_at'),
+    /**
+     * When the model last failed on this company asked alone (a refusal or an unusable answer,
+     * #291), so the nightly run asks it after the rest: a name it always fails on must not stand
+     * at the head of the queue, ahead of the companies behind it, every night. Ordering only: unlike
+     * industry_at it does not stop the task asking again. Cleared when the company is tagged.
+     */
+    industryFailedAt: integer('industry_failed_at'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
