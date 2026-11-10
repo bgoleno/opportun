@@ -345,6 +345,26 @@ describe('SourcesManager', () => {
   });
 });
 
+describe('Run now on a paused source (#297)', () => {
+  it('a 409 source_disabled says the source is paused and how to run it, not a success', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      ...base,
+      'POST /discovery/sources/s-gh/run': () => ({
+        status: 409,
+        body: { error: { code: 'source_disabled' } },
+      }),
+    });
+    renderWithProviders(<SourcesManager />);
+    await user.click(await screen.findByRole('button', { name: 'Run Greenhouse initech now' }));
+    expect(await screen.findByText('Run not started')).toBeInTheDocument();
+    expect(
+      screen.getByText('This source is paused. Turn on its Enabled box, then run it.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Run queued')).toBeNull();
+  });
+});
+
 describe('Workday sources', () => {
   it('labels the kind and summarizes the board as tenant/site on its host', () => {
     expect(sourceKindLabel('ats_workday')).toBe('Workday');

@@ -1288,13 +1288,6 @@ describe('discovery sources API', () => {
     });
     expect(bad.statusCode).toBe(422);
 
-    const patched = await a.request({
-      method: 'PATCH',
-      url: `/api/v1/discovery/sources/${id}`,
-      payload: { enabled: false },
-    });
-    expect(patched.json().enabled).toBe(false);
-
     const run = await a.request({ method: 'POST', url: `/api/v1/discovery/sources/${id}/run` });
     expect(run.statusCode).toBe(202);
     const job = await app.db.select().from(jobs).where(eq(jobs.id, run.json().jobId)).get();
@@ -1322,6 +1315,50 @@ describe('discovery sources API', () => {
         })
       ).json().id,
     read: (c, id) => c.request({ method: 'GET', url: `/api/v1/discovery/sources/${id}` }),
+  });
+
+  it('run-now on a disabled board source is refused with 409 source_disabled, nothing queued; enabled, it queues (#297)', async () => {
+    const { app, a } = await boot();
+    const created = await a.request({
+      method: 'POST',
+      url: '/api/v1/discovery/sources',
+      payload: { kind: 'ats_lever', config: { org: 'initech' } },
+    });
+    const id = created.json().id;
+    const patched = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/discovery/sources/${id}`,
+      payload: { enabled: false },
+    });
+    expect(patched.json().enabled).toBe(false);
+
+    const refused = await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/sources/${id}/run`,
+    });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toEqual({ error: { code: 'source_disabled' } });
+    // The refusal does not turn the source on: enabling is the user's own decision.
+    const after = await a.request({ method: 'GET', url: `/api/v1/discovery/sources/${id}` });
+    expect(after.json().enabled).toBe(false);
+    expect(await app.db.select().from(jobs).where(eq(jobs.kind, DISCOVERY_RUN_KIND)).all()).toEqual(
+      [],
+    );
+
+    // Switched back on, the same call queues a run as before.
+    await a.request({
+      method: 'PATCH',
+      url: `/api/v1/discovery/sources/${id}`,
+      payload: { enabled: true },
+    });
+    const queued = await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/sources/${id}/run`,
+    });
+    expect(queued.statusCode).toBe(202);
+    expect(
+      await app.db.select().from(jobs).where(eq(jobs.kind, DISCOVERY_RUN_KIND)).all(),
+    ).toHaveLength(1);
   });
 
   it('run-now on a channel without an adapter (alert_email, manual) is 422, nothing queued', async () => {

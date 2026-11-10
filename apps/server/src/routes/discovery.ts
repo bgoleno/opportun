@@ -794,7 +794,10 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  /** Run now: queues a run (deduped while one is unfinished), whatever the schedule says. */
+  /**
+   * Run now: queues a run (deduped while one is unfinished), whatever the schedule says. A
+   * disabled source is refused with 409 source_disabled (#297).
+   */
   api.post(
     '/discovery/sources/:id/run',
     { schema: { params: IdParams, response: { 202: z.object({ jobId: z.string() }) } } },
@@ -803,6 +806,9 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       const source = await getSourceRow(db, ctx, req.params.id);
       // Channels that deliver postings themselves (alert_email, manual, extension) have no adapter.
       if (!hasSource(source.kind)) throw new HttpError(422, 'source_not_runnable');
+      // A run skips a disabled source, so queueing one would answer 202 and then do nothing (#297).
+      // Refuse instead of enabling it: turning a source on is the user's own decision.
+      if (!source.enabled) throw new HttpError(409, 'source_disabled');
       const jobId = await enqueue(
         db,
         DISCOVERY_RUN_KIND,
