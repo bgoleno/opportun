@@ -18,7 +18,7 @@
 // C-1: nothing here fetches anything. The posting URL is provenance metadata.
 import { dedupeKey, type NormalizedPosting, type OpportunityStage } from '@opportun/core';
 import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
-import { withTransaction, type Db, type Exec } from '../db/client';
+import { lockScope, withTransaction, type Db, type Exec } from '../db/client';
 import { ilike, jsonText } from '../db/dialect';
 import { discoveryResults, opportunities } from '../db/schema';
 import { POSTING_RECONCILE_KIND } from '../jobs/discoveryKinds';
@@ -429,6 +429,11 @@ async function settleLead(
   posting: NormalizedPosting,
   identity: string | null,
 ): Promise<Settled> {
+  // The user's lock, ahead of any row write (lock order, repos/submissionReview.ts submissionScope):
+  // createOpportunity's company lookup takes it later, after setResolution or createLead has
+  // written a row, and a writer holding it while it waits on that row would close a cycle (40P01).
+  // The ingest lock is already held, taken by withTransaction below.
+  await lockScope(tx, `user:${ctx.userId}`);
   const match = await findMatch(tx, ctx, posting);
   await racePoint('captureResolve.matched.locked');
   const [primary, ...rest] = match.leads;

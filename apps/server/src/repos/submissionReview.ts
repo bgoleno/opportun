@@ -63,7 +63,11 @@ const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
  * Lock order, for every path that takes more than one (tl on #154): the attempt's lock
  * (`submission:<id>`) first, then a resume's (`resume:<id>`, repos/resumeSends.ts resumeScope:
  * attest, recording a send, deleting a resume), then the user's (`user:<id>`, taken by the
- * review cap and by findOrCreateCompanySync), then rows. Every advisory lock comes before any
+ * review cap and by findOrCreateCompanySync), then rows. Discovery's two locks join the order:
+ * the user's discovery lock (`discovery.ingest:<userId>`, repos/discovery.ts ingestScope: a run
+ * storing a posting, and a capture, which then takes `user:<id>` straight after it, before any row)
+ * comes before `user:<id>`, and the company's board-source lock (`discovery.board_source:<id>`,
+ * jobs/atsDetect.ts) is taken alone in its transaction. Every advisory lock comes before any
  * row write: a row write's cascade or foreign-key check can wait on a row another transaction
  * locked, so a lock taken after a write can close a cycle with one taken before (sec on #164:
  * attest wrote the attempt, then waited on the resume lock a resume delete held while its

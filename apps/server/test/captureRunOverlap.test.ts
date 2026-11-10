@@ -17,6 +17,7 @@ import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import { enqueue, runNextJob } from '../src/jobs/runner';
 import { resolveCapture } from '../src/lib/captureResolve';
 import type { UserCtx } from '../src/repos/base';
+import { createCompany } from '../src/repos/companies';
 import { createSource, getResult, setRankDeferred } from '../src/repos/discovery';
 import { getOpportunity } from '../src/repos/opportunities';
 import { useApi } from './api';
@@ -268,6 +269,26 @@ describe('a capture and a board run on one posting', () => {
     await runBoard(app, a, sourceId);
     const rows = await rowsOf(app, a);
     expect(rows.map((r) => r.id)).toEqual([resultId]);
+  });
+
+  // Lock order (repos/submissionReview.ts): every advisory lock before any row write. The capture
+  // writes the lead's row before createOpportunity reaches the company lookup, which takes the
+  // user's lock, so a writer holding that lock and waiting on the row would close a cycle (40P01).
+  // Pinned from the other end: a taker of the user's lock is held while the capture is only
+  // parked after its look, before any write. On SQLite everything waits at the gate, so this is
+  // Postgres only.
+  it.runIf(!sqliteOnly)("a capture takes the user's lock before its first row write", async () => {
+    const { app, a } = await boot();
+    const sourceId = await boardWithThePosting(app, a);
+    await runBoard(app, a, sourceId);
+    const [first, second] = await heldApart(
+      app,
+      'captureResolve.matched.locked',
+      () => capture(app, a),
+      () => createCompany(app.db, ctxOf(a), { name: 'Unrelated Co', status: 'followed' }),
+    );
+    expect(first.createdOpportunity).toBe(true);
+    expect(second.name).toBe('Unrelated Co');
   });
 
   // On SQLite every write waits at the one gate, so only Postgres can say whose lock this is.
