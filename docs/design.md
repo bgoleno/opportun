@@ -1062,7 +1062,7 @@ keys listed in the catalog, each with a value of its declared type:
 | `code`                  | up to 64 characters of letters, digits, `_`, `-` and `.`: an error class, a database error code, a provider's response id                                                     |
 | `model`                 | a model id: up to 128 characters, segments of letters, digits and `. _ : -`, with at most one `/` and not at the start. Anything else, such as a file path, becomes `_OTHER`. |
 | `route`                 | a route template as registered, never a request's path                                                                                                                        |
-| `ip`                    | an IP address literal that `node:net` `isIP()` accepts, nothing else. Local only: no setting or flag makes an `ip` key exportable. `client.address` is its only key.          |
+| `ip`                    | an IP literal that `node:net` `isIP()` accepts. Log only: no span, metric or event carries it, so no telemetry table or exporter gets it. `client.address` is its only key.   |
 
 So there is no place a prompt, a response, a resume, a person's name, an email address, a
 phone number, an error message, a URL's path or query, SQL text or a header can go. An IP
@@ -1152,7 +1152,7 @@ step with `obs/catalog.ts`, so "only catalogued keys" is something a reader can 
 - **Requests** are logged by Opportun's own plugin, with the method, the route template and
   the route's id parameters, not the URL. Fastify's built-in request logging, which writes the
   raw URL, is turned off. The request's address stays in the local access log, as the
-  local-only key `client.address` (14.8), and is never exported.
+  log-only key `client.address` (14.8): it is never in the telemetry tables and never exported.
 - **Today's log calls are brought under it.** Some pass a URL, a host or an error object, or
   build their message from data. FR-T5 changes each to catalogued keys and a fixed, catalogued
   message. Until a call is changed, the gate drops its unknown keys and replaces its message.
