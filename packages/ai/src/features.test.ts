@@ -23,7 +23,9 @@ describe('FEATURES and TASK_FEATURE (#341)', () => {
   it('maps every task key to a listed feature, and nothing else', () => {
     const keys = new Set(FEATURES.map((f) => f.key));
     expect(Object.keys(TASK_FEATURE).sort()).toEqual([...TASK_KEYS].sort());
-    for (const task of TASK_KEYS) expect(keys.has(TASK_FEATURE[task]), task).toBe(true);
+    for (const [task, feature] of Object.entries(TASK_FEATURE)) {
+      expect(keys.has(feature), task).toBe(true);
+    }
   });
 
   it('gives every feature at least one task, in registry order', () => {

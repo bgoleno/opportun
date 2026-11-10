@@ -131,7 +131,7 @@ describe('UsageTable by feature (#341)', () => {
     renderWithProviders(<UsageTable />);
     const table = await screen.findByRole('table', { name: 'AI usage by feature' });
     for (const label of ['Mail', 'Matching', 'Discovery']) {
-      const r = within(table).getByRole('row', { name: new RegExp(`^${label}`) });
+      const r = within(table).getByRole('row', { name: (name) => name.startsWith(label) });
       expect(cells(r).slice(1)).toEqual(['', '0', '0', '0', '$0.00']);
     }
     expect(screen.queryByText('No AI calls in this window.')).not.toBeInTheDocument();

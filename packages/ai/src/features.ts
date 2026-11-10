@@ -46,7 +46,10 @@ export const TASK_FEATURE: Record<TaskKey, FeatureKey> = {
   'integration.diagnose': 'integrations',
 };
 
+// Read through a Map, so a key from storage never indexes the object.
+const FEATURE_OF = new Map<string, FeatureKey>(Object.entries(TASK_FEATURE));
+
 /** A feature's tasks, in TASK_KEYS order. */
 export function tasksOfFeature(feature: FeatureKey): TaskKey[] {
-  return TASK_KEYS.filter((task) => TASK_FEATURE[task] === feature);
+  return TASK_KEYS.filter((task) => FEATURE_OF.get(task) === feature);
 }
