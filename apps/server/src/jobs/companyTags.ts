@@ -18,9 +18,9 @@ import {
   runStructured,
 } from '@opportun/ai';
 import { isNaicsCode, NAICS_2022_INDUSTRY_GROUPS } from '@opportun/core';
-import { and, asc, desc, eq, exists, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, gt, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import type { Db } from '../db/client';
+import { runCount, type Db } from '../db/client';
 import { jsonText } from '../db/dialect';
 import {
   companies,
@@ -59,11 +59,13 @@ const OUTAGE_AFTER_ERRORS = 3;
 
 const NAICS_TABLE_TEXT = NAICS_2022_INDUSTRY_GROUPS.map((g) => `${g.code} ${g.title}`).join('\n');
 
-/** The candidates not yet tagged or tried. With no user, whoever's they are (the sweep's list). */
-function untaggedCandidates(db: Db, userId?: string) {
+/**
+ * The companies the tagging is for: a suggestion, or a company the user knows someone at. With no
+ * user, whoever's they are (the sweep's list). Whether one is tagged or tried is the caller's.
+ */
+function candidateScope(db: Db, userId?: string) {
   return and(
     userId === undefined ? undefined : eq(companies.userId, userId),
-    isNull(companies.industryAt),
     inArray(companies.status, ['none', 'suggested']),
     or(
       eq(companies.status, 'suggested'),
@@ -79,6 +81,48 @@ function untaggedCandidates(db: Db, userId?: string) {
           ),
       ),
     ),
+  );
+}
+
+/** The candidates not yet tagged or tried. */
+function untaggedCandidates(db: Db, userId?: string) {
+  return and(candidateScope(db, userId), isNull(companies.industryAt));
+}
+
+/**
+ * Companies the model could not place from their names alone (tried, with no code) that have since
+ * had job titles stored from their board: asked again, once for each arrival, or they would keep a
+ * name-only answer for good (https://github.com/bgoleno/opportun/issues/221, tl on #284). A tag and
+ * a user's correction have a code and are never reopened. Reopening also clears an old failed mark
+ * (#292), so a company is not put behind the rest for a failure from before. Returns how many.
+ */
+export async function reopenTriedWithTitles(db: Db, userId?: string): Promise<number> {
+  return await runCount(
+    db
+      .update(companies)
+      .set({ industryAt: null, industryFailedAt: null })
+      .where(
+        and(
+          candidateScope(db, userId),
+          isNotNull(companies.industryAt),
+          isNull(companies.naicsCode),
+          isNull(companies.industrySource),
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(discoveryResults)
+              .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
+              .innerJoin(discoverySources, eq(discoverySources.id, discoveryRuns.sourceId))
+              .where(
+                and(
+                  eq(discoverySources.companyId, companies.id),
+                  eq(discoveryResults.userId, companies.userId),
+                  gt(discoveryResults.createdAt, companies.industryAt),
+                ),
+              ),
+          ),
+        ),
+      ),
   );
 }
 
@@ -197,6 +241,7 @@ export async function tagCompanies(
 ): Promise<CompanyTagsRun> {
   const run: CompanyTagsRun = { tagged: 0, calls: 0, failed: 0, stopped: null };
   let errorsInARow = 0;
+  await reopenTriedWithTitles(db, ctx.userId);
   const prompt = await getActivePrompt(db, ctx, COMPANY_TAGS_KIND);
   if (prompt === undefined) return { ...run, stopped: 'no_prompt' };
   const candidates = await db
@@ -345,6 +390,7 @@ async function hasKey(db: Db, ctx: UserCtx): Promise<boolean> {
 
 /** Queues a run for each user with a candidate to tag, a key and room in the budget. */
 export async function sweepCompanyTags(db: Db): Promise<number> {
+  await reopenTriedWithTitles(db);
   const owners = await db
     .selectDistinct({ userId: companies.userId })
     .from(companies)

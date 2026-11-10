@@ -192,13 +192,29 @@ describe('TASKS registry', () => {
 
   it('company.suggest output is capped: at most 15, bounded name, rationale and domain guess', () => {
     const schema = TASKS['company.suggest'].outputSchema;
-    const one = { name: 'Initech', rationale: 'Hires platform engineers.', domainGuess: null };
+    const one = {
+      name: 'Initech',
+      rationale: 'Hires platform engineers.',
+      domainGuess: null,
+      code: '5132',
+      tier: 'core',
+    };
     expect(
       schema.safeParse({ suggestions: [one, { ...one, domainGuess: 'initech.com' }] }).success,
     ).toBe(true);
     // domainGuess is nullable, not optional: strict provider JSON modes always send the key.
-    const withoutGuess = { name: one.name, rationale: one.rationale };
+    const withoutGuess = { ...one, domainGuess: undefined };
     expect(schema.safeParse({ suggestions: [withoutGuess] }).success).toBe(false);
+    // Each suggestion carries a code and a tier (#221). The tier is one of the profile's three; the
+    // code is any short text, as in the profile and the tags: the caller drops one that is not in
+    // the confirmed profile, so one made-up code does not fail the whole answer.
+    expect(schema.safeParse({ suggestions: [{ ...one, code: 'unknown' }] }).success).toBe(true);
+    expect(schema.safeParse({ suggestions: [{ ...one, code: undefined }] }).success).toBe(false);
+    expect(schema.safeParse({ suggestions: [{ ...one, tier: undefined }] }).success).toBe(false);
+    expect(schema.safeParse({ suggestions: [{ ...one, tier: 'best' }] }).success).toBe(false);
+    expect(schema.safeParse({ suggestions: [{ ...one, code: 'x'.repeat(21) }] }).success).toBe(
+      false,
+    );
     expect(schema.safeParse({ suggestions: Array.from({ length: 16 }, () => one) }).success).toBe(
       false,
     );
@@ -334,6 +350,8 @@ describe('TASKS registry', () => {
     expect(TASK_PROMPT_VARS['capture.extract']).toEqual(['page_url_untrusted', 'page_untrusted']);
     expect(TASK_PROMPT_VARS['company.suggest']).toEqual([
       'role_targets',
+      'industry_profile_untrusted',
+      'network_companies_untrusted',
       'pipeline_untrusted',
       'denied_companies_untrusted',
     ]);

@@ -393,6 +393,20 @@
       "when": 1795200000000,
       "tag": "0055_company_industry_failed_at",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "6",
+      "when": 1795300000000,
+      "tag": "0056_company_suggestion_board_probe",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "6",
+      "when": 1795400000000,
+      "tag": "0057_company_suggest_v2_prompt",
+      "breakpoints": true
     }
   ]
 }

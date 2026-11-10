@@ -51,7 +51,18 @@ const LinkedInCaptureInput = vars('page_url_untrusted', 'page_title_untrusted', 
 /** A job page from a site without its own prompt (Indeed, #76): the same three fenced inputs. */
 const JobCaptureInput = vars('page_url_untrusted', 'page_title_untrusted', 'page_untrusted');
 const PostingMergeInput = vars('ats_untrusted', 'capture_untrusted');
-const SuggestInput = vars('role_targets', 'pipeline_untrusted', 'denied_companies_untrusted');
+/**
+ * The confirmed industry profile and the names of the companies where the user knows someone
+ * (#221). Both are fenced: the profile's reasons are model text, and company names are third-party
+ * data. The network names are names only, never a person (decision 3 on #190).
+ */
+const SuggestInput = vars(
+  'role_targets',
+  'industry_profile_untrusted',
+  'network_companies_untrusted',
+  'pipeline_untrusted',
+  'denied_companies_untrusted',
+);
 /** An error message the user pasted from Google's console or consent screen. */
 const DiagnoseInput = vars('error_untrusted');
 
@@ -240,7 +251,12 @@ export const JobCaptureOutputSchema = z.object({
   compNote: z.string().max(500).nullable(),
 });
 
-/** Companies worth following (FR-D8); capped so one run cannot flood the queue. */
+/**
+ * Companies worth following (FR-D8); capped so one run cannot flood the queue. Each carries the
+ * profile row it was found for (#221): a NAICS code and its tier. The code is any short text, as in
+ * the profile and the tags: the caller drops a suggestion whose code is not in the user's confirmed
+ * profile, so one made-up code does not fail the whole answer.
+ */
 export const SuggestOutputSchema = z.object({
   suggestions: z
     .array(
@@ -248,6 +264,8 @@ export const SuggestOutputSchema = z.object({
         name: z.string().max(200),
         rationale: z.string().max(500),
         domainGuess: z.string().max(200).nullable(),
+        code: z.string().max(20),
+        tier: z.enum(['core', 'similar', 'adjacent']),
       }),
     )
     .max(15),
@@ -372,7 +390,7 @@ export const TASKS: Record<TaskKey, TaskDef<any, any>> = {
   ),
   'company.suggest': def(
     'company.suggest',
-    'Suggests companies worth following, given the role targets and past decisions.',
+    'Suggests companies worth following, given the role targets, the confirmed industry profile, the network companies and past decisions.',
     SuggestInput,
     SuggestOutputSchema,
   ),

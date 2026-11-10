@@ -114,12 +114,32 @@ rest wait for a later night. Each call sends the company's name, its domain, and
 from postings already stored from its board. So the names of companies in your network do go to your
 provider; nothing about your contacts does, and no board is fetched for this. A tag is created once
 and kept. Open **Industry** on a row to correct it, and your choice stands. A company the model could
-not place says so, and is not asked about again, though you can still set one.
+not place says so, and is not asked about again until job titles arrive from its board: then it is
+asked once more, with those titles, and once more for each later arrival. You can still set one
+yourself at any time. A suggested company already has the industry it was suggested for (see below),
+so it is not asked about at all.
 
 **Suggested companies** comes from the `company.suggest` task, which once a week (Tuesdays)
-proposes companies worth following, based on your role targets and past decisions, each with its
-reason. **Follow** one and Opportun looks for its job board; **Deny** it and it is not suggested
-again.
+proposes companies worth following, each with its reason, the industry it was suggested for and
+that industry's tier. It looks for companies in the industries you confirmed under
+[Where to look](#where-to-look), like the companies in your network and your pipeline, and it
+drops any suggestion outside those industries. Until you have confirmed an industry, it suggests as
+before, from your role targets and past decisions, and nothing is dropped. **Follow** one and
+Opportun looks for its job board; **Deny** it and it is not suggested again.
+
+**What the suggestions send.** The call sends your AI provider your role targets, your confirmed
+industries (the code, its title and tier, and the one-line reason), the names of the companies in
+your pipeline and the companies you denied, the job titles you recently accepted or dismissed, and
+**the names of the companies where you know someone: their names only, never a person**. That
+list is the 500 companies where you know the most people, the most first, and it is sent every week
+with no setting to turn it off. No contact's name, email, notes, LinkedIn address or tags, and no
+count of how many people you know, is sent.
+
+**The board check.** After each run, every new suggestion gets one board check with no AI call:
+Opportun finds its public job board, reads the list of its open jobs once, and keeps how many
+there are and how many of them the [pre-filter](#the-pre-filter) passes for your role targets. It
+only reads public job board pages, and it does not follow the company: the board stays switched off
+until you follow it.
 
 ![The Companies tab. At the top, Where to look is collapsed and shows 1 confirmed, 2 to review. In your network lists Initech, with Priya Example and Sam Example named under You know 2 people here and Follow and Deny buttons, and Globex, marked Following with no board found. Suggested companies lists Pied Piper with its reason and Follow and Deny buttons](images/discovery-companies.png)
 

@@ -65,6 +65,10 @@ _Editing one task's model. Set prices for a model without a list price, such as 
   add one. Raising the budget starts ranking what waits right away. The usage card shows today's spend against it and how many postings wait.
   The per-task limit above stays as a hard stop behind it, so a budget above $5.00 still stops
   there.
+- **What the AI is sent about your network.** Company suggestions send your AI provider the
+  **names of the companies where you know someone**, never a person, and tagging sends a company's
+  name, its domain and up to 10 job titles from its board. See
+  [Discovery](discovery.md#follow-companies) for exactly what each call sends.
 - **Unpriced models** (local or gateway models) count at the highest listed price unless you
   enter the policy's own prices, so they still count toward the budget.
 - **Usage** shows calls, tokens and estimated cost per task per day for the last 7, 30 or 90
