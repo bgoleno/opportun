@@ -85,6 +85,17 @@ function scheduleText(s: DiscoverySource): string {
   return s.scheduleCron === null ? 'Run now only' : `On schedule: ${s.scheduleCron}`;
 }
 
+/** What the toast says when the server refuses Run now: its reason, in words (#297). */
+function runNowRefusal(err: unknown): string {
+  if (err instanceof ApiError && err.code === 'source_not_runnable') {
+    return 'This source cannot be run on demand: its postings arrive on their own.';
+  }
+  if (err instanceof ApiError && err.code === 'source_disabled') {
+    return 'This source is paused. Turn on its Enabled box, then run it.';
+  }
+  return errorMessage(err);
+}
+
 type Editing = { mode: 'create' } | { mode: 'edit'; source: DiscoverySource } | null;
 
 export function SourcesManager() {
@@ -136,10 +147,7 @@ export function SourcesManager() {
       onError: (err) =>
         toast({
           title: 'Run not started',
-          description:
-            err instanceof ApiError && err.code === 'source_not_runnable'
-              ? 'This source cannot be run on demand: its postings arrive on their own.'
-              : errorMessage(err),
+          description: runNowRefusal(err),
           variant: 'destructive',
         }),
     });
