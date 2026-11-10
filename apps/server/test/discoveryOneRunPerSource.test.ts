@@ -213,6 +213,28 @@ describe('#269 criterion 2: Run now during a run says so, and starts nothing', (
     await first;
   });
 
+  // tl on https://github.com/bgoleno/opportun/pull/322 (https://github.com/bgoleno/opportun/issues/327):
+  // the refusal is for that source only.
+  it("Run now on one source while another of the user's sources runs: 202, and it runs", async () => {
+    const { app, a } = await boot();
+    const slow = slowBoard();
+    const busy = await board(app, a);
+    const other = await createSource(app.db, ctxOf(a), {
+      kind: 'ats_lever',
+      config: { org: 'initech-other' },
+      roleTargetId: null,
+    });
+    await scheduled(app, a, busy.id);
+    const first = runOne(app);
+    await slow.firstStarted;
+    const res = await runNow(a, other.id);
+    expect(res.statusCode, res.body).toBe(202);
+    await runOne(app);
+    expect(slow.state.reads).toBe(2);
+    slow.release();
+    await first;
+  });
+
   it("another user's run of a source of their own does not refuse this user's Run now", async () => {
     const { app, a, b } = await boot();
     const slow = slowBoard();

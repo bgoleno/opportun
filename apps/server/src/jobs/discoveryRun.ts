@@ -9,7 +9,7 @@ import { dedupeKey, newId, NormalizedPostingSchema, type NormalizedPosting } fro
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { getSource, SourceConfigError, type SourceContext } from '../adapters/discoverySource';
-import { lockScope, withTransaction, type Db } from '../db/client';
+import { isLockTimeout, lockScope, withTransaction, type Db } from '../db/client';
 import { jsonText } from '../db/dialect';
 import {
   discoveryResults,
@@ -437,7 +437,10 @@ export async function insertLeads(
     // refused at its lock wait (#309) is an expected end now (tl on
     // https://github.com/bgoleno/opportun/pull/318). The source's own health is left alone: a
     // channel's status says nothing about one capture.
-    await finishRun(db, ctx, run.id, { error: errorText(err), stats: { ...stats } });
+    // A lock wait that ran out is the capture's busy refusal, not a fault: say it as the capture
+    // dialog does, not in the database's words (#324). Anything else keeps its error as it was.
+    const error = isLockTimeout(err) ? CAPTURE_BUSY_RUN_TEXT : errorText(err);
+    await finishRun(db, ctx, run.id, { error, stats: { ...stats } });
     throw err;
   }
   await withTransaction(db, async (tx) => {
@@ -472,6 +475,10 @@ async function assertMayRun(
 function errorText(err: unknown): string {
   return err instanceof Error ? `${err.name}: ${err.message}` : String(err);
 }
+
+/** A capture's run refused at its lock wait (#309), in Run history (#324). */
+const CAPTURE_BUSY_RUN_TEXT =
+  'Not saved: another capture of yours was still being saved. Capture it again in a few seconds.';
 
 /** The `skipped` stat on a run that did not start because its source was paused (#310). */
 export const SKIPPED_DISABLED = 'source_disabled';
