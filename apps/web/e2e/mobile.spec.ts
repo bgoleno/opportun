@@ -391,9 +391,10 @@ async function stubDiscoveryResults(page: Page): Promise<void> {
   });
 }
 /**
- * Serves the Companies tab's three lists with stub companies (qa's sweep on #195): an unbroken
- * name and domain, a suggestion whose "Why" holds a board URL, a followed company whose detected
- * board slug is long, and a denied company with an unbroken name.
+ * Serves the Companies tab with stub companies (qa's sweep on #195): an unbroken name and domain,
+ * a suggestion whose "Why" holds a board URL, a followed company whose detected board slug is long,
+ * and a denied company with an unbroken name; for the Recommended companies list (#300), a
+ * confirmed industry whose reason is unbroken text too, and tags on the companies that fit it.
  */
 const stubCompanyBase = (now: number) => ({
   userId: 'stub-user',
@@ -428,6 +429,9 @@ async function stubCompanies(page: Page): Promise<void> {
               name: UNBROKEN_COMPANY,
               status: 'suggested',
               suggestionRationale: `You applied to two of its roles; its board is ${UNBROKEN}`,
+              naicsCode: '5132',
+              industrySource: 'ai',
+              industryAt: now,
             },
           ]
         : status === 'denied'
@@ -461,7 +465,11 @@ async function stubCompanies(page: Page): Promise<void> {
       ],
     });
     const items = [
-      row('stub-net-n', { status: 'none' }, 'not_checked'),
+      row(
+        'stub-net-n',
+        { status: 'none', naicsCode: '5132', industrySource: 'ai', industryAt: Date.now() },
+        'not_checked',
+      ),
       row(
         'stub-net-f',
         {
@@ -473,10 +481,29 @@ async function stubCompanies(page: Page): Promise<void> {
         'found',
       ),
     ];
+    // The list asks for every company once, denied ones included, and hides them until asked.
     if (new URL(route.request().url()).searchParams.get('showDenied') === 'true') {
       items.push(row('stub-net-d', { status: 'denied', atsKind: 'none' }, 'not_found'));
     }
     await route.fulfill({ json: { items } });
+  });
+  // One confirmed industry, its reason unbroken: the fit line on the rows above (#300).
+  await page.route(/\/api\/v1\/discovery\/industry-profile$/, async (route) => {
+    if (route.request().method() !== 'GET') return await route.fallback();
+    await route.fulfill({
+      json: {
+        items: [
+          {
+            code: '5132',
+            title: 'Software Publishers',
+            tier: 'core',
+            source: 'resume',
+            reason: UNBROKEN,
+            confirmed: true,
+          },
+        ],
+      },
+    });
   });
 }
 
@@ -492,9 +519,7 @@ const stubTitle = (i: number) =>
 async function spillsOutOfCards(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const out: string[] = [];
-    const cards = document.querySelectorAll(
-      '[data-result-id], [aria-label$="companies"] > li, [aria-label="Companies in your network"] > li',
-    );
+    const cards = document.querySelectorAll('[data-result-id], [aria-label$="companies"] > li');
     for (const card of cards) {
       const edge = card.getBoundingClientRect().right;
       for (const el of card.querySelectorAll('*')) {
@@ -513,32 +538,48 @@ async function spillsOutOfCards(page: Page): Promise<string[]> {
   });
 }
 
-/** Every "In your network" row with its people open, then with the denied row too (#211 item 3). */
-async function expectNetworkRowsFit(page: Page): Promise<void> {
-  const rows = page.getByRole('list', { name: 'Companies in your network' }).locator('> li');
+/**
+ * The Recommended companies list (#300 and #211 item 3): its filters on screen without scrolling
+ * sideways, then every row with its people and its industry open, then with the followed and the
+ * denied rows too.
+ */
+async function expectRecommendedRowsFit(page: Page, width: number): Promise<void> {
+  const rows = page.getByRole('list', { name: 'Recommended companies' }).locator('> li');
+  // The suggestion and the network company that is neither followed nor denied.
   await expect(rows).toHaveCount(2);
+  // Each filter and the sort end inside the screen: they stack on a phone, none runs off it.
+  const controls = page.getByRole('group', { name: 'Filter and sort the companies' });
+  for (const label of ['Source', 'Industry', 'Board', 'Sort by']) {
+    const box = await controls.getByLabel(label).boundingBox();
+    expect(box, `the ${label} control is on screen`).not.toBeNull();
+    expect(box!.x + box!.width, `the ${label} control ends inside ${width}px`).toBeLessThanOrEqual(
+      width,
+    );
+  }
   const openPeople = async (count: number) => {
     for (let i = 0; i < count; i += 1) {
       const row = rows.nth(i);
-      // Its people, and its industry with the long picker in it (#220): both must fit, open.
+      // Its people and its industry with the long picker in it (#220): both must fit, open.
       const sections = row.locator('details');
       for (let j = 0; j < (await sections.count()); j += 1) {
         if ((await sections.nth(j).getAttribute('open')) === null) {
           await sections.nth(j).locator('summary').click();
         }
       }
-      await expect(row.getByText(UNBROKEN).first()).toBeVisible();
       await expect(row.getByLabel(/^Industry of /)).toBeVisible();
     }
   };
   await openPeople(2);
-  await expectFits(page, 'the network rows with their people open');
-  expect(await spillsOutOfCards(page), 'text spilling out of a network row').toEqual([]);
-  await page.getByLabel('Show denied').check();
+  await expect(rows.nth(0).getByText(UNBROKEN).first()).toBeVisible();
+  await expectFits(page, 'the recommended rows with their people open');
+  expect(await spillsOutOfCards(page), 'text spilling out of a recommended row').toEqual([]);
+  await page.getByLabel('Show followed').check();
   await expect(rows).toHaveCount(3);
-  await openPeople(3);
-  await expectFits(page, 'the network rows with a denied row');
-  expect(await spillsOutOfCards(page), 'text spilling out of a denied network row').toEqual([]);
+  await page.getByLabel('Show denied').check();
+  await expect(rows).toHaveCount(4);
+  await openPeople(4);
+  await expectFits(page, 'the recommended rows with a followed and a denied row');
+  expect(await spillsOutOfCards(page), 'text spilling out of a followed or denied row').toEqual([]);
   // Opening the rows scrolled down, and the next tab must be on screen from the top of the page.
   await page.evaluate(() => window.scrollTo(0, 0));
 }
@@ -596,7 +637,7 @@ for (const width of DISCOVERY_WIDTHS) {
         await expectFits(page, `Discovery ${name}`);
         if (name === 'Companies') {
           expect(await spillsOutOfCards(page), 'text spilling out of a company card').toEqual([]);
-          await expectNetworkRowsFit(page);
+          await expectRecommendedRowsFit(page, width);
         }
         if (name === 'Decided') {
           for (const [decided, tabName] of [

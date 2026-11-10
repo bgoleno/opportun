@@ -135,7 +135,7 @@ describe('on the Companies tab (#220)', () => {
     contacts: [{ id: 'p1', name: 'Sam Contact', strength: null }],
   });
 
-  it('shows on a suggestion and on a company in your network, and not on a followed one', async () => {
+  it('shows on a suggestion and on a company in your network (both rows of the Recommended list), and not on a followed one', async () => {
     mockApi({
       'GET /companies/suggestions': {
         items: [company({ naicsCode: '5132', industrySource: 'ai' })],
@@ -151,13 +151,16 @@ describe('on the Companies tab (#220)', () => {
       'GET /discovery/industry-profile': { items: [] },
     });
     renderWithProviders(<CompaniesManager />);
-    const suggestions = await screen.findByRole('list', { name: 'Suggested companies' });
+    // Both are rows of the one Recommended companies list (#300). With no confirmed profile a tag
+    // is outside it, which the line says.
+    const recommended = await screen.findByRole('list', { name: 'Recommended companies' });
     expect(
-      await within(suggestions).findByText('Industry: Software Publishers'),
+      await within(recommended).findByText('Industry: Software Publishers (other industries)'),
     ).toBeInTheDocument();
-    const known = await screen.findByRole('list', { name: 'Companies in your network' });
     expect(
-      await within(known).findByText('Industry: Computer Systems Design and Related Services'),
+      await within(recommended).findByText(
+        'Industry: Computer Systems Design and Related Services (other industries)',
+      ),
     ).toBeInTheDocument();
     const followed = await screen.findByRole('list', { name: 'Followed companies' });
     await within(followed).findByText('Followed Co');

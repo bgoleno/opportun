@@ -8,11 +8,19 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { useSetCompanyIndustry, type CompanyView } from './companiesApi';
 import { NAICS_BY_TITLE } from './IndustryProfilePanel';
+import { TIER_WORDS, type Fit } from './recommended';
 
-function industryLine(c: CompanyView): string {
+function industryLine(c: CompanyView, fit?: Fit): string {
   const title = c.naicsCode == null ? undefined : naicsTitle(c.naicsCode);
   if (title !== undefined) {
-    return `Industry: ${title}${c.industrySource === 'user' ? ' (set by you)' : ''}`;
+    // How the tag stands against the confirmed profile (#300): the tier and the profile row's
+    // reason, or "other industries" for a tag outside it; and whether the user set it.
+    const notes: string[] = [];
+    if (fit?.kind === 'tier') notes.push(TIER_WORDS[fit.tier]);
+    if (fit?.kind === 'other') notes.push('other industries');
+    if (c.industrySource === 'user') notes.push('set by you');
+    const reason = fit?.kind === 'tier' && fit.row.reason ? `: ${fit.row.reason}` : '';
+    return `Industry: ${title}${notes.length === 0 ? '' : ` (${notes.join(', ')})`}${reason}`;
   }
   if (c.industryAt != null) return 'Industry: could not be placed';
   // Only a candidate gets a tag, so do not promise one to a company that was followed or denied.
@@ -21,7 +29,7 @@ function industryLine(c: CompanyView): string {
     : 'Industry: not tagged yet';
 }
 
-export function CompanyIndustry({ company: c }: { company: CompanyView }) {
+export function CompanyIndustry({ company: c, fit }: { company: CompanyView; fit?: Fit }) {
   const [open, setOpen] = useState(false);
   return (
     <details className="text-sm" open={open}>
@@ -32,7 +40,7 @@ export function CompanyIndustry({ company: c }: { company: CompanyView }) {
           setOpen((o) => !o);
         }}
       >
-        {industryLine(c)}
+        {industryLine(c, fit)}
       </summary>
       {/* Only once open: closed, 308 options on each of hundreds of rows froze the tab (tl). */}
       {open ? <IndustryForm company={c} /> : null}

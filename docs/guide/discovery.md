@@ -97,14 +97,25 @@ removed industry can come back if a later suggestion proposes it again.
 
 ### Follow companies
 
-The **Companies** tab offers companies to follow from two places.
+The **Companies** tab has one list, **Recommended companies**, under [Where to look](#where-to-look).
+It holds every company where someone in your contacts works now, read from your own contacts, and
+every company the AI suggested, each once; a company that is both shows both badges, **In your
+network** and **AI suggested**. Each row shows whether Opportun has found its job board (found, not
+checked yet, or no board found), why it is there, and **You know N people here**; open that to see
+their names. A suggestion says why it was suggested. A company with an industry says it against your
+confirmed industries: its title and your tier for it, with the reason you confirmed, or **other
+industries** when it is not one of yours.
 
-**In your network** lists every company where someone in your contacts works now, read from your
-own contacts. Each one shows whether it has a job board and **You know N people here**; open that
-to see their names. **Follow** one and Opportun looks for its job board, and it then shows
-**Following**. **Deny** one and it leaves this list and joins **Denied companies**; tick **Show
-denied** to see it here again, with **Undo**. If the list is empty, add your contacts' current
-companies under [Network](network.md).
+**Follow** one and Opportun looks for its job board, and it then shows **Following**. **Deny** one
+and it leaves this list and joins **Denied companies**. Followed and denied companies are left out
+until you tick **Show followed** or **Show denied**; a denied one has **Undo**. If the list is empty,
+add your contacts' current companies under [Network](network.md).
+
+Filter the list by **Source** (in your network, AI suggested), **Industry** (each of your confirmed
+industries, by tier, then other industries and not tagged yet) and **Board**, and sort it by **Most
+people you know** or **Best fit** (your own industries first, then similar, adjacent, other, and not
+tagged). Showing, filtering and sorting use what Opportun already has: they check no job board and
+send nothing to your AI provider.
 
 **Industry tags.** Each suggested company, and each company in your network that you have not
 followed or denied, gets an industry from the [NAICS 2022](https://www.census.gov/naics/) list. A
@@ -124,7 +135,7 @@ suggested company already has the industry it was suggested for (see below), so 
 about, unless that industry could not be read as a code from the list, in which case the nightly run
 asks as for any other company.
 
-**Suggested companies** comes from the `company.suggest` task, which once a week (Tuesdays)
+**AI suggested companies** come from the `company.suggest` task, which once a week (Tuesdays)
 proposes companies worth following, each with its reason, the industry it was suggested for and
 that industry's tier. It looks for companies in the industries you confirmed under
 [Where to look](#where-to-look), like the companies in your network and your pipeline, and it

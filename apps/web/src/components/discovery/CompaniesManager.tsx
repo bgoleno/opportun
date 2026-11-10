@@ -1,50 +1,28 @@
-// Discovery companies (FR-D8, FR-D9): the companies in the user's network
-// (https://github.com/bgoleno/opportun/issues/216), where to look (#219), the suggestion queue,
-// the followed companies with their job board detection state, and the companies denied directly
-// or from a suggestion (#199).
-import { useId, useState } from 'react';
+// Discovery companies (FR-D8, FR-D9): where to look (#219), the Recommended companies list (the
+// user's network and the suggestions, https://github.com/bgoleno/opportun/issues/300), the followed
+// companies with their job board detection state, and the companies denied directly or from a
+// suggestion (#199).
 import { FormError } from '@/components/FormError';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Label } from '@/components/ui/label';
 import { errorMessage } from '@/lib/api';
 import {
-  useAcceptCompany,
-  useCompanySuggestions,
   useDeniedCompanies,
-  useDenyCompany,
   useDenyCompanyByName,
-  useDenyNetworkCompany,
   useDetectAts,
-  useFollowCompany,
   useFollowedCompanies,
-  useNetworkCompanies,
   useSetCareersUrl,
   useUndenyCompany,
 } from './companiesApi';
-import {
-  DenyCompanyForm,
-  DeniedCompanyRow,
-  FollowedCompanyRow,
-  SuggestionCard,
-} from './CompanyCard';
+import { DenyCompanyForm, DeniedCompanyRow, FollowedCompanyRow } from './CompanyCard';
 import { IndustryProfilePanel } from './IndustryProfilePanel';
-import { NetworkCompanyRow } from './NetworkCompanyRow';
+import { RecommendedCompanies } from './RecommendedCompanies';
 
 export function CompaniesManager() {
-  const suggestions = useCompanySuggestions();
   const followed = useFollowedCompanies();
   const denied = useDeniedCompanies();
-  const accept = useAcceptCompany();
-  const deny = useDenyCompany();
   const denyByName = useDenyCompanyByName();
   const undeny = useUndenyCompany();
   const detect = useDetectAts();
   const careers = useSetCareersUrl();
-  const [showDenied, setShowDenied] = useState(false);
-  const network = useNetworkCompanies(showDenied);
-  const follow = useFollowCompany();
-  const denyNetwork = useDenyNetworkCompany();
-  const showDeniedId = useId();
 
   return (
     <div className="grid min-w-0 gap-8">
@@ -60,73 +38,7 @@ export function CompaniesManager() {
         />
       </section>
 
-      <section className="grid gap-3" aria-labelledby="network-companies-heading">
-        <h2 id="network-companies-heading" className="text-lg font-semibold">
-          In your network
-        </h2>
-        <p className="max-w-prose text-sm text-muted-foreground">
-          Companies where someone in your contacts works now, read from your own contacts.
-        </p>
-        <div className="flex items-center gap-2">
-          <Checkbox
-            id={showDeniedId}
-            checked={showDenied}
-            onCheckedChange={(v) => setShowDenied(v === true)}
-          />
-          <Label htmlFor={showDeniedId} className="text-sm font-normal">
-            Show denied
-          </Label>
-        </div>
-        {network.error ? <FormError message={errorMessage(network.error)} /> : null}
-        {network.isPending ? <p className="text-sm text-muted-foreground">Loading...</p> : null}
-        {network.data !== undefined && network.data.items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            None yet. Add your contacts' current companies under Network to see them here.
-          </p>
-        ) : null}
-        <ul className="grid gap-3" aria-label="Companies in your network">
-          {(network.data?.items ?? []).map((item) => {
-            const c = item.company;
-            const busy =
-              (follow.isPending && follow.variables?.id === c.id) ||
-              (denyNetwork.isPending && denyNetwork.variables?.id === c.id) ||
-              (undeny.isPending && undeny.variables?.id === c.id);
-            return (
-              <NetworkCompanyRow
-                key={c.id}
-                item={item}
-                busy={busy}
-                onFollow={() => follow.mutate(c)}
-                onDeny={() => denyNetwork.mutate(c)}
-                onUndeny={() => undeny.mutate(c)}
-              />
-            );
-          })}
-        </ul>
-      </section>
-
-      <section className="grid gap-3" aria-labelledby="company-suggestions-heading">
-        <h2 id="company-suggestions-heading" className="text-lg font-semibold">
-          Suggested companies
-        </h2>
-        {suggestions.error ? <FormError message={errorMessage(suggestions.error)} /> : null}
-        {suggestions.isPending ? <p className="text-sm text-muted-foreground">Loading...</p> : null}
-        {suggestions.data !== undefined && suggestions.data.items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No suggestions right now. New ones appear as your pipeline grows.
-          </p>
-        ) : null}
-        <ul className="grid gap-3" aria-label="Suggested companies">
-          {(suggestions.data?.items ?? []).map((c) => (
-            <SuggestionCard
-              key={c.id}
-              company={c}
-              onAccept={() => accept.mutate(c)}
-              onDeny={() => deny.mutate(c)}
-            />
-          ))}
-        </ul>
-      </section>
+      <RecommendedCompanies />
 
       <section className="grid gap-3" aria-labelledby="followed-companies-heading">
         <h2 id="followed-companies-heading" className="text-lg font-semibold">
