@@ -80,12 +80,14 @@ _Editing one task's model. Set prices for a model without a list price, such as 
   Matching, Discovery, Capture, Mail, Companies, Referrals, Duplicates and Integrations. Each
   row gives the calls (and how many failed), input tokens, output tokens and estimated cost.
   Every feature is listed, at zero if it has not been used in the window. Open a feature to see
-  each of its tasks, also at zero if it has not run, and the model each task ran on. A task that
-  ran on more than one model gets a row for each one. A task no longer in Opportun (renamed or
-  removed in an update) is counted under **Other**, so the total still adds up. Below the
-  features, **By day** lists each task's calls per day (UTC), when there were any. Each call
-  keeps the cost it was charged when it ran: a later change to the price table or to a model's
-  own prices changes only the calls made after it. These are estimates from list prices: your
+  each of its tasks, also at zero if it has not run, and the model each task ran on, with the
+  provider it was called through in brackets. A task that ran on more than one model gets a row
+  for each one, and so does one model reached through two providers (a gateway and the
+  provider's own API, say). A task no longer in Opportun (renamed or removed in an update) is
+  counted under **Other**, so the total still adds up. Below the features, **By day** lists each
+  task's calls per day (UTC), when there were any. Each call keeps the cost it was charged when
+  it ran: a later change to the price table or to a model's own prices changes only the calls
+  made after it. These are estimates from list prices: your
   provider's bill is the real number. Key checks are not counted (see above). A line under the
   table counts the ranking calls refused by the per-task daily limit, today and in the last 7
   days; one posting can be refused more than once.

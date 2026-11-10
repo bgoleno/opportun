@@ -15,7 +15,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { type FeatureUsage, type UsageMetrics, type UsageSums, useUsage } from './api';
+import {
+  type FeatureUsage,
+  type ModelUsage,
+  providerLabel,
+  type UsageMetrics,
+  type UsageSums,
+  useUsage,
+} from './api';
 
 const WINDOWS = [7, 30, 90] as const;
 const usd = new Intl.NumberFormat(undefined, {
@@ -80,6 +87,20 @@ function MetricCells({ row }: { row: UsageSums }) {
   );
 }
 
+/**
+ * A model and the provider it was called through (#350). One model id can be reached through two
+ * providers (an OpenAI-compatible gateway in front of OpenAI's own model, say), and the server
+ * keeps them as separate rows, so each row says which it is.
+ */
+function ModelName({ m }: { m: ModelUsage }) {
+  return (
+    <>
+      {m.model}{' '}
+      <span className="font-sans text-muted-foreground">({providerLabel(m.provider)})</span>
+    </>
+  );
+}
+
 function FeatureTable({ features }: { features: FeatureUsage[] }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const toggle = (key: string) =>
@@ -133,11 +154,13 @@ function FeatureTable({ features }: { features: FeatureUsage[] }) {
                       <TableRow>
                         <TableCell className="pl-9 font-mono text-xs">{t.taskKey}</TableCell>
                         <TableCell className="font-mono text-xs">
-                          {t.models.length === 1
-                            ? t.models[0]!.model
-                            : t.models.length > 1
-                              ? `${t.models.length} models`
-                              : ''}
+                          {t.models.length === 1 ? (
+                            <ModelName m={t.models[0]!} />
+                          ) : t.models.length > 1 ? (
+                            `${t.models.length} models`
+                          ) : (
+                            ''
+                          )}
                         </TableCell>
                         <MetricCells row={t} />
                       </TableRow>
@@ -145,7 +168,9 @@ function FeatureTable({ features }: { features: FeatureUsage[] }) {
                         ? t.models.map((m) => (
                             <TableRow key={`${m.provider}/${m.model}`}>
                               <TableCell />
-                              <TableCell className="pl-4 font-mono text-xs">{m.model}</TableCell>
+                              <TableCell className="pl-4 font-mono text-xs">
+                                <ModelName m={m} />
+                              </TableCell>
                               <MetricCells row={m} />
                             </TableRow>
                           ))

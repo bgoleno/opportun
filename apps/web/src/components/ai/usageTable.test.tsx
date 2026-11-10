@@ -23,8 +23,8 @@ const zero = {
   estCostUsd: 0,
   estimated: false,
 };
-const model = (name: string, runs: number, estCostUsd: number) => ({
-  provider: 'anthropic',
+const model = (name: string, runs: number, estCostUsd: number, provider = 'anthropic') => ({
+  provider,
   model: name,
   ...zero,
   runs,
@@ -168,7 +168,13 @@ describe('UsageTable by feature (#341)', () => {
       '$0.03',
     ]);
     const haiku = within(table).getByRole('row', { name: /claude-haiku-5-5/ });
-    expect(cells(haiku).slice(1)).toEqual(['claude-haiku-5-5', '2', '2,000', '200', '$0.01']);
+    expect(cells(haiku).slice(1)).toEqual([
+      'claude-haiku-5-5 (Anthropic)',
+      '2',
+      '2,000',
+      '200',
+      '$0.01',
+    ]);
     expect(within(table).getByRole('row', { name: /claude-sonnet-5-5/ })).toBeInTheDocument();
     // Other features stay closed.
     expect(within(table).queryByRole('row', { name: /resume\.match/ })).toBeNull();
@@ -176,10 +182,65 @@ describe('UsageTable by feature (#341)', () => {
     // A task on one model names it in its own row.
     await userEvent.click(within(table).getByRole('button', { name: 'Matching' }));
     const match = within(table).getByRole('row', { name: /resume\.match/ });
-    expect(cells(match).slice(0, 2)).toEqual(['resume.match', 'claude-opus-5-5']);
+    expect(cells(match).slice(0, 2)).toEqual(['resume.match', 'claude-opus-5-5 (Anthropic)']);
 
     await userEvent.click(toggle);
     expect(within(table).queryByRole('row', { name: /comms\.classify/ })).toBeNull();
+  });
+
+  it('names the provider on each model row, so one model id through two providers reads as two (#350)', async () => {
+    const viaTwo = {
+      feature: 'capture',
+      label: 'Capture',
+      ...zero,
+      runs: 3,
+      inputTokens: 3000,
+      outputTokens: 300,
+      estCostUsd: 0.04,
+      tasks: [
+        {
+          taskKey: 'capture.extract',
+          ...zero,
+          runs: 3,
+          inputTokens: 3000,
+          outputTokens: 300,
+          estCostUsd: 0.04,
+          models: [
+            model('gpt-6-sol', 2, 0.04, 'openai'),
+            model('gpt-6-sol', 1, 0, 'openai_compatible'),
+          ],
+        },
+        {
+          taskKey: 'capture.job',
+          ...zero,
+          runs: 1,
+          inputTokens: 1000,
+          outputTokens: 100,
+          estCostUsd: 0.5,
+          models: [model('local-llm', 1, 0.5, 'openai_compatible')],
+        },
+      ],
+    };
+    mockApi({ 'GET /ai/usage': { days: 30, items: [], totals: [], features: [viaTwo] } });
+    renderWithProviders(<UsageTable />);
+    const table = await screen.findByRole('table', { name: 'AI usage by feature' });
+    await userEvent.click(within(table).getByRole('button', { name: 'Capture' }));
+
+    const extract = within(table).getByRole('row', { name: /capture\.extract/ });
+    expect(cells(extract)[1]).toBe('2 models');
+    const openai = within(table).getByRole('row', { name: /gpt-6-sol \(OpenAI\)/ });
+    expect(cells(openai).slice(1)).toEqual(['gpt-6-sol (OpenAI)', '2', '2,000', '200', '$0.04']);
+    const gateway = within(table).getByRole('row', { name: /gpt-6-sol \(OpenAI-compatible\)/ });
+    expect(cells(gateway).slice(1)).toEqual([
+      'gpt-6-sol (OpenAI-compatible)',
+      '1',
+      '1,000',
+      '100',
+      '$0.00',
+    ]);
+    // A task on one model names its provider in its own row too.
+    const job = within(table).getByRole('row', { name: /capture\.job/ });
+    expect(cells(job)[1]).toBe('local-llm (OpenAI-compatible)');
   });
 
   it('asks for the chosen window', async () => {
