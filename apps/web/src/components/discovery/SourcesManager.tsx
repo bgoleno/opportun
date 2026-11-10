@@ -93,6 +93,10 @@ function runNowRefusal(err: unknown): string {
   if (err instanceof ApiError && err.code === 'source_disabled') {
     return 'This source is paused. Turn on its Enabled box, then run it.';
   }
+  // A run of this source is going already (#269), so a second would only read the board twice.
+  if (err instanceof ApiError && err.code === 'run_in_progress') {
+    return 'This source is already running. Its new postings arrive when that run ends: see its Run history.';
+  }
   return errorMessage(err);
 }
 
