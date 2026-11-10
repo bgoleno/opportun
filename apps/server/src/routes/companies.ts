@@ -20,8 +20,14 @@ import {
   enqueueAtsDetect,
   syncFollowedCompany,
 } from '../jobs/atsDetect';
+import {
+  BOARD_PROBE_KIND,
+  boardProbeDedupeKey,
+  enqueueBoardProbe,
+} from '../jobs/companyBoardProbe';
 import { countPendingFromCompany } from '../lib/deniedCompanies';
 import { HttpError } from '../lib/errors';
+import { rateLimit } from '../lib/rateLimit';
 import type { UserCtx } from '../repos/base';
 import {
   COMPANY_SORTS,
@@ -54,19 +60,34 @@ const CompanyQuery = listQuery([...COMPANY_SORTS.keys()]).extend({
 export const CompanyViewSchema = CompanySchema.extend({
   atsDetectPending: z.boolean(),
   needsCareersUrl: z.boolean(),
+  /**
+   * The board probe's result (#221, #301): when it ran, how many postings the board had open and how
+   * many of them the pre-filter passes. Null until it has run, and where there is no board to count.
+   * boardProbePending is true while a probe job is queued or running.
+   */
+  boardProbedAt: z.number().int().nullable(),
+  boardOpenJobs: z.number().int().nullable(),
+  boardPrefilterMatches: z.number().int().nullable(),
+  boardProbePending: z.boolean(),
 });
 type CompanyView = z.infer<typeof CompanyViewSchema>;
 
-/** Companies with an unfinished detection job, among `ids`. */
-async function pendingDetection(db: Db, ctx: UserCtx, ids: string[]): Promise<Set<string>> {
+/** Companies with an unfinished job of `kind` (a detection or a board probe), among `ids`. */
+async function pendingJobs(
+  db: Db,
+  ctx: UserCtx,
+  kind: string,
+  dedupeKey: (companyId: string) => string,
+  ids: string[],
+): Promise<Set<string>> {
   if (ids.length === 0) return new Set();
-  const keys = new Map(ids.map((id) => [atsDetectDedupeKey(id), id]));
+  const keys = new Map(ids.map((id) => [dedupeKey(id), id]));
   const rows = await db
     .select({ dedupeKey: jobs.dedupeKey })
     .from(jobs)
     .where(
       and(
-        eq(jobs.kind, ATS_DETECT_KIND),
+        eq(jobs.kind, kind),
         eq(jobs.userId, ctx.userId),
         inArray(jobs.status, ['pending', 'running']),
         inArray(jobs.dedupeKey, [...keys.keys()]),
@@ -77,24 +98,39 @@ async function pendingDetection(db: Db, ctx: UserCtx, ids: string[]): Promise<Se
 }
 
 export async function companyViews(db: Db, ctx: UserCtx, rows: Company[]): Promise<CompanyView[]> {
-  const pending = await pendingDetection(
-    db,
-    ctx,
-    rows.map((r) => r.id),
-  );
+  const ids = rows.map((r) => r.id);
+  const pending = await pendingJobs(db, ctx, ATS_DETECT_KIND, atsDetectDedupeKey, ids);
+  const probing = await pendingJobs(db, ctx, BOARD_PROBE_KIND, boardProbeDedupeKey, ids);
   return rows.map((r) => ({
     ...r,
     atsDetectPending: pending.has(r.id),
     needsCareersUrl: r.atsKind === 'none' && r.careersUrl === null,
+    boardProbePending: probing.has(r.id),
   }));
 }
 
 export const companyView = async (db: Db, ctx: UserCtx, row: Company): Promise<CompanyView> =>
   (await companyViews(db, ctx, [row]))[0]!;
 
+/**
+ * Check board clicks per user per hour (sec's ruling on https://github.com/bgoleno/opportun/issues/301).
+ * Each company can be checked once, but a user can add companies freely, so that bounds each one and
+ * not the user's total; the probe's cap of 2 is for the whole app, so one user's backlog would delay
+ * everyone's probes; and the board vendors see the instance's one shared address. 30 lets a user
+ * check every company one weekly suggestion run proposes (up to 15) and as many from the network in
+ * one sitting. Reasoned, not measured: no real use exists yet. Change it here if real use says so.
+ */
+export const CHECK_BOARD_USER_LIMIT = { limit: 30, windowMs: 60 * 60 * 1000 };
+
 export async function companyRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
   const db = app.db;
+  // One set of buckets for this app, keyed on the signed-in user and nothing from the request.
+  const checkBoardLimit = rateLimit({
+    ...CHECK_BOARD_USER_LIMIT,
+    reason: 'per_user',
+    keyFn: (req) => `check-board|${app.requireUser(req).userId}`,
+  });
 
   api.get(
     '/companies',
@@ -156,6 +192,28 @@ export async function companyRoutes(app: FastifyInstance): Promise<void> {
         ctx,
         await setCompanyIndustry(db, ctx, req.params.id, req.body.code),
       );
+    },
+  );
+
+  // Check board (#301): the user's click queues the board probe for this one company, and nothing
+  // else probes a company the user has not asked about. Refused for a company that is not a
+  // candidate (status none or suggested) or that was already checked, so the button hidden in the
+  // client is not the bound. Limited per user (above), before any lookup or enqueue.
+  api.post(
+    '/companies/:id/check-board',
+    {
+      preHandler: checkBoardLimit,
+      schema: { params: IdParams, response: { 202: z.object({ jobId: z.string() }) } },
+    },
+    async (req, reply) => {
+      const ctx = app.requireUser(req);
+      const company = await getCompany(db, ctx, req.params.id);
+      if (company.status !== 'none' && company.status !== 'suggested') {
+        throw new HttpError(409, 'not_a_candidate');
+      }
+      // A probe that failed leaves no board recorded, so the company can be asked again.
+      if (company.atsKind !== null) throw new HttpError(409, 'already_checked');
+      return reply.code(202).send({ jobId: await enqueueBoardProbe(db, ctx, company.id) });
     },
   );
 

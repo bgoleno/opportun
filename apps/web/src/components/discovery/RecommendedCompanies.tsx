@@ -16,6 +16,7 @@ import { Select } from '@/components/ui/select';
 import { errorMessage } from '@/lib/api';
 import {
   useAcceptCompany,
+  useCheckBoard,
   useCompanySuggestions,
   useDenyCompany,
   useDenyNetworkCompany,
@@ -37,6 +38,10 @@ import {
   type SourceFilter,
 } from './recommended';
 import { RecommendedRow } from './RecommendedRow';
+import { useSources } from './api';
+import { useCostFigures } from './costFigures';
+import { estimateOf } from './estimate';
+import { usePrefilterRecall } from './PrefilterRecall';
 
 const SOURCE_OPTIONS: [SourceFilter, string][] = [
   ['all', 'All'],
@@ -98,6 +103,26 @@ export function RecommendedCompanies() {
   const follow = useFollowCompany();
   const denyNetwork = useDenyNetworkCompany();
   const undeny = useUndenyCompany();
+  const check = useCheckBoard();
+  // The estimate line's figures: the 30-day cost of a rank call, whether the pre-filter acts, and
+  // each followed company's own source. All reads of the user's own records, no AI call.
+  const figures = useCostFigures();
+  const recall = usePrefilterRecall();
+  const sources = useSources();
+  const costPerCall = figures.data?.rank.find((r) => r.days === 30)?.avgCostUsd ?? null;
+  const sourceOf = useMemo(
+    () =>
+      new Map(
+        (sources.data?.items ?? []).flatMap((s) =>
+          s.companyId === null ? [] : [[s.companyId, s] as const],
+        ),
+      ),
+    [sources.data],
+  );
+  const volumeOf = useMemo(
+    () => new Map((figures.data?.sources ?? []).map((v) => [v.sourceId, v])),
+    [figures.data],
+  );
 
   const [filters, setFilters] = useState<RecommendedFilters>(NO_FILTERS);
   const [sort, setSort] = useState<RecommendedSort>('people');
@@ -256,7 +281,9 @@ export function RecommendedCompanies() {
             (deny.isPending && deny.variables?.id === c.id) ||
             (follow.isPending && follow.variables?.id === c.id) ||
             (denyNetwork.isPending && denyNetwork.variables?.id === c.id) ||
-            (undeny.isPending && undeny.variables?.id === c.id);
+            (undeny.isPending && undeny.variables?.id === c.id) ||
+            (check.isPending && check.variables?.id === c.id);
+          const source = sourceOf.get(c.id);
           // A suggestion is accepted or denied as a suggestion, even when someone in the network
           // works there too: the server refuses the other route with not_suggested.
           const isSuggestion = c.status === 'suggested';
@@ -265,7 +292,15 @@ export function RecommendedCompanies() {
               key={c.id}
               item={item}
               fit={fitOf(c, confirmed)}
+              estimate={estimateOf({
+                company: c,
+                source,
+                volume: source === undefined ? undefined : volumeOf.get(source.id),
+                costPerCall,
+                recallOn: recall.data?.on === true,
+              })}
               busy={busy}
+              onCheckBoard={() => check.mutate(c)}
               onFollow={() => (isSuggestion ? accept.mutate(c) : follow.mutate(c))}
               onDeny={() => (isSuggestion ? deny.mutate(c) : denyNetwork.mutate(c))}
               onUndeny={() => undeny.mutate(c)}

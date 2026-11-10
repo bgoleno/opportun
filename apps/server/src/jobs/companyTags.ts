@@ -102,10 +102,11 @@ export async function hasUntaggedCandidates(db: Db, userId: string): Promise<boo
 
 /**
  * Companies the model could not place from their names alone (tried, with no code) that have since
- * had job titles stored from their board: asked again, once for each arrival, or they would keep a
- * name-only answer for good (https://github.com/bgoleno/opportun/issues/221, tl on #284). A tag and
- * a user's correction have a code and are never reopened. Reopening also clears an old failed mark
- * (#292), so a company is not put behind the rest for a failure from before. Returns how many.
+ * had job titles stored from their board, or read by a board probe (#301): asked again, once for
+ * each arrival, or they would keep a name-only answer for good
+ * (https://github.com/bgoleno/opportun/issues/221, tl on #284). A tag and a user's correction have
+ * a code and are never reopened. Reopening also clears an old failed mark (#292), so a company is
+ * not put behind the rest for a failure from before. Returns how many.
  */
 export async function reopenTriedWithTitles(db: Db, userId?: string): Promise<number> {
   return await runCount(
@@ -118,19 +119,26 @@ export async function reopenTriedWithTitles(db: Db, userId?: string): Promise<nu
           isNotNull(companies.industryAt),
           isNull(companies.naicsCode),
           isNull(companies.industrySource),
-          exists(
-            db
-              .select({ one: sql`1` })
-              .from(discoveryResults)
-              .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
-              .innerJoin(discoverySources, eq(discoverySources.id, discoveryRuns.sourceId))
-              .where(
-                and(
-                  eq(discoverySources.companyId, companies.id),
-                  eq(discoveryResults.userId, companies.userId),
-                  gt(discoveryResults.createdAt, companies.industryAt),
+          or(
+            exists(
+              db
+                .select({ one: sql`1` })
+                .from(discoveryResults)
+                .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
+                .innerJoin(discoverySources, eq(discoverySources.id, discoveryRuns.sourceId))
+                .where(
+                  and(
+                    eq(discoverySources.companyId, companies.id),
+                    eq(discoveryResults.userId, companies.userId),
+                    gt(discoveryResults.createdAt, companies.industryAt),
+                  ),
                 ),
-              ),
+            ),
+            // A board probe after the answer, which read titles, counts as titles arriving (#301).
+            and(
+              isNotNull(companies.boardTitles),
+              gt(companies.boardProbedAt, companies.industryAt),
+            ),
           ),
         ),
       ),
@@ -163,6 +171,8 @@ interface Candidate {
   domain: string | null;
   /** When it last failed asked alone (#291): not used in a prompt, only to form the batches. */
   failedAt?: number | null;
+  /** The titles the board probe read (#301): used when no postings are stored from its board. */
+  boardTitles?: string[] | null;
 }
 
 /** The batch as the prompt fences it. The ref is all the model sees of which row is which. */
@@ -171,7 +181,12 @@ async function batchText(db: Db, ctx: UserCtx, batch: readonly Candidate[]): Pro
   for (const [i, company] of batch.entries()) {
     const lines = [`ref: c${i + 1}`, `name: ${line(company.name, 200)}`];
     if (company.domain !== null) lines.push(`domain: ${line(company.domain, 253)}`);
-    const titles = await storedTitles(db, ctx, company.id);
+    // Postings stored from its own board first; the probe's titles are only the fallback.
+    const stored = await storedTitles(db, ctx, company.id);
+    const titles =
+      stored.length > 0
+        ? stored
+        : (company.boardTitles ?? []).map((t) => line(t, 120)).filter((t) => t !== '');
     if (titles.length > 0) lines.push(`job titles: ${titles.join('; ')}`);
     blocks.push(lines.join('\n'));
   }
@@ -261,6 +276,7 @@ export async function tagCompanies(
       name: companies.name,
       domain: companies.domain,
       failedAt: companies.industryFailedAt,
+      boardTitles: companies.boardTitles,
     })
     .from(companies)
     .where(untaggedCandidates(db, ctx.userId))

@@ -432,6 +432,13 @@ async function stubCompanies(page: Page): Promise<void> {
               naicsCode: '5132',
               industrySource: 'ai',
               industryAt: now,
+              // A probed board with a long slug, so the estimate line is on screen (#301).
+              atsKind: 'ats_greenhouse',
+              atsRef: 'probedboardwithaverylongunbrokenslugthatkeepsgoing',
+              atsVerifiedAt: now,
+              boardProbedAt: now,
+              boardOpenJobs: 123456,
+              boardPrefilterMatches: 12345,
             },
           ]
         : status === 'denied'
@@ -547,6 +554,9 @@ async function expectRecommendedRowsFit(page: Page, width: number): Promise<void
   const rows = page.getByRole('list', { name: 'Recommended companies' }).locator('> li');
   // The suggestion and the network company that is neither followed nor denied.
   await expect(rows).toHaveCount(2);
+  // Check board on the company never checked, and the estimate line on the probed suggestion (#301).
+  await expect(rows.nth(0).getByRole('button', { name: /^Check board for / })).toBeVisible();
+  await expect(rows.nth(1).getByText(/^about \d+ new a day/)).toBeVisible();
   // Each filter and the sort end inside the screen: they stack on a phone, none runs off it.
   const controls = page.getByRole('group', { name: 'Filter and sort the companies' });
   for (const label of ['Source', 'Industry', 'Board', 'Sort by']) {

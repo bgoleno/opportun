@@ -16,6 +16,7 @@ import type { Db } from '../db/client';
 import { companies, roleTargets } from '../db/schema';
 import { adapterBoardLookup } from '../lib/postingSearch';
 import { prefilter } from '../lib/prefilter';
+import { line } from '../lib/promptText';
 import type { UserCtx } from '../repos/base';
 import { boardConfig, detectAts, type AtsKind } from './atsDetect';
 import { requireService, type JobHandler } from './registry';
@@ -36,11 +37,32 @@ export type BoardProbeOutcome =
     }
   | { status: 'skipped'; reason: 'missing' };
 
+const MAX_TITLES = 10;
+/** A title's length in the tagging prompt, as storedTitles cuts them. */
+const TITLE_CHARS = 120;
+
+/**
+ * Up to 10 different titles from the listing, newest posted first (a posting with no date after the
+ * dated ones, the listing's own order within them), each cut to 120 characters as the tagging cuts
+ * the titles it reads from stored postings. The tagging uses them for a company with no postings
+ * stored from its board (#301).
+ */
+export function listingTitles(postings: readonly NormalizedPosting[]): string[] {
+  const newestFirst = [...postings].sort((a, b) => (b.postedAt ?? -1) - (a.postedAt ?? -1));
+  const titles = new Set<string>();
+  for (const p of newestFirst) {
+    const clean = line(p.title, TITLE_CHARS);
+    if (clean !== '') titles.add(clean);
+    if (titles.size === MAX_TITLES) break;
+  }
+  return [...titles];
+}
+
 async function record(
   db: Db,
   ctx: UserCtx,
   companyId: string,
-  counts: { openJobs: number | null; prefilterMatches: number | null },
+  counts: { openJobs: number | null; prefilterMatches: number | null; titles?: string[] },
 ): Promise<void> {
   // This write leaves updatedAt alone: a probe is not the user's edit. (The detection just before it
   // records the board and moves updatedAt itself, as it does for every detection.)
@@ -50,6 +72,8 @@ async function record(
       boardProbedAt: Date.now(),
       boardOpenJobs: counts.openJobs,
       boardPrefilterMatches: counts.prefilterMatches,
+      // Null, not an empty list, when the listing had no title.
+      boardTitles: counts.titles === undefined || counts.titles.length === 0 ? null : counts.titles,
     })
     .where(and(eq(companies.userId, ctx.userId), eq(companies.id, companyId)))
     .run();
@@ -102,7 +126,11 @@ export async function probeCompanyBoard(
   const postings = Array.isArray(listing) ? listing : listing.postings;
   const openJobs = Array.isArray(listing) ? listing.length : listing.total;
   const matches = await prefilterMatches(db, ctx, postings);
-  await record(db, ctx, companyId, { openJobs, prefilterMatches: matches });
+  await record(db, ctx, companyId, {
+    openJobs,
+    prefilterMatches: matches,
+    titles: listingTitles(postings),
+  });
   return { status: 'probed', kind: board.kind, openJobs, prefilterMatches: matches };
 }
 

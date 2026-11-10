@@ -1278,6 +1278,67 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
       expect(await rowOf(app, a, 'Tried Co')).toMatchObject({ industryFailedAt: null });
     });
 
+    describe('the titles the board probe read (#301)', () => {
+      const withProbe = (
+        app: FastifyInstance,
+        id: string,
+        probedAt: number,
+        titles: string[] | null,
+      ) =>
+        app.db
+          .update(companies)
+          .set({ boardProbedAt: probedAt, boardTitles: titles })
+          .where(eq(companies.id, id))
+          .run();
+
+      it('a company with no postings stored from its board is asked with the probe titles', async () => {
+        const { app, a } = await boot();
+        const company = await suggested(app, a, 'Probed Co');
+        await withProbe(app, company.id, 900, ['Platform Engineer', 'Staff Platform Engineer']);
+        tagsEverything();
+        await tagCompanies(app.db, ctxOf(a));
+        expect(systemOf()).toContain('job titles: Platform Engineer; Staff Platform Engineer');
+      });
+
+      it('postings stored from its own board come first: the probe titles are only the fallback', async () => {
+        const { app, a } = await boot();
+        const company = await suggested(app, a, 'Both Co');
+        await withProbe(app, company.id, 900, ['Probe Only Title']);
+        await storedPostings(app, a, company.id, ['Stored Title']);
+        tagsEverything();
+        await tagCompanies(app.db, ctxOf(a));
+        expect(systemOf()).toContain('job titles: Stored Title');
+        expect(systemOf()).not.toContain('Probe Only Title');
+      });
+
+      it('a company the probe never read sends no titles line', async () => {
+        const { app, a } = await boot();
+        await suggested(app, a, 'Unprobed Co');
+        tagsEverything();
+        await tagCompanies(app.db, ctxOf(a));
+        expect(systemOf()).not.toContain('job titles:');
+      });
+
+      it('a probe after a "tried, no code" answer, with titles, asks again and tags it', async () => {
+        const { app, a } = await boot();
+        const company = await tried(app, a, 'Tried Co');
+        await withProbe(app, company.id, 900, ['Platform Engineer']);
+        tagsEverything();
+        expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({ tagged: 1, calls: 1 });
+        expect(systemOf()).toContain('job titles: Platform Engineer');
+      });
+
+      it('does not ask again for a probe from before the answer, or one that read no title', async () => {
+        const { app, a } = await boot();
+        const older = await tried(app, a, 'Older Probe', 5000);
+        await withProbe(app, older.id, 900, ['Platform Engineer']);
+        const empty = await tried(app, a, 'Empty Probe');
+        await withProbe(app, empty.id, 900, null);
+        tagsEverything();
+        expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({ tagged: 0, calls: 0 });
+      });
+    });
+
     it('does not reopen a company that is no longer a candidate: followed or denied', async () => {
       const { app, a } = await boot();
       for (const status of ['followed', 'denied'] as const) {
