@@ -61,8 +61,9 @@ _Editing one task's model. Set prices for a model without a list price, such as 
   day than the budget ranks, a poorer older one can wait for as long as that lasts. While older
   postings wait, a new one is ranked only after waiting with them. A posting the AI provider refuses says so on its card, keeps waiting,
   and is tried again after the others. If it rejects the key itself, every waiting card says so
-  and the hourly tries stop until a key works. With no AI key, every waiting card says so until you
-  add one. Raising the budget starts ranking what waits right away. The usage card shows today's spend against it and how many postings wait.
+  and the hourly tries stop until a key works. With no AI key, a posting's card says "AI is not set up" for as long as that is true. Once a key
+  works, every such posting, including those that arrived before you added one, waits for budget like
+  the rest and is ranked in the same order, with nothing more to do. Raising the budget starts ranking what waits right away. The usage card shows today's spend against it and how many postings wait.
   The per-task limit above stays as a hard stop behind it, so a budget above $5.00 still stops
   there.
 - **What the AI is sent about your network.** Company suggestions send your AI provider the
