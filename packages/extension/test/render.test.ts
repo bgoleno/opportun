@@ -167,6 +167,27 @@ describe('renderOutcome', () => {
     );
   });
 
+  it("the account's capture budget says it counts every browser and the web app (#272)", () => {
+    expect(
+      renderOutcome({
+        kind: 'rate_limited',
+        retryAfterSec: 15,
+        limit: { per: 'user', max: 60, windowMinutes: 15 },
+      }),
+    ).toEqual({
+      tone: 'error',
+      text: 'Capture limit for your account reached (60 captures per 15 minutes, counting every browser and the Opportun web app). Try again in about 1 minute.',
+    });
+    // The token's limit, as the server sizes it.
+    expect(
+      renderOutcome({
+        kind: 'rate_limited',
+        retryAfterSec: 125,
+        limit: { per: 'token', max: 30, windowMinutes: 15 },
+      }).text,
+    ).toBe('Capture limit reached (30 captures per 15 minutes). Try again in about 3 minutes.');
+  });
+
   it('connection test, local and transport errors', () => {
     const cases: [Outcome, RegExp][] = [
       [{ kind: 'connected' }, /^Connected: the server accepted the token\.$/],

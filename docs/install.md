@@ -870,7 +870,8 @@ When it cannot settle that, it changes nothing and flags the opportunity for you
   jobs search view with a job selected) only; feeds, search results and company pages are
   refused. On Indeed (`www.indeed.com` only, not the country sites), a job page
   (`/viewjob?jk=<jk>`) or a search with a job open (`/jobs?...&vjk=<jk>`) only. Each token may
-  capture 30 pages per 15 minutes.
+  capture 30 pages per 15 minutes, and each account 60 per 15 minutes across its tokens and the
+  web app's Capture posting dialog (`CAPTURE_USER_LIMIT` in `apps/server/src/lib/captureLimit.ts`).
 
 What it does and how to use it day to day is in the user guide:
 [Browser extension](guide/browser-extension.md). The compliance rationale and a manual QA

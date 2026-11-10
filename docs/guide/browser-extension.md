@@ -85,8 +85,10 @@ Feeds, search result lists, company pages and the signed-out page are refused, a
 says why. On Indeed, a search or the home page with no job opened and a company page are refused in the popup
 before anything is read. Pages on other sites are not read at all.
 
-There is a limit of 30 captures every 15 minutes per token, which is far above normal use and
-exists so a mistake cannot turn into a flood.
+There is a limit of 30 captures every 15 minutes per token, and 60 every 15 minutes for your
+account, counting every browser and the web app's Capture posting dialog. Both are far above
+normal use and exist so a mistake cannot turn into a flood. When one is reached, the popup says
+which, and when you can capture again.
 
 ## Why it works this way
 

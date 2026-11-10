@@ -4,7 +4,8 @@
 //
 // Server answers handled here: 422 with a hint (LinkedIn, Indeed and other unfetchable pages:
 // paste the text instead), 503 ai_unavailable (fall back to the New Opportunity dialog), 409
-// duplicate.
+// duplicate, 429 rate_limited (the user's capture budget, shared with the browser extension:
+// https://github.com/bgoleno/opportun/issues/272).
 // Server text (hints, messages) and posting fields are rendered as text only.
 import { useId, useState, type FormEvent } from 'react';
 import { FormError } from '@/components/FormError';
@@ -50,8 +51,26 @@ function hintOf(err: ApiError, fallback: string): string {
   return typeof hint === 'string' && hint.length > 0 ? hint : fallback;
 }
 
+const isCount = (v: unknown, most: number): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= most;
+
+/** The capture budget's refusal: its size when the server gives one, and when it frees up. */
+function limitMessage(err: ApiError): string {
+  const { max, windowMinutes, retryAfterSec } = err.details;
+  const size =
+    isCount(max, 10_000) && isCount(windowMinutes, 1440)
+      ? ` (${max} captures per ${windowMinutes} minutes, counting the browser extension too)`
+      : '';
+  const m = isCount(retryAfterSec, 86_400) ? Math.ceil(retryAfterSec / 60) : null;
+  const wait = m === null ? 'a few minutes' : `about ${m} minute${m === 1 ? '' : 's'}`;
+  return `Capture limit for your account reached${size}. Try again in ${wait}.`;
+}
+
 function toFailure(err: unknown): Failure {
   if (err instanceof ApiError) {
+    if (err.status === 429 && err.code === 'rate_limited') {
+      return { kind: 'other', message: limitMessage(err) };
+    }
     if (err.status === 422 && typeof err.details.hint === 'string') {
       const fetchProblem = ['prohibited_host', 'fetch_blocked', 'fetch_failed'].includes(err.code);
       return fetchProblem

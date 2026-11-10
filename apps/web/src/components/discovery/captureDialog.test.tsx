@@ -136,6 +136,47 @@ describe('CaptureDialog', () => {
     expect(onManualEntry).toHaveBeenCalled();
   });
 
+  it("a 429 says the account's capture limit is reached and when to try again (#272)", async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'POST /capture': () => ({
+        status: 429,
+        headers: { 'retry-after': '75' },
+        body: {
+          error: { code: 'rate_limited', reason: 'per_user', max: 60, windowMinutes: 15 },
+        },
+      }),
+    });
+    const { onClose } = renderDialog();
+    const dialog = await screen.findByRole('dialog', { name: 'Capture posting' });
+    await user.click(within(dialog).getByLabelText('Pasted text'));
+    await user.type(within(dialog).getByLabelText('Posting description'), 'Some posting');
+    await user.click(within(dialog).getByRole('button', { name: 'Capture' }));
+    expect(
+      await within(dialog).findByText(
+        'Capture limit for your account reached (60 captures per 15 minutes, counting the browser extension too). Try again in about 2 minutes.',
+      ),
+    ).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a 429 without the sizes still says it is the capture limit', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'POST /capture': () => ({ status: 429, body: { error: { code: 'rate_limited' } } }),
+    });
+    renderDialog();
+    const dialog = await screen.findByRole('dialog', { name: 'Capture posting' });
+    await user.click(within(dialog).getByLabelText('Pasted text'));
+    await user.type(within(dialog).getByLabelText('Posting description'), 'Some posting');
+    await user.click(within(dialog).getByRole('button', { name: 'Capture' }));
+    expect(
+      await within(dialog).findByText(
+        'Capture limit for your account reached. Try again in a few minutes.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('renders hostile server and posting text inert', async () => {
     const user = userEvent.setup();
     const hostile = '<img src=x onerror="window.__pwned=1"><script>window.__pwned=1</script>';

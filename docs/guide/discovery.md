@@ -113,12 +113,16 @@ model, and it counts against your [discovery budget](settings.md#models-and-budg
 rest wait for a later night. Each call sends the company's name, its domain, and up to 10 job titles
 from postings already stored from its board. So the names of companies in your network do go to your
 provider; nothing about your contacts does, and no board is fetched for this. A tag is created once
-and kept. Open **Industry** on a row to correct it, and your choice stands. A company the model could
-not place says so, and is not asked about again until job titles arrive from its board: then it is
-asked once more, with those titles, and once more for each later arrival. You can still set one
-yourself at any time. A suggested company already has the industry it was suggested for (see below),
-so it is not asked about, unless that industry could not be read as a code from the list, in which
-case the nightly run asks as for any other company.
+and kept. Until then a row says **Industry: not tagged yet**. Open **Industry** on a row to correct
+it, and your choice stands (the row then says "set by you"). A company the model could not place
+says **Industry: could not be placed** and is not asked about again until job titles arrive from its
+board: then it is asked once more, with those titles, and once more for each later arrival. You can
+still set one yourself at any time. A company the provider refuses, or answers unusably, when asked
+on its own is asked again the next night, after the other companies, so one name that always fails
+does not hold the rest up. With no AI key, or a key the provider rejected, the run does not start. A
+suggested company already has the industry it was suggested for (see below), so it is not asked
+about, unless that industry could not be read as a code from the list, in which case the nightly run
+asks as for any other company.
 
 **Suggested companies** comes from the `company.suggest` task, which once a week (Tuesdays)
 proposes companies worth following, each with its reason, the industry it was suggested for and
@@ -150,9 +154,9 @@ there are and how many of them the [pre-filter](#the-pre-filter) passes for your
 only reads public job board pages, and it does not follow the company: the board stays switched off
 until you follow it.
 
-![The Companies tab. At the top, Where to look is collapsed and shows 1 confirmed, 2 to review. In your network lists Initech, with Priya Example and Sam Example named under You know 2 people here and Follow and Deny buttons, and Globex, marked Following with no board found. Suggested companies lists Pied Piper with its reason and Follow and Deny buttons](images/discovery-companies.png)
+![The Companies tab. At the top, Where to look is collapsed and shows 1 confirmed, 2 to review. In your network lists Initech, with Priya Example and Sam Example named under You know 2 people here and Follow and Deny buttons, and Globex, marked Following with no board found. Suggested companies lists Pied Piper with its reason and Follow and Deny buttons. Each company shows an Industry line, here Software Publishers](images/discovery-companies.png)
 
-_The Companies tab, with invented contacts. Following a company starts job board detection._
+_The Companies tab, with invented contacts, after the nightly industry tags ran. Following a company starts job board detection._
 
 A followed company shows the board it found (for example "Greenhouse: piedpiper") and a
 **Detect now** button; boards are re-checked weekly. The detected board becomes a source that
@@ -254,7 +258,9 @@ reopened and which still hold their key.
 
 **Capture posting** (on the review queue) takes a posting link or pasted text, extracts the
 company, title, location and description, and adds the result to the queue. If extraction
-cannot find the essentials, it tells you to create the opportunity by hand instead.
+cannot find the essentials, it tells you to create the opportunity by hand instead. It shares
+one limit with the browser extension, 60 captures per 15 minutes for your account; when that is
+reached, the dialog says when you can capture again.
 
 Opportun never fetches LinkedIn or Indeed pages. A LinkedIn or Indeed link is refused with a
 prompt to paste the description text instead, or capture the job with the
@@ -285,7 +291,8 @@ duplicated. Profiles become contacts (see [Network](network.md)). The
 
 _The extension popup, with Settings open. (Captured by loading the built extension into Chromium and opening its popup page in a tab.)_
 
-Each token can capture 30 pages per 15 minutes. Only profiles and job pages are accepted;
+Each token can capture 30 pages per 15 minutes, and your account 60 per 15 minutes across every
+token and the Capture posting dialog. Only profiles and job pages are accepted;
 feeds, search results and company pages are refused.
 
 ## Ranking prompts
