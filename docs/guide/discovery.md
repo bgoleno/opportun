@@ -203,9 +203,9 @@ follows it (with the question above when it applies), `x` denies it, and `Escape
 ticks. `?` lists every shortcut. They do nothing while you are typing in a field or a menu, or while
 a dialog is open.
 
-![The Companies tab. At the top, Where to look is collapsed and shows 1 confirmed, 2 to review. In your network lists Initech, with Priya Example and Sam Example named under You know 2 people here and Follow and Deny buttons, and Globex, marked Following with no board found. Suggested companies lists Pied Piper with its reason and Follow and Deny buttons. Each company shows an Industry line, here Software Publishers](images/discovery-companies.png)
+![The Companies tab. At the top, Where to look is collapsed and shows 1 confirmed, 2 to review. The Recommended companies list below it has filters for source, industry and board, and shows five companies. Initech is open to name Priya Example and Sam Example under You know 2 people here. Each row has source badges (In your network, AI suggested, or both for Hooli), a board chip such as Greenhouse: initech, an estimate line such as "about 2.4 new a day, est. $0.05 a day; first run 25, $0.50", an Industry line, and Follow and Deny buttons. Umbrella Corp says No board found and offers Follow and add careers page. Globex and Hooli are ticked, and the selection bar under the list reads 2 selected, about 4.4 new a day, est. $0.09 a day; first run 43, $0.86, with Follow 2, Deny 2 and Clear selection. Beside the list, Today's discovery budget shows Spent today: $0.10 of $1.00 and, with the selection's first run, $0.96 of $1.00](images/discovery-companies.png)
 
-_The Companies tab, with invented contacts, after the nightly industry tags ran. Following a company starts job board detection._
+_The Companies tab, with invented companies and contacts and made-up board counts, after the nightly industry tags ran, with two companies ticked. Following a company starts job board detection._
 
 A followed company shows the board it found (for example "Greenhouse: piedpiper") and a
 **Detect now** button; boards are re-checked weekly. The detected board becomes a source that
