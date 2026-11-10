@@ -25,7 +25,9 @@ import {
   setRankDeferred,
   setRankKeyRejected,
   setWaitingKeyRejected,
-  setRanking,
+  setRankingIfPostingIs,
+  setRankWaitingIfUnranked,
+  readPostingBasis,
   setRankSkip,
   type DiscoveryResultView,
 } from '../repos/discovery';
@@ -89,8 +91,16 @@ export type RankRun =
   | { status: 'ranked'; score: number }
   | { status: 'skipped'; reason: 'missing' | 'not_pending' | 'no_prompt' | string };
 
+/** rankResult's reason when a posting's text changed during the call, so nothing was stored. */
+export const POSTING_CHANGED = 'posting_changed';
+
 /** Ranks one of the user's pending results and stores score and rationale. */
 export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promise<RankRun> {
+  // Read before the posting: if the text changes between the two, the ranking is refused, and it can
+  // never be stored against text it was not given.
+  const basis = await readPostingBasis(db, ctx, resultId);
+  if (basis === undefined) return { status: 'skipped', reason: 'missing' };
+  await racePoint('discoveryRank.basis_read');
   let result: DiscoveryResultView;
   try {
     result = await getResult(db, ctx, resultId);
@@ -174,13 +184,23 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
   }
   const multiPosted = result.aiRationale?.startsWith(MULTI_POSTED_PREFIX) === true;
   const score = multiPosted ? Math.min(out.score, MULTI_POSTED_SCORE_CAP) : out.score;
-  await setRanking(db, ctx, resultId, {
-    aiScore: score,
-    aiRationale: storedRationale(out, multiPosted),
-  });
+  const stored = await setRankingIfPostingIs(
+    db,
+    ctx,
+    resultId,
+    { aiScore: score, aiRationale: storedRationale(out, multiPosted) },
+    basis,
+  );
   // However the key came back: adding one clears this too, but a policy change to a provider that
   // has one does not pass through there.
   await clearWaitingKeyReasons(db, ctx);
+  if (!stored) {
+    // The text changed during the call, so this score says nothing about it. If this is a rank job,
+    // the one that change queued deduped onto it, and without a wait nothing would rank the new text.
+    // The code cannot tell where a score already there came from; with one there, this changes nothing.
+    await setRankWaitingIfUnranked(db, ctx, resultId);
+    return { status: 'skipped', reason: POSTING_CHANGED };
+  }
   return { status: 'ranked', score };
 }
 
@@ -210,6 +230,13 @@ export const discoveryRankJob: JobHandler<z.infer<typeof PayloadSchema>> = {
     // It joined the wait, and nothing else would rank it before the next sweep.
     if (run.status === 'skipped' && run.reason === 'key_changed') {
       if (await discoveryBudgetHasRoom(db, user)) await enqueueRankWaiting(db, user);
+    }
+    // The same, unless a score was already there.
+    if (run.status === 'skipped' && run.reason === POSTING_CHANGED) {
+      const { rankDeferredAt } = await getResult(db, user, payload.resultId);
+      if (rankDeferredAt !== null && (await discoveryBudgetHasRoom(db, user))) {
+        await enqueueRankWaiting(db, user);
+      }
     }
     await ctx.setResult(run);
   },
