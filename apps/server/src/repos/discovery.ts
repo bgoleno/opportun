@@ -1016,20 +1016,49 @@ export async function setWaitingNoKey(exec: Exec, ctx: UserCtx): Promise<void> {
 }
 
 /**
- * A key works: it was added, or a call got through. No waiting card should still say AI is not set
- * up, and those postings are back in line, so new ones go behind them again.
+ * A key works: it was added, a policy now points at a provider that has one, or a call got through.
+ * No card should still say AI is not set up, and those postings are back in line, so new ones go
+ * behind them again.
  */
-export async function clearWaitingKeyReasons(exec: Exec, ctx: UserCtx): Promise<void> {
+export async function clearWaitingKeyReasons(
+  exec: Exec,
+  ctx: UserCtx,
+  now: number = Date.now(),
+): Promise<void> {
+  // A rank job that found no key left its posting outside the wait (setRankSkip), and nothing else
+  // would ever rank it (https://github.com/bgoleno/opportun/issues/262). It joins the wait now, so
+  // the drain ranks it under the discovery budget like any posting that waits (tl's shape on #262).
+  // Not below the cut or filtered: those carry their own reason, and the user sends them.
+  await exec
+    .update(discoveryResults)
+    .set({ rankDeferredAt: now })
+    .where(
+      and(
+        eq(discoveryResults.userId, ctx.userId),
+        isNull(discoveryResults.rankDeferredAt),
+        isNull(discoveryResults.aiScore),
+        eq(discoveryResults.rankSkipReason, 'no_key'),
+        eq(discoveryResults.disposition, 'pending'),
+      ),
+    )
+    .run();
   // Whatever the disposition: a dismissed posting's wait survives for Undo (tl on #230), and its
-  // reason must not, or Undo would turn a rejected key's stop back on with a working key.
+  // reason must not, or Undo would turn a rejected key's stop back on with a working key. No key is
+  // never true once a key works, so a decided posting outside the wait loses that reason too: with
+  // none, Undo puts a dismissed one in the wait (resumeAfterUndo).
   await exec
     .update(discoveryResults)
     .set({ rankSkipReason: null })
     .where(
       and(
         eq(discoveryResults.userId, ctx.userId),
-        isNotNull(discoveryResults.rankDeferredAt),
-        inArray(discoveryResults.rankSkipReason, ['no_key', 'key_rejected']),
+        or(
+          eq(discoveryResults.rankSkipReason, 'no_key'),
+          and(
+            isNotNull(discoveryResults.rankDeferredAt),
+            eq(discoveryResults.rankSkipReason, 'key_rejected'),
+          ),
+        ),
       ),
     )
     .run();
