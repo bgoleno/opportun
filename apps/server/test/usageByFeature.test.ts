@@ -71,6 +71,7 @@ async function insertRun(
     outputTokens: number;
     cost: number;
     model?: string;
+    provider?: string;
     status?: 'ok' | 'error';
     fallback?: boolean;
   },
@@ -82,7 +83,7 @@ async function insertRun(
       id: newId(),
       userId: r.userId,
       taskKey: r.taskKey,
-      provider: 'anthropic',
+      provider: r.provider ?? 'anthropic',
       model: r.model ?? 'claude-haiku-5-5',
       inputTokens: r.inputTokens,
       outputTokens: r.outputTokens,
@@ -223,6 +224,32 @@ describe('GET /ai/usage: by feature (#341)', () => {
     const sum = (xs: Metrics[]) => xs.reduce((n, x) => n + x.runs, 0);
     expect(sum(list)).toBe(sum(body.totals));
     expect(res.body).not.toContain('7777');
+  });
+
+  it('keeps one model id used through two providers as two rows, each with its provider (#350)', async () => {
+    const { app, a } = await boot();
+    const run = (provider: string, cost: number) =>
+      insertRun(app, {
+        userId: a.userId,
+        taskKey: 'capture.extract',
+        at: noon(),
+        inputTokens: 100,
+        outputTokens: 10,
+        cost,
+        provider,
+        model: 'gpt-6-sol',
+      });
+    await run('openai', 0.02);
+    await run('openai', 0.02);
+    await run('openai_compatible', 0);
+    const extract = byTask(byFeature(await features(a), 'capture'), 'capture.extract');
+    expect(extract.runs).toBe(3);
+    expect(extract.models.map((m) => [m.provider, m.model, m.runs])).toEqual([
+      ['openai', 'gpt-6-sol', 2],
+      ['openai_compatible', 'gpt-6-sol', 1],
+    ]);
+    expect(extract.models[0]!.estCostUsd).toBeCloseTo(0.04);
+    expect(extract.models[1]!.estCostUsd).toBe(0);
   });
 
   it('counts only the chosen window: 7, 30 or 90 days', async () => {
