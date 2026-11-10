@@ -432,9 +432,11 @@ sits behind `OPPORTUN_SUBMISSIONS=1`, off by default and never on the demo.
 
 The design is in [design.md, section 14](./design.md#14-observability), and the work is
 tracked on https://github.com/bgoleno/opportun/issues/340. FR-T1 is built; the rest is
-designed. Everything here obeys NFR-PRV6 and NFR-PRV7: telemetry holds no personal
-information and no prompt or response content, and nothing leaves the deployment unless an
-admin turns export on and names where it goes.
+designed. Collection and export are each behind an admin's switch, and both are off by
+default: an instance that does not turn the feature on pays nothing for it (NFR-OPS7), and
+FR-T1 works either way. Everything here obeys NFR-PRV6 and NFR-PRV7: telemetry holds no
+personal information and no prompt or response content, and nothing leaves the deployment
+unless an admin turns export on and names where it goes.
 
 - FR-T1 (P1): **Token use per feature.** For every AI task the user can see calls, failed
   calls, input tokens, output tokens and estimated cost, grouped by the product feature the
@@ -443,7 +445,8 @@ admin turns export on and names where it goes.
   come from the usage ledger (FR-A5).
 - FR-T2 (P1): **Export.** An admin can send Opportun's telemetry to one destination:
   Prometheus, a Datadog Agent, InfluxDB, or any OTLP endpoint. Settings holds a switch for
-  collecting, a switch for exporting, the destination's type and address, and its credential,
+  collecting and a switch for exporting, both off by default, the destination's type and
+  address, and its credential,
   which is stored encrypted and never shown again. Token use is exported as metrics that carry
   the AI task, feature, provider and model, with input and output tokens as separate metrics,
   and estimated cost as a metric that adds each call's cost at the price in force when it ran.
@@ -468,14 +471,16 @@ admin turns export on and names where it goes.
   description and unit, filters the list by the attributes the metrics carry, and charts a
   chosen metric over a chosen time range with zoom, the value under the cursor, and a
   breakdown by a chosen attribute. It reads the app's own store, so it works with export off.
-  A user sees their own AI metrics. An admin also sees the instance's metrics.
+  A user sees their own AI metrics. An admin also sees the instance's metrics. While
+  collection is off the page says so, with a link to the switch for an admin.
 - FR-T7 (P1): **AI trace dashboard.** A page lists the user's AI traces, newest first, with
   time, feature or task, model, duration, tokens, estimated cost and status, filterable by
   task, model, provider, status, time range and conversation. Opening a trace shows a
   waterfall of its spans on one time axis, nested by parent, and a span's attributes on
   selection. A chat's turns are grouped by conversation. It shows no prompt or response
   content: it links to the tailoring session or the prompt where that content already lives.
-  Every user, an admin included, sees only their own traces.
+  Every user, an admin included, sees only their own traces. While collection is off the page
+  says so, with a link to the switch for an admin.
 
 ## 6. Non-functional requirements (NFR)
 
@@ -574,8 +579,9 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
   personal data through every record type and finding none of it in the output. Exported
   telemetry identifies no user: the user's opaque id stays in the local store and the local
   log.
-- NFR-PRV7: Telemetry export is off by default, and with it off Opportun makes no outbound
-  connection for telemetry. Only an admin can turn it on or change where it sends, with their
+- NFR-PRV7: Telemetry collection is off by default, and with it off Opportun stores no
+  telemetry. Telemetry export is a second switch, also off by default, and with it off
+  Opportun makes no outbound connection for telemetry. Only an admin can turn it on or change where it sends, with their
   password confirmed again. The destination must be `https` at a public address, or, only
   where the operator has allowed it in the environment, a loopback or private-network address;
   it never follows a redirect and its URL never holds a credential. Every user of the instance

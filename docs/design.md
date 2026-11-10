@@ -737,7 +737,7 @@ Rules that go with them:
 | ADR-14 | LAN-first access: plain HTTP over a private network is a supported path, TLS recommended but never required; nothing may assume a single canonical origin ([docs/adr/0014-lan-first-access.md](adr/0014-lan-first-access.md))                   | Accepted 2026-10-18                                             |
 | ADR-15 | Assisted apply instead of direct ATS submission: Opportun prepares and records, the user submits on the ATS site ([docs/adr/0015-assisted-apply.md](adr/0015-assisted-apply.md))                                                                | Accepted 2026-10-28                                             |
 | ADR-16 | Observability by wrappers at five boundaries (routes, jobs, database, outbound requests, AI calls) with OpenTelemetry names, not auto-instrumentation and not a span per function (section 14.2)                                                | Proposed 2026-11-10                                             |
-| ADR-17 | Telemetry has a local store in the app's own database, collected by default, and an export that is off by default; the in-app dashboards read only the local store (sections 14.1, 14.7, 14.10)                                                 | Proposed 2026-11-10                                             |
+| ADR-17 | Telemetry has a local store in the app's own database and an export, each behind its own switch and both off by default; the in-app dashboards read only the local store (sections 14.1, 14.7, 14.10)                                           | Proposed 2026-11-10                                             |
 | ADR-18 | Telemetry privacy by allowlist: only catalogued attribute keys with typed values are stored or exported, checked in one gate at the sinks; export identifies no user, and no prompt or response content is stored for traces (section 14.8)     | Proposed 2026-11-10                                             |
 
 Accepted decisions will move into `docs/adr/` as individual records once reviewed.
@@ -766,7 +766,7 @@ records for HTTP routes, background jobs, database access, outbound requests and
 all, AI calls. The data has two destinations:
 
 - **The local store**: tables in Opportun's own database, read by the in-app dashboards
-  (FR-T6, FR-T7). It fills whenever collection is on, so the dashboards work with export off.
+  (FR-T6, FR-T7). It fills while collection is on, so the dashboards work with export off.
 - **Export**: the same data, less what identifies a user, sent over the network to a
   destination an admin names: Prometheus, Datadog, InfluxDB or any OTLP endpoint (FR-T2).
 
@@ -774,12 +774,19 @@ Two instance-wide switches, both admin-only:
 
 | Switch  | Default | What off means                                                                 |
 | ------- | ------- | ------------------------------------------------------------------------------ |
-| Collect | on      | No recording spans, no metric points, no local store writes. Dashboards empty. |
+| Collect | off     | No recording spans, no metric points, no local store writes. Dashboards empty. |
 | Export  | off     | Nothing is sent and no connection is made for telemetry (NFR-PRV1, NFR-PRV7).  |
 
-Collection is on by default because what it stores stays in the user's own database, as
-`task_runs` and `audit_log` already do, and it holds no content (14.8). Export can be on
-only while collection is on.
+- **Both are off by default.** Most users will not care about this feature, so an instance
+  pays nothing for it (14.11) until an admin turns collection on. Export can be on only while
+  collection is on.
+- **Turning either on or off applies without a restart.**
+- **With collection off the dashboards say so.** Each shows an empty state that explains
+  collection is off, with a link to the switch for an admin. Rows collected earlier stay until
+  they age out, and are still shown.
+- **What the Collect switch does not govern:** the Usage card (FR-T1), which reads
+  `task_runs`, and the log output with its events (14.9), which is the instance's ordinary log
+  (NFR-OPS5). Both work as before with collection off. A log record then has no trace id.
 
 ### 14.2 Wrappers at five boundaries
 
@@ -848,9 +855,11 @@ The three sinks are the local store, the log output and export.
   slot the export manager fills while export is on.
 - **Log records** go through pino. `obs.event()` and the error path write to the same
   logger, and the export manager attaches a log exporter to it while export is on.
-- **With collection off**, every `obs` entry point returns after one boolean check, no
-  provider is registered (so a span from the API records nothing), and the SDK packages are
-  not loaded. With export off, the exporter packages are not loaded.
+- **With collection off, which is the default**, every `obs` entry point returns after one
+  boolean check, no provider is registered (so a span from the API records nothing), and the
+  SDK packages are not loaded. They load when an admin first turns collection on. If it is
+  turned off again, the sampler records nothing from then on. With export off, the exporter
+  packages are not loaded.
 
 ### 14.4 Metric names
 
