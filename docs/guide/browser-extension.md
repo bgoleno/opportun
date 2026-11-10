@@ -90,6 +90,12 @@ account, counting every browser and the web app's Capture posting dialog. Both a
 normal use and exist so a mistake cannot turn into a flood. When one is reached, the popup says
 which, and when you can capture again.
 
+A capture can also be refused for a moment, not for a limit: Opportun saves one of your
+captures at a time, so while an earlier one is still being saved, a second waits a few seconds
+and is then turned away. The popup says "Opportun is still saving another capture of yours" and
+to try again in a few seconds. Nothing is wrong: this attempt saved nothing, so wait a moment
+and click **Capture this page** again.
+
 ## Why it works this way
 
 LinkedIn's User Agreement prohibits automated retrieval of its pages, and Opportun takes that
