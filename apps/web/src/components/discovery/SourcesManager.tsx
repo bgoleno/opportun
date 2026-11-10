@@ -403,9 +403,15 @@ function AlertSendersDialog(props: { open: boolean; onClose: () => void }) {
   );
 }
 
+/** A run that did not start because its source was paused (#310): not a failure, not a success. */
+function isSkipped(stats: Record<string, unknown> | null): boolean {
+  return stats !== null && stats.skipped !== undefined;
+}
+
 function statsText(stats: Record<string, unknown> | null): string {
   if (stats === null) return '';
   return Object.entries(stats)
+    .filter(([k]) => k !== 'skipped')
     .filter(([, v]) => typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean')
     .map(([k, v]) => `${k}: ${String(v)}`)
     .join(', ');
@@ -441,7 +447,9 @@ export function RunHistoryDrawer(props: { source: DiscoverySource | null; onClos
               <li key={r.id} className="grid gap-1 rounded-md border p-3 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{formatDateTime(r.startedAt)}</span>
-                  {r.error !== null ? (
+                  {isSkipped(r.stats) ? (
+                    <Badge variant="secondary">Skipped</Badge>
+                  ) : r.error !== null ? (
                     <Badge variant="destructive">Failed</Badge>
                   ) : r.finishedAt === null ? (
                     <Badge variant="secondary">Running</Badge>
@@ -453,7 +461,15 @@ export function RunHistoryDrawer(props: { source: DiscoverySource | null; onClos
                   <p className="text-muted-foreground">{statsText(r.stats)}</p>
                 ) : null}
                 {r.error !== null ? (
-                  <p className="break-words text-destructive">{r.error}</p>
+                  <p
+                    className={
+                      isSkipped(r.stats)
+                        ? 'break-words text-muted-foreground'
+                        : 'break-words text-destructive'
+                    }
+                  >
+                    {r.error}
+                  </p>
                 ) : null}
               </li>
             ))}
