@@ -195,14 +195,27 @@ describe('a capture and a board run on one posting', () => {
   });
 
   describe('during a ranking call on the row', () => {
-    /** The board's row, waiting for budget, with a call for it parked at the provider. */
-    async function callInFlight(app: FastifyInstance, c: TestClient) {
+    /**
+     * The board's row, waiting for budget, with a call for it parked at the provider. With `bare`
+     * the stored posting has only the keys a row can lack (remote, compNote, postedAt left out): a
+     * row stored by an older version or inserted directly, which sanitizePosting would not make today.
+     */
+    async function callInFlight(app: FastifyInstance, c: TestClient, bare = false) {
       const ctx = ctxOf(c);
       const sourceId = await boardWithThePosting(app, c);
       await runBoard(app, c, sourceId);
       await app.db.delete(jobs).run();
       const [row] = await rowsOf(app, c);
       const id = row?.id as string;
+      if (bare && row !== undefined) {
+        const { remote, compNote, postedAt, ...kept } = row.posting;
+        void [remote, compNote, postedAt];
+        await app.db
+          .update(discoveryResults)
+          .set({ posting: kept })
+          .where(eq(discoveryResults.id, id))
+          .run();
+      }
       await setRankDeferred(app.db, ctx, id);
       let go!: () => void;
       const released = new Promise<void>((resolve) => (go = resolve));
@@ -221,7 +234,7 @@ describe('a capture and a board run on one posting', () => {
     it('a capture that keeps the text as it is does not throw the paid score away', async () => {
       const { app, a } = await boot();
       const ctx = ctxOf(a);
-      const { id, drain, release } = await callInFlight(app, a);
+      const { id, drain, release } = await callInFlight(app, a, true);
 
       const { resultId } = await capture(app, a);
       release();

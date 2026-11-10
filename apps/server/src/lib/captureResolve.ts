@@ -409,6 +409,27 @@ async function createLead(
   });
 }
 
+const FILLED_FIELDS = ['postingUrl', 'location', 'remote', 'compNote'] as const;
+
+/**
+ * The lead's posting with what the capture knows and the lead lacks, and nothing else: a field the
+ * capture has no value for is not added, not even as null. A rank call in flight compares the
+ * posting's stored text to the text it ranked (setRankingIfPostingIs), so a capture that adds
+ * nothing must leave the text exactly as it was, or the paid score is refused for a key a row had
+ * never had (https://github.com/bgoleno/opportun/issues/268).
+ */
+function fillFrom(lead: NormalizedPosting, capture: NormalizedPosting): NormalizedPosting {
+  const filled: NormalizedPosting = {
+    ...lead,
+    descriptionMd: lead.descriptionMd || capture.descriptionMd,
+  };
+  for (const field of FILLED_FIELDS) {
+    const value = capture[field];
+    if (lead[field] == null && value != null) Object.assign(filled, { [field]: value });
+  }
+  return filled;
+}
+
 interface Settled {
   opportunity: OpportunityView;
   resultId: string;
@@ -449,14 +470,7 @@ async function settleLead(
     const filled = await setResolution(tx, ctx, primary.id, {
       resolution: 'full',
       resolvedSourceRef: posting.postingUrl ?? null,
-      posting: {
-        ...primary.posting,
-        descriptionMd: primary.posting.descriptionMd || posting.descriptionMd,
-        postingUrl: primary.posting.postingUrl ?? posting.postingUrl ?? null,
-        location: primary.posting.location ?? posting.location ?? null,
-        remote: primary.posting.remote ?? posting.remote ?? null,
-        compNote: primary.posting.compNote ?? posting.compNote ?? null,
-      },
+      posting: fillFrom(primary.posting, posting),
     });
     resultId = filled.id;
     // The matched lead's own key may differ from the capture's, which is routine when the two
