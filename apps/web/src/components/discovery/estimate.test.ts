@@ -183,6 +183,20 @@ describe('the estimate of a followed company: the daily part only', () => {
     });
   });
 
+  it('13 days of runs is not enough: the 2% rule holds until the 14th day (tl on #325)', () => {
+    const at = (days: number) =>
+      estimateOf(
+        inputs({
+          company: followed,
+          source,
+          volume: volume({ days, newPerDay: 99, openJobs: 300 }),
+        }),
+      )!.newPerDay;
+    expect(at(13)).toBe(6);
+    expect(at(14)).toBe(99);
+    expect(at(30)).toBe(99);
+  });
+
   it('shows no first run, and nothing for a followed company with no board or no count', () => {
     expect(
       estimateOf(inputs({ company: followed, source, volume: volume({}) }))!.firstRun,

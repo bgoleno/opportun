@@ -566,6 +566,39 @@ async function expectRecommendedRowsFit(page: Page, width: number): Promise<void
       width,
     );
   }
+  // Selecting (#302): the bar with its totals and the unbroken names it lists, sticky on screen, and
+  // the budget rail under the list on a phone, not beside it.
+  await rows
+    .nth(0)
+    .getByRole('checkbox', { name: /^Select / })
+    .check();
+  await rows
+    .nth(1)
+    .getByRole('checkbox', { name: /^Select / })
+    .check();
+  const selection = page.getByRole('region', { name: 'Selection' });
+  await expect(selection).toBeVisible();
+  await expect(selection).toContainText('2 selected');
+  await selection.getByText(/without an estimate/).click();
+  await expect(selection.getByText(UNBROKEN_COMPANY).first()).toBeVisible();
+  const rail = page.getByRole('complementary', { name: "Today's discovery budget" });
+  await expect(rail).toBeVisible();
+  const list = await page.getByRole('list', { name: 'Recommended companies' }).boundingBox();
+  const railBox = await rail.boundingBox();
+  expect(railBox!.y, 'the budget rail is below the list on a phone').toBeGreaterThanOrEqual(
+    list!.y + list!.height - 1,
+  );
+  for (const [name, box] of [
+    ['the selection bar', await selection.boundingBox()],
+    ['the budget rail', railBox],
+  ] as const) {
+    expect(box!.x, `${name} starts on screen`).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width, `${name} ends inside ${width}px`).toBeLessThanOrEqual(width);
+  }
+  await expectFits(page, 'the recommended rows with a selection');
+  expect(await spillsOutOfCards(page), 'text spilling out of a selected row').toEqual([]);
+  await selection.getByRole('button', { name: 'Clear selection' }).click();
+  await expect(selection).toBeHidden();
   const openPeople = async (count: number) => {
     for (let i = 0; i < count; i += 1) {
       const row = rows.nth(i);
