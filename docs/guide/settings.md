@@ -39,7 +39,7 @@ cent; OpenAI keys are checked against the free model list. An OpenAI-compatible 
 without a model list cannot confirm its models, which shows as Model errors even when calls
 would work. These checks are not counted in **Usage** (under
 [Models and budgets](#models-and-budgets)) and do not count toward any budget: Opportun keeps
-no record of them, so your provider's bill is the only place they show.
+no usage or cost record of them, so your provider's bill is the only place their cost shows.
 
 ## Models and budgets
 
