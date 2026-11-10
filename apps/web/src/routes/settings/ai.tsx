@@ -40,7 +40,9 @@ function AiSettings() {
       <Card>
         <CardHeader>
           <CardTitle>Usage</CardTitle>
-          <CardDescription>Tokens and estimated cost per task per day.</CardDescription>
+          <CardDescription>
+            Tokens and estimated cost per feature, task and model, and per day.
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
           <UsageTable />

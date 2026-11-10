@@ -10,4 +10,5 @@ export {
   type CoreMessage,
 } from './router';
 export * from './tasks';
+export * from './features';
 export { pingModel, type PingOutcome } from './keyCheck';

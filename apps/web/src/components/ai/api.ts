@@ -58,10 +58,31 @@ export interface UsageMetrics {
   estimated: boolean;
 }
 
+export type UsageSums = Omit<UsageMetrics, 'taskKey'>;
+
+/** One model a task ran on in the window. */
+export interface ModelUsage extends UsageSums {
+  provider: string;
+  model: string;
+}
+
+export interface TaskUsage extends UsageMetrics {
+  /** Empty when the task never ran in the window. */
+  models: ModelUsage[];
+}
+
+/** A product feature's usage (#341): the server lists every feature and task, zero where none ran. */
+export interface FeatureUsage extends UsageSums {
+  feature: string;
+  label: string;
+  tasks: TaskUsage[];
+}
+
 export interface UsageResponse {
   days: number;
   items: (UsageMetrics & { day: string })[];
   totals: UsageMetrics[];
+  features: FeatureUsage[];
 }
 
 export interface ModelCheck {
