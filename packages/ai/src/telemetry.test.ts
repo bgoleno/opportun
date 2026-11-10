@@ -10,10 +10,11 @@ import {
   SimpleSpanProcessor,
   TracerProvider,
   type ReadableSpan,
+  type SpanProcessor,
 } from '@opentelemetry/sdk-trace';
 import { APICallError, simulateReadableStream } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { pingModel } from './keyCheck';
 import { DEFAULT_POLICIES, resolvePolicy } from './policies';
@@ -44,9 +45,24 @@ const PROVIDER_FETCH = {
 const exporter = new InMemorySpanExporter();
 let provider: TracerProvider;
 
+/** Counts spans as they start and as they end, so a span left open is a failure of its own. */
+const lifecycle = { started: 0, ended: 0 };
+const lifecycleProcessor: SpanProcessor = {
+  onStart: () => {
+    lifecycle.started += 1;
+  },
+  onEnd: () => {
+    lifecycle.ended += 1;
+  },
+  forceFlush: async () => undefined,
+  shutdown: async () => undefined,
+};
+
 beforeAll(() => {
   context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
-  provider = new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter })] });
+  provider = new TracerProvider({
+    spanProcessors: [new SimpleSpanProcessor({ exporter }), lifecycleProcessor],
+  });
   trace.setGlobalTracerProvider(provider);
 });
 
@@ -56,7 +72,14 @@ afterAll(async () => {
   context.disable();
 });
 
+afterEach(async () => {
+  // Whatever a test did, every span it started has ended (a stream's span ends after its drain).
+  await vi.waitFor(() => expect(lifecycle.ended).toBe(lifecycle.started));
+});
+
 beforeEach(() => {
+  lifecycle.started = 0;
+  lifecycle.ended = 0;
   exporter.reset();
   vi.mocked(createLanguageModel).mockReset();
 });
@@ -385,6 +408,22 @@ describe('a call that fails', () => {
     ]) {
       expect(keys).not.toContain(absent);
     }
+    expect(h.model.doGenerateCalls).toHaveLength(0);
+  });
+
+  it('a spend lookup that rejects starts no span, so none is left open', async () => {
+    const h = harness();
+    h.deps.spentTodayUsd = async () => {
+      throw new Error('database unavailable');
+    };
+    await expect(runStructured(h.deps, 'resume.match', call)).rejects.toThrow(
+      'database unavailable',
+    );
+    await expect(streamChat(h.deps, 'resume.tailor', chatCall)).rejects.toThrow(
+      'database unavailable',
+    );
+    expect(lifecycle).toEqual({ started: 0, ended: 0 });
+    expect(h.runs).toEqual([]);
     expect(h.model.doGenerateCalls).toHaveLength(0);
   });
 

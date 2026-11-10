@@ -69,10 +69,9 @@ export function isSafeBaseUrl(raw: string | undefined, opts: SafeBaseUrlOptions)
  *
  * opts.fetch is required, not defaulted to the SDK's own global fetch (issue #334): a silent
  * fallback here is exactly how the SSRF/LinkedIn bypass this fixes went unnoticed -- every
- * caller must say explicitly what fetch a client uses, so there is no path left that quietly
- * reaches the real network unvalidated. Since issue #344 it goes to all three providers, not only
- * openai_compatible: one fetch that every AI request leaves through is the one place to observe
- * them (design 14.2, the outbound boundary) and to check them.
+ * caller must say explicitly what fetch an openai_compatible client uses, even one (anthropic,
+ * openai) that never reads it, so there is no path left that quietly reaches the real network
+ * unvalidated.
  */
 export function createLanguageModel(
   policy: ModelPolicy,
@@ -81,9 +80,9 @@ export function createLanguageModel(
 ): LanguageModel {
   switch (policy.provider) {
     case 'anthropic':
-      return createAnthropic({ apiKey, fetch: opts.fetch })(policy.model);
+      return createAnthropic({ apiKey })(policy.model);
     case 'openai':
-      return createOpenAI({ apiKey, fetch: opts.fetch })(policy.model);
+      return createOpenAI({ apiKey })(policy.model);
     case 'openai_compatible':
       return createOpenAICompatible({
         name: 'openai_compatible',

@@ -1,4 +1,3 @@
-import { generateText } from 'ai';
 import { describe, expect, it } from 'vitest';
 import { estimateCost, estimateCostUsd, FALLBACK_PRICE, PRICING } from './pricing';
 import { assertSafeBaseUrl, createLanguageModel, isSafeBaseUrl } from './providers';
@@ -108,36 +107,4 @@ describe('cost estimate', () => {
     expect(partial.fallback).toBe(true);
     expect(partial.usd).toBeCloseTo(FALLBACK_PRICE.inputPerMTok + 2);
   });
-});
-
-describe('the fetch handed to every provider (issue #344)', () => {
-  // One fetch that every AI request leaves through is the one place to observe and to check them.
-  // The request is refused by the stub, so nothing leaves the test.
-  it.each([
-    ['anthropic', 'claude-haiku-5-5', 'https://api.anthropic.com/'],
-    ['openai', 'gpt-5-mini', 'https://api.openai.com/'],
-    ['openai_compatible', 'local-model', 'https://llm.example.com/'],
-  ] as const)(
-    '%s makes its request through the fetch it was given',
-    async (provider, model, prefix) => {
-      const seen: string[] = [];
-      const recording = ((input: Parameters<typeof fetch>[0]) => {
-        seen.push(String(input instanceof Request ? input.url : input));
-        return Promise.resolve(new Response('{"error":{"message":"stub"}}', { status: 400 }));
-      }) as typeof fetch;
-      const lm = createLanguageModel(
-        {
-          provider,
-          model,
-          maxOutputTokens: 1,
-          ...(provider === 'openai_compatible' ? { baseUrl: 'https://llm.example.com/v1' } : {}),
-        },
-        'test-key',
-        { fetch: recording, allowLoopbackHttp: false },
-      );
-      await generateText({ model: lm, prompt: 'x', maxRetries: 0 }).catch(() => undefined);
-      expect(seen).toHaveLength(1);
-      expect(seen[0]!.startsWith(prefix)).toBe(true);
-    },
-  );
 });

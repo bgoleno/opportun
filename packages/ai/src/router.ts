@@ -184,9 +184,11 @@ async function prepare(
   info: CallInfo,
 ): Promise<{ run: Run; model: LanguageModel; policy: ModelPolicy; apiKey: string }> {
   const policy = await deps.policyFor(task);
-  const run = new Run(deps, task, policy, info.promptId, info);
-
+  // Before the run, so before its span: a lookup that rejects (the ledger's database is down)
+  // throws with no span started, rather than leaving one open for good. It leaves no ledger row
+  // either, as before.
   const spent = await deps.spentTodayUsd(task);
+  const run = new Run(deps, task, policy, info.promptId, info);
   if (spent >= deps.budget.perTaskDailyUsd) throw await run.fail('budget_exceeded');
 
   let apiKey: string;

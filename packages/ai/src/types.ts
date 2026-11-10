@@ -85,11 +85,9 @@ export interface SafeBaseUrlOptions {
  * What createLanguageModel needs to build an openai_compatible client safely (issue #334): the
  * fetch to hand the SDK instead of its own default (built by apps/server's
  * lib/aiProviderFetch.ts, so this package stays IO-free), plus the loopback decision above,
- * which assertSafeBaseUrl also needs to validate the baseUrl's shape. The fetch goes to every
- * provider's client, so every AI request leaves through it (issue #344, to observe it). Only the
- * baseUrl check is openai_compatible's alone: the Anthropic and OpenAI base URLs are never derived
- * from policy.baseUrl (createLanguageModel's own switch), so there is nothing user-controlled for
- * them to validate.
+ * which assertSafeBaseUrl also needs to validate the baseUrl's shape. Anthropic and OpenAI
+ * never read this: their baseURL is never derived from policy.baseUrl (createLanguageModel's
+ * own switch), so there is nothing user-controlled for them to validate.
  */
 export interface ProviderFetchOptions extends SafeBaseUrlOptions {
   fetch: typeof fetch;
@@ -105,10 +103,7 @@ export interface AiDeps {
   budget: { perTaskDailyUsd: number };
   /** Sum of today's recorded est cost for this task (the ledger lives outside this package). */
   spentTodayUsd(task: TaskKey): Promise<number>;
-  /**
-   * issue #334: handed to createLanguageModel, which gives its fetch to every provider's client
-   * (https://github.com/bgoleno/opportun/issues/344: one place to observe and to check what leaves).
-   */
+  /** issue #334: handed to createLanguageModel for the openai_compatible case. */
   providerFetch: ProviderFetchOptions;
   /**
    * The user the call is for: an opaque row id, put on the call's span as `user.id`. When it is not

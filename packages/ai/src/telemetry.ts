@@ -103,6 +103,9 @@ export function withUser<T>(userId: string, fn: () => T): T {
  * (a file path, a sentence) is a string someone typed, and is not put on a span.
  */
 export function isModelId(value: string): boolean {
+  // Not backtracking: the optional group starts with `/`, which the first class cannot match, so
+  // there is no overlap to try again over, and the length is checked before the pattern runs.
+  // eslint-disable-next-line security/detect-unsafe-regex
   return value.length <= 128 && /^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)?$/.test(value);
 }
 

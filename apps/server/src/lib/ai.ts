@@ -234,5 +234,10 @@ export async function buildAiDeps(
       fetch: createProviderFetch({ allowLoopbackHttp }, resolveOverrides.get(db)),
       allowLoopbackHttp,
     },
+    // packages/ai does no IO, so it hands a failed ledger write after a streamed call to the
+    // server instead of logging it (issue #344). Same line the router logged itself before.
+    onRecordError: (task, err) => {
+      console.error(`[ai] streamChat: failed to record task_runs row for ${task}:`, err);
+    },
   };
 }
