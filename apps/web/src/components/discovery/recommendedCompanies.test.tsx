@@ -154,6 +154,7 @@ const READS = new Set([
   '/discovery/sources',
   '/discovery/cost-figures',
   '/discovery/prefilter/recall',
+  '/ai/discovery-budget',
 ]);
 
 function routes(extra: Record<string, unknown> = {}) {
@@ -167,6 +168,7 @@ function routes(extra: Record<string, unknown> = {}) {
     'GET /discovery/sources': { items: [], total: 0 },
     'GET /discovery/cost-figures': { rank: [], sources: [] },
     'GET /discovery/prefilter/recall': RECALL_ON,
+    'GET /ai/discovery-budget': { dailyUsd: 1, spentTodayUsd: 0, waiting: 0, perTaskDailyUsd: 5 },
     ...extra,
   });
 }
@@ -441,7 +443,11 @@ describe('#300: followed and denied companies only under their toggles', () => {
     const initech = await within(l).findByRole('listitem', { name: 'Initech' });
     expect(within(initech).getByText('Denied')).toBeInTheDocument();
     expect(within(initech).queryByRole('button', { name: 'Follow Initech' })).toBeNull();
-    await user.click(within(initech).getByRole('button', { name: 'Undo denying Initech' }));
+    await user.click(
+      within(initech).getByRole('button', {
+        name: 'Undo denying Initech in Recommended companies',
+      }),
+    );
     await waitFor(() =>
       expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ status: 'none' }),
     );
@@ -718,6 +724,27 @@ describe('#301: the estimate line', () => {
     // 4 new a day, all of them ranked: 4 times $0.02.
     expect(
       await within(acme).findByText('about 4 new a day, est. $0.08 a day; first run 25, $0.50'),
+    ).toBeInTheDocument();
+  });
+
+  it('shows no estimate until the cost figure and the pre-filter have been read, then the right one', async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    withProbed({
+      // The recall answer is late: until it comes the pre-filter would count as off, and the
+      // first line shown (everything ranked, $0.08 a day) would be the wrong one.
+      'GET /discovery/prefilter/recall': async () => {
+        await held;
+        return RECALL_ON;
+      },
+    });
+    renderWithProviders(<CompaniesManager />);
+    const acme = await within(await list()).findByRole('listitem', { name: 'Acme' });
+    await within(acme).findByText('Acme');
+    expect(within(acme).queryByText(/new a day/)).toBeNull();
+    release();
+    expect(
+      await within(acme).findByText('about 4 new a day, est. $0.02 a day; first run 25, $0.50'),
     ).toBeInTheDocument();
   });
 

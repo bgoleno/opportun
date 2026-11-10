@@ -36,6 +36,16 @@ const GROUPS: ShortcutGroup[] = [
     ],
   },
   {
+    title: 'Recommended companies (Discovery > Companies)',
+    items: [
+      { keys: 'j / k', description: 'Move to the next or previous company' },
+      { keys: 'Space', description: 'Check the company the cursor is on' },
+      { keys: 'f', description: 'Follow it (a large follow asks first)' },
+      { keys: 'x', description: 'Deny it' },
+      { keys: 'Escape', description: 'Clear the checked companies' },
+    ],
+  },
+  {
     title: 'Decided results',
     items: [
       { keys: 'j / k', description: 'Select the next or previous result' },

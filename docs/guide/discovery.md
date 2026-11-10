@@ -186,6 +186,23 @@ otherwise all of them. The first run ranks at most 25. Dollars use the average c
 over the last 30 days, the same figure Discovery shows; with no call in 30 days the line says "cost
 not known yet". A followed company (under **Show followed**) shows the daily part only.
 
+**Select, and the budget.** Tick the boxes on several companies to see what following them together
+would bring: a bar at the bottom of the list totals the new postings a day, the ranking cost a day,
+and the first runs, and counts the selected companies that have no estimate yet, naming them under
+**without an estimate**. Beside the list (below it on a phone), **Today's discovery budget** shows
+what has been spent of your [discovery budget](settings.md#models-and-budgets) and what the
+selection's first runs would take it to. **Follow** and **Deny** in the bar act on the whole
+selection; one that fails does not stop the others, and the toast says which were done and why the
+others were not, which stay ticked. A follow asks first, with the figures for each company, when its
+first runs would cost more than $1.00 in all, would bring more than 20 new postings a day, or would
+take today's spend over your budget; any other follow acts at once. Changing a filter drops the
+companies it hides from the selection.
+
+**From the keyboard.** `j` and `k` move through the companies, `Space` ticks the one you are on, `f`
+follows it (with the question above when it applies), `x` denies it, and `Escape` clears the
+ticks. `?` lists every shortcut. They do nothing while you are typing in a field or a menu, or while
+a dialog is open.
+
 ![The Companies tab. At the top, Where to look is collapsed and shows 1 confirmed, 2 to review. In your network lists Initech, with Priya Example and Sam Example named under You know 2 people here and Follow and Deny buttons, and Globex, marked Following with no board found. Suggested companies lists Pied Piper with its reason and Follow and Deny buttons. Each company shows an Industry line, here Software Publishers](images/discovery-companies.png)
 
 _The Companies tab, with invented contacts, after the nightly industry tags ran. Following a company starts job board detection._

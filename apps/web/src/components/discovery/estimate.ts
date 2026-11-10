@@ -81,12 +81,12 @@ export function estimateOf(i: EstimateInputs): Estimate | null {
   };
 }
 
-function newText(n: number): string {
+export function newText(n: number): string {
   if (n < 0.1) return 'under 0.1 new a day';
   return `about ${n < 10 ? n.toFixed(1).replace(/\.0$/, '') : Math.round(n)} new a day`;
 }
 
-function dollars(usd: number): string {
+export function dollars(usd: number): string {
   return usd > 0 && usd < 0.01 ? 'under $0.01' : `$${usd.toFixed(2)}`;
 }
 
