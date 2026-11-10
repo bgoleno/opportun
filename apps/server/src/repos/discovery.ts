@@ -18,6 +18,7 @@ import {
   isNotNull,
   isNull,
   lt,
+  ne,
   or,
   sql,
   type SQL,
@@ -31,6 +32,7 @@ import {
   discoveryRuns,
   discoverySources,
   dismissalFeedback,
+  jobs,
   opportunities,
   roleTargets,
 } from '../db/schema';
@@ -1136,6 +1138,57 @@ export async function usersWithWaitingResults(exec: Exec): Promise<string[]> {
     .where(waitingForBudget)
     .all();
   return rows.map((r) => r.userId);
+}
+
+/**
+ * Whether a discovery.run job of this source is running now, other than `exceptJobId` (the caller's
+ * own), however it was queued: Run now and the source's schedule queue theirs under different
+ * dedupe keys (https://github.com/bgoleno/opportun/issues/269). A running job, not a run row:
+ * a process killed mid-run leaves its row unfinished for good, while its job goes back to pending
+ * when the runner starts again (recoverStaleJobs), so only the job says whether a run is live.
+ */
+export async function hasRunInProgress(
+  exec: Exec,
+  ctx: UserCtx,
+  sourceId: string,
+  exceptJobId?: string,
+): Promise<boolean> {
+  const row = await exec
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.kind, DISCOVERY_RUN_KIND),
+        eq(jobs.status, 'running'),
+        eq(jobs.userId, ctx.userId),
+        eq(jsonText(jobs.payload, 'sourceId'), sourceId),
+        ...(exceptJobId === undefined ? [] : [ne(jobs.id, exceptJobId)]),
+      ),
+    )
+    .limit(1)
+    .get();
+  return row !== undefined;
+}
+
+/** Whether this source has a run row with no finish: one going now, or one a crash left. */
+export async function hasUnfinishedRun(
+  exec: Exec,
+  ctx: UserCtx,
+  sourceId: string,
+): Promise<boolean> {
+  const row = await exec
+    .select({ id: discoveryRuns.id })
+    .from(discoveryRuns)
+    .where(
+      and(
+        eq(discoveryRuns.userId, ctx.userId),
+        eq(discoveryRuns.sourceId, sourceId),
+        isNull(discoveryRuns.finishedAt),
+      ),
+    )
+    .limit(1)
+    .get();
+  return row !== undefined;
 }
 
 /**

@@ -29,6 +29,7 @@ import {
   findChainTarget,
   getResult,
   getSourceRow,
+  hasRunInProgress,
   listResults,
   prefilterRecall,
   listRuns,
@@ -796,7 +797,9 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * Run now: queues a run (deduped while one is unfinished), whatever the schedule says. A
-   * disabled source is refused with 409 source_disabled (#297).
+   * disabled source is refused with 409 source_disabled (#297), and so is one with a run in
+   * progress, with 409 run_in_progress (#269): a second run would read the board again at the same
+   * time, and the 202 would tell the user nothing.
    */
   api.post(
     '/discovery/sources/:id/run',
@@ -809,6 +812,9 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       // A run skips a disabled source, so queueing one would answer 202 and then do nothing (#297).
       // Refuse instead of enabling it: turning a source on is the user's own decision.
       if (!source.enabled) throw new HttpError(409, 'source_disabled');
+      // A run that starts after this check still finds this one going, and records a Skipped run
+      // instead of reading the board (jobs/discoveryRun.ts runDiscoverySource).
+      if (await hasRunInProgress(db, ctx, source.id)) throw new HttpError(409, 'run_in_progress');
       const jobId = await enqueue(
         db,
         DISCOVERY_RUN_KIND,

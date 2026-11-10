@@ -399,6 +399,59 @@ describe('Run now on a paused source (#297)', () => {
   });
 });
 
+describe('Run now during a run of the same source (#269)', () => {
+  it('a 409 run_in_progress says a run is already going and to look at its history', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      ...base,
+      'POST /discovery/sources/s-gh/run': () => ({
+        status: 409,
+        body: { error: { code: 'run_in_progress' } },
+      }),
+    });
+    renderWithProviders(<SourcesManager />);
+    await user.click(await screen.findByRole('button', { name: 'Run Greenhouse initech now' }));
+    expect(await screen.findByText('Run not started')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'This source is already running. Its new postings arrive when that run ends: see its Run history.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Run queued')).toBeNull();
+  });
+
+  it('a run skipped because another was going shows as Skipped, with why', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      ...base,
+      'GET /discovery/sources/s-gh/runs': {
+        items: [
+          {
+            id: 'r-2',
+            sourceId: 's-gh',
+            roleTargetId: null,
+            startedAt: NOW,
+            finishedAt: NOW + 10,
+            stats: { skipped: 'run_in_progress' },
+            error: 'Skipped: a run of this source was already in progress.',
+          },
+        ],
+        total: 1,
+      },
+    });
+    renderWithProviders(<SourcesManager />);
+    await user.click(
+      await screen.findByRole('button', { name: 'Run history for Greenhouse initech' }),
+    );
+    const drawer = await screen.findByRole('dialog', { name: 'Run history' });
+    expect(await within(drawer).findByText('Skipped')).toBeInTheDocument();
+    expect(
+      within(drawer).getByText('Skipped: a run of this source was already in progress.'),
+    ).toBeInTheDocument();
+    expect(within(drawer).queryByText('Failed')).toBeNull();
+  });
+});
+
 describe('Workday sources', () => {
   it('labels the kind and summarizes the board as tenant/site on its host', () => {
     expect(sourceKindLabel('ats_workday')).toBe('Workday');
