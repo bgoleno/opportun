@@ -2,7 +2,7 @@
 // up another's (https://github.com/bgoleno/opportun/issues/321; tl's design on
 // https://github.com/bgoleno/opportun/issues/321#issuecomment-6767502359, as changed on
 // https://github.com/bgoleno/opportun/pull/330#issuecomment-6768955332).
-import { and, eq, inArray, min, ne } from 'drizzle-orm';
+import { and, eq, gte, inArray, min, ne, or } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { jobs } from '../db/schema';
 import type { UserCtx } from '../repos/base';
@@ -16,8 +16,15 @@ import { enqueue } from './runner';
 export const VENDOR_CHECK_KINDS = ['company.ats_detect', 'company.board_probe'] as const;
 export type VendorCheckKind = (typeof VENDOR_CHECK_KINDS)[number];
 
-/** Per user: how many vendor checks pending or running go ahead of other users' waiting ones. */
+/**
+ * Per user: how many vendor checks go ahead of other users' waiting ones, counting those pending,
+ * running, or made in the last VENDOR_CHECK_WINDOW_MS whatever became of them. The window makes it a
+ * budget over time: a user who queued one more each time one finished stayed under a cap of pending
+ * and running alone, and went ahead every time, so another user's backlog was never reached (sec on
+ * https://github.com/bgoleno/opportun/pull/330, B2; tl ruled the window).
+ */
 export const VENDOR_CHECK_CAP = 3;
+export const VENDOR_CHECK_WINDOW_MS = 10 * 60_000;
 
 /** Per app (a Db), per user: the tail of that user's enqueues, so each counts after the last inserts. */
 const lines = new WeakMap<Db, Map<string, Promise<unknown>>>();
@@ -52,10 +59,10 @@ function inUsersLine<T>(db: Db, userId: string, fn: () => Promise<T>): Promise<T
 /**
  * Queues one vendor check for the user, and decides its place in line. The runner claims by run_at,
  * then created_at.
- * - Under VENDOR_CHECK_CAP of the user's checks pending or running: due just before the earliest
- *   vendor check any other user has waiting (or now, if none waits or now is earlier). So a user's
- *   first few checks go ahead of another user's backlog, however long it has waited, behind only
- *   what is running.
+ * - Under VENDOR_CHECK_CAP of the user's checks pending, running or made within the window: due
+ *   just before the earliest vendor check any other user has waiting (or now, if none waits or now
+ *   is earlier). So a user's first few checks in a window go ahead of another user's backlog,
+ *   however long it has waited, behind only what is running.
  * - At or over it: due now, the back of the line. So a user alone is never slowed: 30 follows are
  *   all due at once, as before.
  * Nothing is refused: every check runs in its turn. Dedupe keys are the caller's (per company), as
@@ -77,7 +84,10 @@ export async function enqueueVendorCheck(
         and(
           eq(jobs.userId, ctx.userId),
           inArray(jobs.kind, [...VENDOR_CHECK_KINDS]),
-          inArray(jobs.status, ['pending', 'running']),
+          or(
+            inArray(jobs.status, ['pending', 'running']),
+            gte(jobs.createdAt, now - VENDOR_CHECK_WINDOW_MS),
+          ),
         ),
       )
       .limit(VENDOR_CHECK_CAP)

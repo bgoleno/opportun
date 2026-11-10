@@ -13,7 +13,11 @@ import { claimNextJob } from '../src/db/dialect';
 import { jobs } from '../src/db/schema';
 import { ATS_DETECT_KIND, atsDetectDedupeKey, enqueueAtsDetect } from '../src/jobs/atsDetect';
 import { BOARD_PROBE_KIND, enqueueBoardProbe } from '../src/jobs/companyBoardProbe';
-import { VENDOR_CHECK_CAP, VENDOR_CHECK_KINDS } from '../src/jobs/vendorCheckQueue';
+import {
+  VENDOR_CHECK_CAP,
+  VENDOR_CHECK_KINDS,
+  VENDOR_CHECK_WINDOW_MS,
+} from '../src/jobs/vendorCheckQueue';
 import type { UserCtx } from '../src/repos/base';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
@@ -162,6 +166,83 @@ describe("#321: another user's first checks go ahead of a backlog", () => {
       .where(eq(jobs.dedupeKey, atsDetectDedupeKey(companyId)))
       .all();
     expect(rows).toHaveLength(1);
+  });
+});
+
+// sec on https://github.com/bgoleno/opportun/pull/330#issuecomment-6769528639 (B2): a user who queues
+// one more check each time one of theirs finishes never reaches the cap of pending or running, and
+// was placed ahead every time, so another user's backlog was never reached.
+describe('#321: a user who keeps queueing one at a time', () => {
+  it("cannot keep another user's backlog waiting: it gets a claim within a few", async () => {
+    const { app, a, b } = await boot();
+    await onlyTheseJobs(app);
+    await follows(app, a, 10);
+    // B keeps two checks in flight: each time one of B's finishes, B queues another.
+    await follows(app, b, 2);
+    let claimsBeforeA: number | null = null;
+    for (let i = 0; i < 20; i++) {
+      const job = await claimNextJob(app.db, 'test-worker', Date.now() + 1000);
+      if (job === undefined) break;
+      if (job.userId === a.userId) {
+        claimsBeforeA = i;
+        break;
+      }
+      await app.db.update(jobs).set({ status: 'done' }).where(eq(jobs.id, job.id)).run();
+      await follows(app, b, 1);
+    }
+    expect(claimsBeforeA).not.toBeNull();
+    expect(claimsBeforeA!).toBeLessThanOrEqual(VENDOR_CHECK_CAP);
+  });
+
+  /** Claims every check due, and marks each finished. */
+  async function runAll(app: FastifyInstance) {
+    for (;;) {
+      const job = await claimNextJob(app.db, 'test-worker', Date.now() + 1000);
+      if (job === undefined) return;
+      await app.db.update(jobs).set({ status: 'done' }).where(eq(jobs.id, job.id)).run();
+    }
+  }
+
+  it("B's 4th inside the window goes to the back, even with none of B's waiting", async () => {
+    const { app, a, b } = await boot();
+    await onlyTheseJobs(app);
+    await follows(app, b, VENDOR_CHECK_CAP);
+    await runAll(app);
+    await follows(app, a, 5);
+    await follows(app, b, 1);
+    expect(whose(await claimedInOrder(app), a)).toEqual([...times(5, 'a'), 'b']);
+  });
+
+  it('a finished check inside the window counts toward the cap', async () => {
+    const { app, a, b } = await boot();
+    await onlyTheseJobs(app);
+    await follows(app, b, 1);
+    await runAll(app);
+    await follows(app, a, 5);
+    // One of B's finished a moment ago, and two wait: the next is B's fourth in the window.
+    await follows(app, b, 2);
+    await follows(app, b, 1);
+    expect(whose(await claimedInOrder(app), a)).toEqual(['b', 'b', ...times(5, 'a'), 'b']);
+  });
+
+  it("past the window, B's checks go ahead again", async () => {
+    const { app, a, b } = await boot();
+    await onlyTheseJobs(app);
+    await follows(app, b, VENDOR_CHECK_CAP);
+    await runAll(app);
+    // Those three were made longer ago than the window.
+    await app.db
+      .update(jobs)
+      .set({ createdAt: Date.now() - VENDOR_CHECK_WINDOW_MS - 1000 })
+      .where(eq(jobs.userId, b.userId))
+      .run();
+    await follows(app, a, 5);
+    await follows(app, b, 1);
+    expect(whose(await claimedInOrder(app), a)).toEqual(['b', ...times(5, 'a')]);
+  });
+
+  it('the window is 10 minutes', () => {
+    expect(VENDOR_CHECK_WINDOW_MS).toBe(10 * 60_000);
   });
 });
 
