@@ -15,6 +15,7 @@ import { HttpError } from '../lib/errors';
 import { jobs, settings } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
 import { RANK_WAITING_KIND } from './discoveryKinds';
+import { finishInterruptedRuns } from './interruptedRuns';
 import { getJobHandler, type JobContext, type JobHandler, type JobServices } from './registry';
 
 export const DEFAULT_MAX_ATTEMPTS = 5;
@@ -468,11 +469,13 @@ export function startRunner(
     }
     schedule(interval);
   }
-  // Startup work starts now (stop() waits for it): orphaned jobs go back to pending, then
-  // schedules materialize; the first poll follows immediately.
+  // Startup work starts now (stop() waits for it): orphaned jobs go back to pending, the runs they
+  // left unfinished are ended as interrupted (#323), then schedules materialize; the first poll
+  // follows immediately, so no run begins before the interrupted ones are ended.
   const startup = (async () => {
     try {
       await recoverStaleJobs(db);
+      await finishInterruptedRuns(db);
       await safeMaterialize(db, clock(), opts);
     } catch (err) {
       opts.onError?.(err);
