@@ -855,9 +855,12 @@ The three sinks are the local store, the log output and export.
   restart is needed.
 - **Spans** are OpenTelemetry spans from `@opentelemetry/api`. `packages/ai` uses the API
   directly: the package still does no IO, because the API does nothing until the server
-  registers a provider. The provider (`sdk-trace-base` with the `AsyncLocalStorage` context
-  manager and an explicit sampler) has two processors: the local span store, and an export
-  slot the export manager fills while export is on.
+  registers a provider. The provider (`@opentelemetry/sdk-trace` 2.x, with the
+  `AsyncLocalStorageContextManager` from `@opentelemetry/context-async-hooks` and an explicit
+  sampler) has two processors: the local span store, and an export slot the export manager
+  fills while export is on. `sdk-trace-base` is deprecated in favour of `sdk-trace`. Its 3.x
+  line needs Node 22.15 or later and `@opentelemetry/api` 1.10, while the repository allows
+  any Node 22, so moving to 3.x is a separate change that raises `engines`.
 - **Log records** go through pino. `obs.event()` and the error path write to the same
   logger, and the export manager attaches a log exporter to it while export is on.
 - **With collection off, which is the default**, every `obs` entry point returns after one
