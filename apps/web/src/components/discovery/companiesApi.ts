@@ -450,6 +450,9 @@ export interface BulkOutcome {
 
 /** Why one company in a batch was not followed or denied, in the user's words. */
 function bulkFailure(err: unknown): string {
+  // The browser's own wording for a request that never reached the server ("Failed to fetch").
+  if (err instanceof TypeError)
+    return 'Could not reach Opportun. Check your connection and try again.';
   if (err instanceof ApiError && err.code === 'company_denied') {
     return 'That company is denied. Undo the denial first.';
   }

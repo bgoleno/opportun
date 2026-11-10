@@ -73,6 +73,14 @@ export interface BudgetToday {
 export type ConfirmReason = 'first_run_cost' | 'new_per_day' | 'budget';
 
 /**
+ * Whole cents, what the bar and the dialog show. The dollar tests compare these, not the floats:
+ * $0.33 + $0.56 + $0.11 is exactly $1.00 and 1.0000000000000002 as floats, and would ask while
+ * every figure on screen says $1.00 (tl on #302). The sums themselves stay unrounded; only this
+ * comparison rounds.
+ */
+const cents = (usd: number): number => Math.round(usd * 100);
+
+/**
  * Why a follow of these rows asks first, in a fixed order; empty when it acts at once. The sum of
  * the rows is what is asked about, not each row. The dollar tests need a known cost, and the budget
  * test a budget that was read: without them only the number of new postings can ask. A row with no
@@ -83,14 +91,14 @@ export function confirmReasons(
   budget: BudgetToday | null,
 ): ConfirmReason[] {
   const reasons: ConfirmReason[] = [];
-  if (totals.firstRunUsd !== null && totals.firstRunUsd > CONFIRM_FIRST_RUN_USD) {
+  if (totals.firstRunUsd !== null && cents(totals.firstRunUsd) > cents(CONFIRM_FIRST_RUN_USD)) {
     reasons.push('first_run_cost');
   }
   if (totals.newPerDay > CONFIRM_NEW_PER_DAY) reasons.push('new_per_day');
   if (
     budget !== null &&
     totals.firstRunUsd !== null &&
-    budget.spentTodayUsd + totals.firstRunUsd > budget.dailyUsd
+    cents(budget.spentTodayUsd + totals.firstRunUsd) > cents(budget.dailyUsd)
   ) {
     reasons.push('budget');
   }
