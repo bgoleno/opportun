@@ -390,7 +390,7 @@ export const TASKS: Record<TaskKey, TaskDef<any, any>> = {
   ),
   'company.suggest': def(
     'company.suggest',
-    'Suggests companies worth following, given the role targets, the confirmed industry profile, the network companies and past decisions.',
+    'Suggests companies to follow, from role targets, industries and network.',
     SuggestInput,
     SuggestOutputSchema,
   ),
