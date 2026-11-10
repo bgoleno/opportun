@@ -27,6 +27,10 @@ function company(over: Partial<CompanyView> & { id: string; name: string }): Com
     needsCareersUrl: false,
     createdAt: NOW,
     updatedAt: NOW,
+    boardProbedAt: null,
+    boardOpenJobs: null,
+    boardPrefilterMatches: null,
+    boardProbePending: false,
     ...over,
   };
 }
@@ -148,6 +152,8 @@ const READS = new Set([
   '/companies',
   '/discovery/industry-profile',
   '/discovery/sources',
+  '/discovery/cost-figures',
+  '/discovery/prefilter/recall',
 ]);
 
 function routes(extra: Record<string, unknown> = {}) {
@@ -159,6 +165,8 @@ function routes(extra: Record<string, unknown> = {}) {
     'GET /companies': { items: [], total: 0 },
     'GET /discovery/industry-profile': { items: [SOFTWARE, FREIGHT, UNCONFIRMED] },
     'GET /discovery/sources': { items: [], total: 0 },
+    'GET /discovery/cost-figures': { rank: [], sources: [] },
+    'GET /discovery/prefilter/recall': RECALL_ON,
     ...extra,
   });
 }
@@ -168,6 +176,17 @@ const control = (label: string) =>
   within(screen.getByRole('group', { name: 'Filter and sort the companies' })).getByLabelText(
     label,
   );
+const RECALL_ON = {
+  positives: 40,
+  kept: 40,
+  recall: 1,
+  on: true,
+  neededRecall: 0.95,
+  neededPositives: 20,
+  judged: 100,
+  filtered: 60,
+};
+
 const list = async () => await screen.findByRole('list', { name: 'Recommended companies' });
 const rowTitles = (l: HTMLElement) =>
   [...l.children].map((li) => li.querySelector('[data-company-name]')?.textContent);
@@ -311,7 +330,7 @@ describe('#300: Follow and Deny do what they did', () => {
     );
     await user.click(
       within(within(l).getByRole('listitem', { name: 'Northwind Traders' })).getByRole('button', {
-        name: 'Follow Northwind Traders',
+        name: 'Follow Northwind Traders and add careers page',
       }),
     );
     // A suggestion that is also in the network is still a suggestion: accept, not follow.
@@ -339,7 +358,9 @@ describe('#300: Follow and Deny do what they did', () => {
     });
     renderWithProviders(<CompaniesManager />);
     const row = await within(await list()).findByRole('listitem', { name: 'Northwind Traders' });
-    await user.click(within(row).getByRole('button', { name: 'Follow Northwind Traders' }));
+    await user.click(
+      within(row).getByRole('button', { name: 'Follow Northwind Traders and add careers page' }),
+    );
     expect(
       await screen.findByText('That company is denied. Undo the denial first.'),
     ).toBeInTheDocument();
@@ -541,6 +562,238 @@ describe('#300: nothing is requested to build, filter or sort the list', () => {
     await user.click(screen.getByRole('checkbox', { name: 'Show denied' }));
     await user.click(screen.getByRole('button', { name: 'Clear filters' }));
     expect(calls).toHaveLength(before);
+  });
+});
+
+describe('#301: Check board, only on the click', () => {
+  const checkButton = (row: HTMLElement, name: string) =>
+    within(row).queryByRole('button', { name: `Check board for ${name}` });
+
+  it('is offered on a company never checked, and nowhere else', async () => {
+    const user = userEvent.setup();
+    routes();
+    renderWithProviders(<CompaniesManager />);
+    const l = await list();
+    await within(l).findByRole('listitem', { name: 'Acme' });
+    // Never checked: a network company and a suggestion.
+    expect(
+      checkButton(within(l).getByRole('listitem', { name: 'Tailspin Toys' }), 'Tailspin Toys'),
+    ).not.toBeNull();
+    expect(
+      checkButton(within(l).getByRole('listitem', { name: 'Globex' }), 'Globex'),
+    ).not.toBeNull();
+    // A board found, and no board found.
+    expect(checkButton(within(l).getByRole('listitem', { name: 'Acme' }), 'Acme')).toBeNull();
+    expect(
+      checkButton(
+        within(l).getByRole('listitem', { name: 'Northwind Traders' }),
+        'Northwind Traders',
+      ),
+    ).toBeNull();
+    // A followed company has no use for it.
+    await user.click(screen.getByRole('checkbox', { name: 'Show followed' }));
+    expect(
+      checkButton(await within(l).findByRole('listitem', { name: 'Contoso' }), 'Contoso'),
+    ).toBeNull();
+  });
+
+  it('a click asks for that one company, and the row says it is checking', async () => {
+    const user = userEvent.setup();
+    let asked = false;
+    const { calls } = routes({
+      'POST /companies/n-3/check-board': () => {
+        asked = true;
+        return { status: 202, body: { jobId: 'job-1' } };
+      },
+      'GET /discovery/network-companies': () => ({
+        items: [
+          CONTOSO,
+          INITECH,
+          NORTHWIND,
+          asked
+            ? { ...TAILSPIN, company: { ...TAILSPIN.company, boardProbePending: true } }
+            : TAILSPIN,
+          GLOBEX,
+        ],
+      }),
+    });
+    renderWithProviders(<CompaniesManager />);
+    const l = await list();
+    const row = await within(l).findByRole('listitem', { name: 'Tailspin Toys' });
+    // Nothing has been asked for by showing the list: a build asks for no check.
+    expect(calls.some((c) => c.method !== 'GET')).toBe(false);
+    await user.click(within(row).getByRole('button', { name: 'Check board for Tailspin Toys' }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path}`)).toEqual([
+        'POST /companies/n-3/check-board',
+      ]),
+    );
+    expect(await within(row).findByText('Checking board...')).toBeInTheDocument();
+    expect(checkButtonGone(row)).toBe(true);
+    // No other company was asked about.
+    expect(calls.filter((c) => c.path.endsWith('/check-board'))).toHaveLength(1);
+  });
+
+  const checkButtonGone = (row: HTMLElement) =>
+    within(row).queryByRole('button', { name: /^Check board for / }) === null;
+
+  it('says why a company cannot be checked, and when the hour is up', async () => {
+    const user = userEvent.setup();
+    routes({
+      'POST /companies/n-3/check-board': () => ({
+        status: 409,
+        body: { error: { code: 'already_checked' } },
+      }),
+      'POST /companies/s-2/check-board': () => ({
+        status: 429,
+        headers: { 'retry-after': '1380' },
+        body: { error: { code: 'rate_limited', reason: 'per_user', max: 30, windowMinutes: 60 } },
+      }),
+    });
+    renderWithProviders(<CompaniesManager />);
+    const l = await list();
+    await user.click(
+      within(await within(l).findByRole('listitem', { name: 'Tailspin Toys' })).getByRole(
+        'button',
+        {
+          name: 'Check board for Tailspin Toys',
+        },
+      ),
+    );
+    expect(await screen.findByText('That company was already checked.')).toBeInTheDocument();
+    await user.click(
+      within(within(l).getByRole('listitem', { name: 'Globex' })).getByRole('button', {
+        name: 'Check board for Globex',
+      }),
+    );
+    expect(
+      await screen.findByText(
+        'You can check up to 30 boards an hour. Try again in about 23 minutes.',
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('#301: the estimate line', () => {
+  const PROBED = {
+    ...ACME,
+    boardProbedAt: NOW,
+    boardOpenJobs: 200,
+    boardPrefilterMatches: 40,
+  };
+  const figures = (avgCostUsd: number | null, sources: unknown[] = []) => ({
+    rank: [
+      {
+        days: 30,
+        calls: avgCostUsd === null ? 0 : 10,
+        errors: 0,
+        inputTokens: null,
+        outputTokens: null,
+        avgCostUsd,
+        totalCostUsd: 0,
+      },
+    ],
+    sources,
+  });
+  const withProbed = (extra: Record<string, unknown> = {}) =>
+    routes({
+      'GET /companies/suggestions': { items: [PROBED, GLOBEX_SUGGESTED], total: 2 },
+      'GET /discovery/cost-figures': figures(0.02),
+      ...extra,
+    });
+
+  it('a probed company: new a day, the cost a day, and the first run, at the 30-day average', async () => {
+    withProbed();
+    renderWithProviders(<CompaniesManager />);
+    const acme = await within(await list()).findByRole('listitem', { name: 'Acme' });
+    expect(
+      await within(acme).findByText('about 4 new a day, est. $0.02 a day; first run 25, $0.50'),
+    ).toBeInTheDocument();
+  });
+
+  it('with the pre-filter not acting, everything is ranked', async () => {
+    withProbed({ 'GET /discovery/prefilter/recall': { ...RECALL_ON, on: false } });
+    renderWithProviders(<CompaniesManager />);
+    const acme = await within(await list()).findByRole('listitem', { name: 'Acme' });
+    // 4 new a day, all of them ranked: 4 times $0.02.
+    expect(
+      await within(acme).findByText('about 4 new a day, est. $0.08 a day; first run 25, $0.50'),
+    ).toBeInTheDocument();
+  });
+
+  it('with no rank call in 30 days it says the cost is not known, and keeps the counts', async () => {
+    withProbed({ 'GET /discovery/cost-figures': figures(null) });
+    renderWithProviders(<CompaniesManager />);
+    const acme = await within(await list()).findByRole('listitem', { name: 'Acme' });
+    expect(
+      await within(acme).findByText(
+        'about 4 new a day; first run 25 postings (cost not known yet)',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('a company not probed, or with no board found, has no estimate line', async () => {
+    withProbed();
+    renderWithProviders(<CompaniesManager />);
+    const l = await list();
+    await within(l).findByText(/^about 4 new a day/);
+    for (const name of ['Globex', 'Tailspin Toys', 'Northwind Traders']) {
+      expect(within(within(l).getByRole('listitem', { name })).queryByText(/new a day/)).toBeNull();
+    }
+    // It keeps Follow, labelled for what the user will need to do next.
+    const northwind = within(l).getByRole('listitem', { name: 'Northwind Traders' });
+    expect(
+      within(northwind).getByRole('button', {
+        name: 'Follow Northwind Traders and add careers page',
+      }),
+    ).toHaveTextContent('Follow and add careers page');
+  });
+
+  it('a followed company: the daily part only, from its own runs once it has 14 days of them', async () => {
+    const user = userEvent.setup();
+    withProbed({
+      'GET /discovery/sources': {
+        items: [{ id: 's-9', companyId: 'n-1', kind: 'ats_lever', prefilterEnabled: true }],
+        total: 1,
+      },
+      'GET /discovery/cost-figures': figures(0.02, [
+        {
+          sourceId: 's-9',
+          kind: 'ats_lever',
+          openJobs: 300,
+          newPerDay: 9,
+          days: 14,
+          rankCallsPerDay: 2,
+          costPerDayUsd: 0.04,
+          belowCut: 0,
+          belowCutCostUsd: null,
+        },
+      ]),
+      'GET /discovery/network-companies': {
+        items: [
+          {
+            ...CONTOSO,
+            company: {
+              ...CONTOSO.company,
+              boardProbedAt: NOW,
+              boardOpenJobs: 200,
+              boardPrefilterMatches: 40,
+            },
+          },
+          NORTHWIND,
+          TAILSPIN,
+          GLOBEX,
+        ],
+      },
+    });
+    renderWithProviders(<CompaniesManager />);
+    const l = await list();
+    await user.click(await screen.findByRole('checkbox', { name: 'Show followed' }));
+    const contoso = await within(l).findByRole('listitem', { name: 'Contoso' });
+    expect(
+      await within(contoso).findByText('about 9 new a day, est. $0.04 a day'),
+    ).toBeInTheDocument();
+    expect(within(contoso).queryByText(/first run/)).toBeNull();
   });
 });
 

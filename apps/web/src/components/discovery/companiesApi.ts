@@ -31,6 +31,14 @@ export interface CompanyView {
   industryAt?: number | null;
   atsDetectPending: boolean;
   needsCareersUrl: boolean;
+  /**
+   * The board probe's result (#221, #301): when it ran, how many postings the board had open and how
+   * many of them the pre-filter passes; null until it has run. True while a probe job is waiting.
+   */
+  boardProbedAt?: number | null;
+  boardOpenJobs?: number | null;
+  boardPrefilterMatches?: number | null;
+  boardProbePending?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -51,10 +59,16 @@ export function atsLabel(kind: string | null | undefined): string {
   return (ATS_KINDS as readonly string[]).includes(kind) ? sourceKindLabel(kind as AtsKind) : kind;
 }
 
+/** While a probe is running the list is read again, so the result shows when it lands. */
+const PROBE_POLL_MS = 3000;
+const probing = (rows: readonly CompanyView[] | undefined): boolean =>
+  rows?.some((c) => c.boardProbePending === true) === true;
+
 export function useCompanySuggestions() {
   return useQuery({
     queryKey: companyKeys.suggestions,
     queryFn: () => api<Page<CompanyView>>('/companies/suggestions?limit=200&sort=-createdAt'),
+    refetchInterval: (q) => (probing(q.state.data?.items) ? PROBE_POLL_MS : false),
   });
 }
 
@@ -255,6 +269,53 @@ export function useNetworkCompanies(showDenied: boolean) {
       api<{ items: NetworkCompany[] }>(
         `/discovery/network-companies${showDenied ? '?showDenied=true' : ''}`,
       ),
+    refetchInterval: (q) =>
+      probing(q.state.data?.items.map((i) => i.company)) ? PROBE_POLL_MS : false,
+  });
+}
+
+/** Why Check board was refused, in the user's words (#301). */
+function checkBoardFailure(err: unknown): string {
+  if (err instanceof ApiError && err.status === 429 && err.code === 'rate_limited') {
+    const { max, windowMinutes, retryAfterSec } = err.details;
+    const most = typeof max === 'number' && Number.isInteger(max) && max > 0 ? max : 30;
+    const per =
+      windowMinutes === 60 || typeof windowMinutes !== 'number'
+        ? 'an hour'
+        : `every ${windowMinutes} minutes`;
+    const m =
+      typeof retryAfterSec === 'number' && retryAfterSec > 0 && retryAfterSec <= 86_400
+        ? Math.ceil(retryAfterSec / 60)
+        : null;
+    const wait = m === null ? 'a few minutes' : `about ${m} minute${m === 1 ? '' : 's'}`;
+    return `You can check up to ${most} boards ${per}. Try again in ${wait}.`;
+  }
+  if (err instanceof ApiError && err.code === 'already_checked') {
+    return 'That company was already checked.';
+  }
+  if (err instanceof ApiError && err.code === 'not_a_candidate') {
+    return 'Only a company you have not followed or denied can be checked.';
+  }
+  return errorMessage(err);
+}
+
+/**
+ * Check board (#301): the user's click asks for the company's job board to be found and its open
+ * jobs counted. Public board pages only, and no AI call. The row shows the result when the probe is
+ * done; the lists are read again until then.
+ */
+export function useCheckBoard() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (c: CompanyView) =>
+      api<{ jobId: string }>(`/companies/${enc(c.id)}/check-board`, { method: 'POST' }),
+    onError: (err) =>
+      toast({
+        title: 'Board not checked',
+        description: checkBoardFailure(err),
+        variant: 'destructive',
+      }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['companies'] }),
   });
 }
 

@@ -165,6 +165,27 @@ there are and how many of them the [pre-filter](#the-pre-filter) passes for your
 only reads public job board pages, and it does not follow the company: the board stays switched off
 until you follow it.
 
+**Check board.** A company in Recommended companies that has not been checked, from your network or
+a suggestion, has a **Check board** button. Nothing checks a company you have not asked about:
+only your click does, and only for that company, once. It does what the weekly check does: it looks
+for the company's public job board (the company's name, as board-name guesses, goes to the Greenhouse,
+Lever, Ashby and Workday public pages, as following does), reads the list of its open jobs once, and
+keeps how many there are, how many the pre-filter passes, and up to 10 of the job titles. No AI call
+is made, and the company is not followed. The row says **Checking board...** and shows the result
+when it is done. You can check up to 30 companies an hour; past that the button says when to try
+again. A company with no board found says so, and its **Follow and add careers page** button follows
+it so that you can add the careers page under Followed companies. The job titles are also what the
+nightly industry tags use for a company with no postings stored yet, and a check that reads titles
+after the model could not place a company has it asked again.
+
+**The estimate line.** A row whose board was checked says what following it would bring, for example
+"about 4 new a day, est. $0.02 a day; first run 25, $0.50". New postings a day are 2% of the open
+jobs until the board has its own 14 days of runs, and then what it has seen. While the pre-filter is
+on (see [The pre-filter](#the-pre-filter)) only the postings it passes are counted as ranked, and
+otherwise all of them. The first run ranks at most 25. Dollars use the average cost of a ranking call
+over the last 30 days, the same figure Discovery shows; with no call in 30 days the line says "cost
+not known yet". A followed company (under **Show followed**) shows the daily part only.
+
 ![The Companies tab. At the top, Where to look is collapsed and shows 1 confirmed, 2 to review. In your network lists Initech, with Priya Example and Sam Example named under You know 2 people here and Follow and Deny buttons, and Globex, marked Following with no board found. Suggested companies lists Pied Piper with its reason and Follow and Deny buttons. Each company shows an Industry line, here Software Publishers](images/discovery-companies.png)
 
 _The Companies tab, with invented contacts, after the nightly industry tags ran. Following a company starts job board detection._

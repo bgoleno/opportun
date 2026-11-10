@@ -8,11 +8,13 @@ import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetSources, type SourceContext } from '../src/adapters/discoverySource';
+import type { NormalizedPosting } from '@opportun/core';
 import { companies, jobs } from '../src/db/schema';
 import { AtsDetectTransientError, detectAts } from '../src/jobs/atsDetect';
 import {
   BOARD_PROBE_KIND,
   boardProbeDedupeKey,
+  listingTitles,
   probeCompanyBoard,
 } from '../src/jobs/companyBoardProbe';
 import { createSafeFetch, type RawResponse } from '../src/lib/safeFetch';
@@ -139,6 +141,26 @@ describe('company board probe', () => {
       ['ats_greenhouse', false, company.id],
     ]);
     expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
+  });
+
+  it('keeps the titles it read, in the listing order, for the tagging (#301)', async () => {
+    const { app, a } = await boot();
+    const company = await suggestion(app, a);
+    const { fetch } = board();
+    await probeCompanyBoard(app.db, ctxOf(a), company.id, { fetch, log });
+    expect((await rowOf(app, company.id)).boardTitles).toEqual([
+      'Platform Engineer',
+      'Staff Platform Engineer',
+      'Account Executive',
+    ]);
+  });
+
+  it('keeps no titles for a company with no board', async () => {
+    const { app, a } = await boot();
+    const company = await suggestion(app, a);
+    const { fetch } = net({});
+    await probeCompanyBoard(app.db, ctxOf(a), company.id, { fetch, log });
+    expect((await rowOf(app, company.id)).boardTitles).toBeNull();
   });
 
   it("judges against this user's active role targets only, not another user's", async () => {
@@ -377,5 +399,42 @@ describe('company board probe', () => {
     expect(
       await app.db.select().from(jobs).where(eq(jobs.kind, BOARD_PROBE_KIND)).all(),
     ).toHaveLength(1);
+  });
+});
+
+describe('listingTitles (#301)', () => {
+  const posting = (title: string, postedAt?: number) =>
+    ({
+      company: 'Pied Piper',
+      title,
+      postingUrl: 'https://example.com/1',
+      externalId: title,
+      ...(postedAt === undefined ? {} : { postedAt }),
+    }) as NormalizedPosting;
+
+  it('newest first, different titles only, at most 10', () => {
+    const postings = [
+      posting('Old Engineer', 100),
+      posting('New Engineer', 300),
+      posting('Mid Engineer', 200),
+      posting('New Engineer', 250),
+    ];
+    expect(listingTitles(postings)).toEqual(['New Engineer', 'Mid Engineer', 'Old Engineer']);
+    const many = Array.from({ length: 15 }, (_, i) => posting(`Role ${i}`, 1000 - i));
+    expect(listingTitles(many)).toEqual(Array.from({ length: 10 }, (_, i) => `Role ${i}`));
+  });
+
+  it('a posting with no date comes after the dated ones, in the listing order', () => {
+    expect(
+      listingTitles([posting('Undated A'), posting('Dated', 5), posting('Undated B')]),
+    ).toEqual(['Dated', 'Undated A', 'Undated B']);
+  });
+
+  it('each title is one line of at most 120 characters, as the tagging cuts them', () => {
+    const [long] = listingTitles([posting(`Principal ${'x'.repeat(300)}`)]);
+    expect(long!.length).toBeLessThanOrEqual(120);
+    const [tagged] = listingTitles([posting('Engineer <script>alert(1)</script>\nSecond line')]);
+    expect(tagged).not.toMatch(/[<>\n]/);
+    expect(listingTitles([posting('   ')])).toEqual([]);
   });
 });

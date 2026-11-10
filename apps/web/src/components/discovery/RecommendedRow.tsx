@@ -5,12 +5,13 @@
 // the contacts' names only behind the "You know N people" disclosure, so a glance at the list does
 // not put everyone's name on screen. Every field is a React text node: a company name, a rationale
 // and a contact's name are third-party or model text.
-import { Check, Sparkles, Undo2, Users, X } from 'lucide-react';
+import { Check, Search, Sparkles, Undo2, Users, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { NetworkCompany } from './companiesApi';
 import { AtsStatusChip } from './CompanyCard';
 import { CompanyIndustry } from './CompanyIndustry';
+import { estimateText, type Estimate } from './estimate';
 import type { Fit, Recommended } from './recommended';
 
 const STRENGTH_LABELS = new Map([
@@ -37,7 +38,10 @@ export function closeSplit(contacts: NetworkCompany['contacts']): string {
 export function RecommendedRow(props: {
   item: Recommended;
   fit: Fit;
+  /** The estimate line's figures, or null where there is nothing to say (#301). */
+  estimate: Estimate | null;
   busy?: boolean;
+  onCheckBoard: () => void;
   onFollow: () => void;
   onDeny: () => void;
   onUndeny: () => void;
@@ -45,6 +49,14 @@ export function RecommendedRow(props: {
   const { company: c, contacts, sources } = props.item;
   const nameId = `recommended-company-${c.id}`;
   const split = closeSplit(contacts);
+  // Never checked: no board recorded, and nothing running that would record one. Only a candidate
+  // can be asked about; the server refuses the rest, so hiding the button is not what bounds it.
+  const checkable =
+    (c.status === 'none' || c.status === 'suggested') &&
+    c.atsKind == null &&
+    !c.atsDetectPending &&
+    c.boardProbePending !== true;
+  const noBoard = c.atsKind === 'none';
   return (
     <li
       aria-labelledby={nameId}
@@ -83,8 +95,29 @@ export function RecommendedRow(props: {
             AI suggested
           </Badge>
         ) : null}
-        <AtsStatusChip company={c} />
+        {c.boardProbePending === true ? (
+          <Badge variant="outline">Checking board...</Badge>
+        ) : (
+          <AtsStatusChip company={c} />
+        )}
+        {checkable ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={props.busy}
+            onClick={props.onCheckBoard}
+            aria-label={`Check board for ${c.name}`}
+          >
+            <Search aria-hidden="true" />
+            Check board
+          </Button>
+        ) : null}
       </div>
+      {props.estimate !== null ? (
+        <p className="text-sm [overflow-wrap:anywhere]" data-estimate>
+          {estimateText(props.estimate)}
+        </p>
+      ) : null}
       {sources.suggested && c.suggestionRationale ? (
         <p className="text-sm [overflow-wrap:anywhere]">
           <span className="text-muted-foreground">Why: </span>
@@ -132,10 +165,10 @@ export function RecommendedRow(props: {
             size="sm"
             disabled={props.busy}
             onClick={props.onFollow}
-            aria-label={`Follow ${c.name}`}
+            aria-label={noBoard ? `Follow ${c.name} and add careers page` : `Follow ${c.name}`}
           >
             <Check aria-hidden="true" />
-            Follow
+            {noBoard ? 'Follow and add careers page' : 'Follow'}
           </Button>
           <Button
             size="sm"

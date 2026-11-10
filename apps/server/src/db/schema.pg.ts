@@ -364,6 +364,13 @@ export const companies = pgTable(
     boardProbedAt: int('board_probed_at'),
     boardOpenJobs: int('board_open_jobs'),
     boardPrefilterMatches: int('board_prefilter_matches'),
+    /**
+     * Up to 10 different job titles the board probe read from the listing, newest first (#301). The
+     * tagging asks about a company with these when it has no postings stored from its board, and a
+     * probe that came after a "tried, no code" answer counts as titles arriving. Null until a probe
+     * has read a listing with a title in it.
+     */
+    boardTitles: json<string[]>('board_titles'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
