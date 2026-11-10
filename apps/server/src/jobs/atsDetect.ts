@@ -51,7 +51,8 @@ import {
 } from '../repos/discovery';
 import { readUserSetting, writeUserSetting } from '../repos/userSettings';
 import { requireService, type JobHandler } from './registry';
-import { enqueue, userCronProblem } from './runner';
+import { enqueueVendorCheck } from './vendorCheckQueue';
+import { userCronProblem } from './runner';
 
 export const ATS_DETECT_KIND = 'company.ats_detect'; // payload {companyId}
 export const ATS_REVERIFY_KIND = 'company.ats_reverify';
@@ -634,11 +635,13 @@ export async function detectAts(
 
 /** Queues detection for one of the user's companies (at most one unfinished per company). */
 export async function enqueueAtsDetect(db: Db, ctx: UserCtx, companyId: string): Promise<string> {
-  return enqueue(
+  // Queued per user, so one user's many companies cannot hold up another's (#321).
+  return await enqueueVendorCheck(
     db,
+    ctx,
     ATS_DETECT_KIND,
     { companyId },
-    { dedupeKey: atsDetectDedupeKey(companyId), userId: ctx.userId },
+    atsDetectDedupeKey(companyId),
   );
 }
 
