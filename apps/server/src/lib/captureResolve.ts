@@ -120,7 +120,10 @@ async function resultsWithKey(db: Exec, ctx: UserCtx, key: string): Promise<Disc
     .from(discoveryResults)
     .where(and(eq(discoveryResults.userId, ctx.userId), eq(discoveryResults.dedupeKey, key)))
     .all();
-  return await Promise.all(rows.map((r) => getResult(db, ctx, r.id)));
+  const results: DiscoveryResultView[] = [];
+  // One at a time: they all run on the transaction's one client.
+  for (const r of rows) results.push(await getResult(db, ctx, r.id));
+  return results;
 }
 
 async function opportunityWithKey(
@@ -220,7 +223,10 @@ async function leadsBehind(
       ),
     )
     .all();
-  return await Promise.all(rows.map((r) => getResult(db, ctx, r.id)));
+  const results: DiscoveryResultView[] = [];
+  // One at a time: they all run on the transaction's one client.
+  for (const r of rows) results.push(await getResult(db, ctx, r.id));
+  return results;
 }
 
 /**

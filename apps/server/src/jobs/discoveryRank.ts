@@ -197,7 +197,7 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
   if (!stored) {
     // The text changed during the call, so this score says nothing about it. If this is a rank job,
     // the one that change queued deduped onto it, and without a wait nothing would rank the new text.
-    // With a score from the new text already there, this changes nothing.
+    // The code cannot tell where a score already there came from; with one there, this changes nothing.
     await setRankWaitingIfUnranked(db, ctx, resultId);
     return { status: 'skipped', reason: POSTING_CHANGED };
   }
@@ -231,7 +231,7 @@ export const discoveryRankJob: JobHandler<z.infer<typeof PayloadSchema>> = {
     if (run.status === 'skipped' && run.reason === 'key_changed') {
       if (await discoveryBudgetHasRoom(db, user)) await enqueueRankWaiting(db, user);
     }
-    // The same, unless a score from the new text got there first.
+    // The same, unless a score was already there.
     if (run.status === 'skipped' && run.reason === POSTING_CHANGED) {
       const { rankDeferredAt } = await getResult(db, user, payload.resultId);
       if (rankDeferredAt !== null && (await discoveryBudgetHasRoom(db, user))) {

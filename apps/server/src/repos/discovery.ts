@@ -673,7 +673,10 @@ export async function unsuppressResult(
 /** The column as it is stored, on either engine: JSON text on SQLite, jsonb on Postgres. */
 const postingAsText = sql<string>`cast(${discoveryResults.posting} as text)`;
 
-/** Stores the ranking (score null: not ranked, e.g. no AI available). */
+/**
+ * Stores the ranking (score null: not ranked, e.g. no AI available). For setting up a test: the
+ * source ranks through setRankingIfPostingIs, which refuses a score for text that has since changed.
+ */
 export async function setRanking(
   exec: Exec,
   ctx: UserCtx,
