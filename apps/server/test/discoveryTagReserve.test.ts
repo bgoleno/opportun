@@ -5,9 +5,12 @@
 // and every posting and company is made up.
 //
 // The numbers are binary fractions (a call of 1/16 of a dollar against a budget of one dollar), so
-// the sums are exact and no comparison here depends on floating-point rounding. Ranking starts
-// calls while spend is under 0.9: 14 calls make 0.875, the 15th starts and ends at 0.9375, and the
-// 16th does not start. What is left, 1/16, is one tagging call.
+// the sums are exact and no comparison here depends on floating-point rounding. A call that dear is
+// a sixteenth of the budget, so the reserve's floor of RESERVE_FLOOR_CALLS calls (#317), 5/16, is
+// more than the tenth, and ranking's line here is 1 - 5/16 = 0.6875: 10 calls make 0.625, the 11th
+// starts and ends at 0.6875, and the 12th does not start. Ranking spend is written one call to a
+// ledger row, as the router writes it, since the floor is priced from the day's average call. The
+// #317 tests at the end use calls a usual size, where the line is 90%.
 import { AiUnavailableError, runStructured } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
 import { eq } from 'drizzle-orm';
@@ -29,7 +32,9 @@ import {
   sweepWaitingResults,
 } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND, FIRST_RUN_RANK_CAP } from '../src/jobs/discoveryRun';
+import { rankBudgetHasRoom } from '../src/jobs/rankBudget';
 import { enqueue, runNextJob } from '../src/jobs/runner';
+import { setRaceHook } from '../src/lib/racePoints';
 import type { UserCtx } from '../src/repos/base';
 import { createCompany } from '../src/repos/companies';
 import { countWaitingResults, createSource, listResults } from '../src/repos/discovery';
@@ -54,8 +59,8 @@ const CALL_USD = 0.0625;
 const BUDGET_USD = 1;
 /** Calls ranking makes with no company waiting for a tag: the whole budget. */
 const WHOLE = 16;
-/** And with one waiting: it stops once spend is at or over 90% of the budget. */
-const RESERVED = 15;
+/** And with one waiting: it stops once spend reaches the line (the floor's, here; see above). */
+const RESERVED = 11;
 
 // The same pinned clock as discoveryBudget.test.ts: no weekly schedule falls inside the days these
 // tests move through (https://github.com/bgoleno/opportun/issues/289).
@@ -158,9 +163,19 @@ async function backlog(app: FastifyInstance, c: TestClient, count: number): Prom
 const spentToday = (app: FastifyInstance, c: TestClient) =>
   discoverySpentTodayUsd(app.db, ctxOf(c));
 
-/** Tops today's spend up to `total` dollars with ranking calls, whatever the day holds already. */
+/** `n` ranking calls on today's ledger, one row each. */
+async function rankCalls(app: FastifyInstance, c: TestClient, n: number) {
+  for (let i = 0; i < n; i++) await spend(app, c, CALL_USD, 'discovery.rank');
+}
+
+/**
+ * Tops today's spend up to `total` dollars with ranking calls of CALL_USD, one row each as the
+ * router writes them, and the part of one call left over, whatever the day holds already.
+ */
 async function spendUpTo(app: FastifyInstance, c: TestClient, total: number) {
-  await spend(app, c, total - (await spentToday(app, c)), 'discovery.rank');
+  let left = total - (await spentToday(app, c));
+  for (; left >= CALL_USD; left -= CALL_USD) await spend(app, c, CALL_USD, 'discovery.rank');
+  if (left > 0) await spend(app, c, left, 'discovery.rank');
 }
 
 describe('#299 criteria 1 and 4: ranking leaves the last tenth for tagging while companies wait', () => {
@@ -275,9 +290,9 @@ describe('#299 criterion 3: every path that checks for room before a rank call',
       .set({ aiScore: null, rankDeferredAt: null, rankSkipReason: null })
       .where(eq(discoveryResults.id, row!.id))
       .run();
-    // 15 calls of 16 are spent (this posting's own, and the rest): past the 90% line, before the
-    // whole budget.
-    await spend(app, a, (RESERVED - 1) * CALL_USD, 'discovery.rank');
+    // 11 calls of 16 are spent (this posting's own, and the rest): at the line, before the whole
+    // budget.
+    await rankCalls(app, a, RESERVED - 1);
     await suggested(app, a, 'Suggested 1');
     vi.mocked(runStructured).mockClear();
 
@@ -300,8 +315,8 @@ describe('#299 criterion 3: every path that checks for room before a rank call',
     const { app, a } = await boot();
     await backlog(app, a, 3);
     await suggested(app, a, 'Suggested 1');
-    // 0.95 spent of a budget of 1: over the 90% line.
-    await spend(app, a, 0.95, 'discovery.rank');
+    // 0.95 spent of a budget of 1: over the line.
+    await spendUpTo(app, a, 0.95);
     const queued = async () =>
       await app.db.select().from(jobs).where(eq(jobs.kind, RANK_WAITING_KIND)).all();
     expect(await queued()).toEqual([]);
@@ -315,7 +330,7 @@ describe('#299 criterion 3: every path that checks for room before a rank call',
     expect(res.statusCode, res.body).toBe(200);
     expect(await queued()).toEqual([]);
 
-    // Raised to 2: spend is under 90% of that, so ranking has room and the drain is queued.
+    // Raised to 2: spend is under the line of that, so ranking has room and the drain is queued.
     expect(
       (
         await a.request({
@@ -334,7 +349,7 @@ describe('#299: the other covered tasks use the budget up to 100%', () => {
     const { app, a } = await boot();
     for (let i = 1; i <= 25; i++) await suggested(app, a, `Suggested ${i}`);
     // Spend is already past the ranking line, with room for exactly one more call.
-    await spend(app, a, RESERVED * CALL_USD, 'discovery.rank');
+    await rankCalls(app, a, WHOLE - 1);
     providerCharges(app, a);
 
     const run = await tagCompanies(app.db, ctxOf(a));
@@ -353,7 +368,7 @@ describe('#299 criterion 3: the paths that queue the drain', () => {
   const queuedDrains = async (app: FastifyInstance) =>
     await app.db.select().from(jobs).where(eq(jobs.kind, RANK_WAITING_KIND)).all();
 
-  /** One company waiting for a tag, a budget of one, and 0.95 of it spent: past the ranking line. */
+  /** One company waiting for a tag and a budget of one; the tests then spend past the line. */
   async function pastTheLine(app: FastifyInstance, c: TestClient, candidate: boolean) {
     await writeDiscoveryBudget(app.db, ctxOf(c), BUDGET_USD);
     if (candidate) await suggested(app, c, 'Suggested 1');
@@ -441,7 +456,7 @@ describe('#299 criterion 3: the paths that queue the drain', () => {
     const { app, a } = await boot();
     await pastTheLine(app, a, true);
     const [row] = await unrankedResults(app, a, 1);
-    await spendUpTo(app, a, 0.85); // under the line: the call goes ahead
+    await spendUpTo(app, a, 0.625); // under the line: the call goes ahead
     vi.mocked(runStructured).mockImplementation(async () => {
       await spend(app, a, 0.1, 'discovery.rank'); // and ends past it
       await writeKeyChangedAt(app.db, ctxOf(a), Date.now() + 60_000);
@@ -462,7 +477,7 @@ describe('#299 criterion 3: the paths that queue the drain', () => {
     const { app, a } = await boot();
     await pastTheLine(app, a, true);
     const [row] = await unrankedResults(app, a, 1);
-    await spendUpTo(app, a, 0.85);
+    await spendUpTo(app, a, 0.625);
     vi.mocked(runStructured).mockImplementation(async () => {
       await spend(app, a, 0.1, 'discovery.rank');
       await app.db
@@ -481,5 +496,111 @@ describe('#299 criterion 3: the paths that queue the drain', () => {
     await runNextJob(app.db, { services: app.jobs.services });
     expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(1);
     expect(await queuedDrains(app)).toEqual([]);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/317 (qa and tl on #315). discovery.rank has no
+// concurrency cap of its own, so on a first run up to the worker pool's 4 rank calls pass the check
+// together, and a reserve smaller than those calls is spent by them: qa saw no room for tagging at a
+// $0.20 budget. So the reserve has a floor of RESERVE_FLOOR_CALLS ranking calls' worth, priced from
+// the day's own ranking calls. Calls here cost 1/64 of a dollar, so the sums stay exact.
+describe('#317: at a small budget, the calls that start together leave tagging room', () => {
+  const SMALL_CALL = 1 / 64;
+  const SMALL_BUDGET = 0.25;
+
+  /** Today's ranking spend as `n` calls of `usd` each, so the day's average call is `usd`. */
+  async function rankCallsToday(app: FastifyInstance, c: TestClient, n: number, usd: number) {
+    for (let i = 0; i < n; i++) await spend(app, c, usd, 'discovery.rank');
+  }
+
+  it('at a small budget, ranking stops a few calls short of the 90% line while a company waits', async () => {
+    const { app, a } = await boot();
+    await suggested(app, a, 'Suggested 1');
+    await writeDiscoveryBudget(app.db, ctxOf(a), SMALL_BUDGET);
+    // 0.171875 spent: under 90% (0.225), but within 5 calls (0.078125) of the budget.
+    await rankCallsToday(app, a, 11, SMALL_CALL);
+    expect(await rankBudgetHasRoom(app.db, ctxOf(a))).toBe(false);
+    // With no company waiting, ranking may still use the whole budget.
+    await app.db.delete(companies).where(eq(companies.userId, a.userId)).run();
+    expect(await rankBudgetHasRoom(app.db, ctxOf(a))).toBe(true);
+  });
+
+  it('at the $1.00 default and a usual call cost, the line stays at 90%, as before', async () => {
+    const { app, a } = await boot();
+    await suggested(app, a, 'Suggested 1');
+    await writeDiscoveryBudget(app.db, ctxOf(a), BUDGET_USD);
+    // Calls of 1/128 dollar, about what a ranking call costs: 5 of them are well under a tenth.
+    await rankCallsToday(app, a, 115, 1 / 128); // 0.8984375: just under the line
+    expect(await rankBudgetHasRoom(app.db, ctxOf(a))).toBe(true);
+    await rankCallsToday(app, a, 1, 1 / 128); // 0.90625: at or over it
+    expect(await rankBudgetHasRoom(app.db, ctxOf(a))).toBe(false);
+  });
+
+  it('before any ranking call today there is no price to go by, and the line is 90%, as before', async () => {
+    const { app, a } = await boot();
+    await suggested(app, a, 'Suggested 1');
+    await writeDiscoveryBudget(app.db, ctxOf(a), SMALL_BUDGET);
+    await spend(app, a, 0.2, 'discovery.company_suggest');
+    expect(await rankBudgetHasRoom(app.db, ctxOf(a))).toBe(true);
+  });
+
+  it("qa's run: a board's first run, its rank calls four at a time, and the night's tagging still has room", async () => {
+    const { app, a } = await boot();
+    await suggested(app, a, 'Suggested 1');
+    await writeDiscoveryBudget(app.db, ctxOf(a), SMALL_BUDGET);
+    const calls: string[] = [];
+    vi.mocked(runStructured).mockImplementation(async (_deps, task, opts) => {
+      calls.push(task);
+      await spend(app, a, SMALL_CALL, task);
+      if (task === 'discovery.company_tags') {
+        const system = (opts as { system: string }).system;
+        const refs = [...system.matchAll(/^ref: (c\d+)$/gm)].map(([, ref]) => ref ?? '');
+        return { tags: refs.map((ref) => ({ ref, code: '5132' })) } as never;
+      }
+      return { score: 60, rationale: 'A fair match.', disqualifiers: [] } as never;
+    });
+    // Each batch of 4 rank calls passes the budget check before any of them is on the ledger, as
+    // the default pool of 4 workers does on a first run.
+    let waiting: (() => void)[] = [];
+    let timer: NodeJS.Timeout | undefined;
+    setRaceHook(async (point) => {
+      if (point !== 'discoveryRank.budget_checked') return;
+      await new Promise<void>((resolve) => {
+        waiting.push(resolve);
+        const go = () => {
+          clearTimeout(timer);
+          const batch = waiting;
+          waiting = [];
+          for (const release of batch) release();
+        };
+        clearTimeout(timer);
+        if (waiting.length >= 4) go();
+        else timer = setTimeout(go, 100);
+      });
+    });
+
+    registerSource({
+      kind: 'ats_lever',
+      async *fetchPostings() {
+        for (let i = 1; i <= 30; i++) yield { posting: posting(i), nextCursor: null };
+      },
+    } satisfies DiscoverySource);
+    const src = await createSource(app.db, ctxOf(a), {
+      kind: 'ats_lever',
+      config: { org: 'initech' },
+      roleTargetId: null,
+    });
+    await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: a.userId });
+    await runNextJob(app.db, { services: app.jobs.services });
+    const worker = () => runNextJob(app.db, { services: app.jobs.services });
+    while ((await Promise.all([worker(), worker(), worker(), worker()])).some(Boolean));
+    setRaceHook(undefined);
+
+    // Ranking stopped short of the budget, by enough for the tagging call.
+    expect(await spentToday(app, a)).toBeLessThan(SMALL_BUDGET);
+    const tagged = await tagCompanies(app.db, ctxOf(a));
+    expect(tagged).toMatchObject({ tagged: 1, stopped: null });
+    expect(await untagged(app, a)).toEqual([]);
+    expect(await spentToday(app, a)).toBeLessThanOrEqual(SMALL_BUDGET);
   });
 });
