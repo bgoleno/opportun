@@ -465,8 +465,9 @@ unless an admin turns export on and names where it goes.
 - FR-T5 (P1): **System event log.** Sign-ins, settings changes, job runs, discovery source
   runs, imports and exports, AI key changes and errors are each logged as one structured
   record with an event name, a time, the user's opaque id and a trace id where one exists.
-  A record names a company by its id, not its name. Local structured logs work whether or not
-  export is on, and an exported record leaves the user's id out.
+  A record names a company by its id, not its name. These event records are written while
+  collection is on. The server's ordinary log works either way, under the same privacy rule,
+  and an exported record leaves out every id that belongs to a user.
 - FR-T6 (P1): **Metric dashboards.** A page linked from Settings lists every metric with its
   description and unit, filters the list by the attributes the metrics carry, and charts a
   chosen metric over a chosen time range with zoom, the value under the cursor, and a
@@ -577,14 +578,17 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
   request header or an IP address. The rule is enforced in one place that every stored, logged
   and exported record passes through, not at each call site, and it is tested by sending known
   personal data through every record type and finding none of it in the output. Exported
-  telemetry identifies no user: the user's opaque id stays in the local store and the local
-  log.
+  telemetry identifies no user: no row id that belongs to a user leaves (the user's id, a
+  conversation's, a prompt's, a company's), and a model's name leaves only when it is a
+  listed model. On an instance with few users, the timing of activity can still tell them
+  apart.
 - NFR-PRV7: Telemetry collection is off by default, and with it off Opportun stores no
   telemetry. Telemetry export is a second switch, also off by default, and with it off
   Opportun makes no outbound connection for telemetry. Only an admin can turn it on or change where it sends, with their
   password confirmed again. The destination must be `https` at a public address, or, only
-  where the operator has allowed it in the environment, a loopback or private-network address;
-  it never follows a redirect and its URL never holds a credential. Every user of the instance
+  where the operator has allowed it in the environment, a loopback or private-network address,
+  never a link-local or metadata address; it never follows a redirect, its URL never holds a
+  credential, and its stored credential is cleared when the destination changes. Every user of the instance
   can see that export is on and what kind of data it sends, because export covers every
   user's telemetry. Export is unavailable on the demo deployment. The user guide states what
   is sent to each kind of destination. This is the opt-in telemetry NFR-PRV1 allows for:

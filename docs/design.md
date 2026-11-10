@@ -719,28 +719,28 @@ Rules that go with them:
 
 ## 13. Decision log
 
-| #      | Decision                                                                                                                                                                                                                                        | Status                                                          |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| ADR-1  | Name "Opportun", domain opportun.app                                                                                                                                                                                                            | Accepted 2026-10-15                                             |
-| ADR-2  | Apache-2.0 license                                                                                                                                                                                                                              | Accepted 2026-10-15                                             |
-| ADR-3  | TypeScript monorepo; Fastify + React SPA; single process                                                                                                                                                                                        | Accepted 2026-10-15                                             |
-| ADR-4  | SQLite default, Postgres later; amended: Postgres backend built in iteration 4 (beta, every server test on both engines in CI, verified SQLite-to-Postgres copy tool), SQLite stays default ([docs/adr/0004-postgres.md](adr/0004-postgres.md)) | Accepted 2026-10-15, amended 2026-10-17; implemented 2026-10-17 |
-| ADR-5  | DB-backed sessions, no JWT for first-party auth                                                                                                                                                                                                 | Accepted 2026-10-15                                             |
-| ADR-6  | Vercel AI SDK as provider abstraction                                                                                                                                                                                                           | Accepted 2026-10-15                                             |
-| ADR-7  | MCP client support as a discovery source class                                                                                                                                                                                                  | Accepted 2026-10-15                                             |
-| ADR-8  | LinkedIn via export + user-driven capture only                                                                                                                                                                                                  | Accepted 2026-10-15                                             |
-| ADR-9  | Own jobs table instead of Redis-backed queue                                                                                                                                                                                                    | Accepted 2026-10-15                                             |
-| ADR-10 | Apple Mail via local connector CLI, not server-side access                                                                                                                                                                                      | Accepted 2026-10-15                                             |
-| ADR-11 | Local resumes (FR-R7) via optional Reactive Resume integration, not a built-in builder                                                                                                                                                          | Accepted 2026-10-15                                             |
-| ADR-12 | No embedded scrapers; community scrapers (e.g. JobSpy) only through user-configured MCP sidecars                                                                                                                                                | Accepted 2026-10-15                                             |
-| ADR-13 | Match scoring (FR-R8) recreated as an internal AI task rather than embedding Resume-Matcher                                                                                                                                                     | Accepted 2026-10-15                                             |
-| ADR-14 | LAN-first access: plain HTTP over a private network is a supported path, TLS recommended but never required; nothing may assume a single canonical origin ([docs/adr/0014-lan-first-access.md](adr/0014-lan-first-access.md))                   | Accepted 2026-10-18                                             |
-| ADR-15 | Assisted apply instead of direct ATS submission: Opportun prepares and records, the user submits on the ATS site ([docs/adr/0015-assisted-apply.md](adr/0015-assisted-apply.md))                                                                | Accepted 2026-10-28                                             |
-| ADR-16 | Observability by wrappers at five boundaries (routes, jobs, database, outbound requests, AI calls) with OpenTelemetry names, not auto-instrumentation and not a span per function (section 14.2)                                                | Proposed 2026-11-10                                             |
-| ADR-17 | Telemetry has a local store in the app's own database and an export, each behind its own switch and both off by default; the in-app dashboards read only the local store (sections 14.1, 14.7, 14.10)                                           | Proposed 2026-11-10                                             |
-| ADR-18 | Telemetry privacy by allowlist: only catalogued attribute keys with typed values are stored or exported, checked in one gate at the sinks; export identifies no user, and no prompt or response content is stored for traces (section 14.8)     | Proposed 2026-11-10                                             |
+| #      | Decision                                                                                                                                                                                                                                                  | Status                                                          |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| ADR-1  | Name "Opportun", domain opportun.app                                                                                                                                                                                                                      | Accepted 2026-10-15                                             |
+| ADR-2  | Apache-2.0 license                                                                                                                                                                                                                                        | Accepted 2026-10-15                                             |
+| ADR-3  | TypeScript monorepo; Fastify + React SPA; single process                                                                                                                                                                                                  | Accepted 2026-10-15                                             |
+| ADR-4  | SQLite default, Postgres later; amended: Postgres backend built in iteration 4 (beta, every server test on both engines in CI, verified SQLite-to-Postgres copy tool), SQLite stays default ([docs/adr/0004-postgres.md](adr/0004-postgres.md))           | Accepted 2026-10-15, amended 2026-10-17; implemented 2026-10-17 |
+| ADR-5  | DB-backed sessions, no JWT for first-party auth                                                                                                                                                                                                           | Accepted 2026-10-15                                             |
+| ADR-6  | Vercel AI SDK as provider abstraction                                                                                                                                                                                                                     | Accepted 2026-10-15                                             |
+| ADR-7  | MCP client support as a discovery source class                                                                                                                                                                                                            | Accepted 2026-10-15                                             |
+| ADR-8  | LinkedIn via export + user-driven capture only                                                                                                                                                                                                            | Accepted 2026-10-15                                             |
+| ADR-9  | Own jobs table instead of Redis-backed queue                                                                                                                                                                                                              | Accepted 2026-10-15                                             |
+| ADR-10 | Apple Mail via local connector CLI, not server-side access                                                                                                                                                                                                | Accepted 2026-10-15                                             |
+| ADR-11 | Local resumes (FR-R7) via optional Reactive Resume integration, not a built-in builder                                                                                                                                                                    | Accepted 2026-10-15                                             |
+| ADR-12 | No embedded scrapers; community scrapers (e.g. JobSpy) only through user-configured MCP sidecars                                                                                                                                                          | Accepted 2026-10-15                                             |
+| ADR-13 | Match scoring (FR-R8) recreated as an internal AI task rather than embedding Resume-Matcher                                                                                                                                                               | Accepted 2026-10-15                                             |
+| ADR-14 | LAN-first access: plain HTTP over a private network is a supported path, TLS recommended but never required; nothing may assume a single canonical origin ([docs/adr/0014-lan-first-access.md](adr/0014-lan-first-access.md))                             | Accepted 2026-10-18                                             |
+| ADR-15 | Assisted apply instead of direct ATS submission: Opportun prepares and records, the user submits on the ATS site ([docs/adr/0015-assisted-apply.md](adr/0015-assisted-apply.md))                                                                          | Accepted 2026-10-28                                             |
+| ADR-16 | Observability by wrappers at five boundaries (routes, jobs, database, outbound requests, AI calls) with OpenTelemetry names, not auto-instrumentation and not a span per function (section 14.2)                                                          | Proposed 2026-11-10                                             |
+| ADR-17 | Telemetry has a local store in the app's own database and an export, each behind its own switch and both off by default; the in-app dashboards read only the local store (sections 14.1, 14.7, 14.10)                                                     | Proposed 2026-11-10                                             |
+| ADR-18 | Telemetry privacy by allowlist: only catalogued attribute keys with typed values are stored, logged or exported, checked in one gate at the sinks; export carries no user's row id, and no prompt or response content is stored for traces (section 14.8) | Proposed 2026-11-10                                             |
 
-Accepted decisions will move into `docs/adr/` as individual records once reviewed.
+Accepted decisions will move into `docs/adr/` as individual records once reviewed. A Proposed decision becomes Accepted when the owner accepts it.
 
 ## 14. Observability
 
@@ -749,17 +749,21 @@ https://github.com/bgoleno/opportun/issues/340, and this section is the design e
 follows (https://github.com/bgoleno/opportun/issues/348). **Status: designed; only FR-T1 is
 built.** A name in `code` below that does not exist yet is the name its slice creates.
 
-| Slice | Requirement | Issue                                          |
-| ----- | ----------- | ---------------------------------------------- |
-| O1    | FR-T1       | https://github.com/bgoleno/opportun/issues/341 |
-| O2    | FR-T2       | https://github.com/bgoleno/opportun/issues/342 |
-| O3    | FR-T3       | https://github.com/bgoleno/opportun/issues/343 |
-| O4    | FR-T4       | https://github.com/bgoleno/opportun/issues/344 |
-| O5    | FR-T5       | https://github.com/bgoleno/opportun/issues/345 |
-| O6    | FR-T6       | https://github.com/bgoleno/opportun/issues/346 |
-| O7    | FR-T7       | https://github.com/bgoleno/opportun/issues/347 |
+| Slice | Requirement                          | Issue                                          |
+| ----- | ------------------------------------ | ---------------------------------------------- |
+| Base  | what FR-T2 to FR-T7 build on (14.12) | https://github.com/bgoleno/opportun/issues/353 |
+| O1    | FR-T1                                | https://github.com/bgoleno/opportun/issues/341 |
+| O2    | FR-T2                                | https://github.com/bgoleno/opportun/issues/342 |
+| O3    | FR-T3                                | https://github.com/bgoleno/opportun/issues/343 |
+| O4    | FR-T4, built in two parts (14.12)    | https://github.com/bgoleno/opportun/issues/344 |
+| O5    | FR-T5                                | https://github.com/bgoleno/opportun/issues/345 |
+| O6    | FR-T6                                | https://github.com/bgoleno/opportun/issues/346 |
+| O7    | FR-T7                                | https://github.com/bgoleno/opportun/issues/347 |
 
 ### 14.1 What it is
+
+Everything below except FR-T1 describes the design, in the present tense. It is not shipped
+behaviour until its slice merges.
 
 Opportun measures itself with OpenTelemetry names and data shapes: metrics, traces and log
 records for HTTP routes, background jobs, database access, outbound requests and, most of
@@ -785,8 +789,9 @@ Two instance-wide switches, both admin-only:
   collection is off, with a link to the switch for an admin. Rows collected earlier stay until
   they age out, and are still shown.
 - **What the Collect switch does not govern:** the Usage card (FR-T1), which reads
-  `task_runs`, and the log output with its events (14.9), which is the instance's ordinary log
-  (NFR-OPS5). Both work as before with collection off. A log record then has no trace id.
+  `task_runs`, and the server's ordinary log (NFR-OPS5). FR-T5 puts that log under the gate
+  (14.8) whether or not collection is on. The events of 14.9 are part of the feature: they are
+  written only while collection is on.
 
 ### 14.2 Wrappers at five boundaries
 
@@ -917,24 +922,28 @@ refuses before it reaches the provider (no key, over budget) still gets a span, 
 the stream ends, errors or is aborted. A key check (`keyCheck.ts`) gets the same span with
 `opportun.ai.task` set to `key_check` and no feature.
 
-| Attribute                                                 | Value                                                                                                               |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `gen_ai.operation.name`                                   | `chat`                                                                                                              |
-| `gen_ai.provider.name`                                    | `anthropic` or `openai`. An OpenAI-compatible endpoint is `openai`: the attribute names the wire format.            |
-| `opportun.ai.provider`                                    | Opportun's provider id (`anthropic`, `openai`, `openai_compatible`), which keeps a gateway apart from OpenAI.       |
-| `gen_ai.request.model`, `gen_ai.response.model`           | The policy's model, and the model the provider reports.                                                             |
-| `gen_ai.request.max_tokens`, `gen_ai.request.temperature` | From the policy.                                                                                                    |
-| `gen_ai.request.stream`                                   | `true` for `streamChat`.                                                                                            |
-| `gen_ai.output.type`                                      | `json` for `runStructured`, `text` for `streamChat`.                                                                |
-| `gen_ai.prompt.name`, `gen_ai.prompt.version`             | The task key, and the prompt version when the caller passes one. `opportun.ai.prompt.id` is the prompt's row id.    |
-| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` | As recorded in `task_runs`. Cache-read and cache-write tokens when the provider reports them and they are not zero. |
-| `gen_ai.response.id`, `gen_ai.response.finish_reasons`    | From the provider's response. Finish reasons are the AI SDK's closed list.                                          |
-| `gen_ai.response.time_to_first_chunk`                     | Streamed calls only.                                                                                                |
-| `gen_ai.conversation.id`                                  | The tailoring session id, on the chat's spans only. Never invented where no conversation exists.                    |
-| `error.type`                                              | The router's reason: `no_key`, `budget_exceeded`, `provider_error`, `invalid_output`. Never the error's text.       |
-| `opportun.ai.task`, `opportun.ai.feature`                 | The task key (or `key_check`) and its feature.                                                                      |
-| `opportun.ai.attempts`, `opportun.gen_ai.usage.cost`      | Schema attempts made (1 or 2), and the call's estimated cost in USD.                                                |
-| `user.id`                                                 | The caller's row id, from a new `AiDeps.userId`. Local only: it is removed on export (14.8).                        |
+| Attribute                                                 | Value                                                                                                                                                          |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gen_ai.operation.name`                                   | `chat`                                                                                                                                                         |
+| `gen_ai.provider.name`                                    | `anthropic` or `openai`. An OpenAI-compatible endpoint is `openai`: the attribute names the wire format.                                                       |
+| `opportun.ai.provider`                                    | Opportun's provider id (`anthropic`, `openai`, `openai_compatible`), which keeps a gateway apart from OpenAI.                                                  |
+| `gen_ai.request.model`, `gen_ai.response.model`           | The policy's model, and the model the provider reports. Exported only when the price table lists the model, otherwise as `_OTHER` (14.8).                      |
+| `gen_ai.request.max_tokens`, `gen_ai.request.temperature` | From the policy.                                                                                                                                               |
+| `gen_ai.request.stream`                                   | `true` for `streamChat`.                                                                                                                                       |
+| `gen_ai.output.type`                                      | `json` for `runStructured`, `text` for `streamChat`.                                                                                                           |
+| `gen_ai.prompt.name`, `gen_ai.prompt.version`             | The task key, and the prompt version when the caller passes one. `opportun.ai.prompt.id` is the prompt's row id, local only.                                   |
+| `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` | As recorded in `task_runs`. Cache-read and cache-write tokens when the provider reports them and they are not zero.                                            |
+| `gen_ai.response.finish_reasons`                          | From the provider's response: the AI SDK's closed list.                                                                                                        |
+| `gen_ai.response.id`                                      | The provider's id for the response. Local only.                                                                                                                |
+| `gen_ai.response.time_to_first_chunk`                     | Streamed calls only.                                                                                                                                           |
+| `gen_ai.conversation.id`                                  | The tailoring session id, on the chat's spans only. Never invented where no conversation exists. Local only.                                                   |
+| `error.type`                                              | The router's reason: `no_key`, `budget_exceeded`, `provider_error`, `invalid_output`. Never the error's text, and never anything from a provider's error body. |
+| `opportun.ai.task`, `opportun.ai.feature`                 | The task key (or `key_check`) and its feature.                                                                                                                 |
+| `opportun.ai.attempts`, `opportun.gen_ai.usage.cost`      | Schema attempts made (1 or 2), and the call's estimated cost in USD.                                                                                           |
+| `user.id`                                                 | The caller's row id, from a new `AiDeps.userId`. Local only.                                                                                                   |
+
+"Local only" means the local store and the local log keep the value and export drops it
+(14.8).
 
 **Content is never an attribute.** `gen_ai.input.messages`, `gen_ai.output.messages`,
 `gen_ai.system_instructions`, `gen_ai.tool.definitions` and `gen_ai.prompt.variable` are not
@@ -945,7 +954,11 @@ exception event: an AI SDK error's message can quote the model's output.
 names that are not the conventions', and it turns on by itself once a telemetry integration
 is registered. So every `generateText` and `streamText` call passes
 `telemetry: { isEnabled: false }`, nothing calls `registerTelemetry`, and neither `telemetry`
-nor the older `experimental_telemetry` is ever passed enabled. A test checks all three.
+nor the older `experimental_telemetry` is ever passed enabled. Turned off this way, the SDK
+also publishes nothing on its `ai:telemetry` diagnostics channel, where any in-process
+subscriber could otherwise read each call's prompts. A test checks all of it: the options,
+that the SDK's global list of integrations is empty, and that a subscriber on `ai:telemetry`
+receives nothing from a call through `router.ts` or `keyCheck.ts`.
 
 **The router does no IO for this.** The `console.error` in `streamChat` becomes a call to a
 new optional `AiDeps.onRecordError`, which the server wires to its logger.
@@ -987,7 +1000,8 @@ model call (a fetch, a parse) is an ordinary span, never `execute_tool`.
   growing one endless trace, or one that mixes users. An enqueue that finds its job already
   queued (the dedupe key) leaves that job's context as it is.
 - **Nothing crosses the process boundary.** Opportun sends no `traceparent` header on any
-  outbound request, and ignores one on an incoming request.
+  outbound request, and ignores one on an incoming request. No global propagator is
+  registered.
 - **Telemetry about telemetry is suppressed.** The store's own writes and the exporter's own
   requests run in a context that the database and outbound wrappers skip.
 
@@ -1038,16 +1052,27 @@ keys listed in the catalog, each with a value of its declared type:
 | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `enum`, list of `enum`  | values from a closed list: task keys, features, job kinds, outcomes, router reasons, finish reasons, HTTP methods, table names, the hosts of fixed public services            |
 | `int`, `number`, `bool` | numbers and flags                                                                                                                                                             |
-| `id`                    | a row id (UUID), or a trace or span id                                                                                                                                        |
+| `id`                    | a row id (UUID), or a trace or span id. Each `id` key says whether it may be exported, and by default it may not.                                                             |
 | `code`                  | up to 64 characters of letters, digits, `_`, `-` and `.`: an error class, a database error code, a provider's response id                                                     |
 | `model`                 | a model id: up to 128 characters, segments of letters, digits and `. _ : -`, with at most one `/` and not at the start. Anything else, such as a file path, becomes `_OTHER`. |
 | `route`                 | a route template as registered, never a request's path                                                                                                                        |
 
 So there is no place a prompt, a response, a resume, a person's name, an email address, a
 phone number, an error message, a URL's path or query, SQL text, a header or an IP address
-can go. The rule is the absence of a field, not a pattern that hunts for personal data. Two
-types hold a string someone chose: `model` (the user's or the provider's name for a model)
-and `code` (a provider's id for a response). Their shapes are narrow for that reason.
+can go. The rule is the absence of a field, not a pattern that hunts for personal data.
+
+**A shape is not what makes `code` and `model` safe: the source is.** A name can have the
+shape of either. So the catalog gives every `code` and `model` key its source, and the code
+that sets it may use no other:
+
+- `error.type` is an error's class name or a fixed code. It is never taken from a provider's
+  error body or from an error's message.
+- `gen_ai.request.model` is the user's own policy, which is free text, and
+  `gen_ai.response.model` is whatever the endpoint reports. The local store keeps the
+  shape-checked value. Export sends a model only when it is a key of the price table
+  (`PRICING`), and otherwise `_OTHER`, which also bounds the series at the destination.
+- `gen_ai.response.id` is chosen by the endpoint, which a user may have configured. It stays
+  local.
 
 **Enforced in one place.** `obs/gate.ts` checks against the catalog, and every sink calls it:
 
@@ -1055,10 +1080,16 @@ and `code` (a provider's id for a response). Their shapes are narrow for that re
   the catalog lists it.
 - **Spans** are rebuilt at each sink, not filtered: the local store writer and a wrapper
   around the span exporter copy out the listed attributes, take the name from a catalog
-  template filled with checked values, and drop span events, links and status text. That
-  covers a span made with the OpenTelemetry API directly, as `packages/ai` does.
-- **Log records** pass it in the logger itself (a pino formatter that sees every key of every
-  record), so the local log output is gated like the store and the export.
+  template filled with checked values, and drop span events, links and status text. A span
+  that matches no catalogued name template and kind is dropped whole and counted. That covers
+  a span made with the OpenTelemetry API directly, by `packages/ai` or by any dependency.
+- **Log records** are rebuilt from the finished record, in the destination that the local
+  output and the log exporter both read from. A formatter is too early: in pino it never
+  sees the message, a child logger's bindings, or what the error serializer writes. The gate
+  keeps the catalogued keys, reduces an error to its type, code and frame lines, and keeps a
+  message only when it is one the catalog lists (the fixed messages of Opportun's own log
+  calls, and the event names). Any other message, such as one a library builds from a request,
+  is replaced by a fixed marker and counted.
 
 A value of the wrong type is dropped and counted in `opportun.obs.dropped`, always. A key
 that is not in the catalog is dropped and counted in production, and throws in unit tests,
@@ -1069,53 +1100,68 @@ so a mistake in code fails CI instead of passing in silence.
 - **The resource** is exactly `service.name` (`opportun`), `service.version` and a random
   `service.instance.id` per start. No host, process or OS detectors run: `host.name` and
   `process.owner` are often a person's name.
-- **`server.address`** is set only for fixed public services (a provider's API, an ATS
-  board, Google). A host the user configured or a page they captured gets only its
-  `opportun.outbound.target`.
-- **Errors** carry `error.type` (a class or code), never the message. The local log keeps a
-  stack made of frame lines only (`at ...`), with paths relative to the install root; every
-  other line of a stack, where a message can quote data, is dropped. The store and the
-  export carry no stack.
-- **Export identifies no user.** `user.id`, the opaque row id, stays in the local store and
-  the local log. The exporter wrappers remove it from spans and log records, and metrics
-  never have it.
-- **No company names.** A record names a company by its row id. The requirement allows a
-  company's name in logs, but one free-text field would be the only hole in the rule, and a
-  company's name can be a person's.
+- **`server.address`** comes from a literal list: `ATS_ALLOW_HOSTS`, the AI providers' fixed
+  API hosts, and Google's. Any other host gets only its `opportun.outbound.target`: a host
+  the user configured, a page they captured, and a tenant's own host such as a Workday board,
+  whose name is the company's.
+- **Errors** carry `error.type`, never the message. The local log keeps a stack made of frame
+  lines only (`at ...`): a frame inside the install root keeps its path relative to it, a
+  frame outside loses its path, and every other line of a stack, where a message can quote
+  data, is dropped. The store and the export carry no stack.
+- **Export identifies no user.** No row id that belongs to a user leaves the instance:
+  `user.id`, `gen_ai.conversation.id`, `opportun.ai.prompt.id`, a company's id. Each would
+  group the export by user. They stay in the local store and the local log, and the exporter
+  wrappers drop every `id` key the catalog does not mark as exportable. Trace and span ids are
+  exportable. Metrics never have a user. One limit, stated plainly: on an instance with few
+  users, the timing of activity can still tell them apart.
+- **No company names.** A record names a company by its row id, and that id stays local. The
+  original request (https://github.com/bgoleno/opportun/issues/345) allowed a company's name
+  in logs. These requirements do not: one free-text field would be the only hole in the rule,
+  and a company's name can be a person's.
 - **`OTEL_*` environment variables are not configuration.** The provider and the exporters
-  are built from the stored settings with explicit options, so no `OTEL_` endpoint, header or
-  sampler variable can turn export on, redirect it or add to it.
+  are built from the stored settings with every option passed explicitly, so no `OTEL_`
+  endpoint, header, sampler, batch or limit variable can turn export on, redirect it or add to
+  it. A test sets them and asserts that a captured batch goes to the configured address with
+  only the configured header.
 
 **Tested as a property, not by example** (FR-T5): a test puts known names, email addresses
 and phone numbers into every field of every event type, into span names, attributes, events
-and status text, into error messages and into unknown keys, with the production behaviour for
-unknown keys. It asserts that none of those bytes reaches the local store, the log output or
-a captured export batch. A second test walks the catalog and fails on any key whose type is
-not in the table above, and a third fails if an export batch contains `user.id`.
+and status text, into a log message built from data, a child logger's bindings, an error's
+message and extra properties, a warning a library writes, and unknown keys, with the
+production behaviour for unknown keys. It asserts that none of those bytes reaches the local
+store, the log output or a captured export batch. A second test walks the catalog and fails
+on any key whose type is not in the table above, or whose `code` or `model` type has no
+source. A third fails if an export batch contains a user's row id.
+
+**Published.** The catalog's keys are listed in the user guide, in a table a test keeps in
+step with `obs/catalog.ts`, so "only catalogued keys" is something a reader can check.
 
 ### 14.9 Logs and events
 
-- **One logger configuration** (`obs/log.ts`) for Fastify and for everything else that logs.
-  A request is logged with its method, its route template and the route's id parameters, not
-  its URL, and an error with its type, code and frame-only stack. The request's address stays
-  in the local access log and is never exported.
+- **One logger configuration** (`obs/log.ts`) for Fastify and for everything else that logs,
+  with the gate of 14.8 in its destination. It applies whether or not collection is on.
+- **Requests** are logged by Opportun's own plugin, with the method, the route template and
+  the route's id parameters, not the URL. Fastify's built-in request logging, which writes the
+  raw URL, is turned off. The request's address stays in the local access log and is never
+  exported.
 - **Today's log calls are brought under it.** Some pass a URL, a host or an error object, or
-  build their message from data. FR-T5 changes each to catalogued keys and a fixed message.
-  Until a call is changed, the gate drops its unknown keys.
+  build their message from data. FR-T5 changes each to catalogued keys and a fixed, catalogued
+  message. Until a call is changed, the gate drops its unknown keys and replaces its message.
 - **`obs.event(name, fields)`** writes one structured record: the event name, the time, the
-  user id, the trace id when there is one, and the fields the catalog lists for that event.
+  user id, the trace id, and the fields the catalog lists for that event. Events are part of
+  the feature, so they are written only while collection is on.
 - **The events** are every `audit()` action, emitted by `audit()` itself with its name and
   user and without its `detail` or address, so no call site changes; `job.finished` (kind,
   outcome, attempt); `discovery.run.finished` (source kind, counts); `settings.updated`
   (which setting, never its value); and `error`. The catalog holds the full list.
 - **An error** (a thrown error in a route, a 5xx, a job that fails) writes one `error`
   record with its `error.type`, where it happened (route template or job kind) and its trace
-  id.
+  id. With collection off, the error is still logged as it is today, through the gate.
 - **Exported log records are events and errors only.** The per-request access log stays
   local: the HTTP metric and spans already say what it says.
 - **No `console.*`** in `apps/server/src` or `packages/ai/src`, and no interpolated text in a
-  log message: both are lint rules, because a free-text message is the one thing the gate
-  cannot check.
+  log message: both are lint rules, so that every message of Opportun's own is a fixed string
+  the catalog can list.
 - **There is no log table.** `audit_log` remains the security record in the database
   (NFR-SEC7).
 
@@ -1133,6 +1179,10 @@ One destination at a time, set by an admin in Settings.
 - **Three of the four are one exporter with presets.** InfluxDB has no OTLP endpoint, and
   Telegraf's OTLP input speaks gRPC only, so InfluxDB gets a small writer of its own
   (`obs/export/influx.ts`) instead of a gRPC dependency.
+- **One sender for all of them.** Batches are encoded with OpenTelemetry's OTLP transformer
+  (or as line protocol) and posted by Opportun's own sender, built like the pinned request in
+  `safeFetch.ts`. That gives rule 4 below, and immunity to `OTEL_*` variables, in one place,
+  instead of depending on what a stock exporter's HTTP client does.
 - **No scrape endpoint.** A `/metrics` page would be a new inbound surface that needs its own
   authentication. Prometheus accepts a push on its OTLP receiver, which is one code path and
   no new listener.
@@ -1147,37 +1197,47 @@ One destination at a time, set by an admin in Settings.
 **Where it may send (NFR-PRV7).** The server builds the URL from the fields, so a URL never
 holds a credential.
 
-1. Only an admin can change the destination, with their password confirmed again as for
-   `PATCH /admin/registration`. The change is audited with the type and signals, never the
+1. Only an admin can turn export on or change the destination, with their password confirmed
+   again as for `PATCH /admin/registration`. No operator flag is needed for a public
+   destination: only catalogued metadata leaves, and it reaches nothing a public client could
+   not. The change is audited with the type and signals, never the
    host or the credential.
 2. By default the destination must be `https`, every address its name resolves to must be
    public (`isPrivateAddress`), and `isProhibitedHost` applies.
 3. A destination on loopback or a private network, over `http` or `https`, is accepted only
    when the operator has set `OPPORTUN_TELEMETRY_ALLOW_PRIVATE=1` in the environment. This is
    the usual case for an Agent or a Prometheus beside the app, and it is an operator's
-   decision, not a setting, for the same reason as `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP`.
-   Link-local addresses are refused always. A public destination over plain `http` is refused
-   always.
+   decision, not a setting, for the same reason as `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP`. The flag
+   allows exactly these ranges: loopback (`127.0.0.0/8`, `::1`), private (`10.0.0.0/8`,
+   `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and shared address space (`100.64.0.0/10`,
+   where tailnets live). Refused always, flag or not: link-local (`169.254.0.0/16`,
+   `fe80::/10`), `0.0.0.0/8` and `::`, multicast and the other reserved ranges, and the
+   metadata services that sit inside the allowed ranges, by exact address (`fd00:ec2::254`,
+   `100.100.100.200`). A public destination over plain `http` is refused always.
 4. The connection is pinned to the address that was checked, redirects are never followed,
    the timeout is 10 seconds, and the response body is discarded.
 5. The credential is sealed with the vault key and kept in the instance's settings row, as
-   an OAuth provider's client secret is. It is never returned, is cleared when the type or
-   host changes, and is sent to the configured destination only.
+   an OAuth provider's client secret is. It is never returned, and it is sent to the
+   configured destination only. It is cleared whenever the type, scheme, host or port changes:
+   a new scheme could send it in clear, and a new port to another service. The OTLP header's
+   name is token characters only, and may not be `Host`, `Content-Length`,
+   `Transfer-Encoding`, `Connection` or `Content-Type`.
 6. Export is unavailable when `OPPORTUN_DEMO=1`: the demo's admin account is public.
 7. "Send a test" makes one request and reports only its outcome class. It is rate-limited
-   with the re-confirmation.
+   with the re-confirmation. Under the flag of rule 3 it lets an admin probe the private
+   network for open ports; the operator accepted that by setting the flag.
 
 ### 14.11 Cost and overhead budget (NFR-OPS7)
 
-| State                     | Budget                                                                                                                                                                                                                                                                                      |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Collection off            | One boolean check per boundary: under 1 microsecond. No recording spans, no timers, no writes, SDK not loaded.                                                                                                                                                                              |
-| Collection on, export off | Under 20 microseconds of CPU per boundary crossing on average, under 2 microseconds per database statement after the first sight of its text, no IO on the request path.                                                                                                                    |
-| Flushes                   | Metrics: one transaction every 60 seconds, at most 2,000 rows. Spans: one transaction every 5 seconds or 200 spans.                                                                                                                                                                         |
-| Memory                    | At most 2,000 live series and 2,000 buffered spans. Beyond that the newest are dropped and counted.                                                                                                                                                                                         |
-| Storage                   | At most 250,000 metric point rows and 100,000 span rows, enforced hourly: about 100 MB together at the caps, and an estimated 40 MB or less on a single-user instance. These sizes are estimates until the base slice measures a row. A trace stops at 2,000 spans and is marked truncated. |
-| Export on                 | One request per signal per interval, a queue of at most 2,048 spans and 2,048 log records, a 10-second timeout. A failure is counted and shown, never retried into a backlog, and never delays a request or a job.                                                                          |
-| AI cost                   | None. Observability makes no model call.                                                                                                                                                                                                                                                    |
+| State                        | Budget                                                                                                                                                                                                                                                                                      |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Collection off (the default) | One boolean check per boundary: under 1 microsecond. No recording spans, no timers, no writes, SDK not loaded.                                                                                                                                                                              |
+| Collection on, export off    | Under 20 microseconds of CPU per boundary crossing on average, under 2 microseconds per database statement after the first sight of its text, no IO on the request path.                                                                                                                    |
+| Flushes                      | Metrics: every 60 seconds, in transactions of at most 2,000 rows (each live series writes a 1-minute row and adds to a 1-hour row). Spans: one transaction every 5 seconds or 200 spans.                                                                                                    |
+| Memory                       | At most 2,000 live series and 2,000 buffered spans. Beyond that the newest are dropped and counted.                                                                                                                                                                                         |
+| Storage                      | At most 250,000 metric point rows and 100,000 span rows, enforced hourly: about 100 MB together at the caps, and an estimated 40 MB or less on a single-user instance. These sizes are estimates until the base slice measures a row. A trace stops at 2,000 spans and is marked truncated. |
+| Export on                    | One request per signal per interval, a queue of at most 2,048 spans and 2,048 log records, a 10-second timeout. A failure is counted and shown, never retried into a backlog, and never delays a request or a job.                                                                          |
+| AI cost                      | None. Observability makes no model call.                                                                                                                                                                                                                                                    |
 
 How it is shown: with collection off, a test drives requests, jobs and an AI call and asserts
 that no row reaches any `obs_` table, that no span is recording, and that the SDK was not
@@ -1188,9 +1248,11 @@ caps are tested by exceeding them.
 ### 14.12 Build plan: two engineers, by file
 
 The base slice goes first because it holds what everyone else builds on: the dependencies,
-every table, the catalog and the gate. After it, the two tracks share only `obs/catalog.ts`
-(each slice appends its own entries), the route registration block in `app.ts` (one line per
-slice) and the lockfile.
+every table, the catalog and the gate. It is
+https://github.com/bgoleno/opportun/issues/353. After it, the two tracks share only
+`obs/catalog.ts` (FR-T4 part 2 and FR-T5 append their own entries), the route registration
+block in `app.ts` (one line per slice) and the lockfile. FR-T4 is one issue built in two
+parts.
 
 | Order | Track A                            | Track B                                          |
 | ----- | ---------------------------------- | ------------------------------------------------ |
@@ -1199,29 +1261,35 @@ slice) and the lockfile.
 | 3     | **FR-T2** export                   | **FR-T5** logs and events                        |
 | 4     | **FR-T6** metric dashboards        | **FR-T7** trace dashboard                        |
 
-| Slice         | Owns                                                                                                                                                                                                                                                                                                                                                   | Must not touch                           |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
-| Base          | `obs/catalog.ts`, `obs/gate.ts`, `obs/config.ts`, `obs/index.ts`, `obs/metrics.ts`, `obs/outbound.ts`; the three tables and `jobs.trace_context` in both schemas with the migration pair, the job claim's column mapping in `db/dialect.ts`, the exporter's exclusion list; the `continueTrace` option of `enqueue`; the prune job; the Collect switch | `packages/ai`                            |
-| FR-T4, part 1 | `packages/ai/src/telemetry.ts`; the spans in `router.ts` and `keyCheck.ts`; `AiDeps.userId` and `AiDeps.onRecordError` in `types.ts`; passing a `fetch` to every provider in `providers.ts`; the package's dependency on `@opentelemetry/api`                                                                                                          | `apps/server`                            |
-| FR-T3         | `plugins/obsHttp.ts`; the job span, the user in the context and the trace continuation in `jobs/runner.ts`; the database wrappers in `db/client.ts`; the uses of `obs/outbound.ts` in `safeFetch.ts`, `mcpClient.ts` and `google.ts`                                                                                                                   | `lib/ai.ts`, job handler files           |
-| FR-T4, part 2 | `obs/tracing.ts`, `obs/spanStore.ts`; `lib/ai.ts` (the Gen AI metrics, the user id, the observed fetch for the AI providers) and `aiProviderFetch.ts`; the workflow spans in the routes and job handlers of 14.5 and their `continueTrace` call sites                                                                                                  | `jobs/runner.ts`, `db/client.ts`         |
-| FR-T2         | `obs/export/`, the export settings route and its Settings card, the sealed credential, `OPPORTUN_TELEMETRY_ALLOW_PRIVATE` in `config.ts`                                                                                                                                                                                                               | `obs/log.ts`                             |
-| FR-T5         | `obs/log.ts`, the logger options in `app.ts`, the hook in `lib/audit.ts`, every existing log call that needs changing, the `console.*` replacements in `apps/server`, the two lint rules                                                                                                                                                               | `obs/export/`                            |
-| FR-T6         | `routes/obsMetrics.ts`, the dashboards page under `apps/web/src/routes/settings/`, its link from Settings, the chart component                                                                                                                                                                                                                         | `routes/obsTraces.ts`                    |
-| FR-T7         | `routes/obsTraces.ts`, the traces page                                                                                                                                                                                                                                                                                                                 | the dashboards page, except its one link |
+| Slice         | Owns                                                                                                                                                                                                                                                                                                                                                                                                   | Must not touch                           |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
+| Base          | `obs/catalog.ts`, `obs/gate.ts`, `obs/config.ts`, `obs/index.ts`, `obs/metrics.ts`, `obs/outbound.ts`; the three tables and `jobs.trace_context` in both schemas with the migration pair, the job claim's column mapping in `db/dialect.ts`, the exporter's exclusion list; the `continueTrace` option of `enqueue`; the prune job; the Collect switch with its admin route in `routes/obsSettings.ts` | `packages/ai`                            |
+| FR-T4, part 1 | `packages/ai/src/telemetry.ts`; the spans in `router.ts` and `keyCheck.ts`; `AiDeps.userId` and `AiDeps.onRecordError` in `types.ts`; passing a `fetch` to every provider in `providers.ts`; the package's dependency on `@opentelemetry/api`                                                                                                                                                          | `apps/server`                            |
+| FR-T3         | `plugins/obsHttp.ts`; the job span, the user in the context and the trace continuation in `jobs/runner.ts`; the database wrappers in `db/client.ts`; the uses of `obs/outbound.ts` in `safeFetch.ts`, `mcpClient.ts` and `google.ts`                                                                                                                                                                   | `lib/ai.ts`, job handler files           |
+| FR-T4, part 2 | `obs/tracing.ts`, `obs/spanStore.ts`; `lib/ai.ts` (the Gen AI metrics, the user id, the observed fetch for the AI providers) and `aiProviderFetch.ts`; the workflow spans in the routes and job handlers of 14.5 and their `continueTrace` call sites                                                                                                                                                  | `jobs/runner.ts`, `db/client.ts`         |
+| FR-T2         | `obs/export/`, the export settings in `routes/obsSettings.ts`, the Settings card for both switches, the guide's table of catalogued keys, the sealed credential, `OPPORTUN_TELEMETRY_ALLOW_PRIVATE` in `config.ts`                                                                                                                                                                                     | `obs/log.ts`                             |
+| FR-T5         | `obs/log.ts`, the logger options in `app.ts`, the hook in `lib/audit.ts`, every existing log call that needs changing, the `console.*` replacements in `apps/server`, the two lint rules                                                                                                                                                                                                               | `obs/export/`                            |
+| FR-T6         | `routes/obsMetrics.ts`, the dashboards page under `apps/web/src/routes/settings/`, its link from Settings, the chart component                                                                                                                                                                                                                                                                         | `routes/obsTraces.ts`                    |
+| FR-T7         | `routes/obsTraces.ts`, the traces page                                                                                                                                                                                                                                                                                                                                                                 | the dashboards page, except its one link |
 
 - **The slots between slices are part of the base.** `obs/index.ts` declares where an
   exporter attaches for each signal (metrics, spans, log records). FR-T4 and FR-T5 fill the
   span and log side, FR-T2 calls them, and neither waits for the other.
-- **The base's catalog has no Gen AI entries.** FR-T4 part 2 adds them, and the Gen AI
-  metrics, importing the names from `@opportun/ai`, which part 1 has merged by then.
+- **The base's catalog holds the five metrics that are not Gen AI** (14.4), with their
+  attributes and bucket boundaries, and the `error` event, so FR-T3 adds only wrappers. It has
+  no Gen AI entries: FR-T4 part 2 adds them, and the Gen AI metrics, importing the names from
+  `@opportun/ai`, which part 1 has merged by then.
+- **The Collect switch can be turned on from the base on**, through its admin route, so each
+  later slice can be checked live. Its Settings card comes with FR-T2.
 - **`obs.event()` exists from the base on**, writing through the gate to the logger that is
   there today, so FR-T3 can write its error records. FR-T5 moves it onto `obs/log.ts` and
   completes the list of events.
 - **FR-T3's spans need no provider to compile or to test.** They use the API, and its tests
   register an in-memory provider. They start being stored when FR-T4 part 2 merges.
 - **The dashboards build on the tables, not on the instrumentation.** FR-T6 and FR-T7 can
-  start once the base is merged, against rows their own tests insert.
+  start once the base is merged, against rows their own tests insert. Both scope every query
+  to the caller, check a filter's attribute key against the catalog and bind its value, and
+  give an admin's instance view only the points the instance owns.
 - **One step is sequenced.** FR-T7 adds its link to FR-T6's dashboards page as its last
   commit, after FR-T6 has merged.
 - **One chart library at most**, chosen in FR-T6 and reviewed there: it must work under the
@@ -1237,7 +1305,7 @@ slice) and the lockfile.
 - **No exception events on spans**: `error.type` only.
 - **Jobs use `opportun.job.*`**, not the messaging conventions, which are not stable and
   describe brokers.
-- **Company names are not used**, though FR-T5's origin allows them in logs (14.8).
+- **Company names are not used**, though the original request allowed them in logs (14.8).
 - **Out of scope:** a scrape endpoint, gRPC, more than one destination at a time, sampling
   (volume does not need it), an in-app log viewer, alerting, and storing or showing prompt or
   response content in traces.
