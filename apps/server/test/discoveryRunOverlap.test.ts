@@ -1,9 +1,12 @@
 // Two overlapping runs of one source store each posting once, and make one ranking call for it
-// (https://github.com/bgoleno/opportun/issues/267). Run now and the schedule have different dedupe
-// keys, so neither stops the other. ingest checks then inserts and discovery_results has no unique
-// index: on Postgres only a scope lock keeps the two apart (SQLite's write gate already does).
-// runNextJob starts each run here, so the overlap does not depend on when the pool looks for work.
-// The provider is mocked and every posting is made up.
+// (https://github.com/bgoleno/opportun/issues/267). ingest checks then inserts and
+// discovery_results has no unique index: on Postgres only a scope lock keeps the two apart
+// (SQLite's write gate already does). Since https://github.com/bgoleno/opportun/issues/269 the
+// runner no longer lets two discovery.run jobs of one source run at once: the later one records a
+// Skipped run. So the lockstep tests here call the run directly, two at once, to keep #267's lock
+// tested on its own; the queued ones go through the runner and check that the second is skipped
+// and every posting is still stored and ranked once. The provider is mocked and every posting is
+// made up.
 import { runStructured } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -18,6 +21,7 @@ import {
   DISCOVERY_RUN_KIND,
   FIRST_RUN_RANK_CAP,
   MULTI_POSTED_PREFIX,
+  runDiscoverySource,
 } from '../src/jobs/discoveryRun';
 import { enqueue, runNextJob, startRunner } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
@@ -146,6 +150,19 @@ const queueRun = (
 
 const startRun = (app: FastifyInstance) => runNextJob(app.db, { services: app.jobs.services });
 
+/**
+ * A run of the source called directly, not through the runner, which since #269 would skip a
+ * second one: two of these at once are the overlap #267's ingest lock has to hold against.
+ */
+const runDirectly = (app: FastifyInstance, c: TestClient, sourceId: string) =>
+  runDiscoverySource(app.db, ctxOf(c), sourceId, {
+    fetch: app.jobs.services.sourceFetch!,
+    log: app.log,
+  });
+
+const statusesOf = async (app: FastifyInstance, ids: string[]) =>
+  (await app.db.select().from(jobs).where(inArray(jobs.id, ids)).all()).map((r) => r.result);
+
 /** Every posting stored once, one rank job for it, and one provider call once they have run. */
 async function expectEachPostingOnce(
   app: FastifyInstance,
@@ -161,8 +178,10 @@ async function expectEachPostingOnce(
     .all();
   expect(rows.map((r) => r.posting.title).sort()).toEqual(titles);
 
-  const runs = await app.db.select().from(jobs).where(inArray(jobs.id, runIds)).all();
-  expect(runs.map((r) => r.status)).toEqual(runIds.map(() => 'done'));
+  if (runIds.length > 0) {
+    const runs = await app.db.select().from(jobs).where(inArray(jobs.id, runIds)).all();
+    expect(runs.map((r) => r.status)).toEqual(runIds.map(() => 'done'));
+  }
 
   const rankJobs = await app.db
     .select({ id: jobs.id })
@@ -191,21 +210,18 @@ describe('#267: overlapping runs of one source', () => {
     const { app, a } = await boot();
     board(COUNT, inLockstep());
     const src = await aSourceThatHasRun(app, a);
-    const ids = [
-      await queueRun(app, a, src.id, 'now'),
-      await queueRun(app, a, src.id, 'scheduled'),
-    ];
 
-    await Promise.all([startRun(app), startRun(app)]);
+    const outcomes = await Promise.all([runDirectly(app, a, src.id), runDirectly(app, a, src.id)]);
+    expect(outcomes.map((o) => o.status)).toEqual(['done', 'done']);
 
-    await expectEachPostingOnce(app, a, ids, COUNT);
+    await expectEachPostingOnce(app, a, [], COUNT);
   });
 
   it('with the second queued partway through the first, and catching it up', async () => {
     const COUNT = 60;
     const STORED_BEFORE_SECOND = 15;
     const { app, a } = await boot();
-    const { midway, before } = firstWaitsForSecondAfter(STORED_BEFORE_SECOND);
+    const { midway, before, letFirstGo } = firstWaitsForSecondAfter(STORED_BEFORE_SECOND);
     board(COUNT, before);
     const src = await aSourceThatHasRun(app, a);
     const first = await queueRun(app, a, src.id, 'scheduled');
@@ -213,7 +229,11 @@ describe('#267: overlapping runs of one source', () => {
     await midway;
     const second = await queueRun(app, a, src.id, 'now');
 
-    await Promise.all([firstRun, startRun(app)]);
+    // Since #269 the second does not read the board: it records a Skipped run and ends.
+    await startRun(app);
+    expect(await statusesOf(app, [second])).toEqual([{ status: 'skipped', reason: 'in_progress' }]);
+    letFirstGo();
+    await firstRun;
 
     await expectEachPostingOnce(app, a, [first, second], COUNT);
   });
@@ -223,16 +243,10 @@ describe('#267: overlapping runs of one source', () => {
     const { app, a } = await boot();
     board(COUNT, inLockstep());
     const src = await aSource(app, a);
-    const ids = [
-      await queueRun(app, a, src.id, 'now'),
-      await queueRun(app, a, src.id, 'scheduled'),
-    ];
 
-    await Promise.all([startRun(app), startRun(app)]);
-
-    // runNextJob does not reject when a job fails, and one run dying would still leave these counts.
-    const runs = await app.db.select().from(jobs).where(inArray(jobs.id, ids)).all();
-    expect(runs.map((r) => r.status)).toEqual(['done', 'done']);
+    const outcomes = await Promise.all([runDirectly(app, a, src.id), runDirectly(app, a, src.id)]);
+    // Neither died: one dying would still leave these counts.
+    expect(outcomes.map((o) => o.status)).toEqual(['done', 'done']);
 
     const rows = await app.db
       .select({ reason: discoveryResults.rankSkipReason })
@@ -263,17 +277,27 @@ describe('#267: overlapping runs of one source', () => {
     try {
       await midway;
       second = await queueRun(app, a, src.id, 'now');
+      // Since #269 the second ends Skipped while the first is still going, without reading the
+      // board; the first then goes on.
       const end = performance.now() + 15_000;
-      for (;;) {
-        const runs = await app.db
-          .select({ status: jobs.status })
-          .from(jobs)
-          .where(inArray(jobs.id, [first, second]))
-          .all();
-        if (runs.every((r) => r.status === 'done')) break;
-        if (performance.now() > end) throw new Error('the two runs did not finish');
-        await new Promise((r) => setTimeout(r, 5));
-      }
+      const waitFor = async (ids: string[], what: string) => {
+        for (;;) {
+          const runs = await app.db
+            .select({ status: jobs.status })
+            .from(jobs)
+            .where(inArray(jobs.id, ids))
+            .all();
+          if (runs.every((r) => r.status === 'done')) return;
+          if (performance.now() > end) throw new Error(what);
+          await new Promise((r) => setTimeout(r, 5));
+        }
+      };
+      await waitFor([second], 'the second run did not end');
+      expect(await statusesOf(app, [second])).toEqual([
+        { status: 'skipped', reason: 'in_progress' },
+      ]);
+      letFirstGo();
+      await waitFor([first, second], 'the two runs did not finish');
     } finally {
       letFirstGo();
       await runner.stop();
