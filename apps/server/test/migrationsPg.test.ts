@@ -4,6 +4,7 @@
 //
 // Recorded fake (always): the statements, their connection and their order. Live
 // (TEST_DATABASE_URL, Task 13's matrix): the same properties against postgres:16.
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import pg from 'pg';
@@ -177,10 +178,12 @@ describe.runIf(livePgUrl !== undefined)('migrateLockedPg (live Postgres)', () =>
   it('a migration that throws leaves no bookkeeping row', async () => {
     await withScratchDatabase(async (url) => {
       const pool = new pg.Pool({ connectionString: url });
+      // Removed in the finally below, pass or fail (#294): it is a throwaway migrations folder.
+      let dir: string | undefined;
       try {
         const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises');
         const { tmpdir } = await import('node:os');
-        const dir = await mkdtemp(join(tmpdir(), 'opportun-badpg-'));
+        dir = await mkdtemp(join(tmpdir(), 'opportun-badpg-'));
         await mkdir(join(dir, 'meta'));
         await writeFile(
           join(dir, '0000_bad.sql'),
@@ -201,7 +204,11 @@ describe.runIf(livePgUrl !== undefined)('migrateLockedPg (live Postgres)', () =>
         // The whole read-decide-apply transaction rolled back, bookkeeping table included.
         expect(rows.rows[0]).toEqual({ bookkeeping: null, ok: null });
       } finally {
-        await pool.end();
+        try {
+          await pool.end();
+        } finally {
+          if (dir !== undefined) await rm(dir, { recursive: true, force: true });
+        }
       }
     });
   });
