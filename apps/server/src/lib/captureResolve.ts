@@ -18,12 +18,13 @@
 // C-1: nothing here fetches anything. The posting URL is provenance metadata.
 import { dedupeKey, type NormalizedPosting, type OpportunityStage } from '@opportun/core';
 import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
-import type { Db } from '../db/client';
+import { lockScope, withTransaction, type Db, type Exec } from '../db/client';
 import { ilike, jsonText } from '../db/dialect';
 import { discoveryResults, opportunities } from '../db/schema';
 import { POSTING_RECONCILE_KIND } from '../jobs/discoveryKinds';
 import { enqueue } from '../jobs/runner';
 import { sanitizePosting } from './postingSanitize';
+import { racePoint } from './racePoints';
 import { postingIdentity, siteLabel } from './captureSites';
 import { sourceLabel } from './sourceLabels';
 import { descriptionFingerprint } from './postingFingerprint';
@@ -33,16 +34,18 @@ import {
   createRun,
   ensureChannelSource,
   getResult,
+  ingestScope,
   insertResult,
   setDisposition,
   setResolution,
   type DiscoveryResultView,
 } from '../repos/discovery';
 import {
+  afterStageChange,
   createOpportunity,
   getOpportunity,
   setPostingState,
-  transitionOpportunity,
+  transitionOpportunityIn,
   updateOpportunity,
   type OpportunityView,
 } from '../repos/opportunities';
@@ -91,7 +94,7 @@ function mayCarryIdentity(identity: string): SQL {
 
 /** Results of this user whose posting is the same req as `posting`. */
 async function resultsWithIdentity(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   identity: string,
 ): Promise<DiscoveryResultView[]> {
@@ -111,17 +114,20 @@ async function resultsWithIdentity(
 }
 
 /** Results of this user carrying `key`, whatever their disposition. */
-async function resultsWithKey(db: Db, ctx: UserCtx, key: string): Promise<DiscoveryResultView[]> {
+async function resultsWithKey(db: Exec, ctx: UserCtx, key: string): Promise<DiscoveryResultView[]> {
   const rows = await db
     .select({ id: discoveryResults.id })
     .from(discoveryResults)
     .where(and(eq(discoveryResults.userId, ctx.userId), eq(discoveryResults.dedupeKey, key)))
     .all();
-  return await Promise.all(rows.map((r) => getResult(db, ctx, r.id)));
+  const results: DiscoveryResultView[] = [];
+  // One at a time: they all run on the transaction's one client.
+  for (const r of rows) results.push(await getResult(db, ctx, r.id));
+  return results;
 }
 
 async function opportunityWithKey(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   key: string,
 ): Promise<OpportunityView | null> {
@@ -165,7 +171,7 @@ function identitiesContradict(a: string | null, b: string | null): boolean {
  * the key carries a location, and a capture only has one when the optional `capture.linkedin`
  * refine step ran, so a key-only match misses exactly when AI is unavailable.
  */
-async function findMatch(db: Db, ctx: UserCtx, posting: NormalizedPosting): Promise<Match> {
+async function findMatch(db: Exec, ctx: UserCtx, posting: NormalizedPosting): Promise<Match> {
   const identity = postingIdentity(posting);
   const key = dedupeKey(posting.company, posting.title, posting.location);
 
@@ -202,7 +208,7 @@ async function findMatch(db: Db, ctx: UserCtx, posting: NormalizedPosting): Prom
 
 /** Accepted leads recorded against an opportunity. */
 async function leadsBehind(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   opportunityId: string,
 ): Promise<DiscoveryResultView[]> {
@@ -217,7 +223,10 @@ async function leadsBehind(
       ),
     )
     .all();
-  return await Promise.all(rows.map((r) => getResult(db, ctx, r.id)));
+  const results: DiscoveryResultView[] = [];
+  // One at a time: they all run on the transaction's one client.
+  for (const r of rows) results.push(await getResult(db, ctx, r.id));
+  return results;
 }
 
 /**
@@ -231,7 +240,7 @@ async function leadsBehind(
  * with no leads, or with any lead that does not contradict, keeps D20's attach.
  */
 async function keyHolder(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   key: string,
   identity: string | null,
@@ -264,7 +273,7 @@ function pendingOf(results: DiscoveryResultView[]): DiscoveryResultView[] {
  * which, which is what D20 leaned on to call the residual key-collision case reversible.
  */
 async function recordFoldedLead(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   opportunityId: string,
   lead: DiscoveryResultView,
@@ -358,26 +367,40 @@ async function recordKeptApart(
   });
 }
 
-/** Advances `discovered` and `dismissed` to `interested`; leaves every other stage alone (D3). */
+/**
+ * Advances `discovered` and `dismissed` to `interested`; leaves every other stage alone (D3). Reads
+ * the stage under the lock: two captures of one posting would otherwise both read `discovered`, and
+ * the second would fail on a move to where it already is.
+ */
 async function advance(
   db: Db,
   ctx: UserCtx,
-  opp: OpportunityView,
+  opportunityId: string,
 ): Promise<OpportunityStage | null> {
-  if (!ADVANCES_FROM.has(opp.stage)) return null;
-  await transitionOpportunity(db, ctx, opp.id, {
-    to: 'interested',
-    // Leaving a terminal stage needs this; a capture of something dismissed means the user
-    // changed their mind (owner decision, 2026-10-19).
-    ...(opp.stage === 'dismissed' ? { reopen: true } : {}),
-    note: 'Captured from the browser extension.',
-  });
+  const moved = await withTransaction(
+    db,
+    async (tx) => {
+      const { stage } = await getOpportunity(tx, ctx, opportunityId);
+      if (!ADVANCES_FROM.has(stage)) return null;
+      await racePoint('captureResolve.advance.locked');
+      return await transitionOpportunityIn(tx, ctx, opportunityId, {
+        to: 'interested',
+        // Leaving a terminal stage needs this; a capture of something dismissed means the user
+        // changed their mind (owner decision, 2026-10-19).
+        ...(stage === 'dismissed' ? { reopen: true } : {}),
+        note: 'Captured from the browser extension.',
+      });
+    },
+    { scope: ingestScope(ctx) },
+  );
+  if (moved === null) return null;
+  await afterStageChange(db, ctx, moved);
   return 'interested';
 }
 
 /** Stores the capture as a new accepted lead of the user's extension channel source. */
 async function createLead(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   posting: NormalizedPosting,
 ): Promise<DiscoveryResultView> {
@@ -392,22 +415,56 @@ async function createLead(
   });
 }
 
+const FILLED_FIELDS = ['postingUrl', 'location', 'remote', 'compNote'] as const;
+
 /**
- * Resolves one job capture to an opportunity at `interested`.
- *
- * Not wrapped in a single transaction: `createOpportunity` opens its own, and on the Postgres
- * leg passing the raw db inside a transaction is refused outright (db/client.ts). This follows
- * the existing accept route, which is sequential in the same way; the unique dedupe index is
- * the real guard against two captures racing into two opportunities.
+ * The lead's posting with what the capture knows and the lead lacks, and nothing else: a field the
+ * capture has no value for is not added, not even as null. A rank call in flight compares the
+ * posting's stored text to the text it ranked (setRankingIfPostingIs), so a capture that adds
+ * nothing must leave the text exactly as it was, or the paid score is refused for a key a row had
+ * never had (https://github.com/bgoleno/opportun/issues/268).
  */
-export async function resolveCapture(
-  db: Db,
+function fillFrom(lead: NormalizedPosting, capture: NormalizedPosting): NormalizedPosting {
+  const filled: NormalizedPosting = {
+    ...lead,
+    descriptionMd: lead.descriptionMd || capture.descriptionMd,
+  };
+  for (const field of FILLED_FIELDS) {
+    // eslint-disable-next-line security/detect-object-injection -- field is a FILLED_FIELDS literal
+    const value = capture[field];
+    // eslint-disable-next-line security/detect-object-injection -- same fixed field name
+    if (lead[field] == null && value != null) Object.assign(filled, { [field]: value });
+  }
+  return filled;
+}
+
+interface Settled {
+  opportunity: OpportunityView;
+  resultId: string;
+  createdOpportunity: boolean;
+  keptApartFrom: OpportunityView | null;
+  linkedLeadIds: string[];
+}
+
+/**
+ * Looks for what the capture corresponds to, and records the row that says it was taken. A run's
+ * check reads a pending row from another source as another posting of the same job and stores its
+ * own, so a capture's row is accepted before anyone can see it. Takes only the transaction, so
+ * nothing here can reach the database around it.
+ */
+async function settleLead(
+  tx: Exec,
   ctx: UserCtx,
-  input: CaptureInput,
-): Promise<CaptureResolution> {
-  const posting = sanitizePosting(input.posting);
-  const identity = postingIdentity(posting);
-  const match = await findMatch(db, ctx, posting);
+  posting: NormalizedPosting,
+  identity: string | null,
+): Promise<Settled> {
+  // The user's lock, ahead of any row write (lock order, repos/submissionReview.ts submissionScope):
+  // createOpportunity's company lookup takes it later, after setResolution or createLead has
+  // written a row, and a writer holding it while it waits on that row would close a cycle (40P01).
+  // The ingest lock is already held, taken by withTransaction below.
+  await lockScope(tx, `user:${ctx.userId}`);
+  const match = await findMatch(tx, ctx, posting);
+  await racePoint('captureResolve.matched.locked');
   const [primary, ...rest] = match.leads;
 
   let opportunity = match.opportunity;
@@ -418,31 +475,23 @@ export async function resolveCapture(
   if (primary !== undefined) {
     // The lead keeps its own identity (company, title, so its dedupe key) and gains the
     // description it was waiting for, exactly as the paste path's resolveLeadInPlace does.
-    const filled = await setResolution(db, ctx, primary.id, {
+    const filled = await setResolution(tx, ctx, primary.id, {
       resolution: 'full',
       resolvedSourceRef: posting.postingUrl ?? null,
-      posting: {
-        ...primary.posting,
-        descriptionMd: primary.posting.descriptionMd || posting.descriptionMd,
-        postingUrl: primary.posting.postingUrl ?? posting.postingUrl ?? null,
-        location: primary.posting.location ?? posting.location ?? null,
-        remote: primary.posting.remote ?? posting.remote ?? null,
-        compNote: primary.posting.compNote ?? posting.compNote ?? null,
-      },
+      posting: fillFrom(primary.posting, posting),
     });
     resultId = filled.id;
     // The matched lead's own key may differ from the capture's, which is routine when the two
     // describe the location differently. A live opportunity holding *that* key is the same job
-    // tracked already, and creating a second one would throw 409 after the lead has already
-    // been flipped to `full`: a half-landed capture with no reconcile queued.
+    // tracked already, and creating a second one would throw 409.
     if (opportunity === null && filled.dedupeKey !== null) {
-      const holder = await keyHolder(db, ctx, filled.dedupeKey, identity);
+      const holder = await keyHolder(tx, ctx, filled.dedupeKey, identity);
       opportunity = holder.opportunity;
       keptApartFrom ??= holder.keptApartFrom;
     }
     if (opportunity === null) {
       opportunity = await createOpportunity(
-        db,
+        tx,
         ctx,
         {
           companyName: filled.posting.company,
@@ -460,13 +509,13 @@ export async function resolveCapture(
       );
       createdOpportunity = true;
     }
-    await setDisposition(db, ctx, filled.id, 'accepted', opportunity.id);
-    if (!createdOpportunity) await recordFoldedLead(db, ctx, opportunity.id, filled);
+    await setDisposition(tx, ctx, filled.id, 'accepted', opportunity.id);
+    if (!createdOpportunity) await recordFoldedLead(tx, ctx, opportunity.id, filled);
   } else if (opportunity === null) {
-    const lead = await createLead(db, ctx, posting);
+    const lead = await createLead(tx, ctx, posting);
     resultId = lead.id;
     opportunity = await createOpportunity(
-      db,
+      tx,
       ctx,
       {
         companyName: lead.posting.company,
@@ -483,19 +532,52 @@ export async function resolveCapture(
       forceIfKeptApart(keptApartFrom),
     );
     createdOpportunity = true;
-    await setDisposition(db, ctx, lead.id, 'accepted', opportunity.id);
+    await setDisposition(tx, ctx, lead.id, 'accepted', opportunity.id);
   } else {
     // Re-capturing a job already tracked reuses the lead that recorded it rather than piling
     // up one extension lead per capture.
-    const reusable = match.accepted.find((r) => r.opportunityId === opportunity?.id);
+    const holder = opportunity;
+    const reusable = match.accepted.find((r) => r.opportunityId === holder.id);
     if (reusable !== undefined) {
       resultId = reusable.id;
     } else {
-      const lead = await createLead(db, ctx, posting);
+      const lead = await createLead(tx, ctx, posting);
       resultId = lead.id;
-      await setDisposition(db, ctx, lead.id, 'accepted', opportunity.id);
+      await setDisposition(tx, ctx, lead.id, 'accepted', opportunity.id);
     }
   }
+
+  // Leads this capture did not consume are linked rather than left pending: they would 409
+  // against the now-live opportunity on every later accept (D23).
+  const linkedLeadIds: string[] = [];
+  for (const other of rest) {
+    await setDisposition(tx, ctx, other.id, 'accepted', opportunity.id);
+    await recordFoldedLead(tx, ctx, opportunity.id, other);
+    linkedLeadIds.push(other.id);
+  }
+  return { opportunity, resultId, createdOpportunity, keptApartFrom, linkedLeadIds };
+}
+
+/**
+ * Resolves one job capture to an opportunity at `interested`.
+ *
+ * The look and the row it leads to are one transaction under the lock a run's ingest takes, or a
+ * run storing the posting at that moment leaves the board's pending card next to the capture's
+ * accepted row (https://github.com/bgoleno/opportun/issues/268). The rest is sequential, as the
+ * accept route is: what it writes only adds to an opportunity and a row a run already respects.
+ */
+export async function resolveCapture(
+  db: Db,
+  ctx: UserCtx,
+  input: CaptureInput,
+): Promise<CaptureResolution> {
+  const posting = sanitizePosting(input.posting);
+  const identity = postingIdentity(posting);
+  const settled = await withTransaction(db, (tx) => settleLead(tx, ctx, posting, identity), {
+    scope: ingestScope(ctx),
+  });
+
+  const { opportunity, resultId, createdOpportunity, keptApartFrom, linkedLeadIds } = settled;
 
   await recordCapture(db, ctx, opportunity.id, { ...input, posting });
   if (createdOpportunity && keptApartFrom !== null) {
@@ -513,16 +595,7 @@ export async function resolveCapture(
     await fillOpportunity(db, ctx, opportunity, posting);
   }
 
-  const stageMovedTo = await advance(db, ctx, await getOpportunity(db, ctx, opportunity.id));
-
-  // Leads this capture did not consume are linked rather than left pending: they would 409
-  // against the now-live opportunity on every later accept (D23).
-  const linkedLeadIds: string[] = [];
-  for (const other of rest) {
-    await setDisposition(db, ctx, other.id, 'accepted', opportunity.id);
-    await recordFoldedLead(db, ctx, opportunity.id, other);
-    linkedLeadIds.push(other.id);
-  }
+  const stageMovedTo = await advance(db, ctx, opportunity.id);
 
   const current = await getOpportunity(db, ctx, opportunity.id);
   if (current.postingState !== 'confirmed') {

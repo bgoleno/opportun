@@ -27,6 +27,7 @@ import {
 import { HttpError } from '../lib/errors';
 import { sanitizePosting } from '../lib/postingSanitize';
 import { isBoardSource, prefilter, type PrefilterVerdict } from '../lib/prefilter';
+import { racePoint } from '../lib/racePoints';
 import type { Exec, UserCtx } from '../repos/base';
 import {
   clearBelowCut,
@@ -45,6 +46,7 @@ import {
   sourceScheduleName,
   splitConfig,
   type DiscoveryResultView,
+  ingestScope,
 } from '../repos/discovery';
 import {
   DISCOVERY_RANK_KIND,
@@ -230,13 +232,12 @@ async function ingest(
 ): Promise<DiscoveryResultView | 'duplicate'> {
   const key = dedupeKey(posting.company, posting.title, posting.location);
   return await withTransaction(db, async (tx) => {
-    // discovery_results has no unique index, and two runs of a source can overlap: on Postgres this
-    // lock is all that keeps them from both passing the check. It is the user's, not the source's,
-    // because the check also looks across their other sources (multi_posted).
-    // https://github.com/bgoleno/opportun/issues/267
-    await lockScope(tx, `discovery.ingest:${ctx.userId}`);
+    // Two runs of a source can overlap: on Postgres this lock is all that keeps them from both
+    // passing the check.
+    await lockScope(tx, ingestScope(ctx));
     const check = await checkDuplicate(tx, ctx, key, sourceId, posting.externalId);
     if (check === 'duplicate') return 'duplicate';
+    await racePoint('discovery.ingest.locked');
     const partial = posting.descriptionMd == null || posting.descriptionMd === '';
     const verdict = judge === null ? null : judge(posting);
     const result = await insertResult(tx, ctx, {

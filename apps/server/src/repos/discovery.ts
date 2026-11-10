@@ -71,7 +71,11 @@ export const sourceScheduleName = (sourceId: string): string => `${DISCOVERY_RUN
  * An enabled source with a cron gets its own schedule row (owned by the user, so it goes with
  * the account); any other source has none, and a pending scheduled run is dropped.
  */
-async function syncSourceSchedule(db: Db, ctx: UserCtx, source: DiscoverySourceRow): Promise<void> {
+async function syncSourceSchedule(
+  db: Exec,
+  ctx: UserCtx,
+  source: DiscoverySourceRow,
+): Promise<void> {
   const name = sourceScheduleName(source.id);
   if (source.enabled && source.scheduleCron !== null) {
     await setSchedule(
@@ -203,7 +207,7 @@ export async function listSources(
 }
 
 export async function createSource(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   input: SourceInput,
 ): Promise<DiscoverySourceRow> {
@@ -237,12 +241,20 @@ export async function createSource(
 }
 
 /**
+ * Taken around a check for a posting and the row it leads to, by a run storing one and by a capture
+ * of one: discovery_results has no unique index, and both can overlap with a run of any source
+ * (https://github.com/bgoleno/opportun/issues/267, https://github.com/bgoleno/opportun/issues/268).
+ * It is the user's, not the source's, because the check looks across their other sources.
+ */
+export const ingestScope = (ctx: UserCtx): string => `discovery.ingest:${ctx.userId}`;
+
+/**
  * The user's synthetic source for a channel that delivers postings itself (alert_email, manual,
  * extension): the oldest one of that kind, created (enabled, unscheduled, empty config) on
  * first use.
  */
 export async function ensureChannelSource(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   kind: 'alert_email' | 'manual' | 'extension',
 ): Promise<DiscoverySourceRow> {
@@ -257,7 +269,7 @@ export async function ensureChannelSource(
 
 /** A new config replaces the old one entirely, so the adapter's cursor starts over. */
 export async function updateSource(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   id: string,
   patch: SourcePatch,
@@ -658,7 +670,13 @@ export async function unsuppressResult(
   return await getResult(db, ctx, id);
 }
 
-/** Stores the ranking (score null: not ranked, e.g. no AI available). */
+/** The column as it is stored, on either engine: JSON text on SQLite, jsonb on Postgres. */
+const postingAsText = sql<string>`cast(${discoveryResults.posting} as text)`;
+
+/**
+ * Stores the ranking (score null: not ranked, e.g. no AI available). For setting up a test: the
+ * source ranks through setRankingIfPostingIs, which refuses a score for text that has since changed.
+ */
 export async function setRanking(
   exec: Exec,
   ctx: UserCtx,
@@ -673,6 +691,44 @@ export async function setRanking(
     .where(ownedResult(ctx, id))
     .run();
   return await getResult(exec, ctx, id);
+}
+
+/** A posting's stored text, for setRankingIfPostingIs. Undefined if the result is gone. */
+export async function readPostingBasis(
+  exec: Exec,
+  ctx: UserCtx,
+  id: string,
+): Promise<string | undefined> {
+  const row = await exec
+    .select({ basis: postingAsText })
+    .from(discoveryResults)
+    .where(ownedResult(ctx, id))
+    .get();
+  return row?.basis;
+}
+
+/**
+ * setRanking, only if the posting still has the text that was ranked: a call takes seconds, and the
+ * text can change during it, so a call from the older text could otherwise overwrite the score from
+ * the newer (https://github.com/bgoleno/opportun/issues/268). One statement, so nothing can change
+ * the text between the comparison and the write. It compares the text and not updated_at, which
+ * every reason and every wait moves too: those must not throw away a call that was paid for.
+ * Returns whether it was stored.
+ */
+export async function setRankingIfPostingIs(
+  exec: Exec,
+  ctx: UserCtx,
+  id: string,
+  ranking: { aiScore: number | null; aiRationale: string | null },
+  basis: string,
+): Promise<boolean> {
+  const stored = await exec
+    .update(discoveryResults)
+    .set({ ...ranking, rankSkipReason: null, rankDeferredAt: null, updatedAt: Date.now() })
+    .where(and(ownedResult(ctx, id), eq(postingAsText, basis)))
+    .returning({ id: discoveryResults.id })
+    .all();
+  return stored.length > 0;
 }
 
 /** The parts of a stored posting the recall figure reads; an older shape is simply not counted. */

@@ -34,7 +34,12 @@ import {
   keyChangeScope,
   writeKeyChangedAt,
 } from '../repos/discoveryBudget';
-import { DISCOVERY_RANK_KIND, enqueueRankWaiting, rankResult } from './discoveryRank';
+import {
+  DISCOVERY_RANK_KIND,
+  enqueueRankWaiting,
+  POSTING_CHANGED,
+  rankResult,
+} from './discoveryRank';
 import { enqueueFollowUps } from './discoveryRun';
 import { LEAD_RESOLVE_KIND, RANK_WAITING_KIND } from './discoveryKinds';
 import { requireService, type JobHandler } from './registry';
@@ -235,6 +240,11 @@ export async function drainWaitingResults(
         }
         continue;
       }
+      // Its text changed during the call. A capture or a new run queues a rank job, so another try
+      // here would pay twice; retryWorkdayCapture, repairAlertLeads and a purge change text and queue
+      // none. Either way it keeps its wait, so the cost is only the delay until the next sweep takes
+      // it. Not a provider error, and true of this posting alone.
+      if (run.reason === POSTING_CHANGED) continue;
       // Decided since the list was read, or gone. A dismissed posting already does not wait, and
       // its wait must survive: Undo puts it back in line (tl on #230).
       if (run.reason === 'not_pending' || run.reason === 'missing') continue;
