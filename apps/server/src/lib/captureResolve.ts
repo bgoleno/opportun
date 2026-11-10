@@ -430,7 +430,9 @@ function fillFrom(lead: NormalizedPosting, capture: NormalizedPosting): Normaliz
     descriptionMd: lead.descriptionMd || capture.descriptionMd,
   };
   for (const field of FILLED_FIELDS) {
+    // eslint-disable-next-line security/detect-object-injection -- field is a FILLED_FIELDS literal
     const value = capture[field];
+    // eslint-disable-next-line security/detect-object-injection -- same fixed field name
     if (lead[field] == null && value != null) Object.assign(filled, { [field]: value });
   }
   return filled;
