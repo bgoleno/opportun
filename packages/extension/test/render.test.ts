@@ -188,6 +188,19 @@ describe('renderOutcome', () => {
     ).toBe('Capture limit reached (30 captures per 15 minutes). Try again in about 3 minutes.');
   });
 
+  it('a busy server says to try again shortly, not that something is broken (#309)', () => {
+    expect(renderOutcome({ kind: 'busy', retryAfterSec: 5 })).toEqual({
+      tone: 'error',
+      text: 'Opportun is still saving another capture of yours. Try again in a few seconds.',
+    });
+    expect(renderOutcome({ kind: 'busy', retryAfterSec: null }).text).toMatch(
+      /Try again in a few seconds\.$/,
+    );
+    expect(renderOutcome({ kind: 'busy', retryAfterSec: 125 }).text).toMatch(
+      /Try again in about 3 minutes\.$/,
+    );
+  });
+
   it('connection test, local and transport errors', () => {
     const cases: [Outcome, RegExp][] = [
       [{ kind: 'connected' }, /^Connected: the server accepted the token\.$/],

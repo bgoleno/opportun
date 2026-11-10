@@ -169,6 +169,22 @@ describe('postCapture outcomes', () => {
     }
   });
 
+  it('a 503 capture_busy is the moment, not a server fault (#309); any other 503 is', async () => {
+    expect(
+      await postCapture(
+        respond(503, { error: { code: 'capture_busy' } }, { 'retry-after': '5' }),
+        SETTINGS,
+        PAYLOAD,
+      ),
+    ).toEqual({ kind: 'busy', retryAfterSec: 5 });
+    expect(
+      await postCapture(respond(503, { error: { code: 'capture_busy' } }), SETTINGS, PAYLOAD),
+    ).toEqual({ kind: 'busy', retryAfterSec: null });
+    expect(
+      await postCapture(respond(503, { error: { code: 'ai_unavailable' } }), SETTINGS, PAYLOAD),
+    ).toEqual({ kind: 'server_error', status: 503 });
+  });
+
   it('other 4xx keep their error code; 5xx and odd bodies are server errors', async () => {
     expect(
       await postCapture(respond(422, { error: { code: 'invalid_posting' } }), SETTINGS, PAYLOAD),

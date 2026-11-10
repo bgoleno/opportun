@@ -31,7 +31,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { Db } from '../db/client';
 import { buildAiDeps } from '../lib/ai';
-import { captureUserLimit } from '../lib/captureLimit';
+import { captureUserLimit, withCaptureSlot } from '../lib/captureLimit';
 import { rateLimit } from '../lib/rateLimit';
 import { resolveCapture } from '../lib/captureResolve';
 import {
@@ -265,11 +265,11 @@ export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void
       // `duplicate` stays in the contract and is now always false for a job capture; an old
       // build therefore says "already in your review queue" where a current one says what
       // actually happened. Wrong copy, not a broken capture.
-      const resolved = await resolveCapture(db, ctx, {
-        posting,
-        captureText: text,
-        siteId: page.siteId,
-      });
+      // In the user's one capture slot (#309): see withCaptureSlot. resolveCapture bounds its own
+      // waits for the ingest lock.
+      const resolved = await withCaptureSlot(db, ctx.userId, () =>
+        resolveCapture(db, ctx, { posting, captureText: text, siteId: page.siteId }),
+      );
       return reply.code(resolved.createdOpportunity ? 201 : 200).send({
         kind: 'job' as const,
         resultId: resolved.resultId,

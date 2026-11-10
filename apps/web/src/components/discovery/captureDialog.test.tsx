@@ -177,6 +177,30 @@ describe('CaptureDialog', () => {
     ).toBeInTheDocument();
   });
 
+  it('a 503 capture_busy says to press Capture again shortly, and offers no manual entry (#309)', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'POST /capture': () => ({
+        status: 503,
+        headers: { 'retry-after': '5' },
+        body: { error: { code: 'capture_busy' } },
+      }),
+    });
+    const { onClose, onManualEntry } = renderDialog();
+    const dialog = await screen.findByRole('dialog', { name: 'Capture posting' });
+    await user.click(within(dialog).getByLabelText('Pasted text'));
+    await user.type(within(dialog).getByLabelText('Posting description'), 'Some posting');
+    await user.click(within(dialog).getByRole('button', { name: 'Capture' }));
+    expect(
+      await within(dialog).findByText(
+        'Another capture of yours is still being saved. Wait a few seconds and press Capture again.',
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'New opportunity' })).toBeNull();
+    expect(onManualEntry).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it('renders hostile server and posting text inert', async () => {
     const user = userEvent.setup();
     const hostile = '<img src=x onerror="window.__pwned=1"><script>window.__pwned=1</script>';

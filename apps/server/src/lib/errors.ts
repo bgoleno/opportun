@@ -4,18 +4,22 @@ export class HttpError extends Error {
   readonly code: string;
   /** Extra client-facing fields rendered next to `code` (never secrets). */
   readonly details: Record<string, string | number> | undefined;
+  /** Sent as the retry-after header (seconds), for a refusal the client may try again. */
+  readonly retryAfterSec: number | undefined;
 
   constructor(
     statusCode: number,
     code: string,
     message?: string,
     details?: Record<string, string | number>,
+    opts: { retryAfterSec?: number } = {},
   ) {
     super(message ?? code);
     this.name = 'HttpError';
     this.statusCode = statusCode;
     this.code = code;
     this.details = details;
+    this.retryAfterSec = opts.retryAfterSec;
   }
 }
 

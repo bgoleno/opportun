@@ -24,6 +24,7 @@ import { discoveryResults, opportunities } from '../db/schema';
 import { POSTING_RECONCILE_KIND } from '../jobs/discoveryKinds';
 import { enqueue } from '../jobs/runner';
 import { sanitizePosting } from './postingSanitize';
+import { CAPTURE_SLOT } from './captureLimit';
 import { racePoint } from './racePoints';
 import { postingIdentity, siteLabel } from './captureSites';
 import { sourceLabel } from './sourceLabels';
@@ -391,7 +392,8 @@ async function advance(
         note: 'Captured from the browser extension.',
       });
     },
-    { scope: ingestScope(ctx) },
+    // A bounded wait for the lock (#309): resolveCapture runs in the user's capture slot.
+    { scope: ingestScope(ctx), lockTimeoutMs: CAPTURE_SLOT.lockTimeoutMs },
   );
   if (moved === null) return null;
   await afterStageChange(db, ctx, moved);
@@ -573,8 +575,10 @@ export async function resolveCapture(
 ): Promise<CaptureResolution> {
   const posting = sanitizePosting(input.posting);
   const identity = postingIdentity(posting);
+  // A bounded wait for the lock (#309): the caller runs this in the user's capture slot.
   const settled = await withTransaction(db, (tx) => settleLead(tx, ctx, posting, identity), {
     scope: ingestScope(ctx),
+    lockTimeoutMs: CAPTURE_SLOT.lockTimeoutMs,
   });
 
   const { opportunity, resultId, createdOpportunity, keptApartFrom, linkedLeadIds } = settled;

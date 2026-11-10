@@ -152,6 +152,7 @@ const CLIENT_CODES = new Map<number, string>([
 
 function errorHandler(err: FastifyError | Error, req: FastifyRequest, reply: FastifyReply) {
   if (err instanceof HttpError) {
+    if (err.retryAfterSec !== undefined) reply.header('retry-after', String(err.retryAfterSec));
     return reply.code(err.statusCode).send({ error: { ...err.details, code: err.code } });
   }
   if (err instanceof ZodError) {

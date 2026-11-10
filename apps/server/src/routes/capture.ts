@@ -22,7 +22,7 @@ import { DISCOVERY_RANK_KIND } from '../jobs/discoveryKinds';
 import { insertLeads } from '../jobs/discoveryRun';
 import { enqueue } from '../jobs/runner';
 import { buildAiDeps, expiredKeyHint } from '../lib/ai';
-import { captureUserLimit } from '../lib/captureLimit';
+import { CAPTURE_SLOT, captureUserLimit, withCaptureSlot } from '../lib/captureLimit';
 import { HttpError } from '../lib/errors';
 import { sanitizeDescriptionText, sanitizePosting } from '../lib/postingSanitize';
 import { FetchBlockedError, isPageFetchProhibited, type safeFetch } from '../lib/safeFetch';
@@ -240,7 +240,13 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(200).send({ posting: resolved.posting, resultId: resolved.id });
       }
       const source = await ensureChannelSource(db, ctx, 'manual');
-      const { stats, inserted } = await insertLeads(db, ctx, [posting], source.id);
+      // In the user's one capture slot, with a bounded wait for their ingest lock (#309), so
+      // captures queued behind a slow holder cannot take every pool connection.
+      const { stats, inserted } = await withCaptureSlot(db, ctx.userId, () =>
+        insertLeads(db, ctx, [posting], source.id, undefined, {
+          lockTimeoutMs: CAPTURE_SLOT.lockTimeoutMs,
+        }),
+      );
       const result = inserted[0];
       if (result === undefined) {
         throw new HttpError(
