@@ -92,6 +92,8 @@ async function storedPostings(
   c: TestClient,
   companyId: string,
   titles: string[],
+  /** When the first posting was stored: later than a company's answer, they are new titles. */
+  from = 1000,
 ) {
   const source = await createSource(app.db, ctxOf(c), {
     kind: 'ats_lever',
@@ -99,7 +101,7 @@ async function storedPostings(
     companyId,
   });
   const run = await createRun(app.db, ctxOf(c), { sourceId: source.id });
-  let at = 1000;
+  let at = from;
   for (const title of titles) {
     at += 1;
     await app.db
@@ -1171,6 +1173,144 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
       expect(await failedAt(app, a, 'Alone')).not.toBeNull();
       // The other user's company of the same name is not touched by this user's run.
       expect(await failedAt(app, b, 'Alone')).toBeNull();
+    });
+  });
+
+  // https://github.com/bgoleno/opportun/issues/221: a company the model could not place from its name
+  // alone is marked as tried, and until now kept that answer for good. Once job titles arrive from
+  // its board it is asked again, once for each arrival. Reopening it also clears an old failed mark,
+  // so it is not put behind the rest for a failure from before.
+  describe('a company marked as tried is asked again once titles arrive', () => {
+    /** Asked once and not placed: industry_at set (at `at`), no code, no source. */
+    async function tried(app: FastifyInstance, c: TestClient, name: string, at = 500) {
+      const company = await suggested(app, c, name);
+      await app.db
+        .update(companies)
+        .set({ industryAt: at, naicsCode: null, industrySource: null })
+        .where(eq(companies.id, company.id))
+        .run();
+      return company;
+    }
+
+    it('asks again once a stored posting is newer than its answer, and tags it', async () => {
+      const { app, a } = await boot();
+      const company = await tried(app, a, 'Tried Co');
+      await storedPostings(app, a, company.id, ['Platform Engineer']);
+      tagsEverything();
+      const run = await tagCompanies(app.db, ctxOf(a));
+      expect(run).toMatchObject({ tagged: 1, calls: 1, stopped: null });
+      expect(systemOf()).toContain('name: Tried Co');
+      expect(systemOf()).toContain('job titles: Platform Engineer');
+      expect(await rowOf(app, a, 'Tried Co')).toMatchObject({
+        naicsCode: '5132',
+        industrySource: 'ai',
+      });
+    });
+
+    it('does not ask while no titles have arrived, or for titles that came before its answer', async () => {
+      const { app, a } = await boot();
+      await tried(app, a, 'No Titles');
+      const older = await tried(app, a, 'Old Titles', 5000);
+      await storedPostings(app, a, older.id, ['Platform Engineer']);
+      tagsEverything();
+      expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({ tagged: 0, calls: 0 });
+      expect((await rowOf(app, a, 'No Titles')).industryAt).toBe(500);
+      expect((await rowOf(app, a, 'Old Titles')).industryAt).toBe(5000);
+    });
+
+    it('asks once for each arrival: unplaced again, it waits for the next titles', async () => {
+      const { app, a } = await boot();
+      const company = await tried(app, a, 'Still Unknown');
+      await storedPostings(app, a, company.id, ['Platform Engineer']);
+      vi.mocked(runStructured).mockResolvedValue({
+        tags: [{ ref: 'c1', code: 'unknown' }],
+      } as never);
+      expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({ calls: 1, tagged: 0 });
+      expect((await rowOf(app, a, 'Still Unknown')).industryAt).toBeGreaterThan(1000);
+      // Nothing new has arrived: not asked again.
+      expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({ calls: 0, tagged: 0 });
+      expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(1);
+      // New titles arrive: asked again.
+      await storedPostings(app, a, company.id, ['Staff Platform Engineer'], Date.now() + 60_000);
+      tagsEverything();
+      expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({ calls: 1, tagged: 1 });
+    });
+
+    it('never asks again about a tag or a correction, whatever arrives', async () => {
+      const { app, a } = await boot();
+      const tagged = await suggested(app, a, 'AI Tagged');
+      const corrected = await suggested(app, a, 'User Corrected');
+      await app.db
+        .update(companies)
+        .set({ industryAt: 500, naicsCode: '5415', industrySource: 'ai' })
+        .where(eq(companies.id, tagged.id))
+        .run();
+      await app.db
+        .update(companies)
+        .set({ industryAt: 500, naicsCode: '5121', industrySource: 'user' })
+        .where(eq(companies.id, corrected.id))
+        .run();
+      await storedPostings(app, a, tagged.id, ['Platform Engineer']);
+      await storedPostings(app, a, corrected.id, ['Platform Engineer']);
+      tagsEverything();
+      expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({ calls: 0 });
+      expect(await rowOf(app, a, 'AI Tagged')).toMatchObject({ naicsCode: '5415' });
+      expect(await rowOf(app, a, 'User Corrected')).toMatchObject({
+        naicsCode: '5121',
+        industrySource: 'user',
+      });
+    });
+
+    it('clears an old failed mark when it reopens, so it is not put behind the rest', async () => {
+      const { app, a } = await boot();
+      const company = await tried(app, a, 'Tried Co');
+      await app.db
+        .update(companies)
+        .set({ industryFailedAt: 7 })
+        .where(eq(companies.id, company.id))
+        .run();
+      await suggested(app, a, 'Fresh Co');
+      await storedPostings(app, a, company.id, ['Platform Engineer']);
+      tagsEverything();
+      const run = await tagCompanies(app.db, ctxOf(a));
+      // One batch of both: a company with a failed mark would have been asked after the rest.
+      expect(run).toMatchObject({ tagged: 2, calls: 1 });
+      expect(await rowOf(app, a, 'Tried Co')).toMatchObject({ industryFailedAt: null });
+    });
+
+    it('does not reopen a company that is no longer a candidate: followed or denied', async () => {
+      const { app, a } = await boot();
+      for (const status of ['followed', 'denied'] as const) {
+        const company = await tried(app, a, `Was Tried ${status}`);
+        await app.db.update(companies).set({ status }).where(eq(companies.id, company.id)).run();
+        await storedPostings(app, a, company.id, ['Platform Engineer']);
+      }
+      tagsEverything();
+      expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({ calls: 0 });
+      // Still "could not be placed", not "not set": the row keeps what it was told.
+      expect((await rowOf(app, a, 'Was Tried followed')).industryAt).toBe(500);
+      expect((await rowOf(app, a, 'Was Tried denied')).industryAt).toBe(500);
+    });
+
+    it("reopens only the caller's own companies", async () => {
+      const { app, a, b } = await boot();
+      const mine = await tried(app, a, 'My Tried Co');
+      const theirs = await tried(app, b, 'Their Tried Co');
+      await storedPostings(app, a, mine.id, ['Platform Engineer']);
+      await storedPostings(app, b, theirs.id, ['Platform Engineer']);
+      tagsEverything();
+      expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({ calls: 1, tagged: 1 });
+      expect(await rowOf(app, b, 'Their Tried Co')).toMatchObject({ industryAt: 500 });
+      expect(systemOf()).not.toContain('Their Tried Co');
+    });
+
+    it('the nightly sweep queues a job for a user whose only candidate is such a company', async () => {
+      const { app, a } = await boot();
+      await putSecret(app.db, ctxOf(a), 'ai_api_key', 'anthropic', 'sk-test-reask-value');
+      const company = await tried(app, a, 'Tried Co');
+      expect(await sweepCompanyTags(app.db)).toBe(0);
+      await storedPostings(app, a, company.id, ['Platform Engineer']);
+      expect(await sweepCompanyTags(app.db)).toBe(1);
     });
   });
 

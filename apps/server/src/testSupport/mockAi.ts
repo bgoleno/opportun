@@ -160,6 +160,10 @@ export const SUGGESTED_COMPANY = {
   name: 'Pied Piper',
   rationale: 'Builds developer platforms like the companies in your pipeline.',
   domainGuess: 'piedpiper.example',
+  // A software publisher, core: the first row of MOCK_INDUSTRY_PROFILE, so it is inside a profile
+  // confirmed from it (company.suggest drops a suggestion outside the confirmed profile).
+  code: '5132',
+  tier: 'core',
 };
 
 function classify(promptText: string): Record<string, unknown> {
