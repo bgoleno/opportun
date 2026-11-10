@@ -299,7 +299,12 @@ describe('#262 criterion 1: postings that arrived with no key are ranked once a 
     // Dismissed: not ranked while dismissed, and with no reason left, Undo puts it in the wait (the
     // next test).
     expect(after.get(title(4))).toMatchObject({ rankSkipReason: null, rankDeferredAt: null });
-    expect(await sayNoKey(app, b)).toEqual([title(9)]);
+    // A's key is A's alone: B's posting keeps its reason and stays out of the wait, or B's sweep
+    // would rank it under B's budget with no key of B's (https://github.com/bgoleno/opportun/issues/312).
+    expect((await byTitle(app, b)).get(title(9))).toMatchObject({
+      rankSkipReason: 'no_key',
+      rankDeferredAt: null,
+    });
   });
 
   it('a dismissed posting that arrived with no key is ranked after Undo', async () => {
