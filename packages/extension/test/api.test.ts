@@ -140,6 +140,35 @@ describe('postCapture outcomes', () => {
     });
   });
 
+  it("a 429 says which limit it hit: the account's or the token's (#272)", async () => {
+    const limited = (error: Record<string, unknown>) =>
+      postCapture(respond(429, { error }, { 'retry-after': '15' }), SETTINGS, PAYLOAD);
+    expect(
+      await limited({ code: 'rate_limited', reason: 'per_user', max: 60, windowMinutes: 15 }),
+    ).toEqual({
+      kind: 'rate_limited',
+      retryAfterSec: 15,
+      limit: { per: 'user', max: 60, windowMinutes: 15 },
+    });
+    expect(
+      await limited({ code: 'rate_limited', reason: 'per_token', max: 30, windowMinutes: 15 }),
+    ).toEqual({
+      kind: 'rate_limited',
+      retryAfterSec: 15,
+      limit: { per: 'token', max: 30, windowMinutes: 15 },
+    });
+    // A reason it does not know, or sizes that are not plain counts, are left out: the popup
+    // then says what it said before the server named its limits.
+    for (const error of [
+      { code: 'rate_limited', reason: 'per_ip', max: 60, windowMinutes: 15 },
+      { code: 'rate_limited', reason: 'per_user', max: '60', windowMinutes: 15 },
+      { code: 'rate_limited', reason: 'per_user', max: 60, windowMinutes: 0 },
+      { code: 'rate_limited', reason: 'per_user', max: 1.5, windowMinutes: 15 },
+    ]) {
+      expect(await limited(error)).toEqual({ kind: 'rate_limited', retryAfterSec: 15 });
+    }
+  });
+
   it('other 4xx keep their error code; 5xx and odd bodies are server errors', async () => {
     expect(
       await postCapture(respond(422, { error: { code: 'invalid_posting' } }), SETTINGS, PAYLOAD),

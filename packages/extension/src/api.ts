@@ -40,7 +40,7 @@ export type Outcome =
   | { kind: 'refused'; reason: string }
   | { kind: 'unauthorized' }
   | { kind: 'forbidden' }
-  | { kind: 'rate_limited'; retryAfterSec: number | null }
+  | { kind: 'rate_limited'; retryAfterSec: number | null; limit?: CaptureLimit }
   | { kind: 'too_large' }
   | { kind: 'invalid'; status: number; code: string }
   | { kind: 'server_error'; status: number }
@@ -81,6 +81,30 @@ async function readJson(res: FetchResponse): Promise<unknown> {
 
 function errorOf(body: unknown): Record<string, unknown> {
   return isRecord(body) && isRecord(body.error) ? body.error : {};
+}
+
+/**
+ * Which capture limit a 429 hit, as the server names it (#272): the user's own, shared by every
+ * browser and the web app, or this token's. Absent from an older server, or when the body does
+ * not hold plain counts, and the popup then says what it said before.
+ */
+export interface CaptureLimit {
+  per: 'user' | 'token';
+  max: number;
+  windowMinutes: number;
+}
+
+const PER: Readonly<Record<string, CaptureLimit['per']>> = { per_user: 'user', per_token: 'token' };
+
+const isCount = (v: unknown, most: number): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= most;
+
+function limitOf(error: Record<string, unknown>): CaptureLimit | undefined {
+  const per = typeof error.reason === 'string' ? PER[error.reason] : undefined;
+  if (per === undefined || !isCount(error.max, 10_000) || !isCount(error.windowMinutes, 1440)) {
+    return undefined;
+  }
+  return { per, max: error.max, windowMinutes: error.windowMinutes };
 }
 
 function success(status: number, body: unknown): Outcome {
@@ -127,7 +151,12 @@ async function classify(res: FetchResponse): Promise<Outcome> {
   if (status === 413) return { kind: 'too_large' };
   if (status === 429) {
     const after = Number.parseInt(res.headers.get('retry-after') ?? '', 10);
-    return { kind: 'rate_limited', retryAfterSec: Number.isFinite(after) ? after : null };
+    const limit = limitOf(errorOf(body));
+    return {
+      kind: 'rate_limited',
+      retryAfterSec: Number.isFinite(after) ? after : null,
+      ...(limit === undefined ? {} : { limit }),
+    };
   }
   const error = errorOf(body);
   const code = typeof error.code === 'string' ? error.code : 'unknown';

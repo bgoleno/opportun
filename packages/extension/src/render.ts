@@ -123,13 +123,22 @@ export function renderOutcome(outcome: Outcome, site: CaptureSiteId = 'linkedin'
         tone: 'error',
         text: 'This token does not have the browser capture permission. Create one that does under Settings > Integrations > Extensions and Connectors.',
       };
-    case 'rate_limited':
+    case 'rate_limited': {
+      // The limit the server names (#272); an older server names none, and then it was the
+      // token's 30 per 15 minutes, the only one there was.
+      const limit = outcome.limit ?? { per: 'token', max: 30, windowMinutes: 15 };
+      const size = `${limit.max} captures per ${limit.windowMinutes} minutes`;
+      const reached =
+        limit.per === 'user'
+          ? `Capture limit for your account reached (${size}, counting every browser and the Opportun web app).`
+          : `Capture limit reached (${size}).`;
       return {
         tone: 'error',
-        text: `Capture limit reached (30 captures per 15 minutes). Try again in ${
+        text: `${reached} Try again in ${
           outcome.retryAfterSec === null ? 'a few minutes' : minutes(outcome.retryAfterSec)
         }.`,
       };
+    }
     case 'too_large':
       return { tone: 'error', text: 'This page is too large to capture.' };
     case 'invalid':

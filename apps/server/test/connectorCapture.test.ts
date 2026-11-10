@@ -686,6 +686,10 @@ describe('C-1: the captured URL is never fetched', () => {
     }
     const blocked = await push(app, bearer, PROFILE);
     expect(blocked.statusCode).toBe(429);
+    // It names the token's limit, so the extension does not blame the user's (#272).
+    expect(blocked.json()).toEqual({
+      error: { code: 'rate_limited', reason: 'per_token', max: 30, windowMinutes: 15 },
+    });
     // Another token keeps its own budget.
     const other = await token(a);
     expect([200, 201]).toContain((await push(app, other, PROFILE)).statusCode);

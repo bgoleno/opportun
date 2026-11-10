@@ -224,7 +224,8 @@ signing (AMO) and the install prompt of Firefox 140 and later; earlier versions 
    (without it the extension cannot reach your server).
 3. Click **Test connection**. "Connected" means the server is reachable and accepted the
    token. The test sends a page the server always refuses, so it creates nothing, but it
-   counts toward the capture limit (30 captures per 15 minutes per token).
+   counts toward the capture limits (30 captures per 15 minutes per token, and 60 per 15
+   minutes for the account across every token and the web app).
 
 The settings live in this browser profile's extension storage (not synced). The token is never
 shown again in the popup, logged, or sent anywhere but your server. To revoke it, delete it

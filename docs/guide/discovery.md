@@ -229,7 +229,9 @@ reopened and which still hold their key.
 
 **Capture posting** (on the review queue) takes a posting link or pasted text, extracts the
 company, title, location and description, and adds the result to the queue. If extraction
-cannot find the essentials, it tells you to create the opportunity by hand instead.
+cannot find the essentials, it tells you to create the opportunity by hand instead. It shares
+one limit with the browser extension, 60 captures per 15 minutes for your account; when that is
+reached, the dialog says when you can capture again.
 
 Opportun never fetches LinkedIn or Indeed pages. A LinkedIn or Indeed link is refused with a
 prompt to paste the description text instead, or capture the job with the
@@ -260,7 +262,8 @@ duplicated. Profiles become contacts (see [Network](network.md)). The
 
 _The extension popup, with Settings open. (Captured by loading the built extension into Chromium and opening its popup page in a tab.)_
 
-Each token can capture 30 pages per 15 minutes. Only profiles and job pages are accepted;
+Each token can capture 30 pages per 15 minutes, and your account 60 per 15 minutes across every
+token and the Capture posting dialog. Only profiles and job pages are accepted;
 feeds, search results and company pages are refused.
 
 ## Ranking prompts
