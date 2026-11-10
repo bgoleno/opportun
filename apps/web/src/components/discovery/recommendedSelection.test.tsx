@@ -475,6 +475,74 @@ describe('#302: Deny', () => {
   });
 });
 
+describe('#335: Deny selected, from the bar', () => {
+  it('a deny that works leaves nothing selected and says what was denied', async () => {
+    const user = userEvent.setup();
+    routes({
+      'PATCH /companies/n-1': { ...CHARLIE.company, status: 'denied' },
+      'POST /companies/s-1/deny': { ...ACME, status: 'denied' },
+    });
+    renderWithProviders(<CompaniesManager />);
+    await ready();
+    await user.click(box('Charlie'));
+    await user.click(box('Acme'));
+    await user.click(within(bar()).getByRole('button', { name: 'Deny 2 selected' }));
+    expect(await screen.findByText('Charlie, Acme')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Selection' })).toBeNull());
+  });
+
+  it('one that fails part-way carries on, names each row, and keeps the failed one selected', async () => {
+    const user = userEvent.setup();
+    const { calls } = routes({
+      'PATCH /companies/n-1': { ...CHARLIE.company, status: 'denied' },
+      'PATCH /companies/n-2': () => ({
+        status: 409,
+        body: { error: { code: 'duplicate', message: 'a company with that name exists' } },
+      }),
+      'POST /companies/s-1/deny': { ...ACME, status: 'denied' },
+    });
+    renderWithProviders(<CompaniesManager />);
+    await ready();
+    await user.click(box('Charlie'));
+    await user.click(box('Delta'));
+    await user.click(box('Acme'));
+    await user.click(within(bar()).getByRole('button', { name: 'Deny 3 selected' }));
+    expect(
+      await screen.findByText(/Denied: Charlie, Acme\. Not denied: Delta \(/),
+    ).toBeInTheDocument();
+    // The one that failed is still selected, the others are no longer; all three were tried.
+    await waitFor(() => expect(bar()).toHaveTextContent('1 selected'));
+    expect(box('Delta')).toBeChecked();
+    expect(posts(calls)).toEqual([
+      'PATCH /companies/n-1',
+      'PATCH /companies/n-2',
+      'POST /companies/s-1/deny',
+    ]);
+  });
+
+  it('a network failure reads as one, not as the browser’s "Failed to fetch" (qa on #332)', async () => {
+    const user = userEvent.setup();
+    routes({
+      'POST /companies/s-1/accept': () => {
+        throw new TypeError('Failed to fetch');
+      },
+      'GET /ai/discovery-budget': budget(0.2, 5),
+    });
+    renderWithProviders(<CompaniesManager />);
+    await ready();
+    await user.click(box('Acme'));
+    await user.click(within(bar()).getByRole('button', { name: 'Follow 1 selected' }));
+    expect(
+      await screen.findByText(
+        /Not followed: Acme \(Could not reach Opportun\. Check your connection and try again\.\)/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Failed to fetch/)).toBeNull();
+    // Still selected, to try again.
+    expect(box('Acme')).toBeChecked();
+  });
+});
+
 describe('#302: the keyboard', () => {
   const cursorName = () =>
     screen

@@ -138,6 +138,21 @@ describe('when a follow asks first', () => {
     expect(confirmReasons(selectionTotals([row('a', null)]), BUDGET)).toEqual([]);
   });
 
+  it('the dollar tests compare in whole cents: a sum that shows as $1.00 does not ask (tl on #302)', () => {
+    const usdRow = (id: string, usd: number) => row(id, est({ firstRun: { count: 25, usd } }));
+    // $0.33 + $0.56 + $0.11 is exactly $1.00, and is 1.0000000000000002 in a float: over one.
+    const sum = selectionTotals([usdRow('a', 0.33), usdRow('b', 0.56), usdRow('c', 0.11)]);
+    expect(sum.firstRunUsd).toBeGreaterThan(1);
+    // The bar and the dialog say $1.00, so a first run of $1.00 does not ask.
+    expect(confirmReasons(sum, null)).toEqual([]);
+    // Nor does a first day that reaches the $1.00 budget exactly.
+    expect(confirmReasons(sum, { dailyUsd: 1, spentTodayUsd: 0 })).toEqual([]);
+    // A cent over still asks, and so does a sum that shows as a cent over.
+    expect(confirmReasons(selectionTotals([usdRow('a', 1.006)]), null)).toEqual(['first_run_cost']);
+    expect(confirmReasons(selectionTotals([usdRow('a', 1.004)]), null)).toEqual([]);
+    expect(confirmReasons(sum, { dailyUsd: 1, spentTodayUsd: 0.01 })).toEqual(['budget']);
+  });
+
   it('a selection is asked about on its sum, not row by row', () => {
     // Each first run is $0.60: under $1.00 alone, $1.20 together.
     const each = { firstRun: { count: 25, usd: 0.6 } };
