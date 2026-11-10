@@ -536,6 +536,22 @@ describe('#317: at a small budget, the calls that start together leave tagging r
     expect(await rankBudgetHasRoom(app.db, ctxOf(a))).toBe(false);
   });
 
+  // tl on https://github.com/bgoleno/opportun/pull/333: with calls dear enough that five cost more
+  // than the budget, the floor alone puts the line below nothing, and ranking never starts while a
+  // company waits for a tag; a company the model keeps failing on waits for good. Ranking keeps at
+  // least half the budget.
+  it('when five calls cost more than the budget, ranking still has half of it', async () => {
+    const { app, a } = await boot();
+    await suggested(app, a, 'Suggested 1');
+    const budget = 1 / 16;
+    const call = 1 / 64; // five of these are 5/64, more than the budget
+    await writeDiscoveryBudget(app.db, ctxOf(a), budget);
+    await rankCallsToday(app, a, 1, call);
+    expect(await rankBudgetHasRoom(app.db, ctxOf(a))).toBe(true);
+    await rankCallsToday(app, a, 1, call); // half the budget: the bound
+    expect(await rankBudgetHasRoom(app.db, ctxOf(a))).toBe(false);
+  });
+
   it('before any ranking call today there is no price to go by, and the line is 90%, as before', async () => {
     const { app, a } = await boot();
     await suggested(app, a, 'Suggested 1');

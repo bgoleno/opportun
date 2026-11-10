@@ -30,6 +30,14 @@ export const RANK_BUDGET_SHARE = 0.9;
 export const RESERVE_FLOOR_CALLS = 5;
 
 /**
+ * However dear the calls, ranking keeps at least this share of the budget while a company waits.
+ * With calls so dear that five cost more than the budget, the floor alone would put the line below
+ * nothing, and ranking would never start; a company the model keeps failing on stays untagged for
+ * good, so it would never start again (tl on https://github.com/bgoleno/opportun/pull/333).
+ */
+export const RANK_BUDGET_MIN_SHARE = 0.5;
+
+/**
  * What one of today's ranking calls cost, on average, from the ledger: the day's own price, so the
  * floor follows the model in use. Null before the day's first one, when there is nothing to go by.
  */
@@ -65,11 +73,14 @@ export async function rankBudgetHasRoom(
   const spent = await discoverySpentTodayUsd(db, ctx, now);
   if (spent >= budget) return false;
   // The line is 90%, or lower when a few of today's calls are worth more than a tenth: min, so the
-  // 90% line is the same number as before wherever the floor is not the larger.
+  // 90% line is the same number as before wherever the floor is not the larger. Never under half.
   const call = await rankCallUsdToday(db, ctx, now);
-  const line = Math.min(
-    budget * RANK_BUDGET_SHARE,
-    call === null ? budget : budget - RESERVE_FLOOR_CALLS * call,
+  const line = Math.max(
+    budget * RANK_BUDGET_MIN_SHARE,
+    Math.min(
+      budget * RANK_BUDGET_SHARE,
+      call === null ? budget : budget - RESERVE_FLOOR_CALLS * call,
+    ),
   );
   if (spent < line) return true;
   return !(await hasUntaggedCandidates(db, ctx.userId));
