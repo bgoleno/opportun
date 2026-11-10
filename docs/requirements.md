@@ -575,8 +575,9 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
   an identifier of a narrow, checked shape (a model id, an error code, a route template). It
   never carries prompt or response content, resume text, a person's name, an email address,
   a phone number, a company's name, an error message, a URL's path or query, SQL text, a
-  request header or an IP address. The rule is enforced in one place that every stored, logged
-  and exported record passes through, not at each call site, and it is tested by sending known
+  request header or an IP address, except the request's address in the server's own access
+  log, which is never stored in the telemetry tables or exported. The rule is enforced in one
+  place that every stored, logged and exported record passes through, not at each call site, and it is tested by sending known
   personal data through every record type and finding none of it in the output. Exported
   telemetry identifies no user: no row id that belongs to a user leaves (the user's id, a
   conversation's, a prompt's, a company's), and a model's name leaves only when it is a

@@ -785,6 +785,9 @@ Two instance-wide switches, both admin-only:
   pays nothing for it (14.11) until an admin turns collection on. Export can be on only while
   collection is on.
 - **Turning either on or off applies without a restart.**
+- **Changing the Collect switch is audited** (`telemetry.collect.updated`, with the new
+  state), as an export change is (14.10 rule 1), because turning it on starts recording every
+  user's activity metadata. It needs no password re-confirmation: nothing leaves the instance.
 - **With collection off the dashboards say so.** Each shows an empty state that explains
   collection is off, with a link to the switch for an admin. Rows collected earlier stay until
   they age out, and are still shown.
@@ -1059,10 +1062,13 @@ keys listed in the catalog, each with a value of its declared type:
 | `code`                  | up to 64 characters of letters, digits, `_`, `-` and `.`: an error class, a database error code, a provider's response id                                                     |
 | `model`                 | a model id: up to 128 characters, segments of letters, digits and `. _ : -`, with at most one `/` and not at the start. Anything else, such as a file path, becomes `_OTHER`. |
 | `route`                 | a route template as registered, never a request's path                                                                                                                        |
+| `ip`                    | an IP address literal that `node:net` `isIP()` accepts, nothing else. Local only: no setting or flag makes an `ip` key exportable. `client.address` is its only key.          |
 
 So there is no place a prompt, a response, a resume, a person's name, an email address, a
-phone number, an error message, a URL's path or query, SQL text, a header or an IP address
-can go. The rule is the absence of a field, not a pattern that hunts for personal data.
+phone number, an error message, a URL's path or query, SQL text or a header can go. An IP
+address can go in one place only: `client.address`, the request's address in the local
+access log (14.9), which no exporter sends. The rule is the absence of a field, not a pattern
+that hunts for personal data.
 
 **A shape is not what makes `code` and `model` safe: the source is.** A name can have the
 shape of either. So the catalog gives every `code` and `model` key its source, and the code
@@ -1145,8 +1151,8 @@ step with `obs/catalog.ts`, so "only catalogued keys" is something a reader can 
   with the gate of 14.8 in its destination. It applies whether or not collection is on.
 - **Requests** are logged by Opportun's own plugin, with the method, the route template and
   the route's id parameters, not the URL. Fastify's built-in request logging, which writes the
-  raw URL, is turned off. The request's address stays in the local access log and is never
-  exported.
+  raw URL, is turned off. The request's address stays in the local access log, as the
+  local-only key `client.address` (14.8), and is never exported.
 - **Today's log calls are brought under it.** Some pass a URL, a host or an error object, or
   build their message from data. FR-T5 changes each to catalogued keys and a fixed, catalogued
   message. Until a call is changed, the gate drops its unknown keys and replaces its message.
@@ -1216,7 +1222,9 @@ holds a credential.
    where tailnets live). Refused always, flag or not: link-local (`169.254.0.0/16`,
    `fe80::/10`), `0.0.0.0/8` and `::`, multicast and the other reserved ranges, and the
    metadata services that sit inside the allowed ranges, by exact address (`fd00:ec2::254`,
-   `100.100.100.200`). A public destination over plain `http` is refused always.
+   `100.100.100.200`). A public destination over plain `http` is refused always. An
+   IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) is unwrapped before it is classified, as
+   `mappedIpv4` in `safeFetch.ts` does, so it gets the same answer as its IPv4 address.
 4. The connection is pinned to the address that was checked, redirects are never followed,
    the timeout is 10 seconds, and the response body is discarded.
 5. The credential is sealed with the vault key and kept in the instance's settings row, as
