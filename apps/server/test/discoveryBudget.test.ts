@@ -51,8 +51,22 @@ const PAGE = { limit: 200, offset: 0 };
 const DAY = 86_400_000;
 const CALL_USD = 0.01;
 
+// The clock every test starts from (https://github.com/bgoleno/opportun/issues/289). boot()
+// queues each seeded schedule's next run from the clock, and tests here move Date up to a few
+// days on from that day's UTC midnight. From the real clock, a weekly run then fell inside those
+// days on some weekdays only: company.suggest (Tuesday 08:00, in the process's own zone: UTC on
+// CI) ran through the mocked provider and added calls the tests count. Pinned, every schedule and
+// every "today" starts from one known instant, so the result does not depend on the day the suite
+// runs. Pinned rather than turning company.suggest off, because the other weekly runs (Monday
+// 05:00 and 06:00, Wednesday 06:00) would still move with the real date. A Thursday, 07:00 UTC:
+// in every zone from UTC-12 to UTC+14, no weekly run falls in the next three days. The clock
+// still moves (shouldAdvanceTime), as the real one would, until a test fakes its own;
+// afterEach's useRealTimers ends it.
+const PINNED_NOW = Date.UTC(2026, 10, 12, 7);
+
 // Braces matter: a function returned from beforeEach is run as a cleanup hook, here the mock.
 beforeEach(() => {
+  vi.useFakeTimers({ now: PINNED_NOW, toFake: ['Date'], shouldAdvanceTime: true });
   vi.mocked(runStructured).mockReset();
 });
 afterEach(() => {
