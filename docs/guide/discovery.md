@@ -275,6 +275,8 @@ company, title, location and description, and adds the result to the queue. If e
 cannot find the essentials, it tells you to create the opportunity by hand instead. It shares
 one limit with the browser extension, 60 captures per 15 minutes for your account; when that is
 reached, the dialog says when you can capture again.
+If another capture of yours is still being saved, the dialog says so and to wait a few
+seconds and press **Capture** again; that is not a limit.
 
 Opportun never fetches LinkedIn or Indeed pages. A LinkedIn or Indeed link is refused with a
 prompt to paste the description text instead, or capture the job with the
