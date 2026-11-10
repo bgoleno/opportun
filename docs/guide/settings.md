@@ -54,7 +54,7 @@ _Editing one task's model. Set prices for a model without a list price, such as 
 - **Daily budget**: each task may spend $5.00 per UTC day by estimated cost; once reached,
   that task's calls stop until the next day. The page shows the limit; there is no editor
   for it in the app yet.
-- **Discovery budget**: dollars a day for ranking discovered postings, suggesting industries and tagging companies, $1.00 unless you change
+- **Discovery budget**: dollars a day for ranking discovered postings, suggesting industries, tagging companies and suggesting companies, $1.00 unless you change
   it, on the same UTC day. When it runs out, postings are not skipped: each card says "Waiting for
   budget", and they are ranked on the next budget day, the [best pre-filter
   matches](discovery.md#the-pre-filter) first, then the oldest. With more good new postings each
@@ -65,6 +65,10 @@ _Editing one task's model. Set prices for a model without a list price, such as 
   add one. Raising the budget starts ranking what waits right away. The usage card shows today's spend against it and how many postings wait.
   The per-task limit above stays as a hard stop behind it, so a budget above $5.00 still stops
   there.
+- **What the AI is sent about your network.** Company suggestions send your AI provider the
+  **names of the companies where you know someone**, never a person, and tagging sends a company's
+  name, its domain and up to 10 job titles from its board. See
+  [Discovery](discovery.md#follow-companies) for exactly what each call sends.
 - **Unpriced models** (local or gateway models) count at the highest listed price unless you
   enter the policy's own prices, so they still count toward the budget.
 - **Usage** shows calls, tokens and estimated cost per task per day for the last 7, 30 or 90

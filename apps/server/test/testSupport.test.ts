@@ -4,9 +4,11 @@
 // none of it can be switched on in production.
 import { createServer } from 'node:net';
 import { MatchReportSchema, runStructured, streamChat } from '@opportun/ai';
+import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Config } from '../src/config';
+import { companies } from '../src/db/schema';
 import { buildAiDeps } from '../src/lib/ai';
 import { exchangeAndIdentify } from '../src/lib/oauthProviders';
 import { testSupportFromEnv } from '../src/testSupport/index';
@@ -266,7 +268,7 @@ describe('Source mock', () => {
       url: '/__mock/discovery/suggest-companies',
       payload: { email: 'Isolation-A@example.com' },
     });
-    expect(suggest.json()).toEqual({ status: 'suggested', created: 1 });
+    expect(suggest.json()).toEqual({ status: 'suggested', created: 1, dropped: 0 });
     const list = await a.request({ method: 'GET', url: '/api/v1/companies/suggestions' });
     const [company] = list.json().items as { id: string; name: string }[];
     expect(company?.name).toBe('Pied Piper');
@@ -282,6 +284,10 @@ describe('Source mock', () => {
       atsKind: 'ats_greenhouse',
       atsRef: 'piedpiper',
     });
+    // The board probe queued by the suggestion ran against the same fixture board (#221).
+    const probed = await app.db.select().from(companies).where(eq(companies.id, company!.id)).get();
+    expect(probed?.boardProbedAt).not.toBeNull();
+    expect(probed?.boardOpenJobs).toBeGreaterThan(0);
   });
 
   it('answers only fixture boards and only loopback callers', async () => {

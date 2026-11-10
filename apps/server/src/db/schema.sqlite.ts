@@ -364,6 +364,16 @@ export const companies = sqliteTable(
      * industry_at it does not stop the task asking again. Cleared when the company is tagged.
      */
     industryFailedAt: integer('industry_failed_at'),
+    /**
+     * The tier of the confirmed profile row a suggestion was found for (#221, company.suggest v2),
+     * and the one board probe made after it (company.board_probe): when it ran, how many postings
+     * the board had open, and how many of them the pre-filter passes for the user's role targets.
+     * Null until the probe has run, and where the company has no board to count.
+     */
+    suggestionTier: text('suggestion_tier', { enum: NAICS_TIERS }),
+    boardProbedAt: integer('board_probed_at'),
+    boardOpenJobs: integer('board_open_jobs'),
+    boardPrefilterMatches: integer('board_prefilter_matches'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

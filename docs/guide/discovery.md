@@ -115,15 +115,44 @@ from postings already stored from its board. So the names of companies in your n
 provider; nothing about your contacts does, and no board is fetched for this. A tag is created once
 and kept. Until then a row says **Industry: not tagged yet**. Open **Industry** on a row to correct
 it, and your choice stands (the row then says "set by you"). A company the model could not place
-says **Industry: could not be placed** and is not asked about again, though you can still set one.
-A company the provider refuses, or answers unusably, when asked on its own is asked again the next
-night, after the other companies, so one name that always fails does not hold the rest up. With no
-AI key, or a key the provider rejected, the run does not start.
+says **Industry: could not be placed** and is not asked about again until job titles arrive from its
+board: then it is asked once more, with those titles, and once more for each later arrival. You can
+still set one yourself at any time. A company the provider refuses, or answers unusably, when asked
+on its own is asked again the next night, after the other companies, so one name that always fails
+does not hold the rest up. With no AI key, or a key the provider rejected, the run does not start. A
+suggested company already has the industry it was suggested for (see below), so it is not asked
+about, unless that industry could not be read as a code from the list, in which case the nightly run
+asks as for any other company.
 
 **Suggested companies** comes from the `company.suggest` task, which once a week (Tuesdays)
-proposes companies worth following, based on your role targets and past decisions, each with its
-reason. **Follow** one and Opportun looks for its job board; **Deny** it and it is not suggested
-again.
+proposes companies worth following, each with its reason, the industry it was suggested for and
+that industry's tier. It looks for companies in the industries you confirmed under
+[Where to look](#where-to-look), like the companies in your network and your pipeline, and it
+drops any suggestion outside those industries. Until you have confirmed an industry, it suggests as
+before, from your role targets and past decisions, and nothing is dropped. **Follow** one and
+Opportun looks for its job board; **Deny** it and it is not suggested again. The weekly call counts
+against your [discovery budget](settings.md#models-and-budgets): with no room left that day it runs
+again at the start of the next budget day, not the next week.
+
+If you edited the `company.suggest` prompt yourself, your version keeps its wording and does not
+use the new inputs until you add `{{industry_profile_untrusted}}` and
+`{{network_companies_untrusted}}` to it (or take the new default). Without the industries, most of
+the codes the model gives will be outside your confirmed industries, and those suggestions are
+dropped.
+
+**What the suggestions send.** The call sends your AI provider your role targets, your confirmed
+industries (the code, its title and tier, and the one-line reason), the names of the companies in
+your pipeline and the companies you denied, the job titles you recently accepted or dismissed, and
+**the names of the companies where you know someone: their names only, never a person**. That
+list is the 500 companies where you know the most people, the most first, and it is sent every week
+with no setting to turn it off. No contact's name, email, notes, LinkedIn address or tags, and no
+count of how many people you know, is sent.
+
+**The board check.** After each run, every new suggestion gets one board check with no AI call:
+Opportun finds its public job board, reads the list of its open jobs once, and keeps how many
+there are and how many of them the [pre-filter](#the-pre-filter) passes for your role targets. It
+only reads public job board pages, and it does not follow the company: the board stays switched off
+until you follow it.
 
 ![The Companies tab. At the top, Where to look is collapsed and shows 1 confirmed, 2 to review. In your network lists Initech, with Priya Example and Sam Example named under You know 2 people here and Follow and Deny buttons, and Globex, marked Following with no board found. Suggested companies lists Pied Piper with its reason and Follow and Deny buttons. Each company shows an Industry line, here Software Publishers](images/discovery-companies.png)
 

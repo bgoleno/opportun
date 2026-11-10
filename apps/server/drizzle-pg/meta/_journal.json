@@ -267,6 +267,20 @@
       "when": 1795200000000,
       "tag": "0037_company_industry_failed_at",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1795300000000,
+      "tag": "0038_company_suggestion_board_probe",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1795400000000,
+      "tag": "0039_company_suggest_v2_prompt",
+      "breakpoints": true
     }
   ]
 }

@@ -408,7 +408,17 @@ async function ensureBoardSource(
     db,
     async (tx) => {
       const existing = await companyAtsSources(tx, ctx, company.id);
-      const enabled = company.status === 'followed';
+      // The company's status as it is now, read inside the lock, not the copy the caller read at the
+      // start of a possibly long detection: a Follow that landed while the probe waited on the board
+      // has already made the source enabled, and the stale status would switch it off again, until
+      // the monthly re-check (https://github.com/bgoleno/opportun/pull/295, tl). A company deleted
+      // meanwhile has no status to read; the caller's copy stands.
+      const current = await tx
+        .select({ status: companies.status })
+        .from(companies)
+        .where(and(eq(companies.userId, ctx.userId), eq(companies.id, company.id)))
+        .get();
+      const enabled = (current?.status ?? company.status) === 'followed';
       const same = existing.find(
         (s) =>
           s.kind === board.kind &&
