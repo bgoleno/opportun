@@ -448,6 +448,10 @@ function errorText(err: unknown): string {
   return err instanceof Error ? `${err.name}: ${err.message}` : String(err);
 }
 
+/** The `skipped` stat on a run that did not start because its source was paused (#310). */
+export const SKIPPED_DISABLED = 'source_disabled';
+const SKIPPED_DISABLED_TEXT = 'Skipped: the source was paused before this run started.';
+
 export type DiscoveryRunOutcome =
   | { status: 'done'; runId: string; stats: RunStats; inserted: DiscoveryResultView[] }
   | { status: 'config_error'; runId: string; stats: RunStats; error: string }
@@ -472,7 +476,18 @@ export async function runDiscoverySource(
     }
     throw err;
   }
-  if (!source.enabled) return { status: 'skipped', reason: 'disabled' };
+  if (!source.enabled) {
+    // Run now was accepted while the source was on, and it was switched off before the job started
+    // (#310). Say so in the run history instead of ending silently. The run carries an error, so
+    // it is never taken for a success (hasSucceededRun, the volume figures), and the source's own
+    // health and last run are left alone: nothing was fetched.
+    const run = await createRun(db, ctx, { sourceId: source.id });
+    await finishRun(db, ctx, run.id, {
+      error: SKIPPED_DISABLED_TEXT,
+      stats: { skipped: SKIPPED_DISABLED },
+    });
+    return { status: 'skipped', reason: 'disabled' };
+  }
 
   const run = await createRun(db, ctx, { sourceId: source.id });
   const stats: RunStats = {

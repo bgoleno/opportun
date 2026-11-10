@@ -28,6 +28,7 @@ import {
   createSource,
   deleteSource,
   getSourceRow,
+  hasSucceededRun,
   listResults,
   updateSource,
 } from '../src/repos/discovery';
@@ -410,6 +411,45 @@ describe('discovery.run job', () => {
     await deleteSource(app.db, ctx, src.id);
     expect((await jobOf(app, await runSource(app, a, src.id))).status).toBe('done');
     expect((await listResults(app.db, ctx, PAGE)).total).toBe(0);
+  });
+
+  it('a queued run that finds its source disabled records a skipped run, changes nothing else, and a first run still counts (#310)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    registerSource(fakeSource('ats_lever', { postings: [P1] }));
+    const src = await createSource(app.db, ctx, { kind: 'ats_lever', config: { org: 'initech' } });
+    // Run now was accepted while the source was on; the user then switched it off.
+    await updateSource(app.db, ctx, src.id, { enabled: false });
+    const before = await getSourceRow(app.db, ctx, src.id);
+    const job = await jobOf(app, await runSource(app, a, src.id));
+    expect(job).toMatchObject({
+      status: 'done',
+      result: { status: 'skipped', reason: 'disabled' },
+    });
+
+    // Visible: one finished run that says it was skipped, and why.
+    const runs = await runsOf(app, src.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      stats: { skipped: 'source_disabled' },
+      error: expect.stringContaining('paused'),
+    });
+    expect(runs[0]!.finishedAt).not.toBeNull();
+    // Nothing else moved: no postings, and the source's health and last run are as they were.
+    expect((await listResults(app.db, ctx, PAGE)).total).toBe(0);
+    expect(await getSourceRow(app.db, ctx, src.id)).toMatchObject({
+      status: before.status,
+      statusDetail: before.statusDetail,
+      lastRunAt: before.lastRunAt,
+    });
+
+    // The skipped run is not a success: switched back on, the first run still holds its cut.
+    await updateSource(app.db, ctx, src.id, { enabled: true });
+    expect(await hasSucceededRun(app.db, ctx, src.id)).toBe(false);
+    await runSource(app, a, src.id);
+    expect((await listResults(app.db, ctx, PAGE)).total).toBe(1);
+    expect(await hasSucceededRun(app.db, ctx, src.id)).toBe(true);
+    expect(await runsOf(app, src.id)).toHaveLength(2);
   });
 
   it('an adapter error marks the source error, retries with growing backoff, and success resets it (Review Focus 5)', async () => {
