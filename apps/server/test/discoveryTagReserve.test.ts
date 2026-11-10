@@ -552,6 +552,19 @@ describe('#317: at a small budget, the calls that start together leave tagging r
     expect(await rankBudgetHasRoom(app.db, ctxOf(a))).toBe(false);
   });
 
+  // tl on https://github.com/bgoleno/opportun/pull/333 (https://github.com/bgoleno/opportun/issues/338):
+  // the test above pins the half from above; this pins it from below, so a lower bound (0.4 passed
+  // every test) fails.
+  it('when five calls cost more than the budget, ranking has room up to half, not less', async () => {
+    const { app, a } = await boot();
+    await suggested(app, a, 'Suggested 1');
+    await writeDiscoveryBudget(app.db, ctxOf(a), BUDGET_USD);
+    // Calls of 7/32: five of them (35/32) cost more than the budget. Two are 0.4375 spent: just
+    // under half, over 0.4.
+    await rankCallsToday(app, a, 2, 7 / 32);
+    expect(await rankBudgetHasRoom(app.db, ctxOf(a))).toBe(true);
+  });
+
   it('before any ranking call today there is no price to go by, and the line is 90%, as before', async () => {
     const { app, a } = await boot();
     await suggested(app, a, 'Suggested 1');
