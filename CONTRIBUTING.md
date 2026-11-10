@@ -96,6 +96,32 @@ when the app closes. A failing test prints the names of its databases; set
 `PG_KEEP_DATABASES=1` to keep them for inspection (drop them yourself afterwards). The
 backup test also needs `pg_dump` and `pg_restore` of the server's major version on `PATH`.
 
+### A red local Postgres run that is not a code failure (macOS)
+
+If a local run fails with different tests each time, and mostly tests your change does not
+touch, read the throwaway server's own log before looking at the code. `Interrupted system
+call` (EINTR) on file open, directory open or a checkpoint is an environment fault, not a test
+failure. So is a `PANIC` on `fsync` followed by "the database system is in recovery mode",
+which fails every test in that run. CI's Postgres leg has not shown this.
+
+It was seen on a development Mac, in a run of cold starts (a fresh data directory and a fresh
+server each time). The cause found there: a Postgres server process waiting on a macOS
+privacy (TCC) permission check had its file call ended by one of the signals Postgres sends
+its own processes, and Postgres reports that as an error. The data directory's disk did not
+matter: the same binary on the same external volume, in another session, had none of it.
+
+To confirm, look for privacy checks about the postgres process at the times of the errors:
+
+```sh
+log show --predicate 'process == "tccd" AND eventMessage CONTAINS "postgres"'
+```
+
+What helped there: starting a fresh session of the terminal or tool you run the tests from.
+The failures stopped after the sessions were restarted, and 12 cold runs then passed with no
+EINTR and no such checks. That a restart always helps is inferred, not proven, and why only
+that one session's process tree was checked so often was not determined. Rerun after a
+restart before treating the failures as yours.
+
 ## Testing `deploy/compose.yml` locally
 
 A compose project name is a global namespace on the Docker host: every container, network

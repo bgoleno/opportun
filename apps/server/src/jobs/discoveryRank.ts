@@ -31,7 +31,7 @@ import {
   setRankSkip,
   type DiscoveryResultView,
 } from '../repos/discovery';
-import { discoveryBudgetHasRoom, keyChangeScope, readKeyChangedAt } from '../repos/discoveryBudget';
+import { keyChangeScope, readKeyChangedAt } from '../repos/discoveryBudget';
 import { resolveDiscoveryPrompt } from '../repos/profile';
 import { roleTargetLine, roleTargetsText } from './classify';
 import {
@@ -40,6 +40,7 @@ import {
   MULTI_POSTED_SCORE_CAP,
   RANK_WAITING_KIND,
 } from './discoveryKinds';
+import { rankBudgetHasRoom } from './rankBudget';
 import type { JobHandler } from './registry';
 import { enqueue } from './runner';
 
@@ -115,7 +116,7 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
   // The discovery budget (#214): over it, the posting waits for a later budget day and the
   // provider is not called. Spend is on the ledger only when a call ends, so calls that passed
   // this check together can pass the budget by the calls in flight, and no further.
-  if (!(await discoveryBudgetHasRoom(db, ctx))) {
+  if (!(await rankBudgetHasRoom(db, ctx))) {
     await setRankDeferred(db, ctx, resultId);
     return { status: 'skipped', reason: 'budget_exceeded' };
   }
@@ -222,19 +223,19 @@ export const discoveryRankJob: JobHandler<z.infer<typeof PayloadSchema>> = {
     // finished, dedupes onto it, and the next hourly sweep takes that posting.
     if (await hasOlderWaitingResult(db, user, payload.resultId)) {
       await setRankDeferred(db, user, payload.resultId);
-      if (await discoveryBudgetHasRoom(db, user)) await enqueueRankWaiting(db, user);
+      if (await rankBudgetHasRoom(db, user)) await enqueueRankWaiting(db, user);
       await ctx.setResult({ status: 'skipped', reason: 'behind_older_waiting' });
       return;
     }
     const run = await rankResult(db, user, payload.resultId);
     // It joined the wait, and nothing else would rank it before the next sweep.
     if (run.status === 'skipped' && run.reason === 'key_changed') {
-      if (await discoveryBudgetHasRoom(db, user)) await enqueueRankWaiting(db, user);
+      if (await rankBudgetHasRoom(db, user)) await enqueueRankWaiting(db, user);
     }
     // The same, unless a score was already there.
     if (run.status === 'skipped' && run.reason === POSTING_CHANGED) {
       const { rankDeferredAt } = await getResult(db, user, payload.resultId);
-      if (rankDeferredAt !== null && (await discoveryBudgetHasRoom(db, user))) {
+      if (rankDeferredAt !== null && (await rankBudgetHasRoom(db, user))) {
         await enqueueRankWaiting(db, user);
       }
     }

@@ -29,11 +29,7 @@ import {
   usersWithWaitingResults,
   type DiscoveryResultView,
 } from '../repos/discovery';
-import {
-  discoveryBudgetHasRoom,
-  keyChangeScope,
-  writeKeyChangedAt,
-} from '../repos/discoveryBudget';
+import { keyChangeScope, writeKeyChangedAt } from '../repos/discoveryBudget';
 import {
   DISCOVERY_RANK_KIND,
   enqueueRankWaiting,
@@ -42,6 +38,7 @@ import {
 } from './discoveryRank';
 import { enqueueFollowUps } from './discoveryRun';
 import { LEAD_RESOLVE_KIND, RANK_WAITING_KIND } from './discoveryKinds';
+import { rankBudgetHasRoom } from './rankBudget';
 import { requireService, type JobHandler } from './registry';
 
 export { enqueueRankWaiting, RANK_WAITING_KIND };
@@ -62,7 +59,7 @@ export async function sweepWaitingResults(db: Db): Promise<{ queued: number }> {
   for (const userId of await usersWithWaitingResults(db)) {
     if (stopped.has(userId)) continue;
     const ctx: UserCtx = { userId, isAdmin: false };
-    if (await discoveryBudgetHasRoom(db, ctx)) {
+    if (await rankBudgetHasRoom(db, ctx)) {
       await enqueueRankWaiting(db, ctx);
       queued += 1;
     }
@@ -85,7 +82,7 @@ export async function resumeAfterKeyChange(db: Db, ctx: UserCtx): Promise<void> 
     },
     { scope: keyChangeScope(ctx) },
   );
-  if ((await countWaitingResults(db, ctx)) > 0 && (await discoveryBudgetHasRoom(db, ctx))) {
+  if ((await countWaitingResults(db, ctx)) > 0 && (await rankBudgetHasRoom(db, ctx))) {
     await enqueueRankWaiting(db, ctx);
   }
 }
@@ -136,7 +133,7 @@ export async function resumeAfterUndo(db: Db, ctx: UserCtx, ids: string[]): Prom
     await setRankWaitingIfUnranked(db, ctx, id);
     joined = true;
   }
-  if (joined && (await discoveryBudgetHasRoom(db, ctx))) await enqueueRankWaiting(db, ctx);
+  if (joined && (await rankBudgetHasRoom(db, ctx))) await enqueueRankWaiting(db, ctx);
 }
 
 /**
