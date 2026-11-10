@@ -82,6 +82,10 @@ describe('copy plan', () => {
       'sync_state',
       'jobs',
       'settings',
+      // The observability store (#353): a trace before its spans.
+      'obs_metric_points',
+      'obs_traces',
+      'obs_spans',
     ]);
     const position = new Map(order.map((n, i) => [n, i]));
     for (const spec of tableSpecs()) {

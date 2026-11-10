@@ -288,6 +288,13 @@
       "when": 1795500000000,
       "tag": "0040_company_board_titles",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1795600000000,
+      "tag": "0041_obs_store",
+      "breakpoints": true
     }
   ]
 }

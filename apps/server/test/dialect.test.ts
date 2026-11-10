@@ -197,6 +197,7 @@ describe.runIf(sqliteOnly)('dialect helpers on SQLite', () => {
       attempts: 1,
       maxAttempts: 3,
       userId: null,
+      traceContext: null,
     });
     expect((await claimNextJob(handle.db, 'w2', 100))?.payload).toBeUndefined(); // j-bad
     expect((await claimNextJob(handle.db, 'w1', 100))?.id).toBe('j-late');
