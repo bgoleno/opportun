@@ -441,3 +441,79 @@ export function useDenyNetworkCompany() {
       ]),
   });
 }
+
+/** What a follow or a deny of several companies did, company by company (#302). */
+export interface BulkOutcome {
+  done: CompanyView[];
+  failed: { company: CompanyView; reason: string }[];
+}
+
+/** Why one company in a batch was not followed or denied, in the user's words. */
+function bulkFailure(err: unknown): string {
+  if (err instanceof ApiError && err.code === 'company_denied') {
+    return 'That company is denied. Undo the denial first.';
+  }
+  if (err instanceof ApiError && err.code === 'not_suggested') {
+    return 'That company is no longer a pending suggestion.';
+  }
+  return errorMessage(err);
+}
+
+/**
+ * Follows or denies several companies one after another, as the one-company routes do (a suggestion
+ * is accepted or denied as a suggestion, any other company followed or set to denied): one that
+ * fails does not stop the rest, and the result says which did and which did not, with each reason.
+ * One toast tells it, not one for each company.
+ */
+export function useBulkCompanies(action: 'follow' | 'deny') {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (rows: readonly CompanyView[]): Promise<BulkOutcome> => {
+      const outcome: BulkOutcome = { done: [], failed: [] };
+      for (const c of rows) {
+        const suggestion = c.status === 'suggested';
+        try {
+          if (action === 'follow') {
+            await api<CompanyView>(`/companies/${enc(c.id)}/${suggestion ? 'accept' : 'follow'}`, {
+              method: 'POST',
+            });
+          } else if (suggestion) {
+            await api<CompanyView>(`/companies/${enc(c.id)}/deny`, { method: 'POST' });
+          } else {
+            await api<CompanyView>(`/companies/${enc(c.id)}`, {
+              method: 'PATCH',
+              body: { status: 'denied' },
+            });
+          }
+          outcome.done.push(c);
+        } catch (err) {
+          outcome.failed.push({ company: c, reason: bulkFailure(err) });
+        }
+      }
+      return outcome;
+    },
+    onSuccess: (outcome) => {
+      const verb = action === 'follow' ? ['Followed', 'Not followed'] : ['Denied', 'Not denied'];
+      const names = outcome.done.map((c) => c.name).join(', ');
+      if (outcome.failed.length === 0) {
+        toast({
+          title: action === 'follow' ? 'Following' : 'Denied',
+          description: names,
+          variant: action === 'follow' ? 'success' : 'default',
+        });
+        return;
+      }
+      const failed = outcome.failed.map((f) => `${f.company.name} (${f.reason})`).join(', ');
+      toast({
+        title: `${verb[0]} ${outcome.done.length} of ${outcome.done.length + outcome.failed.length}`,
+        description: `${outcome.done.length > 0 ? `${verb[0]}: ${names}. ` : ''}${verb[1]}: ${failed}.`,
+        variant: 'destructive',
+      });
+    },
+    onSettled: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: ['companies'] }),
+        qc.invalidateQueries({ queryKey: discoveryKeys.sources }),
+      ]),
+  });
+}
