@@ -345,6 +345,52 @@ describe('SourcesManager', () => {
   });
 });
 
+describe('Run history of a run a server stop cut short (#323)', () => {
+  it('reads Interrupted with the reason, not Running or Failed, and shows no raw stat', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      ...base,
+      'GET /discovery/sources/s-gh/runs': {
+        items: [
+          {
+            id: 'run-cut',
+            sourceId: 's-gh',
+            roleTargetId: null,
+            startedAt: NOW,
+            finishedAt: NOW + 1000,
+            stats: { interrupted: 'server_restart' },
+            error: 'Interrupted: the server stopped before this run finished.',
+          },
+          // A run that really is going: no finish, no error. It still reads Running.
+          {
+            id: 'run-live',
+            sourceId: 's-gh',
+            roleTargetId: null,
+            startedAt: NOW + 5000,
+            finishedAt: null,
+            stats: null,
+            error: null,
+          },
+        ],
+        total: 2,
+      },
+    });
+    renderWithProviders(<SourcesManager />);
+    await user.click(
+      await screen.findByRole('button', { name: 'Run history for Greenhouse initech' }),
+    );
+    const drawer = await screen.findByRole('dialog', { name: 'Run history' });
+    expect(await within(drawer).findByText('Interrupted')).toBeInTheDocument();
+    expect(
+      within(drawer).getByText('Interrupted: the server stopped before this run finished.'),
+    ).toBeInTheDocument();
+    expect(within(drawer).queryByText('Failed')).toBeNull();
+    expect(within(drawer).queryByText('interrupted: server_restart')).toBeNull();
+    // One Running, the live one: the interrupted one is not it.
+    expect(within(drawer).getAllByText('Running')).toHaveLength(1);
+  });
+});
+
 describe('Run history of a run skipped because the source was paused (#310)', () => {
   it('reads Skipped with the reason, not Failed, and shows no raw stat', async () => {
     const user = userEvent.setup();

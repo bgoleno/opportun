@@ -174,9 +174,15 @@ export async function discoveryCostFigures(
   return {
     rank,
     sources: sources.map((s): SourceVolume => {
-      // A run skipped because its source was paused (#310) fetched nothing: it is neither a run
-      // that succeeded nor one that stored postings, so it says nothing about volume.
-      const own = runs.filter((r) => r.sourceId === s.id && r.stats?.skipped === undefined); // newest first
+      // A run skipped because its source was paused (#310), or ended by a server stop (#323), kept
+      // no count: it is neither a run that succeeded nor one that stored postings it recorded, so it
+      // says nothing about volume.
+      const own = runs.filter(
+        (r) =>
+          r.sourceId === s.id &&
+          r.stats?.skipped === undefined &&
+          r.stats?.interrupted === undefined,
+      ); // newest first
       // A failed run still finishes with the stats it reached, and an error (discoveryRun.ts's
       // catch block): open jobs and the backfill come only from runs that succeeded (tl on #212).
       const succeeded = own.filter((r) => r.error === null);

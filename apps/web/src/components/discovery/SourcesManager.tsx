@@ -407,15 +407,20 @@ function AlertSendersDialog(props: { open: boolean; onClose: () => void }) {
   );
 }
 
-/** A run that did not start because its source was paused (#310): not a failure, not a success. */
-function isSkipped(stats: Record<string, unknown> | null): boolean {
-  return stats !== null && stats.skipped !== undefined;
+/**
+ * A run that ended without a count: it did not start because its source was paused (#310) or
+ * another run of it was going, or a server stop cut it short (#323). Not a failure, not a success.
+ */
+function endedEarly(stats: Record<string, unknown> | null): 'Skipped' | 'Interrupted' | null {
+  if (stats === null) return null;
+  if (stats.interrupted !== undefined) return 'Interrupted';
+  return stats.skipped !== undefined ? 'Skipped' : null;
 }
 
 function statsText(stats: Record<string, unknown> | null): string {
   if (stats === null) return '';
   return Object.entries(stats)
-    .filter(([k]) => k !== 'skipped')
+    .filter(([k]) => k !== 'skipped' && k !== 'interrupted')
     .filter(([, v]) => typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean')
     .map(([k, v]) => `${k}: ${String(v)}`)
     .join(', ');
@@ -451,8 +456,8 @@ export function RunHistoryDrawer(props: { source: DiscoverySource | null; onClos
               <li key={r.id} className="grid gap-1 rounded-md border p-3 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{formatDateTime(r.startedAt)}</span>
-                  {isSkipped(r.stats) ? (
-                    <Badge variant="secondary">Skipped</Badge>
+                  {endedEarly(r.stats) !== null ? (
+                    <Badge variant="secondary">{endedEarly(r.stats)}</Badge>
                   ) : r.error !== null ? (
                     <Badge variant="destructive">Failed</Badge>
                   ) : r.finishedAt === null ? (
@@ -467,7 +472,7 @@ export function RunHistoryDrawer(props: { source: DiscoverySource | null; onClos
                 {r.error !== null ? (
                   <p
                     className={
-                      isSkipped(r.stats)
+                      endedEarly(r.stats) !== null
                         ? 'break-words text-muted-foreground'
                         : 'break-words text-destructive'
                     }
