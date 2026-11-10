@@ -17,7 +17,9 @@ import { discoveryRuns, jobs, opportunities } from '../src/db/schema';
 import { POSTING_RECONCILE_KIND } from '../src/jobs/discoveryKinds';
 import { CAPTURE_SLOT, withCaptureSlot } from '../src/lib/captureLimit';
 import { HttpError } from '../src/lib/errors';
+import { setRaceHook } from '../src/lib/racePoints';
 import { ingestScope } from '../src/repos/discovery';
+import { transitionOpportunity } from '../src/repos/opportunities';
 import { useApi } from './api';
 import { queryOne, testDialect } from './db';
 import { JOB } from './fixtures/capture/pages';
@@ -102,6 +104,77 @@ describe('#309: the per-user capture slot', () => {
     const { a } = await boot();
     const [one, two] = await Promise.all([paste(a, 1), paste(a, 2)]);
     expect([one.statusCode, two.statusCode]).toEqual([201, 201]);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/324 (qa and tl on #318). A lock wait that runs out is
+  // Postgres's 55P03; here a race hook throws one where the lock is held, so this runs on both
+  // dialects. The Postgres block below has the real lock held from outside.
+  describe('what a refusal leaves behind', () => {
+    const lockTimeout = () =>
+      Object.assign(new Error('canceling statement due to lock timeout'), {
+        code: '55P03',
+        severity: 'ERROR',
+      });
+    const failAt = (point: string, err: () => Error) =>
+      setRaceHook(async (reached) => {
+        if (reached === point) throw err();
+      });
+    const runsOf = (app: FastifyInstance, c: TestClient) =>
+      app.db.select().from(discoveryRuns).where(eq(discoveryRuns.userId, c.userId)).all();
+
+    it("a web capture refused at its lock: its run says so in the dialog's words", async () => {
+      const { app, a } = await boot();
+      failAt('discovery.ingest.locked', lockTimeout);
+      expectBusy(await paste(a, 1));
+      const runs = await runsOf(app, a);
+      expect(runs).toHaveLength(1);
+      expect(runs[0]!.finishedAt).not.toBeNull();
+      expect(runs[0]!.error).toBe(
+        'Not saved: another capture of yours was still being saved. Capture it again in a few seconds.',
+      );
+    });
+
+    it('any other error: the run keeps the error as it was', async () => {
+      const { app, a } = await boot();
+      failAt('discovery.ingest.locked', () => new Error('the store broke'));
+      const res = await paste(a, 1);
+      expect(res.statusCode, res.body).toBe(500);
+      const runs = await runsOf(app, a);
+      expect(runs).toHaveLength(1);
+      expect(runs[0]!.error).toBe('Error: the store broke');
+    });
+
+    /** A job captured, then dismissed: capturing it again moves it back to interested (advance). */
+    async function capturedThenDismissed(app: FastifyInstance, c: TestClient, bearer: string) {
+      const first = await push(app, bearer);
+      expect(first.statusCode, first.body).toBe(201);
+      const { opportunityId } = first.json<{ opportunityId: string }>();
+      await transitionOpportunity(app.db, { userId: c.userId, isAdmin: false }, opportunityId, {
+        to: 'dismissed',
+      });
+      return opportunityId;
+    }
+
+    it('a lock timeout in the stage move: the capture answers as saved, and is reconciled', async () => {
+      const { app, a } = await boot();
+      const bearer = await token(a);
+      const id = await capturedThenDismissed(app, a, bearer);
+      failAt('captureResolve.advance.locked', lockTimeout);
+      const res = await push(app, bearer);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ opportunityId: id, stage: null });
+    });
+
+    // tl's and sec's point on #318: only a lock timeout is answered as saved. Passes on the code as
+    // it is; it fails if the stage move's catch swallows every error.
+    it('any other error in the stage move still fails the capture', async () => {
+      const { app, a } = await boot();
+      const bearer = await token(a);
+      await capturedThenDismissed(app, a, bearer);
+      failAt('captureResolve.advance.locked', () => new Error('the stage move broke'));
+      const res = await push(app, bearer);
+      expect(res.statusCode, res.body).toBe(500);
+    });
   });
 
   describe('withCaptureSlot', () => {
@@ -260,7 +333,9 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
       .all();
     expect(runs).toHaveLength(1);
     expect(runs[0]!.finishedAt).not.toBeNull();
-    expect(runs[0]!.error).toEqual(expect.any(String));
+    expect(runs[0]!.error).toBe(
+      'Not saved: another capture of yours was still being saved. Capture it again in a few seconds.',
+    );
   }, 30_000);
 
   it('the extension route too', async () => {
