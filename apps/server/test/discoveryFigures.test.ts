@@ -266,6 +266,28 @@ describe('#209: each board source, over the last 14 days', () => {
     expect(row!.newPerDay).toBeCloseTo(6 / 5, 10);
   });
 
+  it('a run skipped because its source was paused is left out: it is not a later run (#310)', async () => {
+    const { app, a } = await boot();
+    const s = await board(app, a, 'hooli');
+    await run(app, a, s.id, 2, { fetched: 80, inserted: 80 }); // the backfill, the only real run
+    const startedAt = NOW - DAY;
+    await app.db
+      .insert(discoveryRuns)
+      .values({
+        id: newId(),
+        userId: a.userId,
+        sourceId: s.id,
+        startedAt,
+        finishedAt: startedAt + 1000,
+        stats: { skipped: 'source_disabled' },
+        error: 'Skipped: the source was paused before this run started.',
+      })
+      .run();
+    const [row] = (await discoveryCostFigures(app.db, ctxOf(a), NOW)).sources;
+    // No rate yet, as before the skipped run: it fetched nothing, so it says nothing about volume.
+    expect(row).toMatchObject({ openJobs: 80, newPerDay: null, days: 0 });
+  });
+
   it('a run still going is left out: no open jobs, no postings from it (qa on #212)', async () => {
     const { app, a } = await boot();
     const s = await board(app, a, 'umbrella');

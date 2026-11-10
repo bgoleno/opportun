@@ -345,6 +345,40 @@ describe('SourcesManager', () => {
   });
 });
 
+describe('Run history of a run skipped because the source was paused (#310)', () => {
+  it('reads Skipped with the reason, not Failed, and shows no raw stat', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      ...base,
+      'GET /discovery/sources/s-gh/runs': {
+        items: [
+          {
+            id: 'run-skip',
+            sourceId: 's-gh',
+            roleTargetId: null,
+            startedAt: NOW,
+            finishedAt: NOW + 1000,
+            stats: { skipped: 'source_disabled' },
+            error: 'Skipped: the source was paused before this run started.',
+          },
+        ],
+        total: 1,
+      },
+    });
+    renderWithProviders(<SourcesManager />);
+    await user.click(
+      await screen.findByRole('button', { name: 'Run history for Greenhouse initech' }),
+    );
+    const drawer = await screen.findByRole('dialog', { name: 'Run history' });
+    expect(await within(drawer).findByText('Skipped')).toBeInTheDocument();
+    expect(
+      within(drawer).getByText('Skipped: the source was paused before this run started.'),
+    ).toBeInTheDocument();
+    expect(within(drawer).queryByText('Failed')).toBeNull();
+    expect(within(drawer).queryByText('skipped: source_disabled')).toBeNull();
+  });
+});
+
 describe('Run now on a paused source (#297)', () => {
   it('a 409 source_disabled says the source is paused and how to run it, not a success', async () => {
     const user = userEvent.setup();
