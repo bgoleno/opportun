@@ -64,6 +64,8 @@ _Editing one task's model. Set prices for a model without a list price, such as 
   and the hourly tries stop until a key works. With no AI key, a posting's card says "AI is not set up" for as long as that is true. Once a key
   works, every such posting, including those that arrived before you added one, waits for budget like
   the rest and is ranked in the same order, with nothing more to do. Raising the budget starts ranking what waits right away. The usage card shows today's spend against it and how many postings wait.
+  While a company waits for an industry tag, ranking stops at 90% of the budget and leaves the last
+  tenth for tagging and the other tasks; with none waiting, it may use all of it.
   The per-task limit above stays as a hard stop behind it, so a budget above $5.00 still stops
   there.
 - **What the AI is sent about your network.** Company suggestions send your AI provider the

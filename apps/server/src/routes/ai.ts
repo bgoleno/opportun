@@ -38,7 +38,6 @@ import {
 } from '../repos/prompts';
 import { countWaitingResults } from '../repos/discovery';
 import {
-  discoveryBudgetHasRoom,
   discoverySpentTodayUsd,
   MAX_DISCOVERY_DAILY_USD,
   MIN_DISCOVERY_DAILY_USD,
@@ -46,6 +45,7 @@ import {
   writeDiscoveryBudget,
 } from '../repos/discoveryBudget';
 import { enqueueRankWaiting } from '../jobs/discoveryRankWaiting';
+import { rankBudgetHasRoom } from '../jobs/rankBudget';
 import { rankBudgetSkips, usageRollup } from '../repos/taskRuns';
 import { IdParams } from './common';
 import { DISCOVERY_RANK_KIND } from '../jobs/discoveryKinds';
@@ -395,7 +395,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       });
       // A raised budget has room today: what waits need not wait for the next sweep.
       const view = await discoveryBudgetView(ctx);
-      if (view.waiting > 0 && (await discoveryBudgetHasRoom(db, ctx))) {
+      if (view.waiting > 0 && (await rankBudgetHasRoom(db, ctx))) {
         await enqueueRankWaiting(db, ctx);
       }
       return view;

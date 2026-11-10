@@ -89,6 +89,17 @@ function untaggedCandidates(db: Db, userId?: string) {
   return and(candidateScope(db, userId), isNull(companies.industryAt));
 }
 
+/** Whether this user has a company waiting for a tag: the ranking keeps part of the budget for it. */
+export async function hasUntaggedCandidates(db: Db, userId: string): Promise<boolean> {
+  const row = await db
+    .select({ id: companies.id })
+    .from(companies)
+    .where(untaggedCandidates(db, userId))
+    .limit(1)
+    .get();
+  return row !== undefined;
+}
+
 /**
  * Companies the model could not place from their names alone (tried, with no code) that have since
  * had job titles stored from their board: asked again, once for each arrival, or they would keep a
