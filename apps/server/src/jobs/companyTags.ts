@@ -180,6 +180,7 @@ export interface CompanyTagsRun {
     | 'no_key'
     | 'key_rejected'
     | 'provider_error'
+    | 'invalid_output'
     | 'no_prompt'
     | 'shutdown'
     | null;
@@ -237,18 +238,23 @@ export async function tagCompanies(
     return err.reason === 'no_key' || err.reason === 'budget_exceeded' ? err.reason : null;
   };
 
-  /** A call that holds one company alone: its error counts towards an outage. */
+  /**
+   * A call that holds one company alone: only a usable answer ends a run of errors, and any other
+   * failure counts towards it, an unusable answer included. An answer that cannot be used is a failed
+   * call for cost, whatever the reason: a model that never answers usably must cost 4 calls a night
+   * (the batch, then three alone), not every call the budget allows (qa and tl on
+   * https://github.com/bgoleno/opportun/pull/284).
+   */
   const askAlone = async (company: Candidate): Promise<CompanyTagsRun['stopped']> => {
     const err = await ask([company]);
-    if (err === null || err.reason !== 'provider_error') errorsInARow = 0;
-    if (err === null) return null;
+    if (err === null) {
+      errorsInARow = 0;
+      return null;
+    }
     const stop = stopAfter(err);
     if (stop !== null) return stop;
-    if (err.reason === 'provider_error') {
-      errorsInARow += 1;
-      if (errorsInARow >= OUTAGE_AFTER_ERRORS) return err.reason;
-    }
-    return null;
+    errorsInARow += 1;
+    return errorsInARow >= OUTAGE_AFTER_ERRORS ? err.reason : null;
   };
 
   for (let at = 0; at < candidates.length; at += COMPANY_TAGS_BATCH) {
@@ -267,9 +273,7 @@ export async function tagCompanies(
     }
     const stop = stopAfter(err);
     if (stop !== null) return { ...run, stopped: stop };
-    // The provider answered (an unusable answer): that ends a run of errors, as a good answer does.
-    // One that did not answer (provider_error) leaves the count as it was: the batch is not counted.
-    if (err.reason !== 'provider_error') errorsInARow = 0;
+    // A failed batch neither counts nor ends a run of errors: only the single calls below do.
     // Refused, or answered badly, perhaps because of one name in it (company names and titles are
     // untrusted text in the prompt). The list starts from the same place each night, so this batch
     // would re-form every night and its other companies would never be tagged: ask each alone.

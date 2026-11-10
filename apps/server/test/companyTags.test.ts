@@ -805,7 +805,9 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
       expect((await rowOf(app, a, 'C08')).naicsCode).toBe('5132');
     });
 
-    it('an unusable answer alone does not count towards errors in a row', async () => {
+    // qa and tl on https://github.com/bgoleno/opportun/pull/284: an answer that cannot be used is a
+    // failed call for cost. Only a usable answer ends a run of errors.
+    it('three unusable single answers in a row stop the run, and it says why', async () => {
       const { app, a } = await boot();
       for (let i = 1; i <= 6; i++) await suggested(app, a, named(i));
       const BAD = new AiUnavailableError('invalid_output');
@@ -813,14 +815,43 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
         .mockRejectedValueOnce(REFUSED) // the batch
         .mockRejectedValueOnce(BAD)
         .mockRejectedValueOnce(BAD)
-        .mockRejectedValueOnce(BAD)
-        .mockRejectedValueOnce(BAD)
-        .mockResolvedValueOnce(TAGGED)
-        .mockResolvedValueOnce(TAGGED);
-      expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({
-        tagged: 2,
-        calls: 7,
-        stopped: null,
+        .mockRejectedValueOnce(BAD);
+      expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+        tagged: 0,
+        calls: 4,
+        failed: 4,
+        stopped: 'invalid_output',
+      });
+    });
+
+    it('a model that never answers usably costs 4 calls, whatever the number of companies', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 90; i++) await suggested(app, a, `C${i}`);
+      vi.mocked(runStructured).mockRejectedValue(new AiUnavailableError('invalid_output'));
+      expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+        tagged: 0,
+        calls: 4,
+        failed: 4,
+        stopped: 'invalid_output',
+      });
+      expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(4);
+      expect((await rowOf(app, a, 'C1')).industryAt).toBeNull();
+      expect((await rowOf(app, a, 'C90')).industryAt).toBeNull();
+    });
+
+    it('unusable answers and refusals alone count together', async () => {
+      const { app, a } = await boot();
+      for (let i = 1; i <= 6; i++) await suggested(app, a, named(i));
+      vi.mocked(runStructured)
+        .mockRejectedValueOnce(REFUSED) // the batch
+        .mockRejectedValueOnce(new AiUnavailableError('invalid_output')) // C01
+        .mockRejectedValueOnce(REFUSED) // C02
+        .mockRejectedValueOnce(REFUSED); // C03: the third in a row
+      expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
+        tagged: 0,
+        calls: 4,
+        failed: 4,
+        stopped: 'provider_error',
       });
     });
 
@@ -850,7 +881,7 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
       });
     });
 
-    it('a batch with an unusable answer starts the count of errors in a row again', async () => {
+    it('a batch with an unusable answer leaves the count of errors in a row as it is', async () => {
       const { app, a } = await boot();
       for (let i = 1; i <= 40; i++) await suggested(app, a, named(i));
       tagsEverything();
@@ -858,13 +889,13 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
       once.mockRejectedValueOnce(REFUSED); // batch 1
       for (let i = 1; i <= 18; i++) once.mockResolvedValueOnce(TAGGED); // C01 to C18
       once.mockRejectedValueOnce(REFUSED).mockRejectedValueOnce(REFUSED); // C19, C20: 2 in a row
-      once.mockRejectedValueOnce(new AiUnavailableError('invalid_output')); // batch 2: it answered
-      once.mockRejectedValueOnce(REFUSED); // C21: the first in a row, not the third
+      once.mockRejectedValueOnce(new AiUnavailableError('invalid_output')); // batch 2: neither counted nor ended
+      once.mockRejectedValueOnce(REFUSED); // C21: the third in a row
       expect(await tagCompanies(app.db, ctxOf(a))).toEqual({
-        tagged: 37,
-        calls: 42,
+        tagged: 18,
+        calls: 23,
         failed: 5,
-        stopped: null,
+        stopped: 'provider_error',
       });
     });
 
