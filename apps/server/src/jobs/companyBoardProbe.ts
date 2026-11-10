@@ -20,7 +20,7 @@ import { line } from '../lib/promptText';
 import type { UserCtx } from '../repos/base';
 import { boardConfig, detectAts, type AtsKind } from './atsDetect';
 import { requireService, type JobHandler } from './registry';
-import { enqueue } from './runner';
+import { enqueueVendorCheck } from './vendorCheckQueue';
 
 export const BOARD_PROBE_KIND = 'company.board_probe'; // payload {companyId}
 export const boardProbeDedupeKey = (companyId: string): string =>
@@ -136,11 +136,13 @@ export async function probeCompanyBoard(
 
 /** Queues a probe for one of the user's companies (at most one unfinished per company). */
 export async function enqueueBoardProbe(db: Db, ctx: UserCtx, companyId: string): Promise<string> {
-  return await enqueue(
+  // Queued per user, with ATS detection, so one user's probes cannot hold up another's (#321).
+  return await enqueueVendorCheck(
     db,
+    ctx,
     BOARD_PROBE_KIND,
     { companyId },
-    { dedupeKey: boardProbeDedupeKey(companyId), userId: ctx.userId },
+    boardProbeDedupeKey(companyId),
   );
 }
 
