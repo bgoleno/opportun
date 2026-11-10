@@ -18,7 +18,7 @@
 // C-1: nothing here fetches anything. The posting URL is provenance metadata.
 import { dedupeKey, type NormalizedPosting, type OpportunityStage } from '@opportun/core';
 import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
-import { lockScope, withTransaction, type Db, type Exec } from '../db/client';
+import { isLockTimeout, lockScope, withTransaction, type Db, type Exec } from '../db/client';
 import { ilike, jsonText } from '../db/dialect';
 import { discoveryResults, opportunities } from '../db/schema';
 import { POSTING_RECONCILE_KIND } from '../jobs/discoveryKinds';
@@ -464,7 +464,9 @@ async function settleLead(
   // createOpportunity's company lookup takes it later, after setResolution or createLead has
   // written a row, and a writer holding it while it waits on that row would close a cycle (40P01).
   // The ingest lock is already held, taken by withTransaction below.
-  await lockScope(tx, `user:${ctx.userId}`);
+  // The same bounded wait as the ingest lock (#309): nothing is written yet, so a slow holder of
+  // this one gets the capture refused cleanly too, not a 500 at statement_timeout.
+  await lockScope(tx, `user:${ctx.userId}`, { timeoutMs: CAPTURE_SLOT.lockTimeoutMs });
   const match = await findMatch(tx, ctx, posting);
   await racePoint('captureResolve.matched.locked');
   const [primary, ...rest] = match.leads;
@@ -599,7 +601,19 @@ export async function resolveCapture(
     await fillOpportunity(db, ctx, opportunity, posting);
   }
 
-  const stageMovedTo = await advance(db, ctx, opportunity.id);
+  // The capture is saved here: the transaction above committed it.
+  await racePoint('captureResolve.saved');
+  // advance takes the ingest lock again, with the bounded wait. If a run or an alert holds it now
+  // and is slow, only the stage move waits for the next capture: answering capture_busy ("try
+  // again") for a capture that is saved would be untrue, and a retry would record it twice (tl on
+  // https://github.com/bgoleno/opportun/pull/318). The posting is still reconciled below.
+  let stageMovedTo: Awaited<ReturnType<typeof advance>>;
+  try {
+    stageMovedTo = await advance(db, ctx, opportunity.id);
+  } catch (err) {
+    if (!isLockTimeout(err)) throw err;
+    stageMovedTo = null;
+  }
 
   const current = await getOpportunity(db, ctx, opportunity.id);
   if (current.postingState !== 'confirmed') {

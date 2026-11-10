@@ -7,15 +7,19 @@
 // The provider is mocked and every posting is made up.
 import { AiUnavailableError, runStructured } from '@opportun/ai';
 import type { FastifyInstance } from 'fastify';
+import { and, eq, sql } from 'drizzle-orm';
 import pg from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PostgresConfig } from '../src/config';
+import { lockScope, rawGet, withTransaction } from '../src/db/client';
 import { onSlowTransaction } from '../src/db/gate';
+import { discoveryRuns, jobs, opportunities } from '../src/db/schema';
+import { POSTING_RECONCILE_KIND } from '../src/jobs/discoveryKinds';
 import { CAPTURE_SLOT, withCaptureSlot } from '../src/lib/captureLimit';
 import { HttpError } from '../src/lib/errors';
 import { ingestScope } from '../src/repos/discovery';
 import { useApi } from './api';
-import { testDialect } from './db';
+import { queryOne, testDialect } from './db';
 import { JOB } from './fixtures/capture/pages';
 import type { TestClient } from './isolation';
 import { pauseAt } from './race';
@@ -171,13 +175,13 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
     holder = undefined;
   });
 
-  async function holdIngestLock(app: FastifyInstance, userId: string): Promise<void> {
+  async function holdLock(app: FastifyInstance, scope: string): Promise<void> {
     holder = new pg.Client({ connectionString: (app.config.db as PostgresConfig).url });
     await holder.connect();
-    await holder.query('SELECT pg_advisory_lock(hashtext($1))', [
-      ingestScope({ userId, isAdmin: false }),
-    ]);
+    await holder.query('SELECT pg_advisory_lock(hashtext($1))', [scope]);
   }
+  const holdIngestLock = (app: FastifyInstance, userId: string) =>
+    holdLock(app, ingestScope({ userId, isAdmin: false }));
 
   it("more captures than the pool queued behind it: another user's read still succeeds", async () => {
     const { app, a, b } = await boot();
@@ -247,6 +251,16 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
     // Nothing half written: the refused capture stored no lead.
     const list = await a.request({ method: 'GET', url: '/api/v1/discovery/results' });
     expect(list.json<{ items: unknown[] }>().items).toEqual([]);
+    // And its run in the manual source's history is finished, with why, not "Running" for good
+    // (tl on https://github.com/bgoleno/opportun/pull/318).
+    const runs = await app.db
+      .select()
+      .from(discoveryRuns)
+      .where(eq(discoveryRuns.userId, a.userId))
+      .all();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.finishedAt).not.toBeNull();
+    expect(runs[0]!.error).toEqual(expect.any(String));
   }, 30_000);
 
   it('the extension route too', async () => {
@@ -257,5 +271,62 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
     const res = await push(app, bearer);
     expectBusy(res);
     expect(Date.now() - began).toBeLessThan(10_000);
+  }, 30_000);
+
+  // sec on https://github.com/bgoleno/opportun/pull/318: the bound is for the lock's wait alone, and
+  // the rest of the transaction keeps the usual limit.
+  it('the bounded wait ends once the lock is held: lock_timeout is put back', async () => {
+    const { app } = await boot();
+    const before = await queryOne<{ v: string }>(
+      app,
+      "SELECT current_setting('lock_timeout') AS v",
+    );
+    await withTransaction(app.db, async (tx) => {
+      await lockScope(tx, 'test.bounded', { timeoutMs: 1234 });
+      const after = await rawGet<{ v: string }>(
+        tx,
+        sql`SELECT current_setting('lock_timeout') AS v`,
+      );
+      expect(after?.v).toBe(before!.v);
+    });
+  });
+
+  it("the user's own lock held: the extension capture is refused too, before anything is written", async () => {
+    const { app, a } = await boot();
+    const bearer = await token(a);
+    // settleLead takes user:<id> after the ingest lock (captureResolve.ts).
+    await holdLock(app, `user:${a.userId}`);
+    const began = Date.now();
+    const res = await push(app, bearer);
+    expectBusy(res);
+    expect(Date.now() - began).toBeLessThan(10_000);
+    expect(
+      await app.db.select().from(opportunities).where(eq(opportunities.userId, a.userId)).all(),
+    ).toEqual([]);
+  }, 30_000);
+
+  // tl on https://github.com/bgoleno/opportun/pull/318: the capture is saved by the first locked
+  // transaction. A lock wait that runs out after that, in the stage move, must not answer "try
+  // again", and the posting is still reconciled.
+  it('a lock wait that runs out after the capture is saved answers as saved, and reconciles', async () => {
+    const { app, a } = await boot();
+    const bearer = await token(a);
+    const saved = pauseAt('captureResolve.saved');
+    const pending = push(app, bearer);
+    await saved.reached;
+    // A discovery run or an alert takes the user's ingest lock in the gap, and is slow.
+    await holdIngestLock(app, a.userId);
+    saved.release();
+    const res = await pending;
+    expect([200, 201], res.body).toContain(res.statusCode);
+    const { opportunityId } = res.json<{ opportunityId: string }>();
+    const reconcile = await app.db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.kind, POSTING_RECONCILE_KIND), eq(jobs.userId, a.userId)))
+      .all();
+    expect(reconcile.map((j) => (j.payload as { opportunityId: string }).opportunityId)).toEqual([
+      opportunityId,
+    ]);
   }, 30_000);
 });

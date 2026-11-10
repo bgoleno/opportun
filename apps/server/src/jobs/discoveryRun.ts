@@ -409,25 +409,34 @@ export async function insertLeads(
     filtered: 0,
   };
   const inserted: DiscoveryResultView[] = [];
-  for (const posting of postings) {
-    stats.fetched += 1;
-    await ingestRaw(
-      db,
-      ctx,
-      run.id,
-      sourceId,
-      source.companyId,
-      posting,
-      stats,
-      inserted,
-      // Job-alert emails are never pre-filtered (owner's decision 5 on #190).
-      null,
-      false,
-      // A job alert is not a board, so no first-run cap either.
-      false,
-      sourceCommunicationId,
-      opts.lockTimeoutMs,
-    );
+  try {
+    for (const posting of postings) {
+      stats.fetched += 1;
+      await ingestRaw(
+        db,
+        ctx,
+        run.id,
+        sourceId,
+        source.companyId,
+        posting,
+        stats,
+        inserted,
+        // Job-alert emails are never pre-filtered (owner's decision 5 on #190).
+        null,
+        false,
+        // A job alert is not a board, so no first-run cap either.
+        false,
+        sourceCommunicationId,
+        opts.lockTimeoutMs,
+      );
+    }
+  } catch (err) {
+    // The run ends with why, or the source's history would show it running for good: a capture
+    // refused at its lock wait (#309) is an expected end now (tl on
+    // https://github.com/bgoleno/opportun/pull/318). The source's own health is left alone: a
+    // channel's status says nothing about one capture.
+    await finishRun(db, ctx, run.id, { error: errorText(err), stats: { ...stats } });
+    throw err;
   }
   await withTransaction(db, async (tx) => {
     await finishRun(tx, ctx, run.id, { stats: { ...stats } });
