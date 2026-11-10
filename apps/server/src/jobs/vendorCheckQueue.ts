@@ -1,7 +1,8 @@
-// Vendor checks (ATS detection and the board probe) queued per user, so one user cannot hold up
-// another's (https://github.com/bgoleno/opportun/issues/321; tl's design on
-// https://github.com/bgoleno/opportun/issues/321#issuecomment-6767502359).
-import { and, eq, inArray } from 'drizzle-orm';
+// Vendor checks (ATS detection and the board probe) placed in line per user, so one user cannot hold
+// up another's (https://github.com/bgoleno/opportun/issues/321; tl's design on
+// https://github.com/bgoleno/opportun/issues/321#issuecomment-6767502359, as changed on
+// https://github.com/bgoleno/opportun/pull/330#issuecomment-6768955332).
+import { and, eq, inArray, min, ne } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { jobs } from '../db/schema';
 import type { UserCtx } from '../repos/base';
@@ -15,26 +16,50 @@ import { enqueue } from './runner';
 export const VENDOR_CHECK_KINDS = ['company.ats_detect', 'company.board_probe'] as const;
 export type VendorCheckKind = (typeof VENDOR_CHECK_KINDS)[number];
 
-/**
- * Per user: how many vendor checks may be due at once, and how far apart the rest are queued.
- * Adding a handful of companies is due at once, as before; 50 follows take about 16 minutes, and
- * nobody else waits for them.
- */
+/** Per user: how many vendor checks pending or running go ahead of other users' waiting ones. */
 export const VENDOR_CHECK_CAP = 3;
-export const VENDOR_CHECK_SPACING_MS = 20_000;
+
+/** Per app (a Db), per user: the tail of that user's enqueues, so each counts after the last inserts. */
+const lines = new WeakMap<Db, Map<string, Promise<unknown>>>();
 
 /**
- * Queues one vendor check for the user. Under VENDOR_CHECK_CAP of the user's checks pending or
- * running, it is due now, as before. At or over it, it is due one spacing after the user's latest
- * pending check (or after now, if that is past). The runner claims by run_at, then created_at, so
- * another user's check, due now, goes ahead of this user's spread-out backlog: each user has at
- * most the cap due at once, and a detection waits behind at most that many of each other user's,
- * through the kind's concurrency limit. Nothing is refused: every check runs in its turn, and the
- * UI's pending states stay true while one waits.
- *
- * Two enqueues for one user at the same moment can both see room and both be due now, one over
- * the cap. That loosens the bound by one job and no more, so it takes no lock. The dedupe key is
- * the caller's (per company), as before: a company already queued keeps its place and its id.
+ * Runs `fn` after the user's earlier enqueues have finished, so the count and the insert of one are
+ * never interleaved with another's: enqueues for one user at the same moment otherwise each counted
+ * before any inserted, and all went ahead (sec on #330). In-process: it orders one server process's
+ * enqueues, which is the deployment (single node, like the capture slot in lib/captureLimit.ts and
+ * every limiter here). Two processes on one database could each place up to the cap ahead.
+ */
+function inUsersLine<T>(db: Db, userId: string, fn: () => Promise<T>): Promise<T> {
+  let users = lines.get(db);
+  if (users === undefined) {
+    users = new Map();
+    lines.set(db, users);
+  }
+  const before = users.get(userId) ?? Promise.resolve();
+  const mine = before.then(fn);
+  // The tail never rejects, so a refused enqueue does not stop the next one for that user.
+  const tail = mine.then(
+    () => undefined,
+    () => undefined,
+  );
+  users.set(userId, tail);
+  void tail.then(() => {
+    if (users.get(userId) === tail) users.delete(userId);
+  });
+  return mine;
+}
+
+/**
+ * Queues one vendor check for the user, and decides its place in line. The runner claims by run_at,
+ * then created_at.
+ * - Under VENDOR_CHECK_CAP of the user's checks pending or running: due just before the earliest
+ *   vendor check any other user has waiting (or now, if none waits or now is earlier). So a user's
+ *   first few checks go ahead of another user's backlog, however long it has waited, behind only
+ *   what is running.
+ * - At or over it: due now, the back of the line. So a user alone is never slowed: 30 follows are
+ *   all due at once, as before.
+ * Nothing is refused: every check runs in its turn. Dedupe keys are the caller's (per company), as
+ * before: a company already queued keeps its place and its job id.
  */
 export async function enqueueVendorCheck(
   db: Db,
@@ -43,25 +68,36 @@ export async function enqueueVendorCheck(
   payload: unknown,
   dedupeKey: string,
 ): Promise<string> {
-  const now = Date.now();
-  const queued = await db
-    .select({ status: jobs.status, runAt: jobs.runAt })
-    .from(jobs)
-    .where(
-      and(
-        eq(jobs.userId, ctx.userId),
-        inArray(jobs.kind, [...VENDOR_CHECK_KINDS]),
-        inArray(jobs.status, ['pending', 'running']),
-      ),
-    )
-    .all();
-  let runAt = now;
-  if (queued.length >= VENDOR_CHECK_CAP) {
-    const latest = Math.max(
-      now,
-      ...queued.filter((j) => j.status === 'pending').map((j) => j.runAt),
-    );
-    runAt = latest + VENDOR_CHECK_SPACING_MS;
-  }
-  return await enqueue(db, kind, payload, { dedupeKey, userId: ctx.userId, runAt });
+  return await inUsersLine(db, ctx.userId, async () => {
+    const now = Date.now();
+    const mine = await db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.userId, ctx.userId),
+          inArray(jobs.kind, [...VENDOR_CHECK_KINDS]),
+          inArray(jobs.status, ['pending', 'running']),
+        ),
+      )
+      .limit(VENDOR_CHECK_CAP)
+      .all();
+    let runAt = now;
+    if (mine.length < VENDOR_CHECK_CAP) {
+      const others = await db
+        .select({ earliest: min(jobs.runAt) })
+        .from(jobs)
+        .where(
+          and(
+            ne(jobs.userId, ctx.userId),
+            inArray(jobs.kind, [...VENDOR_CHECK_KINDS]),
+            eq(jobs.status, 'pending'),
+          ),
+        )
+        .get();
+      const earliest = others?.earliest == null ? null : Number(others.earliest);
+      if (earliest !== null) runAt = Math.min(now, earliest - 1);
+    }
+    return await enqueue(db, kind, payload, { dedupeKey, userId: ctx.userId, runAt });
+  });
 }

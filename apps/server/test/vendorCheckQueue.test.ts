@@ -1,10 +1,10 @@
 // One user's company adds, follows, re-checks or probes never hold up another user's ATS detection
 // beyond a small bound, and nothing is refused (https://github.com/bgoleno/opportun/issues/321; tl's
-// design on https://github.com/bgoleno/opportun/issues/321#issuecomment-6767502359). Each user has
-// at most VENDOR_CHECK_CAP vendor checks due at once; the rest are queued VENDOR_CHECK_SPACING_MS
-// apart. The runner claims by run_at, so another user's new check, due now, goes ahead of the first
-// user's spread-out backlog. No job runs here: claimNextJob is the runner's own claim, and the
-// jobs are only claimed to see their order.
+// design on https://github.com/bgoleno/opportun/issues/321#issuecomment-6767502359, as changed on
+// https://github.com/bgoleno/opportun/pull/330#issuecomment-6768955332). A user's first
+// VENDOR_CHECK_CAP checks go just ahead of every other user's waiting ones; the rest go to the back
+// of the line. No job runs here: claimNextJob is the runner's own claim, and the jobs are only
+// claimed to see their order.
 import { newId } from '@opportun/core';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -12,26 +12,18 @@ import { describe, expect, it } from 'vitest';
 import { claimNextJob } from '../src/db/dialect';
 import { jobs } from '../src/db/schema';
 import { ATS_DETECT_KIND, atsDetectDedupeKey, enqueueAtsDetect } from '../src/jobs/atsDetect';
-import {
-  BOARD_PROBE_KIND,
-  boardProbeDedupeKey,
-  enqueueBoardProbe,
-} from '../src/jobs/companyBoardProbe';
-import { enqueue } from '../src/jobs/runner';
-import {
-  VENDOR_CHECK_CAP,
-  VENDOR_CHECK_KINDS,
-  VENDOR_CHECK_SPACING_MS,
-} from '../src/jobs/vendorCheckQueue';
+import { BOARD_PROBE_KIND, enqueueBoardProbe } from '../src/jobs/companyBoardProbe';
+import { VENDOR_CHECK_CAP, VENDOR_CHECK_KINDS } from '../src/jobs/vendorCheckQueue';
 import type { UserCtx } from '../src/repos/base';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 
 const boot = useApi();
 const ctxOf = (c: TestClient): UserCtx => ({ userId: c.userId, isAdmin: false });
+const HOUR = 3_600_000;
 
-/** The vendor-check jobs claimed, in the runner's order, as of `now`. */
-async function claimedInOrder(app: FastifyInstance, now: number) {
+/** The vendor-check jobs claimed, in the runner's order, as of `now`, by whom. */
+async function claimedInOrder(app: FastifyInstance, now = Date.now() + 1000) {
   const claimed: { id: string; userId: string | null }[] = [];
   for (;;) {
     const job = await claimNextJob(app.db, 'test-worker', now);
@@ -42,128 +34,124 @@ async function claimedInOrder(app: FastifyInstance, now: number) {
   }
 }
 
-/** The user's vendor-check jobs, oldest first, with when each is due. */
+/** Who was claimed, in order, as 'a' or 'b'. */
+const whose = (order: { userId: string | null }[], a: TestClient) =>
+  order.map((j) => (j.userId === a.userId ? 'a' : 'b'));
+
+const times = (n: number, who: string) => Array.from({ length: n }, () => who);
+
+/** The user's vendor-check jobs, with when each is due. */
 const dueTimes = async (app: FastifyInstance, c: TestClient) =>
   (
     await app.db
-      .select({ runAt: jobs.runAt, createdAt: jobs.createdAt })
+      .select({ runAt: jobs.runAt })
       .from(jobs)
       .where(and(eq(jobs.userId, c.userId), inArray(jobs.kind, [...VENDOR_CHECK_KINDS])))
       .all()
-  )
-    .sort((x, y) => x.createdAt - y.createdAt)
-    .map((r) => r.runAt);
+  ).map((r) => r.runAt);
 
 /** Clears the jobs boot() queued for itself, so the claims below see only these. */
 const onlyTheseJobs = (app: FastifyInstance) => app.db.delete(jobs).run();
 
-describe('#321: per user, a few vendor checks due at once and the rest queued', () => {
-  it('the cap is 3 and the spacing 20 s, and the kinds are detection and the board probe', () => {
+const follows = async (app: FastifyInstance, c: TestClient, n: number) => {
+  const ids: string[] = [];
+  for (let i = 0; i < n; i++) ids.push(await enqueueAtsDetect(app.db, ctxOf(c), newId()));
+  return ids;
+};
+
+describe('#321: a user alone is not slowed', () => {
+  it('the cap is 3, and the kinds are detection and the board probe', () => {
     expect(VENDOR_CHECK_CAP).toBe(3);
-    expect(VENDOR_CHECK_SPACING_MS).toBe(20_000);
     expect([...VENDOR_CHECK_KINDS].sort()).toEqual([ATS_DETECT_KIND, BOARD_PROBE_KIND].sort());
   });
 
-  it("one user following 50 companies: another user's one detection goes before the first's fourth", async () => {
+  it("qa's 30 follows by one user, and no one else waiting: every one is due at once, as before", async () => {
+    const { app, a } = await boot();
+    await onlyTheseJobs(app);
+    await follows(app, a, 30);
+    const due = await dueTimes(app, a);
+    expect(due).toHaveLength(30);
+    expect(due.every((t) => t <= Date.now())).toBe(true);
+  });
+});
+
+describe("#321: another user's first checks go ahead of a backlog", () => {
+  it('A follows 30, then B follows 1: B is claimed within the first 3', async () => {
     const { app, a, b } = await boot();
     await onlyTheseJobs(app);
-    for (let i = 0; i < 50; i++) await enqueueAtsDetect(app.db, ctxOf(a), newId());
-    const theirs = await enqueueAtsDetect(app.db, ctxOf(b), newId());
-
-    const order = await claimedInOrder(app, Date.now() + 1000);
+    await follows(app, a, 30);
+    const [theirs] = await follows(app, b, 1);
+    const order = await claimedInOrder(app);
     const at = order.findIndex((j) => j.id === theirs);
     expect(at).toBeGreaterThanOrEqual(0);
-    expect(at).toBeLessThanOrEqual(VENDOR_CHECK_CAP);
-    expect(order.slice(0, at).every((j) => j.userId === a.userId)).toBe(true);
+    expect(at).toBeLessThan(VENDOR_CHECK_CAP);
   });
 
-  it('a handful of companies: every check is due at once, as before', async () => {
-    const { app, a } = await boot();
+  it("B's fourth goes to the back of the line, behind A's backlog", async () => {
+    const { app, a, b } = await boot();
     await onlyTheseJobs(app);
-    const before = Date.now();
-    for (let i = 0; i < VENDOR_CHECK_CAP; i++) await enqueueAtsDetect(app.db, ctxOf(a), newId());
-    const due = await dueTimes(app, a);
-    expect(due).toHaveLength(VENDOR_CHECK_CAP);
-    expect(due.every((t) => t <= Date.now() && t >= before)).toBe(true);
+    await follows(app, a, 10);
+    await follows(app, b, VENDOR_CHECK_CAP + 1);
+    expect(whose(await claimedInOrder(app), a)).toEqual([
+      ...times(VENDOR_CHECK_CAP, 'b'),
+      ...times(10, 'a'),
+      'b',
+    ]);
   });
 
-  it('past the cap, each later check is due one spacing after the one before', async () => {
-    const { app, a } = await boot();
+  it("a user's own first checks keep the order they came in", async () => {
+    const { app, a, b } = await boot();
     await onlyTheseJobs(app);
-    for (let i = 0; i < VENDOR_CHECK_CAP + 3; i++) {
-      await enqueueAtsDetect(app.db, ctxOf(a), newId());
-    }
-    const due = await dueTimes(app, a);
-    const later = due.slice(VENDOR_CHECK_CAP);
-    const lastAtOnce = Math.max(...due.slice(0, VENDOR_CHECK_CAP));
-    expect(later[0]! - lastAtOnce).toBeGreaterThanOrEqual(VENDOR_CHECK_SPACING_MS);
-    expect(later[1]! - later[0]!).toBe(VENDOR_CHECK_SPACING_MS);
-    expect(later[2]! - later[1]!).toBe(VENDOR_CHECK_SPACING_MS);
-    // Nothing is refused or lost: every one is queued, and runs in its turn.
-    expect(due).toHaveLength(VENDOR_CHECK_CAP + 3);
+    await follows(app, a, 5);
+    const mine = await follows(app, b, VENDOR_CHECK_CAP);
+    expect((await claimedInOrder(app)).slice(0, VENDOR_CHECK_CAP).map((j) => j.id)).toEqual(mine);
   });
 
-  it("board probes count toward the same cap as detections: one user's checks share one count", async () => {
-    const { app, a } = await boot();
+  it('a check placed ahead of a backlog long past due is still claimed first', async () => {
+    const { app, a, b } = await boot();
     await onlyTheseJobs(app);
+    await follows(app, a, 5);
+    // A's backlog has waited an hour already (the runner was busy, or down).
+    await app.db
+      .update(jobs)
+      .set({ runAt: Date.now() - HOUR })
+      .where(eq(jobs.userId, a.userId))
+      .run();
+    const [theirs] = await follows(app, b, 1);
+    expect((await claimedInOrder(app)).at(0)?.id).toBe(theirs);
+  });
+
+  it("running checks count toward the user's cap", async () => {
+    const { app, a, b } = await boot();
+    await onlyTheseJobs(app);
+    await follows(app, b, VENDOR_CHECK_CAP);
+    // B's three are claimed: running, not pending.
     for (let i = 0; i < VENDOR_CHECK_CAP; i++) {
-      const companyId = newId();
-      await enqueue(
-        app.db,
-        BOARD_PROBE_KIND,
-        { companyId },
-        { dedupeKey: boardProbeDedupeKey(companyId), userId: a.userId },
-      );
+      const claimed = await claimNextJob(app.db, 'test-worker', Date.now() + 1000);
+      expect(claimed?.userId).toBe(b.userId);
     }
-    await enqueueAtsDetect(app.db, ctxOf(a), newId());
-    const due = await dueTimes(app, a);
-    expect(due[VENDOR_CHECK_CAP]! - Date.now()).toBeGreaterThan(VENDOR_CHECK_SPACING_MS - 1000);
+    await follows(app, a, 5);
+    await follows(app, b, 1);
+    expect(whose(await claimedInOrder(app), a)).toEqual([...times(5, 'a'), 'b']);
   });
 
-  it('board probes past the cap are spaced the same way', async () => {
-    const { app, a } = await boot();
-    await onlyTheseJobs(app);
-    for (let i = 0; i < VENDOR_CHECK_CAP + 2; i++) {
-      await enqueueBoardProbe(app.db, ctxOf(a), newId());
-    }
-    const due = await dueTimes(app, a);
-    expect(due[VENDOR_CHECK_CAP + 1]! - due[VENDOR_CHECK_CAP]!).toBe(VENDOR_CHECK_SPACING_MS);
-    expect(due[VENDOR_CHECK_CAP]! - Date.now()).toBeGreaterThan(VENDOR_CHECK_SPACING_MS - 1000);
-  });
-
-  // sec on https://github.com/bgoleno/opportun/issues/321#issuecomment-6767893892: Detect now has
-  // no limit of its own, and is deduped only while a job is unfinished.
-  it("Detect now pressed on many companies by one user: another user's goes before the first's fourth", async () => {
+  it('board probes count toward the same cap as detections', async () => {
     const { app, a, b } = await boot();
-    const company = async (c: TestClient, name: string) => {
-      const res = await c.request({ method: 'POST', url: '/api/v1/companies', payload: { name } });
-      expect(res.statusCode, res.body).toBe(201);
-      return res.json<{ id: string }>().id;
-    };
-    const detectNow = async (c: TestClient, id: string) => {
-      const res = await c.request({ method: 'POST', url: `/api/v1/companies/${id}/detect-ats` });
-      expect(res.statusCode, res.body).toBe(202);
-      return res.json<{ jobId: string }>().jobId;
-    };
-    const mine: string[] = [];
-    for (let i = 0; i < 12; i++) mine.push(await company(a, `Initech ${i}`));
-    const theirsCompany = await company(b, 'Globex');
     await onlyTheseJobs(app);
-    for (const id of mine) await detectNow(a, id);
-    const theirs = await detectNow(b, theirsCompany);
-
-    const order = await claimedInOrder(app, Date.now() + 1000);
-    const at = order.findIndex((j) => j.id === theirs);
-    expect(at).toBeGreaterThanOrEqual(0);
-    expect(at).toBeLessThanOrEqual(VENDOR_CHECK_CAP);
+    await follows(app, a, 5);
+    for (let i = 0; i < VENDOR_CHECK_CAP; i++) await enqueueBoardProbe(app.db, ctxOf(b), newId());
+    await follows(app, b, 1);
+    expect(whose(await claimedInOrder(app), a)).toEqual([
+      ...times(VENDOR_CHECK_CAP, 'b'),
+      ...times(5, 'a'),
+      'b',
+    ]);
   });
 
-  it('a company already queued is not queued twice, wherever its turn is', async () => {
+  it('a company already queued is not queued twice, and keeps its place', async () => {
     const { app, a } = await boot();
     await onlyTheseJobs(app);
-    for (let i = 0; i < VENDOR_CHECK_CAP + 1; i++) {
-      await enqueueAtsDetect(app.db, ctxOf(a), newId());
-    }
+    await follows(app, a, VENDOR_CHECK_CAP + 1);
     const companyId = newId();
     const first = await enqueueAtsDetect(app.db, ctxOf(a), companyId);
     const again = await enqueueAtsDetect(app.db, ctxOf(a), companyId);
@@ -175,15 +163,53 @@ describe('#321: per user, a few vendor checks due at once and the rest queued', 
       .all();
     expect(rows).toHaveLength(1);
   });
+});
 
-  it("another user's checks do not count toward this user's cap", async () => {
+// sec on https://github.com/bgoleno/opportun/pull/330#issuecomment-6768866975 (and qa on Postgres):
+// enqueues for one user at the same moment each counted before any of them inserted, so all of them
+// went ahead.
+describe('#321: enqueues for one user at the same moment', () => {
+  it('ten at once: at most 3 of them go ahead of the other user', async () => {
     const { app, a, b } = await boot();
     await onlyTheseJobs(app);
-    for (let i = 0; i < 10; i++) await enqueueAtsDetect(app.db, ctxOf(a), newId());
-    const before = Date.now();
-    await enqueueAtsDetect(app.db, ctxOf(b), newId());
-    const [due] = await dueTimes(app, b);
-    expect(due).toBeGreaterThanOrEqual(before);
-    expect(due).toBeLessThanOrEqual(Date.now());
+    await follows(app, a, 10);
+    await Promise.all(
+      Array.from({ length: 10 }, () => enqueueAtsDetect(app.db, ctxOf(b), newId())),
+    );
+    const order = whose(await claimedInOrder(app), a);
+    expect(order.indexOf('a')).toBe(VENDOR_CHECK_CAP);
+    expect(order.filter((w) => w === 'b')).toHaveLength(10);
+  });
+
+  it('Detect now pressed on many companies at once, through the route: the same', async () => {
+    const { app, a, b } = await boot();
+    const company = async (c: TestClient, name: string) => {
+      const res = await c.request({ method: 'POST', url: '/api/v1/companies', payload: { name } });
+      expect(res.statusCode, res.body).toBe(201);
+      return res.json<{ id: string }>().id;
+    };
+    const detectNow = async (c: TestClient, id: string) => {
+      const res = await c.request({ method: 'POST', url: `/api/v1/companies/${id}/detect-ats` });
+      expect(res.statusCode, res.body).toBe(202);
+    };
+    const theirs: string[] = [];
+    for (let i = 0; i < 8; i++) theirs.push(await company(b, `Globex ${i}`));
+    const mine: string[] = [];
+    for (let i = 0; i < 6; i++) mine.push(await company(a, `Initech ${i}`));
+    await onlyTheseJobs(app);
+    for (const id of mine) await detectNow(a, id);
+    await Promise.all(theirs.map((id) => detectNow(b, id)));
+    const order = whose(await claimedInOrder(app), a);
+    expect(order.indexOf('a')).toBe(VENDOR_CHECK_CAP);
+    expect(order.filter((w) => w === 'b')).toHaveLength(8);
+  });
+
+  it('a failed enqueue does not stop the next one for that user', async () => {
+    const { app, a } = await boot();
+    await onlyTheseJobs(app);
+    // A payload the job's schema refuses: the enqueue throws, and the user's line goes on.
+    await expect(enqueueAtsDetect(app.db, ctxOf(a), '')).rejects.toThrow();
+    await follows(app, a, 1);
+    expect(await dueTimes(app, a)).toHaveLength(1);
   });
 });
