@@ -102,6 +102,7 @@ describe('TASKS registry', () => {
       expect(TASKS[k].defaultPolicy.model).toBe('claude-sonnet-5-5');
     }
     for (const k of [
+      'discovery.company_tags',
       'comms.classify',
       'capture.extract',
       'capture.linkedin',
@@ -180,6 +181,13 @@ describe('TASKS registry', () => {
     expect(schema.safeParse(withoutHeadline).success).toBe(false);
     expect(schema.safeParse({ ...profile, name: 'x'.repeat(301) }).success).toBe(false);
     expect(schema.safeParse({ ...profile, descriptionMd: 'x'.repeat(50_001) }).success).toBe(false);
+  });
+
+  it('discovery.company_tags: a code that is more than a code does not fail the batch', () => {
+    const schema = TASKS['discovery.company_tags'].outputSchema;
+    expect(
+      schema.safeParse({ tags: [{ ref: 'c1', code: '5132 Software Publishers' }] }).success,
+    ).toBe(true);
   });
 
   it('company.suggest output is capped: at most 15, bounded name, rationale and domain guess', () => {

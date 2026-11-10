@@ -372,6 +372,20 @@
       "when": 1794900000000,
       "tag": "0052_discovery_prefilter_switch",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "6",
+      "when": 1795000000000,
+      "tag": "0053_company_industry_tags",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "6",
+      "when": 1795100000000,
+      "tag": "0054_discovery_company_tags_prompt",
+      "breakpoints": true
     }
   ]
 }

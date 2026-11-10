@@ -397,6 +397,10 @@ export const naicsTitle = (code: string): string | undefined => TITLES.get(code)
 export const NAICS_TIERS = ['core', 'similar', 'adjacent'] as const;
 export type NaicsTier = (typeof NAICS_TIERS)[number];
 
+/** Who set a company's industry tag (#220): the model, or the user, whose correction stands. */
+export const INDUSTRY_TAG_SOURCES = ['ai', 'user'] as const;
+export type IndustryTagSource = (typeof INDUSTRY_TAG_SOURCES)[number];
+
 /** Where a profile row came from: the base resume, a role target, or the user adding it. */
 export const INDUSTRY_SOURCES = ['resume', 'target', 'user'] as const;
 export type IndustrySource = (typeof INDUSTRY_SOURCES)[number];

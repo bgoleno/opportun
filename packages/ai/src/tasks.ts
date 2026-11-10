@@ -38,6 +38,8 @@ const RefineInput = vars('current_prompt', 'feedback_summary');
 /** One role target, as the user wrote it (#217): the titles it means, to expand into variants. */
 const TitleVariantsInput = vars('role_target');
 const IndustryProfileInput = vars('resume_untrusted', 'role_targets', 'naics_table');
+/** Company names, domains and posting titles are third-party data (#220), so they are fenced. */
+const CompanyTagsInput = vars('companies_untrusted', 'naics_table');
 /** Stage 2's gate: the sender, the subject and a 500-character head of the body, fenced. */
 const TriageInput = vars('message_untrusted');
 const ClassifyInput = vars('role_targets', 'open_opportunities_untrusted', 'message_untrusted');
@@ -124,6 +126,15 @@ export const IndustryProfileOutputSchema = z.object({
       }),
     )
     .max(80),
+});
+
+/**
+ * A NAICS code for each company in a batch (https://github.com/bgoleno/opportun/issues/220). Each
+ * row names the company by the short ref it was given. Any text is allowed here, as in the profile:
+ * the caller drops an unknown ref or a code not in the table, so one bad row does not fail the batch.
+ */
+export const CompanyTagsOutputSchema = z.object({
+  tags: z.array(z.object({ ref: z.string().max(200), code: z.string().max(200) })).max(60),
 });
 
 export const RefineOutputSchema = z.object({
@@ -298,6 +309,12 @@ export const TASKS: Record<TaskKey, TaskDef<any, any>> = {
     'Lists NAICS industries to look in, from one base resume and the role targets, each with a tier and a reason.',
     IndustryProfileInput,
     IndustryProfileOutputSchema,
+  ),
+  'discovery.company_tags': def(
+    'discovery.company_tags',
+    'Tags about 20 companies with a NAICS industry group each, from their names, domains and job titles.',
+    CompanyTagsInput,
+    CompanyTagsOutputSchema,
   ),
   'discovery.refine_prompt': def(
     'discovery.refine_prompt',
