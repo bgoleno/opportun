@@ -113,17 +113,21 @@ model, and it counts against your [discovery budget](settings.md#models-and-budg
 rest wait for a later night. Each call sends the company's name, its domain, and up to 10 job titles
 from postings already stored from its board. So the names of companies in your network do go to your
 provider; nothing about your contacts does, and no board is fetched for this. A tag is created once
-and kept. Open **Industry** on a row to correct it, and your choice stands. A company the model could
-not place says so, and is not asked about again, though you can still set one.
+and kept. Until then a row says **Industry: not tagged yet**. Open **Industry** on a row to correct
+it, and your choice stands (the row then says "set by you"). A company the model could not place
+says **Industry: could not be placed** and is not asked about again, though you can still set one.
+A company the provider refuses, or answers unusably, when asked on its own is asked again the next
+night, after the other companies, so one name that always fails does not hold the rest up. With no
+AI key, or a key the provider rejected, the run does not start.
 
 **Suggested companies** comes from the `company.suggest` task, which once a week (Tuesdays)
 proposes companies worth following, based on your role targets and past decisions, each with its
 reason. **Follow** one and Opportun looks for its job board; **Deny** it and it is not suggested
 again.
 
-![The Companies tab. At the top, Where to look is collapsed and shows 1 confirmed, 2 to review. In your network lists Initech, with Priya Example and Sam Example named under You know 2 people here and Follow and Deny buttons, and Globex, marked Following with no board found. Suggested companies lists Pied Piper with its reason and Follow and Deny buttons](images/discovery-companies.png)
+![The Companies tab. At the top, Where to look is collapsed and shows 1 confirmed, 2 to review. In your network lists Initech, with Priya Example and Sam Example named under You know 2 people here and Follow and Deny buttons, and Globex, marked Following with no board found. Suggested companies lists Pied Piper with its reason and Follow and Deny buttons. Each company shows an Industry line, here Software Publishers](images/discovery-companies.png)
 
-_The Companies tab, with invented contacts. Following a company starts job board detection._
+_The Companies tab, with invented contacts, after the nightly industry tags ran. Following a company starts job board detection._
 
 A followed company shows the board it found (for example "Greenhouse: piedpiper") and a
 **Detect now** button; boards are re-checked weekly. The detected board becomes a source that
