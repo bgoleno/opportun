@@ -41,6 +41,8 @@ export type Outcome =
   | { kind: 'unauthorized' }
   | { kind: 'forbidden' }
   | { kind: 'rate_limited'; retryAfterSec: number | null; limit?: CaptureLimit }
+  /** Another capture of the user's was being saved, and this one could not wait (#309). */
+  | { kind: 'busy'; retryAfterSec: number | null }
   | { kind: 'too_large' }
   | { kind: 'invalid'; status: number; code: string }
   | { kind: 'server_error'; status: number }
@@ -164,6 +166,11 @@ async function classify(res: FetchResponse): Promise<Outcome> {
     return { kind: 'refused', reason: typeof error.reason === 'string' ? error.reason : 'unknown' };
   }
   if (status >= 400 && status < 500) return { kind: 'invalid', status, code };
+  // Not a fault: the server could not take this capture at that moment, and says so (#309).
+  if (status === 503 && code === 'capture_busy') {
+    const after = Number.parseInt(res.headers.get('retry-after') ?? '', 10);
+    return { kind: 'busy', retryAfterSec: Number.isFinite(after) && after > 0 ? after : null };
+  }
   return { kind: 'server_error', status };
 }
 

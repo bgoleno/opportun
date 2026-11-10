@@ -229,12 +229,17 @@ async function ingest(
   filterActs: boolean,
   holdBelowCut: boolean,
   sourceCommunicationId?: string,
+  lockTimeoutMs?: number,
 ): Promise<DiscoveryResultView | 'duplicate'> {
   const key = dedupeKey(posting.company, posting.title, posting.location);
   return await withTransaction(db, async (tx) => {
     // Two runs of a source can overlap: on Postgres this lock is all that keeps them from both
     // passing the check.
-    await lockScope(tx, ingestScope(ctx));
+    await lockScope(
+      tx,
+      ingestScope(ctx),
+      lockTimeoutMs === undefined ? {} : { timeoutMs: lockTimeoutMs },
+    );
     const check = await checkDuplicate(tx, ctx, key, sourceId, posting.externalId);
     if (check === 'duplicate') return 'duplicate';
     await racePoint('discovery.ingest.locked');
@@ -332,6 +337,7 @@ async function ingestRaw(
   filterActs: boolean,
   holdBelowCut: boolean,
   sourceCommunicationId?: string,
+  lockTimeoutMs?: number,
 ): Promise<void> {
   const parsed = NormalizedPostingSchema.safeParse(sanitizePosting(raw));
   if (!parsed.success) {
@@ -349,6 +355,7 @@ async function ingestRaw(
     filterActs,
     holdBelowCut,
     sourceCommunicationId,
+    lockTimeoutMs,
   );
   if (outcome === 'duplicate') {
     stats.duplicates += 1;
@@ -384,6 +391,12 @@ export async function insertLeads(
    * the mail it came from instead of sending the user to search their mailbox for it.
    */
   sourceCommunicationId?: string,
+  /**
+   * How long each posting waits for the user's ingest lock, at most (Postgres). The capture
+   * route passes CAPTURE_SLOT.lockTimeoutMs (https://github.com/bgoleno/opportun/issues/309);
+   * alert mail keeps the usual wait.
+   */
+  opts: { lockTimeoutMs?: number } = {},
 ): Promise<{ runId: string; stats: RunStats; inserted: DiscoveryResultView[] }> {
   const run = await createRun(db, ctx, { sourceId });
   const source = await getSourceRow(db, ctx, sourceId);
@@ -396,24 +409,34 @@ export async function insertLeads(
     filtered: 0,
   };
   const inserted: DiscoveryResultView[] = [];
-  for (const posting of postings) {
-    stats.fetched += 1;
-    await ingestRaw(
-      db,
-      ctx,
-      run.id,
-      sourceId,
-      source.companyId,
-      posting,
-      stats,
-      inserted,
-      // Job-alert emails are never pre-filtered (owner's decision 5 on #190).
-      null,
-      false,
-      // A job alert is not a board, so no first-run cap either.
-      false,
-      sourceCommunicationId,
-    );
+  try {
+    for (const posting of postings) {
+      stats.fetched += 1;
+      await ingestRaw(
+        db,
+        ctx,
+        run.id,
+        sourceId,
+        source.companyId,
+        posting,
+        stats,
+        inserted,
+        // Job-alert emails are never pre-filtered (owner's decision 5 on #190).
+        null,
+        false,
+        // A job alert is not a board, so no first-run cap either.
+        false,
+        sourceCommunicationId,
+        opts.lockTimeoutMs,
+      );
+    }
+  } catch (err) {
+    // The run ends with why, or the source's history would show it running for good: a capture
+    // refused at its lock wait (#309) is an expected end now (tl on
+    // https://github.com/bgoleno/opportun/pull/318). The source's own health is left alone: a
+    // channel's status says nothing about one capture.
+    await finishRun(db, ctx, run.id, { error: errorText(err), stats: { ...stats } });
+    throw err;
   }
   await withTransaction(db, async (tx) => {
     await finishRun(tx, ctx, run.id, { stats: { ...stats } });

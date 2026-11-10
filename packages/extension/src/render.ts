@@ -139,6 +139,15 @@ export function renderOutcome(outcome: Outcome, site: CaptureSiteId = 'linkedin'
         }.`,
       };
     }
+    case 'busy':
+      return {
+        tone: 'error',
+        text: `Opportun is still saving another capture of yours. Try again in ${
+          outcome.retryAfterSec === null || outcome.retryAfterSec <= 60
+            ? 'a few seconds'
+            : minutes(outcome.retryAfterSec)
+        }.`,
+      };
     case 'too_large':
       return { tone: 'error', text: 'This page is too large to capture.' };
     case 'invalid':

@@ -77,6 +77,15 @@ function toFailure(err: unknown): Failure {
         ? { kind: 'paste_text', hint: hintOf(err, '') }
         : { kind: 'other', message: hintOf(err, errorMessage(err)) };
     }
+    // Another capture of yours is being saved and this one could not wait for it (#309). Not the
+    // AI: the posting was read, so pressing Capture again in a moment is all it takes.
+    if (err.status === 503 && err.code === 'capture_busy') {
+      return {
+        kind: 'other',
+        message:
+          'Another capture of yours is still being saved. Wait a few seconds and press Capture again.',
+      };
+    }
     if (err.status === 503 && err.code === 'ai_unavailable') {
       return {
         kind: 'ai_unavailable',

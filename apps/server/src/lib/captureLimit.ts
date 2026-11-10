@@ -6,9 +6,10 @@
 // of the user's extension tokens), keeps any burst short. The extension's per-token budget
 // (30 per 15 minutes) stays as well: it is the narrower limit for one browser.
 import type { FastifyRequest } from 'fastify';
-import type { Db } from '../db/client';
+import { isLockTimeout, type Db } from '../db/client';
 import { requireUser } from '../repos/base';
 import { requireDevice } from './deviceTokens';
+import { HttpError } from './errors';
 import { rateLimit, type RateLimiter } from './rateLimit';
 
 /**
@@ -53,4 +54,93 @@ export function captureUserLimit(db: Db): RateLimiter {
     limiters.set(db, found);
   }
   return found;
+}
+
+/**
+ * How many of one user's captures may be in their ingest lock at once, and how long a capture
+ * waits (https://github.com/bgoleno/opportun/issues/309, tl's design on
+ * https://github.com/bgoleno/opportun/issues/309#issuecomment-6765588508). The limit above bounds
+ * how many captures a user makes in 15 minutes, not how many wait at once: each capture waiting
+ * on the user's ingest lock held a pool connection, so one user's captures behind a slow holder
+ * could take every connection, and another user's request failed at the 10 s connection timeout.
+ * - One slot per user. The ingest lock already lets one of the user's captures in at a time, so
+ *   a second slot would buy nothing but a second connection waiting on that lock.
+ * - A capture finding the slot taken waits for it in memory, holding no connection, for up to
+ *   waitMs, so two ordinary captures that overlap for the ~42 ms the lock is held both go through.
+ * - The capture holding the slot waits for the lock itself (Postgres) for up to lockTimeoutMs,
+ *   then gives up and rolls back. That bounds how long it holds its one connection.
+ * Each wait stays under the pool's 10 s connection timeout. Change them here.
+ */
+export const CAPTURE_SLOT = { waitMs: 5_000, lockTimeoutMs: 5_000, retryAfterSec: 5 };
+
+/**
+ * 503, not 429: the clients read 429 as the 60-per-15-minutes limit above and would say so. This
+ * one is about the moment, so the clients say to try again shortly.
+ */
+const captureBusy = (): HttpError =>
+  new HttpError(503, 'capture_busy', undefined, undefined, {
+    retryAfterSec: CAPTURE_SLOT.retryAfterSec,
+  });
+
+interface Slot {
+  /** Waiters in arrival order; each is handed the slot when the one before it is done. */
+  queue: (() => void)[];
+}
+
+/** Per app, per user: an entry exists while the user's slot is taken. */
+const slots = new WeakMap<Db, Map<string, Slot>>();
+
+async function takeSlot(db: Db, userId: string): Promise<void> {
+  let users = slots.get(db);
+  if (users === undefined) {
+    users = new Map();
+    slots.set(db, users);
+  }
+  const slot = users.get(userId);
+  if (slot === undefined) {
+    users.set(userId, { queue: [] });
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const turn = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      // Gone from the line, so the slot is never handed to a caller that already gave up.
+      slot.queue.splice(slot.queue.indexOf(turn), 1);
+      reject(captureBusy());
+    }, CAPTURE_SLOT.waitMs);
+    slot.queue.push(turn);
+  });
+}
+
+function releaseSlot(db: Db, userId: string): void {
+  const users = slots.get(db);
+  const slot = users?.get(userId);
+  if (users === undefined || slot === undefined) return;
+  const next = slot.queue.shift();
+  // Handed straight to the next waiter, so no new caller can slip in between.
+  if (next === undefined) users.delete(userId);
+  else next();
+}
+
+/**
+ * Runs `fn`, a capture's calls that take the user's ingest lock, in the user's one capture slot.
+ * Around those calls and not the request: the fetch and the AI calls before them take seconds and
+ * hold no connection, and a slot taken in one request hook and given back in another could be
+ * lost on a path that skips the second. try/finally cannot lose it. A slot wait or a lock wait
+ * that runs out is a 503 capture_busy with retry-after; fn passes CAPTURE_SLOT.lockTimeoutMs to
+ * its locked transactions.
+ */
+export async function withCaptureSlot<T>(db: Db, userId: string, fn: () => Promise<T>): Promise<T> {
+  await takeSlot(db, userId);
+  try {
+    return await fn();
+  } catch (err) {
+    if (isLockTimeout(err)) throw captureBusy();
+    throw err;
+  } finally {
+    releaseSlot(db, userId);
+  }
 }

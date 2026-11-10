@@ -938,6 +938,11 @@ export interface TransactionOptions {
    * write gate already serializes every transaction; Postgres takes an advisory lock on it.
    */
   scope?: string;
+  /**
+   * With `scope`: how long, at most, to wait for that lock on Postgres (lockScope's timeoutMs).
+   * Past it the transaction fails with 55P03 (isLockTimeout) and rolls back.
+   */
+  lockTimeoutMs?: number;
   /** Names the transaction in the production watchdog's warning (default: the call site). */
   label?: string;
   /**
@@ -983,7 +988,11 @@ export async function withTransaction<T>(
     opts.scope === undefined
       ? fn
       : async (tx: Exec) => {
-          await lockScope(tx, opts.scope as string);
+          await lockScope(
+            tx,
+            opts.scope as string,
+            opts.lockTimeoutMs === undefined ? {} : { timeoutMs: opts.lockTimeoutMs },
+          );
           return fn(tx);
         };
   if (isPgTransaction(exec)) {
@@ -1164,7 +1173,11 @@ function watchStatements(tx: unknown, watch: StatementWatch): () => void {
  * check and writes rolled back with it, and every guarded helper takes the lock again before
  * its next check, so nothing relies on the lock outliving the savepoint. (2) hashtext() is
  * int4, so two scopes can share a key: that over-serializes, never under-serializes. (3) The
- * wait is bounded by statement_timeout (30 s), after which the transaction fails.
+ * wait is bounded by statement_timeout (30 s), after which the transaction fails, or by
+ * `timeoutMs` when given (https://github.com/bgoleno/opportun/issues/309): lock_timeout is set
+ * for the lock's wait alone and put back once it is held, so the rest of the transaction keeps
+ * the usual limits. Past it the statement fails with 55P03 (isLockTimeout). SQLite has no such
+ * setting: there the write gate is the wait, and timeoutMs does nothing.
  */
 /**
  * Test seam (test/race.ts): the write gate of a SQLite database, so a racing test can observe
@@ -1176,10 +1189,24 @@ export function writeGateOf(exec: Exec): WriteGate | undefined {
   return connOf(exec).gate;
 }
 
-export async function lockScope(exec: Exec, scope: string): Promise<void> {
+export async function lockScope(
+  exec: Exec,
+  scope: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<void> {
   if (scope.length === 0) throw new Error('lockScope: empty scope');
   if (isPgTransaction(exec)) {
+    if (opts.timeoutMs === undefined) {
+      await exec.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${scope}))`);
+      return;
+    }
+    const ms = Math.max(1, Math.floor(opts.timeoutMs));
+    // set_config(..., true) is SET LOCAL: it ends with the transaction (or savepoint) at the latest.
+    const before = await exec.execute(sql`SELECT current_setting('lock_timeout') AS prev`);
+    const prev = (before as unknown as QueryResult<{ prev: string }>).rows[0]?.prev ?? '0';
+    await exec.execute(sql`SELECT set_config('lock_timeout', ${`${ms}ms`}, true)`);
     await exec.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${scope}))`);
+    await exec.execute(sql`SELECT set_config('lock_timeout', ${prev}, true)`);
     return;
   }
   // A transaction object, never the root handle (on Postgres the lock would be taken on some
@@ -1308,6 +1335,12 @@ export async function pingDatabase(handle: DbHandle): Promise<boolean> {
 export async function closeDatabase(handle: DbHandle): Promise<void> {
   if (handle.dialect === 'sqlite') handle.sqlite.close();
   else await handle.pool.end();
+}
+
+/** True when `err` is Postgres giving up a lock wait at lock_timeout (55P03, lockScope's timeoutMs). */
+export function isLockTimeout(err: unknown): boolean {
+  const e = unwrapDriverError(err);
+  return e instanceof Error && 'code' in e && e.code === '55P03';
 }
 
 /** True when `err` is the driver's unique-constraint violation (a lost insert race). */
