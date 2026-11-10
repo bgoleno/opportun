@@ -136,7 +136,7 @@ test('discovery: follow a suggested company and see its job board detected', asy
 
   await page.goto('/discovery/companies');
   const suggestion = page
-    .getByRole('list', { name: 'Suggested companies' })
+    .getByRole('list', { name: 'Recommended companies' })
     .getByRole('listitem', { name: 'Pied Piper' });
   await expect(suggestion).toContainText('Builds developer platforms');
   await suggestion.getByRole('button', { name: 'Follow Pied Piper' }).click();

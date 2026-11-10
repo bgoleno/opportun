@@ -1,11 +1,10 @@
-// One suggested company (rationale, accept, deny), one followed company (ATS board status,
-// careers URL prompt, detect now), and one denied company (undo). Names and rationales are
+// The board status chip, one followed company (careers URL prompt, detect now), and one denied
+// company (undo). A suggestion is a row of the Recommended companies list (RecommendedRow). Names and rationales are
 // model or third-party derived: every field is a React text node (never markdown, never HTML),
 // and the careers link is http(s) only.
-import { Check, ExternalLink, RefreshCw, Undo2, X } from 'lucide-react';
+import { ExternalLink, RefreshCw, Undo2, X } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { FormError } from '@/components/FormError';
-import { CompanyIndustry } from './CompanyIndustry';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -101,57 +100,6 @@ export function DeniedCompanyRow(props: {
         <Undo2 aria-hidden="true" />
         Undo
       </Button>
-    </li>
-  );
-}
-
-export function SuggestionCard(props: {
-  company: CompanyView;
-  busy?: boolean;
-  onAccept: () => void;
-  onDeny: () => void;
-}) {
-  const { company: c } = props;
-  return (
-    <li
-      aria-label={c.name}
-      className="grid gap-2 rounded-xl border bg-card p-4"
-      data-company-id={c.id}
-    >
-      <div className="grid gap-0.5">
-        <span className="font-medium [overflow-wrap:anywhere]">{c.name}</span>
-        {c.domain ? (
-          <span className="text-sm [overflow-wrap:anywhere] text-muted-foreground">{c.domain}</span>
-        ) : null}
-      </div>
-      {c.suggestionRationale ? (
-        <p className="text-sm [overflow-wrap:anywhere]">
-          <span className="text-muted-foreground">Why: </span>
-          {c.suggestionRationale}
-        </p>
-      ) : null}
-      <CompanyIndustry company={c} />
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          disabled={props.busy}
-          onClick={props.onAccept}
-          aria-label={`Follow ${c.name}`}
-        >
-          <Check aria-hidden="true" />
-          Follow
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={props.busy}
-          onClick={props.onDeny}
-          aria-label={`Deny ${c.name}`}
-        >
-          <X aria-hidden="true" />
-          Deny
-        </Button>
-      </div>
     </li>
   );
 }
