@@ -1,0 +1,116 @@
+// The pipeline board's keyboard drag (#413): a move the stage rules refuse says so, on screen and
+// to a screen reader, as a pointer drag does, and never announces that the card "was dropped on"
+// the column. Driven through the real keyboard path (focus the card, Space to pick up, arrows,
+// Space to drop) in a real browser, because the component tests mock the drag library.
+import { expect, test, type Locator, type Page } from '@playwright/test';
+import { card, choose, createOpportunity, registerUser, toasts } from './helpers';
+
+/** dnd-kit's live region: what a screen reader hears during a drag (assertive). */
+const liveRegion = (page: Page) => page.locator('[id^="DndLiveRegion-"]');
+const column = (page: Page, name: string) => page.getByRole('region', { name: `${name} column` });
+
+async function moveWithMenu(page: Page, opp: { company: string; title: string }, stage: string) {
+  await page.getByRole('button', { name: `Move ${opp.company}: ${opp.title}` }).click();
+  await page.getByRole('menuitem', { name: stage, exact: true }).click();
+}
+
+/** A dismissed opportunity, with the Dismissed column expanded so its card can be dragged. */
+async function dismissed(page: Page, opp: { company: string; title: string }) {
+  await createOpportunity(page, opp);
+  await moveWithMenu(page, opp, 'Dismissed');
+  const dialog = page.getByRole('dialog', { name: 'Dismiss opportunity' });
+  await choose(dialog, 'Reason', 'Other');
+  await dialog.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await page.getByRole('button', { name: /^Expand Dismissed/ }).click();
+  await expect(card(page, opp.company, opp.title)).toBeVisible();
+}
+
+/**
+ * Picks `moved` up with Space, then presses ArrowLeft one at a time, each time letting the live
+ * region announce the new place, until it is over `target`'s column; then drops.
+ */
+async function keyboardDrop(page: Page, moved: Locator, target: string) {
+  await moved.focus();
+  await page.keyboard.press('Space');
+  await expect(liveRegion(page)).toContainText('is over');
+  const wanted = `is over the ${target} column`;
+  for (let i = 0; i < 12; i++) {
+    const before = (await liveRegion(page).textContent()) ?? '';
+    if (before.includes(wanted)) break;
+    await page.keyboard.press('ArrowLeft');
+    // The first step may only go from the card to its own column, which is announced the same
+    // way, so the text need not change: wait for a change, briefly, and go on either way.
+    await expect(liveRegion(page))
+      .not.toHaveText(before, { timeout: 1_000 })
+      .catch(() => undefined);
+  }
+  await expect(liveRegion(page)).toContainText(wanted);
+  await page.keyboard.press('Space');
+}
+
+test.describe('the board refuses a keyboard move as it refuses a pointer move (#413)', () => {
+  // Every column on screen, as qa had it on #410: the keyboard sensor picks the nearest target
+  // by position, so columns scrolled out of a narrow window make its steps uneven.
+  test.use({ viewport: { width: 2200, height: 1100 } });
+
+  test('onto an empty column: the message, the reason announced, focus kept', async ({ page }) => {
+    await registerUser(page);
+    const opp = { company: 'Initrode', title: 'Staff Keyboard Engineer' };
+    await dismissed(page, opp);
+    const moved = card(page, opp.company, opp.title);
+
+    await keyboardDrop(page, moved, 'Offer');
+
+    const reason = 'Use Reopen to move a dismissed opportunity back to Offer.';
+    await expect(toasts(page).getByText(reason)).toBeVisible();
+    await expect(liveRegion(page)).toHaveText(
+      `${opp.company}: ${opp.title} was not moved. ${reason}`,
+    );
+    await expect(moved).toBeFocused();
+    await expect(column(page, 'Dismissed').getByRole('article')).toHaveCount(1);
+  });
+
+  test('onto a card in a column that holds cards (qa on #410)', async ({ page }) => {
+    await registerUser(page);
+    for (const title of ['First Offer Engineer', 'Second Offer Engineer']) {
+      await createOpportunity(page, { company: 'Globex', title });
+      await moveWithMenu(page, { company: 'Globex', title }, 'Offer');
+      await expect(
+        column(page, 'Offer').getByRole('article', { name: `Globex: ${title}` }),
+      ).toBeVisible();
+    }
+    const opp = { company: 'Initrode', title: 'Staff Keyboard Engineer' };
+    await dismissed(page, opp);
+    const moved = card(page, opp.company, opp.title);
+
+    await keyboardDrop(page, moved, 'Offer');
+
+    const reason = 'Use Reopen to move a dismissed opportunity back to Offer.';
+    await expect(toasts(page).getByText(reason)).toBeVisible();
+    await expect(liveRegion(page)).toHaveText(
+      `${opp.company}: ${opp.title} was not moved. ${reason}`,
+    );
+    await expect(liveRegion(page)).not.toContainText('was dropped on');
+    await expect(moved).toBeFocused();
+  });
+
+  test('an allowed keyboard move is unchanged: it moves and says where', async ({ page }) => {
+    await registerUser(page);
+    const opp = { company: 'Initrode', title: 'Staff Keyboard Engineer' };
+    await createOpportunity(page, opp);
+    await moveWithMenu(page, opp, 'Interested');
+    const moved = card(page, opp.company, opp.title);
+    await expect(column(page, 'Interested').getByRole('article')).toHaveCount(1);
+
+    await keyboardDrop(page, moved, 'New');
+
+    await expect(liveRegion(page)).toHaveText(
+      `${opp.company}: ${opp.title} was dropped on the New column.`,
+    );
+    await expect(
+      column(page, 'New').getByRole('article', { name: `${opp.company}: ${opp.title}` }),
+    ).toBeVisible();
+    await expect(toasts(page).getByText('Stage not changed')).toHaveCount(0);
+  });
+});
