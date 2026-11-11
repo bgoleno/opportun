@@ -58,6 +58,7 @@ import {
   WriteGate,
 } from './gate';
 import type { DbConfig, DbSsl, PostgresConfig } from '../config';
+import { startBackgroundCheckpointer, type BackgroundCheckpointer } from './checkpointer';
 import { SCHEMA_DIALECT } from './schema';
 import * as pgSchema from './schema.pg';
 import * as schema from './schema.sqlite';
@@ -82,6 +83,8 @@ export interface SqliteHandle {
   dialect: 'sqlite';
   db: Db;
   sqlite: Sqlite;
+  /** The background WAL checkpointer, when it is on (db/checkpointer.ts, #383). */
+  checkpointer?: BackgroundCheckpointer;
 }
 
 /** An open Postgres database: `db` is typed as the SQLite driver (dialect erasure). */
@@ -572,6 +575,41 @@ function migrateSqliteDir(
   }
 }
 
+/** The main connection's automatic checkpoint threshold, in pages (#375). */
+const AUTOCHECKPOINT_PAGES = 100;
+
+/**
+ * Starts the background checkpointer for the main connection `sqlite` (#383), after its
+ * migrations, and turns the main connection's automatic checkpoint off while it runs. The
+ * worker's connection gets the main one's sync settings. When the worker stops, at close or by
+ * failing, automatic checkpoints come back on at once, so the WAL never grows without bound;
+ * only a failure is logged.
+ */
+function backgroundCheckpointer(
+  sqlite: Sqlite,
+  file: string,
+  opts: ConnectOptions,
+): BackgroundCheckpointer {
+  const pragmas = (['synchronous', 'fullfsync', 'checkpoint_fullfsync'] as const).map(
+    (name) => `${name} = ${String(sqlite.pragma(name, { simple: true }))}`,
+  );
+  sqlite.pragma('wal_autocheckpoint = 0');
+  return startBackgroundCheckpointer(file, {
+    pragmas,
+    ...(opts.checkpointIntervalMs === undefined ? {} : { intervalMs: opts.checkpointIntervalMs }),
+    onStopped: ({ unexpected, err }) => {
+      if (sqlite.open) sqlite.pragma(`wal_autocheckpoint = ${AUTOCHECKPOINT_PAGES}`);
+      if (unexpected) {
+        dbLog(
+          'warn',
+          { err },
+          'background checkpointer stopped: automatic checkpoints are back on',
+        );
+      }
+    },
+  });
+}
+
 /** Opens `${sqliteDir}/opportun.db` with WAL and foreign keys on, then applies migrations. */
 export function openDatabase(
   dataDir: string,
@@ -600,13 +638,17 @@ export function openDatabase(
     // 2 ms, a 2,000-span flush's work between two turns of the loop stays under 10 ms, and an
     // ordinary write's p99 halved (https://github.com/bgoleno/opportun/issues/375:
     // test/obsFlushBench.test.ts and test/sqliteWriteBench.test.ts, figures in its PR). If this
-    // ever falls short (a slow disk), the next step is a background checkpointer on its own
-    // connection in a worker, with this set to 0.
-    sqlite.pragma('wal_autocheckpoint = 100');
+    // ever falls short (a slow disk), OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT turns on the
+    // background checkpointer below, which sets this to 0 while it runs.
+    sqlite.pragma(`wal_autocheckpoint = ${AUTOCHECKPOINT_PAGES}`);
     sqlite.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
     // Migrations run on the raw connection before the async driver exists.
     migrateLocked(sqlite);
-    return { dialect: 'sqlite', db: asyncDatabase(sqlite, opts), sqlite };
+    const handle: SqliteHandle = { dialect: 'sqlite', db: asyncDatabase(sqlite, opts), sqlite };
+    if (opts.backgroundCheckpoint === true) {
+      handle.checkpointer = backgroundCheckpointer(sqlite, join(sqliteDir, 'opportun.db'), opts);
+    }
+    return handle;
   } catch (err) {
     sqlite.close();
     throw err;
@@ -780,6 +822,13 @@ export interface ConnectOptions {
    * smaller value here so it does not have to wait out the real production timeout.
    */
   migrationLockTimeoutMs?: number;
+  /**
+   * SQLite only: run the background WAL checkpointer (db/checkpointer.ts, #383). The server
+   * takes it from OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT (the SQLite DbConfig); a test may set
+   * it here, with a shorter interval.
+   */
+  backgroundCheckpoint?: boolean;
+  checkpointIntervalMs?: number;
 }
 
 async function openPostgres(cfg: PostgresConfig, opts: ConnectOptions): Promise<PgHandle> {
@@ -824,7 +873,10 @@ export async function connectDatabase(
     throw new Error(`DB_DIALECT=${SCHEMA_DIALECT}: refusing to open the ${name} database`);
   }
   if (cfg.db.dialect === 'sqlite') {
-    return openDatabase(cfg.dataDir, cfg.sqliteDir ?? cfg.dataDir, opts);
+    return openDatabase(cfg.dataDir, cfg.sqliteDir ?? cfg.dataDir, {
+      ...opts,
+      backgroundCheckpoint: opts.backgroundCheckpoint ?? cfg.db.backgroundCheckpoint === true,
+    });
   }
   return openPostgres(cfg.db, opts);
 }
@@ -1360,8 +1412,11 @@ export async function pingDatabase(handle: DbHandle): Promise<boolean> {
 
 /** Closes the connection (SQLite) or ends the pool (Postgres); the handle is unusable after. */
 export async function closeDatabase(handle: DbHandle): Promise<void> {
-  if (handle.dialect === 'sqlite') handle.sqlite.close();
-  else await handle.pool.end();
+  if (handle.dialect === 'sqlite') {
+    // The worker's connection closes first, so the main one is the last to touch the WAL.
+    await handle.checkpointer?.stop();
+    handle.sqlite.close();
+  } else await handle.pool.end();
 }
 
 /** True when `err` is Postgres giving up a lock wait at lock_timeout (55P03, lockScope's timeoutMs). */
