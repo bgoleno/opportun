@@ -49,6 +49,7 @@ import {
   isOperatorFile,
   removeOperatorFile,
 } from '../lib/storage';
+import { observeStatement, observeStatementAsync } from '../obs/database';
 import { armGateWatchdog, reportSlowTransaction, SLOW_TRANSACTION_MS, WriteGate } from './gate';
 import type { DbConfig, DbSsl, PostgresConfig } from '../config';
 import { SCHEMA_DIALECT } from './schema';
@@ -309,25 +310,37 @@ export function scrubPgError(err: unknown): unknown {
  * (SQLite: sqlite-proxy's RemotePreparedQuery; Postgres: pg-core's PgPreparedQuery, shared
  * by node-postgres builder statements and db.execute). Patched once per process.
  */
-function unwrapQueryErrors(prototype: object): void {
+function unwrapQueryErrors(prototype: object, observe: boolean): void {
   type QueryWithCache = (this: unknown, ...args: unknown[]) => Promise<unknown>;
   const proto = prototype as { queryWithCache: QueryWithCache; __opportunUnwrapped?: true };
   if (proto.__opportunUnwrapped === true) return;
   const original = proto.queryWithCache;
   // .catch (not async/await) keeps the statement's synchronous start: see proxyCallback.
   proto.queryWithCache = function (this: unknown, ...args: unknown[]) {
-    return original.apply(this, args).catch((err: unknown) => {
-      throw unwrapDriverError(err);
-    });
+    const run = () =>
+      original.apply(this, args).catch((err: unknown) => {
+        throw unwrapDriverError(err);
+      });
+    // The Postgres statement metric (design.md 14.2, #343). SQLite's is in execute(), below
+    // this layer, so it is not counted here as well. args[0] is the statement's text.
+    const text = args[0];
+    return observe && typeof text === 'string'
+      ? observeStatementAsync('postgresql', text, run)
+      : run();
   };
   proto.__opportunUnwrapped = true;
 }
-unwrapQueryErrors(RemotePreparedQuery.prototype);
-unwrapQueryErrors(PgPreparedQuery.prototype);
+unwrapQueryErrors(RemotePreparedQuery.prototype, false);
+unwrapQueryErrors(PgPreparedQuery.prototype, true);
 
 type Method = Parameters<AsyncRemoteCallback>[2];
 
 function execute(sqlite: Sqlite, text: string, params: unknown[], method: Method) {
+  // Synchronous, so the write-gate invariant below is unchanged (design.md 14.2, #343).
+  return observeStatement('sqlite', text, () => executeStatement(sqlite, text, params, method));
+}
+
+function executeStatement(sqlite: Sqlite, text: string, params: unknown[], method: Method) {
   const stmt = sqlite.prepare(text);
   if (method === 'run') {
     const r = stmt.run(...params);
@@ -1227,7 +1240,7 @@ async function onConnection<T>(
   // Same invariant as proxyCallback: the last mustWait() check and the statement share one
   // synchronous step (no await between the loop condition and run()).
   while (conn.gate.mustWait()) await conn.gate.idleFor();
-  return run(conn.sqlite.prepare(text), params);
+  return observeStatement('sqlite', text, () => run(conn.sqlite.prepare(text), params));
 }
 
 /** Postgres: the statement on the exec's connection (a transaction's own, or the pool). */

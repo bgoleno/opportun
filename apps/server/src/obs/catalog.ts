@@ -68,6 +68,10 @@ export const OUTBOUND_TARGETS = [
   'google',
   'oauth',
   ...ATS_REF_KINDS,
+  // Discovery boards whose hosts are in ATS_ALLOW_HOSTS but which are not ATS_REF_KINDS: an
+  // opportunity never records a job ref on them, so core has no kind for them (#343).
+  'ats_smartrecruiters',
+  'ats_workable',
   'reactive_resume',
   'public_site',
 ] as const;
@@ -79,8 +83,19 @@ export type OutboundTarget = (typeof OUTBOUND_TARGETS)[number];
  * `opportun.outbound.target` only: a host the user configured, a page they captured, and a
  * tenant's own host such as a Workday board, whose name is the company's.
  */
-export const FIXED_SERVICE_HOSTS: readonly string[] = [
-  ...ATS_ALLOW_HOSTS,
+let fixedHosts: readonly string[] | undefined;
+
+/**
+ * Read on first use, not at load: safeFetch imports obs/outbound, which imports this file, so
+ * reading ATS_ALLOW_HOSTS while the modules load would find safeFetch still initialising.
+ */
+export function fixedServiceHosts(): readonly string[] {
+  fixedHosts ??= serviceHostsWith(ATS_ALLOW_HOSTS);
+  return fixedHosts;
+}
+
+const serviceHostsWith = (ats: readonly string[]): readonly string[] => [
+  ...ats,
   'api.anthropic.com',
   'api.openai.com',
   'accounts.google.com',
@@ -142,7 +157,7 @@ export const ATTRIBUTES = {
       "status; never an error's message, never a provider's error body",
   },
   'opportun.outbound.target': { kind: 'enum', values: OUTBOUND_TARGETS },
-  'server.address': { kind: 'enum', values: FIXED_SERVICE_HOSTS },
+  'server.address': { kind: 'enum', values: fixedServiceHosts },
   'db.system.name': { kind: 'enum', values: ['sqlite', 'postgresql'] },
   'db.operation.name': { kind: 'enum', values: DB_OPERATIONS },
   'db.collection.name': { kind: 'enum', values: tableNames },

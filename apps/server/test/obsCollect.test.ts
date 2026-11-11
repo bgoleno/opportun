@@ -133,17 +133,20 @@ describe('turning Collect on and off (#353)', () => {
     expect(isCollecting()).toBe(true);
 
     await driveEverything(app, a.userId);
-    // Points for the server metric, the job metric and the outbound request: each a minute row
-    // and an hour row. Spans are not stored until FR-T4 part 2 registers a provider.
+    // Points for the server metric, the job metric and the outbound request, and since FR-T3
+    // (#343) the HTTP and database boundaries' own: each series a minute row and an hour row.
+    // Spans are not stored until FR-T4 part 2 registers a provider.
     const points = await app.db.select().from(obsMetricPoints).all();
-    expect(new Set(points.map((p) => p.metric))).toEqual(
-      new Set([
-        'http.server.request.duration',
-        'opportun.job.duration',
-        'http.client.request.duration',
-      ]),
-    );
-    expect(points).toHaveLength(6);
+    const metrics = new Set(points.map((p) => p.metric));
+    for (const m of [
+      'http.server.request.duration',
+      'opportun.job.duration',
+      'http.client.request.duration',
+      'db.client.operation.duration',
+    ]) {
+      expect(metrics.has(m), m).toBe(true);
+    }
+    expect(points.filter((p) => p.resolution === 60_000)).toHaveLength(points.length / 2);
     expect(await countRows(app, obsTraces)).toBe(0);
 
     const audits = await app.db.select().from(auditLog).all();

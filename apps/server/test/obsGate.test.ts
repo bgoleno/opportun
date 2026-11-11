@@ -8,7 +8,7 @@ import {
   ATTRIBUTES,
   type AttrType,
   EVENTS,
-  FIXED_SERVICE_HOSTS,
+  fixedServiceHosts,
   isLocalOnly,
   METRICS,
   OTHER,
@@ -128,7 +128,7 @@ describe('the catalog (#353)', () => {
 
   it('server.address takes exact hosts from a literal list, never a pattern', () => {
     // 14.8 at b8dcc27: ATS_ALLOW_HOSTS, the AI providers' fixed API hosts, and Google's.
-    expect([...FIXED_SERVICE_HOSTS].sort()).toEqual(
+    expect([...fixedServiceHosts()].sort()).toEqual(
       [
         ...ATS_ALLOW_HOSTS,
         'api.anthropic.com',
@@ -142,7 +142,7 @@ describe('the catalog (#353)', () => {
         'docs.googleapis.com',
       ].sort(),
     );
-    for (const h of FIXED_SERVICE_HOSTS) expect(h, h).toMatch(/^[a-z0-9.-]+$/);
+    for (const h of fixedServiceHosts()) expect(h, h).toMatch(/^[a-z0-9.-]+$/);
     const type = ATTRIBUTES['server.address'];
     expect(checkValue(type, 'api.openai.com')).toBe('api.openai.com');
     expect(checkValue(type, 'apply.workable.com')).toBe('apply.workable.com');
