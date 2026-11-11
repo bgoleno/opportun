@@ -5,10 +5,22 @@
 // Opportun never transmits an application. These calls create and edit a record, review it, and
 // hand off: the server returns the employer's address for the browser to open, and never
 // contacts it.
-import type { Submission, SubmissionAnswer, SubmissionFields } from '@opportun/core';
+import {
+  APPLICATION_DETAIL_FIELDS,
+  applicationDetailField,
+  submissionFieldProblem,
+  type ApplicationDetailKey,
+  type ApplicationDetailsPrefill,
+  type DetailSource,
+  type Profile,
+  type Submission,
+  type SubmissionAnswer,
+  type SubmissionFields,
+} from '@opportun/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, errorMessage } from '@/lib/api';
-import { qk, type Page } from '@/lib/opportunities';
+import { formatDate, qk, type Page } from '@/lib/opportunities';
+import { keys as settingsKeys } from '@/routes/settings/-api';
 import { rk } from '@/components/resume/api';
 
 const enc = encodeURIComponent;
@@ -31,24 +43,83 @@ export type SubmissionView = Submission & {
 };
 
 /**
- * The profile values a form usually asks for, in the order the details step shows them. Keys
- * follow the server's field-name rule. firstName, lastName, linkedinUrl and websiteUrl are what
- * prefill fills by name (M3a, #181); the full name and the free-text links stay as they were,
- * and nothing is ever split or derived from them.
+ * How each detail is typed in: the input's type and the browser's autocomplete hint. The fields
+ * themselves (key, label, where each lives in the profile) are core's APPLICATION_DETAIL_FIELDS
+ * (#411), one list for the server, the details step and Settings > Profile.
  */
-export const DETAIL_FIELDS = [
-  { key: 'firstName', label: 'First name', type: 'text', autoComplete: 'given-name' },
-  { key: 'lastName', label: 'Last name', type: 'text', autoComplete: 'family-name' },
-  { key: 'fullName', label: 'Full name', type: 'text', autoComplete: 'name' },
-  { key: 'email', label: 'Email', type: 'email', autoComplete: 'email' },
-  { key: 'phone', label: 'Phone', type: 'tel', autoComplete: 'tel' },
-  { key: 'location', label: 'Location', type: 'text', autoComplete: 'address-level2' },
-  { key: 'workAuthorization', label: 'Work authorisation', type: 'text', autoComplete: 'off' },
+const DETAIL_INPUTS = new Map<
+  ApplicationDetailKey,
+  { type: 'text' | 'email' | 'tel' | 'url'; autoComplete: string }
+>([
+  ['firstName', { type: 'text', autoComplete: 'given-name' }],
+  ['lastName', { type: 'text', autoComplete: 'family-name' }],
+  ['fullName', { type: 'text', autoComplete: 'name' }],
+  ['email', { type: 'email', autoComplete: 'email' }],
+  ['phone', { type: 'tel', autoComplete: 'tel' }],
+  ['location', { type: 'text', autoComplete: 'address-level2' }],
+  ['workAuthorization', { type: 'text', autoComplete: 'off' }],
   // 'off', not 'url': the browser's one "url" value is a home page, which belongs in Website.
-  { key: 'linkedinUrl', label: 'LinkedIn profile', type: 'url', autoComplete: 'off' },
-  { key: 'websiteUrl', label: 'Website', type: 'url', autoComplete: 'url' },
-  { key: 'links', label: 'Links', type: 'text', autoComplete: 'url' },
-] as const;
+  ['linkedinUrl', { type: 'url', autoComplete: 'off' }],
+  ['websiteUrl', { type: 'url', autoComplete: 'url' }],
+  ['links', { type: 'text', autoComplete: 'url' }],
+]);
+
+/**
+ * The profile values a form usually asks for, in the order the details step shows them.
+ * firstName, lastName, linkedinUrl and websiteUrl are what prefill fills by name (M3a, #181); the
+ * full name and the free-text links stay as they were, and nothing is ever split or derived.
+ */
+export const DETAIL_FIELDS = APPLICATION_DETAIL_FIELDS.map((f) => ({
+  key: f.key,
+  label: f.label,
+  home: f.home,
+  ...(DETAIL_INPUTS.get(f.key) ?? { type: 'text' as const, autoComplete: 'off' }),
+}));
+
+/** What the profile holds for a detail, or '' (its column, or its saved Application detail). */
+export function profileDetail(profile: Profile, key: ApplicationDetailKey): string {
+  const { home } = applicationDetailField(key);
+  if (home !== 'details') {
+    const columns = new Map<string, string | null | undefined>([
+      ['fullName', profile.fullName],
+      ['email', profile.email],
+      ['phone', profile.phone],
+      ['location', profile.location],
+      ['workAuth', profile.workAuth],
+    ]);
+    return columns.get(home) ?? '';
+  }
+  return new Map(Object.entries(profile.applicationDetails ?? {})).get(key) ?? '';
+}
+
+/** Where a value on the details step came from, as the step says it (#401). */
+export function sourceText(source: DetailSource): string {
+  switch (source.kind) {
+    case 'profile':
+      return 'From your profile';
+    case 'account':
+      return 'From your account';
+    case 'application':
+      return `From your application to ${source.companyName}, ${formatDate(source.reviewedAt)}`;
+  }
+}
+
+/** Why a detail cannot be saved as typed, in the details step's words, or null (core's checks). */
+export function detailProblemText(key: string, value: string): string | null {
+  const problem = submissionFieldProblem(Object.fromEntries([[key, value]]));
+  if (problem === null) return value.length > 2_000 ? 'Use at most 2,000 characters.' : null;
+  return FIELD_PROBLEM_TEXT.get(problem.code) ?? 'This value does not pass the check.';
+}
+
+const FIELD_PROBLEM_TEXT = new Map<string, string>([
+  ['field_url_invalid', 'Enter the whole web address, starting with https:// (or http://).'],
+  [
+    'field_name_invalid',
+    'Use one line of plain text, up to 100 characters, with no spaces at the start or end.',
+  ],
+  ['field_email_invalid', 'An email address must be one line, like name@example.com.'],
+  ['field_phone_invalid', 'A phone number may hold digits, spaces, +, -, ., ( ) and an extension.'],
+]);
 
 /** A field's label, or its key when the screens do not know it. */
 export const detailLabel = (key: string): string =>
@@ -156,6 +227,8 @@ export const ak = {
   submission: (id: string) => ['submissions', id] as const,
   /** The caller's own daily review usage and cap (#130). */
   reviewUsage: ['submissions', 'review-usage'] as const,
+  /** What the details step is filled from, for one draft (#401). */
+  applicationDetails: (excluding: string) => ['application-details', excluding] as const,
 };
 
 /** The statuses of an attempt that is still in progress: at most one per opportunity. */
@@ -213,6 +286,9 @@ function useInvalidate(opportunityId: string) {
       qc.invalidateQueries({ queryKey: ak.reviewUsage }),
       // A submission detail page open on it reads it again too (#149).
       qc.invalidateQueries({ queryKey: ['submissions', 'one'] }),
+      // An edit can save details to the profile (#401): its readers read it again.
+      qc.invalidateQueries({ queryKey: settingsKeys.profile }),
+      qc.invalidateQueries({ queryKey: ['application-details'] }),
     ]);
 }
 
@@ -259,6 +335,29 @@ export interface SubmissionPatch {
   resumeId?: string;
   fields?: SubmissionFields;
   answers?: SubmissionAnswer[];
+  /** Detail fields to save to the profile too, with this request's values (#401). */
+  saveToProfile?: ApplicationDetailKey[];
+}
+
+/**
+ * What Opportun holds for the user's next application, each value with its source (#411's
+ * GET /profile/application-details), leaving out `excluding`, the draft on the step. Null when it
+ * cannot be read: the step then shows no source lines, and never breaks for it.
+ */
+export function useApplicationDetails(excluding: string) {
+  return useQuery({
+    queryKey: ak.applicationDetails(excluding),
+    queryFn: async (): Promise<ApplicationDetailsPrefill | null> => {
+      try {
+        return await api<ApplicationDetailsPrefill>(
+          `/profile/application-details?excluding=${enc(excluding)}`,
+        );
+      } catch {
+        return null;
+      }
+    },
+    retry: false,
+  });
 }
 
 /** An edit. After a review it sends the attempt back to draft (design 4.3). */

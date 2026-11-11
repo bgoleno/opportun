@@ -398,9 +398,11 @@ export async function listCommunications(
           likeContains(communications.from, opts.q),
         ) as SQL),
   );
-  // Inbox views honor the requested date order, newest first by default. A single opportunity's
-  // thread stays chronological (oldest first) so the conversation reads top to bottom.
-  const oldestFirst = opts.opportunityId !== undefined || opts.order === 'oldest';
+  // The requested date order, applied before the limit, so a long thread asked for newest first
+  // is its newest messages (#394). Without one, the Inbox is newest first and a single
+  // opportunity's thread oldest first, so the conversation reads top to bottom.
+  const oldestFirst =
+    opts.order === undefined ? opts.opportunityId !== undefined : opts.order === 'oldest';
   const order = oldestFirst
     ? [asc(communications.sentAt), asc(communications.id)]
     : [desc(communications.sentAt), desc(communications.id)];

@@ -351,8 +351,6 @@ describe('#395: a refused Apply button says why, and never swallows a click', ()
   );
 });
 
-// https://github.com/bgoleno/opportun/issues/404 (tl's decision 1): once the user has applied, the
-// panel leads with the outcome, and applying again is a quiet link under one line of why.
 // https://github.com/bgoleno/opportun/issues/428: the panel's resume reason is the resume flow's
 // own state, with a link to the Resume tab (?tab=resume).
 describe('#428: the resume reason comes from the resume flow', () => {
@@ -444,6 +442,8 @@ describe('#428: the resume reason comes from the resume flow', () => {
   });
 });
 
+// https://github.com/bgoleno/opportun/issues/404 (tl's decision 1): once the user has applied, the
+// panel leads with the outcome, and applying again is a quiet link under one line of why.
 describe('#404: after applying, the panel leads with the outcome', () => {
   const DAY = 24 * 60 * MIN;
   const sentOn = NOW - 3 * DAY;
@@ -2282,5 +2282,287 @@ describe('#198: a 429 on the handoff says when to try again (tl on #194)', () =>
     expect(at.some((t) => alert.textContent?.includes(t))).toBe(true);
     expect(alert).not.toHaveTextContent(/in a minute/i);
     expect(screen.queryByText(/check your connection/i)).toBeNull();
+  });
+});
+
+// #401 (slice 2 of tl's note, issuecomment-6794002888): the details step opens filled with what
+// Opportun holds, says where each value came from, and saves a value to the profile only when
+// the user ticks it. Every name, address and company here is made up.
+describe('#401: the details step, filled from the profile, the account and the last application', () => {
+  const PROFILE = {
+    userId: 'u1',
+    fullName: 'Jane Doe',
+    headline: null,
+    email: null,
+    phone: null,
+    location: null,
+    workAuth: null,
+    links: [],
+    applicationDetails: {},
+    updatedAt: NOW,
+  };
+  const REVIEWED_AT = new Date(2026, 9, 3).getTime();
+  const PREFILL = {
+    values: [
+      { key: 'fullName', value: 'Jane Doe', source: { kind: 'profile' } },
+      { key: 'email', value: 'jane@example.com', source: { kind: 'account' } },
+      {
+        key: 'phone',
+        value: '+1 555 0100',
+        source: {
+          kind: 'application',
+          submissionId: '01a1caeb-0000-7000-8000-000000000001',
+          opportunityId: '01a1caeb-0000-7000-8000-000000000002',
+          companyName: 'Globex',
+          reviewedAt: REVIEWED_AT,
+        },
+      },
+    ],
+    leftOut: [],
+  };
+  const filled = submission({
+    fields: { fullName: 'Jane Doe', email: 'jane@example.com', phone: '+1 555 0100' },
+  });
+
+  function withDetails(sub: SubmissionView, extra: Record<string, unknown> = {}) {
+    return routes(sub, {
+      'GET /profile': PROFILE,
+      'GET /profile/application-details': PREFILL,
+      'PATCH /submissions/sub-1': (c: ApiCall) => ({
+        status: 200,
+        body: { ...sub, ...(c.body as object), status: 'draft' },
+      }),
+      ...extra,
+    });
+  }
+
+  const fieldBox = (label: string) => screen.getByLabelText(label).parentElement as HTMLElement;
+  const fieldBoxAsync = async (label: string) =>
+    (await screen.findByLabelText(label)).parentElement as HTMLElement;
+
+  it('says where each value came from, and which ones the profile does not hold', async () => {
+    const api = mockApi(withDetails(filled));
+    renderStep('details');
+    expect(await screen.findByText('From your profile')).toBeInTheDocument();
+    expect(within(fieldBox('Full name')).getByText('From your profile')).toBeInTheDocument();
+    expect(within(fieldBox('Email')).getByText('From your account')).toBeInTheDocument();
+    expect(
+      within(fieldBox('Phone')).getByText(
+        `From your application to Globex, ${formatDate(REVIEWED_AT)}`,
+      ),
+    ).toBeInTheDocument();
+    // The account's email and the application's phone are not in the profile: a tick each,
+    // off by default. The full name is the profile's own: no tick.
+    expect(within(fieldBox('Email')).getByText('Not in your profile')).toBeInTheDocument();
+    expect(
+      within(fieldBox('Email')).getByRole('checkbox', { name: 'Save to my profile' }),
+    ).not.toBeChecked();
+    expect(
+      within(fieldBox('Phone')).getByRole('checkbox', { name: 'Save to my profile' }),
+    ).not.toBeChecked();
+    expect(within(fieldBox('Full name')).queryByRole('checkbox')).toBeNull();
+    expect(screen.getByText(/unless you tick Save to my profile/)).toBeInTheDocument();
+    expect(calls(api.calls, 'GET', '/profile/application-details')[0]?.search).toBe(
+      '?excluding=sub-1',
+    );
+  });
+
+  it('an edit stays on this application: it differs from the profile, and saves nothing unticked', async () => {
+    const api = mockApi(withDetails(filled));
+    const { user, router } = renderStep('details');
+    const name = await screen.findByLabelText('Full name');
+    await screen.findByText('From your profile');
+    await user.clear(name);
+    await user.type(name, 'Jane Q. Doe');
+    expect(within(fieldBox('Full name')).queryByText('From your profile')).toBeNull();
+    expect(
+      within(fieldBox('Full name')).getByText('Differs from your profile'),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'review' }));
+    const [edit] = calls(api.calls, 'PATCH', '/submissions/sub-1');
+    expect(edit?.body).toMatchObject({ fields: { fullName: 'Jane Q. Doe' } });
+    expect(edit?.body).not.toHaveProperty('saveToProfile');
+  });
+
+  it('Next sends the draft and the ticked names in one request', async () => {
+    const api = mockApi(withDetails(filled));
+    const { user, router } = renderStep('details');
+    const name = await screen.findByLabelText('Full name');
+    await screen.findByText('From your profile');
+    await user.clear(name);
+    await user.type(name, 'Jane Q. Doe');
+    await user.click(
+      within(fieldBox('Full name')).getByRole('checkbox', { name: 'Save to my profile' }),
+    );
+    await user.click(
+      within(fieldBox('Phone')).getByRole('checkbox', { name: 'Save to my profile' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'review' }));
+    const edits = calls(api.calls, 'PATCH', '/submissions/sub-1');
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.body).toMatchObject({
+      fields: { fullName: 'Jane Q. Doe', email: 'jane@example.com', phone: '+1 555 0100' },
+      saveToProfile: ['fullName', 'phone'],
+    });
+  });
+
+  it('a tick alone is a change: an unedited reviewed attempt with a tick is sent', async () => {
+    const reviewed = submission({ ...filled, status: 'reviewed', reviewExpiresAt: NOW + 30 * MIN });
+    const api = mockApi(withDetails(reviewed));
+    const { user } = renderStep('details');
+    await user.click(
+      await within(await fieldBoxAsync('Email')).findByRole('checkbox', {
+        name: 'Save to my profile',
+      }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await waitFor(() => expect(calls(api.calls, 'PATCH', '/submissions/sub-1')).toHaveLength(1));
+    expect(calls(api.calls, 'PATCH', '/submissions/sub-1')[0]?.body).toMatchObject({
+      saveToProfile: ['email'],
+    });
+  });
+
+  it('an emptied field the profile holds offers to remove it, and sends it without the value', async () => {
+    const api = mockApi(withDetails(filled));
+    const { user, router } = renderStep('details');
+    const name = await screen.findByLabelText('Full name');
+    await screen.findByText('From your profile');
+    await user.clear(name);
+    await user.click(
+      within(fieldBox('Full name')).getByRole('checkbox', { name: 'Remove from my profile' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'review' }));
+    const body = calls(api.calls, 'PATCH', '/submissions/sub-1')[0]?.body as {
+      fields: Record<string, string>;
+      saveToProfile: string[];
+    };
+    expect(body.saveToProfile).toEqual(['fullName']);
+    expect(body.fields).not.toHaveProperty('fullName');
+  });
+
+  // tl on #430: LinkedIn profile and Links can come from the profile's links with no detail saved.
+  // Such a value is the profile's: unchanged it needs no tick, changed it differs, and emptied
+  // there is nothing saved to remove.
+  describe('a value the profile gives from its links, with no detail saved', () => {
+    const LINK = 'https://www.linkedin.com/in/jane-example';
+    const fromLinks = submission({ fields: { linkedinUrl: LINK, links: LINK } });
+    const derived = () =>
+      withDetails(fromLinks, {
+        'GET /profile': { ...PROFILE, links: [{ label: 'LinkedIn', url: LINK }] },
+        'GET /profile/application-details': {
+          values: [
+            { key: 'linkedinUrl', value: LINK, source: { kind: 'profile' } },
+            { key: 'links', value: LINK, source: { kind: 'profile' } },
+          ],
+          leftOut: [],
+        },
+      });
+
+    it('unchanged: from your profile, with no marker and no tick', async () => {
+      mockApi(derived());
+      renderStep('details');
+      expect(
+        await within(await fieldBoxAsync('LinkedIn profile')).findByText('From your profile'),
+      ).toBeInTheDocument();
+      for (const label of ['LinkedIn profile', 'Links']) {
+        expect(within(fieldBox(label)).getByText('From your profile')).toBeInTheDocument();
+        expect(
+          within(fieldBox(label)).queryByText(/^(Not in|Differs from) your profile$/),
+        ).toBeNull();
+        expect(within(fieldBox(label)).queryByRole('checkbox')).toBeNull();
+      }
+    });
+
+    it('changed: differs from your profile, with Save to my profile', async () => {
+      const { user } = (mockApi(derived()), renderStep('details'));
+      const input = await screen.findByLabelText('LinkedIn profile');
+      await within(fieldBox('LinkedIn profile')).findByText('From your profile');
+      await user.clear(input);
+      await user.type(input, 'https://www.linkedin.com/in/jane-new');
+      expect(
+        within(fieldBox('LinkedIn profile')).getByText('Differs from your profile'),
+      ).toBeInTheDocument();
+      expect(
+        within(fieldBox('LinkedIn profile')).getByRole('checkbox', { name: 'Save to my profile' }),
+      ).toBeInTheDocument();
+    });
+
+    it('emptied: no marker and no tick, as nothing is saved to remove', async () => {
+      const { user } = (mockApi(derived()), renderStep('details'));
+      const input = await screen.findByLabelText('LinkedIn profile');
+      await within(fieldBox('LinkedIn profile')).findByText('From your profile');
+      await user.clear(input);
+      expect(within(fieldBox('LinkedIn profile')).queryByText(/your profile/)).toBeNull();
+      expect(within(fieldBox('LinkedIn profile')).queryByRole('checkbox')).toBeNull();
+    });
+  });
+
+  it('an empty profile and nothing held: empty inputs, no source lines, no ticks', async () => {
+    mockApi(
+      withDetails(submission({ fields: {} }), {
+        'GET /profile': { ...PROFILE, fullName: null },
+        'GET /profile/application-details': { values: [], leftOut: [] },
+      }),
+    );
+    renderStep('details');
+    expect(await screen.findByLabelText('First name')).toHaveValue('');
+    expect(screen.getByLabelText('Email')).toHaveValue('');
+    await waitFor(() => expect(screen.queryByText(/^From your/)).toBeNull());
+    expect(screen.queryByRole('checkbox', { name: /my profile/ })).toBeNull();
+  });
+
+  it('names a value Opportun holds but did not fill in, because it fails the checks', async () => {
+    mockApi(
+      withDetails(submission({ fields: { fullName: 'Jane Doe' } }), {
+        'GET /profile/application-details': {
+          values: [PREFILL.values[0]],
+          leftOut: [{ key: 'phone', source: { kind: 'profile' } }],
+        },
+      }),
+    );
+    renderStep('details');
+    const notice = await screen.findByRole('status', { name: /not filled in/i });
+    expect(notice).toHaveTextContent(
+      'Not filled in, because the value Opportun holds does not pass the checks: Phone (from your profile). Enter them if you need them.',
+    );
+  });
+
+  it('start again keeps the expired attempt values and fills the rest from the server', async () => {
+    const expired = submission({
+      id: 'sub-old',
+      status: 'abandoned',
+      failureReason: 'review_expired',
+      fields: { email: 'old@example.com', fullName: 'Jane Doe', linkedinUrl: 'linkedin.com/x' },
+      answers: [],
+    });
+    // The server filled the new draft from the profile (#411): a phone and an email.
+    const fresh = submission({
+      id: 'sub-2',
+      fields: { phone: '+1 555 0100', email: 'jane@example.com' },
+      answers: [],
+    });
+    const api = mockApi({
+      ...routes(null),
+      'GET /opportunities/opp-1/submissions': { items: [expired], total: 1 },
+      'POST /opportunities/opp-1/submissions': () => ({ status: 201, body: fresh }),
+      'PATCH /submissions/sub-2': (c: ApiCall) => ({
+        status: 200,
+        body: { ...fresh, ...(c.body as object) },
+      }),
+    });
+    const { user, router } = renderStep('resume');
+    await user.click(await screen.findByRole('button', { name: 'Next: Details' }));
+    await waitFor(() =>
+      expect(router.state.location.search).toEqual({ step: 'details', cleared: ['linkedinUrl'] }),
+    );
+    const [copy] = calls(api.calls, 'PATCH', '/submissions/sub-2');
+    expect((copy?.body as { fields: unknown }).fields).toEqual({
+      phone: '+1 555 0100',
+      email: 'old@example.com',
+      fullName: 'Jane Doe',
+    });
   });
 });
