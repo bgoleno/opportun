@@ -162,6 +162,56 @@ describe('createProviderFetch: redirect policy (issue #334)', () => {
   });
 });
 
+describe("createProviderFetch: the operator's own provider base URL (issue #344, decision 40)", () => {
+  // An operator who sets ANTHROPIC_BASE_URL or OPENAI_BASE_URL chose that proxy themselves, as
+  // with OPPORTUN_AI_ALLOW_LOOPBACK_HTTP: its origin skips the https and public-address checks.
+  // It keeps the rest: no credentials in the URL, and redirect: 'error'.
+  const operator = { allowLoopbackHttp: false, operatorOrigins: ['http://litellm:4000'] };
+
+  it('reaches an http proxy on a private network at that origin, without resolving it', async () => {
+    const f = createProviderFetch(operator, neverResolve);
+    await f('http://litellm:4000/v1/messages', { method: 'POST' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]![1]).toMatchObject({ redirect: 'error', method: 'POST' });
+  });
+
+  it('reaches a private https gateway at that origin too', async () => {
+    const f = createProviderFetch(
+      { allowLoopbackHttp: false, operatorOrigins: ['https://gateway.corp.internal'] },
+      resolvePrivate,
+    );
+    await f('https://gateway.corp.internal/v1/chat/completions');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('checks every other origin as before: another port, another scheme, another host', async () => {
+    const f = createProviderFetch(operator, resolvePrivate);
+    for (const url of [
+      'http://litellm:4001/v1/messages',
+      'https://litellm:4000/v1/messages',
+      'http://other:4000/v1/messages',
+    ]) {
+      await expect(f(url), url).rejects.toThrow();
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses credentials in the URL even at that origin', async () => {
+    const f = createProviderFetch(
+      { allowLoopbackHttp: false, operatorOrigins: ['http://litellm:4000'] },
+      neverResolve,
+    );
+    await expect(f('http://user:pass@litellm:4000/v1/messages')).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('an official provider host still gets the full check', async () => {
+    const f = createProviderFetch(operator, resolvePrivate);
+    await expect(f('https://api.anthropic.com/v1/messages')).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('end-to-end: a directly-written policy row cannot reach a prohibited or private host (issue #334)', () => {
   const boot = useApi();
 

@@ -24,7 +24,13 @@ import { secrets, settings } from '../db/schema';
 import { obs } from '../obs';
 import type { UserCtx } from '../repos/base';
 import { recordTaskRun, spentTodayUsd } from '../repos/taskRuns';
-import { createProviderFetch, type ResolveHost } from './aiProviderFetch';
+import { observeOutbound } from '../obs/outbound';
+import {
+  createProviderFetch,
+  operatorProviderOrigins,
+  providerTarget,
+  type ResolveHost,
+} from './aiProviderFetch';
 import { getSecretValue } from './secretBox';
 
 export const DEFAULT_PER_TASK_DAILY_USD = 5;
@@ -251,6 +257,30 @@ export function recordGenAiMetrics(userId: string, run: TaskRunRecord): void {
   }
 }
 
+/**
+ * The fetch every AI provider's requests leave through (issue #334, and for Anthropic and OpenAI
+ * since https://github.com/bgoleno/opportun/issues/344): checked (aiProviderFetch.ts), then
+ * observed under its provider's target (obs/outbound.ts, design 14.2). The operator's own
+ * ANTHROPIC_BASE_URL and OPENAI_BASE_URL are read here, as the SDKs read them when the client is
+ * built, so the two agree on which origin is the operator's (decision 40).
+ */
+function providerFetchFor(allowLoopbackHttp: boolean, resolve?: ResolveHost): typeof fetch {
+  const operator = operatorProviderOrigins();
+  const checked = createProviderFetch(
+    { allowLoopbackHttp, operatorOrigins: [...operator.keys()] },
+    resolve,
+  );
+  return ((input, init) =>
+    observeOutbound(
+      {
+        target: providerTarget(input, operator),
+        method: init?.method ?? (input instanceof Request ? input.method : 'GET'),
+        url: input instanceof Request ? input.url : input,
+      },
+      () => checked(input, init),
+    )) as typeof fetch;
+}
+
 export async function buildAiDeps(
   db: Db,
   ctx: UserCtx,
@@ -289,7 +319,7 @@ export async function buildAiDeps(
     budget: await readBudget(db, ctx),
     spentTodayUsd: async (task) => await spentTodayUsd(db, ctx, task),
     providerFetch: {
-      fetch: createProviderFetch({ allowLoopbackHttp }, resolveOverrides.get(db)),
+      fetch: providerFetchFor(allowLoopbackHttp, resolveOverrides.get(db)),
       allowLoopbackHttp,
     },
     // packages/ai does no IO, so it hands a failed ledger write after a streamed call to the

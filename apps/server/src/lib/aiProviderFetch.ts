@@ -70,9 +70,23 @@ export type ResolveHost = (host: string) => Promise<string[]>;
 const realResolve: ResolveHost = async (host) =>
   (await lookup(host, { all: true, verbatim: true })).map((a) => a.address);
 
+export interface ProviderFetchOptions {
+  allowLoopbackHttp: boolean;
+  /**
+   * The origins of the operator's own ANTHROPIC_BASE_URL and OPENAI_BASE_URL, which the SDKs read
+   * from the environment (issue https://github.com/bgoleno/opportun/issues/344, decision 40). An
+   * operator who points them at a proxy chose it, as with OPPORTUN_AI_ALLOW_LOOPBACK_HTTP, so a
+   * request to one of these origins skips the https and public-address checks: a LiteLLM
+   * container on the compose network, or a private gateway, keeps working. It keeps the rest: no
+   * credentials in the URL, and redirect: 'error'. No user can set either variable, and a user's
+   * own openai_compatible baseUrl on any other origin is checked as before.
+   */
+  operatorOrigins?: readonly string[];
+}
+
 async function checkProviderUrl(
   raw: string,
-  allowLoopbackHttp: boolean,
+  opts: ProviderFetchOptions,
   resolve: ResolveHost,
 ): Promise<URL> {
   let url: URL;
@@ -84,6 +98,8 @@ async function checkProviderUrl(
   if (url.username !== '' || url.password !== '') {
     throw new FetchBlockedError('scheme', 'credentials in URL');
   }
+  if (opts.operatorOrigins?.includes(url.origin) === true) return url;
+  const allowLoopbackHttp = opts.allowLoopbackHttp;
   if (url.protocol === 'http:') {
     if (!allowLoopbackHttp || !LOOPBACK_HOSTNAMES.has(url.hostname)) {
       throw new FetchBlockedError('scheme', url.protocol);
@@ -123,11 +139,60 @@ function targetOf(input: FetchInput): string {
  * stricter choice should never be loosened, but nothing downstream may loosen this default.
  */
 export function createProviderFetch(
-  opts: { allowLoopbackHttp: boolean },
+  opts: ProviderFetchOptions,
   resolve: ResolveHost = realResolve,
 ): typeof fetch {
   return (async (input: FetchInput, init?: RequestInit) => {
-    await checkProviderUrl(targetOf(input), opts.allowLoopbackHttp, resolve);
+    await checkProviderUrl(targetOf(input), opts, resolve);
     return fetch(input, { redirect: 'error', ...init });
   }) as typeof fetch;
+}
+
+/** The env variables the Anthropic and OpenAI SDKs read their base URL from, and their target. */
+const OPERATOR_BASE_URLS = [
+  ['ANTHROPIC_BASE_URL', 'anthropic'],
+  ['OPENAI_BASE_URL', 'openai'],
+] as const;
+
+export type ProviderTarget = 'anthropic' | 'openai' | 'ai_compatible';
+
+/**
+ * The operator's own provider origins, read from the environment the SDKs read (decision 40). A
+ * value that is not a URL is left out: the SDK fails on it by itself.
+ */
+export function operatorProviderOrigins(
+  env: NodeJS.ProcessEnv = process.env,
+): Map<string, ProviderTarget> {
+  const out = new Map<string, ProviderTarget>();
+  for (const [name, target] of OPERATOR_BASE_URLS) {
+    const raw = env[name];
+    if (raw === undefined || raw.trim() === '') continue;
+    try {
+      out.set(new URL(raw).origin, target);
+    } catch {
+      // Not a URL: not an origin to trust.
+    }
+  }
+  return out;
+}
+
+const OFFICIAL: ReadonlyMap<string, ProviderTarget> = new Map([
+  ['api.anthropic.com', 'anthropic'],
+  ['api.openai.com', 'openai'],
+]);
+
+/**
+ * Which provider a request goes to, for its outbound span and metric (14.4): the official hosts
+ * and the operator's origins by name, any other endpoint (a user's own gateway) ai_compatible.
+ */
+export function providerTarget(
+  input: FetchInput,
+  operator: ReadonlyMap<string, ProviderTarget>,
+): ProviderTarget {
+  try {
+    const url = new URL(targetOf(input));
+    return operator.get(url.origin) ?? OFFICIAL.get(url.hostname.toLowerCase()) ?? 'ai_compatible';
+  } catch {
+    return 'ai_compatible';
+  }
 }

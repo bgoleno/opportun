@@ -37,6 +37,7 @@ import {
   writeKeyChangedAt,
 } from '../src/repos/discoveryBudget';
 import { useApi } from './api';
+import { withProviderResolver } from './providerDns';
 import type { TestClient } from './isolation';
 import { holdAt } from './race';
 
@@ -45,7 +46,7 @@ vi.mock('@opportun/ai', async (importOriginal) => {
   return { ...real, runStructured: vi.fn() };
 });
 
-const boot = useApi();
+const boot = withProviderResolver(useApi());
 const ctxOf = (c: TestClient): UserCtx => ({ userId: c.userId, isAdmin: false });
 const PAGE = { limit: 200, offset: 0 };
 const DAY = 86_400_000;
