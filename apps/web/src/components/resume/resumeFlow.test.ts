@@ -245,7 +245,9 @@ describe('resumeFlowState: H names a newer copy made since (#440, ruling 6)', ()
   it('a copy that was itself sent, recorded or applied with, is not again; nor a Submitted one', () => {
     const r = resume({ id: 'copy', status: 'final' });
     const sentCopy = send({ resumeId: 'copy', resumeKind: 'tailored' });
-    expect(again(resumeFlowState(input({ resumes: [BASE, r], sends: [sentCopy] })))).toBeUndefined();
+    expect(
+      again(resumeFlowState(input({ resumes: [BASE, r], sends: [sentCopy] }))),
+    ).toBeUndefined();
     const applied = attempt({ status: 'submitted', resumeId: 'copy' });
     expect(
       again(resumeFlowState(input({ resumes: [BASE, r], attempts: [applied] }))),

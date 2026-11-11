@@ -135,8 +135,10 @@ export function flowSentence(state: ResumeFlowState): string | null {
       return `"${state.resume.title}" is still ${statusLabel(state.resume.status)}. Mark it as final to apply.`;
     case 'H':
       // A copy made since, not Final yet: its own words, as in C and D (tl on #440, ruling 6).
-      if (state.again?.status === 'draft') return flowSentence({ state: 'C', step: 2, resume: state.again });
-      if (state.again?.status === 'in_review') return flowSentence({ state: 'D', step: 3, resume: state.again });
+      if (state.again?.status === 'draft')
+        return flowSentence({ state: 'C', step: 2, resume: state.again });
+      if (state.again?.status === 'in_review')
+        return flowSentence({ state: 'D', step: 3, resume: state.again });
       // Sent another way (a base sent as it is), and no resume assisted apply can use yet.
       return state.send !== undefined
         ? 'A resume is already recorded as sent for this opportunity. To apply here too, mark a resume as final.'
