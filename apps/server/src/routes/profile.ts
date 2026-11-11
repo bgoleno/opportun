@@ -2,6 +2,7 @@
 import {
   ApplicationDetailsPrefillSchema,
   ApplicationDetailsSchema,
+  PROFILE_DETAIL_KEYS,
   checkSeniorityRange,
   ProfileSchema,
   REMOTE_PREFS,
@@ -36,7 +37,9 @@ import {
   updateResumeRule,
   updateRoleTarget,
 } from '../repos/profile';
+import { submissionsEnabled } from '../config';
 import { audit } from '../lib/audit';
+import { HttpError } from '../lib/errors';
 import { applicationDetailsFor } from '../repos/applicationDetails';
 import { PromptVersionSchema } from './ai';
 import { HttpUrl, IdParams, listQuery, optionalText, pageOf } from './common';
@@ -48,6 +51,14 @@ import { HttpUrl, IdParams, listQuery, optionalText, pageOf } from './common';
  */
 const ApplicationDetailsBody = z
   .record(z.string(), z.string().trim())
+  // Keys first, before empty values are dropped: an unknown key is refused even when its
+  // value is empty (tl on #415), as every name in an audit record must be one of the list's.
+  .refine(
+    (details) => Object.keys(details).every((k) => PROFILE_DETAIL_KEYS.includes(k as never)),
+    {
+      message: 'not an application detail',
+    },
+  )
   .transform((details) => Object.fromEntries(Object.entries(details).filter(([, v]) => v !== '')))
   .pipe(ApplicationDetailsSchema);
 
@@ -187,8 +198,14 @@ export async function profileRoutes(app: FastifyInstance): Promise<void> {
         response: { 200: ApplicationDetailsPrefillSchema },
       },
     },
-    async (req) =>
-      applicationDetailsFor(db, app.requireUser(req), { excluding: req.query.excluding ?? null }),
+    async (req) => {
+      // It reads the user's applications, so it follows assisted apply's switch as the
+      // submission routes do (routes/submissions.ts): off, it does not exist (tl on #415).
+      if (!submissionsEnabled(app.config)) throw new HttpError(404, 'feature_unavailable');
+      return applicationDetailsFor(db, app.requireUser(req), {
+        excluding: req.query.excluding ?? null,
+      });
+    },
   );
 
   // --- role targets --------------------------------------------------------

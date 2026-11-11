@@ -258,6 +258,34 @@ describe('resolveApplicationDetails', () => {
       expect(valueOf(r, 'linkedinUrl')).toBeUndefined();
     });
 
+    // tl on #415: a link the profile only lists is not a value the user saved, so one that
+    // fails the LinkedIn check leaves the field to the next source.
+    it('one that fails the LinkedIn check is not held: the next source decides', () => {
+      const r = resolve({
+        profile: { ...EMPTY_PROFILE, links: [link('https://jane@linkedin.com/in/jane')] },
+        lastApplication: { ...APP, fields: { linkedinUrl: 'https://linkedin.com/in/jane-old' } },
+      });
+      expect(valueOf(r, 'linkedinUrl')).toEqual({
+        key: 'linkedinUrl',
+        value: 'https://linkedin.com/in/jane-old',
+        source: appSource,
+      });
+      expect(r.leftOut).toEqual([]);
+    });
+
+    it('a saved LinkedIn detail that fails is left out, and nothing comes in its place', () => {
+      const r = resolve({
+        profile: {
+          ...EMPTY_PROFILE,
+          links: [link('https://linkedin.com/in/from-links')],
+          applicationDetails: { linkedinUrl: 'linkedin.com/in/saved' },
+        },
+        lastApplication: { ...APP, fields: { linkedinUrl: 'https://linkedin.com/in/jane-old' } },
+      });
+      expect(valueOf(r, 'linkedinUrl')).toBeUndefined();
+      expect(r.leftOut).toEqual([{ key: 'linkedinUrl', source: { kind: 'profile' } }]);
+    });
+
     it('a saved LinkedIn detail wins over the links', () => {
       const r = resolve({
         profile: {

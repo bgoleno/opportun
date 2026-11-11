@@ -281,6 +281,18 @@ describe('a new draft is filled from what Opportun holds (#411)', () => {
     expect(p.values.map((v) => v.key).sort()).toEqual(['email', 'fullName']);
   });
 
+  // tl on #415: with no filter on the users read, the second user's draft took the first's.
+  it("each user's draft carries their own account's name and email", async () => {
+    const { app, a, b } = await boot(ON);
+    await setAccount(app, a, 'Ada Example');
+    await setAccount(app, b, 'Bea Example');
+    expect(await accountEmail(app, b)).not.toBe(await accountEmail(app, a));
+    const bDraft = await newDraft(app, b);
+    const aDraft = await newDraft(app, a);
+    expect(bDraft.fields).toEqual({ fullName: 'Bea Example', email: await accountEmail(app, b) });
+    expect(aDraft.fields).toEqual({ fullName: 'Ada Example', email: await accountEmail(app, a) });
+  });
+
   it('a replayed create returns the existing draft and fills nothing again', async () => {
     const { app, a } = await boot(ON);
     await api(a, 'PUT', '/profile', FULL_PROFILE);
@@ -291,7 +303,8 @@ describe('a new draft is filled from what Opportun holds (#411)', () => {
       resumeId: d.resumeId,
     });
     expect(again.statusCode, again.body).toBe(200);
-    expect(again.json()).toMatchObject({ id: d.id, fields: {} });
+    expect(again.json().id).toBe(d.id);
+    expect(again.json().fields).toEqual({});
   });
 
   it('a PATCH after create wins over the fill (the start-again carry-over)', async () => {
@@ -392,6 +405,11 @@ describe('saving a value to the profile from the draft (#411)', () => {
       422,
     ],
     [
+      'a location over 200 characters, which PUT /profile refuses too',
+      { fields: { location: `${'x'.repeat(198)}😀😀😀` }, saveToProfile: ['location'] },
+      422,
+    ],
+    [
       'a value the draft refuses',
       { fields: { linkedinUrl: 'linkedin.com/in/x' }, saveToProfile: ['linkedinUrl'] },
       422,
@@ -420,6 +438,29 @@ describe('saving a value to the profile from the draft (#411)', () => {
       expect(await profileRow(app, a)).toEqual(profileBefore);
     },
   );
+
+  // The save counts length as PUT /profile does (Zod's max(): code points), so what one
+  // accepts the other accepts (tl and qa on #415).
+  it('a value saved from an application is one PUT /profile then accepts, and the reverse', async () => {
+    const { app, a } = await boot(ON);
+    const d = await newDraft(app, a);
+    const location = `${'x'.repeat(197)}😀😀😀`; // 200 code points, 203 UTF-16 units
+    const saved = await api(a, 'PATCH', `/submissions/${d.id}`, {
+      fields: { location },
+      saveToProfile: ['location'],
+    });
+    expect(saved.statusCode, saved.body).toBe(200);
+    expect((await profileRow(app, a))?.location).toBe(location);
+    // What Settings does next: PUT back exactly what GET returned.
+    const got = (await api(a, 'GET', '/profile')).json();
+    expect(got.location).toBe(location);
+    const put = await api(a, 'PUT', '/profile', {
+      location: got.location,
+      applicationDetails: got.applicationDetails,
+    });
+    expect(put.statusCode, put.body).toBe(200);
+    expect((await api(a, 'PUT', '/profile', { location: `${location}x` })).statusCode).toBe(400);
+  });
 
   it("names to save only ever write the caller's own profile", async () => {
     const { app, a, b } = await boot(ON);
@@ -474,6 +515,7 @@ describe('/profile carries the application details (#411)', () => {
     ['a key outside the list', { nickname: 'J' }],
     ['a key that lives in a column', { phone: '+1 555 0100' }],
     ['a value that fails the checks', { linkedinUrl: 'linkedin.com/in/x' }],
+    ['a key outside the list with an empty value', { nickname: '' }],
   ])('refuses %s, changing nothing', async (_, applicationDetails) => {
     const { app, a } = await boot();
     await api(a, 'PUT', '/profile', FULL_PROFILE);
@@ -550,6 +592,15 @@ describe('a profile saved with the same values again records and writes nothing 
       .where(and(eq(auditLog.userId, a.userId), eq(auditLog.event, 'profile.updated')))
       .all();
     expect(recorded).toHaveLength(1);
+  });
+});
+
+describe('the read route follows the assisted apply switch (#411, tl)', () => {
+  it('answers 404 with assisted apply off, as the submission routes do', async () => {
+    const { a } = await boot();
+    const res = await api(a, 'GET', '/profile/application-details');
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ error: { code: 'feature_unavailable' } });
   });
 });
 

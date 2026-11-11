@@ -170,8 +170,12 @@ function fromProfile(
   const saved = profile.applicationDetails[field.key];
   if (held(saved)) return saved;
   if (field.key === 'linkedinUrl') {
+    // A link the profile only lists is not a value the user saved: one that fails the LinkedIn
+    // field's check is not held, and the next source decides (tl on #415). A saved detail that
+    // fails is held, and left out with nothing in its place.
     const linkedIn = profile.links.filter((l) => isLinkedIn(l.url));
-    return linkedIn.length === 1 ? (linkedIn[0]?.url ?? null) : null;
+    const url = linkedIn.length === 1 ? (linkedIn[0]?.url ?? null) : null;
+    return url !== null && detailValuePasses('linkedinUrl', url) ? url : null;
   }
   if (field.key === 'links') {
     const text = linksText(profile.links);

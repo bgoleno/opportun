@@ -49,9 +49,10 @@ export async function getProfile(db: Exec, ctx: UserCtx): Promise<ProfileRow> {
 }
 
 /**
- * The longest text each profile column holds, and the profile's email rule: PUT /profile's own
- * rules (routes/profile.ts builds its body from these), so a value saved from an application
- * (#411) passes the same ones and GET /profile never serves what its schema refuses.
+ * The longest text each profile column holds, in code points as optionalText's Zod max() counts
+ * them, and the profile's email rule: PUT /profile's own rules (routes/profile.ts builds its body
+ * from these), so a value saved from an application (#411) passes the same ones, counted the same
+ * way, and GET /profile never serves what its schema refuses.
  */
 export const PROFILE_TEXT_MAX = {
   fullName: 200,
@@ -182,6 +183,9 @@ function profileValueProblem(key: ApplicationDetailKey, value: string): string |
   if (home === 'email')
     return ProfileEmail.safeParse(value).success ? null : 'profile_value_invalid';
   const max = new Map<string, number>(Object.entries(PROFILE_TEXT_MAX)).get(home) ?? 0;
+  // Counted as PUT /profile counts it: optionalText's z.string().max() counts code points in
+  // Zod 4 (zod/v4/core/checks.js), so a value this save accepts passes every later PUT of the
+  // same column, and one the PUT refuses is refused here (#415; a test pins both).
   return [...value].length <= max ? null : 'profile_value_invalid';
 }
 
