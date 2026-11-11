@@ -75,7 +75,9 @@ async function addCommunication(
 }
 
 describe('resolveCompanyDomain', () => {
-  it('resolves from the outreach sender domain once the homepage names the company', async () => {
+  // The company's domain is set only from what its name gives, as when there is no message: a
+  // sender's domain counts only where the name gives it too, in that domain's own place.
+  it("a sender's own domain is not the company's, even when its homepage names the company", async () => {
     const { app, a } = await boot();
     const ctx: UserCtx = { userId: a.userId, isAdmin: false };
     const company = await createCompany(app.db, ctx, { name: 'Initech Labs' });
@@ -85,18 +87,58 @@ describe('resolveCompanyDomain', () => {
       sourceKind: 'communication',
     });
     await addCommunication(app.db, ctx, opp.id, '"Recruiter" <talent@initechhq.dev>');
-    const { fetch } = net({
+    const { fetch, requested } = net({
       'https://initechhq.dev/': '<html><body>Initech Labs builds billing software.</body></html>',
     });
 
     const outcome = await resolveCompanyDomain(app.db, ctx, fetch, company.id);
 
-    expect(outcome).toEqual({ outcome: 'resolved', domain: 'initechhq.dev' });
+    expect(outcome).toEqual({ outcome: 'unresolved' });
     const row = await app.db.select().from(companies).where(eq(companies.id, company.id)).get();
-    expect(row?.domain).toBe('initechhq.dev');
+    expect(row?.domain).toBeNull();
+    expect(requested).not.toContain('https://initechhq.dev/');
   });
 
-  it('falls through to a name-derived guess when the sender domain fails verification', async () => {
+  it('a sender on a later name-derived domain does not go first: the first one is saved', async () => {
+    const { app, a } = await boot();
+    const ctx: UserCtx = { userId: a.userId, isAdmin: false };
+    const company = await createCompany(app.db, ctx, { name: 'Initech Labs' });
+    const opp = await createOpportunity(app.db, ctx, {
+      companyName: 'Initech Labs',
+      title: 'Staff PM',
+      sourceKind: 'communication',
+    });
+    await addCommunication(app.db, ctx, opp.id, '"Recruiter" <talent@initechlabs.io>');
+    const { fetch } = net({
+      'https://initechlabs.io/': '<html><body>Initech Labs hiring</body></html>',
+      'https://initechlabs.com/': '<html><body>Initech Labs builds billing software.</body></html>',
+    });
+
+    const outcome = await resolveCompanyDomain(app.db, ctx, fetch, company.id);
+
+    expect(outcome).toEqual({ outcome: 'resolved', domain: 'initechlabs.com' });
+  });
+
+  it('a sender on a later name-derived domain, with no earlier one answering, is saved as it would be', async () => {
+    const { app, a } = await boot();
+    const ctx: UserCtx = { userId: a.userId, isAdmin: false };
+    const company = await createCompany(app.db, ctx, { name: 'Initech Labs' });
+    const opp = await createOpportunity(app.db, ctx, {
+      companyName: 'Initech Labs',
+      title: 'Staff PM',
+      sourceKind: 'communication',
+    });
+    await addCommunication(app.db, ctx, opp.id, '"Recruiter" <talent@initechlabs.io>');
+    const { fetch } = net({
+      'https://initechlabs.io/': '<html><body>Initech Labs builds billing software.</body></html>',
+    });
+
+    const outcome = await resolveCompanyDomain(app.db, ctx, fetch, company.id);
+
+    expect(outcome).toEqual({ outcome: 'resolved', domain: 'initechlabs.io' });
+  });
+
+  it('resolves from a name-derived domain, with an agency sender not probed at all', async () => {
     const { app, a } = await boot();
     const ctx: UserCtx = { userId: a.userId, isAdmin: false };
     const company = await createCompany(app.db, ctx, { name: 'Initech Labs' });
@@ -115,7 +157,7 @@ describe('resolveCompanyDomain', () => {
     const outcome = await resolveCompanyDomain(app.db, ctx, fetch, company.id);
 
     expect(outcome).toEqual({ outcome: 'resolved', domain: 'initechlabs.com' });
-    expect(requested).toEqual(['https://talentco.example/', 'https://initechlabs.com/']);
+    expect(requested).toEqual(['https://initechlabs.com/']);
   });
 
   it('leaves the company unresolved when no candidate verifies', async () => {
