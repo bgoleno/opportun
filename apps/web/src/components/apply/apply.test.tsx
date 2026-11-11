@@ -412,6 +412,43 @@ describe('#428: the resume reason comes from the resume flow', () => {
     );
   });
 
+  // tl on #431 (optional): no sentence chosen before the sends are in, or a base sent as it is
+  // reads as B for a moment before H.
+  it('says nothing about the resume until the sends have loaded', async () => {
+    let release: (v: unknown) => void = () => {};
+    const sendsIn = new Promise((r) => (release = r));
+    mockApi({
+      'GET /resumes': { items: [{ ...RESUME, status: 'in_review' }], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'GET /opportunities/opp-1/resume-sends': () => sendsIn,
+    });
+    renderWithProviders(<ApplyPanel opp={{ ...OPP, stage: 'interested' } as OpportunityView} />);
+    // Long enough for the resumes and the submissions to have answered.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText('Choose the resume to start from.')).toBeNull();
+    release({
+      items: [
+        {
+          id: 'send-1',
+          opportunityId: 'opp-1',
+          opportunityTitle: 'Staff PM',
+          companyName: 'Acme',
+          resumeId: 'res-1',
+          resumeTitle: 'Jane Final',
+          resumeKind: 'base',
+          sentAt: NOW,
+          sentVia: 'Indeed',
+          submissionId: null,
+          createdAt: NOW,
+        },
+      ],
+    });
+    const button = await screen.findByRole('button', { name: 'Apply on Greenhouse' });
+    expect(button).toHaveAccessibleDescription(
+      'A resume is already recorded as sent for this opportunity. To apply here too, mark a resume as final.',
+    );
+  });
+
   it('a reason that is not about the resume has no such link', async () => {
     renderWith([RESUME], { stage: 'in_process' });
     await screen.findByRole('button', { name: 'Apply on Greenhouse' });

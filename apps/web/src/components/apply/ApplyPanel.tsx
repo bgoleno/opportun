@@ -167,6 +167,9 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
 
   // Feature off, on the demo, or not loaded: nothing of the feature shows.
   if (submissions.data === null || submissions.data === undefined) return null;
+  // Nor before the resumes and the sends are in: the reason is chosen from them, and a base sent
+  // as it is would read as B for a moment before H (tl on #431).
+  if (resumes.isPending || sends.isPending) return null;
   const items = submissions.data.items;
   const live = items.find(isLive);
   const latest = items[0];
