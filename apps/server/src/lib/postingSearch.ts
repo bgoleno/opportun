@@ -13,7 +13,7 @@
 // A Workday board (FR-D10) is read from its listing only, since its descriptions cost one detail
 // request per posting; the posting the flow settles on is then described from its detail
 // endpoint (describeWorkdayPosting), as is a Workday candidate the user picks later.
-import { NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
+import { greenhouseJidOf, NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import {
   ATS_SOURCE_KINDS,
@@ -96,7 +96,13 @@ export interface ReadFrom {
 }
 
 export type FindOutcome = (
-  | { status: 'exact'; candidate: PostingCandidate; via: 'email_link'; readFrom?: ReadFrom }
+  | {
+      status: 'exact';
+      candidate: PostingCandidate;
+      /** 'posting_link': the opportunity's own careers link named it (#398). */
+      via: 'email_link' | 'posting_link';
+      readFrom?: ReadFrom;
+    }
   | { status: 'single'; candidate: PostingCandidate; via: 'board'; readFrom?: ReadFrom }
   | {
       status: 'candidates';
@@ -392,6 +398,23 @@ function referenceHit(
   return null;
 }
 
+/**
+ * The Greenhouse job an opportunity's own posting link names, when it is a careers page carrying
+ * a numeric `gh_jid` and the opportunity has no identity yet (#398). Its board is unknown (org
+ * null), so only the company's own boards can match it. Nothing is asked of Greenhouse for this
+ * when an opportunity is created or its mail is read: Find posting, or a new link, is when the
+ * server looks (tl on #414).
+ */
+export function ownGreenhouseRef(opp: {
+  postingUrl?: string | null;
+  atsJobRef?: AtsJobRef | null;
+}): AtsJobRef | null {
+  const link = opp.postingUrl;
+  if (link == null || opp.atsJobRef != null || boardFromUrl(link) !== null) return null;
+  const jid = greenhouseJidOf(link);
+  return jid === null ? null : { kind: 'ats_greenhouse', org: null, externalId: jid, url: link };
+}
+
 /** The board a posting of `reads` came from, by identity: ranking keeps the posting objects. */
 function readFromOf(reads: BoardRead[], posting: NormalizedPosting): ReadFrom | undefined {
   const read = reads.find((r) => r.postings.includes(posting));
@@ -507,6 +530,19 @@ export async function findPosting(
       : {
           note: `Large Workday board: showing the first ${cut.shown} of ${cut.total} postings. Paste the posting link or text if yours is not among them.`,
         };
+  // The opportunity's own careers link names its Greenhouse job (#398, tl on #414): that job on
+  // the company's own board is the posting, ahead of any message's link and any title match,
+  // and the read is the proof of its board. Only the company's own boards are searched for it.
+  const ownRef = ownGreenhouseRef(opp);
+  const own = ownRef === null ? null : referenceHit(reads, [ownRef]);
+  if (own !== null) {
+    const candidate = exactly(own.posting);
+    const readFrom = { kind: own.board.kind, org: own.board.org };
+    return hasDescription(candidate.posting)
+      ? { status: 'exact', candidate, via: 'posting_link', readFrom }
+      : unattachable(candidate);
+  }
+
   const hit = referenceHit(reads, refs);
   if (hit !== null) {
     const candidate = exactly(await describeWorkdayPosting(sctx, hit.posting));

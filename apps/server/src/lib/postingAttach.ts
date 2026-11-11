@@ -30,10 +30,11 @@ import {
 import { sanitizePosting } from './postingSanitize';
 
 /** How the posting was found, for the timeline entry. */
-export type AttachSource = 'email_link' | 'board' | 'paste';
+export type AttachSource = 'email_link' | 'posting_link' | 'board' | 'paste';
 
 const HOW_SAID: ReadonlyMap<AttachSource, string> = new Map([
   ['email_link', 'Found through a link in a linked message.'],
+  ['posting_link', "Found on the company's ATS board, by the job its posting link names."],
   ['board', "Found on the company's ATS board."],
   ['paste', 'Added by hand.'],
 ]);
@@ -46,6 +47,7 @@ const HOW_SAID: ReadonlyMap<AttachSource, string> = new Map([
  */
 const HOW_SAID_REFETCH: ReadonlyMap<AttachSource, string> = new Map([
   ['email_link', 'Refetched through a link in a linked message.'],
+  ['posting_link', "Refetched from the company's ATS board, by the job its posting link names."],
   ['board', "Refetched from the company's ATS board."],
   ['paste', 'Replaced by hand.'],
 ]);
@@ -104,9 +106,15 @@ export async function attachPosting(
   if (current.remote == null && posting.remote != null) patch.remote = posting.remote;
   if (current.compNote == null && posting.compNote != null) patch.compNote = posting.compNote;
   // Worked out before any write: a check on Greenhouse's API is a request (#398).
+  // The identity is the stored link's: a posting without a link of its own keeps the one already
+  // stored (as reconcile's confirm does), and is judged by it (tl on #414).
   const atsJobRef =
     identity.readFrom !== undefined
-      ? boardReadAtsJobRef(posting, identity.readFrom, Date.now())
+      ? boardReadAtsJobRef(
+          { postingUrl: patch.postingUrl, externalId: posting.externalId },
+          identity.readFrom,
+          Date.now(),
+        )
       : identity.sctx !== undefined
         ? await resolvePostingAtsJobRef(db, ctx, current, patch.postingUrl, identity.sctx)
         : postingAtsJobRefKeeping(patch.postingUrl, current.atsJobRef);

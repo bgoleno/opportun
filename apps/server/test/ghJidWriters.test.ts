@@ -2,6 +2,7 @@
 // page (https://github.com/bgoleno/opportun/issues/398, criteria 2, 3 and 6, with tl's note on
 // board reads). Every host here is synthetic; the only "requests" are to a counting fake.
 import type { AtsJobRef, NormalizedPosting } from '@opportun/core';
+import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   registerSource,
@@ -9,10 +10,13 @@ import {
   type DiscoverySource,
 } from '../src/adapters/discoverySource';
 import type { Db } from '../src/db/client';
+import { communications, opportunities, resumes } from '../src/db/schema';
 import { backfillAtsJobRefs } from '../src/jobs/atsJobRefBackfill';
 import { reconcilePosting } from '../src/jobs/postingReconcile';
+import { attachPosting } from '../src/lib/postingAttach';
 import { confirmPosting } from '../src/lib/postingConfirm';
 import type { safeFetch } from '../src/lib/safeFetch';
+import { upsertInbound } from '../src/repos/communications';
 import { createCompany } from '../src/repos/companies';
 import {
   createOpportunity,
@@ -20,7 +24,9 @@ import {
   setPostingState,
   updateOpportunity,
 } from '../src/repos/opportunities';
+import { insertResume } from '../src/repos/resumes';
 import { destinationRefusal } from '../src/repos/submissionReview';
+import { createSubmissionDraft } from '../src/repos/submissions';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 
@@ -114,6 +120,184 @@ async function seed(
 async function refOf(app: { db: Db }, c: TestClient, id: string) {
   return (await getOpportunity(app.db, ctxOf(c), id)).atsJobRef ?? null;
 }
+
+/** One of the user's messages, linked to the opportunity, carrying `body`. */
+async function linkedMail(app: { db: Db }, c: TestClient, opportunityId: string, body: string) {
+  const { id } = await upsertInbound(app.db, ctxOf(c), 'gmail', {
+    externalId: `m-${opportunityId}`,
+    threadKey: `t-${opportunityId}`,
+    from: 'recruiter@example.com',
+    to: ['owner@example.com'],
+    subject: 'The role',
+    snippet: body.slice(0, 80),
+    bodyText: body,
+    sentAt: Date.now(),
+  });
+  await app.db.update(communications).set({ opportunityId }).where(eq(communications.id, id)).run();
+}
+
+/** A final base resume the draft can use. */
+async function finalBaseResume(app: { db: Db }, c: TestClient): Promise<string> {
+  const r = await insertResume(app.db, ctxOf(c), {
+    kind: 'base',
+    title: 'Example Resume',
+    store: 'local_file',
+    docRef: `resumes/${crypto.randomUUID()}.txt`,
+    opportunityId: null,
+    parentResumeId: null,
+  });
+  await app.db.update(resumes).set({ status: 'final' }).where(eq(resumes.id, r.id)).run();
+  return r.id;
+}
+
+describe("Find posting resolves the opportunity's own careers link (tl on #414, blocking 1)", () => {
+  it('the posting with that gh_jid on the company board is the hit, ahead of a title match, with no extra request', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Staff Platform Engineer' });
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: CAREERS });
+    // A same-title posting first, then the job the link names: the link's job wins.
+    const board = embeddedBoardServes([
+      embedded('Staff Platform Engineer', '1', 'https://careers.examplecorp.example/jobs?gh_jid=1'),
+      embedded('Senior Platform Engineer, Infra', JID),
+    ]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().outcome).toBe('attached');
+    expect(res.json().candidate.posting.externalId).toBe(JID);
+    expect(await refOf(app, a, id)).toMatchObject({
+      org: 'examplecorp',
+      externalId: JID,
+      url: BOARD_PAGE,
+    });
+    expect(board.reads).toBe(1);
+    expect(api.asked).toEqual([]);
+  });
+
+  it('when no board read answers it, the identity comes from the API check, and the description is left alone', async () => {
+    const { app, a } = await boot();
+    api = greenhouseApi({ examplecorp: [JID] });
+    const id = await seed(app, a, { title: 'Staff Platform Engineer' });
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: CAREERS });
+    embeddedBoardServes([]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await refOf(app, a, id)).toMatchObject({ org: 'examplecorp', url: BOARD_PAGE });
+    expect(api.asked).toHaveLength(1);
+    expect((await getOpportunity(app.db, ctxOf(a), id)).descriptionMd ?? null).toBeNull();
+  });
+
+  it("a description the user wrote: no board read, the API check, and the user's text untouched", async () => {
+    const { app, a } = await boot();
+    api = greenhouseApi({ examplecorp: [JID] });
+    const id = await seed(app, a);
+    await updateOpportunity(app.db, ctxOf(a), id, {
+      postingUrl: CAREERS,
+      descriptionMd: 'My own notes about this role.',
+    });
+    const board = embeddedBoardServes([embedded('Staff Platform Engineer', JID)]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().outcome).toBe('identified');
+    expect(board.reads).toBe(0);
+    expect(await refOf(app, a, id)).toMatchObject({ org: 'examplecorp', url: BOARD_PAGE });
+    expect((await getOpportunity(app.db, ctxOf(a), id)).descriptionMd).toBe(
+      'My own notes about this role.',
+    );
+  });
+
+  it('a description the user wrote and no board holds the job: 409 as before, and no identity', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a);
+    await updateOpportunity(app.db, ctxOf(a), id, {
+      postingUrl: CAREERS,
+      descriptionMd: 'My own notes about this role.',
+    });
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.statusCode).toBe(409);
+    expect(await refOf(app, a, id)).toBeNull();
+  });
+
+  it('the same careers link arriving only in mail gets no identity, and no request (criterion 6)', async () => {
+    const { app, a } = await boot();
+    api = greenhouseApi({ examplecorp: [JID] });
+    const id = await seed(app, a);
+    await linkedMail(app, a, id, `Here is the role: ${CAREERS}`);
+    embeddedBoardServes([]);
+    await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    expect(await refOf(app, a, id)).toBeNull();
+    expect(api.asked).toEqual([]);
+  });
+});
+
+describe('attach from a board read keeps the identity of the link it keeps (tl on #414, blocking 3)', () => {
+  it('a posting with no link of its own keeps the verified identity of the stored careers link', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a);
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: CAREERS });
+    await setPostingState(app.db, ctxOf(a), id, {
+      postingState: 'confirmed',
+      postingStateDetail: null,
+      atsJobRef: VERIFIED,
+    });
+    await attachPosting(
+      app.db,
+      ctxOf(a),
+      id,
+      {
+        company: 'Example Corp',
+        title: 'Staff Platform Engineer',
+        descriptionMd: 'What We Do.',
+        externalId: JID,
+      },
+      'board',
+      undefined,
+      { readFrom: { kind: 'ats_greenhouse', org: 'examplecorp' } },
+    );
+    expect(await refOf(app, a, id)).toMatchObject({
+      org: 'examplecorp',
+      externalId: JID,
+      url: BOARD_PAGE,
+    });
+  });
+});
+
+describe('a draft from a verified identity hands off to the board page (criterion 2)', () => {
+  it("the draft's destination is the board page, never the careers link", async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a);
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: CAREERS });
+    await app.db
+      .update(opportunities)
+      .set({ stage: 'interested' })
+      .where(eq(opportunities.id, id))
+      .run();
+    await setPostingState(app.db, ctxOf(a), id, {
+      postingState: 'confirmed',
+      postingStateDetail: null,
+      atsJobRef: VERIFIED,
+    });
+    const resume = await finalBaseResume(app, a);
+    const { submission } = await createSubmissionDraft(app.db, ctxOf(a), id, {
+      resumeId: resume,
+      idempotencyKey: 'k-398',
+    });
+    expect(submission.destinationUrl).toBe(BOARD_PAGE);
+    expect(submission.atsRef).toBe('examplecorp');
+    expect(submission.atsExternalId).toBe(JID);
+  });
+});
 
 describe('writers that ask nobody keep a verified identity while the link names its job (criterion 3)', () => {
   it("a user's confirm keeps it, and drops it for a link that names another job", async () => {

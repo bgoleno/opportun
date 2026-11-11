@@ -368,6 +368,63 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
     );
   });
 
+  it.each([
+    ['identified', { outcome: 'identified' }, 'Recognised on Greenhouse.'],
+    [
+      'candidates',
+      { outcome: 'candidates', candidates: [], board: [] },
+      'Several postings could be this job. Choose it on the Details tab.',
+    ],
+    [
+      'none',
+      { outcome: 'none', candidates: [] },
+      "This job was not found on the company's board. Paste the posting on the Details tab.",
+    ],
+    [
+      'no_board',
+      { outcome: 'no_board', needsCareersUrl: true },
+      'No job board is known for this company yet. Add its careers page on the Details tab.',
+    ],
+  ] as const)(
+    'Find posting answering %s says what happened and where to go',
+    async (_n, answer, text) => {
+      mockApi({
+        'GET /resumes': { items: [RESUME], total: 1 },
+        'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+        'POST /opportunities/opp-1/find-posting': answer,
+      });
+      const user = userEvent.setup();
+      renderWithProviders(
+        <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+      );
+      await user.click(await screen.findByRole('button', { name: 'Find posting' }));
+      const said = await screen.findByText(text);
+      expect(said.closest('[role="status"]')).not.toBeNull();
+    },
+  );
+
+  it('Find posting failing shows the error', async () => {
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 409,
+        body: {
+          error: {
+            code: 'already_described',
+            message: 'This opportunity already has a description. Edit it instead.',
+          },
+        },
+      }),
+    });
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+    );
+    await user.click(await screen.findByRole('button', { name: 'Find posting' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('already has a description');
+  });
+
   it('a link without a numeric gh_jid keeps the general reason, and no Find posting here', async () => {
     mockApi({
       'GET /resumes': { items: [RESUME], total: 1 },

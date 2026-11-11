@@ -1,7 +1,19 @@
 // Opportunities and their lifecycle (FR-O1, O2, O5). Stage changes go through
 // applyTransition from @opportun/core and write opportunities + stage_history in one
 // transaction, so a rejected transition writes nothing.
-import { and, count, eq, getTableColumns, inArray, max, ne, or, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  count,
+  eq,
+  getTableColumns,
+  inArray,
+  isNull,
+  max,
+  ne,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import {
   ACTIVE_PIPELINE_STAGES,
   applyTransition,
@@ -585,6 +597,34 @@ function sameRequisition(
     (a.org ?? '').toLowerCase() === (b.org ?? '').toLowerCase() &&
     a.externalId === b.externalId
   );
+}
+
+/**
+ * Records the ATS identity proven for the posting link the opportunity has now (#398: an
+ * embedded Greenhouse job checked on Greenhouse's API), and nothing else: the description, the
+ * posting state and the link stay as they are. Written only while the link is still `postingUrl`
+ * and no identity is set, so a link changed meanwhile, or an identity a writer set meanwhile,
+ * wins. Returns the opportunity, or null when it was not written.
+ */
+export async function recordAtsJobRef(
+  db: Db,
+  ctx: UserCtx,
+  id: string,
+  postingUrl: string,
+  ref: AtsJobRef,
+): Promise<OpportunityView | null> {
+  const written = await db
+    .update(opportunities)
+    .set({ atsJobRef: ref, updatedAt: Date.now() })
+    .where(
+      and(
+        owned(ctx, id),
+        eq(opportunities.postingUrl, postingUrl),
+        isNull(opportunities.atsJobRef),
+      ),
+    )
+    .returning({ id: opportunities.id });
+  return written.length === 0 ? null : await getOpportunity(db, ctx, id);
 }
 
 /**

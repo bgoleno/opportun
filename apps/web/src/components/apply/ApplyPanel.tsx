@@ -8,7 +8,7 @@ import { greenhouseJidOf } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { useFindPosting } from '@/components/opportunity/api';
+import { useFindPosting, type FindPostingResult } from '@/components/opportunity/api';
 import { statusLabel, useResumes, type Resume } from '@/components/resume/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -20,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { errorMessage } from '@/lib/api';
 import { formatDateTime, stageLabel, type OpportunityView } from '@/lib/opportunities';
 import {
   atsLabel,
@@ -44,6 +45,18 @@ export function usableResumes(resumes: Resume[], opportunityId: string): Resume[
       (r.kind === 'base' || r.opportunityId === opportunityId),
   );
 }
+
+/** What the panel says after Find posting, by its answer (#398). */
+const FIND_SAID = new Map<FindPostingResult['outcome'], string>([
+  ['attached', 'Posting attached.'],
+  ['identified', 'Recognised on Greenhouse.'],
+  ['candidates', 'Several postings could be this job. Choose it on the Details tab.'],
+  ['none', "This job was not found on the company's board. Paste the posting on the Details tab."],
+  [
+    'no_board',
+    'No job board is known for this company yet. Add its careers page on the Details tab.',
+  ],
+]);
 
 const EMBEDDED_GREENHOUSE =
   "This looks like a Greenhouse job on the company's own careers page. Find the posting on Greenhouse to apply with assisted apply.";
@@ -171,14 +184,27 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                 : reason}
             </p>
             {reason === EMBEDDED_GREENHOUSE ? (
-              <Button
-                variant="outline"
-                className="w-fit"
-                disabled={find.isPending}
-                onClick={() => find.mutate()}
-              >
-                {find.isPending ? 'Searching...' : 'Find posting'}
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  className="w-fit"
+                  disabled={find.isPending}
+                  onClick={() => find.mutate()}
+                >
+                  {find.isPending ? 'Searching...' : 'Find posting'}
+                </Button>
+                {/* What Find posting found, and where to go next: never a silent button
+                    (#395, tl on #414). */}
+                {find.isError ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {errorMessage(find.error)}
+                  </p>
+                ) : find.data !== undefined ? (
+                  <p role="status" className="text-sm text-muted-foreground">
+                    {FIND_SAID.get(find.data.outcome) ?? ''}
+                  </p>
+                ) : null}
+              </>
             ) : null}
           </>
         )}
