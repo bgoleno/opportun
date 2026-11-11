@@ -27,8 +27,20 @@ import { isSystemWritten, replaceAllowedByFlag } from '../lib/postingFingerprint
 import { attachPosting } from '../lib/postingAttach';
 import { confirmPosting, unconfirmPosting } from '../lib/postingConfirm';
 import { rederivePosting } from '../lib/postingRederive';
-import { describeWorkdayPosting, findPosting, type BodyReader } from '../lib/postingSearch';
-import { getOpportunity, type OpportunityView as OpportunityRowView } from '../repos/opportunities';
+import type { SourceContext } from '../adapters/discoverySource';
+import { verifyEmbeddedGreenhouse } from '../lib/greenhouseEmbed';
+import {
+  describeWorkdayPosting,
+  findPosting,
+  ownGreenhouseRef,
+  type BodyReader,
+} from '../lib/postingSearch';
+import type { UserCtx } from '../repos/base';
+import {
+  getOpportunity,
+  recordAtsJobRef,
+  type OpportunityView as OpportunityRowView,
+} from '../repos/opportunities';
 import { CAPTURE_MAX_TEXT, extract, fetchPageText, PASTE_TEXT_HINT } from './capture';
 import { HttpsUrl, IdParams } from './common';
 import { OpportunityView } from './opportunities';
@@ -41,8 +53,10 @@ const CandidateView = z.object({
 });
 
 const FindResponse = z.object({
-  outcome: z.enum(['attached', 'candidates', 'none', 'no_board']),
-  /** Present when the outcome is 'attached'. */
+  /** 'identified' (#398): the opportunity's own careers link got its Greenhouse identity from
+   *  Greenhouse's API; no posting was attached. */
+  outcome: z.enum(['attached', 'identified', 'candidates', 'none', 'no_board']),
+  /** Present when the outcome is 'attached' or 'identified'. */
   opportunity: OpportunityView.optional(),
   candidate: CandidateView.optional(),
   /** Confident candidates ('candidates'), or the ranked board ('none'). */
@@ -91,7 +105,26 @@ function userWritten(opp: OpportunityRowView): boolean {
 
 export async function opportunityPostingRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
+
   const db = app.db;
+
+  /**
+   * The identity of an opportunity's own embedded Greenhouse link (#398), checked on
+   * Greenhouse's API when no board read gave it: the opportunity as written, or null when the
+   * link is not one, no known board holds the job, or the link changed meanwhile.
+   */
+  async function identifyOwnLink(
+    ctx: UserCtx,
+    opp: OpportunityRowView,
+    sctx: Pick<SourceContext, 'fetch' | 'log'>,
+  ): Promise<OpportunityRowView | null> {
+    const own = ownGreenhouseRef(opp);
+    if (own === null || opp.postingUrl == null) return null;
+    const ref = await verifyEmbeddedGreenhouse(db, ctx, opp, own.url, sctx);
+    if (ref === null) return null;
+    return await recordAtsJobRef(db, ctx, opp.id, opp.postingUrl, ref);
+  }
+
   const readBody: BodyReader = async (bodyRef) =>
     (await buffer(await app.storage.openAttachment(bodyRef))).toString('utf8');
 
@@ -101,21 +134,21 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
     async (req) => {
       const ctx = app.requireUser(req);
       const { id } = req.params;
-      // Checked before any board is read: the user's own description has nothing to find.
-      if (userWritten(await getOpportunity(db, ctx, id))) {
+      const sctx = { fetch: app.jobs.services.sourceFetch, log: req.log };
+      const current = await getOpportunity(db, ctx, id);
+      // Checked before any board is read: the user's own description has nothing to find. An
+      // embedded Greenhouse link still gets its identity, from Greenhouse's API, with the
+      // description left as it is (#398, tl on #414).
+      if (userWritten(current)) {
+        const identified = await identifyOwnLink(ctx, current, sctx);
+        if (identified !== null) return { outcome: 'identified' as const, opportunity: identified };
         throw new HttpError(
           409,
           'already_described',
           'This opportunity already has a description. Edit it instead.',
         );
       }
-      const outcome = await findPosting(
-        db,
-        ctx,
-        id,
-        { fetch: app.jobs.services.sourceFetch, log: req.log },
-        { readBody },
-      );
+      const outcome = await findPosting(db, ctx, id, sctx, { readBody });
       if (outcome.status === 'exact' || outcome.status === 'single') {
         // #114: 'single' can carry a large-board truncation note (exact never does, since it
         // only ever comes from an email-linked job id, never a board read). Forwarded onto the
@@ -126,13 +159,28 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           ctx,
           id,
           outcome.candidate.posting,
-          outcome.status === 'exact' ? 'email_link' : 'board',
+          outcome.status === 'exact'
+            ? outcome.via === 'posting_link'
+              ? 'posting_link'
+              : 'email_link'
+            : 'board',
           outcome.note,
+          // The board this posting was just read from is the proof an embedded Greenhouse job
+          // needs (#398): no further request.
+          outcome.readFrom === undefined
+            ? { sctx: { fetch: app.jobs.services.sourceFetch, log: req.log } }
+            : { readFrom: outcome.readFrom },
         );
         const note = outcome.note === undefined ? {} : { note: outcome.note };
         return { outcome: 'attached' as const, opportunity, candidate: outcome.candidate, ...note };
       }
+      // No board read answered the opportunity's own careers link: its identity can still come
+      // from Greenhouse's API, while the posting itself is left to the user to choose (#398).
+      const identified = await identifyOwnLink(ctx, current, sctx);
       const note = outcome.note === undefined ? {} : { note: outcome.note };
+      if (identified !== null && outcome.status !== 'candidates') {
+        return { outcome: 'identified' as const, opportunity: identified, ...note };
+      }
       if (outcome.status === 'candidates') {
         return {
           outcome: 'candidates' as const,
@@ -163,13 +211,16 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
         const { id } = req.params;
         const opp = await getOpportunity(db, ctx, id);
         const { posting, text, url } = req.body;
+        // Anything handed over here, a picked board row included, comes from the client: an
+        // embedded Greenhouse link in it is checked on Greenhouse's API, never taken on trust (#398).
+        const identity = { sctx: { fetch: app.jobs.services.sourceFetch, log: req.log } };
         if (posting !== undefined) {
           // A Workday board row is listed without its description: fetch it now (FR-D10).
           const described = await describeWorkdayPosting(
             { fetch: app.jobs.services.sourceFetch, log: req.log },
             posting,
           );
-          return attachPosting(db, ctx, id, described, 'board');
+          return attachPosting(db, ctx, id, described, 'board', undefined, identity);
         }
         if (text !== undefined) {
           return attachPosting(
@@ -178,6 +229,8 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
             id,
             { company: opp.companyName, title: opp.title, descriptionMd: text },
             'paste',
+            undefined,
+            identity,
           );
         }
         const page = await fetchPageText(app.jobs.services.sourceFetch, url as string);
@@ -197,6 +250,8 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
             compNote: out.compNote,
           },
           'paste',
+          undefined,
+          identity,
         );
       });
     },

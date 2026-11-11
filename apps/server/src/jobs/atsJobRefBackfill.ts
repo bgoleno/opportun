@@ -18,7 +18,7 @@ import { and, eq, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { withTransaction, type Db } from '../db/client';
 import { opportunities, settings, users } from '../db/schema';
-import { postingAtsJobRef } from '../lib/atsJobRef';
+import { postingAtsJobRefKeeping } from '../lib/atsJobRef';
 import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
 import { lockLiveAttempt, markPostingChanged } from '../repos/submissions';
@@ -73,7 +73,9 @@ export async function backfillAtsJobRefs(db: Db, ctx: UserCtx): Promise<AtsJobRe
     .all();
   const outcome: AtsJobRefBackfillOutcome = { read: rows.length, set: 0, changed: 0, cleared: 0 };
   for (const row of rows) {
-    const ref = postingAtsJobRef(row.postingUrl);
+    // A verified `gh_jid` identity stays while the link names its job (#398): the backfill asks
+    // nobody, so it can keep one but never make one.
+    const ref = postingAtsJobRefKeeping(row.postingUrl, row.atsJobRef);
     if (sameRef(row.atsJobRef, ref)) continue;
     // Between the read above and this write, an attach, reconcile or URL edit may land.
     await racePoint('opportunities.backfillAtsJobRef.beforeWrite');
