@@ -142,16 +142,41 @@ in one step. Each attached resume has its own **Remove from this opportunity** (
 link is cleared, nothing else changes, and it's free to attach elsewhere) and **Delete** (the
 same rule as the Resumes page: a hard delete, except a submitted resume is archived instead).
 
+Each resume appears once, with its kind (Tailored or Base resume), its status and when it was
+last updated. Its sends for this opportunity are listed inside it, one line each ("Sent via
+Greenhouse on _date_"), with **View application** when the send was an application made through
+assisted apply. The file that was sent is kept with that application, on its own page.
+
 A base resume is never attached. Pick one under **Attach an existing resume** and it offers
-**Record as sent** instead: say how you sent it (for example "Indeed") and on what day. The
-send is listed here, marked **Base resume**, and the resume itself does not change, so the
-same base can be recorded for other opportunities and still tailored from. Each send has its
-own remove control, which removes only that record. See [Resumes](resumes.md).
+**Record as sent** instead: say how you sent it (for example "Indeed") and on what day. It is
+then listed here as a **Base resume** with that send, and the resume itself does not change, so
+the same base can be recorded for other opportunities and still tailored from. Each send has
+its own remove control, which removes only that record. See [Resumes](resumes.md).
 
-### Your details when you apply
+### Communications
 
-Where assisted apply is on, an opportunity whose posting is confirmed has **Apply**. Its
-**Details** step opens already filled with what Opportun holds for you, field by field:
+Every message linked to this opportunity, with the same actions as the inbox (open, change
+link, reclassify, accept a suggested stage). See [Inbox](inbox.md). The newest message is at the
+top; **Newest** at the top right switches to oldest first and back. Each time you open the
+opportunity it starts newest first again.
+
+### Referrals
+
+Contacts who could refer you, ranked by the AI, and the asks you have made. See
+[Network](network.md#referrals).
+
+### Assisted apply
+
+Where assisted apply is on, the opportunity has an **Assisted apply** panel beside the tabs.
+Before you apply, it offers **Apply on _ATS_** once the posting is confirmed on Greenhouse, Lever
+or Ashby (Workday as a handoff only), or says why it can't yet. **Apply**
+takes you through the resume, your details and your answers, then one review of everything.
+**Confirm review and open** opens the real application form in a new tab. Opportun never
+submits anything: you press the site's own Submit button.
+
+#### Your details when you apply
+
+The **Details** step opens already filled with what Opportun holds for you, field by field:
 
 1. your profile: **Settings > Profile**, and its **Application details** card for first and
    last name, LinkedIn profile, website and links;
@@ -170,40 +195,31 @@ off by default. Changes you make on the step apply to this application only. To 
 next time, tick **Save to my profile** before **Next: Review**: the application and your profile
 are saved together. On a field you emptied, the tick reads **Remove from my profile**.
 
-### Communications
-
-Every message linked to this opportunity, with the same actions as the inbox (open, change
-link, reclassify, accept a suggested stage). See [Inbox](inbox.md). The newest message is at the
-top; **Newest** at the top right switches to oldest first and back. Each time you open the
-opportunity it starts newest first again.
-
-### Referrals
-
-Contacts who could refer you, ranked by the AI, and the asks you have made. See
-[Network](network.md#referrals).
-
-## Assisted apply
-
-Where your administrator has turned it on, an opportunity whose posting is on Greenhouse, Lever
-or Ashby (Workday as a handoff only) has an **Assisted apply** card. It takes you through the
-resume, your details and your answers, then one review of everything. **Confirm review and
-open** opens the real application form in a new tab. Opportun never submits anything: you
-press the site's own Submit button.
+#### Finish on the application site
 
 The last step, **Finish on the application site**, says what to do on that tab:
 
 - **Where the browser extension can fill the form** (a Greenhouse form on Greenhouse's own
   pages, not a job shown on the company's own careers page, and an extension token with the
-  **Assisted apply** permission): go to the form's tab, click the Opportun icon in
-  the toolbar, then press **Fill in this application**. The review step says this too, under
-  the button that opens the form. Check every field (the extension lists what it filled and
-  what it left for you), then press the site's own Submit. See
+  **Assisted apply** permission): go to the form's tab, click the Opportun icon in the toolbar,
+  then press **Fill in this application**. The review step says this too, under the button that
+  opens the form. Check every field (the extension lists what it filled and what it left for
+  you), then press the site's own Submit. See
   [Browser extension](browser-extension.md#filling-an-application-assisted-apply).
 - **Otherwise:** fill in the form yourself, copying from **Your details to copy**, with a link
   to **Settings > Integrations > Extensions and Connectors**, where the extension is set up.
 
 **Your details to copy** stays below either way. When you are done, tell Opportun: **I submitted
 it** or **I did not submit it**.
+
+#### After you apply
+
+Once you have applied (Submitted, Confirmed, No confirmation seen or ATS refused), the panel
+leads with that: the status, when you applied and through which site (and when it was
+confirmed), and **View application**. For an application with no confirmation yet it asks what
+happened since. **Apply again** stays available as a link, with one line on when to use it: only
+if the first application did not go through, or the employer asked you to. The apply flow then
+asks for the reason.
 
 ## Find a posting
 

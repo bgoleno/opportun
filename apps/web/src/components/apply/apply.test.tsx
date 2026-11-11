@@ -12,7 +12,7 @@ import { parseApplySearch } from '@/routes/opportunities.$id_.apply';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { ApplyPage } from './ApplyPage';
 import { clockTime, type SubmissionView } from './api';
-import { ApplyPanel } from './ApplyPanel';
+import { ApplyPanel, appliedAttempt } from './ApplyPanel';
 
 const NOW = Date.now();
 const MIN = 60 * 1000;
@@ -340,6 +340,110 @@ describe('#395: a refused Apply button says why, and never swallows a click', ()
       expect(button.nextElementSibling).toBe(text);
     },
   );
+});
+
+// https://github.com/bgoleno/opportun/issues/404 (tl's decision 1): once the user has applied, the
+// panel leads with the outcome, and applying again is a quiet link under one line of why.
+describe('#404: after applying, the panel leads with the outcome', () => {
+  const DAY = 24 * 60 * MIN;
+  const sentOn = NOW - 3 * DAY;
+  const applied = (over: Partial<SubmissionView>) =>
+    submission({ status: 'submitted', submittedAt: sentOn, ...over });
+
+  function renderPanel(items: SubmissionView[], opp: Partial<OpportunityView> = {}) {
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items, total: items.length },
+    });
+    renderWithProviders(<ApplyPanel opp={{ ...OPP, ...opp } as OpportunityView} />);
+  }
+
+  it('Confirmed: the outcome and View application lead; no Apply button; Apply again is a link with why', async () => {
+    renderPanel([applied({ id: 'sub-9', status: 'confirmed', confirmedAt: NOW - DAY })]);
+    expect(
+      await screen.findByText(`You applied on ${formatDate(sentOn)} through Greenhouse.`, {
+        exact: false,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(`Greenhouse confirmed it on ${formatDate(NOW - DAY)}.`, { exact: false }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Apply on Greenhouse' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Apply on Greenhouse' })).toBeNull();
+    expect(screen.queryByText(/You will review everything/)).toBeNull();
+    const view = screen.getByRole('link', { name: 'View application' });
+    expect(view).toHaveAttribute('href', '/opportunities/opp-1/applications/sub-9');
+    expect(view.getAttribute('data-slot')).toBe('button');
+    expect(
+      screen.getByText(
+        'Apply again only if the first application did not go through, or the employer asked you to. You will be asked for the reason.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Apply again' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1/apply?step=resume',
+    );
+  });
+
+  it('Submitted: the follow-up questions still show', async () => {
+    renderPanel([applied({})]);
+    expect(await screen.findByRole('button', { name: /I saw a confirmation/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /The site refused it/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Apply on Greenhouse' })).toBeNull();
+  });
+
+  it('Rejected: the outcome leads, with no Apply button', async () => {
+    renderPanel([applied({ status: 'rejected' })]);
+    expect(await screen.findByText('ATS refused')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Apply on Greenhouse' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'View application' })).toBeInTheDocument();
+  });
+
+  it('applied, but a new attempt would be refused: no Apply again link', async () => {
+    renderPanel([applied({ status: 'confirmed', confirmedAt: NOW })], { stage: 'closed' });
+    expect(await screen.findByRole('link', { name: 'View application' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Apply again' })).toBeNull();
+    expect(screen.queryByText(/Apply again only if/)).toBeNull();
+  });
+
+  it('a cancelled attempt newer than a submitted one: the submitted one leads', async () => {
+    renderPanel([
+      submission({ id: 'sub-new', status: 'abandoned', createdAt: NOW }),
+      applied({ id: 'sub-old', createdAt: NOW - 5 * DAY }),
+    ]);
+    const view = await screen.findByRole('link', { name: 'View application' });
+    expect(view).toHaveAttribute('href', '/opportunities/opp-1/applications/sub-old');
+    expect(screen.queryByRole('link', { name: 'Apply on Greenhouse' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Apply again' })).toBeInTheDocument();
+  });
+
+  it('an application in progress over an earlier submitted one: unchanged', async () => {
+    renderPanel([
+      submission({ id: 'sub-live', status: 'draft', createdAt: NOW }),
+      applied({ id: 'sub-old', createdAt: NOW - 5 * DAY }),
+    ]);
+    expect(await screen.findByRole('link', { name: 'Continue' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Earlier application' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Apply again' })).toBeNull();
+  });
+
+  it('never applied: unchanged', async () => {
+    renderPanel([]);
+    expect(await screen.findByRole('link', { name: 'Apply on Greenhouse' })).toBeInTheDocument();
+    expect(screen.getByText(/You will review everything/)).toBeInTheDocument();
+  });
+});
+
+describe('#404: appliedAttempt', () => {
+  it('is the newest Submitted, Confirmed, No confirmation seen or Rejected attempt, or none', () => {
+    const a = submission({ id: 'a', status: 'abandoned' });
+    const b = submission({ id: 'b', status: 'confirmed' });
+    const c = submission({ id: 'c', status: 'submitted' });
+    expect(appliedAttempt([a, b, c])?.id).toBe('b');
+    expect(appliedAttempt([a])).toBeUndefined();
+    expect(appliedAttempt([submission({ id: 'u', status: 'unknown' })])?.id).toBe('u');
+    expect(appliedAttempt([submission({ id: 'r', status: 'rejected' })])?.id).toBe('r');
+  });
 });
 
 // https://github.com/bgoleno/opportun/issues/398 criterion 4: a Greenhouse job embedded on the
@@ -1785,14 +1889,6 @@ describe('an earlier submission can still be reported on (#148, tl)', () => {
 
   it.each([
     ['while a re-application is in progress', submission({ id: 'sub-new', status: 'draft' })],
-    [
-      'after a newer attempt was cancelled',
-      submission({ id: 'sub-new', status: 'abandoned', failureReason: 'cancelled_by_user' }),
-    ],
-    [
-      'after a newer attempt’s review expired',
-      submission({ id: 'sub-new', status: 'abandoned', failureReason: 'review_expired' }),
-    ],
   ])('%s, named by when it was submitted', async (_n, newer) => {
     const { api, user } = panelWith([newer, earlier]);
     const block = await screen.findByRole('region', { name: 'Earlier application' });
@@ -1803,6 +1899,33 @@ describe('an earlier submission can still be reported on (#148, tl)', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Mark confirmed' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     // The report is about the earlier attempt, never the newer one.
+    expect(calls(api.calls, 'POST', '/submissions/sub-old/outcome')).toHaveLength(1);
+    expect(api.calls.filter((c) => c.path === '/submissions/sub-new/outcome')).toHaveLength(0);
+  });
+
+  // #404: a newer attempt that was cancelled or expired no longer puts the Apply button above
+  // the earlier submission: that submission leads the panel, and its report is still its own.
+  it.each([
+    [
+      'after a newer attempt was cancelled',
+      submission({ id: 'sub-new', status: 'abandoned', failureReason: 'cancelled_by_user' }),
+    ],
+    [
+      'after a newer attempt’s review expired',
+      submission({ id: 'sub-new', status: 'abandoned', failureReason: 'review_expired' }),
+    ],
+  ])('%s, the earlier submission leads and is the one reported on', async (_n, newer) => {
+    const { api, user } = panelWith([newer, earlier]);
+    expect(await screen.findByText('No confirmation seen')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Earlier application' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View application' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1/applications/sub-old',
+    );
+    await user.click(screen.getByRole('button', { name: 'I saw a confirmation' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Mark as confirmed?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Mark confirmed' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(calls(api.calls, 'POST', '/submissions/sub-old/outcome')).toHaveLength(1);
     expect(api.calls.filter((c) => c.path === '/submissions/sub-new/outcome')).toHaveLength(0);
   });

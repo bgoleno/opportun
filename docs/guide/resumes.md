@@ -88,7 +88,9 @@ and records it on the resume, so you can always tell which version a company has
 A resume can also be **recorded as sent** for an opportunity, from that opportunity's
 **Resume** tab. This is how a base resume you sent as it is (for example through a job site's
 own apply flow) is recorded, and "I submitted it" in assisted apply records one the same way.
-Each send is kept: a resume's page lists every opportunity it was sent for under **Sent for**.
+Each send is kept: a resume's page lists every opportunity it was sent for under **Sent for**,
+and the opportunity's **Resume** tab lists each resume once, with its sends inside it. A send
+made through assisted apply links to the application, where the file that was sent is kept.
 A Final resume with a send shows as Submitted, with the latest send (or a later "Submitted to"
 you entered) as where and when. A Draft or In review resume keeps its status even when it was
 sent (for example a base you tailored again afterwards), so assisted apply won't use it until you

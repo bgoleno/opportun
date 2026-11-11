@@ -227,6 +227,52 @@ describe('Kanban drag and drop', () => {
     expect(stageCalls(api.calls)).toHaveLength(0);
   });
 
+  // #413: the drag's announcement (what a screen reader hears, for keyboard and pointer drags
+  // alike) follows the drop's outcome. A refused drop is "not moved" with the toast's reason.
+  describe('the drop announcement', () => {
+    const announceEnd = (activeId: string, overId: string | null) => {
+      const end = dnd.props?.accessibility?.announcements?.onDragEnd;
+      if (!end) throw new Error('no onDragEnd announcement');
+      return end({
+        active: { id: activeId },
+        over: overId === null ? null : { id: overId },
+      } as unknown as Parameters<typeof end>[0]);
+    };
+
+    it('says a refused drop was not moved, and why, in the words of its message', async () => {
+      await renderBoard();
+      expect(announceEnd('opp-4', 'interested')).toBe(
+        'Umbrella: VP Product was not moved. Use Reopen to move a closed opportunity back to Interested.',
+      );
+      // Onto a card in the column, as the keyboard sensor often lands.
+      expect(announceEnd('opp-4', 'opp-1')).toBe(
+        'Umbrella: VP Product was not moved. Use Reopen to move a closed opportunity back to New.',
+      );
+      await drop('opp-4', 'interested');
+      expect(
+        await screen.findByText('Use Reopen to move a closed opportunity back to Interested.'),
+      ).toBeInTheDocument();
+    });
+
+    it('says an allowed drop was dropped on its column, as before', async () => {
+      await renderBoard();
+      expect(announceEnd('opp-1', 'interested')).toBe(
+        'Acme: Staff PM was dropped on the Interested column.',
+      );
+      expect(announceEnd('opp-1', 'opp-3')).toBe(
+        'Acme: Staff PM was dropped on the Applied column.',
+      );
+      expect(announceEnd('opp-1', null)).toBe('Acme: Staff PM was dropped on no column.');
+    });
+
+    it('says a drop within a column while filtering was not moved, and why', async () => {
+      await renderBoard(undefined, { q: 'a' });
+      expect(announceEnd('opp-1', 'opp-2')).toBe(
+        'Acme: Staff PM was not moved. Clear the search to drag cards within a column.',
+      );
+    });
+  });
+
   it('asks for a closed reason before closing, and cancel sends nothing', async () => {
     const { api, user } = await renderBoard();
     await drop('opp-3', 'closed');

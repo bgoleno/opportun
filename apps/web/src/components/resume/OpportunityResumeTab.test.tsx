@@ -1,6 +1,7 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
+import { formatDate } from '@/lib/opportunities';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { rk, type Resume, type ResumeSend } from './api';
 import { OpportunityResumeTab } from './OpportunityResumeTab';
@@ -38,6 +39,7 @@ const unattachedResume: Resume = {
 function resumeRoutes(opts: {
   forOpportunity?: (typeof archivedResume)[];
   all?: (typeof archivedResume)[];
+  bases?: (typeof archivedResume)[];
   sends?: ResumeSend[];
 }) {
   return {
@@ -46,7 +48,9 @@ function resumeRoutes(opts: {
       if (call.search.includes('opportunityId')) {
         return { items: opts.forOpportunity ?? [], total: (opts.forOpportunity ?? []).length };
       }
-      if (call.search.includes('kind=base')) return { items: [], total: 0 };
+      if (call.search.includes('kind=base')) {
+        return { items: opts.bases ?? [], total: (opts.bases ?? []).length };
+      }
       return { items: opts.all ?? [], total: (opts.all ?? []).length };
     },
     'GET /integrations/google': { connected: true, scopes: [] },
@@ -258,5 +262,117 @@ describe('OpportunityResumeTab: recording a base resume as sent (#158)', () => {
       body: { error: { code: 'conflict', message: 'Something changed' } },
     });
     expect(await screen.findByText('Could not remove the record')).toBeInTheDocument();
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/404 (tl's decision 2): one entry for each resume,
+// with its sends inside it, instead of a row for the resume and another for each send.
+describe('OpportunityResumeTab: one entry per resume, sends inside it (#404)', () => {
+  const tailoredFinal: Resume = {
+    ...unattachedResume,
+    id: 'r-tail',
+    title: 'Jane at Acme',
+    opportunityId: 'opp-1',
+    status: 'submitted' as const,
+    updatedAt: Date.parse('2026-10-29T12:00:00'),
+  };
+  const send = (over: Partial<ResumeSend>): ResumeSend => ({
+    ...sentBase,
+    id: 'send-t1',
+    resumeId: 'r-tail',
+    resumeTitle: 'Jane at Acme',
+    resumeKind: 'tailored',
+    sentVia: 'Greenhouse',
+    submissionId: 'sub-1',
+    ...over,
+  });
+
+  async function rows() {
+    const list = await screen.findByRole('list', { name: 'Resumes for this opportunity' });
+    return [...list.querySelectorAll(':scope > li')] as HTMLElement[];
+  }
+
+  it('a tailored resume with one send is one row, with the send line and View application', async () => {
+    mockApi(resumeRoutes({ forOpportunity: [tailoredFinal], sends: [send({})] }));
+    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    const all = await rows();
+    expect(all).toHaveLength(1);
+    const row = all[0]!;
+    expect(row).toHaveTextContent('Jane at Acme');
+    expect(row).toHaveTextContent('Tailored');
+    expect(row).toHaveTextContent('Submitted');
+    expect(row).toHaveTextContent(`Updated ${formatDate(tailoredFinal.updatedAt)}`);
+    expect(row).toHaveTextContent(`Sent via Greenhouse on ${formatDate(sentBase.sentAt)}`);
+    expect(within(row).getByRole('link', { name: 'View application' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1/applications/sub-1',
+    );
+    expect(
+      screen.getByText('The file that was sent is kept with the application.'),
+    ).toBeInTheDocument();
+  });
+
+  it('two sends of one resume are one row with two send lines', async () => {
+    mockApi(
+      resumeRoutes({
+        forOpportunity: [tailoredFinal],
+        sends: [send({}), send({ id: 'send-t2', sentVia: 'Email', submissionId: null })],
+      }),
+    );
+    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    const all = await rows();
+    expect(all).toHaveLength(1);
+    expect(all[0]).toHaveTextContent('Sent via Greenhouse on');
+    expect(all[0]).toHaveTextContent('Sent via Email on');
+    expect(within(all[0]!).getAllByRole('link', { name: 'View application' })).toHaveLength(1);
+  });
+
+  it('a base resume sent as it is is one Base resume row with its send, and no Detach or Delete', async () => {
+    mockApi(resumeRoutes({ bases: [baseResume], sends: [sentBase] }));
+    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    const all = await rows();
+    expect(all).toHaveLength(1);
+    expect(all[0]).toHaveTextContent('Base resume');
+    expect(all[0]).toHaveTextContent('Draft');
+    expect(all[0]).toHaveTextContent('Sent via Indeed on');
+    expect(
+      within(all[0]!).queryByRole('button', {
+        name: /Remove Jane Base Resume from this opportunity/,
+      }),
+    ).toBeNull();
+    expect(within(all[0]!).queryByRole('button', { name: /Delete/ })).toBeNull();
+    // No application behind this send: no link, and no sentence about a kept file.
+    expect(within(all[0]!).queryByRole('link', { name: 'View application' })).toBeNull();
+    expect(screen.queryByText('The file that was sent is kept with the application.')).toBeNull();
+  });
+
+  it('a tailored resume never sent is one row with no send lines', async () => {
+    mockApi(resumeRoutes({ forOpportunity: [{ ...tailoredFinal, status: 'draft' as const }] }));
+    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    const all = await rows();
+    expect(all).toHaveLength(1);
+    expect(all[0]).not.toHaveTextContent('Sent via');
+    expect(
+      within(all[0]!).getByRole('button', { name: 'Remove Jane at Acme from this opportunity' }),
+    ).toBeInTheDocument();
+  });
+
+  it('Remove on a send still works, inside its resume row', async () => {
+    const user = userEvent.setup();
+    const { calls } = mockApi({
+      ...resumeRoutes({ forOpportunity: [tailoredFinal], sends: [send({})] }),
+      'DELETE /opportunities/opp-1/resume-sends/send-t1': () => ({ status: 204 }),
+    });
+    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    await rows();
+    await user.click(
+      screen.getByRole('button', { name: 'Remove the record that Jane at Acme was sent' }),
+    );
+    await screen.findByText('Sent record removed');
+    expect(
+      calls.some(
+        (c) => c.method === 'DELETE' && c.path === '/opportunities/opp-1/resume-sends/send-t1',
+      ),
+    ).toBe(true);
   });
 });
