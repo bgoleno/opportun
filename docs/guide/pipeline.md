@@ -192,6 +192,10 @@ link, reclassify, accept a suggested stage). See [Inbox](inbox.md). The newest m
 top; **Newest** at the top right switches to oldest first and back. Each time you open the
 opportunity it starts newest first again.
 
+A thread of more than 200 messages shows 200 at a time, in the order you chose, with a line
+such as "Showing the newest 200 of 205 messages." **Show 5 more** (or up to 200 more) adds the
+next ones below.
+
 ### Referrals
 
 Contacts who could refer you, ranked by the AI, and the asks you have made. See

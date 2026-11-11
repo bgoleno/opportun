@@ -8,7 +8,13 @@ import type {
   OpportunityStage,
   OutreachKind,
 } from '@opportun/core';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { RejectPayload } from './RejectForm';
 import { qk, type OpportunityView, type Page } from '@/lib/opportunities';
@@ -159,21 +165,32 @@ export function useBulkTriage() {
   });
 }
 
+/** The server's cap on one page of a thread, and the size of each page after it (#422). */
+export const THREAD_PAGE = 200;
+
 /**
  * An opportunity's linked messages in `order` (#394). The server applies its 200 cap after
- * ordering, so a long thread asked for newest first is its newest messages. While the other
- * order loads, the page already held stays on screen (the tab re-sorts it at once).
+ * ordering, so a long thread asked for newest first is its newest messages; the next page
+ * carries on from there in the same order (#422). While the other order loads, the pages already
+ * held stay available (`isPlaceholderData`): the tab shows them re-sorted only when they are the
+ * whole thread, and a loading line otherwise.
  */
 export function useOpportunityCommunications(
   opportunityId: string,
   order: 'newest' | 'oldest' = 'newest',
 ) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: [...ck.opportunity(opportunityId), order] as const,
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       api<Page<CommunicationView>>(
-        `/communications?view=all&opportunityId=${enc(opportunityId)}&order=${order}&limit=200`,
+        `/communications?view=all&opportunityId=${enc(opportunityId)}&order=${order}&limit=${THREAD_PAGE}${pageParam === 0 ? '' : `&offset=${pageParam}`}`,
       ),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const held = pages.reduce((n, p) => n + p.items.length, 0);
+      // An empty page ends it too, so a thread that shrank meanwhile cannot ask forever.
+      return last.items.length > 0 && held < last.total ? held : undefined;
+    },
     placeholderData: keepPreviousData,
   });
 }

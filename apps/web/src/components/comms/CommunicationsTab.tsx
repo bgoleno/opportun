@@ -4,7 +4,7 @@ import { FormError } from '@/components/FormError';
 import { Button } from '@/components/ui/button';
 import { errorMessage } from '@/lib/api';
 import { InboxRow } from './InboxRow';
-import { useOpportunityCommunications, type CommunicationView } from './api';
+import { THREAD_PAGE, useOpportunityCommunications, type CommunicationView } from './api';
 
 type Order = 'newest' | 'oldest';
 
@@ -35,19 +35,37 @@ export function orderMessages(
  * An opportunity's linked messages (they also appear on its Timeline): newest first on every
  * load, with the Inbox's own control to read them oldest first. The choice is not remembered,
  * and no other list is touched.
+ *
+ * Over the server's 200 cap (#422), a line says how many are shown of how many, and "Show N
+ * more" asks for the next page in the same order. Load more, not a link to the Inbox: the Inbox
+ * has the same cap, and the reader keeps their place and their order here.
  */
 export function CommunicationsTab({ opportunityId }: { opportunityId: string }) {
   const [order, setOrder] = useState<Order>('newest');
-  const { data, error, isPending } = useOpportunityCommunications(opportunityId, order);
+  const {
+    data,
+    error,
+    isPending,
+    isPlaceholderData,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+  } = useOpportunityCommunications(opportunityId, order);
   if (error) return <FormError message={errorMessage(error)} />;
   if (isPending) return <p className="text-sm text-muted-foreground">Loading...</p>;
-  if (data.items.length === 0) {
+  const items = data.pages.flatMap((p) => p.items);
+  const total = data.pages[0]?.total ?? items.length;
+  if (items.length === 0 && !isPlaceholderData) {
     return (
       <p className="text-sm text-muted-foreground">
         No messages are linked yet. Link one from the Inbox.
       </p>
     );
   }
+  // The other order's first page is on its way. What is held can stand in for it only when it
+  // is the whole thread: part of it, re-sorted, would be the wrong messages (#422).
+  const waiting = isPlaceholderData && items.length < total;
+  const remaining = total - items.length;
   return (
     <div className="grid gap-3">
       <div className="flex justify-end">
@@ -66,11 +84,35 @@ export function CommunicationsTab({ opportunityId }: { opportunityId: string }) 
           {order === 'newest' ? 'Newest' : 'Oldest'}
         </Button>
       </div>
-      <ul className="grid gap-3" aria-label="Linked messages">
-        {orderMessages(data.items, order).map((c) => (
-          <InboxRow key={c.id} comm={c} mode="opportunity" />
-        ))}
-      </ul>
+      {waiting ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          {`Loading the ${order} messages...`}
+        </p>
+      ) : (
+        <>
+          {remaining > 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {`Showing the ${order} ${items.length} of ${total} messages.`}
+            </p>
+          ) : null}
+          <ul className="grid gap-3" aria-label="Linked messages">
+            {orderMessages(items, order).map((c) => (
+              <InboxRow key={c.id} comm={c} mode="opportunity" />
+            ))}
+          </ul>
+          {hasNextPage && remaining > 0 ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-fit"
+              disabled={isFetchingNextPage}
+              onClick={() => void fetchNextPage()}
+            >
+              {isFetchingNextPage ? 'Loading...' : `Show ${Math.min(remaining, THREAD_PAGE)} more`}
+            </Button>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }
