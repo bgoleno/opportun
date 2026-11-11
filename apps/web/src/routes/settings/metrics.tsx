@@ -28,7 +28,10 @@ export const Route = createFileRoute('/settings/metrics')({
 
 function MetricsRoute() {
   const { user } = Route.useRouteContext();
-  const search = Route.useSearch();
+  // Parsed again: the router hands a route its own validated search merged over what its parent
+  // routes passed through unvalidated, so a value parseMetricsSearch dropped is still in
+  // useSearch() (qa found this on the traces page, https://github.com/bgoleno/opportun/pull/361).
+  const search = parseMetricsSearch(Route.useSearch());
   const navigate = Route.useNavigate();
   return (
     <MetricsPage
