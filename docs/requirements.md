@@ -591,7 +591,7 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
   never a link-local or metadata address; it never follows a redirect, its URL never holds a
   credential, and its stored credential is cleared when the destination changes. Every user of the instance
   can see that export is on and what kind of data it sends, because export covers every
-  user's telemetry. Export is unavailable on the demo deployment. The user guide states what
+  user's telemetry. Collection and export are unavailable on the demo deployment. The user guide states what
   is sent to each kind of destination. This is the opt-in telemetry NFR-PRV1 allows for:
   NFR-PRV1 itself is unchanged.
 

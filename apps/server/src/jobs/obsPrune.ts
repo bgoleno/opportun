@@ -16,7 +16,9 @@
 // large first run does not hold the SQLite write gate for the whole backlog.
 //
 // It runs whether or not collection is on: rows written while it was on still age out after it
-// is turned off. With nothing to delete it writes nothing.
+// is turned off (14.1). With nothing to delete it deletes nothing, but the scheduler still writes
+// its hourly `jobs` row, as for every scheduled job, and jobs.prune removes those later. So with
+// collection off the instance writes no telemetry, not nothing at all (NFR-OPS7).
 import { and, asc, count, eq, inArray, lt } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client';

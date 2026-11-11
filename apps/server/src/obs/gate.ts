@@ -74,13 +74,25 @@ const isAddress = (value: string): boolean => isIP(value) !== 0;
 const ROUTE_FIXED = /^[A-Za-z0-9_.-]+$/;
 const ROUTE_PARAM = /^:[A-Za-z][A-Za-z0-9_]*$/;
 const ROUTE_MAX = 200;
+/**
+ * A segment shaped like a row id: a UUID, 16 or more hex digits (a trace or span id), or all
+ * digits. No route template has one, so a path that does is a request's URL, not its template,
+ * and its ids would otherwise reach export (tl on #359).
+ */
+const ROUTE_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const ROUTE_LONG_HEX = /^[0-9a-fA-F]{16,}$/;
+const ROUTE_DIGITS = /^[0-9]+$/;
+const isIdSegment = (seg: string): boolean =>
+  ROUTE_UUID.test(seg) || ROUTE_LONG_HEX.test(seg) || ROUTE_DIGITS.test(seg);
 
 function isRouteShape(value: string): boolean {
   if (!value.startsWith('/')) return false;
   const segments = value.slice(1).split('/');
   // A trailing slash leaves one empty last segment; "/" alone is the root.
   if (segments.at(-1) === '') segments.pop();
-  return segments.every((seg) => seg === '*' || ROUTE_FIXED.test(seg) || ROUTE_PARAM.test(seg));
+  return segments.every(
+    (seg) => seg === '*' || ROUTE_PARAM.test(seg) || (ROUTE_FIXED.test(seg) && !isIdSegment(seg)),
+  );
 }
 
 function listOf(type: Extract<AttrType, { values: unknown }>): readonly string[] {
