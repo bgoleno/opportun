@@ -289,7 +289,8 @@ async function probe(sctx: SourceContext, p: Probe, slug: string): Promise<Probe
   try {
     res = await sctx.fetch(p.url(slug), { allowHosts: [p.host], maxBytes: ATS_MAX_BYTES });
   } catch (err) {
-    sctx.log.warn({ kind: p.kind, slug, err }, 'ats probe failed');
+    // The slug names the company's board: only the ATS kind is logged (14.8).
+    sctx.log.warn({ 'opportun.ats.kind': p.kind, err }, 'ats probe failed');
     return 'error';
   }
   if (res.status === 429 || res.status >= 500) return 'error';
@@ -312,7 +313,7 @@ async function probeWorkday(sctx: SourceContext, board: AtsBoard): Promise<Probe
     page = await fetchWorkdayPage(sctx, workdayBoard(boardConfig(board)), 0, 1);
   } catch (err) {
     if (err instanceof SourceConfigError) return 'miss';
-    sctx.log.warn({ kind: board.kind, slug: board.slug, err }, 'ats probe failed');
+    sctx.log.warn({ 'opportun.ats.kind': board.kind, err }, 'ats probe failed');
     return 'error';
   }
   return page.jobPostings.length > 0 ? 'hit' : 'miss';
@@ -623,7 +624,10 @@ export async function detectAts(
       // Refused by policy (prohibited host, private address, non-https, oversized): final.
       careersPage = 'blocked';
       detail = err.message;
-      sctx.log.warn({ companyId, reason: err.reason }, 'careers page fetch blocked');
+      sctx.log.warn(
+        { 'opportun.company.id': companyId, 'opportun.fetch.blocked_reason': err.reason },
+        'careers page fetch blocked',
+      );
     }
   }
   if (transient) {

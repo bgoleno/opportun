@@ -606,7 +606,10 @@ export async function runDiscoverySource(
       await finishRun(tx, ctx, run.id, { error: detail, stats: { ...stats } });
       await setSourceStatus(tx, ctx, source.id, 'error', detail);
     });
-    sctx.log.warn({ sourceId: source.id, kind: source.kind, err }, 'discovery run failed');
+    sctx.log.warn(
+      { 'opportun.source.id': source.id, 'opportun.discovery.source_kind': source.kind, err },
+      'discovery run failed',
+    );
     if (err instanceof SourceConfigError) {
       return { status: 'config_error', runId: run.id, stats, error: detail };
     }

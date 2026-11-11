@@ -1,6 +1,7 @@
 import { pathToFileURL } from 'node:url';
 import { buildApp } from './app';
-import { loadConfig } from './config';
+import { ConfigError, loadConfig } from './config';
+import { createLogger } from './obs/log';
 
 /** Server entry point: load config, build the app, listen. */
 export async function main(): Promise<void> {
@@ -20,10 +21,13 @@ export async function main(): Promise<void> {
   const app = await buildApp(cfg, mocks?.build ?? {});
   if (mocks !== undefined) {
     await mocks.register(app);
-    app.log.warn({ mocks: mocks.enabled }, 'TEST MOCKS ENABLED: external provider calls are fake');
+    app.log.warn(
+      { 'opportun.mocks.count': mocks.enabled.length },
+      'TEST MOCKS ENABLED: external provider calls are fake',
+    );
   }
   const shutdown = (signal: string): void => {
-    app.log.info({ signal }, 'shutting down');
+    app.log.info({ 'opportun.process.signal': signal }, 'shutting down');
     app.close().then(
       () => process.exit(0),
       (err: unknown) => {
@@ -40,8 +44,14 @@ export async function main(): Promise<void> {
 const entry = process.argv[1];
 if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
   main().catch((err: unknown) => {
-    // Config errors are operator-facing; print the message plainly.
-    console.error(err instanceof Error ? err.message : err);
+    if (err instanceof ConfigError) {
+      // A config error is operator-facing, and quotes only the operator's own environment,
+      // before the app or any user data exists: its message is printed plainly, as the one way
+      // to say which variable is wrong (design 14.9 keeps every other message to the catalog).
+      process.stderr.write(`${err.message}\n`);
+    } else {
+      createLogger({ level: 'error' }).error({ err }, 'server failed to start');
+    }
     process.exit(1);
   });
 }

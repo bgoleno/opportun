@@ -44,6 +44,7 @@ import { JOB_PRUNE_CRON, JOB_PRUNE_JOB_KIND } from './jobs/jobPrune';
 import { OBS_PRUNE_CRON, OBS_PRUNE_JOB_KIND } from './jobs/obsPrune';
 import { stopObs } from './obs';
 import { startObsFromSettings } from './obs/config';
+import { loggerOptions } from './obs/log';
 import { obsMetricRoutes } from './routes/obsMetrics';
 import { obsSettingsRoutes } from './routes/obsSettings';
 import { obsTraceRoutes } from './routes/obsTraces';
@@ -285,11 +286,16 @@ function serializeReq(req: LoggableRequest): Record<string, unknown> {
  */
 export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({
+    // The one logger configuration (obs/log.ts, design 14.9): every line goes through the gate
+    // in its destination (14.8). The redaction and the request serializer stay as a second line,
+    // though the gate keeps no request url and no key a credential could be in.
     logger: {
-      level: cfg.logLevel,
+      ...loggerOptions({
+        level: cfg.logLevel,
+        ...(opts.logStream === undefined ? {} : { stream: opts.logStream }),
+      }),
       redact: { paths: LOG_REDACT_PATHS, censor: '[redacted]' },
       serializers: { req: serializeReq },
-      ...(opts.logStream === undefined ? {} : { stream: opts.logStream }),
     },
     // Trust X-Forwarded-* only from explicitly configured proxies (OPPORTUN_TRUSTED_PROXIES,
     // issue #333), empty by default. The previous ['loopback','linklocal','uniquelocal'] default
@@ -319,7 +325,12 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     onIdleError: (err) => app.log.error({ err }, 'postgres idle connection error'),
   });
   if (dbHandle.dialect === 'postgres') {
-    for (const warning of dbHandle.warnings) app.log.warn(warning);
+    // The warning's own text names the collation; the fixed message points at the fix.
+    if (dbHandle.warnings.length > 0) {
+      app.log.warn(
+        'database collation does not match SQLite ordering: create the database with LOCALE_PROVIDER libc and C collation (docs/install.md)',
+      );
+    }
   }
   const storage = createStorage(cfg.dataDir, cfg.sqliteDir);
   // Issue #197: say once, at boot, if the database directory sits on a filesystem WAL's
@@ -331,11 +342,20 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     dbHandle.dialect === 'sqlite'
       ? (checkSqliteFilesystem(storage.liveDatabasePath('opportun.db')) ?? null)
       : null;
-  if (sqliteFsHazard !== null) app.log.warn(sqliteFsHazard.message);
+  if (sqliteFsHazard !== null) {
+    app.log.warn(
+      { 'opportun.db.filesystem': sqliteFsHazard.fsType },
+      'database directory is on a filesystem whose locking SQLite cannot depend on (docs/install.md)',
+    );
+  }
   const { db } = dbHandle;
   // A transaction holding the write gate for seconds stalls every request: say who.
   configureGateWatchdog({
-    report: (held) => app.log.warn(held, 'database write gate held too long'),
+    report: (held) =>
+      app.log.warn(
+        { 'opportun.db.gate_label': held.label, 'opportun.db.gate_held_ms': held.heldMs },
+        'database write gate held too long',
+      ),
   });
   app.decorate('config', cfg);
   app.decorate('db', db);
@@ -563,7 +583,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   if (cfg.webDir !== undefined && hasSpaBuild(cfg.webDir)) {
     await app.register(spaRoutes, { root: cfg.webDir });
   } else {
-    app.log.info({ webDir: cfg.webDir }, 'no web build found; serving the API only');
+    app.log.info('no web build found; serving the API only');
   }
 
   // OPPORTUN_HOST defaults to loopback (deliberately, on bare node: ADR-14 decision 6/7, no
@@ -573,9 +593,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   // has to already know to read (issue #24).
   if (LOOPBACK_HOSTS.has(cfg.host)) {
     app.log.info(
-      { host: cfg.host, port: cfg.port },
-      'listening on localhost only: this instance cannot be reached from another device until ' +
-        'OPPORTUN_HOST names a reachable address (docs/install.md, "Reaching it from another device")',
+      { 'server.port': cfg.port },
+      'listening on localhost only: this instance cannot be reached from another device until OPPORTUN_HOST names a reachable address (docs/install.md, "Reaching it from another device")',
     );
   }
 
