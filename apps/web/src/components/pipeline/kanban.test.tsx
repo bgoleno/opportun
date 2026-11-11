@@ -174,9 +174,12 @@ describe('Kanban drag and drop', () => {
       reject({
         status: 422,
         body: {
+          // A stale board: the server already had it in Interested.
           error: {
             code: 'invalid_transition',
-            message: 'Invalid stage transition discovered -> interested',
+            message: 'Invalid stage transition interested -> interested',
+            from: 'interested',
+            to: 'interested',
           },
         },
       });
@@ -185,9 +188,13 @@ describe('Kanban drag and drop', () => {
       expect(within(column('New')).getByRole('article', { name: /Acme/ })).toBeVisible(),
     );
     expect(within(column('Interested')).queryByRole('article', { name: /Acme/ })).toBeNull();
+    // #397: the sentence names what is allowed, not the server's raw stage ids.
     expect(
-      await screen.findByText('Invalid stage transition discovered -> interested'),
+      await screen.findByText(
+        'Interested can move to New, Preparing, Applied, In process, Offer, Dismissed or Closed.',
+      ),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/Invalid stage transition/)).toBeNull();
   });
 
   it('does nothing when dropped on its own column or outside any column', async () => {
@@ -197,12 +204,27 @@ describe('Kanban drag and drop', () => {
     expect(stageCalls(api.calls)).toHaveLength(0);
   });
 
-  it('refuses a move the state machine forbids without a request', async () => {
+  // #397: a card moved forward by mistake goes straight back, however far.
+  it('moves a card back several stages in one move', async () => {
     const { api } = await renderBoard();
     await drop('opp-3', 'discovered');
-    expect(await screen.findByText('Applied cannot move to New.')).toBeInTheDocument();
+    await waitFor(() => expect(stageCalls(api.calls)).toHaveLength(1));
+    expect(stageCalls(api.calls)[0]).toMatchObject({
+      path: '/opportunities/opp-3/stage',
+      body: { to: 'discovered' },
+    });
+    await waitFor(() =>
+      expect(within(column('New')).getByRole('article', { name: /Initech/ })).toBeVisible(),
+    );
+  });
+
+  it('refuses a chain stage for a closed card without a request, and says to use Reopen', async () => {
+    const { api } = await renderBoard();
+    await drop('opp-4', 'interested');
+    expect(
+      await screen.findByText('Use Reopen to move a closed opportunity back to Interested.'),
+    ).toBeInTheDocument();
     expect(stageCalls(api.calls)).toHaveLength(0);
-    expect(within(column('Applied')).getByRole('article', { name: /Initech/ })).toBeVisible();
   });
 
   it('asks for a closed reason before closing, and cancel sends nothing', async () => {
@@ -258,11 +280,12 @@ describe('Card controls', () => {
     const card = within(column('Applied')).getByRole('article', { name: /Initech/ });
     await user.click(within(card).getByRole('button', { name: 'Move Initech: Director' }));
     const menu = await screen.findByRole('menu');
+    // Every other chain stage, earlier ones included (#397), then the terminal ones.
     expect(
       within(menu)
         .getAllByRole('menuitem')
         .map((m) => m.textContent),
-    ).toEqual(['Preparing', 'In process', 'Offer', 'Dismissed', 'Closed']);
+    ).toEqual(['New', 'Interested', 'Preparing', 'In process', 'Offer', 'Dismissed', 'Closed']);
     await user.click(within(menu).getByRole('menuitem', { name: 'In process' }));
     await waitFor(() => expect(stageCalls(api.calls)).toHaveLength(1));
     expect(stageCalls(api.calls)[0]?.body).toEqual({ to: 'in_process' });
