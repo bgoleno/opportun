@@ -115,6 +115,11 @@ function run(data: CheckpointWorkerData, port: NonNullable<typeof parentPort>): 
   const shm = `${data.file}-shm`;
   let waitingSince: number | undefined;
   let lastAttempt = -Infinity;
+  // Whether the last checkpoint left frames behind (a reader held them): only then is the next
+  // attempt delayed. A checkpoint that copied everything is followed at once by the next one the
+  // WAL calls for, or under steady writes the backstop would do the worker's job, on the main
+  // thread (the busy benchmark caught that).
+  let heldBack = false;
   let timer: NodeJS.Timeout | undefined;
   const tick = (): void => {
     const index = readWalIndex(shm, data.pageSize);
@@ -132,13 +137,14 @@ function run(data: CheckpointWorkerData, port: NonNullable<typeof parentPort>): 
           ? 'age'
           : undefined;
     // A checkpoint that a reader held back is retried, but not on every poll.
-    if (reason !== undefined && now - lastAttempt >= data.retryMs) {
+    if (reason !== undefined && (!heldBack || now - lastAttempt >= data.retryMs)) {
       lastAttempt = now;
       const started = performance.now();
       const [result] = db.pragma('wal_checkpoint(PASSIVE)') as {
         log: number;
         checkpointed: number;
       }[];
+      heldBack = (result?.checkpointed ?? 0) < (result?.log ?? 0);
       tell({
         type: 'checkpoint',
         reason,

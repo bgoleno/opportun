@@ -149,6 +149,27 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
     }
   });
 
+  it('keeps up under steady writes: the retry delay is only for a checkpoint a reader held back', async () => {
+    const opened = await openTestDb({
+      backgroundCheckpoint: true,
+      checkpointerTuning: { maxPages: 50, pollMs: 20 },
+    });
+    try {
+      const h = opened.handle as SqliteHandle;
+      const started = Date.now();
+      // 60 pages at a time, each burst over the threshold, well inside a second.
+      for (let burst = 0; burst < 6 && Date.now() - started < 900; burst++) {
+        const before = h.checkpointer!.checkpoints;
+        await write(h, 60);
+        await until(() => h.checkpointer!.checkpoints > before, 900);
+      }
+      expect(h.checkpointer!.checkpoints).toBeGreaterThanOrEqual(3);
+      expect(Date.now() - started).toBeLessThan(1_000);
+    } finally {
+      await opened.close();
+    }
+  });
+
   it('under the size threshold and its time bound, nothing is checkpointed', async () => {
     const opened = await openTestDb({
       backgroundCheckpoint: true,
