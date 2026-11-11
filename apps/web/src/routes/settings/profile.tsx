@@ -139,7 +139,13 @@ function ProfileForm({ profile }: { profile: Profile }) {
               hint={LOCATION_HINT}
               error={errors.location?.message}
             >
-              {(p) => <Input {...p} placeholder="Seattle, WA" {...form.register('location')} />}
+              {(p) => (
+                <Input
+                  {...p}
+                  placeholder="Seattle, Washington, United States"
+                  {...form.register('location')}
+                />
+              )}
             </FormField>
             <FormField label="Work authorization" error={errors.workAuth?.message}>
               {(p) => <Input {...p} placeholder="US citizen" {...form.register('workAuth')} />}

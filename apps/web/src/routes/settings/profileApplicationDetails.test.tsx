@@ -68,6 +68,11 @@ describe('Settings > Profile > Application details (#401)', () => {
     expect(screen.getByLabelText('Location (city)')).toHaveAccessibleDescription(
       /as the form's list shows it, for example Seattle, Washington/,
     );
+    // Its placeholder shows the same wording as its hint (tl on #437).
+    expect(screen.getByLabelText('Location (city)')).toHaveAttribute(
+      'placeholder',
+      'Seattle, Washington, United States',
+    );
   });
 
   it('saves the details with the profile as stored, and only the details change', async () => {
