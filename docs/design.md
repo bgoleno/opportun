@@ -837,9 +837,10 @@ SDK's own global fetch. What this costs and what it changes:
 - **A host that reaches the internet only through NAT64 cannot reach Anthropic or OpenAI.**
   DNS64 answers in `64:ff9b::/96`, which `isPrivateAddress` refuses, as it already did for an
   OpenAI-compatible endpoint. Such a host needs a proxy (next point) or IPv4.
-- **The operator's own `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` keep working.** Both SDKs
-  read them from the environment, and an operator who points one at a proxy (a LiteLLM
-  container on the compose network, a corporate gateway) chose it, as with
+- **The operator's own `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` keep working.** The server
+  reads them once and gives them to the SDKs itself (never letting an SDK read the environment
+  behind the fetch's back), for task calls and key checks alike. An operator who points one at
+  a proxy (a LiteLLM container on the compose network, a corporate gateway) chose it, as with
   `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP`. A request to the origin of either skips the https and
   public-address checks. It keeps the rest: credentials in the URL are refused, and redirects
   are not followed. No user can set either variable, and any other origin, a user's own

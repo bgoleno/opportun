@@ -178,12 +178,22 @@ function membership(models: string[], list: ListResult): ModelCheck[] {
   });
 }
 
+/**
+ * Where an OpenAI key is checked: the model list under the operator's own OPENAI_BASE_URL when
+ * set, the same place the task calls go (https://github.com/bgoleno/opportun/issues/344, decision
+ * 40), else the official API.
+ */
+export function openAiModelsUrl(providerFetch: Pick<ProviderFetchOptions, 'baseUrls'>): string {
+  const base = providerFetch.baseUrls?.openai?.replace(/\/+$/, '');
+  return base === undefined ? OPENAI_MODELS_URL : `${base}/models`;
+}
+
 async function validateOpenAi(
   apiKey: string,
   policies: ModelPolicy[],
   providerFetch: ProviderFetchOptions,
 ): Promise<Pick<KeyValidation, 'ok' | 'models' | 'error'>> {
-  const list = await listModels(OPENAI_MODELS_URL, apiKey, providerFetch.fetch);
+  const list = await listModels(openAiModelsUrl(providerFetch), apiKey, providerFetch.fetch);
   const models = membership(
     policies.map((p) => p.model),
     list,

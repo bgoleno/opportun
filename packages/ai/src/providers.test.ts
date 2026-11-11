@@ -141,3 +141,36 @@ describe('the fetch handed to every provider (issue #344)', () => {
     },
   );
 });
+
+describe('the base URL of Anthropic and OpenAI (issue #344, decision 40)', () => {
+  // The server reads ANTHROPIC_BASE_URL and OPENAI_BASE_URL once and passes them; the SDK is
+  // always given a baseURL, so it never reads the environment behind the checked fetch's back.
+  it.each([
+    [
+      'anthropic',
+      'claude-haiku-5-5',
+      { anthropic: 'http://litellm:4000/v1' },
+      'http://litellm:4000/v1/',
+    ],
+    [
+      'openai',
+      'gpt-5-mini',
+      { openai: 'https://gateway.corp.internal/v1' },
+      'https://gateway.corp.internal/v1/',
+    ],
+  ] as const)('%s calls the base URL it is given', async (provider, model, baseUrls, prefix) => {
+    const seen: string[] = [];
+    const recording = ((input: Parameters<typeof fetch>[0]) => {
+      seen.push(String(input instanceof Request ? input.url : input));
+      return Promise.resolve(new Response('{"error":{"message":"stub"}}', { status: 400 }));
+    }) as typeof fetch;
+    const lm = createLanguageModel({ provider, model, maxOutputTokens: 1 }, 'test-key', {
+      fetch: recording,
+      allowLoopbackHttp: false,
+      baseUrls,
+    });
+    await generateText({ model: lm, prompt: 'x', maxRetries: 0 }).catch(() => undefined);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.startsWith(prefix)).toBe(true);
+  });
+});

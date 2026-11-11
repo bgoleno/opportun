@@ -148,25 +148,37 @@ export function createProviderFetch(
   }) as typeof fetch;
 }
 
-/** The env variables the Anthropic and OpenAI SDKs read their base URL from, and their target. */
-const OPERATOR_BASE_URLS = [
-  ['ANTHROPIC_BASE_URL', 'anthropic'],
-  ['OPENAI_BASE_URL', 'openai'],
-] as const;
-
 export type ProviderTarget = 'anthropic' | 'openai' | 'ai_compatible';
 
+/** The operator's own base URLs for Anthropic and OpenAI, as the environment sets them. */
+export interface OperatorBaseUrls {
+  anthropic?: string;
+  openai?: string;
+}
+
 /**
- * The operator's own provider origins, read from the environment the SDKs read (decision 40). A
- * value that is not a URL is left out: the SDK fails on it by itself.
+ * Reads ANTHROPIC_BASE_URL and OPENAI_BASE_URL (decision 40). The server passes these to the
+ * SDKs itself (packages/ai createLanguageModel), so what the fetch trusts and what the SDK calls
+ * are the same value. An empty variable is unset.
  */
-export function operatorProviderOrigins(
-  env: NodeJS.ProcessEnv = process.env,
-): Map<string, ProviderTarget> {
+export function operatorBaseUrls(env: NodeJS.ProcessEnv): OperatorBaseUrls {
+  const out: OperatorBaseUrls = {};
+  const anthropic = env.ANTHROPIC_BASE_URL?.trim();
+  const openai = env.OPENAI_BASE_URL?.trim();
+  if (anthropic !== undefined && anthropic !== '') out.anthropic = anthropic;
+  if (openai !== undefined && openai !== '') out.openai = openai;
+  return out;
+}
+
+/**
+ * The origins of the operator's base URLs, by target. A value that is not a URL has no origin to
+ * trust; the request to it fails the check as any other bad URL does.
+ */
+export function operatorProviderOrigins(urls: OperatorBaseUrls): Map<string, ProviderTarget> {
   const out = new Map<string, ProviderTarget>();
-  for (const [name, target] of OPERATOR_BASE_URLS) {
-    const raw = env[name];
-    if (raw === undefined || raw.trim() === '') continue;
+  for (const target of ['anthropic', 'openai'] as const) {
+    const raw = urls[target];
+    if (raw === undefined) continue;
     try {
       out.set(new URL(raw).origin, target);
     } catch {

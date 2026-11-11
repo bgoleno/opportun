@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { obsMetricPoints } from '../src/db/schema';
 import { buildAiDeps, setProviderResolveOverride } from '../src/lib/ai';
+import { openAiModelsUrl } from '../src/lib/aiKeyValidate';
 import type { ResolveHost } from '../src/lib/aiProviderFetch';
 import { flushNow, setCollecting } from '../src/obs';
 import { MINUTE_MS } from '../src/obs/metrics';
@@ -38,9 +39,6 @@ const neverResolve: ResolveHost = async (host) => {
 };
 
 beforeEach(() => {
-  // Unset, not empty: the SDKs take an empty value as the base URL itself.
-  vi.stubEnv('ANTHROPIC_BASE_URL', undefined);
-  vi.stubEnv('OPENAI_BASE_URL', undefined);
   asked.length = 0;
   fetchMock.mockReset();
   // A 400 is not retried, so each call makes exactly one request.
@@ -50,12 +48,20 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.unstubAllGlobals();
-  vi.unstubAllEnvs();
   await setCollecting(false);
 });
 
-async function depsFor(app: App, userId: string, policy?: ModelPolicy) {
-  const deps = await buildAiDeps(app.db, { userId, isAdmin: false });
+/**
+ * The deps of a call, with the environment the server reads the operator's base URLs from given
+ * here (never the real process.env, issue #292): empty by default, so the official APIs.
+ */
+async function depsFor(
+  app: App,
+  userId: string,
+  policy?: ModelPolicy,
+  env: NodeJS.ProcessEnv = {},
+) {
+  const deps = await buildAiDeps(app.db, { userId, isAdmin: false }, { env });
   deps.getKey = async () => KEY;
   if (policy !== undefined) deps.policyFor = async () => policy;
   return deps;
@@ -106,10 +112,11 @@ describe("the operator's own ANTHROPIC_BASE_URL or OPENAI_BASE_URL keeps working
   it('a non-loopback http proxy at ANTHROPIC_BASE_URL is reached, without a DNS lookup', async () => {
     const { app, a } = await boot();
     setProviderResolveOverride(app.db, neverResolve);
-    vi.stubEnv('ANTHROPIC_BASE_URL', 'http://litellm:4000/v1');
-    await runStructured(await depsFor(app, a.userId), 'comms.classify', call).catch(
-      () => undefined,
-    );
+    await runStructured(
+      await depsFor(app, a.userId, undefined, { ANTHROPIC_BASE_URL: 'http://litellm:4000/v1' }),
+      'comms.classify',
+      call,
+    ).catch(() => undefined);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(requested().url.startsWith('http://litellm:4000/')).toBe(true);
     expect(requested().init).toMatchObject({ redirect: 'error' });
@@ -118,10 +125,11 @@ describe("the operator's own ANTHROPIC_BASE_URL or OPENAI_BASE_URL keeps working
   it('a private gateway at OPENAI_BASE_URL is reached', async () => {
     const { app, a } = await boot();
     setProviderResolveOverride(app.db, resolvePrivate);
-    vi.stubEnv('OPENAI_BASE_URL', 'https://gateway.corp.internal/v1');
-    await runStructured(await depsFor(app, a.userId, OPENAI), 'comms.classify', call).catch(
-      () => undefined,
-    );
+    await runStructured(
+      await depsFor(app, a.userId, OPENAI, { OPENAI_BASE_URL: 'https://gateway.corp.internal/v1' }),
+      'comms.classify',
+      call,
+    ).catch(() => undefined);
     expect(requested().url.startsWith('https://gateway.corp.internal/')).toBe(true);
     expect(asked).toEqual([]);
   });
@@ -129,7 +137,6 @@ describe("the operator's own ANTHROPIC_BASE_URL or OPENAI_BASE_URL keeps working
   it("the operator's origin is not a way past the check for anything else", async () => {
     const { app, a } = await boot();
     setProviderResolveOverride(app.db, resolvePrivate);
-    vi.stubEnv('ANTHROPIC_BASE_URL', 'http://litellm:4000');
     // A user's own openai_compatible policy on another private host is still refused.
     const compatible: ModelPolicy = {
       provider: 'openai_compatible',
@@ -138,7 +145,11 @@ describe("the operator's own ANTHROPIC_BASE_URL or OPENAI_BASE_URL keeps working
       baseUrl: 'https://llm.internal.example/v1',
     };
     await expect(
-      runStructured(await depsFor(app, a.userId, compatible), 'comms.classify', call),
+      runStructured(
+        await depsFor(app, a.userId, compatible, { ANTHROPIC_BASE_URL: 'http://litellm:4000' }),
+        'comms.classify',
+        call,
+      ),
     ).rejects.toMatchObject({ reason: 'provider_error' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -146,11 +157,30 @@ describe("the operator's own ANTHROPIC_BASE_URL or OPENAI_BASE_URL keeps working
   it('a base URL with credentials in it is refused, even as the operator set it', async () => {
     const { app, a } = await boot();
     setProviderResolveOverride(app.db, neverResolve);
-    vi.stubEnv('ANTHROPIC_BASE_URL', 'http://user:pass@litellm:4000');
     await expect(
-      runStructured(await depsFor(app, a.userId), 'comms.classify', call),
+      runStructured(
+        await depsFor(app, a.userId, undefined, {
+          ANTHROPIC_BASE_URL: 'http://user:pass@litellm:4000',
+        }),
+        'comms.classify',
+        call,
+      ),
     ).rejects.toMatchObject({ reason: 'provider_error' });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('an OpenAI key is checked where its calls go (#344, decision 40)', () => {
+  it('lists the models under the operator\u2019s OPENAI_BASE_URL when set, else the official API', async () => {
+    const { app, a } = await boot();
+    const official = await buildAiDeps(app.db, { userId: a.userId, isAdmin: false }, { env: {} });
+    expect(openAiModelsUrl(official.providerFetch)).toBe('https://api.openai.com/v1/models');
+    const proxied = await buildAiDeps(
+      app.db,
+      { userId: a.userId, isAdmin: false },
+      { env: { OPENAI_BASE_URL: 'http://litellm:4000/v1/' } },
+    );
+    expect(openAiModelsUrl(proxied.providerFetch)).toBe('http://litellm:4000/v1/models');
   });
 });
 
@@ -175,10 +205,11 @@ describe('the provider request is observed (#344, 14.2)', () => {
     await runStructured(await depsFor(app, a.userId), 'comms.classify', call).catch(
       () => undefined,
     );
-    vi.stubEnv('OPENAI_BASE_URL', 'http://litellm:4000/v1');
-    await runStructured(await depsFor(app, a.userId, OPENAI), 'comms.classify', call).catch(
-      () => undefined,
-    );
+    await runStructured(
+      await depsFor(app, a.userId, OPENAI, { OPENAI_BASE_URL: 'http://litellm:4000/v1' }),
+      'comms.classify',
+      call,
+    ).catch(() => undefined);
     await flushNow();
     const attrs = (await outbound(app)).map((p) => p.attributes);
     expect(attrs).toContainEqual(

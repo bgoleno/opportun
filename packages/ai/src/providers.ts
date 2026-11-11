@@ -5,7 +5,12 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import type { ModelPolicy, ProviderFetchOptions, SafeBaseUrlOptions } from './types';
+import {
+  OFFICIAL_BASE_URLS,
+  type ModelPolicy,
+  type ProviderFetchOptions,
+  type SafeBaseUrlOptions,
+} from './types';
 
 /**
  * Hostnames trusted as loopback by literal match, never by resolving them (issue #334): an
@@ -80,10 +85,20 @@ export function createLanguageModel(
   opts: ProviderFetchOptions,
 ): LanguageModel {
   switch (policy.provider) {
+    // Always an explicit baseURL: unset, the SDKs read ANTHROPIC_BASE_URL and OPENAI_BASE_URL
+    // from the environment themselves, behind the back of the fetch that checks them (#344).
     case 'anthropic':
-      return createAnthropic({ apiKey, fetch: opts.fetch })(policy.model);
+      return createAnthropic({
+        apiKey,
+        fetch: opts.fetch,
+        baseURL: opts.baseUrls?.anthropic ?? OFFICIAL_BASE_URLS.anthropic,
+      })(policy.model);
     case 'openai':
-      return createOpenAI({ apiKey, fetch: opts.fetch })(policy.model);
+      return createOpenAI({
+        apiKey,
+        fetch: opts.fetch,
+        baseURL: opts.baseUrls?.openai ?? OFFICIAL_BASE_URLS.openai,
+      })(policy.model);
     case 'openai_compatible':
       return createOpenAICompatible({
         name: 'openai_compatible',

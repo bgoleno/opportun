@@ -27,8 +27,10 @@ import { recordTaskRun, spentTodayUsd } from '../repos/taskRuns';
 import { observeOutbound } from '../obs/outbound';
 import {
   createProviderFetch,
+  operatorBaseUrls,
   operatorProviderOrigins,
   providerTarget,
+  type OperatorBaseUrls,
   type ResolveHost,
 } from './aiProviderFetch';
 import { getSecretValue } from './secretBox';
@@ -261,11 +263,15 @@ export function recordGenAiMetrics(userId: string, run: TaskRunRecord): void {
  * The fetch every AI provider's requests leave through (issue #334, and for Anthropic and OpenAI
  * since https://github.com/bgoleno/opportun/issues/344): checked (aiProviderFetch.ts), then
  * observed under its provider's target (obs/outbound.ts, design 14.2). The operator's own
- * ANTHROPIC_BASE_URL and OPENAI_BASE_URL are read here, as the SDKs read them when the client is
- * built, so the two agree on which origin is the operator's (decision 40).
+ * ANTHROPIC_BASE_URL and OPENAI_BASE_URL are trusted (decision 40); buildAiDeps hands the same
+ * values to the SDKs, which never read the environment themselves.
  */
-function providerFetchFor(allowLoopbackHttp: boolean, resolve?: ResolveHost): typeof fetch {
-  const operator = operatorProviderOrigins();
+function providerFetchFor(
+  allowLoopbackHttp: boolean,
+  baseUrls: OperatorBaseUrls,
+  resolve?: ResolveHost,
+): typeof fetch {
+  const operator = operatorProviderOrigins(baseUrls);
   const checked = createProviderFetch(
     { allowLoopbackHttp, operatorOrigins: [...operator.keys()] },
     resolve,
@@ -287,6 +293,8 @@ export async function buildAiDeps(
   opts: {
     onRecorded?: (runId: string) => Promise<void> | void;
     allowLoopbackHttp?: boolean;
+    /** Where ANTHROPIC_BASE_URL and OPENAI_BASE_URL are read from: the process's own by default. */
+    env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<AiDeps> {
   const override = overrides.get(db);
@@ -297,6 +305,7 @@ export async function buildAiDeps(
   // keeps it out of a running server, so a correctly configured production is the only thing
   // that keeps it off. While one is registered, policyFor above ignores the user's stored
   // policies, so a user-supplied baseUrl is never fetched under the override's allowance.
+  const baseUrls = operatorBaseUrls(opts.env ?? process.env);
   const allowLoopbackHttp =
     override?.allowLoopbackHttp ??
     opts.allowLoopbackHttp ??
@@ -319,8 +328,9 @@ export async function buildAiDeps(
     budget: await readBudget(db, ctx),
     spentTodayUsd: async (task) => await spentTodayUsd(db, ctx, task),
     providerFetch: {
-      fetch: providerFetchFor(allowLoopbackHttp, resolveOverrides.get(db)),
+      fetch: providerFetchFor(allowLoopbackHttp, baseUrls, resolveOverrides.get(db)),
       allowLoopbackHttp,
+      baseUrls,
     },
     // packages/ai does no IO, so it hands a failed ledger write after a streamed call to the
     // server instead of logging it (issue #344). Same line the router logged itself before.

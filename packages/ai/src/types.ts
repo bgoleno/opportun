@@ -93,7 +93,21 @@ export interface SafeBaseUrlOptions {
  */
 export interface ProviderFetchOptions extends SafeBaseUrlOptions {
   fetch: typeof fetch;
+  /**
+   * Where Anthropic and OpenAI calls go, when not the official API: the operator's own
+   * ANTHROPIC_BASE_URL and OPENAI_BASE_URL as the server read them
+   * (https://github.com/bgoleno/opportun/issues/344, decision 40). Passed to the SDK explicitly,
+   * so the SDK never reads the environment itself and the server's fetch checks the very URL the
+   * SDK calls. No user can set these: only a policy's openai_compatible baseUrl is the user's.
+   */
+  baseUrls?: { anthropic?: string | undefined; openai?: string | undefined };
 }
+
+/** The official API base URLs, used when the operator set no base URL of their own. */
+export const OFFICIAL_BASE_URLS = {
+  anthropic: 'https://api.anthropic.com/v1',
+  openai: 'https://api.openai.com/v1',
+} as const;
 
 export interface AiDeps {
   /** The caller's API key for a provider; throws AiUnavailableError('no_key') when absent. */

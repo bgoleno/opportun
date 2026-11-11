@@ -143,8 +143,8 @@ since it was not a deliberate choice.)
   `OPENAI_BASE_URL`, when the operator sets one, skips the https and public-address checks of
   the AI provider path, so a proxy on the compose network or a private gateway keeps working
   (https://github.com/bgoleno/opportun/issues/344, decision 40). Both are environment
-  variables of the server process, which no user can set, and the SDKs send every Anthropic or
-  OpenAI call there anyway. A URL with credentials in it is still refused, and redirects are
+  variables of the server process, which no user can set, and the server sends every Anthropic
+  or OpenAI call, key checks included, there. A URL with credentials in it is still refused, and redirects are
   still not followed. Any other origin, a user's own `openai_compatible` `baseUrl` among them,
   is checked as before.
 - **Postgres TLS is encrypted but not verified by default.** For a Postgres host that is not

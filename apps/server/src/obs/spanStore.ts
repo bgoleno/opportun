@@ -265,7 +265,9 @@ async function writeBatch(tx: Exec, batch: Pending[], now: number): Promise<void
       for (let i = taken.length; i < own.length; i++) countSpanDrop('buffer_full');
     }
     for (const p of taken) addSpan(row, p);
-    const { traceId: _key, ...figures } = row;
+    // Everything but the key: an upsert's set may not change the row's own id.
+    const figures: Partial<TraceRow> = { ...row };
+    delete figures.traceId;
     await tx
       .insert(obsTraces)
       .values(row)
