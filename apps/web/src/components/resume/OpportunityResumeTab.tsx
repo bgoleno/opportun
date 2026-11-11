@@ -22,6 +22,7 @@ import {
   useOpportunitySends,
   useResumes,
   type Resume,
+  type ResumeSend,
 } from './api';
 import {
   ArchivedBadge,
@@ -134,6 +135,97 @@ function DetachButton({ resume }: { resume: Resume }) {
   );
 }
 
+/** One resume on this tab and its sends for this opportunity (#404, tl's decision 2). */
+interface ResumeRowData {
+  resumeId: string;
+  title: string;
+  kind: 'base' | 'tailored';
+  /** The resume itself, when it is one this tab has loaded (attached here, or a base). */
+  resume: Resume | undefined;
+  /** Attached to this opportunity: it can be detached or deleted here. */
+  attached: boolean;
+  sends: ResumeSend[];
+}
+
+/**
+ * One entry for each resume attached to this opportunity or sent for it, with its sends inside
+ * it (#404): a send is a fact about a resume, not a second document. Attached resumes first, in
+ * their own order; then resumes known here only from a send (a base sent as it is), in the order
+ * of their sends.
+ */
+export function resumeRows(
+  attached: readonly Resume[],
+  sends: readonly ResumeSend[],
+  bases: readonly Resume[],
+): ResumeRowData[] {
+  const rows = attached.map<ResumeRowData>((r) => ({
+    resumeId: r.id,
+    title: r.title,
+    kind: r.kind,
+    resume: r,
+    attached: true,
+    sends: sends.filter((s) => s.resumeId === r.id),
+  }));
+  for (const s of sends) {
+    if (rows.some((row) => row.resumeId === s.resumeId)) continue;
+    rows.push({
+      resumeId: s.resumeId,
+      title: s.resumeTitle,
+      kind: s.resumeKind,
+      resume: bases.find((b) => b.id === s.resumeId),
+      attached: false,
+      sends: sends.filter((x) => x.resumeId === s.resumeId),
+    });
+  }
+  return rows;
+}
+
+function ResumeRow({ row, opportunityId }: { row: ResumeRowData; opportunityId: string }) {
+  const r = row.resume;
+  return (
+    <li className="grid gap-1 rounded-md border px-3 py-2 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="flex flex-wrap items-center gap-2">
+          <Link
+            to="/resumes/$id"
+            params={{ id: row.resumeId }}
+            className="font-medium break-all text-primary underline-offset-4 hover:underline"
+          >
+            {row.title}
+          </Link>
+          <Badge variant="secondary">{row.kind === 'base' ? 'Base resume' : 'Tailored'}</Badge>
+        </span>
+        <span className="flex items-center gap-2 text-muted-foreground">
+          {r === undefined ? null : <StatusBadge status={r.status} />}
+          {r === undefined || r.archivedAt === null ? null : <ArchivedBadge />}
+          {r === undefined ? null : `Updated ${formatDate(r.updatedAt)}`}
+          {row.attached && r !== undefined ? (
+            <>
+              <DetachButton resume={r} />
+              <DeleteResumeButton resume={r} tailoredCount={0} />
+            </>
+          ) : null}
+        </span>
+      </div>
+      {row.sends.map((s) => (
+        <div key={s.id} className="flex flex-wrap items-center gap-2 text-muted-foreground">
+          <span>{sentLine(s)}</span>
+          {s.submissionId === null ? null : (
+            <Link
+              to="/opportunities/$id/applications/$submissionId"
+              params={{ id: opportunityId, submissionId: s.submissionId }}
+              className="text-primary underline-offset-4 hover:underline"
+            >
+              View application
+            </Link>
+          )}
+          <RemoveSendButton opportunityId={opportunityId} send={s} />
+        </div>
+      ))}
+    </li>
+  );
+}
+
 export function OpportunityResumeTab({ opportunityId }: { opportunityId: string }) {
   const tailored = useResumes({ opportunityId });
   const sends = useOpportunitySends(opportunityId);
@@ -143,6 +235,7 @@ export function OpportunityResumeTab({ opportunityId }: { opportunityId: string 
   const navigate = useNavigate();
   const [chosen, setChosen] = useState('');
   const baseItems = bases.data?.items ?? [];
+  const rows = resumeRows(tailored.data?.items ?? [], sendItems, baseItems);
   const baseId = chosen || baseItems[0]?.id || '';
 
   function createCopy() {
@@ -165,52 +258,18 @@ export function OpportunityResumeTab({ opportunityId }: { opportunityId: string 
           ) : (tailored.data?.items.length ?? 0) === 0 && sendItems.length === 0 ? (
             <p className="text-sm text-muted-foreground">No resume for this opportunity yet.</p>
           ) : (
-            <ul className="grid gap-2">
-              {sendItems.map((s) => (
-                <li
-                  key={`send-${s.id}`}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
-                >
-                  <span className="flex flex-wrap items-center gap-2">
-                    <Link
-                      to="/resumes/$id"
-                      params={{ id: s.resumeId }}
-                      className="font-medium break-all text-primary underline-offset-4 hover:underline"
-                    >
-                      {s.resumeTitle}
-                    </Link>
-                    <Badge variant="secondary">
-                      {s.resumeKind === 'base' ? 'Base resume' : 'Tailored'}
-                    </Badge>
-                  </span>
-                  <span className="flex items-center gap-2 text-muted-foreground">
-                    {sentLine(s)}
-                    <RemoveSendButton opportunityId={opportunityId} send={s} />
-                  </span>
-                </li>
-              ))}
-              {tailored.data?.items.map((r) => (
-                <li
-                  key={r.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
-                >
-                  <Link
-                    to="/resumes/$id"
-                    params={{ id: r.id }}
-                    className="font-medium break-all text-primary underline-offset-4 hover:underline"
-                  >
-                    {r.title}
-                  </Link>
-                  <span className="flex items-center gap-2 text-muted-foreground">
-                    <StatusBadge status={r.status} />
-                    {r.archivedAt === null ? null : <ArchivedBadge />}
-                    {formatDate(r.updatedAt)}
-                    <DetachButton resume={r} />
-                    <DeleteResumeButton resume={r} tailoredCount={0} />
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className="grid gap-2" aria-label="Resumes for this opportunity">
+                {rows.map((row) => (
+                  <ResumeRow key={row.resumeId} row={row} opportunityId={opportunityId} />
+                ))}
+              </ul>
+              {sendItems.some((s) => s.submissionId !== null) ? (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  The file that was sent is kept with the application.
+                </p>
+              ) : null}
+            </>
           )}
         </CardContent>
       </Card>

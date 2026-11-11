@@ -142,11 +142,16 @@ in one step. Each attached resume has its own **Remove from this opportunity** (
 link is cleared, nothing else changes, and it's free to attach elsewhere) and **Delete** (the
 same rule as the Resumes page: a hard delete, except a submitted resume is archived instead).
 
+Each resume appears once, with its kind (Tailored or Base resume), its status and when it was
+last updated. Its sends for this opportunity are listed inside it, one line each ("Sent via
+Greenhouse on _date_"), with **View application** when the send was an application made through
+assisted apply. The file that was sent is kept with that application, on its own page.
+
 A base resume is never attached. Pick one under **Attach an existing resume** and it offers
-**Record as sent** instead: say how you sent it (for example "Indeed") and on what day. The
-send is listed here, marked **Base resume**, and the resume itself does not change, so the
-same base can be recorded for other opportunities and still tailored from. Each send has its
-own remove control, which removes only that record. See [Resumes](resumes.md).
+**Record as sent** instead: say how you sent it (for example "Indeed") and on what day. It is
+then listed here as a **Base resume** with that send, and the resume itself does not change, so
+the same base can be recorded for other opportunities and still tailored from. Each send has
+its own remove control, which removes only that record. See [Resumes](resumes.md).
 
 ### Communications
 
@@ -157,6 +162,16 @@ link, reclassify, accept a suggested stage). See [Inbox](inbox.md).
 
 Contacts who could refer you, ranked by the AI, and the asks you have made. See
 [Network](network.md#referrals).
+
+### The Assisted apply panel
+
+Where assisted apply is on, the opportunity has an **Assisted apply** panel beside the tabs.
+Before you apply, it offers **Apply on _ATS_** or says why it can't yet. Once you have applied
+(Submitted, Confirmed, No confirmation seen or ATS refused), it leads with that: the status,
+when you applied and through which site (and when it was confirmed), and **View application**.
+For an application with no confirmation yet it asks what happened since. **Apply again** stays
+available as a link, with one line on when to use it: only if the first application did not go
+through, or the employer asked you to. The apply flow then asks for the reason.
 
 ## Find a posting
 
