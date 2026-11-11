@@ -1,6 +1,6 @@
 import { Link } from '@tanstack/react-router';
 import { ArrowLeft, Merge, MoreHorizontal } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { MainWithRail } from '@/components/MainWithRail';
 import { CommunicationsTab } from '@/components/comms/CommunicationsTab';
 import { ReferralsTab } from '@/components/network/ReferralsTab';
@@ -31,11 +31,52 @@ import { PossibleDuplicateBanner } from './PossibleDuplicateBanner';
 import { StageControl } from './StageControl';
 import { TimelineList } from './TimelineList';
 
-export function OpportunityDetail({ id }: { id: string }) {
+/** The opportunity page's tabs, in order; one of them can be named in the URL (#428). */
+export const OPPORTUNITY_TABS = [
+  'timeline',
+  'details',
+  'resume',
+  'communications',
+  'referrals',
+] as const;
+export type OpportunityTab = (typeof OPPORTUNITY_TABS)[number];
+
+const isTab = (v: string): v is OpportunityTab =>
+  (OPPORTUNITY_TABS as readonly string[]).includes(v);
+
+export function OpportunityDetail({
+  id,
+  tab,
+  onTabChange,
+}: {
+  id: string;
+  /** The tab to show, from the URL (#428); Timeline when none is given. */
+  tab?: OpportunityTab;
+  /** Told when the user picks another tab, so the URL can follow. */
+  onTabChange?: (tab: OpportunityTab) => void;
+}) {
   const { data: opp, error, isPending } = useOpportunity(id);
   const update = useUpdateOpportunity(id);
   const flow = useStageFlow();
   const [merging, setMerging] = useState(false);
+  // The URL's tab when given, followed when it changes (a link to ?tab=resume on this page).
+  const [picked, setPicked] = useState<OpportunityTab>(tab ?? 'timeline');
+  const [shownFor, setShownFor] = useState(tab);
+  if (tab !== shownFor) {
+    setShownFor(tab);
+    setPicked(tab ?? 'timeline');
+  }
+  const current = picked;
+  // Radix reports a click's tab on mousedown and again on focus, both before the next render:
+  // the last tab told is kept here, so the URL is told once.
+  const told = useRef<OpportunityTab>(picked);
+  told.current = picked;
+  const changeTab = (v: string) => {
+    if (!isTab(v) || v === told.current) return;
+    told.current = v;
+    setPicked(v);
+    onTabChange?.(v);
+  };
 
   if (error) {
     return (
@@ -119,7 +160,7 @@ export function OpportunityDetail({ id }: { id: string }) {
         </div>
       </div>
 
-      <Tabs defaultValue="timeline">
+      <Tabs value={current} onValueChange={changeTab}>
         <TabsList>
           <TabsTrigger value="timeline">Timeline</TabsTrigger>
           <TabsTrigger value="details">Details</TabsTrigger>
