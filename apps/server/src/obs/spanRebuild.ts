@@ -5,7 +5,6 @@
 // span that matches no catalogued name and kind is dropped whole and counted, wherever it comes
 // from (packages/ai, a dependency, the API used directly).
 import { SpanKind, SpanStatusCode, type HrTime } from '@opentelemetry/api';
-import { PRICING } from '@opportun/ai';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace';
 import {
   ATTRIBUTE_TYPES,
@@ -15,8 +14,8 @@ import {
   OTHER,
   SPANS,
   type SpanDef,
-  withoutLocalOnly,
 } from './catalog';
+import { exportAttributes } from './export/allowlist';
 import { gateAttributes, UnknownTelemetryKeyError } from './gate';
 import { obs, type GatedSpan } from './index';
 
@@ -102,9 +101,6 @@ export function spanDefOf(span: ReadableSpan): SpanDef | undefined {
 
 const hrMs = (t: HrTime): number => t[0] * 1000 + t[1] / 1e6;
 
-/** Every model the price table lists, by provider: the only ones export names (14.8). */
-const PRICED = new Set(Object.values(PRICING).flatMap((models) => Object.keys(models)));
-
 /**
  * A span rebuilt from its catalog entry, or undefined when it matches none (dropped and counted).
  * `export` also drops the local-only keys and names a model only when it is priced (sec's O2 on
@@ -120,14 +116,11 @@ export function rebuildSpan(span: ReadableSpan, sink: 'local' | 'export'): Gated
     countSpanDrop(reason),
   );
   if (sink === 'export') {
-    attributes = Object.fromEntries(
-      Object.entries(withoutLocalOnly(attributes)).map(([key, value]) => [
-        key,
-        isModelKey(key as AttrKey) && typeof value === 'string' && !PRICED.has(value)
-          ? OTHER
-          : value,
-      ]),
-    ) as Attributes;
+    // The one export allowlist every signal passes (obs/export/allowlist.ts, #342): no local-only
+    // key, and a model named only when it is priced, so the name filled below follows suit.
+    attributes = exportAttributes('spans', attributes, def.attributes, (_signal, reason) =>
+      countSpanDrop(reason),
+    );
   }
   const ctx = span.spanContext();
   return {

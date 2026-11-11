@@ -62,6 +62,7 @@ export async function testApp(
     db: pgDb?.config ?? { dialect: 'sqlite' },
     demo: false,
     aiAllowLoopbackHttp: false,
+    telemetryAllowPrivate: false,
     // Trust no proxy by default, matching production (issue #333). Tests that exercise proxy
     // trust pass trustedProxies through overrides.
     trustedProxies: [],

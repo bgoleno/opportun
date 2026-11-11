@@ -145,9 +145,9 @@ export function TracesPage({ isAdmin, filters, onFiltersChange }: TracesPageProp
 }
 
 /**
- * While collection is off nothing new is recorded (design.md 14.1). The switch has no Settings
- * card until FR-T2 (https://github.com/bgoleno/opportun/issues/342), so an admin gets the words
- * and no link: whichever of FR-T2 and FR-T7 merges second adds the link (tl on #347).
+ * While collection is off nothing new is recorded (design.md 14.1). An admin gets a link to the
+ * switch, Settings > Telemetry (FR-T2, https://github.com/bgoleno/opportun/issues/342, which
+ * merged second and added it, as tl ruled on #347).
  */
 function CollectOff({
   isAdmin,
@@ -173,9 +173,13 @@ function CollectOff({
     <div role="status" className="rounded-md border bg-muted/50 p-3 text-sm">
       <p className="font-medium">Collection is off, so no new traces are being recorded.</p>
       <p className="text-muted-foreground">
-        {isAdmin
-          ? 'An admin can turn it on in Settings once telemetry settings are available.'
-          : 'Ask an admin to turn it on.'}
+        {isAdmin ? (
+          <>
+            Turn it on in <Link to="/settings/telemetry">Settings &gt; Telemetry</Link>.
+          </>
+        ) : (
+          'Ask an admin to turn it on.'
+        )}
         {hasTraces ? ' Traces collected earlier are still shown.' : null}
       </p>
     </div>

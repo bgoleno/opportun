@@ -12,6 +12,7 @@ const SECTIONS = [
   { to: '/settings/mail-filters', label: 'Mail filters' },
   { to: '/settings/data', label: 'Import/Export' },
   { to: '/settings/metrics', label: 'Metrics' },
+  { to: '/settings/telemetry', label: 'Telemetry' },
   { to: '/settings/users', label: 'Users', adminOnly: true },
   { to: '/settings/jobs', label: 'Jobs', adminOnly: true },
 ] as const;

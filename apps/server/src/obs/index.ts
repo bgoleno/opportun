@@ -141,14 +141,10 @@ function countDrop(signal: Signal, reason: DropReason): void {
   if (!collecting || aggregator === undefined || runtime === undefined) return;
   // Known-good attributes, so straight to the aggregator, and always admitted past the series
   // cap: a drop must stay countable when the buffer is full.
-  aggregator.add(
-    'opportun.obs.dropped',
-    1,
-    { 'opportun.obs.signal': signal, 'opportun.obs.reason': reason },
-    null,
-    runtime.now(),
-    true,
-  );
+  const attributes = { 'opportun.obs.signal': signal, 'opportun.obs.reason': reason };
+  aggregator.add('opportun.obs.dropped', 1, attributes, null, runtime.now(), true);
+  // And to the exporter, so an operator can see telemetry being dropped (tl on #359, FR-T2).
+  sinks.metrics?.record('opportun.obs.dropped', 1, attributes);
 }
 
 async function flush(): Promise<void> {

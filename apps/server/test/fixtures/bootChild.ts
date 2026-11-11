@@ -22,6 +22,7 @@ process.stdin.once('data', () => {
       db: { dialect: 'sqlite' },
       demo: false,
       aiAllowLoopbackHttp: false,
+      telemetryAllowPrivate: false,
       trustedProxies: [],
     },
     { jobRunner: false },
