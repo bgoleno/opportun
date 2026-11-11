@@ -527,6 +527,32 @@ describe('the audit record of a profile change names the fields, never the value
   });
 });
 
+describe('a profile saved with the same values again records and writes nothing (#411)', () => {
+  // Postgres jsonb stores an object's keys in its own order (shorter keys first), so a stored link
+  // reads back as { url, label } while a client sends { label, url }: still the same value. CI's
+  // Postgres leg caught a spurious "links changed" record; this reproduces it on either engine.
+  it('the same links in another key order are not a change', async () => {
+    const { app, a } = await boot();
+    const links = [{ label: 'GitHub', url: 'https://github.com/jane-doe-example' }];
+    expect((await api(a, 'PUT', '/profile', { fullName: 'Jane Doe', links })).statusCode).toBe(200);
+    await app.db
+      .update(profiles)
+      .set({ links: [{ url: links[0]!.url, label: links[0]!.label }] })
+      .where(eq(profiles.userId, a.userId))
+      .run();
+    const before = await profileRow(app, a);
+    const again = await api(a, 'PUT', '/profile', { fullName: 'Jane Doe', links });
+    expect(again.statusCode, again.body).toBe(200);
+    expect((await profileRow(app, a))?.updatedAt).toBe(before?.updatedAt);
+    const recorded = await app.db
+      .select({ detail: auditLog.detail })
+      .from(auditLog)
+      .where(and(eq(auditLog.userId, a.userId), eq(auditLog.event, 'profile.updated')))
+      .all();
+    expect(recorded).toHaveLength(1);
+  });
+});
+
 describe('no route the extension can reach is added (#411)', () => {
   it('a device token cannot read the details or save to the profile', async () => {
     const { app, a } = await boot(ON);

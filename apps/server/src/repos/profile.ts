@@ -83,11 +83,25 @@ export type ProfileChangeVia = 'settings' | 'application';
  * `applicationDetails.<key>` in the shared list's order. Names only, always code constants (the
  * details' keys are the list's, ApplicationDetailsSchema), never a value.
  */
+/**
+ * A value as text with every object's keys sorted, so two values compare equal whatever their
+ * key order. Postgres jsonb keeps keys in its own order (shorter first): a link it stores reads
+ * back as { url, label } while a client sends { label, url }, which is no change (#411, CI).
+ */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'undefined';
+}
+
 function changedFields(before: ProfileValues, next: ProfileValues): string[] {
   const wasRow = new Map<string, unknown>(Object.entries(before));
   const nowRow = new Map<string, unknown>(Object.entries(next));
   const names: string[] = PROFILE_COLUMNS.filter(
-    (c) => JSON.stringify(wasRow.get(c)) !== JSON.stringify(nowRow.get(c)),
+    (c) => canonical(wasRow.get(c)) !== canonical(nowRow.get(c)),
   );
   const was = new Map(Object.entries(before.applicationDetails));
   const now = new Map(Object.entries(next.applicationDetails));
