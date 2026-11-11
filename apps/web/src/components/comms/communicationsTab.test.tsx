@@ -1,7 +1,7 @@
 // An opportunity's linked messages, newest first by default with a control to read them oldest
 // first (https://github.com/bgoleno/opportun/issues/394). The server answers the thread oldest
 // first, ties by id; the tab only reorders what it was given.
-import { cleanup, screen, within } from '@testing-library/react';
+import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { mockApi, renderWithProviders } from '@/test/render';
@@ -57,10 +57,10 @@ async function subjects(): Promise<string[]> {
 }
 
 function renderTab(items: CommunicationView[] = THREAD) {
-  mockApi({ 'GET /communications': { items, total: items.length } });
+  const api = mockApi({ 'GET /communications': { items, total: items.length } });
   const user = userEvent.setup();
   renderWithProviders(<CommunicationsTab opportunityId="opp-1" />);
-  return { user };
+  return { user, api };
 }
 
 describe('CommunicationsTab order (#394)', () => {
@@ -91,6 +91,18 @@ describe('CommunicationsTab order (#394)', () => {
     await user.keyboard('{Enter}');
     expect(screen.getByRole('button', { name: 'Sorted newest first' })).toHaveFocus();
     expect((await subjects())[0]).toBe('Latest reply');
+  });
+
+  it('asks the server for the order it shows, so a long thread shows its newest messages', async () => {
+    const { user, api } = renderTab();
+    await screen.findByRole('button', { name: 'Sorted newest first' });
+    const asked = () =>
+      api.calls
+        .filter((c) => c.method === 'GET' && c.path === '/communications')
+        .map((c) => new URLSearchParams(c.search).get('order'));
+    expect(asked()).toEqual(['newest']);
+    await user.click(screen.getByRole('button', { name: 'Sorted newest first' }));
+    await waitFor(() => expect(asked()).toEqual(['newest', 'oldest']));
   });
 
   it('ties on date keep one order: by id, so toggling exactly reverses the list', async () => {

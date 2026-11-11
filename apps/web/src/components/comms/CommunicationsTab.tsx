@@ -16,8 +16,8 @@ function sentTime(c: CommunicationView): number {
 /**
  * The messages in `order` (#394). Oldest first is by date, then by id for messages sent at the
  * same moment, the server's own order for a thread; newest first is exactly its reverse, so
- * switching never reshuffles ties. Sorted here rather than asked of the server, whose thread
- * order stays as it is for every other caller.
+ * switching never reshuffles ties. The server is asked for the same order (so its cap keeps
+ * the right 200); sorting here as well shows the page already held in the new order at once.
  */
 export function orderMessages(
   items: readonly CommunicationView[],
@@ -37,8 +37,8 @@ export function orderMessages(
  * and no other list is touched.
  */
 export function CommunicationsTab({ opportunityId }: { opportunityId: string }) {
-  const { data, error, isPending } = useOpportunityCommunications(opportunityId);
   const [order, setOrder] = useState<Order>('newest');
+  const { data, error, isPending } = useOpportunityCommunications(opportunityId, order);
   if (error) return <FormError message={errorMessage(error)} />;
   if (isPending) return <p className="text-sm text-muted-foreground">Loading...</p>;
   if (data.items.length === 0) {
