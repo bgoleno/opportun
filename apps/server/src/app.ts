@@ -44,6 +44,7 @@ import { JOB_PRUNE_CRON, JOB_PRUNE_JOB_KIND } from './jobs/jobPrune';
 import { OBS_PRUNE_CRON, OBS_PRUNE_JOB_KIND } from './jobs/obsPrune';
 import { stopObs } from './obs';
 import { startObsFromSettings } from './obs/config';
+import { obsMetricRoutes } from './routes/obsMetrics';
 import { obsSettingsRoutes } from './routes/obsSettings';
 import {
   DB_INTEGRITY_CHECK_CRON,
@@ -551,6 +552,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       // Assisted apply (#114): every route 404s unless OPPORTUN_SUBMISSIONS=1, never on the demo.
       await api.register(submissionRoutes);
       await api.register(obsSettingsRoutes);
+      await api.register(obsMetricRoutes);
     },
     { prefix: '/api/v1' },
   );
