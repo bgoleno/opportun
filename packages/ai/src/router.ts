@@ -222,10 +222,16 @@ function callSettings(policy: ModelPolicy): { maxOutputTokens: number; temperatu
 const CHARS_PER_TOKEN = 4;
 
 /**
- * How many characters of the call the provider would cache at the break: the structured-output
- * schema, which it renders ahead of the system prompt (tools, then system, then messages), and the
- * system text before the break (https://github.com/bgoleno/opportun/issues/388). The schema is
- * measured as the SDK converts it for the request.
+ * How many characters of the call the provider would cache at the break: the system text before
+ * the break and the structured-output schema (https://github.com/bgoleno/opportun/issues/388).
+ * That the schema is cached with the prefix is ASSUMED: Anthropic documents only that structured
+ * outputs add a system prompt explaining the format, not where it sits against the breakpoint.
+ * The #388 count script compares both counts with a cache write measured live; if the schema
+ * turns out to be outside the cached span, this goes back to the break alone, since counting it
+ * would mark prefixes that cannot cache. The schema is measured as the SDK converts it.
+ *
+ * It runs before the run exists, so a schema the SDK cannot convert throws without a failed-run
+ * record. Schemas are fixed in code, so that is a programming error the tests show.
  */
 async function cachedChars(schema: z.ZodType, cacheBreak: number | undefined): Promise<number> {
   if (cacheBreak === undefined) return 0;

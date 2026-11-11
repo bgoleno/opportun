@@ -457,9 +457,10 @@ describe('prompt caching (#356)', () => {
     expect(sys[1]?.providerOptions?.anthropic).toBeUndefined();
   });
 
-  // https://github.com/bgoleno/opportun/issues/388: the provider renders the structured-output
-  // schema ahead of the system prompt, so it is cached with the prefix and counts toward it.
-  it('counts the output schema toward the minimum, as the provider caches it with the prefix', async () => {
+  // https://github.com/bgoleno/opportun/issues/388: the structured-output schema is ASSUMED to be
+  // cached with the prefix, so it counts toward the minimum. The #388 count script's tags control
+  // settles it; if the schema is outside the cached span, these two tests change with cachedChars.
+  it('counts the output schema toward the minimum (assumed cached with the prefix)', async () => {
     // 1,600 characters: 400 tokens at 4 characters a token, under 512 alone.
     const prefix = 'Fixed instructions and a table. '.repeat(50);
     // Over 600 characters of JSON schema: the two together are over 512 tokens.

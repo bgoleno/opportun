@@ -8,7 +8,11 @@ export type CountBody = Record<string, unknown>;
 /**
  * Request fields that render before the system prompt (the provider renders tools, then system,
  * then messages) or that add text there (output_config.format: the structured-output schema).
- * All three go into the cacheable prefix. count_tokens takes each of them.
+ * count_tokens takes each of them. Tools are in the cacheable prefix by the documented render
+ * order. The schema is assumed to be: Anthropic documents only that it adds a system prompt
+ * explaining the output format, not where that sits against the breakpoint. The script's
+ * discovery.company_tags control, against a cache write measured live, settles it
+ * (https://github.com/bgoleno/opportun/issues/388).
  */
 function leadingFields(captured: Record<string, unknown>): CountBody {
   const { tools, tool_choice, output_config } = captured;
@@ -23,9 +27,9 @@ function leadingFields(captured: Record<string, unknown>): CountBody {
 const PROBE_MESSAGES = [{ role: 'user', content: '.' }];
 
 /**
- * Three count_tokens bodies for one rank call. `prefix` minus `baseline` is the system prefix
- * alone; `prefixWithSchema` minus `baseline` is everything the provider would cache at the
- * breakpoint, which is what the model's minimum applies to. Only the prefix goes: the posting and
+ * Three count_tokens bodies for one call. `prefix` minus `baseline` is the system prefix alone;
+ * `prefixWithSchema` minus `baseline` adds the structured-output schema. The two bound what the
+ * provider caches at the breakpoint (the schema's place is assumed; see above). Only the prefix goes: the posting and
  * the rest of the call are never sent.
  */
 export function prefixCountBodies(

@@ -7,7 +7,8 @@
 // count_tokens runs no model and costs nothing, but it needs an Anthropic API key. --dry-run
 // needs none and sends nothing: it prints the characters, and the schema's characters, alone.
 //
-// The key: read from the file named, and used only in the x-api-key header of requests to
+// The key: read from the file named, which must be readable by its owner alone (mode 600 or 400;
+// anything else is refused before the file is read), and used only in the x-api-key header of requests to
 // https://api.anthropic.com/v1/messages/count_tokens (a fixed address; redirects are refused). It
 // is never printed, logged, written or put in an error message. The request the router builds is
 // captured with a stand-in key and a fetch that sends nothing, so the router never sees the key.
@@ -15,8 +16,15 @@
 // What it counts: the rank default from a fresh database migrated to head, as it is and with
 // "## Output" moved before "## Posting", for four role targets (invented, no one's data). For each,
 // the system text before the posting (the part the router may mark for the cache), and that part
-// plus the structured-output schema, which the provider renders ahead of it. Each count is the
-// body's count minus that of the same one-character message alone.
+// plus the structured-output schema. Each count is the body's count minus that of the same
+// one-character message alone, on the task's own model.
+//
+// Whether the schema is inside the cached prefix is not documented: Anthropic says only that the
+// model receives an added system prompt explaining the output format, not where it sits against
+// the breakpoint. So the script also counts the discovery.company_tags prefix both ways, beside the
+// cache write qa measured live for that same prefix on #378 (6,472 tokens for 14,531 characters,
+// https://github.com/bgoleno/opportun/pull/378#issuecomment-6790450354). Whichever count matches
+// the live write says whether the schema is cached with the prefix.
 //
 // Output: characters and tokens only.
 import Database from 'better-sqlite3';
@@ -24,15 +32,19 @@ import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   cacheMinTokens,
+  CompanyTagsOutputSchema,
   RankOutputSchema,
   resolvePolicy,
   runStructured,
   systemWithCacheBreak,
   type AiDeps,
+  type TaskKey,
 } from '@opportun/ai';
+import type { z } from 'zod';
 import { migrateLocked } from '../src/db/client';
 import type { roleTargets } from '../src/db/schema';
 import { roleTargetLine } from '../src/jobs/classify';
+import { NAICS_TABLE_TEXT } from '../src/jobs/companyTags';
 import { outputBeforePosting, prefixCountBodies, type CountBody } from '../src/lib/rankPrefixCount';
 
 const COUNT_URL = 'https://api.anthropic.com/v1/messages/count_tokens';
@@ -47,9 +59,20 @@ function readKey(): string {
   const path = i === -1 ? undefined : process.argv[i + 1];
   if (path === undefined)
     fail('usage: countRankPrefix --key-file <path to a file holding the key>');
-  let text: string;
+  // Before the key is read: a key file other users can read is refused (chmod 600 or 400).
+  let mode: number;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- the operator's own argument
+    mode = statSync(resolve(path)).mode;
+  } catch {
+    fail('Could not read the key file.');
+  }
+  if ((mode & 0o077) !== 0) {
+    fail('The key file can be read by other users: chmod 600 it, then run this again.');
+  }
+  let text: string;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- the same path, checked above
     text = readFileSync(resolve(path), 'utf8');
   } catch {
     fail('Could not read the key file.');
@@ -57,25 +80,22 @@ function readKey(): string {
   const key = text.trim();
   // Checked without echoing it: a header value must be one line of visible characters.
   if (!/^[\x21-\x7e]+$/.test(key)) fail('The key file must hold the key alone, on one line.');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- the same path, read above
-  if ((statSync(resolve(path)).mode & 0o077) !== 0) {
-    process.stderr.write('Note: the key file can be read by other users (chmod 600 it).\n');
-  }
   return key;
 }
 
-/** The rank default as a fresh install has it: every migration applied to an empty database. */
-function rankDefault(): string {
+/** The system defaults as a fresh install has them: every migration applied to an empty database. */
+function defaults(): { rank: string; tags: string } {
   const sqlite = new Database(':memory:');
   try {
     migrateLocked(sqlite);
-    const row = sqlite
-      .prepare(
-        "SELECT body FROM prompts WHERE user_id IS NULL AND task_key = 'discovery.rank' AND version = 1",
-      )
-      .get() as { body: string } | undefined;
-    if (row === undefined) fail('The migrated database has no discovery.rank default.');
-    return row.body;
+    const body = (task: TaskKey): string => {
+      const row = sqlite
+        .prepare('SELECT body FROM prompts WHERE user_id IS NULL AND task_key = ? AND version = 1')
+        .get(task) as { body: string } | undefined;
+      if (row === undefined) fail(`The migrated database has no ${task} default.`);
+      return row.body;
+    };
+    return { rank: body('discovery.rank'), tags: body('discovery.company_tags') };
   } finally {
     sqlite.close();
   }
@@ -141,8 +161,13 @@ const ROLE_TARGETS: { label: string; text: string }[] = [
 /** Stands in for the posting: it follows the break, so it is never counted. */
 const POSTING = 'A posting.';
 
-/** The Messages request the router builds for this rank call, captured, never sent. */
-async function capture(system: string, cacheBreak: number): Promise<Record<string, unknown>> {
+/** The Messages request the router builds for this call, captured, never sent. */
+async function capture(
+  task: TaskKey,
+  schema: z.ZodType,
+  system: string,
+  cacheBreak: number,
+): Promise<Record<string, unknown>> {
   let body: Record<string, unknown> | undefined;
   const recording = (async (_input: unknown, init?: RequestInit) => {
     body = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -156,11 +181,11 @@ async function capture(system: string, cacheBreak: number): Promise<Record<strin
     spentTodayUsd: async () => 0,
     providerFetch: { fetch: recording, allowLoopbackHttp: false },
   };
-  await runStructured(deps, 'discovery.rank', {
+  await runStructured(deps, task, {
     system,
     cacheBreak,
-    prompt: 'Score the posting and return the result.',
-    schema: RankOutputSchema,
+    prompt: 'Return the result.',
+    schema,
   }).catch(() => undefined);
   if (body === undefined) fail('The router made no request to capture.');
   return body;
@@ -197,42 +222,102 @@ async function count(key: string, body: CountBody): Promise<number> {
 
 const dryRun = process.argv.includes('--dry-run');
 const key = dryRun ? undefined : readKey();
-const base = rankDefault();
-const templates = [
-  { label: 'default as migrated', body: base },
-  { label: 'Output before Posting', body: outputBeforePosting(base) },
-];
-const policy = resolvePolicy('discovery.rank', undefined);
-const min = cacheMinTokens(policy.provider, policy.model);
-process.stdout.write(`model ${policy.model}; cache minimum ${String(min)} tokens\n`);
-process.stdout.write(
-  dryRun
-    ? 'template | role target | prefix chars | + schema chars\n'
-    : 'template | role target | prefix chars | prefix tokens | + schema tokens\n',
-);
 
-let baseline: number | undefined;
-for (const tpl of templates) {
-  for (const rt of ROLE_TARGETS) {
-    const { system, cacheBreak } = systemWithCacheBreak(tpl.body, {
-      role_target: rt.text,
-      posting_untrusted: POSTING,
-    });
-    const captured = await capture(system, cacheBreak);
-    // The prefix counted is the one the router would send: check it against the capture.
-    const prefix = system.slice(0, cacheBreak);
-    if (!systemText(captured).startsWith(prefix)) fail('The captured system prompt differs.');
-    const bodies = prefixCountBodies(captured, prefix);
-    if (key === undefined) {
-      const schema = JSON.stringify(bodies.prefixWithSchema['output_config'] ?? '').length;
-      process.stdout.write(
-        `${tpl.label} | ${rt.label} | ${prefix.length} | ${prefix.length + schema}\n`,
+/** The one-character message alone, per model: subtracted from every count on that model. */
+const baselines = new Map<string, number>();
+
+/**
+ * One call's prefix: characters, and with a key its tokens alone and with the schema. The prefix
+ * counted is checked against the request the router would send.
+ */
+async function measure(
+  task: TaskKey,
+  schema: z.ZodType,
+  split: { system: string; cacheBreak: number },
+): Promise<{ chars: number; schemaChars: number; tokens?: number; withSchema?: number }> {
+  const captured = await capture(task, schema, split.system, split.cacheBreak);
+  const prefix = split.system.slice(0, split.cacheBreak);
+  if (!systemText(captured).startsWith(prefix)) fail('The captured system prompt differs.');
+  const bodies = prefixCountBodies(captured, prefix);
+  const schemaChars = JSON.stringify(bodies.prefixWithSchema['output_config'] ?? '').length;
+  if (key === undefined) return { chars: prefix.length, schemaChars };
+  const model = String(captured['model']);
+  let baseline = baselines.get(model);
+  if (baseline === undefined) {
+    baseline = await count(key, bodies.baseline);
+    baselines.set(model, baseline);
+  }
+  return {
+    chars: prefix.length,
+    schemaChars,
+    tokens: (await count(key, bodies.prefix)) - baseline,
+    withSchema: (await count(key, bodies.prefixWithSchema)) - baseline,
+  };
+}
+
+const row = (cells: (string | number | undefined)[]): void => {
+  process.stdout.write(`${cells.map((c) => String(c ?? '')).join(' | ')}\n`);
+};
+
+async function main(): Promise<void> {
+  const { rank, tags } = defaults();
+
+  // The control: the tags prefix qa measured live. Like for like, or nothing.
+  const LIVE_TAGS_CHARS = 14_531;
+  const LIVE_TAGS_CACHE_WRITE = 6_472;
+  const tagsSplit = systemWithCacheBreak(tags, {
+    naics_table: NAICS_TABLE_TEXT,
+    companies_untrusted: 'A company.',
+  });
+  if (tagsSplit.cacheBreak !== LIVE_TAGS_CHARS) {
+    fail(
+      `The tags prefix is ${tagsSplit.cacheBreak} characters, not the ${LIVE_TAGS_CHARS} measured live.`,
+    );
+  }
+  const tagsPolicy = resolvePolicy('discovery.company_tags', undefined);
+  const t = await measure('discovery.company_tags', CompanyTagsOutputSchema, tagsSplit);
+  process.stdout.write(`Control: discovery.company_tags on ${tagsPolicy.model}\n`);
+  row(['prefix chars', 'schema chars', 'prefix tokens', '+ schema tokens', 'live cache write']);
+  row([t.chars, t.schemaChars, t.tokens, t.withSchema, LIVE_TAGS_CACHE_WRITE]);
+  if (t.tokens !== undefined && t.withSchema !== undefined) {
+    const off = Math.abs(t.tokens - LIVE_TAGS_CACHE_WRITE);
+    const offWith = Math.abs(t.withSchema - LIVE_TAGS_CACHE_WRITE);
+    process.stdout.write(
+      `The live write is ${off} tokens from the prefix alone and ${offWith} from the prefix with the schema.\n`,
+    );
+  }
+
+  const policy = resolvePolicy('discovery.rank', undefined);
+  const min = cacheMinTokens(policy.provider, policy.model);
+  process.stdout.write(
+    `\ndiscovery.rank on ${policy.model}; cache minimum ${String(min)} tokens\n`,
+  );
+  row([
+    'template',
+    'role target',
+    'prefix chars',
+    'schema chars',
+    'prefix tokens',
+    '+ schema tokens',
+  ]);
+  const templates = [
+    { label: 'default as migrated', body: rank },
+    { label: 'Output before Posting', body: outputBeforePosting(rank) },
+  ];
+  for (const tpl of templates) {
+    for (const rt of ROLE_TARGETS) {
+      const r = await measure(
+        'discovery.rank',
+        RankOutputSchema,
+        systemWithCacheBreak(tpl.body, { role_target: rt.text, posting_untrusted: POSTING }),
       );
-      continue;
+      row([tpl.label, rt.label, r.chars, r.schemaChars, r.tokens, r.withSchema]);
     }
-    baseline ??= await count(key, bodies.baseline);
-    const p = (await count(key, bodies.prefix)) - baseline;
-    const ps = (await count(key, bodies.prefixWithSchema)) - baseline;
-    process.stdout.write(`${tpl.label} | ${rt.label} | ${prefix.length} | ${p} | ${ps}\n`);
   }
 }
+
+// Anything unexpected (a network error, a timeout) prints its name only: an error's message or
+// stack could carry part of a request.
+await main().catch((err: unknown) => {
+  fail(`Stopped: ${err instanceof Error ? err.name : 'unknown error'}.`);
+});
