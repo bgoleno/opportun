@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 
 const ROOT = join(__dirname, '..', 'src');
 const EXPORT_PACKAGES = /from '@opentelemetry\/(?:sdk-metrics|otlp-transformer|resources)'/;
-const LAZY_MODULES = /from '(?:\.{1,2}\/)+(?:obs\/)?(?:export\/)?(?:otlp|influx)'/;
+const LAZY_MODULES = /from '[./]+(?:obs\/)?(?:export\/)?(?:otlp|influx)'/;
 
 async function sources(): Promise<{ rel: string; values: string }[]> {
   const out: { rel: string; values: string }[] = [];
