@@ -446,6 +446,139 @@ describe('#404: appliedAttempt', () => {
   });
 });
 
+// https://github.com/bgoleno/opportun/issues/398 criterion 4: a Greenhouse job embedded on the
+// company's own careers page, with no proven board yet, says so and offers Find posting, which
+// also detects the company's board when it has none.
+describe('#398: an embedded Greenhouse job with no proven board', () => {
+  const careers = 'https://careers.acme.example/jobs?gh_jid=8136554';
+
+  it('says what it looks like and offers Find posting, which asks the server', async () => {
+    const api = mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'POST /opportunities/opp-1/find-posting': { outcome: 'none', candidates: [] },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+    );
+    const button = await screen.findByRole('button', { name: 'Apply on an ATS' });
+    expect(button).toHaveAccessibleDescription(
+      "This looks like a Greenhouse job on the company's own careers page. Find the posting on Greenhouse to apply with assisted apply.",
+    );
+    await user.click(screen.getByRole('button', { name: 'Find posting' }));
+    await waitFor(() =>
+      expect(calls(api.calls, 'POST', '/opportunities/opp-1/find-posting')).toHaveLength(1),
+    );
+  });
+
+  it.each([
+    ['identified', { outcome: 'identified' }, 'Recognised on Greenhouse.'],
+    [
+      'candidates',
+      { outcome: 'candidates', candidates: [{}, {}], board: [] },
+      'Several postings could be this job. Choose it on the Details tab.',
+    ],
+    [
+      'one candidate',
+      { outcome: 'candidates', candidates: [{}], board: [] },
+      "A posting on the company's board could be this job. Check it on the Details tab.",
+    ],
+    [
+      'none',
+      { outcome: 'none', candidates: [] },
+      "This job was not found on the company's board. Paste the posting on the Details tab.",
+    ],
+    [
+      'no_board',
+      { outcome: 'no_board', needsCareersUrl: true },
+      'No job board is known for this company yet. Add its careers page on the Details tab.',
+    ],
+  ] as const)(
+    'Find posting answering %s says what happened and where to go',
+    async (_n, answer, text) => {
+      mockApi({
+        'GET /resumes': { items: [RESUME], total: 1 },
+        'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+        'POST /opportunities/opp-1/find-posting': answer,
+      });
+      const user = userEvent.setup();
+      renderWithProviders(
+        <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+      );
+      await user.click(await screen.findByRole('button', { name: 'Find posting' }));
+      const said = await screen.findByText(text);
+      expect(said.closest('[role="status"]')).not.toBeNull();
+    },
+  );
+
+  it('Find posting failing shows the error', async () => {
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 502,
+        body: { error: { code: 'upstream_unavailable', message: 'The job board did not answer.' } },
+      }),
+    });
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+    );
+    await user.click(await screen.findByRole('button', { name: 'Find posting' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The job board did not answer.');
+  });
+
+  it('a description of your own and no known board holding the job: says so, and where to go', async () => {
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 409,
+        body: {
+          error: {
+            code: 'already_described',
+            message: 'This opportunity already has a description. Edit it instead.',
+          },
+        },
+      }),
+    });
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+    );
+    await user.click(await screen.findByRole('button', { name: 'Find posting' }));
+    const said = await screen.findByText(
+      'This job was not found on a Greenhouse board known for this company. Check the posting link on the Details tab.',
+    );
+    expect(said.closest('[role="status"]')).not.toBeNull();
+    expect(screen.queryByText(/already_described/)).toBeNull();
+  });
+
+  it('a link without a numeric gh_jid keeps the general reason, and no Find posting here', async () => {
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+    });
+    renderWithProviders(
+      <ApplyPanel
+        opp={
+          {
+            ...OPP,
+            atsJobRef: null,
+            postingUrl: 'https://careers.acme.example/jobs?gh_jid=abc',
+          } as OpportunityView
+        }
+      />,
+    );
+    const button = await screen.findByRole('button', { name: 'Apply on an ATS' });
+    expect(button).toHaveAccessibleDescription(
+      "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.",
+    );
+    expect(screen.queryByRole('button', { name: 'Find posting' })).toBeNull();
+  });
+});
+
 describe('S2: the resume step', () => {
   it('creates the draft with the chosen final resume, then goes to details', async () => {
     const api = mockApi(

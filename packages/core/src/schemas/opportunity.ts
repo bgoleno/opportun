@@ -126,6 +126,14 @@ export const AtsJobRefSchema = z.object({
   externalPath: z.string().max(500).optional(),
   externalId: z.string().min(1).max(200),
   url: z.string().max(2000),
+  /**
+   * Set when the identity came from a `gh_jid` link on a company's own page (#398): Greenhouse's
+   * API confirmed board `org` holds job `externalId`, and `url` is that board's page for it,
+   * never the company's link.
+   */
+  verifiedVia: z.literal('gh_jid').optional(),
+  /** When that confirmation was made. */
+  verifiedAt: z.number().int().nonnegative().optional(),
 });
 export type AtsJobRef = z.infer<typeof AtsJobRefSchema>;
 
