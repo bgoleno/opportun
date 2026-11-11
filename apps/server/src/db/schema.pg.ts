@@ -92,6 +92,8 @@ import {
   MAIL_FILTER_EFFECTS,
   MAIL_FILTER_SOURCES,
   type MatchReport,
+  OBS_SPAN_KINDS,
+  OBS_SPAN_STATUSES,
   type ProfileLinkRow,
   REJECTION_REASONS,
   SECRET_KINDS,
@@ -1097,6 +1099,7 @@ export const jobs = pgTable(
     dedupeKey: text('dedupe_key'),
     userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
     result: json<unknown>('result'),
+    traceContext: text('trace_context'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -1119,4 +1122,106 @@ export const settings = pgTable(
     updatedAt: updatedAt(),
   },
   (t) => [index('settings_user_id_idx').on(t.userId)],
+);
+
+// ---------------------------------------------------------------------------
+// Section 9: observability (design.md 14.7; https://github.com/bgoleno/opportun/issues/353). The
+// local store the in-app dashboards read. Written only while the Collect switch is on (off by
+// default), pruned hourly by obs.prune (jobs/obsPrune.ts), deleted with their user, and left out
+// of the data export (lib/exporter.ts): derived operating data, like jobs.
+
+/**
+ * One series in one time bucket. A series is a metric, its owner and its attributes; `series`
+ * is their hash (obs/metrics.ts seriesId), so the key needs no row id. `metric` and
+ * `attributes` are kept readable beside it for the dashboards' filters and breakdowns (FR-T6).
+ */
+export const obsMetricPoints = pgTable(
+  'obs_metric_points',
+  {
+    series: text('series').notNull(),
+    metric: text('metric').notNull(),
+    attributes: json<Record<string, unknown>>('attributes').notNull(),
+    /** The user the point belongs to (a user-scoped metric), or null for the instance's. */
+    userId: text('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    /** The bucket's length in ms: 60,000 (kept 48 hours) or 3,600,000 (kept 30 days). */
+    resolution: int('resolution').notNull(),
+    bucketStart: int('bucket_start').notNull(),
+    count: int('count').notNull(),
+    sum: doublePrecision('sum').notNull(),
+    min: doublePrecision('min').notNull(),
+    max: doublePrecision('max').notNull(),
+    /** A histogram's per-bucket counts (the catalog's boundaries, plus one); null for a counter. */
+    bucketCounts: json<number[]>('bucket_counts'),
+  },
+  (t) => [
+    primaryKey({ columns: [t.series, t.resolution, t.bucketStart] }),
+    index('obs_metric_points_metric_idx').on(t.metric, t.resolution, t.bucketStart),
+    index('obs_metric_points_age_idx').on(t.resolution, t.bucketStart),
+    index('obs_metric_points_user_id_idx').on(t.userId),
+  ],
+);
+
+/** One kept trace (14.7): always a user's, kept up to date as its spans arrive. */
+export const obsTraces = pgTable(
+  'obs_traces',
+  {
+    /** The W3C trace id: 32 lowercase hex digits. */
+    traceId: text('trace_id').primaryKey(),
+    userId: userRef(),
+    startedAt: int('started_at').notNull(),
+    durationMs: doublePrecision('duration_ms').notNull(),
+    /** What contained the first Gen AI span: a route template, or `job {kind}`. */
+    origin: text('origin').notNull(),
+    workflow: text('workflow'),
+    feature: text('feature'),
+    /** The tailoring session id, on a chat's trace only. */
+    conversationId: text('conversation_id'),
+    tasks: json<string[]>('tasks').notNull().default([]),
+    models: json<string[]>('models').notNull().default([]),
+    providers: json<string[]>('providers').notNull().default([]),
+    inputTokens: int('input_tokens').notNull().default(0),
+    outputTokens: int('output_tokens').notNull().default(0),
+    estCost: doublePrecision('est_cost').notNull().default(0),
+    spanCount: int('span_count').notNull().default(0),
+    errorCount: int('error_count').notNull().default(0),
+    status: text('status', { enum: OBS_SPAN_STATUSES }).notNull(),
+    /** The trace reached its span limit (14.11) and stopped growing. */
+    truncated: bool('truncated').notNull().default(false),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    index('obs_traces_user_started_idx').on(t.userId, t.startedAt),
+    index('obs_traces_user_conversation_idx').on(t.userId, t.conversationId),
+    index('obs_traces_started_idx').on(t.startedAt),
+  ],
+);
+
+/** One kept span (14.7), with its inference span's task, model and provider in columns. */
+export const obsSpans = pgTable(
+  'obs_spans',
+  {
+    traceId: text('trace_id')
+      .notNull()
+      .references(() => obsTraces.traceId, { onDelete: 'cascade' }),
+    /** The W3C span id: 16 lowercase hex digits. */
+    spanId: text('span_id').notNull(),
+    parentSpanId: text('parent_span_id'),
+    userId: userRef(),
+    name: text('name').notNull(),
+    kind: text('kind', { enum: OBS_SPAN_KINDS }).notNull(),
+    startedAt: int('started_at').notNull(),
+    durationMs: doublePrecision('duration_ms').notNull(),
+    status: text('status', { enum: OBS_SPAN_STATUSES }).notNull(),
+    errorType: text('error_type'),
+    /** The span's attributes, every one checked by obs/gate.ts. */
+    attributes: json<Record<string, unknown>>('attributes').notNull(),
+    task: text('task'),
+    model: text('model'),
+    provider: text('provider'),
+  },
+  (t) => [
+    primaryKey({ columns: [t.traceId, t.spanId] }),
+    index('obs_spans_user_started_idx').on(t.userId, t.startedAt),
+    index('obs_spans_started_idx').on(t.startedAt),
+  ],
 );

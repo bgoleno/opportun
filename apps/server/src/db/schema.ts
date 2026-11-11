@@ -59,3 +59,6 @@ export const resumeSends = t.resumeSends;
 export const syncState = t.syncState;
 export const jobs = t.jobs;
 export const settings = t.settings;
+export const obsMetricPoints = t.obsMetricPoints;
+export const obsTraces = t.obsTraces;
+export const obsSpans = t.obsSpans;

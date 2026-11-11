@@ -31,6 +31,7 @@ import { retryWorkdayCaptureJob } from './retryWorkdayCapture';
 import { submissionExpireJob } from './submissionExpire';
 import { submissionFollowupJob } from './submissionFollowup';
 import { gmailSyncAllJob, gmailSyncJob } from './gmailSync';
+import { obsPruneJob } from './obsPrune';
 import { registerJob } from './registry';
 import { snapshotReconcileJob, submissionSnapshotJob } from './submissionSnapshot';
 
@@ -40,6 +41,7 @@ registerJob(backupJob);
 registerJob(dbIntegrityCheckJob);
 registerJob(attachmentSweepJob);
 registerJob(jobPruneJob);
+registerJob(obsPruneJob);
 registerJob(submissionExpireJob);
 registerJob(submissionFollowupJob);
 registerJob(demoResetJob);

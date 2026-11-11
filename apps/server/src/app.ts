@@ -41,6 +41,10 @@ import { SUBMISSION_FOLLOWUP_CRON, SUBMISSION_FOLLOWUP_JOB_KIND } from './jobs/s
 import { BACKUP_CRON, BACKUP_JOB_KIND } from './jobs/backup';
 import { DEMO_RESET_CRON, DEMO_RESET_JOB_KIND } from './jobs/demoReset';
 import { JOB_PRUNE_CRON, JOB_PRUNE_JOB_KIND } from './jobs/jobPrune';
+import { OBS_PRUNE_CRON, OBS_PRUNE_JOB_KIND } from './jobs/obsPrune';
+import { stopObs } from './obs';
+import { startObsFromSettings } from './obs/config';
+import { obsSettingsRoutes } from './routes/obsSettings';
 import {
   DB_INTEGRITY_CHECK_CRON,
   DB_INTEGRITY_CHECK_CRON_POSTGRES,
@@ -377,6 +381,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   // 04:00, after the backup (issue #272): every row this prunes exists in at least one
   // snapshot before it is deleted. Keep it after the backup if either schedule ever moves.
   await seedSchedule(db, JOB_PRUNE_JOB_KIND, JOB_PRUNE_CRON);
+  // Hourly at :23 (#353): ages out the observability store, whether or not collection is on.
+  await seedSchedule(db, OBS_PRUNE_JOB_KIND, OBS_PRUNE_CRON);
   // Only on a deployment that declares itself the demo instance (issue #280). This gate is
   // tidiness, not safety: registered unconditionally, the job would still delete zero rows on
   // a real database, since the pinned demo user ids it acts on do not exist there. The point of
@@ -456,9 +462,13 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       onError: (err) => app.log.error({ err }, 'job runner'),
     });
   });
+  // Observability (design.md 14.1, #353): bound to this database, Collect as stored (off by
+  // default). Stopped before the database closes, so a last flush still has somewhere to go.
+  await startObsFromSettings(db, app.log);
   app.addHook('onClose', async () => {
     // Let an in-flight job finish before the database goes away.
     await runner?.stop();
+    await stopObs(db);
     await closeDatabase(dbHandle);
   });
   await app.register(sessionPlugin, { demo: cfg.demo });
@@ -540,6 +550,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       await api.register(referralRoutes);
       // Assisted apply (#114): every route 404s unless OPPORTUN_SUBMISSIONS=1, never on the demo.
       await api.register(submissionRoutes);
+      await api.register(obsSettingsRoutes);
     },
     { prefix: '/api/v1' },
   );

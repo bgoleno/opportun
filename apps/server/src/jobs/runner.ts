@@ -14,6 +14,7 @@ import { claimNextJob, type ClaimedJob } from '../db/dialect';
 import { HttpError } from '../lib/errors';
 import { jobs, settings } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
+import { currentTraceparent } from '../obs';
 import { RANK_WAITING_KIND } from './discoveryKinds';
 import { finishInterruptedRuns } from './interruptedRuns';
 import { getJobHandler, type JobContext, type JobHandler, type JobServices } from './registry';
@@ -76,6 +77,12 @@ export interface EnqueueOptions {
   dedupeKey?: string;
   /** The user the job acts for; scopes GET /jobs and per-user lookups such as imports. */
   userId?: string;
+  /**
+   * Continue the caller's trace in the job (design.md 14.6): stores the active span's W3C
+   * traceparent in jobs.trace_context. Only while collection is on, and only when a span is
+   * active; otherwise the column stays null. A deduped enqueue leaves the holder's own value.
+   */
+  continueTrace?: boolean;
 }
 
 async function insertJob(
@@ -87,6 +94,7 @@ async function insertJob(
   const handler = getJobHandler(kind);
   const value = handler === undefined ? payload : handler.payloadSchema.parse(payload);
   await racePoint('jobs.enqueue');
+  const traceContext = opts.continueTrace === true ? currentTraceparent() : null;
   // The partial unique index jobs_unfinished_dedupe_uq (migration 0019) admits one unfinished
   // job per (kind, dedupe_key): insert-or-nothing, then read the holder. If the holder
   // finished between the two statements the key is free again, so try once more.
@@ -102,6 +110,7 @@ async function insertJob(
       status: 'pending' as const,
       dedupeKey: opts.dedupeKey ?? null,
       userId: opts.userId ?? null,
+      traceContext,
       createdAt: now,
       updatedAt: now,
     };
@@ -115,10 +124,10 @@ async function insertJob(
     const inserted = await rawGet<{ id: string }>(
       db,
       sql`INSERT INTO jobs (id, kind, payload, run_at, attempts, max_attempts, status,
-                            dedupe_key, user_id, created_at, updated_at)
+                            dedupe_key, user_id, trace_context, created_at, updated_at)
           VALUES (${row.id}, ${row.kind}, ${JSON.stringify(row.payload)}, ${row.runAt},
                   ${row.attempts}, ${row.maxAttempts}, ${row.status}, ${row.dedupeKey},
-                  ${row.userId}, ${row.createdAt}, ${row.updatedAt})
+                  ${row.userId}, ${row.traceContext}, ${row.createdAt}, ${row.updatedAt})
           ON CONFLICT (kind, dedupe_key)
             WHERE dedupe_key IS NOT NULL AND status IN ('pending', 'running')
           DO NOTHING

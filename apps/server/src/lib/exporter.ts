@@ -32,6 +32,12 @@ export const EXPORT_EXCLUDED_TABLES: readonly string[] = [
   // dismissed near-miss could be re-proposed once after a reimport, the same low-stakes gap
   // a pre-#94 dismissal already has (see opportunityDedupe.ts).
   'opportunity_dedupe_candidates',
+  // The observability store (design.md 14.7, #353): derived operating data, bounded and pruned
+  // hourly, like jobs. A trace names its user, but it is a record of what the app did, not the
+  // user's own data, and a restore into another instance would mix two instances' timings.
+  'obs_metric_points',
+  'obs_traces',
+  'obs_spans',
 ];
 
 type UserTable = DbTable & { userId: DbColumn };
