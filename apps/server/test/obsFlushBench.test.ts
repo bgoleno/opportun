@@ -84,8 +84,12 @@ async function stalls(work: () => Promise<void>): Promise<{
     }
   });
   obs.observe({ entryTypes: ['gc'] });
+  // The event loop's own thread: the process's figure would add the GC's helper threads, which
+  // run beside it (a 6.7 ms gap read 10.4 ms of process CPU). threadCpuUsage is Node 23.9 and
+  // later; on an older Node the process figure stands in, and can only overstate.
   const cpuNow = () => {
-    const u = process.cpuUsage();
+    const u =
+      typeof process.threadCpuUsage === 'function' ? process.threadCpuUsage() : process.cpuUsage();
     return (u.user + u.system) / 1_000;
   };
   const wallMs: number[] = [];
@@ -190,8 +194,8 @@ describe.runIf(RUN)('the span flush yields to the event loop (#375, reported in 
     // The bound is on the work the flush does on the event loop: the process's CPU time inside
     // any one gap stays under 10 ms. Wall time is reported beside it but not asserted, as it also
     // counts waiting for the disk or for other processes, which a loaded machine or a shared CI
-    // runner adds without the flush doing more (tl on #375). The CPU figure counts every thread of
-    // this process, the GC's and SQLite's included, so it can only overstate the flush's own work.
+    // runner adds without the flush doing more (tl on #375). The CPU figure is the event loop's
+    // thread, SQLite's work on it included, which is the time the loop could not turn.
     expect(report.chunked.worstCpuInGapMs).toBeLessThan(10);
   }, 120_000);
 });
