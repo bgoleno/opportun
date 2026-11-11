@@ -3,7 +3,7 @@
 // server scopes all of it to the signed-in user; nothing here carries prompt or response text.
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 
 export type TraceStatus = 'ok' | 'error';
 
@@ -51,6 +51,8 @@ export interface SpanView {
 export interface TraceList {
   /** Whether collection is on now. Traces collected earlier are listed either way. */
   collect: boolean;
+  /** Whether collection can be turned on here at all: false on the demo (#364). */
+  collectAvailable: boolean;
   items: TraceView[];
   next: string | null;
 }
@@ -138,5 +140,11 @@ export function useTrace(traceId: string) {
   return useQuery({
     queryKey: [...tracesKey, 'one', traceId],
     queryFn: () => api<TraceDetail>(`/obs/traces/${encodeURIComponent(traceId)}`),
+    // A 404 is an answer, not a failure to get one: asking again cannot change it, and the
+    // retry only kept "Trace not found" off the screen for a second
+    // (https://github.com/bgoleno/opportun/issues/365). Anything else is retried once, as the
+    // app's client does everywhere.
+    retry: (failures, error) =>
+      !(error instanceof ApiError && error.status === 404) && failures < 1,
   });
 }

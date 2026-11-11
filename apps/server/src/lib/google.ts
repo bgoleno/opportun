@@ -15,6 +15,7 @@ import type { UserCtx } from '../repos/base';
 import { HttpError } from './errors';
 import { racePoint } from './racePoints';
 import { getSecretValueIn, putSecretIn } from './secretBox';
+import { observeCall } from '../obs/outbound';
 
 // ---------------------------------------------------------------------------
 // Scopes: incremental. Each set is a separate grant (include_granted_scopes keeps the others).
@@ -215,7 +216,7 @@ export function escapeDriveQueryLiteral(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-export const realGoogleApi: GoogleApi = {
+const rawGoogleApi: GoogleApi = {
   async exchangeCode(client, code) {
     const { tokens } = await client.getToken(code);
     return tokens;
@@ -365,6 +366,47 @@ export const realGoogleApi: GoogleApi = {
     };
   },
 };
+
+/**
+ * Each call's HTTP method as the client library sends it, for the outbound metric (#343). A
+ * literal table, so a new GoogleApi method is a type error here until it is given one.
+ */
+const GOOGLE_METHODS: Record<keyof GoogleApi, 'GET' | 'POST'> = {
+  exchangeCode: 'POST',
+  revokeToken: 'POST',
+  accountEmail: 'GET',
+  getDocument: 'GET',
+  batchUpdateDocument: 'POST',
+  copyFile: 'POST',
+  exportFile: 'GET',
+  getFile: 'GET',
+  searchDriveFiles: 'GET',
+  gmailProfile: 'GET',
+  gmailListMessages: 'GET',
+  gmailGetMessage: 'GET',
+  gmailGetAttachment: 'GET',
+  gmailListHistory: 'GET',
+  gmailListLabels: 'GET',
+};
+
+/**
+ * The Google API seam with every call measured as target `google` (design.md 14.2, #343). The
+ * client libraries do their own HTTP, so a call is observed as a whole: its method, and on
+ * failure the library error's status. Never a document id, file name or query.
+ */
+export function observedGoogleApi(api: GoogleApi): GoogleApi {
+  const wrapped = new Map<string, unknown>();
+  for (const [name, method] of Object.entries(GOOGLE_METHODS)) {
+    const fn = Reflect.get(api, name) as ((...args: unknown[]) => Promise<unknown>) | undefined;
+    if (fn === undefined) continue;
+    wrapped.set(name, (...args: unknown[]) =>
+      observeCall({ target: 'google', method }, () => fn.apply(api, args)),
+    );
+  }
+  return Object.fromEntries(wrapped) as unknown as GoogleApi;
+}
+
+export const realGoogleApi: GoogleApi = observedGoogleApi(rawGoogleApi);
 
 /** The HTTP status carried by a Google client error, when there is one. */
 export function googleErrorStatus(err: unknown): number | undefined {
