@@ -158,6 +158,28 @@ link, reclassify, accept a suggested stage). See [Inbox](inbox.md).
 Contacts who could refer you, ranked by the AI, and the asks you have made. See
 [Network](network.md#referrals).
 
+## Assisted apply
+
+Where your administrator has turned it on, an opportunity whose posting is on Greenhouse, Lever
+or Ashby (Workday as a handoff only) has an **Assisted apply** card. It takes you through the
+resume, your details and your answers, then one review of everything. **Confirm review and
+open** opens the real application form in a new tab. Opportun never submits anything: you
+press the site's own Submit button.
+
+The last step, **Finish on the application site**, says what to do on that tab:
+
+- **Where the browser extension can fill the form** (a Greenhouse form, and an extension token
+  with the **Assisted apply** permission): go to the form's tab, click the Opportun icon in
+  the toolbar, then press **Fill in this application**. The review step says this too, under
+  the button that opens the form. Check every field (the extension lists what it filled and
+  what it left for you), then press the site's own Submit. See
+  [Browser extension](browser-extension.md#filling-an-application-assisted-apply).
+- **Otherwise:** fill in the form yourself, copying from **Your details to copy**, with a link
+  to **Settings > Integrations > Extensions and Connectors**, where the extension is set up.
+
+**Your details to copy** stays below either way. When you are done, tell Opportun: **I submitted
+it** or **I did not submit it**.
+
 ## Find a posting
 
 An opportunity created from an email or an import often has no description. On the Details

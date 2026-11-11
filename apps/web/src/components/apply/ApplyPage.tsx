@@ -1070,8 +1070,10 @@ function ReviewStep({
             extension can fill this form. */}
         {canFill ? (
           <p className="text-sm">
-            When the form opens, click the Opportun icon in your browser&apos;s toolbar. It fills in
-            what you reviewed here.
+            {/* "then press Fill in this application" until #403 slice 2 fills on the click itself
+                (tl's ruling on #416): never more than the extension does today. */}
+            When the form opens, click the Opportun icon in your browser&apos;s toolbar, then press
+            Fill in this application. It fills in what you reviewed here.
           </p>
         ) : null}
         <p id={hintId} className="text-sm text-muted-foreground" aria-live="polite">
@@ -1274,8 +1276,8 @@ function ExtensionSteps({ host }: { host: string }) {
           alt=""
           className="inline size-4 align-text-bottom"
         />{' '}
-        in your browser&apos;s toolbar. Not there? Open your browser&apos;s Extensions menu and pin
-        Opportun.
+        in the toolbar, then press Fill in this application. Not there? Open your browser&apos;s
+        Extensions menu and pin Opportun.
       </li>
       <li>Check every field. The extension lists what it filled and what it left for you.</li>
       <li>Press the site&apos;s own Submit button. Only you can do this.</li>

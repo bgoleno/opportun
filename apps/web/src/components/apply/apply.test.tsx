@@ -632,7 +632,7 @@ describe('S5: open the form', () => {
 
 describe('#416: the next step names the extension only where it can fill this form', () => {
   const REVIEW_LINE =
-    "When the form opens, click the Opportun icon in your browser's toolbar. It fills in what you reviewed here.";
+    "When the form opens, click the Opportun icon in your browser's toolbar, then press Fill in this application. It fills in what you reviewed here.";
   const token = (over: Record<string, unknown> = {}) => ({
     id: 'tok-1',
     name: 'Laptop',
@@ -708,7 +708,9 @@ describe('#416: the next step names the extension only where it can fill this fo
       await waitFor(() => expect(within(card).getByText(/Go to the/)).toBeVisible());
       expect(text).toHaveLength(4);
       expect(text[0]).toMatch(/^Go to the boards\.greenhouse\.io tab\./);
-      expect(text[1]).toContain("Click the Opportun icon in your browser's toolbar");
+      expect(text[1]).toContain(
+        'Click the Opportun icon in the toolbar, then press Fill in this application.',
+      );
       expect(text[1]).toContain("Not there? Open your browser's Extensions menu and pin Opportun.");
       // The icon itself is shown beside the words.
       expect(card.querySelector('img[src="/favicon.svg"]')).not.toBeNull();
