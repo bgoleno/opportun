@@ -79,13 +79,15 @@ function ReactiveResumeConnectHint() {
 export function RegisterDocCard({
   opportunityId,
   quiet = false,
-  onRegistered,
+  onStart,
+  onFail,
 }: {
   opportunityId?: string;
   /** An outline button: on the Resume tab, the flow above it has the one filled button (#440). */
   quiet?: boolean;
-  /** Told once a resume is registered, so the resume flow can move focus to where it led. */
-  onRegistered?: () => void;
+  /** Told as a resume is submitted, and again if it fails, for the resume flow's focus (#440). */
+  onStart?: () => void;
+  onFail?: () => void;
 } = {}) {
   const create = useCreateResume();
   // One id per card: the Resume tab can show the base card and the attaching one together (#440).
@@ -97,7 +99,6 @@ export function RegisterDocCard({
   const attaching = opportunityId !== undefined;
 
   function registered(r: { title: string }) {
-    onRegistered?.();
     toast({
       title: attaching ? 'Resume registered and attached' : 'Base resume registered',
       description: r.title,
@@ -107,6 +108,7 @@ export function RegisterDocCard({
 
   function submit(e: FormEvent) {
     e.preventDefault();
+    onStart?.();
     create.mutate(
       {
         store: rr ? 'reactive_resume' : 'google_doc',
@@ -118,14 +120,16 @@ export function RegisterDocCard({
           setDocRef('');
           registered(r);
         },
+        onError: () => onFail?.(),
       },
     );
   }
 
   function pickFromDrive(hit: DriveSearchHit) {
+    onStart?.();
     create.mutate(
       { store: 'google_doc', docRef: hit.id, ...(attaching ? { opportunityId } : {}) },
-      { onSuccess: registered },
+      { onSuccess: registered, onError: () => onFail?.() },
     );
   }
 

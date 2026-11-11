@@ -469,6 +469,26 @@ describe('the Resume tab flow: every action here moves focus and says where it l
   });
 });
 
+describe('the Resume tab flow: the base-as-is branch when assisted apply cannot start', () => {
+  it("says the panel's reason, records the send as the primary action, and links where the reason says", async () => {
+    setup({ resumes: [BASE], opp: { postingState: 'needs_review' } as Partial<OpportunityView> });
+    const region = await flow();
+    const user = userEvent.setup();
+    await user.click(
+      await within(region).findByRole('button', { name: 'Send a base resume as it is' }),
+    );
+    expect(said(region)).toHaveTextContent(
+      "This opportunity's posting needs review. Confirm it on the Details tab first.",
+    );
+    expect(currentStep(region)).toMatch(/^4 Apply/);
+    expect(primary(region)).toHaveAccessibleName('Record that you sent it');
+    expect(within(region).getByRole('link', { name: 'Open the Details tab' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1?tab=details',
+    );
+  });
+});
+
 describe('the Resume tab: the cards around the flow (#440)', () => {
   it('"Other ways to add a resume" is open at step 1, closed from step 2 on', async () => {
     setup({ resumes: [BASE] });

@@ -42,14 +42,19 @@ export function RecordSendFields({
   opportunityId,
   resume,
   quiet = false,
-  onRecorded,
+  onStart,
+  onFail,
 }: {
   opportunityId: string;
   resume: Resume;
   /** An outline button, where the next action is elsewhere on the page (#440). */
   quiet?: boolean;
-  /** Told once the send is recorded, so the resume flow can move focus to where it led. */
-  onRecorded?: () => void;
+  /**
+   * Told as the send is submitted, and again if it fails, so the resume flow can move focus to
+   * where it leads (#440). Before, not after: the refreshed lists can show the new place first.
+   */
+  onStart?: () => void;
+  onFail?: () => void;
 }) {
   const record = useRecordSend(opportunityId);
   const [via, setVia] = useState('');
@@ -60,14 +65,15 @@ export function RecordSendFields({
   function submit(e: FormEvent) {
     e.preventDefault();
     const sentAt = sentAtFor(day);
+    onStart?.();
     record.mutate(
       { resumeId: resume.id, sentVia: via.trim(), ...(sentAt === undefined ? {} : { sentAt }) },
       {
         onSuccess: () => {
           setVia('');
-          onRecorded?.();
           toast({ title: 'Recorded as sent', description: resume.title, variant: 'success' });
         },
+        onError: () => onFail?.(),
       },
     );
   }

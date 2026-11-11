@@ -191,6 +191,21 @@ export function ResumeFlowCard({
   const [registering, setRegistering] = useState(false);
   const [recording, setRecording] = useState(false);
   const [chosenBase, setChosenBase] = useState('');
+
+  // Set as an action starts, not when it succeeds: a mutation's own refresh can show the new place
+  // before its success callback runs, and the change of place is what moves focus. Cleared if it
+  // fails, so a later change is not announced as this action's.
+  function startAction(what: string) {
+    done.current = what;
+  }
+  function actionFailed() {
+    done.current = null;
+  }
+  const recordSend = {
+    onStart: () => startAction('Recorded as sent.'),
+    onFail: actionFailed,
+  };
+
   const view = flow.state === undefined ? undefined : viewFor(flow.state);
 
   useEffect(() => {
@@ -204,14 +219,6 @@ export function ResumeFlowCard({
     // Only a change of place moves focus, never a re-render in the same place.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view?.key]);
-
-  function didAction(what: string) {
-    done.current = what;
-  }
-
-  function recorded() {
-    didAction('Recorded as sent.');
-  }
 
   function viewFor(state: ResumeFlowState): View {
     const ats = atsLabel(opp.atsJobRef?.kind ?? '');
@@ -228,7 +235,10 @@ export function ResumeFlowCard({
           body: (
             <>
               {registering ? (
-                <RegisterDocCard onRegistered={() => didAction('Base resume registered.')} />
+                <RegisterDocCard
+                  onStart={() => startAction('Base resume registered.')}
+                  onFail={actionFailed}
+                />
               ) : (
                 <Button className={primaryClass} onClick={() => setRegistering(true)}>
                   Register a base resume
@@ -271,7 +281,7 @@ export function ResumeFlowCard({
                   Open and tailor
                 </Link>
               </Button>
-              <MarkFinal resume={state.resume} onDone={didAction} quiet>
+              <MarkFinal resume={state.resume} onStart={startAction} onFail={actionFailed} quiet>
                 It needs no changes: mark as final
               </MarkFinal>
             </>
@@ -286,7 +296,7 @@ export function ResumeFlowCard({
           body: (
             <>
               <ResumeLine resume={state.resume} opportunityId={opp.id} />
-              <MarkFinal resume={state.resume} onDone={didAction}>
+              <MarkFinal resume={state.resume} onStart={startAction} onFail={actionFailed}>
                 Mark as final
               </MarkFinal>
               <Link className={quietClass} to="/resumes/$id" params={{ id: state.resume.id }}>
@@ -308,7 +318,7 @@ export function ResumeFlowCard({
               resume={state.resume}
               recording={recording}
               onRecord={() => setRecording(true)}
-              onRecorded={recorded}
+              recordSend={recordSend}
             />
           ),
         };
@@ -322,11 +332,7 @@ export function ResumeFlowCard({
           body: (
             <>
               {recording ? (
-                <RecordSendFields
-                  onRecorded={recorded}
-                  opportunityId={opp.id}
-                  resume={state.resume}
-                />
+                <RecordSendFields {...recordSend} opportunityId={opp.id} resume={state.resume} />
               ) : (
                 <Button className={primaryClass} onClick={() => setRecording(true)}>
                   Record that you sent it
@@ -373,12 +379,7 @@ export function ResumeFlowCard({
               </Link>
             ) : again !== undefined ? (
               recording ? (
-                <RecordSendFields
-                  onRecorded={recorded}
-                  opportunityId={opp.id}
-                  resume={again}
-                  quiet
-                />
+                <RecordSendFields {...recordSend} opportunityId={opp.id} resume={again} quiet />
               ) : (
                 <Quiet onClick={() => setRecording(true)}>Record that you sent {again.title}</Quiet>
               )
@@ -408,7 +409,7 @@ export function ResumeFlowCard({
             <p className="text-sm text-muted-foreground">
               This marks {base.title} as final everywhere it is used.
             </p>
-            <MarkFinal resume={base} onDone={didAction}>
+            <MarkFinal resume={base} onStart={startAction} onFail={actionFailed}>
               Mark {base.title} as final
             </MarkFinal>
             {leave}
@@ -433,15 +434,16 @@ export function ResumeFlowCard({
               resume={base}
               recording={recording}
               onRecord={() => setRecording(true)}
-              onRecorded={recorded}
+              recordSend={recordSend}
             />
           ) : recording ? (
-            <RecordSendFields onRecorded={recorded} opportunityId={opp.id} resume={base} />
+            <RecordSendFields {...recordSend} opportunityId={opp.id} resume={base} />
           ) : (
             <Button className={primaryClass} onClick={() => setRecording(true)}>
               Record that you sent it
             </Button>
           )}
+          {blocked === null ? null : <ReasonLink reason={blocked} opportunityId={opp.id} />}
           {leave}
         </>
       ),
@@ -559,24 +561,26 @@ function TailorAgain({ base, opportunityId }: { base: Resume; opportunityId: str
  */
 function MarkFinal({
   resume,
-  onDone,
+  onStart,
+  onFail,
   quiet = false,
   children,
 }: {
   resume: Resume;
-  onDone: (what: string) => void;
+  onStart: (what: string) => void;
+  onFail: () => void;
   quiet?: boolean;
   children: ReactNode;
 }) {
   const update = useUpdateResume(resume.id);
   function mark() {
+    onStart('Marked final.');
     update.mutate(
       { status: 'final' },
       {
-        onSuccess: () => {
-          onDone('Marked final.');
-          toast({ title: 'Marked final', description: resume.title, variant: 'success' });
-        },
+        onSuccess: () =>
+          toast({ title: 'Marked final', description: resume.title, variant: 'success' }),
+        onError: onFail,
       },
     );
   }
@@ -633,14 +637,14 @@ function ApplyOrRecord({
   resume,
   recording,
   onRecord,
-  onRecorded,
+  recordSend,
 }: {
   opp: OpportunityView;
   ats: string;
   resume: Resume;
   recording: boolean;
   onRecord: () => void;
-  onRecorded: () => void;
+  recordSend: { onStart: () => void; onFail: () => void };
 }) {
   return (
     <>
@@ -650,7 +654,7 @@ function ApplyOrRecord({
         </Link>
       </Button>
       {recording ? (
-        <RecordSendFields onRecorded={onRecorded} opportunityId={opp.id} resume={resume} quiet />
+        <RecordSendFields {...recordSend} opportunityId={opp.id} resume={resume} quiet />
       ) : (
         <Quiet onClick={onRecord}>Record that you sent it yourself</Quiet>
       )}
