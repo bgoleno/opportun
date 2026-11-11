@@ -96,7 +96,7 @@ describe('collection off: the budget of 14.11 (#343)', () => {
       if (rel !== TRACING && /from '@opentelemetry\/(?!api')[^']+'/.test(values)) {
         sdkImports.push(rel);
       }
-      if (/from '(?:\.{1,2}\/)+(?:obs\/)?tracing'/.test(text)) staticTracingImports.push(rel);
+      if (/from '[./]+(?:obs\/)?tracing'/.test(text)) staticTracingImports.push(rel);
     }
     expect(sdkImports).toEqual([]);
     expect(staticTracingImports).toEqual([]);
