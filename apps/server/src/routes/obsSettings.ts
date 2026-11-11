@@ -9,7 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { HttpError } from '../lib/errors';
-import { readCollect, writeCollect } from '../obs/config';
+import { collectInEffect, writeCollect } from '../obs/config';
 
 const ObsSettings = z.object({ collect: z.boolean() });
 
@@ -19,7 +19,7 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
 
   api.get('/obs/settings', { schema: { response: { 200: ObsSettings } } }, async (req) => {
     app.requireUser(req);
-    return { collect: await readCollect(db) };
+    return { collect: await collectInEffect(db, app.config) };
   });
 
   api.put(
@@ -34,7 +34,7 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
       if (app.config.demo) throw new HttpError(403, 'unavailable_on_demo');
       if (!ctx.isAdmin) throw new HttpError(403, 'forbidden');
       await writeCollect(db, req.body.collect, { userId: ctx.userId, ip: req.ip });
-      return { collect: await readCollect(db) };
+      return { collect: await collectInEffect(db, app.config) };
     },
   );
 }

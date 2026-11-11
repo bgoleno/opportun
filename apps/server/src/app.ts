@@ -464,7 +464,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   });
   // Observability (design.md 14.1, #353): bound to this database, Collect as stored (off by
   // default). Stopped before the database closes, so a last flush still has somewhere to go.
-  await startObsFromSettings(db, app.log);
+  await startObsFromSettings(db, app.log, { demo: cfg.demo });
   app.addHook('onClose', async () => {
     // Let an in-flight job finish before the database goes away.
     await runner?.stop();

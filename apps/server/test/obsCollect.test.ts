@@ -200,7 +200,7 @@ describe('turning Collect on and off (#353)', () => {
       .values({ key: OBS_COLLECT_KEY, userId: null, value: true, updatedAt: Date.now() })
       .run();
     expect(isCollecting()).toBe(false);
-    await startObsFromSettings(app.db, app.log);
+    await startObsFromSettings(app.db, app.log, { demo: false });
     expect(isCollecting()).toBe(true);
   });
 });
