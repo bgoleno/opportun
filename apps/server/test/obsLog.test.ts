@@ -3,9 +3,18 @@
 // any other message becomes a fixed marker with no keys, an error keeps its type and frame lines,
 // and pino's pid and hostname are never written. Driven through a real pino logger, so what the
 // gate sees is what pino writes: a child's bindings, the error serializer's output, the message.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { withTransaction } from '../src/db/client';
+import {
+  configureGateWatchdog,
+  gateHeldError,
+  logHeldGate,
+  logSlowTransaction,
+  type WatchdogClock,
+} from '../src/db/gate';
 import { setUnknownKeyMode, UnknownTelemetryKeyError } from '../src/obs/gate';
 import { createLogger, frameLines, gatedDestination, logRequest, WITHHELD } from '../src/obs/log';
+import { captureLogs, testApp } from './helpers';
 
 const NAME = 'Jane Doe';
 const EMAIL = 'jane.doe@example.com';
@@ -113,9 +122,9 @@ describe('the log gate (#345)', () => {
 });
 
 describe('frame lines (#345, 14.8)', () => {
-  it('keep a frame inside the install root with its relative path, and drop the path of one outside', () => {
+  it('keep a frame inside the install root with its relative path, and only a placeholder for one outside', () => {
     const inside = new Error('x').stack!;
-    const frames = frameLines(inside);
+    const frames = frameLines(inside, 'x');
     expect(frames.length).toBeGreaterThan(0);
     expect(frames.some((f) => f.includes('apps/server/test/obsLog.test.ts'))).toBe(true);
     for (const f of frames) expect(f).not.toContain('/Volumes/');
@@ -128,8 +137,10 @@ describe('frame lines (#345, 14.8)', () => {
           '    at node:internal/process/task_queues:95:5',
           `    { person: '${NAME}' }`,
         ].join('\n'),
+        `mail for ${EMAIL}`,
       ),
-    ).toEqual(['at handler']);
+      // Outside the install root a frame keeps no name either (#381): one placeholder for the run.
+    ).toEqual(['at <external>']);
   });
 });
 
@@ -204,5 +215,279 @@ describe('the access log line (#345, 14.9)', () => {
     expect(c.records()[0]).not.toHaveProperty('opportun.route.id');
     expect(c.text()).not.toContain(UUID);
     expect(c.text()).not.toContain(EMAIL);
+  });
+});
+
+/** A watchdog clock this test advances by hand (as dbGate.test.ts does, issue #72). */
+function handClock(): { clock: WatchdogClock; advance: (ms: number) => void } {
+  let now = 0;
+  const timers: { at: number; cb: () => void }[] = [];
+  return {
+    clock: {
+      now: () => now,
+      setTimeout: (cb, ms) => {
+        const entry = { at: now + ms, cb };
+        timers.push(entry);
+        return entry as unknown as NodeJS.Timeout;
+      },
+      clearTimeout: (timer) => {
+        const i = timers.indexOf(timer as unknown as { at: number; cb: () => void });
+        if (i !== -1) timers.splice(i, 1);
+      },
+    },
+    advance: (ms) => {
+      now += ms;
+      for (const t of timers.filter((x) => x.at <= now)) {
+        timers.splice(timers.indexOf(t), 1);
+        t.cb();
+      }
+    },
+  };
+}
+
+describe('a held gate keeps its call site as a frame (#381)', () => {
+  it('in the record the watchdog logs', () => {
+    const c = capture();
+    // The call site withTransaction names when no label was set: a frame line (db/client.ts).
+    const site = `at runImport (${process.cwd()}/src/jobs/import.ts:10:5)`;
+    c.log.warn(
+      {
+        'opportun.db.gate_label': site,
+        'opportun.db.gate_held_ms': 5_000,
+        err: gateHeldError(site),
+      },
+      'database write gate held too long',
+    );
+    const r = c.records()[0]!;
+    expect(r['error.type']).toBe('GateHeld');
+    expect(r.stack).toEqual(['at runImport (apps/server/src/jobs/import.ts:10:5)']);
+  });
+
+  it("from the app's own reporter, for a transaction held past the threshold", async () => {
+    const logs = captureLogs();
+    const { app } = await testApp({ logLevel: 'warn' }, { logStream: logs });
+    const { clock, advance } = handClock();
+    try {
+      // The app's reporter stays (no `report`): only the threshold and the clock change.
+      configureGateWatchdog({ ms: 40, clock });
+      const held = withTransaction(
+        app.db,
+        async () => {
+          await new Promise((r) => setTimeout(r, 5));
+        },
+        { isTestRun: false },
+      );
+      await new Promise((r) => setTimeout(r, 1));
+      advance(50);
+      await held;
+      const line = logs.lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .find((l) => l.msg === 'database write gate held too long');
+      expect(line).toMatchObject({ 'error.type': 'GateHeld' });
+      expect(line!.stack).toEqual([expect.stringContaining('apps/server/test/obsLog.test.ts')]);
+    } finally {
+      configureGateWatchdog({});
+      await app.close();
+    }
+  });
+});
+
+describe('a stack whose header no longer matches its message (#381, sec)', () => {
+  // A V8 stack is formatted on its first read, with the message of that moment. Code that
+  // reassigns the message afterwards leaves a header the current message no longer counts.
+  const FAKE = `    at ${NAME.replace(' ', '')} (/srv/elsewhere/data.js:1:1)`;
+  const logged = (err: Error) => {
+    const c = capture();
+    c.log.error({ err }, 'unhandled error');
+    return { record: c.records()[0]!, text: c.text() };
+  };
+
+  it('a message lengthened after the stack was read: no frames, rather than a miscount', () => {
+    const err = new Error('one');
+    void err.stack;
+    err.message = 'two\nthree';
+    const { record } = logged(err);
+    expect(record['error.type']).toBe('Error');
+    expect(record).not.toHaveProperty('stack');
+  });
+
+  it('a message shortened after the stack was read: its old lines are never taken by name', () => {
+    const err = new Error(`x\n${FAKE}`);
+    void err.stack;
+    err.message = 'x';
+    const { record, text } = logged(err);
+    expect(text).not.toContain(NAME.replace(' ', ''));
+    // The old line still parses as a frame, but one outside the install root: the fixed
+    // placeholder, then this file's own frame.
+    expect(record.stack).toEqual(
+      expect.arrayContaining(['at <external>', expect.stringContaining('obsLog.test.ts')]),
+    );
+  });
+
+  it('a message shortened to nothing after the stack was read: no frames', () => {
+    const err = new Error(`x\n${FAKE}`);
+    void err.stack;
+    err.message = '';
+    const { record, text } = logged(err);
+    expect(text).not.toContain(NAME.replace(' ', ''));
+    expect(record).not.toHaveProperty('stack');
+  });
+
+  it('a message shortened before the stack was read: the stack follows it, frames kept', () => {
+    const err = new Error(`x\n${FAKE}`);
+    err.message = 'x';
+    const { record, text } = logged(err);
+    expect(text).not.toContain(NAME.replace(' ', ''));
+    expect((record.stack as string[])[0]).toContain('obsLog.test.ts');
+  });
+
+  it('an empty message: the header is the name alone, frames kept', () => {
+    const { record } = logged(new Error(''));
+    expect((record.stack as string[])[0]).toContain('obsLog.test.ts');
+  });
+
+  it('a frame outside the install root keeps its place with no name, runs of them as one', () => {
+    const lines = frameLines(
+      [
+        'Error: x',
+        `    at ours (${process.cwd()}/src/a.ts:1:2)`,
+        '    at Lib.call (/srv/lib/node_modules/dep/index.js:3:4)',
+        `${FAKE}`,
+        '    at node:internal/process/task_queues:95:5',
+        `    at again (${process.cwd()}/src/b.ts:5:6)`,
+      ].join('\n'),
+      'x',
+    );
+    expect(lines).toEqual([
+      'at ours (apps/server/src/a.ts:1:2)',
+      'at <external>',
+      'at again (apps/server/src/b.ts:5:6)',
+    ]);
+  });
+
+  it('a frame inside the install root whose name is not an identifier keeps only its path', () => {
+    // The case the placeholder cannot cover: a fake frame that names a path inside the root.
+    expect(
+      frameLines(['Error: x', `    at ${NAME} (${process.cwd()}/src/a.ts:1:2)`].join('\n'), 'x'),
+    ).toEqual(['at (apps/server/src/a.ts:1:2)']);
+  });
+
+  it('frames outside the install root never fill the cap', () => {
+    const outside = Array.from({ length: 40 }, (_, i) => `    at dep${i} (/srv/dep.js:${i + 1}:1)`);
+    const lines = frameLines(
+      ['Error: x', ...outside, `    at ours (${process.cwd()}/src/a.ts:1:2)`].join('\n'),
+      'x',
+    );
+    expect(lines).toEqual(['at <external>', 'at ours (apps/server/src/a.ts:1:2)']);
+  });
+});
+
+describe('errors that kept their frames on main keep them (tl on #389)', () => {
+  const logged = (err: Error) => {
+    const c = capture();
+    c.log.error({ err }, 'unhandled error');
+    return c.records()[0]!;
+  };
+  const ours = (r: Record<string, unknown>) =>
+    (r.stack as string[] | undefined)?.some((f) => f.includes('obsLog.test.ts')) === true;
+
+  it('an error with a cause: pino writes the messages joined, the header has its own alone', () => {
+    const inner = new Error(`no route to ${EMAIL}`);
+    expect(ours(logged(new Error('outer', { cause: inner })))).toBe(true);
+    // What fetch() throws for a host that does not resolve.
+    const dns = Object.assign(new Error('getaddrinfo ENOTFOUND x.example'), { code: 'ENOTFOUND' });
+    const r = logged(new TypeError('fetch failed', { cause: dns }));
+    expect(r['error.type']).toBe('TypeError');
+    expect(ours(r)).toBe(true);
+  });
+
+  it('with no cause, a message cut to a prefix of its own after the read still gives no frames (sec on #389)', () => {
+    // No `caused by:` line, so the message's `: ` is its own: the shorter prefix is not tried.
+    const err = new Error(`x\n    at ${NAME.replace(' ', '')} (${process.cwd()}/src/fake.ts:1:1)`);
+    void err.stack;
+    err.message = 'x: something else';
+    const r = logged(err);
+    expect(r['error.type']).toBe('Error');
+    expect(r).not.toHaveProperty('stack');
+  });
+
+  it("with a cause, a prefix is tried only where the rest is the cause's message", () => {
+    const err = new Error(`x\n    at ${NAME.replace(' ', '')} (${process.cwd()}/src/fake.ts:1:1)`, {
+      cause: new Error('z'),
+    });
+    void err.stack;
+    // pino gives `x: y: z`: cut where `z` follows, the header would be `x: y`, which it is not;
+    // cut at the first `: `, what follows is `y: z`, not the cause's message.
+    err.message = 'x: y';
+    const r = logged(err);
+    expect(r).not.toHaveProperty('stack');
+  });
+
+  it('an error thrown inside a builtin: its location-less frame is a placeholder, ours follow', () => {
+    let thrown: Error | undefined;
+    try {
+      JSON.parse('{bad');
+    } catch (err) {
+      thrown = err as Error;
+    }
+    const r = logged(thrown!);
+    expect((r.stack as string[])[0]).toBe('at <external>');
+    expect(ours(r)).toBe(true);
+    let invalid: Error | undefined;
+    try {
+      new Date('nope').toISOString();
+    } catch (err) {
+      invalid = err as Error;
+    }
+    expect(ours(logged(invalid!))).toBe(true);
+  });
+});
+
+describe("the database's default reporters keep their frames (tl on #389)", () => {
+  /** The gated lines written to stderr while `fn` runs (processLogger, through dbLog). */
+  async function stderrOf(fn: () => void, msg: string): Promise<Record<string, unknown>> {
+    const lines: string[] = [];
+    const write = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation((chunk: string | Uint8Array) => {
+        lines.push(String(chunk));
+        return true;
+      });
+    try {
+      fn();
+      const end = Date.now() + 5_000;
+      for (;;) {
+        const found = lines
+          .flatMap((l) => l.split('\n'))
+          .filter((l) => l.startsWith('{'))
+          .map((l) => JSON.parse(l) as Record<string, unknown>)
+          .find((l) => l.msg === msg);
+        if (found !== undefined) return found;
+        if (Date.now() > end) throw new Error(`no line "${msg}"`);
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    } finally {
+      write.mockRestore();
+    }
+  }
+
+  it('a held gate, with no app wired (a CLI)', async () => {
+    const site = `at runImport (${process.cwd()}/src/jobs/import.ts:10:5)`;
+    const r = await stderrOf(
+      () => logHeldGate({ label: site, heldMs: 5_000 }),
+      'database write gate held too long',
+    );
+    expect(r).toMatchObject({ 'error.type': 'GateHeld' });
+    expect(r.stack).toEqual(['at runImport (apps/server/src/jobs/import.ts:10:5)']);
+  });
+
+  it('a slow transaction, with the stack of its caller', async () => {
+    const caller = new Error('withTransaction caller').stack!;
+    const r = await stderrOf(
+      () => logSlowTransaction({ durationMs: 30, awaitedOutside: true, stack: caller }),
+      'slow transaction held the database write gate',
+    );
+    expect(r).toMatchObject({ 'error.type': 'SlowTransaction' });
+    expect(r.stack).toEqual(expect.arrayContaining([expect.stringContaining('obsLog.test.ts')]));
   });
 });
