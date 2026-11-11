@@ -38,11 +38,13 @@ export type ExportSignal = 'metrics' | 'spans' | 'logs';
 // ---------------------------------------------------------------------------- the fields
 
 /** A host name of LDH labels, an IPv4 literal, or a bracketed IPv6 literal. Nothing else. */
-const LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+const LABEL = /^[A-Za-z0-9-]{1,63}$/;
 function isHostField(host: string): boolean {
   if (host.startsWith('[') && host.endsWith(']')) return isIP(host.slice(1, -1)) === 6;
   if (host.length === 0 || host.length > 253) return false;
-  return host.split('.').every((label) => LABEL.test(label));
+  return host
+    .split('.')
+    .every((label) => LABEL.test(label) && !label.startsWith('-') && !label.endsWith('-'));
 }
 
 /** Absolute segments of unreserved characters; no empty, `.` or `..` segment, no escapes. */
