@@ -622,7 +622,7 @@ function ReviewStep({
   host: string;
 }) {
   const navigate = useNavigate();
-  const canFill = useExtensionCanFill(live);
+  const canFill = useExtensionCanFill(live, opp);
   const review = useReviewSubmission(opp.id);
   const handoff = useHandoffSubmission(opp.id);
   const patch = usePatchSubmission(opp.id);
@@ -1150,7 +1150,7 @@ function OpenStep({
   const cancel = useCancelSubmission(opp.id);
   const [stopping, setStopping] = useState(false);
   const [attesting, setAttesting] = useState(false);
-  const canFill = useExtensionCanFill(live);
+  const canFill = useExtensionCanFill(live, opp);
 
   if (live.status !== 'handed_off') {
     return (

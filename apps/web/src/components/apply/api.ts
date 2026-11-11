@@ -8,7 +8,7 @@
 import type { Submission, SubmissionAnswer, SubmissionFields } from '@opportun/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, errorMessage } from '@/lib/api';
-import { qk, type Page } from '@/lib/opportunities';
+import { qk, type OpportunityView, type Page } from '@/lib/opportunities';
 import { rk } from '@/components/resume/api';
 
 const enc = encodeURIComponent;
@@ -447,15 +447,22 @@ interface DeviceTokenView {
  * extension fills (Greenhouse, on its own hosts), and the user has a token, not revoked, with
  * the Assisted apply scope. It reads the token list Settings reads, under the same key. Anything
  * else, a token list the server will not give included, is false: nothing is promised that the
- * user's setup cannot do.
+ * user's setup cannot do. A Greenhouse job embedded on the company's own careers page (its board
+ * proven from a `gh_jid` link, #398) is false too: its destination is Greenhouse's page for the
+ * job, but the user may apply on the company's page, where the extension does not fill (tl on
+ * #425).
  */
-export function useExtensionCanFill(live: SubmissionView): boolean {
+export function useExtensionCanFill(
+  live: SubmissionView,
+  opp: Pick<OpportunityView, 'atsJobRef'>,
+): boolean {
   const tokens = useQuery({
     queryKey: ['device-tokens'] as const,
     queryFn: () => api<{ items: DeviceTokenView[] }>('/device-tokens'),
     retry: false,
   });
   if (live.atsKind !== 'ats_greenhouse') return false;
+  if (opp.atsJobRef?.verifiedVia === 'gh_jid') return false;
   let host: string;
   try {
     host = new URL(live.destinationUrl).hostname;

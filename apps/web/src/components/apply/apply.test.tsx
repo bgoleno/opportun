@@ -776,7 +776,13 @@ describe('#416: the next step names the extension only where it can fill this fo
     ...over,
   });
   const LEVER = 'https://jobs.lever.co/examplecorp/abcd-1234/apply';
-  const cases: [string, Record<string, unknown>, Partial<SubmissionView>, boolean][] = [
+  const cases: [
+    string,
+    Record<string, unknown>,
+    Partial<SubmissionView>,
+    boolean,
+    Partial<OpportunityView>?,
+  ][] = [
     ['a usable token on a Greenhouse form', { items: [token()] }, {}, true],
     ['no token', { items: [] }, {}, false],
     ['a revoked token', { items: [token({ revokedAt: NOW - MIN })] }, {}, false],
@@ -806,19 +812,46 @@ describe('#416: the next step names the extension only where it can fill this fo
       { atsKind: 'ats_lever', destinationUrl: LEVER },
       false,
     ],
+    // A Greenhouse job embedded on the company's own careers page (#398, tl on #425): its board
+    // is proven and the destination is Greenhouse's own page, but the user applies where the job
+    // is embedded, so the extension is not named.
+    [
+      'an embedded Greenhouse job whose board was proven from its gh_jid link',
+      { items: [token()] },
+      {},
+      false,
+      {
+        atsJobRef: {
+          kind: 'ats_greenhouse',
+          org: 'examplecorp',
+          externalId: '1000001',
+          url: DEST,
+          verifiedVia: 'gh_jid',
+          verifiedAt: NOW - MIN,
+        },
+      },
+    ],
   ];
 
   /** Renders a step once its token list has been read, so a missing line is a decision. */
-  async function renderAfterTokens(step: 'review' | 'open', tokens: unknown, sub: SubmissionView) {
-    const api = mockApi({ ...routes(sub), 'GET /device-tokens': tokens });
+  async function renderAfterTokens(
+    step: 'review' | 'open',
+    tokens: unknown,
+    sub: SubmissionView,
+    opp: Partial<OpportunityView> = {},
+  ) {
+    const api = mockApi({
+      ...routes(sub, { 'GET /opportunities/opp-1': { ...OPP, ...opp } }),
+      'GET /device-tokens': tokens,
+    });
     const out = renderStep(step);
     await waitFor(() => expect(calls(api.calls, 'GET', '/device-tokens')).toHaveLength(1));
     await screen.findByRole('heading', { level: 1 });
     return out;
   }
 
-  it.each(cases)('the review step, with %s', async (_name, tokens, over, canFill) => {
-    await renderAfterTokens('review', tokens, submission(over));
+  it.each(cases)('the review step, with %s', async (_name, tokens, over, canFill, opp) => {
+    await renderAfterTokens('review', tokens, submission(over), opp);
     if (canFill) expect(await screen.findByText(REVIEW_LINE)).toBeVisible();
     else {
       await screen.findByText(/Ready to open the form\?/);
@@ -826,11 +859,12 @@ describe('#416: the next step names the extension only where it can fill this fo
     }
   });
 
-  it.each(cases)('the Open step, with %s', async (_name, tokens, over, canFill) => {
+  it.each(cases)('the Open step, with %s', async (_name, tokens, over, canFill, opp) => {
     await renderAfterTokens(
       'open',
       tokens,
       submission({ status: 'handed_off', handedOffAt: NOW, ...over }),
+      opp,
     );
     const card = (await screen.findByText('On the application site')).closest(
       '[data-slot="card"]',
