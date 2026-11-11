@@ -304,6 +304,14 @@ describe('GET /obs/traces (FR-T7)', () => {
       '?status=maybe',
       '?limit=0',
       '?limit=1000',
+      // Past any date (sec on #361): not a time a store could hold.
+      '?to=1e300',
+      '?from=9999999999999999',
+      // Shapes the store's columns never hold (sec on #361).
+      '?task=Bad%20Task',
+      '?provider=Open-AI',
+      '?model=a%2Fb%2Fc',
+      '?model=%2Fetc%2Fpasswd',
     ]) {
       const res = await b.request({ method: 'GET', url: `/api/v1/obs/traces${q}` });
       expect(res.statusCode, q).toBe(400);
@@ -460,6 +468,8 @@ describe('GET /obs/traces/:traceId (FR-T7)', () => {
             'opportun.outbound.target': 'anthropic',
             // Row ids are local only and say nothing a reader needs: not displayed (tl on #347).
             'user.id': b.userId,
+            // An address is log-only (14.8): never shown, even if a row held one (sec on #361).
+            'client.address': '203.0.113.7',
             'opportun.ai.prompt.id': newId(),
             'gen_ai.conversation.id': newId(),
             // Not in the catalog: an older row, or one written around the gate, is not shown.
@@ -476,6 +486,37 @@ describe('GET /obs/traces/:traceId (FR-T7)', () => {
       'opportun.outbound.target': 'anthropic',
     });
     expect(JSON.stringify(body)).not.toContain('jane@example.com');
+    expect(JSON.stringify(body)).not.toContain('203.0.113.7');
+  });
+
+  it('returns at most 2,000 spans of a trace, the earliest (14.11)', async () => {
+    const { app, b } = await boot();
+    const traceId = await insertTrace(app, b.userId, { spans: [] });
+    const rows = Array.from({ length: 2001 }, (_, i) => ({
+      traceId,
+      spanId: (i + 1).toString(16).padStart(16, '0'),
+      parentSpanId: null,
+      userId: b.userId,
+      name: 'POST',
+      kind: 'client' as const,
+      startedAt: T0 + i,
+      durationMs: 1,
+      status: 'ok' as const,
+      errorType: null,
+      attributes: {},
+      task: null,
+      model: null,
+      provider: null,
+    }));
+    for (let i = 0; i < rows.length; i += 400) {
+      await app.db
+        .insert(obsSpans)
+        .values(rows.slice(i, i + 400))
+        .run();
+    }
+    const body = (await b.request({ method: 'GET', url: `/api/v1/obs/traces/${traceId}` })).json();
+    expect(body.spans).toHaveLength(2000);
+    expect(body.spans.at(-1).startedAt).toBe(T0 + 1999);
   });
 
   it('names the prompt a span used by its task and version, never by its id', async () => {
