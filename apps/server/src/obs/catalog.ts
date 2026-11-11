@@ -68,6 +68,10 @@ export const OUTBOUND_TARGETS = [
   'google',
   'oauth',
   ...ATS_REF_KINDS,
+  // Discovery boards whose hosts are in ATS_ALLOW_HOSTS but which are not ATS_REF_KINDS: an
+  // opportunity never records a job ref on them, so core has no kind for them (#343).
+  'ats_smartrecruiters',
+  'ats_workable',
   'reactive_resume',
   'public_site',
 ] as const;
@@ -79,8 +83,19 @@ export type OutboundTarget = (typeof OUTBOUND_TARGETS)[number];
  * `opportun.outbound.target` only: a host the user configured, a page they captured, and a
  * tenant's own host such as a Workday board, whose name is the company's.
  */
-export const FIXED_SERVICE_HOSTS: readonly string[] = [
-  ...ATS_ALLOW_HOSTS,
+let fixedHosts: readonly string[] | undefined;
+
+/**
+ * Read on first use, not at load: safeFetch imports obs/outbound, which imports this file, so
+ * reading ATS_ALLOW_HOSTS while the modules load would find safeFetch still initialising.
+ */
+export function fixedServiceHosts(): readonly string[] {
+  fixedHosts ??= serviceHostsWith(ATS_ALLOW_HOSTS);
+  return fixedHosts;
+}
+
+const serviceHostsWith = (ats: readonly string[]): readonly string[] => [
+  ...ats,
   'api.anthropic.com',
   'api.openai.com',
   'accounts.google.com',
@@ -113,7 +128,18 @@ export const DB_OPERATIONS = [
 ] as const;
 
 /** The schema's tables (db.collection.name), plus SQLite's full-text index and OTHER. */
+let tables: readonly string[] | undefined;
+
+/**
+ * Computed once, on first use (the schema does not change at runtime). Rebuilding it per check
+ * cost about 8 microseconds a database statement, four times the budget of 14.11 (#343).
+ */
 function tableNames(): readonly string[] {
+  tables ??= readTableNames();
+  return tables;
+}
+
+function readTableNames(): readonly string[] {
   const exported = new Set<string>(schema.TABLE_EXPORTS);
   const tables = Object.entries(schema)
     .filter(([name]) => exported.has(name))
@@ -142,7 +168,7 @@ export const ATTRIBUTES = {
       "status; never an error's message, never a provider's error body",
   },
   'opportun.outbound.target': { kind: 'enum', values: OUTBOUND_TARGETS },
-  'server.address': { kind: 'enum', values: FIXED_SERVICE_HOSTS },
+  'server.address': { kind: 'enum', values: fixedServiceHosts },
   'db.system.name': { kind: 'enum', values: ['sqlite', 'postgresql'] },
   'db.operation.name': { kind: 'enum', values: DB_OPERATIONS },
   'db.collection.name': { kind: 'enum', values: tableNames },
@@ -232,15 +258,34 @@ export const METRICS = {
 
 export type MetricName = keyof typeof METRICS;
 
-/** A span the base's own code starts: the name is filled from checked values only (14.8). */
+export type SpanKindName = 'server' | 'client' | 'internal' | 'consumer' | 'producer';
+
+/** A span Opportun's own code starts: the name is filled from checked values only (14.8). */
 export interface SpanDef {
   /** `{key}` is replaced by that attribute's checked value. */
   template: string;
-  kind: 'server' | 'client' | 'internal' | 'consumer' | 'producer';
+  /** The kind it has unless the caller picks another from `kinds`. */
+  kind: SpanKindName;
+  /** Every kind the span may have, when it may have more than one (a job: 14.2). */
+  kinds?: readonly SpanKindName[];
   attributes: readonly AttrKey[];
 }
 
 export const SPANS = {
+  // FR-T3 (#343): the HTTP route's span, /api/v1 only (plugins/obsHttp.ts).
+  'http.server': {
+    template: '{http.request.method} {http.route}',
+    kind: 'server',
+    attributes: ['http.request.method', 'http.route', 'http.response.status_code', 'error.type'],
+  },
+  // FR-T3 (#343): around the whole of processJob (jobs/runner.ts). A consumer when it continues
+  // the trace in jobs.trace_context, else internal (14.2, 14.6).
+  job: {
+    template: 'job {opportun.job.kind}',
+    kind: 'internal',
+    kinds: ['internal', 'consumer'],
+    attributes: ['opportun.job.kind', 'opportun.job.outcome', 'error.type'],
+  },
   'http.client': {
     template: '{http.request.method}',
     kind: 'client',

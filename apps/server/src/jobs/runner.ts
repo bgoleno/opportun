@@ -5,7 +5,9 @@
 // expression) into the next pending job for that kind.
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
+import { USER_CONTEXT_KEY } from '@opportun/ai';
 import { newId } from '@opportun/core';
+import { ROOT_CONTEXT } from '@opentelemetry/api';
 import { CronExpressionParser } from 'cron-parser';
 import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -14,7 +16,9 @@ import { claimNextJob, type ClaimedJob } from '../db/dialect';
 import { HttpError } from '../lib/errors';
 import { jobs, settings } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
-import { currentTraceparent } from '../obs';
+import { contextFromTraceparent, currentTraceparent, isCollecting, obs } from '../obs';
+import { OTHER } from '../obs/catalog';
+import { errorType } from '../obs/outbound';
 import { RANK_WAITING_KIND } from './discoveryKinds';
 import { finishInterruptedRuns } from './interruptedRuns';
 import { getJobHandler, type JobContext, type JobHandler, type JobServices } from './registry';
@@ -243,7 +247,59 @@ function errorText(err: unknown): string {
   return err instanceof Error ? `${err.name}: ${err.message}` : String(err);
 }
 
+/** How a run ended, for the job metric and span (#343). */
+interface JobOutcome {
+  outcome: 'done' | 'retry' | 'dead';
+  /** A class or code (14.8): `no_handler`, `invalid_payload`, or the thrown error's. */
+  errorType?: string;
+}
+
+/**
+ * The job boundary (design.md 14.2, 14.6; #343): around the whole run, so a job that dies before
+ * its handler runs is counted too. The span is `job {kind}`: a CONSUMER child of the trace in
+ * jobs.trace_context when the row carries a valid one, else a new INTERNAL trace. A failed run
+ * writes one `error` event in that trace. With collection off, one check and the plain run.
+ */
 async function processJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<void> {
+  if (!isCollecting()) {
+    await runJob(db, job, opts);
+    return;
+  }
+  // An unregistered kind is not on the catalog's list: _OTHER, so a stray row adds no series.
+  const kind = getJobHandler(job.kind) === undefined ? OTHER : job.kind;
+  // A job is a trace of its own unless it continues the one stored with it (14.6): it starts
+  // from the root, never from whatever span or user the runner's caller had active. Its user goes
+  // on that parent (not on an outer context), so the AI router finds it in the job's span; an
+  // instance job has none, and the router starts one trace per user it calls for.
+  const root =
+    job.userId === null ? ROOT_CONTEXT : ROOT_CONTEXT.setValue(USER_CONTEXT_KEY, job.userId);
+  const continued = contextFromTraceparent(job.traceContext, root);
+  const started = performance.now();
+  await obs.span(
+    'job',
+    { 'opportun.job.kind': kind },
+    async (span) => {
+      const { outcome, errorType: failure } = await runJob(db, job, opts);
+      const attributes = {
+        'opportun.job.kind': kind,
+        'opportun.job.outcome': outcome,
+        ...(failure === undefined ? {} : { 'error.type': failure }),
+      };
+      span.set({ 'opportun.job.outcome': outcome });
+      obs.record('opportun.job.duration', (performance.now() - started) / 1000, attributes);
+      if (failure === undefined) return;
+      span.fail(failure);
+      obs.event(
+        'error',
+        { 'error.type': failure, 'opportun.job.kind': kind },
+        job.userId === null ? {} : { userId: job.userId },
+      );
+    },
+    continued === undefined ? { parent: root } : { parent: continued, kind: 'consumer' },
+  );
+}
+
+async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOutcome> {
   const now = opts.now ?? Date.now;
   const log = opts.services?.log;
   const handler = getJobHandler(job.kind);
@@ -251,7 +307,7 @@ async function processJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<vo
     const reason = `no handler registered for kind ${job.kind}`;
     log?.error({ jobId: job.id, kind: job.kind }, reason);
     await finish(db, job.id, 'dead', now(), reason);
-    return;
+    return { outcome: 'dead', errorType: 'no_handler' };
   }
   // Decoded by the claim; undefined when the stored payload is not JSON.
   const parsed = handler.payloadSchema.safeParse(job.payload);
@@ -271,7 +327,7 @@ async function processJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<vo
       `invalid payload: ${parsed.error.message}`,
       withoutTransient(handler, job.payload),
     );
-    return;
+    return { outcome: 'dead', errorType: 'invalid_payload' };
   }
   const ctx: JobContext = {
     jobId: job.id,
@@ -305,6 +361,7 @@ async function processJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<vo
     if (job.attempts >= job.maxAttempts) {
       log?.error(fields, 'job exhausted its retries; marked dead');
       await finish(db, job.id, 'dead', at, errorText(err), transient);
+      return { outcome: 'dead', errorType: errorType(err) };
     } else {
       log?.warn(fields, 'job failed; will retry');
       await db
@@ -319,10 +376,11 @@ async function processJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<vo
         })
         .where(eq(jobs.id, job.id))
         .run();
+      return { outcome: 'retry', errorType: errorType(err) };
     }
-    return;
   }
   await finish(db, job.id, 'done', now(), undefined, transient);
+  return { outcome: 'done' };
 }
 
 /** Claims and runs one due job. Resolves false when nothing is due. */

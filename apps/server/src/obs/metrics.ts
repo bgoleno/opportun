@@ -46,10 +46,15 @@ function canonical(attributes: Attributes): string {
   );
 }
 
+/** A series' identity as text: the metric, the owner and the attributes in key order. */
+export function seriesKey(metric: string, userId: string | null, attributes: Attributes): string {
+  return `${metric}\n${userId ?? ''}\n${canonical(attributes)}`;
+}
+
 /** The stored series id: a hash of the metric, the owner and the attributes (no row id needed). */
 export function seriesId(metric: string, userId: string | null, attributes: Attributes): string {
   return createHash('sha256')
-    .update(`${metric}\n${userId ?? ''}\n${canonical(attributes)}`)
+    .update(seriesKey(metric, userId, attributes))
     .digest('hex');
 }
 
@@ -76,8 +81,13 @@ export class MetricAggregator {
     userId: string | null,
     at: number,
     always = false,
+    /** The series' key when the caller already has it (a repeated database statement). */
+    knownSeries?: string,
   ): boolean {
-    const series = seriesId(metric, userId, attributes);
+    // The live key is the series' canonical text; its hash (seriesId, the stored key) is taken
+    // once per point at flush, not on every value: hashing here cost about a microsecond a
+    // statement, half the database budget of 14.11 (#343).
+    const series = knownSeries ?? seriesKey(metric, userId, attributes);
     if (!this.live.has(series)) {
       if (!always && this.live.size >= this.maxSeries) return false;
       this.live.add(series);

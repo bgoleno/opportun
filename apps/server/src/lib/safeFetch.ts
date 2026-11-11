@@ -16,6 +16,8 @@ import { lookup } from 'node:dns/promises';
 import type { IncomingHttpHeaders } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP, type LookupFunction } from 'node:net';
+import type { OutboundTarget } from '../obs/catalog';
+import { observeOutbound, outboundTargetFor } from '../obs/outbound';
 
 export type FetchBlockedReason =
   'scheme' | 'host_not_allowed' | 'private_address' | 'too_large' | 'timeout' | 'redirect_blocked';
@@ -59,6 +61,12 @@ export interface SafeFetchOptions {
    * carry a body or caller headers, so a redirect is never followed.
    */
   officialApiUrl?: string;
+  /**
+   * The named target this request is measured under (http.client.request.duration, design.md
+   * 14.4; #343). Absent, it is derived from the host (obs/outbound.ts outboundTargetFor); a
+   * caller passes it only where the host cannot say, such as a user-configured service.
+   */
+  target?: OutboundTarget;
 }
 
 export interface RequestBody {
@@ -476,7 +484,20 @@ export function createSafeFetch(deps: SafeFetchDeps) {
           ...(opts.headers === undefined ? {} : { headers: opts.headers }),
         };
         await takeToken(target.url.hostname.toLowerCase(), signal);
-        const res = await untilAbort(deps.request(target, signal), signal);
+        // One measurement per hop (#343): each hop is a real request, as the HTTP conventions
+        // count it, so a followed redirect is two.
+        const res = await observeOutbound(
+          {
+            target: outboundTargetFor({
+              url: target.url,
+              ...(opts.target === undefined ? {} : { target: opts.target }),
+              officialApi: opts.officialApiUrl !== undefined,
+            }),
+            method: opts.post === undefined ? 'GET' : (opts.post.method ?? 'POST'),
+            url: target.url,
+          },
+          () => untilAbort(deps.request(target, signal), signal),
+        );
         if (res.status >= 300 && res.status < 400 && res.status !== 304) {
           await discard(res);
           if (opts.post !== undefined) {

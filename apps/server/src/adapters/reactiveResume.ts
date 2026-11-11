@@ -369,6 +369,8 @@ async function rrCall(
   try {
     res = await fetch(url, {
       allowHosts: [host],
+      // The user's own host, so safeFetch could not name it (#343).
+      target: 'reactive_resume',
       ...(opts.raw === true ? {} : { headers: { 'x-api-key': cfg.apiKey } }),
       ...(method === 'GET'
         ? {}
