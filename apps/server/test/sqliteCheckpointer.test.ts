@@ -3,8 +3,11 @@
 // and a worker thread checkpoints on its own connection, so no commit on the main thread waits
 // for a checkpoint's IO. When the worker stops, for any reason, the main connection goes back to
 // automatic checkpoints, so the WAL can never grow without bound.
-import { statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { loadDbConfig } from '../src/config';
@@ -112,6 +115,22 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       ]);
     } finally {
       await opened.close();
+    }
+  });
+
+  it('a shutdown waits for the worker: close finishes, the main connection with it', () => {
+    // The worker is unref'd, so it never keeps a process alive; while it stops, it must.
+    const dir = mkdtempSync(join(tmpdir(), 'opportun-383-'));
+    try {
+      const child = fileURLToPath(new URL('./fixtures/checkpointerChild.ts', import.meta.url));
+      const res = spawnSync(process.execPath, ['--import', 'tsx', child, dir], {
+        encoding: 'utf8',
+        timeout: 20_000,
+      });
+      expect(res.stdout).toBe('closed shut\n');
+      expect(res.status).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

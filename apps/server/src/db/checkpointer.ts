@@ -85,7 +85,8 @@ export function startBackgroundCheckpointer(
       intervalMs: opts.intervalMs ?? CHECKPOINT_INTERVAL_MS,
     },
   });
-  // Never what keeps the process alive: the server's close stops it, and a CLI's exit ends it.
+  // Not what keeps the process alive while it runs: the server's close stops it, and a CLI's
+  // exit ends it (stop() refs it again until it has stopped).
   worker.unref();
   let stopping = false;
   let failure: unknown;
@@ -108,6 +109,10 @@ export function startBackgroundCheckpointer(
     async stop() {
       if (!stopping) {
         stopping = true;
+        // Unref'd, the worker would let a shutdown end before it had stopped: the awaited close
+        // would never finish, nor the main connection's own close after it. While it stops, it
+        // keeps the process alive.
+        worker.ref();
         worker.postMessage('stop');
         // A worker stuck in a checkpoint (a disk that does not answer) still ends.
         setTimeout(() => void worker.terminate(), STOP_GRACE_MS).unref();
