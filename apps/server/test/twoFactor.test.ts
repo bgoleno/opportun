@@ -636,7 +636,8 @@ describe('secrecy', () => {
       });
       const audit = JSON.stringify(await app.db.select().from(auditLog).all());
       const logText = logs.text();
-      expect(logText).toContain('/api/v1/auth/2fa/verify'); // the capture saw the requests
+      // The capture is live (a catalogued boot line is in it); no request url is ever logged (#345).
+      expect(logText).toContain('serving the API only');
       for (const s of [secret, ...recoveryCodes]) {
         expect(audit).not.toContain(s);
         expect(logText).not.toContain(s);

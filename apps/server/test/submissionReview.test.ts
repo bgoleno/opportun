@@ -612,9 +612,9 @@ describe('AC5: an answer value appears in no audit detail, job payload or log li
     expect(JSON.stringify(audits)).not.toContain(SENTINEL);
     const jobRows = await app.db.select().from(jobs).all();
     expect(JSON.stringify(jobRows)).not.toContain(SENTINEL);
-    // This test's own request is in the log, so the next line cannot pass on an empty one: at the
-    // harness's default `silent` level it did (https://github.com/bgoleno/opportun/issues/240).
-    expect(logs.text()).toContain(`/api/v1/submissions/${r.id}`);
+    // The capture is live at info level (a catalogued boot line is in it), so the checks below
+    // cannot pass on an empty log (#240). No request url is ever logged (#345, design 14.9).
+    expect(logs.text()).toContain('serving the API only');
     expect(logs.text()).not.toContain(SENTINEL);
     // The value is there, where it belongs.
     expect(JSON.stringify((await rowOf(app, r.id))?.answers)).toContain(SENTINEL);

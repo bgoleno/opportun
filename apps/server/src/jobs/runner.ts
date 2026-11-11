@@ -287,6 +287,16 @@ async function processJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<vo
       };
       span.set({ 'opportun.job.outcome': outcome });
       obs.record('opportun.job.duration', (performance.now() - started) / 1000, attributes);
+      // #345: the job.finished event (design 14.9), in the job's own trace.
+      obs.event(
+        'job.finished',
+        {
+          'opportun.job.kind': kind,
+          'opportun.job.outcome': outcome,
+          'opportun.job.attempt': job.attempts,
+        },
+        job.userId === null ? {} : { userId: job.userId },
+      );
       if (failure === undefined) return;
       span.fail(failure);
       obs.event(
@@ -305,7 +315,11 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
   const handler = getJobHandler(job.kind);
   if (handler === undefined) {
     const reason = `no handler registered for kind ${job.kind}`;
-    log?.error({ jobId: job.id, kind: job.kind }, reason);
+    // #345: a fixed message, the kind in its catalogued key (design 14.9).
+    log?.error(
+      { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
+      'no handler registered for this job kind',
+    );
     await finish(db, job.id, 'dead', now(), reason);
     return { outcome: 'dead', errorType: 'no_handler' };
   }
@@ -314,7 +328,7 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
   if (!parsed.success) {
     // A stored payload that no longer validates will never succeed: no retries.
     log?.error(
-      { jobId: job.id, kind: job.kind, err: parsed.error },
+      { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind, err: parsed.error },
       'invalid stored payload; job marked dead',
     );
     // Stripped like any finished job's (#175): a payload that does not validate may still
@@ -351,11 +365,12 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
     await handler.run(db, parsed.data, ctx);
   } catch (err) {
     const at = now();
+    // #345: catalogued keys (design 14.9); the error reduces to its type and frames in the log.
     const fields = {
-      jobId: job.id,
-      kind: job.kind,
-      attempt: job.attempts,
-      maxAttempts: job.maxAttempts,
+      'opportun.job.id': job.id,
+      'opportun.job.kind': job.kind,
+      'opportun.job.attempt': job.attempts,
+      'opportun.job.max_attempts': job.maxAttempts,
       err,
     };
     if (job.attempts >= job.maxAttempts) {

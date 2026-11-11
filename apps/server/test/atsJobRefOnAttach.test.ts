@@ -386,7 +386,9 @@ describe('criterion 5: the backfill brings every confirmed posting identity in l
     expect(lines).toHaveLength(2);
     for (const line of lines) {
       expect(
-        Object.keys(line).filter((k) => ['read', 'set', 'changed', 'cleared'].includes(k)),
+        Object.keys(line).filter((k) =>
+          ['read', 'set', 'changed', 'cleared'].map((n) => `opportun.count.${n}`).includes(k),
+        ),
       ).toHaveLength(4);
     }
     // Counts only: no ids, URLs or company names in what the backfill logged.

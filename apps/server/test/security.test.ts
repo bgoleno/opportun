@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { audit } from '../src/lib/audit';
 import { captureLogs, testApp, type TestAppOptions } from './helpers';
 import { queryAll, queryOne } from './db';
+import { WITHHELD } from '../src/obs/log';
 
 const SESSION = 'opportun_session';
 const CSRF = 'opportun_csrf';
@@ -256,19 +257,25 @@ describe('central error handler', () => {
     expect(res.json().error.code).toBe('invalid_transition');
   });
 
-  it('hides unknown errors behind a generic 500 and logs the full error', async () => {
+  it('hides unknown errors behind a generic 500, and logs the error as its type and frames only', async () => {
     const logs = captureLogs();
     const a = await boot({ logLevel: 'error' }, { ...routes, logStream: logs });
     const res = await a.inject({ method: 'GET', url: '/api/v1/__test/boom' });
     expect(res.statusCode).toBe(500);
     expect(res.json()).toEqual({ error: { code: 'internal', message: 'Internal server error' } });
     expect(res.body).not.toContain('hunter2');
-    expect(logs.text()).toContain('hunter2-internal');
+    // Logged, but never by its message, which can quote data (#345, design 14.8).
+    const record = logs.lines
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .find((r) => r.msg === 'unhandled error');
+    expect(record).toMatchObject({ 'error.type': 'Error', stack: expect.any(Array) });
+    expect((record!.stack as string[])[0]).toMatch(/^at .*apps\/server\/test\/security\.test\.ts/);
+    expect(logs.text()).not.toContain('hunter2');
   });
 });
 
 describe('logging', () => {
-  it('redacts credentials from log lines', async () => {
+  it('no credential reaches a log line, whatever key it is under (#345: the gate keeps no such key)', async () => {
     const logs = captureLogs();
     const a = await boot({ logLevel: 'info' }, { logStream: logs });
     a.log.info(
@@ -279,36 +286,50 @@ describe('logging', () => {
       'probe',
     );
     const text = logs.text();
-    expect(text).toContain('probe');
-    for (const leak of ['AUTHZ', 'COOKIE', 'PASSWD', 'TOKEN', 'APIKEY', 'CIPHER']) {
+    // Not a catalogued message: written as the marker, with none of its keys (design 14.8).
+    expect(text).toContain(WITHHELD);
+    for (const leak of ['AUTHZ', 'COOKIE', 'PASSWD', 'TOKEN', 'APIKEY', 'CIPHER', 'probe']) {
       expect(text).not.toContain(leak);
     }
   });
 
-  it('never logs the oauth code or state from the google callback url', async () => {
+  it('never logs a request url: not the oauth code or state, and no query string at all', async () => {
     const logs = captureLogs();
     const a = await boot({ logLevel: 'info' }, { logStream: logs });
     await a.inject({
       method: 'GET',
       url: '/api/v1/integrations/google/callback?code=OAUTHCODE123&state=OAUTHSTATE456&scope=x',
     });
+    await a.inject({ method: 'GET', url: '/healthz?probe=visible' });
     const text = logs.text();
-    const urls = logs.lines
-      .map((l) => JSON.parse(l) as { req?: { url?: string } })
-      .flatMap((l) => (l.req?.url === undefined ? [] : [l.req.url]));
-    expect(urls.length).toBeGreaterThan(0);
-    for (const url of urls) {
-      expect(url.startsWith('/api/v1/integrations/google/callback')).toBe(true);
+    expect(logs.lines.length).toBeGreaterThan(0);
+    // The route's template may be written (the access line); its values never are.
+    for (const leak of ['OAUTHCODE123', 'OAUTHSTATE456', 'probe=visible', 'code=', 'state=']) {
+      expect(text).not.toContain(leak);
     }
-    expect(text).not.toContain('OAUTHCODE123');
-    expect(text).not.toContain('OAUTHSTATE456');
+    for (const line of logs.lines) expect(JSON.parse(line)).not.toHaveProperty('req');
   });
 
-  it('keeps the query string on other request urls', async () => {
+  it('writes Opportun\u2019s own access line per request: the route template, not the url (#345)', async () => {
     const logs = captureLogs();
     const a = await boot({ logLevel: 'info' }, { logStream: logs });
-    await a.inject({ method: 'GET', url: '/healthz?probe=visible' });
-    expect(logs.text()).toContain('/healthz?probe=visible');
+    await a.inject({ method: 'GET', url: '/healthz?probe=visible', remoteAddress: '203.0.113.7' });
+    const lines = logs.lines
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .filter((r) => r.msg === 'request completed');
+    expect(lines).toEqual([
+      {
+        level: 30,
+        time: expect.any(Number),
+        msg: 'request completed',
+        'http.request.method': 'GET',
+        'http.route': '/healthz',
+        'http.response.status_code': 200,
+        'client.address': '203.0.113.7',
+      },
+    ]);
+    // Fastify's own request lines, which carried the url, are off.
+    expect(logs.text()).not.toContain('incoming request');
   });
 });
 

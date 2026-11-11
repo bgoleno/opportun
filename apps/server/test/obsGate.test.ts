@@ -88,7 +88,10 @@ describe('the catalog (#353)', () => {
         ).toEqual([...b]);
       }
     }
-    expect(Object.keys(EVENTS)).toEqual(['error']);
+    // FR-T5 (#345) completes the event list: the system events and every audit action.
+    expect(Object.keys(EVENTS)).toEqual(
+      expect.arrayContaining(['error', 'settings.updated', 'discovery.run.finished', 'auth.login']),
+    );
   });
 
   it('keeps every id key local unless the catalog marks it exportable (14.8)', () => {
