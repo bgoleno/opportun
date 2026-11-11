@@ -201,6 +201,31 @@ describe('TelemetrySettings, as an admin', () => {
     expect(notice).toHaveTextContent(/nothing is sent/i);
   });
 
+  it('does not say export is blocked once a send has succeeded since (tl on #385)', async () => {
+    // The admin fixed the destination at runtime: a send succeeded after the blocked one.
+    mockApi({
+      'GET /obs/settings': { collect: true },
+      'GET /obs/export': {
+        ...ON,
+        admin: {
+          ...ADMIN_OFF.admin,
+          destination: DEST,
+          lastSuccessAt: Date.now() - 10_000,
+          lastFailure: {
+            outcome: 'blocked',
+            reason: 'private_not_allowed',
+            at: Date.now() - 60_000,
+          },
+        },
+      },
+    });
+    renderWithProviders(<TelemetrySettings isAdmin />);
+    const exp = await screen.findByRole('region', { name: 'Export' });
+    expect(await within(exp).findByText(/Last failure/)).toBeInTheDocument();
+    expect(within(exp).queryByRole('status', { name: /export is blocked/i })).toBeNull();
+    expect(exp).not.toHaveTextContent(/nothing is sent/i);
+  });
+
   it('Send a test says why a destination is blocked (#382)', async () => {
     mockApi({
       'GET /obs/settings': { collect: true },

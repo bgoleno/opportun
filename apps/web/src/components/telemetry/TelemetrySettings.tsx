@@ -561,13 +561,19 @@ function outcomeText(outcome: string, reason: string | undefined): string {
 }
 
 function ExportStatusView({ admin }: { admin: NonNullable<ExportView['admin']> }) {
+  // Blocked now only if no send has succeeded since: the status keeps the last failure after a
+  // success, so a destination fixed at runtime must not still read as blocked (tl on #385).
+  const blockedNow =
+    admin.lastFailure !== null &&
+    admin.lastFailure.outcome === 'blocked' &&
+    admin.lastFailure.at > (admin.lastSuccessAt ?? 0);
   return (
     <div className="grid gap-2 text-sm">
       <p>
         Last success:{' '}
         {admin.lastSuccessAt === null ? 'none yet' : relativeTime(admin.lastSuccessAt)}
       </p>
-      {admin.lastFailure === null ? null : admin.lastFailure.outcome === 'blocked' ? (
+      {admin.lastFailure === null ? null : blockedNow ? (
         // Blocked is not the destination's failure: export cannot send there at all until the
         // destination or the server changes, so it says so and why (#382). A destination saved
         // while OPPORTUN_TELEMETRY_ALLOW_PRIVATE=1 was set is blocked once the server runs
