@@ -23,8 +23,13 @@ export interface RawMail {
   id: string;
   subject?: string;
   sender?: string;
-  /** {name, address} pairs, address strings, or one address-list string. */
+  /** The To recipients: {name, address} pairs, address strings, or one address-list string. */
   recipients?: unknown;
+  /**
+   * The Cc recipients, in the same forms (#406). A line from before it has none, and its
+   * `recipients` held To and Cc together.
+   */
+  cc?: unknown;
   dateReceived: string;
   dateSent?: string;
   body?: string;
@@ -64,7 +69,8 @@ export function formatAddress({ name, address }: Address): string {
   return `${shown} <${a}>`;
 }
 
-function recipientList(value: unknown): string[] {
+/** Each recipient once, as shown and by the address it is compared on. */
+function recipientEntries(value: unknown): { shown: string; key: string }[] {
   const parts: Address[] = [];
   const add = (v: unknown) => {
     if (typeof v === 'string') {
@@ -80,15 +86,27 @@ function recipientList(value: unknown): string[] {
   if (Array.isArray(value)) value.forEach(add);
   else add(value);
   const seen = new Set<string>();
-  const out: string[] = [];
+  const out: { shown: string; key: string }[] = [];
   for (const p of parts) {
     const shown = formatAddress(p);
     const key = (p.address.trim() || shown).toLowerCase();
     if (shown === '' || seen.has(key)) continue;
     seen.add(key);
-    out.push(truncateChars(shown, MAX_ADDRESS));
+    out.push({ shown: truncateChars(shown, MAX_ADDRESS), key });
   }
-  return out.slice(0, MAX_RECIPIENTS);
+  return out;
+}
+
+/**
+ * The To and Cc lists as the server takes them (#406): each at most MAX_RECIPIENTS, and an
+ * address in both only once, in To.
+ */
+function recipientLists(raw: RawMail): { to: string[]; cc: string[] } {
+  const to = recipientEntries(raw.recipients);
+  const inTo = new Set(to.map((e) => e.key));
+  const cc = recipientEntries(raw.cc).filter((e) => !inTo.has(e.key));
+  const shown = (list: { shown: string }[]) => list.slice(0, MAX_RECIPIENTS).map((e) => e.shown);
+  return { to: shown(to), cc: shown(cc) };
 }
 
 // "Re:", "Fwd :", "AW:", and the counted "Re[2]:" form (two patterns keep each one simple).
@@ -155,13 +173,17 @@ export function toInbound(raw: RawMail): { message: InboundMessage; receivedAt: 
   if (looksLikeHtml(body)) body = htmlToText(body, { keepLinks: true });
 
   const sender = typeof raw.sender === 'string' ? formatAddress(parseAddress(raw.sender)) : '';
+  const { to, cc } = recipientLists(raw);
   return {
     receivedAt,
     message: {
       externalId,
       threadKey,
       from: sender === '' ? '(unknown sender)' : truncateChars(sender, MAX_ADDRESS),
-      to: recipientList(raw.recipients),
+      to,
+      // Apart from To (#406). The server reads it for its automatic-unsubscribe check only, and a
+      // server from before it drops the key.
+      cc,
       subject,
       snippet: truncateChars(body.replace(/\s+/g, ' ').trim(), SNIPPET_CHARS),
       bodyText: body,

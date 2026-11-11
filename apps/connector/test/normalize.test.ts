@@ -110,6 +110,8 @@ describe('toInbound', () => {
       threadKey: 'apple-mail-subject:senior engineer',
       from: '"Doe, Jane" <jane@initech.example>',
       to: ['Me <me@home.example>', 'cc@home.example'],
+      // A line with no `cc` (#406): the recipients are all in `to`, as a connector before #406 sent.
+      cc: [],
       subject: 'Re: Senior Engineer',
       snippet: 'Hello there',
       bodyText: 'Hello\nthere',
@@ -126,6 +128,27 @@ describe('toInbound', () => {
     );
     expect(message.bodyText).toBe('Apply here (https://x.example/job?a=1&b=2)\nThanks !');
     expect(message.snippet).toBe('Apply here (https://x.example/job?a=1&b=2) Thanks !');
+  });
+
+  it('sends Cc apart from To, and an address in both once, in To (#406)', () => {
+    const { message } = toInbound(
+      raw(7, {
+        recipients: [{ name: '', address: 'unsubscribe@news.example' }],
+        cc: [
+          { name: 'Jane Recruiter', address: 'jane@acme.example' },
+          { name: '', address: 'UNSUBSCRIBE@news.example' },
+        ],
+      }),
+    );
+    expect(message.to).toEqual(['unsubscribe@news.example']);
+    expect(message.cc).toEqual(['Jane Recruiter <jane@acme.example>']);
+  });
+
+  it('caps Cc at the server schema cap, as To', () => {
+    const { message } = toInbound(
+      raw(8, { cc: Array.from({ length: 600 }, (_, i) => `c${i}@x.example`) }),
+    );
+    expect(message.cc).toHaveLength(500);
   });
 
   it('accepts recipients as an address-list string', () => {

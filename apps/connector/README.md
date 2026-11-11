@@ -57,7 +57,13 @@ opportun-connector watch [--interval 15]    # sync every N minutes until Ctrl-C
 - **Mapping to the server's InboundMessage**: `externalId` is `apple-mail:<Message-ID>`
   (hashed when over 1024 characters), `threadKey` is the subject without Re:/Fwd: prefixes
   (`apple-mail-subject:<subject>`), falling back to the external id when there is no
-  subject.
+  subject. `to` holds the To recipients and `cc` the Cc recipients, an address in both once,
+  in `to` ([#406](https://github.com/bgoleno/opportun/issues/406)). Before #406 the connector
+  put Cc inside `to`, so a message's stored recipients no longer include its Cc, as Gmail's
+  never did. The server reads `cc` only for its automatic-unsubscribe check.
+- **Upgrading**: either side may go first. A server from before #406 drops the `cc` key
+  rather than refusing the batch (its check then reads To only), and a newer server takes a
+  batch with no `cc` from an older connector as before.
 
 Exit codes: 0 ok, 1 unexpected, 2 config or usage, 3 token rejected or wrong scope,
 4 server unreachable or failing, 5 Apple Mail could not be read.

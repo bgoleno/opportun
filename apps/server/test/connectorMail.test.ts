@@ -6,7 +6,7 @@ import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InboundMessage } from '../src/adapters/mailProvider';
-import { communications, jobs, syncState } from '../src/db/schema';
+import { communications, jobs, syncState, users } from '../src/db/schema';
 import type { ClassifyOutput } from '../src/jobs/classify';
 import { CLASSIFY_JOB_KIND } from '../src/jobs/gmailSync';
 import { ingestInbound } from '../src/jobs/mailIngest';
@@ -653,4 +653,87 @@ describe('hostile mail (Review Focus 4)', () => {
       }
     });
   }
+});
+
+// https://github.com/bgoleno/opportun/issues/406 (tl's ruling, issuecomment-6807366725): the
+// connector sends Cc apart from To, and the automatic-unsubscribe check reads both. An older
+// connector put Cc inside `to` and sends no `cc`; its payload behaves exactly as before. Every
+// address here is made up.
+describe('Cc on a pushed message (#406)', () => {
+  const own = async (app: FastifyInstance, userId: string) =>
+    (await app.db.select({ email: users.email }).from(users).where(eq(users.id, userId)).get())!
+      .email;
+
+  async function pushOne(app: FastifyInstance, c: TestClient, message: object) {
+    const { token } = await mint(c);
+    const res = await push(app, token, { messages: [message] });
+    expect(res.statusCode, res.body).toBe(200);
+    const [row] = await rows(app, c.userId);
+    return row!;
+  }
+
+  it('from the account to an unsubscribe address alone, it is filtered', async () => {
+    const { app, a } = await boot();
+    const row = await pushOne(
+      app,
+      a,
+      msg(1, { from: await own(app, a.userId), to: ['unsubscribe@news.example'], cc: [] }),
+    );
+    expect(row).toMatchObject({ triageDecision: 'filtered', triageRule: 'auto_unsubscribe' });
+    expect(row.subject).toBeNull();
+  });
+
+  it("with a person in Cc, it is ingested as the account's own mail, and `to` keeps To only", async () => {
+    const { app, a } = await boot();
+    const row = await pushOne(
+      app,
+      a,
+      msg(1, {
+        from: await own(app, a.userId),
+        to: ['unsubscribe@news.example'],
+        cc: ['Jane Recruiter <jane.recruiter@acme.example>'],
+      }),
+    );
+    expect(row.triageDecision).not.toBe('filtered');
+    expect(row.triageRule).toBe('own_address');
+    expect(row.to).toEqual(['unsubscribe@news.example']);
+  });
+
+  it.each([
+    [['unsubscribe@news.example'], 'filtered'],
+    [['unsubscribe@news.example', 'Jane Recruiter <jane.recruiter@acme.example>'], 'own_address'],
+  ] as const)(
+    'an older connector payload (Cc inside `to`, no `cc`) behaves as before: %j',
+    async (to, expected) => {
+      const { app, a } = await boot();
+      const old = msg(1, { from: await own(app, a.userId), to: [...to] });
+      expect(old).not.toHaveProperty('cc');
+      const row = await pushOne(app, a, old);
+      if (expected === 'filtered') {
+        expect(row).toMatchObject({ triageDecision: 'filtered', triageRule: 'auto_unsubscribe' });
+      } else {
+        expect(row.triageRule).toBe('own_address');
+        expect(row.to).toEqual(to);
+      }
+    },
+  );
+
+  // The other direction (tl): a new connector pushing to a server from before this change. That
+  // server's schema is this one without `cc`, and a zod object drops a key it does not list rather
+  // than refusing it, so the push is stored there (its filter reads To only, as Gmail's did). Shown
+  // here with a key this server does not list either.
+  it('a key the schema does not list is dropped, not refused, as an older server does with `cc`', async () => {
+    const { app, a } = await boot();
+    const row = await pushOne(app, a, { ...msg(1), bcc: ['someone@acme.example'] });
+    expect(row.externalId).toBe(msg(1).externalId);
+    expect(JSON.stringify(row)).not.toContain('someone@acme.example');
+  });
+
+  it('refuses a Cc list longer than the To list may be', async () => {
+    const { app, a } = await boot();
+    const { token } = await mint(a);
+    const cc = Array.from({ length: 501 }, (_, i) => `r${i}@acme.example`);
+    const res = await push(app, token, { messages: [msg(1, { cc })] });
+    expect(res.statusCode).toBe(400);
+  });
 });

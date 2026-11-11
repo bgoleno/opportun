@@ -219,6 +219,8 @@ export async function toInbound(
     threadKey: msg.threadId,
     from: header(msg.payload, 'From') || '(unknown sender)',
     to: splitAddresses(header(msg.payload, 'To')),
+    // For the automatic-unsubscribe check (#406); not stored.
+    cc: splitAddresses(header(msg.payload, 'Cc')),
     subject: header(msg.payload, 'Subject'),
     snippet: decodeEntities(msg.snippet ?? ''),
     bodyText: await bodyTextOf(msg.payload, fetchAttachment),

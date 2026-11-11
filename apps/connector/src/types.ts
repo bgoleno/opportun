@@ -14,6 +14,8 @@ export interface InboundMessage {
   threadKey: string;
   from: string;
   to: string[];
+  /** The Cc recipients, apart from To (#406). A server from before it drops the key. */
+  cc: string[];
   subject: string;
   snippet: string;
   bodyText: string;

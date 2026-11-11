@@ -207,11 +207,13 @@ export interface TriageMessageInput {
    * check reads them. Absent counts as unknown, so every caller that predates it is unchanged.
    */
   recipients?: readonly string[];
+  /**
+   * Its Cc recipients (#406), read with `recipients` by the same check only. Absent counts as none:
+   * an older connector puts them inside `recipients`, and a caller that predates it is unchanged.
+   */
+  cc?: readonly string[];
 }
 
-/**
- * Gmail's whole body for the request its Unsubscribe button sends to a list's mailto: address.
- */
 /**
  * The whole body of the request Gmail's Unsubscribe button sends, in English. Whether Gmail
  * writes it in the account's language is not checked; if it does, this signal is English-only
@@ -244,23 +246,28 @@ function recipientAddress(entry: string): string {
   return address.split('@').length === 2 ? address : '';
 }
 
+/** Whether one recipient entry is a list's unsubscribe address. */
+function isUnsubscribeRecipient(entry: string): boolean {
+  const address = recipientAddress(entry);
+  return address !== '' && isUnsubscribeLocal(address.slice(0, address.indexOf('@')));
+}
+
 /**
  * True for an unsubscribe request the user's own mail client sent automatically (#392): every
- * recipient is a list's unsubscribe address, or the body is exactly Gmail's generated line. Only
- * asked of mail from the account's own address, which no other rule may filter: a reply to a
- * recruiter or a note to self is never addressed to unsubscribe@ alone, and never says only that.
- * An unreadable recipient counts as a person, so a message that cannot be read passes (fail open).
+ * recipient, To and Cc together, is a list's unsubscribe address, or the body is exactly Gmail's
+ * generated line and no Cc recipient is anything else (#406, tl's ruling): Gmail's button never
+ * adds a Cc, so a person there was put there by the user, and the message is theirs. A To address of
+ * any form still counts with Gmail's body, for lists whose mailto: address does not say
+ * "unsubscribe". Only asked of mail from the account's own address, which no other rule may filter:
+ * a reply to a recruiter or a note to self is never addressed to unsubscribe@ alone, and never says
+ * only that. An unreadable recipient counts as a person, so a message that cannot be read passes
+ * (fail open).
  */
 function isAutomaticUnsubscribe(input: TriageMessageInput): boolean {
-  if (input.body.trim() === GMAIL_UNSUBSCRIBE_BODY) return true;
-  const to = input.recipients ?? [];
-  return (
-    to.length > 0 &&
-    to.every((entry) => {
-      const address = recipientAddress(entry);
-      return address !== '' && isUnsubscribeLocal(address.slice(0, address.indexOf('@')));
-    })
-  );
+  const cc = input.cc ?? [];
+  if (input.body.trim() === GMAIL_UNSUBSCRIBE_BODY && cc.every(isUnsubscribeRecipient)) return true;
+  const all = [...(input.recipients ?? []), ...cc];
+  return all.length > 0 && all.every(isUnsubscribeRecipient);
 }
 
 /**
