@@ -93,6 +93,7 @@ describe.runIf(sqliteOnly)('booting the demo over a database with Collect on (#3
       db: { dialect: 'sqlite' },
       demo,
       aiAllowLoopbackHttp: false,
+      telemetryAllowPrivate: false,
       trustedProxies: [],
     };
     const app = await buildApp(cfg, { jobRunner: false });

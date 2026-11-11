@@ -112,6 +112,15 @@ export interface Config {
    */
   aiAllowLoopbackHttp: boolean;
   /**
+   * OPPORTUN_TELEMETRY_ALLOW_PRIVATE=1 (design.md 14.10 rule 3; issue #342): whether telemetry
+   * export may send to loopback, a private network or shared address space (100.64.0.0/10), over
+   * http or https. Off by default, so export goes only to a public https destination. Like
+   * aiAllowLoopbackHttp it is the operator's decision for their own deployment, not a setting an
+   * admin can turn on from the app. Link-local and the metadata services stay refused under it
+   * (obs/export/destination.ts).
+   */
+  telemetryAllowPrivate: boolean;
+  /**
    * Reverse proxies whose X-Forwarded-* headers are trusted (OPPORTUN_TRUSTED_PROXIES, issue
    * #333): IPs, CIDR ranges, or the preset names loopback/linklocal/uniquelocal, passed to
    * Fastify's trustProxy. Empty (the default) trusts NO proxy, so req.ip and req.protocol come
@@ -479,6 +488,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     submissions: env.OPPORTUN_SUBMISSIONS === '1',
     dailyReviewCap: loadDailyReviewCap(env),
     aiAllowLoopbackHttp: env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1',
+    telemetryAllowPrivate: env.OPPORTUN_TELEMETRY_ALLOW_PRIVATE === '1',
     trustedProxies: loadTrustedProxies(env),
     webDir: resolve(
       env.WEB_DIR === undefined || env.WEB_DIR === '' ? DEFAULT_WEB_DIR : env.WEB_DIR,
