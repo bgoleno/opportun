@@ -152,6 +152,19 @@ export interface GateHeld {
   heldMs: number;
 }
 
+/**
+ * A held gate as the error both watchdog reporters log: this file's default one, and the app's
+ * (app.ts configureGateWatchdog), which must stay in step with it. The call site that names the
+ * holder when no label was set is a frame line, so it goes in as the error's frame, after a
+ * header line as a V8 stack has one: the log gate skips a stack's header unread (obs/log.ts
+ * frameLines), and a stack of the call site alone lost it (#381). It has no message, so the
+ * header is the name alone (a `message` would also make pino's error serializer rename the type
+ * to Object). A label set in code is not frame-shaped and gives no frame.
+ */
+export function gateHeldError(label: string): { type: 'GateHeld'; stack: string } {
+  return { type: 'GateHeld', stack: `GateHeld\n${label}` };
+}
+
 let watchdogMs = GATE_WATCHDOG_MS;
 let watchdogReport: (held: GateHeld) => void = (held) => {
   dbLog(
@@ -161,7 +174,8 @@ let watchdogReport: (held: GateHeld) => void = (held) => {
       // the error's frame (the gate reduces it to its path in the install root), not as a code.
       'opportun.db.gate_label': held.label,
       'opportun.db.gate_held_ms': Math.round(held.heldMs),
-      err: { type: 'GateHeld', stack: held.label },
+      // gateHeldError: the same value as the app's reporter logs (app.ts).
+      err: gateHeldError(held.label),
     },
     'database write gate held too long',
   );

@@ -4,8 +4,11 @@
 // and pino's pid and hostname are never written. Driven through a real pino logger, so what the
 // gate sees is what pino writes: a child's bindings, the error serializer's output, the message.
 import { afterEach, describe, expect, it } from 'vitest';
+import { withTransaction } from '../src/db/client';
+import { configureGateWatchdog, gateHeldError, type WatchdogClock } from '../src/db/gate';
 import { setUnknownKeyMode, UnknownTelemetryKeyError } from '../src/obs/gate';
 import { createLogger, frameLines, gatedDestination, logRequest, WITHHELD } from '../src/obs/log';
+import { captureLogs, testApp } from './helpers';
 
 const NAME = 'Jane Doe';
 const EMAIL = 'jane.doe@example.com';
@@ -204,5 +207,79 @@ describe('the access log line (#345, 14.9)', () => {
     expect(c.records()[0]).not.toHaveProperty('opportun.route.id');
     expect(c.text()).not.toContain(UUID);
     expect(c.text()).not.toContain(EMAIL);
+  });
+});
+
+/** A watchdog clock this test advances by hand (as dbGate.test.ts does, issue #72). */
+function handClock(): { clock: WatchdogClock; advance: (ms: number) => void } {
+  let now = 0;
+  const timers: { at: number; cb: () => void }[] = [];
+  return {
+    clock: {
+      now: () => now,
+      setTimeout: (cb, ms) => {
+        const entry = { at: now + ms, cb };
+        timers.push(entry);
+        return entry as unknown as NodeJS.Timeout;
+      },
+      clearTimeout: (timer) => {
+        const i = timers.indexOf(timer as unknown as { at: number; cb: () => void });
+        if (i !== -1) timers.splice(i, 1);
+      },
+    },
+    advance: (ms) => {
+      now += ms;
+      for (const t of timers.filter((x) => x.at <= now)) {
+        timers.splice(timers.indexOf(t), 1);
+        t.cb();
+      }
+    },
+  };
+}
+
+describe('a held gate keeps its call site as a frame (#381)', () => {
+  it('in the record the watchdog logs', () => {
+    const c = capture();
+    // The call site withTransaction names when no label was set: a frame line (db/client.ts).
+    const site = `at runImport (${process.cwd()}/src/jobs/import.ts:10:5)`;
+    c.log.warn(
+      {
+        'opportun.db.gate_label': site,
+        'opportun.db.gate_held_ms': 5_000,
+        err: gateHeldError(site),
+      },
+      'database write gate held too long',
+    );
+    const r = c.records()[0]!;
+    expect(r['error.type']).toBe('GateHeld');
+    expect(r.stack).toEqual(['at runImport (apps/server/src/jobs/import.ts:10:5)']);
+  });
+
+  it("from the app's own reporter, for a transaction held past the threshold", async () => {
+    const logs = captureLogs();
+    const { app } = await testApp({ logLevel: 'warn' }, { logStream: logs });
+    const { clock, advance } = handClock();
+    try {
+      // The app's reporter stays (no `report`): only the threshold and the clock change.
+      configureGateWatchdog({ ms: 40, clock });
+      const held = withTransaction(
+        app.db,
+        async () => {
+          await new Promise((r) => setTimeout(r, 5));
+        },
+        { isTestRun: false },
+      );
+      await new Promise((r) => setTimeout(r, 1));
+      advance(50);
+      await held;
+      const line = logs.lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .find((l) => l.msg === 'database write gate held too long');
+      expect(line).toMatchObject({ 'error.type': 'GateHeld' });
+      expect(line!.stack).toEqual([expect.stringContaining('apps/server/test/obsLog.test.ts')]);
+    } finally {
+      configureGateWatchdog({});
+      await app.close();
+    }
   });
 });
