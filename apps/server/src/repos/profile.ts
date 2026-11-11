@@ -1,8 +1,16 @@
 // Profile (singleton per user), role targets and resume rules (FR-P1..P4).
 import { and, eq } from 'drizzle-orm';
-import { newId } from '@opportun/core';
+import { z } from 'zod';
+import {
+  applicationDetailField,
+  detailValuePasses,
+  newId,
+  PROFILE_DETAIL_KEYS,
+  type ApplicationDetailKey,
+} from '@opportun/core';
 import { profiles, resumeRules, roleTargets } from '../db/schema';
-import { notFound } from '../lib/errors';
+import { audit } from '../lib/audit';
+import { HttpError, notFound } from '../lib/errors';
 import type { Db, Exec, UserCtx } from './base';
 import { countWhere, orderBy, sortColumns, type ListOpts, type Page } from './list';
 import {
@@ -13,7 +21,7 @@ import {
   roleTargetProposal,
   type PromptVersion,
 } from './prompts';
-import { runCount, withTransaction } from '../db/client';
+import { lockScope, runCount, withTransaction } from '../db/client';
 
 export type ProfileRow = typeof profiles.$inferSelect;
 export type RoleTargetRow = typeof roleTargets.$inferSelect;
@@ -28,7 +36,7 @@ export type ResumeRuleInput = Writable<typeof resumeRules.$inferInsert>;
 // Profile
 
 /** The caller's profile; created empty on first access so it always exists. */
-export async function getProfile(db: Db, ctx: UserCtx): Promise<ProfileRow> {
+export async function getProfile(db: Exec, ctx: UserCtx): Promise<ProfileRow> {
   const now = Date.now();
   await db
     .insert(profiles)
@@ -40,24 +48,173 @@ export async function getProfile(db: Db, ctx: UserCtx): Promise<ProfileRow> {
   return row;
 }
 
-/** Full replace: every field not in `input` is reset to null (links to []). */
-export async function putProfile(db: Db, ctx: UserCtx, input: ProfileInput): Promise<ProfileRow> {
-  const now = Date.now();
-  const values = {
-    fullName: input.fullName ?? null,
-    headline: input.headline ?? null,
-    email: input.email ?? null,
-    phone: input.phone ?? null,
-    location: input.location ?? null,
-    workAuth: input.workAuth ?? null,
-    links: input.links ?? [],
-  };
-  await db
-    .insert(profiles)
-    .values({ userId: ctx.userId, ...values, createdAt: now, updatedAt: now })
-    .onConflictDoUpdate({ target: profiles.userId, set: { ...values, updatedAt: now } })
+/**
+ * The longest text each profile column holds, and the profile's email rule: PUT /profile's own
+ * rules (routes/profile.ts builds its body from these), so a value saved from an application
+ * (#411) passes the same ones and GET /profile never serves what its schema refuses.
+ */
+export const PROFILE_TEXT_MAX = {
+  fullName: 200,
+  headline: 300,
+  phone: 50,
+  location: 200,
+  workAuth: 200,
+} as const;
+export const ProfileEmail = z.email().max(254);
+
+/** The profile's columns, in the order an audit record names them. */
+const PROFILE_COLUMNS = [
+  'fullName',
+  'headline',
+  'email',
+  'phone',
+  'location',
+  'workAuth',
+  'links',
+] as const;
+type ProfileColumn = (typeof PROFILE_COLUMNS)[number];
+type ProfileValues = Pick<ProfileRow, ProfileColumn | 'applicationDetails'>;
+
+/** Who changed the profile, for its audit record: Settings > Profile, or an application. */
+export type ProfileChangeVia = 'settings' | 'application';
+
+/**
+ * The names of the fields `next` changes, in a fixed order: the columns, then each detail as
+ * `applicationDetails.<key>` in the shared list's order. Names only, always code constants (the
+ * details' keys are the list's, ApplicationDetailsSchema), never a value.
+ */
+function changedFields(before: ProfileValues, next: ProfileValues): string[] {
+  const wasRow = new Map<string, unknown>(Object.entries(before));
+  const nowRow = new Map<string, unknown>(Object.entries(next));
+  const names: string[] = PROFILE_COLUMNS.filter(
+    (c) => JSON.stringify(wasRow.get(c)) !== JSON.stringify(nowRow.get(c)),
+  );
+  const was = new Map(Object.entries(before.applicationDetails));
+  const now = new Map(Object.entries(next.applicationDetails));
+  for (const key of PROFILE_DETAIL_KEYS) {
+    if (was.get(key) !== now.get(key)) names.push(`applicationDetails.${key}`);
+  }
+  return names;
+}
+
+/**
+ * Writes the caller's profile as `change` says, under the profile's own lock (a caller that
+ * holds an attempt's lock takes it first: repos/submissions.ts), and records which fields
+ * changed, by name, in one `profile.updated` audit record (`changed`). Writes and records nothing when
+ * nothing would change. `exec` is the caller's transaction.
+ */
+async function changeProfile(
+  exec: Exec,
+  ctx: UserCtx,
+  change: (current: ProfileValues) => ProfileValues,
+  via: ProfileChangeVia,
+): Promise<void> {
+  await lockScope(exec, `profile:${ctx.userId}`);
+  const current = await getProfile(exec, ctx);
+  const next = change(current);
+  const fields = changedFields(current, next);
+  if (fields.length === 0) return;
+  await exec
+    .update(profiles)
+    .set({ ...next, updatedAt: Date.now() })
+    .where(eq(profiles.userId, ctx.userId))
     .run();
+  // `changed`, not `fields`: the audit log redacts a `fields` key (lib/audit.ts), because a
+  // submission's fields hold values; this one holds names only.
+  await audit(exec, 'profile.updated', { userId: ctx.userId, detail: { via, changed: fields } });
+}
+
+/**
+ * Full replace of the columns: every one not in `input` is reset to null (links to []). The
+ * application details are the exception: omitted, they stay as they are (#411, tl), because a
+ * client that does not show them (Settings before #401's slice 2) would otherwise wipe them on
+ * every save. Sent, they replace the stored ones.
+ */
+export async function putProfile(
+  db: Db,
+  ctx: UserCtx,
+  input: Partial<ProfileInput>,
+): Promise<ProfileRow> {
+  await withTransaction(db, (tx) =>
+    changeProfile(
+      tx,
+      ctx,
+      (current) => ({
+        fullName: input.fullName ?? null,
+        headline: input.headline ?? null,
+        email: input.email ?? null,
+        phone: input.phone ?? null,
+        location: input.location ?? null,
+        workAuth: input.workAuth ?? null,
+        links: input.links ?? [],
+        applicationDetails: input.applicationDetails ?? current.applicationDetails,
+      }),
+      'settings',
+    ),
+  );
   return getProfile(db, ctx);
+}
+
+const PROFILE_VALUE_MESSAGE = 'That value cannot be saved to your profile.';
+
+/**
+ * Whether `value` may be saved as detail `key` in the profile: today's draft check, then, for a
+ * detail that lives in a column, that column's own rule. Null when it may.
+ */
+function profileValueProblem(key: ApplicationDetailKey, value: string): string | null {
+  if (!detailValuePasses(key, value)) return 'profile_value_invalid';
+  const { home } = applicationDetailField(key);
+  if (home === 'details') return null;
+  if (home === 'email')
+    return ProfileEmail.safeParse(value).success ? null : 'profile_value_invalid';
+  const max = new Map<string, number>(Object.entries(PROFILE_TEXT_MAX)).get(home) ?? 0;
+  return [...value].length <= max ? null : 'profile_value_invalid';
+}
+
+/**
+ * Saves these detail fields of a draft to the caller's profile (#411): each takes the draft's
+ * value, trimmed, and an empty one removes the profile's (the column to null, the detail's key
+ * dropped). Checks every value before writing any, and refuses the lot with a 422 that names the
+ * field, never its value. Runs inside the caller's transaction, after the attempt's lock.
+ */
+export async function saveDetailsToProfile(
+  exec: Exec,
+  ctx: UserCtx,
+  fields: Readonly<Record<string, string>>,
+  keys: readonly ApplicationDetailKey[],
+): Promise<void> {
+  const values = new Map(Object.entries(fields));
+  const saved = new Map<ApplicationDetailKey, string>();
+  for (const key of new Set(keys)) {
+    const value = (values.get(key) ?? '').trim();
+    const problem = value === '' ? null : profileValueProblem(key, value);
+    if (problem !== null) throw new HttpError(422, problem, PROFILE_VALUE_MESSAGE, { field: key });
+    saved.set(key, value);
+  }
+  if (saved.size === 0) return;
+  await changeProfile(
+    exec,
+    ctx,
+    (current) => {
+      const next: ProfileValues = {
+        ...current,
+        applicationDetails: { ...current.applicationDetails },
+      };
+      const details = new Map(Object.entries(next.applicationDetails));
+      for (const [key, value] of saved) {
+        const { home } = applicationDetailField(key);
+        if (home === 'details') {
+          if (value === '') details.delete(key);
+          else details.set(key, value);
+        } else {
+          Object.assign(next, { [home]: value === '' ? null : value });
+        }
+      }
+      next.applicationDetails = Object.fromEntries(details);
+      return next;
+    },
+    'application',
+  );
 }
 
 // ---------------------------------------------------------------------------

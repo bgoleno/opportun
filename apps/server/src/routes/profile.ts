@@ -1,5 +1,7 @@
 // Profile, role targets and resume rules (FR-P1..P4).
 import {
+  ApplicationDetailsPrefillSchema,
+  ApplicationDetailsSchema,
   checkSeniorityRange,
   ProfileSchema,
   REMOTE_PREFS,
@@ -26,6 +28,8 @@ import {
   getRoleTarget,
   listResumeRules,
   listRoleTargets,
+  PROFILE_TEXT_MAX,
+  ProfileEmail,
   putProfile,
   RESUME_RULE_SORTS,
   ROLE_TARGET_SORTS,
@@ -33,21 +37,36 @@ import {
   updateRoleTarget,
 } from '../repos/profile';
 import { audit } from '../lib/audit';
+import { applicationDetailsFor } from '../repos/applicationDetails';
 import { PromptVersionSchema } from './ai';
 import { HttpUrl, IdParams, listQuery, optionalText, pageOf } from './common';
 
+/**
+ * The profile's Application details (#411) as Settings sends them: each value trimmed and an
+ * empty one dropped (as optionalText clears a column), then the shared rule: only the list's
+ * keys whose home is the details, each passing the draft's checks. Omitted, they stay as stored.
+ */
+const ApplicationDetailsBody = z
+  .record(z.string(), z.string().trim())
+  .transform((details) => Object.fromEntries(Object.entries(details).filter(([, v]) => v !== '')))
+  .pipe(ApplicationDetailsSchema);
+
 const ProfileBody = z.object({
-  fullName: optionalText(200),
-  headline: optionalText(300),
-  email: z.email().max(254).nullish(),
-  phone: optionalText(50),
-  location: optionalText(200),
-  workAuth: optionalText(200),
+  fullName: optionalText(PROFILE_TEXT_MAX.fullName),
+  headline: optionalText(PROFILE_TEXT_MAX.headline),
+  email: ProfileEmail.nullish(),
+  phone: optionalText(PROFILE_TEXT_MAX.phone),
+  location: optionalText(PROFILE_TEXT_MAX.location),
+  workAuth: optionalText(PROFILE_TEXT_MAX.workAuth),
   links: z
     .array(z.object({ label: z.string().trim().min(1).max(100), url: HttpUrl }))
     .max(50)
     .optional(),
+  applicationDetails: ApplicationDetailsBody.optional(),
 });
+
+/** The step's own draft, so its review does not make it "the last application" (tl, #411). */
+const ApplicationDetailsQuery = z.object({ excluding: z.uuid().optional() }).strict();
 
 const StringList = z.array(z.string().trim().min(1).max(200)).max(100);
 const Level = z.number().int().nonnegative().max(100).nullish();
@@ -155,6 +174,21 @@ export async function profileRoutes(app: FastifyInstance): Promise<void> {
     '/profile',
     { schema: { body: ProfileBody, response: { 200: ProfileSchema } } },
     async (req) => putProfile(db, app.requireUser(req), req.body),
+  );
+
+  // What a new application draft is filled with, each value with its source (#411), for the
+  // details step to say where each came from. Session only, like every /profile route: the
+  // extension's device token never reaches it (it receives only the reviewed attempt).
+  api.get(
+    '/profile/application-details',
+    {
+      schema: {
+        querystring: ApplicationDetailsQuery,
+        response: { 200: ApplicationDetailsPrefillSchema },
+      },
+    },
+    async (req) =>
+      applicationDetailsFor(db, app.requireUser(req), { excluding: req.query.excluding ?? null }),
   );
 
   // --- role targets --------------------------------------------------------

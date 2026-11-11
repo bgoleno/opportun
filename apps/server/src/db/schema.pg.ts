@@ -265,6 +265,12 @@ export const profiles = pgTable('profiles', {
   location: text('location'),
   workAuth: text('work_auth'),
   links: json<ProfileLinkRow[]>('links').notNull().default([]),
+  /**
+   * The application details with no column of their own (#411): keys from core's
+   * APPLICATION_DETAIL_FIELDS whose home is `details`, values under the draft's checks
+   * (ApplicationDetailsSchema). One JSON column, so a form that adds a key needs no migration.
+   */
+  applicationDetails: json<Record<string, string>>('application_details').notNull().default({}),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
