@@ -23,7 +23,37 @@ const PHONE = '+1 (206) 555-0142';
 const COMPANY = 'Acme Robotics';
 const PERSONAL = [NAME, EMAIL, PHONE, '206', COMPANY];
 
-afterEach(() => setUnknownKeyMode('throw'));
+afterEach(() => {
+  setUnknownKeyMode('throw');
+  vi.useRealTimers();
+});
+
+/**
+ * A record as text without what the runtime writes on its own: the time, and each frame's line
+ * and column. A personal value can only come from the code's input, and a value of digits (the
+ * phone's area code) must not match an epoch or a line number by chance (#419: a time holding
+ * "206" failed CI). The rest of the record, frame paths included, is checked as written.
+ */
+/** A frame line without its `:line:column` ("at (a/b.ts:99:31)" becomes "at (a/b.ts)"). */
+function withoutPosition(frame: string): string {
+  const close = frame.endsWith(')') ? ')' : '';
+  const parts = (close === '' ? frame : frame.slice(0, -1)).split(':');
+  while (parts.length > 1 && /^\d+$/.test(parts.at(-1) ?? '')) parts.pop();
+  return `${parts.join(':')}${close}`;
+}
+
+function writtenText(records: Record<string, unknown>[]): string {
+  return records
+    .map((record) => {
+      const kept = Object.fromEntries(Object.entries(record).filter(([k]) => k !== 'time'));
+      const stack = kept.stack;
+      if (Array.isArray(stack)) {
+        kept.stack = stack.map((f) => withoutPosition(String(f)));
+      }
+      return JSON.stringify(kept);
+    })
+    .join('\n');
+}
 
 function capture() {
   const lines: string[] = [];
@@ -93,6 +123,9 @@ describe('the log gate (#345)', () => {
   });
 
   it('reduces an error to its type and frame lines: never its message or its properties', () => {
+    // At the time CI's run had (#419): an epoch whose digits hold the phone's area code.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_794_402_063_862);
     const c = capture();
     const err = Object.assign(new TypeError(`cannot reach ${EMAIL} for ${NAME}`), {
       code: PHONE,
@@ -103,7 +136,10 @@ describe('the log gate (#345)', () => {
     expect(r).toMatchObject({ msg: 'unhandled error', 'error.type': 'TypeError' });
     expect(Object.keys(r!).sort()).toEqual(['error.type', 'level', 'msg', 'stack', 'time']);
     for (const frame of r!.stack as string[]) expect(frame).toMatch(/^at /);
-    for (const p of PERSONAL) expect(c.text()).not.toContain(p);
+    // Frame paths are still checked: only their line and column numbers are left out.
+    expect(writtenText(c.records())).toContain('obsLog.test.ts');
+    for (const p of PERSONAL) expect(writtenText(c.records())).not.toContain(p);
+    expect(r!.time).toBe(1_794_402_063_862);
   });
 
   it('a child logger’s bindings do not pass either', () => {
