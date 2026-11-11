@@ -68,9 +68,11 @@ _Editing one task's model. Set prices for a model without a list price, such as 
   the rest and is ranked in the same order, with nothing more to do. Raising the budget starts ranking what waits right away. The usage card shows today's spend against it and how many postings wait.
   While a company waits for an industry tag, ranking stops at 90% of the budget and leaves the last
   tenth for tagging and the other tasks; with none waiting, it may use all of it.
-  To size it: on 2026-11-10 a ranking call on the default model cost about $0.008 (median $0.0079)
-  and tagging 20 companies about $0.0014, so $1.00 ranks about 125 postings a day, or about 114 while
-  a company waits for a tag. These are list-price estimates from one test, not a provider bill, and
+  To size it: on 2026-11-11 a ranking call on the default model cost about $0.0065 with prompt
+  caching, when postings for one role target are ranked within five minutes of each other (about
+  $0.008 without it, measured on 2026-11-10), and tagging 20 companies about $0.0014 without it.
+  So $1.00 ranks about 150 postings a day, or about 135 while a company waits for a tag (about 125
+  and 114 without caching). These are list-price estimates from one test, not a provider bill, and
   they change with the model, its prices and the length of your role targets and postings. The
   [measured figures and how they change](discovery.md#the-review-queue) are on the Discovery page,
   and **Discovery ranking cost** on **Settings > AI** shows your own.

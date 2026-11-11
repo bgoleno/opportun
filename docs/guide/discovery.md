@@ -289,8 +289,9 @@ times the prices in Opportun's price table on that date.
   2026-11-10, costs 31% less. So a posting costs about $0.0065 when postings for one role target
   are ranked within five minutes of each other, as a board's run does. A posting ranked on its own gets no saving: its
   call is the one that writes the cache, which by the price table costs about 5% more than a call
-  without it. The cache is per role target, so a run that switches between role targets saves
-  less. Only Anthropic models are marked; the table's figures are without the cache.
+  without it. The cache is per role target, so a run that switches between role targets pays one
+  more cache write for each role target. Only Anthropic models are marked; the table's figures are
+  without the cache.
 - **The default budget.** $1.00 a day ranks about 150 postings with prompt caching (about 125
   without it, or about 106 if every call cost as much as the 90th percentile). While a company
   waits for an industry tag, ranking stops at 90% of the budget, which is about 135 postings
