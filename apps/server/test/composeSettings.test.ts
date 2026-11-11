@@ -182,11 +182,27 @@ describe('what compose.yml passes as ${VAR:-} is read as if VAR were unset', () 
     expect(passedEmpty.length).toBeGreaterThan(5);
   });
 
-  it.each(passedEmpty)('%s: empty equals unset', (name) => {
-    // The pepper itself is the one variable whose own base entry must not be present.
-    const base = name === 'OPPORTUN_PEPPER' ? { ...BASE, OPPORTUN_PEPPER: undefined } : BASE;
-    const unset = read({ ...base, [name]: undefined });
-    const empty = read({ ...base, [name]: '' });
-    expect(empty).toEqual(unset);
+  // Run on SQLite and on Postgres: a setting only loadPostgres reads (DB_POOL_MAX, DB_SSL) is read
+  // only on the second, so a run on SQLite alone would pass whatever the code did with it.
+  const DIALECTS: [string, NodeJS.ProcessEnv][] = [
+    ['sqlite', {}],
+    ['postgres', { DB_DIALECT: 'postgres', DATABASE_URL: 'postgres://u:p@db:5432/opportun' }],
+  ];
+
+  describe.each(DIALECTS)('on %s', (dialect, extra) => {
+    it.each(passedEmpty)('%s: empty equals unset', (name) => {
+      // The pepper itself is the one variable whose own base entry must not be present.
+      const base = name === 'OPPORTUN_PEPPER' ? { ...BASE, OPPORTUN_PEPPER: undefined } : BASE;
+      const withDb = { ...base, ...extra };
+      const unset = read({ ...withDb, [name]: undefined });
+      const empty = read({ ...withDb, [name]: '' });
+      expect(empty).toEqual(unset);
+      // Both sides must have loaded, on the engine this run is about, or equality proves nothing.
+      // The one exception: with no DATABASE_URL, Postgres refuses to start either way.
+      if (!(dialect === 'postgres' && name === 'DATABASE_URL')) {
+        expect(unset).not.toHaveProperty('error');
+        expect(unset).toHaveProperty('config.db.dialect', dialect);
+      }
+    });
   });
 });
