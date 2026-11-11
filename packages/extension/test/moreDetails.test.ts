@@ -95,6 +95,31 @@ describe('Location (city) fills a text field (#435)', () => {
   });
 });
 
+// tl's ruling on #437: country, school and degree are not planned in slice 1. A list is reported
+// whatever the plan holds, and a planned detail would add a "no question" line to every form.
+describe('Country, School and Degree are not planned yet (#435)', () => {
+  it('the plan carries the city and how you heard, and none of the three', () => {
+    const plan = buildPlan(attempt(DETAILS), { board: BOARD, jobId: JOB_ID }, null);
+    const names = plan.questions.map((q) => q.name);
+    expect(names).toEqual(['Location (city)', 'How did you hear about this role?']);
+    // Whole values, as the city itself ends in "United States".
+    const values = plan.questions.map((q) => q.value);
+    for (const key of ['country', 'school', 'degree'] as const) {
+      expect(values).not.toContain(DETAILS[key]);
+    }
+  });
+
+  it('a text question labelled School is not filled, and a form without one says nothing of it', async () => {
+    const { doc, report } = await fill(withTextQuestion('School'));
+    expect(valueOf(doc, 'question_9000105')).toBe('');
+    expect(report.notFilled).toContainEqual({ label: 'School', reason: 'not_in_review' });
+    const plain = await fill(MANY_QUESTIONS);
+    for (const name of ['School', 'Degree']) {
+      expect(plain.report.notFilled.map((n) => n.label)).not.toContain(name);
+    }
+  });
+});
+
 describe('a dropdown is reported once, as choose it on the form (#435)', () => {
   it('the Country list and the "How did you hear about us?" list, each once', async () => {
     const { doc, report, events } = await fill(MANY_QUESTIONS);

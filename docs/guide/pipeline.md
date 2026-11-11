@@ -176,8 +176,9 @@ are saved together. On a field you emptied, the tick reads **Remove from my prof
 
 Country, Location (city), School, Degree and "How did you hear about this role?" are usually lists
 on the employer's form. Write each as the form's list shows it ("United States", not "USA"). The
-browser extension fills one of these where the form asks it as a text question with the same
-label; where the form has a list, it leaves it for you and says "choose it on the form".
+browser extension fills Location (city) and how you heard where the form asks them as a text
+question with the same label, and leaves a list for any of the five to you, saying "choose it on
+the form".
 
 ### Communications
 

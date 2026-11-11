@@ -277,14 +277,11 @@ const PREFILL_FIELDS: readonly {
     name: 'LinkedIn profile',
   },
   { key: 'websiteUrl', id: null, labels: ['Website'], name: 'Website' },
-  // #435 (slice 1 of #402; tl's table): these fill a text question with exactly one of these
-  // labels, compared whole like every other. Where the form has a list instead (Greenhouse's
-  // Country, its education block, often "How did you hear"), the filler leaves it alone and
-  // reports it once, as choose it on the form: choosing an option is slice 2.
-  { key: 'country', id: null, labels: ['Country'], name: 'Country' },
+  // #435 (slice 1 of #402; tl's ruling on #437): the city and how you heard fill a text question
+  // with exactly one of these labels, compared whole like every other. Country, School and Degree
+  // are not planned yet: on Greenhouse they are lists, which the filler leaves alone and reports
+  // as choose it on the form whatever the plan holds, and slice 2 adds them when it can choose.
   { key: 'location', id: null, labels: ['Location (City)'], name: 'Location (city)' },
-  { key: 'school', id: null, labels: ['School'], name: 'School' },
-  { key: 'degree', id: null, labels: ['Degree'], name: 'Degree' },
   {
     key: 'heardFrom',
     id: null,
@@ -301,8 +298,8 @@ const PREFILL_FIELDS: readonly {
 
 /**
  * What the filler fills, from the reviewed attempt only (tl's mapping): the four standard
- * fields by the form's ids, the other details (LinkedIn, website, and #435's country, city,
- * school, degree and how you heard) by the question's exact label, and each reviewed answer by
+ * fields by the form's ids, the other details (LinkedIn, website, and #435's city and how you
+ * heard) by the question's exact label, and each reviewed answer by
  * its exact label. Empty values are left out: nothing is invented.
  */
 export function buildPlan(
