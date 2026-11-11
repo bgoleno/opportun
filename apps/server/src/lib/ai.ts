@@ -3,16 +3,25 @@
 // is built per request for the signed-in user, so every AI call is user-scoped.
 import {
   AiUnavailableError,
+  ATTR,
+  GEN_AI_METRIC,
   ModelPolicySchema,
+  OPERATION_CHAT,
+  PROVIDERS,
   resolvePolicy,
+  TASK_FEATURE,
+  wireProvider,
   type AiDeps,
   type ModelPolicy,
+  type ProviderId,
   type TaskKey,
+  type TaskRunRecord,
 } from '@opportun/ai';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db, Exec } from '../db/client';
 import { secrets, settings } from '../db/schema';
+import { obs } from '../obs';
 import type { UserCtx } from '../repos/base';
 import { recordTaskRun, spentTodayUsd } from '../repos/taskRuns';
 import { createProviderFetch, type ResolveHost } from './aiProviderFetch';
@@ -197,6 +206,51 @@ export async function aiAvailable(db: Db, ctx: UserCtx): Promise<boolean> {
  * app.config in scope and this function does not; both ultimately read the one real flag, so
  * they can never disagree in production.
  */
+/**
+ * The Gen AI metrics of one call (design.md 14.2, 14.4; issue
+ * https://github.com/bgoleno/opportun/issues/344), from the very record written to task_runs, so
+ * the two cannot disagree: the same tokens, the same duration, and the cost estimated at the
+ * price in force when the call ran. Each point is the caller's (14.7). A zero is not recorded, as
+ * the conventions require, so a call refused before the provider records its duration only.
+ * With collection off each obs.record returns after one check.
+ */
+export function recordGenAiMetrics(userId: string, run: TaskRunRecord): void {
+  if (!obs.isCollecting()) return;
+  const provider = (PROVIDERS as readonly string[]).includes(run.provider)
+    ? (run.provider as ProviderId)
+    : undefined;
+  const base: Record<string, unknown> = {
+    [ATTR.operationName]: OPERATION_CHAT,
+    [ATTR.requestModel]: run.model,
+    [ATTR.aiTask]: run.taskKey,
+    [ATTR.aiFeature]: TASK_FEATURE[run.taskKey],
+  };
+  if (provider !== undefined) {
+    base[ATTR.providerName] = wireProvider(provider);
+    base[ATTR.aiProvider] = provider;
+  }
+  const owner = { userId };
+  // The router's reason is the error's first word (router.ts Run.record): never its detail.
+  const reason = run.status === 'error' ? run.error?.split(':')[0] : undefined;
+  obs.record(
+    GEN_AI_METRIC.inferenceDuration,
+    run.durationMs / 1000,
+    reason === undefined ? base : { ...base, [ATTR.errorType]: reason },
+    owner,
+  );
+  const text = { ...base, [ATTR.tokenModality]: 'text' };
+  if (run.inputTokens > 0) obs.record(GEN_AI_METRIC.inputTokens, run.inputTokens, text, owner);
+  if (run.outputTokens > 0) obs.record(GEN_AI_METRIC.outputTokens, run.outputTokens, text, owner);
+  if (run.estCostUsd > 0) {
+    obs.record(
+      GEN_AI_METRIC.cost,
+      run.estCostUsd,
+      { ...base, [ATTR.costEstimated]: run.fallbackPricing === true },
+      owner,
+    );
+  }
+}
+
 export async function buildAiDeps(
   db: Db,
   ctx: UserCtx,
@@ -226,8 +280,12 @@ export async function buildAiDeps(
         : override.policyFor(task),
     record: async (run) => {
       const id = await recordTaskRun(db, ctx, run);
+      // After the row is written, so a point never counts a call the ledger does not have.
+      recordGenAiMetrics(ctx.userId, run);
       await opts.onRecorded?.(id);
     },
+    // The user of every call: on its span (user.id), and what keeps one user per trace (14.6).
+    userId: ctx.userId,
     budget: await readBudget(db, ctx),
     spentTodayUsd: async (task) => await spentTodayUsd(db, ctx, task),
     providerFetch: {
