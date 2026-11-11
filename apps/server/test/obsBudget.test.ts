@@ -85,6 +85,10 @@ describe('collection off: the budget of 14.11 (#343)', () => {
     // provider). It is loaded when collection is first turned on, by a dynamic import(), so
     // the SDK stays unloaded until then: no file may import tracing.ts statically.
     const TRACING = '/obs/tracing.ts';
+    // FR-T2's obs/export/otlp.ts loads the exporter packages the same way: the export manager
+    // import()s it when export is first built, and obsExportLoad.test.ts checks that nothing
+    // imports it statically (design 14.3: with export off, they are not loaded).
+    const LAZY_SDK = new Set([TRACING, '/obs/export/otlp.ts']);
     const sdkImports: string[] = [];
     const staticTracingImports: string[] = [];
     for (const f of files) {
@@ -93,7 +97,7 @@ describe('collection off: the budget of 14.11 (#343)', () => {
       // `import type` is erased by TypeScript and loads nothing (fs2's span store uses the SDK's
       // types), so only value imports count.
       const values = text.replace(/import type [^;]*;/g, '');
-      if (rel !== TRACING && /from '@opentelemetry\/(?!api')[^']+'/.test(values)) {
+      if (!LAZY_SDK.has(rel) && /from '@opentelemetry\/(?!api')[^']+'/.test(values)) {
         sdkImports.push(rel);
       }
       if (/from '[./]+(?:obs\/)?tracing'/.test(text)) staticTracingImports.push(rel);
