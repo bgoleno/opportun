@@ -69,9 +69,10 @@ describe('GET /api/v1/obs/export', () => {
     const { app, a, b } = await boot();
     const user = await b.request({ method: 'GET', url: '/api/v1/obs/export' });
     expect(user.statusCode).toBe(200);
-    expect(user.json()).toEqual({ enabled: false, type: null, signals: [] });
+    expect(user.json()).toEqual({ available: true, enabled: false, type: null, signals: [] });
     const admin = await a.request({ method: 'GET', url: '/api/v1/obs/export' });
     expect(admin.json()).toEqual({
+      available: true,
       enabled: false,
       type: null,
       signals: [],
@@ -105,6 +106,7 @@ describe('PUT /api/v1/obs/export', () => {
     // Every user sees that it is on, its type and its signals; not where to.
     const seen = await b.request({ method: 'GET', url: '/api/v1/obs/export' });
     expect(seen.json()).toEqual({
+      available: true,
       enabled: true,
       type: 'otlp',
       signals: ['metrics', 'spans', 'logs'],
@@ -238,8 +240,12 @@ describe('the demo deployment (14.10 rule 6)', () => {
       expect(test.statusCode).toBe(403);
       expect(test.json()).toEqual({ error: { code: 'unavailable_on_demo' } });
     }
-    expect((await b.request({ method: 'GET', url: '/api/v1/obs/export' })).json()).toMatchObject({
+    // Unavailable, not off: no admin can turn it on there (as the dashboards say, #364).
+    expect((await b.request({ method: 'GET', url: '/api/v1/obs/export' })).json()).toEqual({
+      available: false,
       enabled: false,
+      type: null,
+      signals: [],
     });
   });
 });

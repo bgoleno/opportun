@@ -44,6 +44,8 @@ export interface Destination {
 }
 
 export interface ExportView {
+  /** False on the demo deployment, where neither switch can be turned on (#364). */
+  available: boolean;
   enabled: boolean;
   type: ExportType | null;
   signals: Signal[];
@@ -155,6 +157,8 @@ export function TelemetrySettings({ isAdmin }: { isAdmin: boolean }) {
 function CollectCard({ isAdmin }: { isAdmin: boolean }) {
   const qc = useQueryClient();
   const state = useQuery(settingsQuery);
+  // The export view says whether this deployment allows either switch (false on the demo).
+  const availability = useQuery(exportQuery);
   const [error, setError] = useState<string | null>(null);
   const titleId = useId();
 
@@ -174,6 +178,7 @@ function CollectCard({ isAdmin }: { isAdmin: boolean }) {
   }
 
   const collect = state.data?.collect;
+  const available = availability.data?.available;
   return (
     <Card role="region" aria-labelledby={titleId}>
       <CardHeader>
@@ -186,7 +191,11 @@ function CollectCard({ isAdmin }: { isAdmin: boolean }) {
       </CardHeader>
       <CardContent className="flex flex-wrap items-center gap-3">
         <FormError message={error ?? (state.isError ? errorMessage(state.error) : null)} />
-        {collect === undefined ? null : (
+        {available === false ? (
+          <p role="status" className="text-sm text-muted-foreground">
+            Collection is not available on this deployment.
+          </p>
+        ) : collect === undefined || available === undefined ? null : (
           <>
             <p role="status" className="text-sm text-muted-foreground">
               Collection is {collect ? 'on' : 'off'}.
@@ -271,12 +280,14 @@ function ExportCard({ isAdmin }: { isAdmin: boolean }) {
         {view.isError ? <FormError message={errorMessage(view.error)} /> : null}
         {data === undefined ? null : (
           <p role="status" className="text-sm text-muted-foreground">
-            {data.enabled && data.type !== null
-              ? `Export is on: ${typeLabel(data.type)}, sending ${inWords(signals)}.`
-              : 'Export is off.'}
+            {!data.available
+              ? 'Export is not available on this deployment.'
+              : data.enabled && data.type !== null
+                ? `Export is on: ${typeLabel(data.type)}, sending ${inWords(signals)}.`
+                : 'Export is off.'}
           </p>
         )}
-        {isAdmin && data?.admin !== undefined ? (
+        {isAdmin && data?.available === true && data.admin !== undefined ? (
           <ExportAdmin
             view={data}
             admin={data.admin}

@@ -358,7 +358,7 @@ Every address the host name resolves to must pass, and the address is checked ag
 every batch. The connection goes to the address that was checked, redirects are never followed,
 and a request that takes longer than 10 seconds is abandoned.
 
-Export is not available on the demo.
+Neither collection nor export is available on the demo deployment, and the card says so.
 
 ### Prometheus
 

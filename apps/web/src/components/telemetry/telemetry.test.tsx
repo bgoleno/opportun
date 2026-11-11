@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { mockApi, renderWithProviders } from '@/test/render';
 import { TelemetrySettings } from './TelemetrySettings';
 
-const OFF = { enabled: false, type: null, signals: [] };
+const OFF = { available: true, enabled: false, type: null, signals: [] };
 const ADMIN_OFF = {
   ...OFF,
   admin: {
@@ -21,7 +21,7 @@ const ADMIN_OFF = {
     dropped: [],
   },
 };
-const ON = { enabled: true, type: 'otlp', signals: ['metrics', 'spans', 'logs'] };
+const ON = { available: true, enabled: true, type: 'otlp', signals: ['metrics', 'spans', 'logs'] };
 const DEST = {
   type: 'otlp',
   scheme: 'https',
@@ -180,5 +180,28 @@ describe('TelemetrySettings, as an admin', () => {
     const exp = await screen.findByRole('region', { name: 'Export' });
     expect(await within(exp).findByLabelText('Send telemetry to this destination')).toBeDisabled();
     expect(exp).toHaveTextContent(/Turn collection on first/);
+  });
+});
+
+describe('TelemetrySettings, on the demo deployment (#364)', () => {
+  it('says both are not available there, to an admin too, and offers no controls', async () => {
+    mockApi({
+      'GET /obs/settings': { collect: false },
+      'GET /obs/export': {
+        ...ADMIN_OFF,
+        available: false,
+      },
+    });
+    renderWithProviders(<TelemetrySettings isAdmin />);
+    const collect = await screen.findByRole('region', { name: 'Collection' });
+    expect(await within(collect).findByRole('status')).toHaveTextContent(
+      'Collection is not available on this deployment.',
+    );
+    const exp = screen.getByRole('region', { name: 'Export' });
+    expect(await within(exp).findByRole('status')).toHaveTextContent(
+      'Export is not available on this deployment.',
+    );
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.queryByLabelText('Host')).toBeNull();
   });
 });

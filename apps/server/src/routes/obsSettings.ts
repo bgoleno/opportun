@@ -23,7 +23,7 @@ import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import { confirmPassword, reauthLimits } from '../lib/reauth';
 import { encryptSecret } from '../lib/secretBox';
-import { collectInEffect, writeCollect } from '../obs/config';
+import { collectAvailable, collectInEffect, writeCollect } from '../obs/config';
 import { readDropCounts } from '../obs/export/drops';
 import {
   checkDestination,
@@ -48,6 +48,8 @@ const DestinationView = z.object({
   headerName: z.string().optional(),
 });
 const ExportView = z.object({
+  /** False on the demo, where neither switch can be turned on (14.1, 14.10 rule 6; #364). */
+  available: z.boolean(),
   enabled: z.boolean(),
   type: z.enum(EXPORT_TYPES).nullable(),
   signals: z.array(SignalName),
@@ -105,6 +107,7 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
       stored.enabled && stored.destination !== null && (await collectInEffect(db, app.config));
     const type = on && stored.destination !== null ? stored.destination.type : null;
     const view: z.infer<typeof ExportView> = {
+      available: collectAvailable(app.config),
       enabled: on,
       type,
       signals: type === null ? [] : signalsOf(type),
