@@ -208,6 +208,140 @@ describe('S1: the panel', () => {
   });
 });
 
+// https://github.com/bgoleno/opportun/issues/395: a refused Apply button looked enabled and a click
+// did nothing at all. It must look disabled, stay reachable, show its own reason next to it, and
+// say so when clicked.
+const TAILORED_IN_REVIEW = {
+  ...RESUME,
+  id: 'res-2',
+  kind: 'tailored',
+  opportunityId: 'opp-1',
+  title: 'Acme tailored',
+  status: 'in_review',
+};
+
+describe('#395: a refused Apply button says why, and never swallows a click', () => {
+  function renderRefused(opp: OpportunityView, resumes: unknown[] = [RESUME]) {
+    const api = mockApi({
+      'GET /resumes': { items: resumes, total: resumes.length },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<ApplyPanel opp={opp} />);
+    return { api, user };
+  }
+
+  it('a click on a refused button says it cannot start, and why, instead of nothing', async () => {
+    const { api, user } = renderRefused({ ...OPP, stage: 'in_process' } as OpportunityView);
+    const button = await screen.findByRole('button', { name: 'Apply on Greenhouse' });
+    await user.click(button);
+    const reason = screen.getByText(/Apply on Greenhouse is not available yet/);
+    expect(reason).toBeVisible();
+    expect(reason).toHaveTextContent('This opportunity is In process.');
+    expect(reason).toHaveAttribute('aria-live', 'polite');
+    // Still nothing sent and nowhere to go: the refusal is the answer.
+    expect(api.calls.filter((c) => c.method !== 'GET')).toHaveLength(0);
+    expect(button).toHaveFocus();
+  });
+
+  it('looks disabled (dimmed, a not-allowed cursor, no hover colour) and stays focusable', async () => {
+    renderRefused({ ...OPP, stage: 'in_process' } as OpportunityView);
+    const button = await screen.findByRole('button', { name: 'Apply on Greenhouse' });
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    // The Button's own disabled: styles match only the disabled attribute, never aria-disabled.
+    expect(button.className).toMatch(/\baria-disabled:opacity-50\b/);
+    expect(button.className).toMatch(/\baria-disabled:cursor-not-allowed\b/);
+    expect(button.className).toMatch(/\baria-disabled:hover:bg-primary\b/);
+    button.focus();
+    expect(button).toHaveFocus();
+  });
+
+  it('an eligible opportunity keeps the plain link, with no disabled styling', async () => {
+    renderRefused(OPP);
+    const link = await screen.findByRole('link', { name: 'Apply on Greenhouse' });
+    expect(link).not.toHaveAttribute('aria-disabled');
+    expect(screen.queryByText(/is not available yet/)).toBeNull();
+  });
+
+  it.each([
+    [
+      'the stage',
+      { stage: 'in_process' },
+      [RESUME],
+      'Apply on Greenhouse',
+      'This opportunity is In process. Applying is available at Interested, Preparing or Applied. Change its stage to apply.',
+    ],
+    [
+      'closed',
+      { stage: 'closed' },
+      [RESUME],
+      'Apply on Greenhouse',
+      'This opportunity is Closed. Reopen it to apply.',
+    ],
+    [
+      'dismissed',
+      { stage: 'dismissed' },
+      [RESUME],
+      'Apply on Greenhouse',
+      'This opportunity is Dismissed. Reopen it to apply.',
+    ],
+    [
+      'no ATS recognised',
+      { atsJobRef: null },
+      [RESUME],
+      'Apply on an ATS',
+      "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.",
+    ],
+    [
+      'a posting that needs review',
+      { postingState: 'needs_review' },
+      [RESUME],
+      'Apply on Greenhouse',
+      "This opportunity's posting needs review. Confirm it on the Details tab first.",
+    ],
+    ['no final resume', {}, [], 'Apply on Greenhouse', 'Attach a final resume first.'],
+    // Brian's third case on #395: a resume is attached, but not Final. Say so, and how to fix it.
+    [
+      'an attached resume In review',
+      { stage: 'interested' },
+      [TAILORED_IN_REVIEW],
+      'Apply on Greenhouse',
+      'The resume attached here ("Acme tailored") is In review. Set its Status to Final on the Resume tab.',
+    ],
+    [
+      'an attached resume in Draft',
+      { stage: 'interested' },
+      [{ ...TAILORED_IN_REVIEW, status: 'draft' }],
+      'Apply on Greenhouse',
+      'The resume attached here ("Acme tailored") is Draft. Set its Status to Final on the Resume tab.',
+    ],
+    // Brian's second case on #395: Interested, nothing attached.
+    [
+      'no final resume at Interested',
+      { stage: 'interested' },
+      [],
+      'Apply on Greenhouse',
+      'Attach a final resume first.',
+    ],
+  ] as const)(
+    'refused for %s: the reason is visible next to the button and describes it',
+    async (_name, over, resumes, label, reason) => {
+      renderRefused({ ...OPP, ...over } as unknown as OpportunityView, [...resumes]);
+      const button = await screen.findByRole('button', { name: label });
+      expect(button).toHaveAttribute('aria-disabled', 'true');
+      expect(button).not.toBeDisabled();
+      expect(button.className).toMatch(/\baria-disabled:opacity-50\b/);
+      expect(button).toHaveAccessibleDescription(reason);
+      // Visible text, not only for screen readers, and right after the button.
+      const text = screen.getByText(reason);
+      expect(text).toBeVisible();
+      expect(text.className).not.toMatch(/\bsr-only\b/);
+      expect(button.nextElementSibling).toBe(text);
+    },
+  );
+});
+
 describe('S2: the resume step', () => {
   it('creates the draft with the chosen final resume, then goes to details', async () => {
     const api = mockApi(
