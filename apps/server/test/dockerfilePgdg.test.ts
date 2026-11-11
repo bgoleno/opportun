@@ -28,7 +28,9 @@ function instructions(text: string): string[] {
 /** The instructions of one build stage, from its FROM to the next. */
 function stage(name: string): string[] {
   const all = instructions(DOCKERFILE);
-  const start = all.findIndex((l) => new RegExp(`^FROM .* AS ${name}$`, 'i').test(l));
+  const start = all.findIndex(
+    (l) => /^FROM /i.test(l) && l.toLowerCase().endsWith(` as ${name.toLowerCase()}`),
+  );
   if (start === -1) throw new Error(`no stage ${name}`);
   const end = all.findIndex((l, i) => i > start && /^FROM /i.test(l));
   return all.slice(start, end === -1 ? undefined : end);
