@@ -14,7 +14,7 @@ import {
   type Participant,
   type SourceKind,
 } from '@opportun/core';
-import { api } from './api';
+import { api, ApiError, errorMessage } from './api';
 
 export type OpportunityView = Opportunity & {
   companyName: string;
@@ -189,6 +189,45 @@ export function stageTargets(from: OpportunityStage): OpportunityStage[] {
 /** Targets the separate "Reopen" action offers (empty unless closed or dismissed). */
 export function reopenTargets(from: OpportunityStage): OpportunityStage[] {
   return isTerminal(from) ? CHAIN_STAGES.filter((to) => canTransition(from, to)) : [];
+}
+
+/** "A", "A or B", "A, B or C". */
+function orList(items: readonly string[]): string {
+  if (items.length <= 1) return items.join('');
+  return `${items.slice(0, -1).join(', ')} or ${items.at(-1)}`;
+}
+
+/**
+ * Why a move from `from` to `to` is refused, saying what to do instead (#397). A chain stage
+ * out of closed or dismissed needs Reopen; anything else names the moves the stage control
+ * offers, from the same list (stageTargets), so the message and the control cannot disagree.
+ */
+export function stageRefusal(from: OpportunityStage, to: OpportunityStage): string {
+  if (isTerminal(from) && !isTerminal(to)) {
+    return `Use Reopen to move a ${stageLabel(from).toLowerCase()} opportunity back to ${stageLabel(to)}.`;
+  }
+  return `${stageLabel(from)} can move to ${orList(stageTargets(from).map(stageLabel))}.`;
+}
+
+const isStage = (v: unknown): v is OpportunityStage =>
+  typeof v === 'string' && (OPPORTUNITY_STAGES as readonly string[]).includes(v);
+
+/**
+ * The message for a failed stage change. The server's 422 `invalid_transition` carries `from`
+ * (its current stage, which a stale page may not show) and `to`; it becomes stageRefusal's
+ * sentence rather than the raw "Invalid stage transition in_process -> preparing". A refusal
+ * the rule itself allows (closing with no reason) keeps the server's own message.
+ */
+export function stageErrorMessage(err: unknown): string {
+  if (err instanceof ApiError && err.code === 'invalid_transition') {
+    const { from, to } = err.details;
+    if (isStage(from) && isStage(to)) {
+      const refusedByRule =
+        !stageTargets(from).includes(to) || (isTerminal(from) && !isTerminal(to));
+      if (refusedByRule) return stageRefusal(from, to);
+    }
+  }
+  return errorMessage(err);
 }
 
 export interface StageChange {

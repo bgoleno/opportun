@@ -305,8 +305,10 @@ filter before it is written: it keeps a fixed message and a few typed values (ro
 codes), and nothing else. So a log line never holds a name, an email address, a phone number, a
 company's name, a request's URL or query string, an error's message, or the server's host name.
 An error is written as its type and the code frames it passed through. A message the server
-does not know, such as one a library builds, is written as `[message withheld]`. The one
-exception is a configuration error at startup, which names the variable that is wrong.
+does not know, such as one a library builds, is written as `[message withheld]`. Two
+exceptions: a configuration error at startup, which names the variable that is wrong, and a
+warning from the TypeScript loader (tsx) on a start with a cold cache, which Node prints itself.
+That warning comes from the loader, never from the server's code or your data.
 
 **Password pepper.** `OPPORTUN_PEPPER` is an extra secret mixed into every password hash
 (Argon2id's keyed `secret` input), so a stolen database file alone cannot be used to
@@ -488,6 +490,11 @@ marked **on Postgres** instead.
   whatever is still in the WAL, so this specific hazard does not apply to a backup taken
   that way. `sqlite3 <file> 'PRAGMA integrity_check;'` (see the risk above) is how to
   check a backup you are not certain was taken that way.
+
+  Opportun also sets `wal_autocheckpoint = 100`. SQLite folds the WAL back into
+  `opportun.db` whenever it passes 100 pages, rather than at its default of 1,000, so
+  `opportun.db-wal` stays small and no single write waits long for a checkpoint. There is
+  nothing to configure.
 
 - **Restore**: pick which snapshot first. Settings → Import/Export lists every snapshot
   with its own **Verified** badge; use that, not just the newest file on disk, since an

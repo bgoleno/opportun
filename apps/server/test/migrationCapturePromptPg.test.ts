@@ -103,13 +103,19 @@ describe.runIf(livePgUrl !== undefined)('0022 capture.linkedin verbatim on Postg
         // add a system default for a task that had none (as migrations.test.ts's 0040 test allows).
         const known = new Set(othersBefore.map((r) => r.id));
         const othersAfter = await promptsOf(pool, `task_key <> 'capture.linkedin'`);
-        // company.suggest v2 (0039, #221) rewrote its system default in place, after 0022: that one
-        // row is checked apart, and every other row is as it was.
-        const rewritten = (r: PromptRow) => r.userId === null && r.taskKey === 'company.suggest';
+        // company.suggest v2 (0039, #221) and the rank default's reorder (0043, #388) rewrote their
+        // system defaults in place, after 0022: those rows are checked apart, and every other row
+        // is as it was.
+        const rewritten = (r: PromptRow) =>
+          r.userId === null && (r.taskKey === 'company.suggest' || r.taskKey === 'discovery.rank');
         expect(othersAfter.filter((r) => known.has(r.id) && !rewritten(r))).toEqual(
           othersBefore.filter((r) => !rewritten(r)),
         );
-        expect(othersAfter.find(rewritten)!.body).toContain('{{industry_profile_untrusted}}');
+        const rewrittenRow = (task: string) =>
+          othersAfter.find((r) => rewritten(r) && r.taskKey === task)!;
+        expect(rewrittenRow('company.suggest').body).toContain('{{industry_profile_untrusted}}');
+        const rank = rewrittenRow('discovery.rank').body;
+        expect(rank.indexOf('## Output')).toBeLessThan(rank.indexOf('## Posting'));
         const tasksBefore = new Set(othersBefore.map((r) => r.taskKey));
         for (const added of othersAfter.filter((r) => !known.has(r.id))) {
           expect(added.userId, added.taskKey).toBeNull();

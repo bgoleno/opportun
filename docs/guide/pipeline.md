@@ -19,8 +19,11 @@ An opportunity moves through these stages:
 | Dismissed  | Not a fit (with a reason)                          |
 | Closed     | Finished: accepted, rejected, withdrawn or ghosted |
 
-Dismissed and Closed are end states. Moving out of one is an explicit **Reopen**, not an
-ordinary stage move.
+Between New, Interested, Preparing, Applied, In process and Offer, an opportunity can move to
+any earlier or later stage in one move, so a mistaken move is corrected directly, and the move
+is recorded in its timeline. Any stage can move to Dismissed or Closed. Dismissed and Closed
+are end states: moving out of one is an explicit **Reopen**, not an ordinary stage move. A move
+the rules refuse says which stages are allowed.
 
 ## The board
 

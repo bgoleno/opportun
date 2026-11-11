@@ -247,20 +247,21 @@ describe('opportunities', () => {
     const opp = (await createOpp(a)).json();
     await move(a, opp.id, { to: 'offer' });
     const before = await historyCount(app, opp.id);
-    // Backward more than one step.
-    const back = await move(a, opp.id, { to: 'interested' });
-    expect(back.statusCode).toBe(422);
-    expect(back.json().error).toMatchObject({ from: 'offer', to: 'interested' });
     // Self transition, and closed without a reason.
-    expect((await move(a, opp.id, { to: 'offer' })).statusCode).toBe(422);
+    const self = await move(a, opp.id, { to: 'offer' });
+    expect(self.statusCode).toBe(422);
+    expect(self.json().error).toMatchObject({ from: 'offer', to: 'offer' });
     expect((await move(a, opp.id, { to: 'closed' })).statusCode).toBe(422);
     // A malformed body is a 400 before anything runs.
     expect((await move(a, opp.id, { to: 'closed', closedReason: 'bored' })).statusCode).toBe(400);
     expect(await historyCount(app, opp.id)).toBe(before);
     const got = await a.request({ method: 'GET', url: `/api/v1/opportunities/${opp.id}` });
     expect(got.json().stage).toBe('offer');
-    // One step back is allowed; reopen on a non-terminal move is ignored.
-    expect((await move(a, opp.id, { to: 'in_process', reopen: true })).statusCode).toBe(200);
+    // A move back several stages is allowed (#397); reopen on a non-terminal move is ignored.
+    const back = await move(a, opp.id, { to: 'interested', reopen: true });
+    expect(back.statusCode).toBe(200);
+    expect(back.json()).toMatchObject({ stage: 'interested' });
+    expect(await historyCount(app, opp.id)).toBe(before + 1);
   });
 
   it('dismisses from discovered with a reason and persists dismissedReason', async () => {

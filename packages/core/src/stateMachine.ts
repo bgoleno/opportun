@@ -2,9 +2,12 @@ import type { ClosedReason, DismissReason, OpportunityStage } from './schemas';
 
 /**
  * Opportunity lifecycle rules (design 4.7):
- * - forward along the chain to any later stage (skips allowed): discovered, interested,
- *   preparing, applied, in_process, offer (then closed)
- * - backward within the chain, one step only (in_process -> applied, not offer -> interested)
+ * - any chain stage -> any other chain stage in one move, forward or back (the chain is
+ *   discovered, interested, preparing, applied, in_process, offer). A backward move is a
+ *   recorded correction, not an undo: it writes the stage and one history row, and nothing
+ *   tied to a later stage (attempts, sends, messages) follows it. Nothing depends on the
+ *   order of stages, so a one-step limit protected nothing and made a mis-click forward,
+ *   which any length of move allows, take several moves to correct (#397).
  * - any stage -> dismissed (optional reason); any stage -> closed (reason required)
  * - dismissed/closed -> any chain stage reopens, recorded with a "reopened" note
  * - self-transitions are invalid
@@ -38,8 +41,7 @@ export function canTransition(from: OpportunityStage, to: OpportunityStage): boo
   if (from === to) return false;
   if (isTerminal(to)) return true;
   if (isTerminal(from)) return true;
-  const delta = CHAIN.indexOf(to) - CHAIN.indexOf(from);
-  return delta > 0 || delta === -1;
+  return CHAIN.includes(from) && CHAIN.includes(to);
 }
 
 export interface TransitionOptions {

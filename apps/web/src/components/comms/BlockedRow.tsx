@@ -26,6 +26,8 @@ const RULE_LABELS: Record<string, string> = {
   // Only ever passes (#119), so a blocked row never shows it; listed so no rule is a bare id.
   submission_window: 'expected from an application you submitted',
   ai_gate: 'not part of the job search',
+  // #392: a list unsubscribe your mail app sent from your own address (Gmail's Unsubscribe button).
+  auto_unsubscribe: 'an unsubscribe request your mail app sent',
   no_signal: 'nothing in it about a job',
   none: 'no rule',
 };
