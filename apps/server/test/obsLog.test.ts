@@ -494,6 +494,30 @@ describe('the header search (#399)', () => {
     expect(frameLines(stack, `${own}: q`)).toEqual([]);
   });
 
+  describe('a message longer than the search bound gets the whole-message reading only', () => {
+    // The error's own message holds a line shaped like a frame and a `caused by:` line after a
+    // `: `. Only a cut at that early `: ` would fit them, and the bound does not reach the cut
+    // pino made, so the search ends with no frames.
+    const own = (rest: string) => `p: p\n${app('Early', 'early.ts')}\ncaused by: Error: p\n${rest}`;
+
+    it('past 4,096 characters', () => {
+      const { message, stack } = serialize(
+        new Error(own('q'.repeat(5_000)), { cause: new Error('inner') }),
+      );
+      expect(frameLines(stack, message)).toEqual([]);
+    });
+
+    it('past 50 lines', () => {
+      const short = Array.from({ length: 60 }, (_, i) => `l${i}`).join('\n');
+      const { message, stack } = serialize(new Error(own(short), { cause: new Error('inner') }));
+      expect(message.length).toBeLessThan(4_096);
+      expect(frameLines(stack, message)).toEqual([]);
+    });
+  });
+
+  /** The timing bound: generous for a slow runner, and the uncapped search takes over a second. */
+  const BOUND_MS = 100;
+
   /** The fastest of five runs, so a busy machine's one slow run does not count. */
   const fastest = (fn: () => unknown) => {
     fn();
@@ -506,13 +530,13 @@ describe('the header search (#399)', () => {
     return best;
   };
 
-  it('costs at most 10 ms for a long message: 8,000 lines of key: value', () => {
+  it('costs at most 100 ms for a long message: 8,000 lines of key: value', () => {
     const lines = Array.from({ length: 8_000 }, (_, i) => `k${i}: v${i}`).join('\n');
     const { message, stack } = serialize(new Error('outer', { cause: new Error(lines) }));
-    expect(fastest(() => frameLines(stack, message))).toBeLessThan(10);
+    expect(fastest(() => frameLines(stack, message))).toBeLessThan(BOUND_MS);
   });
 
-  it('costs at most 10 ms for a long message: a validation error with 2,000 issues', () => {
+  it('costs at most 100 ms for a long message: a validation error with 2,000 issues', () => {
     const shape = Object.fromEntries(
       Array.from({ length: 2_000 }, (_, i) => [`field${i}`, z.string()]),
     );
@@ -520,7 +544,23 @@ describe('the header search (#399)', () => {
     expect(parsed.success).toBe(false);
     const { message, stack } = serialize(new Error('invalid input', { cause: parsed.error }));
     expect(message.length).toBeGreaterThan(100_000);
-    expect(fastest(() => frameLines(stack, message))).toBeLessThan(10);
+    expect(fastest(() => frameLines(stack, message))).toBeLessThan(BOUND_MS);
+  });
+
+  it('costs at most 100 ms for a long line among the first lines: 1,300 cuts', () => {
+    // Every cut's header is the stack's first four lines, the last of them a million characters
+    // long: that text is built once, not once per cut.
+    const text = `s1\ns2\ns3\n${'a: '.repeat(1_300)}${'b'.repeat(1_000_000)}`;
+    const withCause = serialize(new Error(text, { cause: new Error('inner') }));
+    expect(fastest(() => frameLines(withCause.stack, withCause.message))).toBeLessThan(BOUND_MS);
+    // No cause, and the message changed after its stack was read: no reading fits, and every
+    // cut up to the bound is tried.
+    const changed = new Error(text);
+    void changed.stack;
+    changed.message = `t1${text.slice(2)}`;
+    const noCause = serialize(changed);
+    expect(noCause.message.lastIndexOf(': ')).toBeLessThan(4_096);
+    expect(fastest(() => frameLines(noCause.stack, noCause.message))).toBeLessThan(BOUND_MS);
   });
 
   it('counts a node_modules folder as a dependency, and no other folder whose name contains it', () => {

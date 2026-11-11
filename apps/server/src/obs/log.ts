@@ -149,12 +149,26 @@ const CAUSED_BY = 'caused by: ';
 function headerLength(lines: readonly string[], message: string): number | undefined {
   const whole = message.split('\n').length;
   if (headerMatches(lines.slice(0, whole).join('\n'), message)) return whole;
-  const last = message.lastIndexOf(': ', HEADER_SEARCH_CHARS);
+  // A cut the cost cap does not try ends the header search. Cuts go longest first, so the search
+  // never goes on past one it cannot try.
+  const last = message.lastIndexOf(': ');
+  if (last > HEADER_SEARCH_CHARS) return undefined;
+  // The header text for each line count is built once: cuts on the same lines share it, so a
+  // long line among the stack's first lines is copied once, not once per cut.
+  const headers = new Map<number, string>();
+  const headerOf = (length: number): string => {
+    let header = headers.get(length);
+    if (header === undefined) {
+      header = lines.slice(0, length).join('\n');
+      headers.set(length, header);
+    }
+    return header;
+  };
   for (let at = last; at >= 0; at = at === 0 ? -1 : message.lastIndexOf(': ', at - 1)) {
     const own = message.slice(0, at);
     const length = own.split('\n').length;
-    if (length > HEADER_SEARCH_LINES) continue;
-    if (!headerMatches(lines.slice(0, length).join('\n'), own)) continue;
+    if (length > HEADER_SEARCH_LINES) return undefined;
+    if (!headerMatches(headerOf(length), own)) continue;
     // The header search stops at the first cut whose header matches: that cut decides.
     const cause = causeAfterFrames(lines, length);
     if (cause === undefined) return undefined;
@@ -166,11 +180,11 @@ function headerLength(lines: readonly string[], message: string): number | undef
 
 /**
  * A cost cap on the log gate's header search; an error whose message is longer gets the
- * whole-message reading only. A cut is tried only at a `: ` within the message's first
- * HEADER_SEARCH_CHARS characters, and only while the cut's own text has at most
- * HEADER_SEARCH_LINES lines, so the search costs no more than a few kilobytes of work however
- * long the message (a cause's message of thousands of lines, a validation error listing every
- * field).
+ * whole-message reading only. Cuts are tried only when the message's last `: ` is within its
+ * first HEADER_SEARCH_CHARS characters, and only while the cut's own text has at most
+ * HEADER_SEARCH_LINES lines; a cut past either ends the search. So it costs no more than a few
+ * kilobytes of work however long the message (a cause's message of thousands of lines, a
+ * validation error listing every field).
  */
 const HEADER_SEARCH_CHARS = 4_096;
 const HEADER_SEARCH_LINES = 50;
