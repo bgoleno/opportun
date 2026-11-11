@@ -24,6 +24,7 @@ export const USER_ROUTES = [
   '/settings/integrations',
   '/settings/mail-filters',
   '/settings/data',
+  '/settings/traces',
   '/settings/metrics',
 ] as const;
 

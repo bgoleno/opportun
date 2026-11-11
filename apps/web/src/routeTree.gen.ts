@@ -42,6 +42,8 @@ import { Route as SettingsRoleTargetsRouteImport } from './routes/settings/role-
 import { Route as SettingsSecurityRouteImport } from './routes/settings/security';
 import { Route as SettingsUsersRouteImport } from './routes/settings/users';
 import { Route as OpportunitiesIdApplyRouteImport } from './routes/opportunities.$id_.apply';
+import { Route as SettingsTracesIndexRouteImport } from './routes/settings/traces/index';
+import { Route as SettingsTracesTraceIdRouteImport } from './routes/settings/traces/$traceId';
 import { Route as OpportunitiesIdApplicationsSubmissionIdRouteImport } from './routes/opportunities.$id_.applications.$submissionId';
 
 const IndexRoute = IndexRouteImport.update({
@@ -209,6 +211,16 @@ const OpportunitiesIdApplyRoute = OpportunitiesIdApplyRouteImport.update({
   path: '/opportunities/$id/apply',
   getParentRoute: () => rootRouteImport,
 } as any);
+const SettingsTracesIndexRoute = SettingsTracesIndexRouteImport.update({
+  id: '/traces/',
+  path: '/traces/',
+  getParentRoute: () => SettingsRouteRoute,
+} as any);
+const SettingsTracesTraceIdRoute = SettingsTracesTraceIdRouteImport.update({
+  id: '/traces/$traceId',
+  path: '/traces/$traceId',
+  getParentRoute: () => SettingsRouteRoute,
+} as any);
 const OpportunitiesIdApplicationsSubmissionIdRoute =
   OpportunitiesIdApplicationsSubmissionIdRouteImport.update({
     id: '/opportunities/$id_/applications/$submissionId',
@@ -250,6 +262,8 @@ export interface FileRoutesByFullPath {
   '/resumes/': typeof ResumesIndexRoute;
   '/settings/': typeof SettingsIndexRoute;
   '/opportunities/$id/apply': typeof OpportunitiesIdApplyRoute;
+  '/settings/traces/$traceId': typeof SettingsTracesTraceIdRoute;
+  '/settings/traces/': typeof SettingsTracesIndexRoute;
   '/opportunities/$id/applications/$submissionId': typeof OpportunitiesIdApplicationsSubmissionIdRoute;
 }
 export interface FileRoutesByTo {
@@ -284,6 +298,8 @@ export interface FileRoutesByTo {
   '/resumes': typeof ResumesIndexRoute;
   '/settings': typeof SettingsIndexRoute;
   '/opportunities/$id/apply': typeof OpportunitiesIdApplyRoute;
+  '/settings/traces/$traceId': typeof SettingsTracesTraceIdRoute;
+  '/settings/traces': typeof SettingsTracesIndexRoute;
   '/opportunities/$id/applications/$submissionId': typeof OpportunitiesIdApplicationsSubmissionIdRoute;
 }
 export interface FileRoutesById {
@@ -321,6 +337,8 @@ export interface FileRoutesById {
   '/resumes/': typeof ResumesIndexRoute;
   '/settings/': typeof SettingsIndexRoute;
   '/opportunities/$id_/apply': typeof OpportunitiesIdApplyRoute;
+  '/settings/traces/$traceId': typeof SettingsTracesTraceIdRoute;
+  '/settings/traces/': typeof SettingsTracesIndexRoute;
   '/opportunities/$id_/applications/$submissionId': typeof OpportunitiesIdApplicationsSubmissionIdRoute;
 }
 export interface FileRouteTypes {
@@ -359,6 +377,8 @@ export interface FileRouteTypes {
     | '/resumes/'
     | '/settings/'
     | '/opportunities/$id/apply'
+    | '/settings/traces/$traceId'
+    | '/settings/traces/'
     | '/opportunities/$id/applications/$submissionId';
   fileRoutesByTo: FileRoutesByTo;
   to:
@@ -393,6 +413,8 @@ export interface FileRouteTypes {
     | '/resumes'
     | '/settings'
     | '/opportunities/$id/apply'
+    | '/settings/traces/$traceId'
+    | '/settings/traces'
     | '/opportunities/$id/applications/$submissionId';
   id:
     | '__root__'
@@ -429,6 +451,8 @@ export interface FileRouteTypes {
     | '/resumes/'
     | '/settings/'
     | '/opportunities/$id_/apply'
+    | '/settings/traces/$traceId'
+    | '/settings/traces/'
     | '/opportunities/$id_/applications/$submissionId';
   fileRoutesById: FileRoutesById;
 }
@@ -684,6 +708,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof OpportunitiesIdApplyRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    '/settings/traces/': {
+      id: '/settings/traces/';
+      path: '/traces';
+      fullPath: '/settings/traces/';
+      preLoaderRoute: typeof SettingsTracesIndexRouteImport;
+      parentRoute: typeof SettingsRouteRoute;
+    };
+    '/settings/traces/$traceId': {
+      id: '/settings/traces/$traceId';
+      path: '/traces/$traceId';
+      fullPath: '/settings/traces/$traceId';
+      preLoaderRoute: typeof SettingsTracesTraceIdRouteImport;
+      parentRoute: typeof SettingsRouteRoute;
+    };
     '/opportunities/$id_/applications/$submissionId': {
       id: '/opportunities/$id_/applications/$submissionId';
       path: '/opportunities/$id/applications/$submissionId';
@@ -728,6 +766,8 @@ interface SettingsRouteRouteChildren {
   SettingsSecurityRoute: typeof SettingsSecurityRoute;
   SettingsUsersRoute: typeof SettingsUsersRoute;
   SettingsIndexRoute: typeof SettingsIndexRoute;
+  SettingsTracesTraceIdRoute: typeof SettingsTracesTraceIdRoute;
+  SettingsTracesIndexRoute: typeof SettingsTracesIndexRoute;
 }
 
 const SettingsRouteRouteChildren: SettingsRouteRouteChildren = {
@@ -744,6 +784,8 @@ const SettingsRouteRouteChildren: SettingsRouteRouteChildren = {
   SettingsSecurityRoute: SettingsSecurityRoute,
   SettingsUsersRoute: SettingsUsersRoute,
   SettingsIndexRoute: SettingsIndexRoute,
+  SettingsTracesTraceIdRoute: SettingsTracesTraceIdRoute,
+  SettingsTracesIndexRoute: SettingsTracesIndexRoute,
 };
 
 const SettingsRouteRouteWithChildren = SettingsRouteRoute._addFileChildren(
