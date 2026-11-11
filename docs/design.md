@@ -1285,11 +1285,11 @@ measured alone leaves out what a whole operation adds around it: the HTTP plugin
 context switches around the handler, the statements, the garbage. So `test/obsBench.test.ts`
 (run with `OBS_BENCH=1`) also times whole operations: process CPU time per operation, in batches
 of 150 alternated with collection off and on in one process and one database, 30 pairs, the
-median of the pairs' differences. The figures below are qa's harness (median of 20 pairs, three
-runs per tree, `main` and this change alternated in one sitting at load averages falling from 21
-to 8, on the Mac mini the team shares); only alternation cancels a shared machine's load. The
-span flush runs between batches and is timed apart: it is off the request path, and bounded on
-its own (#375).
+median of the pairs' differences. The figures below are qa's harness, also process CPU time, so
+the garbage collector's helper threads count in them (median of 20 pairs, three runs per tree,
+`main` and this change alternated in one sitting at load averages falling from 21 to 8, on the
+Mac mini the team shares); only alternation cancels a shared machine's load. The span flush runs
+between batches and is timed apart: it is off the request path, and bounded on its own (#375).
 
 - **A whole request** (`GET /api/v1/opportunities/:id`: one HTTP crossing and five statements):
   with collection off it costs 268 to 295 microseconds of CPU, and collection adds 13 to 23 (it
