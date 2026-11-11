@@ -50,7 +50,13 @@ import {
   removeOperatorFile,
 } from '../lib/storage';
 import { observeStatement, observeStatementAsync } from '../obs/database';
-import { armGateWatchdog, reportSlowTransaction, SLOW_TRANSACTION_MS, WriteGate } from './gate';
+import {
+  armGateWatchdog,
+  dbLog,
+  reportSlowTransaction,
+  SLOW_TRANSACTION_MS,
+  WriteGate,
+} from './gate';
 import type { DbConfig, DbSsl, PostgresConfig } from '../config';
 import { SCHEMA_DIALECT } from './schema';
 import * as pgSchema from './schema.pg';
@@ -587,6 +593,16 @@ export function openDatabase(
     sqlite.pragma(`busy_timeout = ${MIGRATION_LOCK_TIMEOUT_MS}`);
     enableWal(sqlite, Date.now() + MIGRATION_LOCK_TIMEOUT_MS);
     sqlite.pragma('foreign_keys = ON');
+    // SQLite's automatic WAL checkpoint runs inside whichever commit takes the WAL past this many
+    // pages, on the event loop (better-sqlite3 is synchronous, and this is the only connection).
+    // A smaller WAL means shorter stalls, and more of them. At the default 1,000 pages a
+    // checkpoint stalled the loop for up to 45 ms, in any write; at 100 a checkpoint costs about
+    // 2 ms, a 2,000-span flush's work between two turns of the loop stays under 10 ms, and an
+    // ordinary write's p99 halved (https://github.com/bgoleno/opportun/issues/375:
+    // test/obsFlushBench.test.ts and test/sqliteWriteBench.test.ts, figures in its PR). If this
+    // ever falls short (a slow disk), the next step is a background checkpointer on its own
+    // connection in a worker, with this set to 0.
+    sqlite.pragma('wal_autocheckpoint = 100');
     sqlite.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
     // Migrations run on the raw connection before the async driver exists.
     migrateLocked(sqlite);
@@ -773,8 +789,8 @@ async function openPostgres(cfg: PostgresConfig, opts: ConnectOptions): Promise<
   // Without a listener an idle connection's error would crash the process.
   pool.on(
     'error',
-    opts.onIdleError ??
-      ((err: Error) => console.error(`postgres: idle connection error: ${err.message}`)),
+    // #345: through the gated logger, the error as its type and frames (design 14.9).
+    opts.onIdleError ?? ((err: Error) => dbLog('error', { err }, 'postgres idle connection error')),
   );
   try {
     await migrateLockedPg(pool);
@@ -891,9 +907,7 @@ export async function openPgSession(cfg: PostgresConfig): Promise<PgSession> {
   installPgTypeParsers();
   // Two connections: the session's own, and one for migrate().
   const pool = new pg.Pool({ ...pgPoolConfig(cfg), max: 2, application_name: 'opportun-copy' });
-  pool.on('error', (err: Error) =>
-    console.error(`postgres: idle connection error: ${err.message}`),
-  );
+  pool.on('error', (err: Error) => dbLog('error', { err }, 'postgres idle connection error'));
   let client: pg.PoolClient | undefined;
   try {
     const [collation] = await collationWarnings(pool);

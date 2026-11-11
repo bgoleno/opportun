@@ -4,12 +4,16 @@
 // "By default this feature should be disabled"). It is stored as one instance setting, and a
 // missing row reads as off, so an instance that never touched it collects nothing.
 //
-// Export is FR-T2's: its switch, destination and credential join this file there. It can be
-// on only while collection is (obs/index.ts refuses an exporter while collection is off).
+// Export (FR-T2) lives in obs/export/; this file holds the one rule that ties the two switches:
+// export can be on only while collection is. Turning Collect off turns Export off, stored as well
+// as in this process, so turning Collect on again does not resume sending by itself; and boot
+// applies Export after Collect (obs/index.ts refuses an exporter while collection is off).
 import { eq } from 'drizzle-orm';
 import type { Db, Exec } from '../db/client';
 import { settings } from '../db/schema';
 import { audit } from '../lib/audit';
+import { applyExport, stopExport, type ExportDeployment } from './export/manager';
+import { disableExport, readExport } from './export/settings';
 import { type ObsLogger, setCollecting, startObs } from './index';
 
 export const OBS_COLLECT_KEY = 'obs_collect';
@@ -42,7 +46,15 @@ export async function writeCollect(
   // Audited with the acting admin (sec's O6 on PR #352). No password re-confirmation, unlike
   // export: nothing leaves the instance.
   await audit(db, 'telemetry.collect.updated', { ...actor, detail: { enabled: on } });
+  if (!on && (await readExport(db)).enabled) {
+    await disableExport(db);
+    await audit(db, 'telemetry.export.updated', {
+      ...actor,
+      detail: { enabled: false, cause: 'collect_off' },
+    });
+  }
   await setCollecting(on);
+  if (!on) await stopExport();
 }
 
 /**
@@ -69,11 +81,20 @@ export function collectAvailable(deployment: { demo: boolean }): boolean {
   return !deployment.demo;
 }
 
-/** Binds observability to the app's database and applies the switch in effect (app.ts, at boot). */
+/**
+ * Binds observability to the app's database and applies the switches in effect (app.ts, at
+ * boot): Collect first, then Export, which can be on only while Collect is.
+ */
 export async function startObsFromSettings(
   db: Db,
   log: ObsLogger,
-  deployment: { demo: boolean },
+  deployment: Pick<ExportDeployment, 'demo'> & Partial<ExportDeployment>,
 ): Promise<void> {
   await startObs(db, { log, collect: await collectInEffect(db, deployment) });
+  // Without the operator's flag, private destinations stay refused. An export that cannot be
+  // built must not stop the app from starting: it stays off until an admin saves it again.
+  await applyExport(db, {
+    demo: deployment.demo,
+    telemetryAllowPrivate: deployment.telemetryAllowPrivate ?? false,
+  }).catch(() => undefined);
 }

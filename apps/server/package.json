@@ -38,6 +38,9 @@
     "@node-rs/argon2": "^2.2.2",
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/context-async-hooks": "2.12.0",
+    "@opentelemetry/otlp-transformer": "0.223.0",
+    "@opentelemetry/resources": "2.12.0",
+    "@opentelemetry/sdk-metrics": "2.12.0",
     "@opentelemetry/sdk-trace": "2.12.0",
     "@opportun/ai": "workspace:^",
     "@opportun/core": "workspace:^",
@@ -50,6 +53,7 @@
     "fflate": "^0.8.3",
     "google-auth-library": "^11.3.1",
     "pg": "8.23.1",
+    "pino": "10.4.0",
     "qrcode": "^1.5.4",
     "tsx": "^4.23.15",
     "zod": "^4.6.7"

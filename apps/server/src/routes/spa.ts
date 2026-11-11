@@ -44,8 +44,8 @@ export async function spaRoutes(app: FastifyInstance, opts: { root: string }): P
       // every script 404s and the page renders blank. Name that here, because a bare 404 on a
       // hashed filename gives the operator nothing to go on.
       if (path.startsWith('/assets/')) {
+        // The path is the request's: not logged (14.8).
         req.log.warn(
-          { path },
           'no route for this asset; if the web build was rebuilt while the server was running, restart the server',
         );
       }

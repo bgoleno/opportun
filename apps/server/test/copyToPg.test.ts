@@ -358,6 +358,7 @@ describe.runIf(testDialect === 'postgres')('copy tool (live Postgres)', () => {
       db: new PostgresConfig(url, 4, 'disable'),
       demo: false,
       aiAllowLoopbackHttp: false,
+      telemetryAllowPrivate: false,
       trustedProxies: [],
     };
     const app = await buildApp(cfg, { jobRunner: false });

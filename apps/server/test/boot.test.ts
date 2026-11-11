@@ -130,6 +130,7 @@ describe.runIf(sqliteOnly)('boot migration lock', () => {
       db: { dialect: 'sqlite' as const },
       demo: false,
       aiAllowLoopbackHttp: false,
+      telemetryAllowPrivate: false,
       trustedProxies: [],
     };
     const apps = await Promise.all([

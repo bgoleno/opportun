@@ -229,7 +229,7 @@ export async function resolveLead(
           postings = (await live(sctx, source)).map(sanitizePosting);
         } catch (err) {
           // One unreachable board does not fail the lead; it can still be captured by hand.
-          sctx.log.warn({ sourceId: source.id, err }, 'lead resolution lookup failed');
+          sctx.log.warn({ 'opportun.source.id': source.id, err }, 'lead resolution lookup failed');
           continue;
         }
         match = bestMatch(lead, postings);

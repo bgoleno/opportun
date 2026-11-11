@@ -9,6 +9,7 @@ import { inspect } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config';
 import { captureLogs, testApp } from './helpers';
+import { WITHHELD } from '../src/obs/log';
 
 const base = {
   OPPORTUN_MASTER_KEY: randomBytes(32).toString('hex'),
@@ -158,8 +159,10 @@ describe('loadConfig: database', () => {
     const { app } = await testApp({ logLevel: 'info' }, { logStream: logs });
     try {
       app.log.info({ db: cfg.db, cfg }, 'config');
-      expect(logs.text()).toContain('"dialect":"postgres"');
+      // Not a catalogued message: the line is written as the marker, with none of its keys (#345).
+      expect(logs.text()).toContain(WITHHELD);
       expect(logs.text()).not.toContain(SECRET);
+      expect(logs.text()).not.toContain('"dialect"');
     } finally {
       await app.close();
     }

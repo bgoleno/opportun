@@ -187,7 +187,7 @@ export async function describeWorkdayPosting(
     );
     return parsed.success && hasDescription(parsed.data) ? parsed.data : posting;
   } catch (err) {
-    sctx.log.warn({ board, err }, 'workday posting detail failed');
+    sctx.log.warn({ err }, 'workday posting detail failed');
     return posting;
   }
 }
@@ -219,7 +219,7 @@ async function mailText(
     return await readBody(row.bodyRef);
   } catch (err) {
     // A body that cannot be read costs this message, not the search.
-    log.warn({ communicationId: row.id, err }, 'message body unreadable');
+    log.warn({ 'opportun.communication.id': row.id, err }, 'message body unreadable');
     return row.snippet ?? '';
   }
 }
@@ -352,7 +352,7 @@ async function readBoards(
         });
       }
     } catch (err) {
-      sctx.log.warn({ board, err }, 'posting search board lookup failed');
+      sctx.log.warn({ err }, 'posting search board lookup failed');
     }
   }
   return reads;
@@ -400,7 +400,7 @@ async function directWorkdayPosting(
     );
     return parsed.success && hasDescription(parsed.data) ? parsed.data : null;
   } catch (err) {
-    sctx.log.warn({ ref: ref.url, err }, 'workday posting detail failed');
+    sctx.log.warn({ err }, 'workday posting detail failed');
     return null;
   }
 }
@@ -458,7 +458,7 @@ export async function findPosting(
     } catch (err) {
       // A transient probe failure is not a verdict; the user still gets the paste path.
       if (!(err instanceof AtsDetectTransientError)) throw err;
-      sctx.log.warn({ companyId: company.id, err }, 'ats detection failed');
+      sctx.log.warn({ 'opportun.company.id': company.id, err }, 'ats detection failed');
     }
   }
   const foreign = referenceBoards(refs, owned);

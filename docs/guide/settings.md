@@ -145,10 +145,10 @@ What a trace does not hold:
 Traces are kept 30 days. One trace keeps at most 2,000 steps; a longer one says it was
 truncated.
 
-**Collection is off by default.** An administrator turns it on for the whole instance. While it
-is off, the page says so and nothing new is recorded; traces recorded earlier are still shown
-until they age out. On the demo deployment collection is not available at all, and the page
-says that instead.
+**Collection is off by default.** An administrator turns it on for the whole instance in
+[**Settings > Telemetry**](#telemetry). While it is off, the page says so and nothing new is
+recorded; traces recorded earlier are still shown until they age out. On the demo deployment
+collection is not available at all, and the page says that instead.
 
 ## Security
 
@@ -288,10 +288,221 @@ the cursor). The same numbers are in the table under the chart, one row per step
 
 ![The HTTP request metric over the last 24 hours, broken down by route, with the cursor reading out each route's calls at 10:00](images/settings-metrics.png)
 
-**Collection is off by default.** An administrator turns it on for the whole instance. While it
-is off the page says so and nothing new is recorded; points recorded earlier are still shown
-until they age out. On the demo deployment collection is not available at all, and the page
-says that instead.
+**Collection is off by default.** An administrator turns it on for the whole instance in
+[**Settings > Telemetry**](#telemetry). While it is off the page says so and nothing new is
+recorded; points recorded earlier are still shown until they age out. On the demo deployment
+collection is not available at all, and the page says that instead.
+
+## Telemetry
+
+**Settings > Telemetry** holds two switches for the whole instance. Both are off until an
+administrator turns them on, and both apply at once, with no restart.
+
+- **Collection** records how Opportun runs, in its own database: HTTP requests, background
+  jobs, database statements, outbound requests and AI calls, as metrics and traces. The
+  **Metrics** and **AI traces** pages read it. Nothing leaves the instance.
+- **Export** sends the same metrics, traces and error records to one outside destination an
+  administrator names. It can be on only while collection is: turning collection off turns
+  export off too, and turning collection back on does not resume export by itself.
+
+Everyone signed in sees whether each switch is on, export's destination type, and which kinds
+of data it sends. Only an administrator sees where it sends them.
+
+### What export sends, and what it never sends
+
+Export covers every user's activity on the instance, without saying whose. Each record carries
+only the fixed names and values in Opportun's telemetry catalog (the table at the end of this
+section): route templates such as `/api/v1/opportunities/:id`, never a URL with ids or a query;
+job kinds; database table names, never SQL; durations, counts and token numbers. It never sends
+a user's id, an email address, a name, a prompt, a model's reply or an error message. A model is
+named only when Opportun's price table lists it; any other model is sent as `_OTHER`. One limit,
+stated plainly: on an instance with few users, the timing of activity can still tell them apart.
+
+Each record is tagged with `service.name` (`opportun`), `service.version` and a random
+`service.instance.id` that changes at every start, and nothing about the host it runs on.
+`OTEL_*` environment variables change nothing: the destination and its settings come from
+this card only.
+
+Metrics leave every 60 seconds. Traces and error records leave in batches every 5 seconds.
+
+### Setting it up
+
+Choose the **Destination type**, then the **Scheme**, **Host** and **Port**, and what the type
+needs (see below). Opportun builds the address from these fields; you never enter a URL.
+Tick **Send telemetry to this destination** and **Save**. Saving asks for your password again,
+and is recorded in the audit log with the type and the kinds of data, never the host or the
+credential.
+
+A credential (a header value, a token) is stored encrypted and is never shown again. Leave the
+field blank to keep the stored one, or tick **Remove the stored credential**. Changing the type,
+scheme, host or port clears it, so it cannot follow the destination somewhere else.
+
+**Send a test** makes one request to the saved destination and says how it went: accepted,
+refused, timed out, a TLS failure, a refused credential, or an error from the destination.
+It asks for your password too, and shares its limit of 10 tries in 15 minutes with the other
+password checks. Below the form, the card shows the last successful send, the last failure, and
+how many records were dropped in the last 24 hours (by a full buffer, for example).
+
+### Where export may send
+
+- **A public destination must use `https`.** Plain `http` to a public address is always refused.
+- **Loopback and private networks** (`127.0.0.0/8`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`,
+  `192.168.0.0/16`, `fc00::/7`, and `100.64.0.0/10`, where tailnets live), over `http` or
+  `https`, only when the server's operator sets `OPPORTUN_TELEMETRY_ALLOW_PRIVATE=1` in its
+  environment ([installation](../install.md)). This is the usual case for a Prometheus or a
+  Datadog Agent next to Opportun. It is the operator's choice, not a setting on this card.
+- **Never**: link-local addresses (`169.254.0.0/16`, `fe80::/10`), unspecified, multicast and
+  reserved addresses, and the cloud metadata services (`100.100.100.200`, `fd00:ec2::254`).
+
+Every address the host name resolves to must pass, and the address is checked again before
+every batch. The connection goes to the address that was checked, redirects are never followed,
+and a request that takes longer than 10 seconds is abandoned.
+
+Neither collection nor export is available on the demo deployment, and the card says so.
+
+### Prometheus
+
+Opportun pushes metrics to Prometheus's own OTLP receiver (Prometheus 3):
+there is no scrape endpoint to add. Start Prometheus with the receiver on:
+
+```sh
+prometheus --config.file=prometheus.yml --web.enable-otlp-receiver
+```
+
+On the card: type **Prometheus**, the scheme, the host and Prometheus's port (9090 by default).
+Opportun sends to `/api/v1/otlp/v1/metrics`. If Prometheus sits behind a proxy that checks a
+header, put the whole `Authorization` value in **Authorization header value**, such as
+`Bearer <token>` or `Basic <base64>`. Prometheus receives metrics only. They appear with
+Prometheus's usual names, for example `http_server_request_duration_seconds_count`, labelled by
+`http_route`, and `job="opportun"`.
+
+### Datadog
+
+Opportun sends metrics, traces and error records to a Datadog Agent's OTLP receiver over HTTP.
+The Agent holds your Datadog API key, so the card takes no credential. Turn the receiver on in
+the Agent's configuration:
+
+```sh
+DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT=0.0.0.0:4318
+DD_OTLP_CONFIG_LOGS_ENABLED=true   # for the error records
+DD_LOGS_ENABLED=true
+```
+
+On the card: type **Datadog Agent**, the scheme (usually `http` to an Agent on the same host or
+network, which needs `OPPORTUN_TELEMETRY_ALLOW_PRIVATE=1`), the Agent's host, and port 4318.
+
+### InfluxDB
+
+InfluxDB has no OTLP receiver, so Opportun writes line protocol to its `/api/v2/write` endpoint
+(InfluxDB 2 and 3, and 1.8 or later), once a minute. On the card: type **InfluxDB**, the scheme,
+the host, the port (8086 by default), the **Organisation** and **Bucket** to write to, and an
+**API token** with write access to that bucket. Each metric becomes a measurement of the same
+name (`http.server.request.duration`), its attributes become tags, and a duration's `count`,
+`sum`, `min` and `max` become fields. InfluxDB receives metrics only.
+
+### OTLP
+
+Any endpoint that accepts OTLP over HTTP with protobuf, such as an OpenTelemetry Collector or a
+hosted service. On the card: type **OTLP**, the scheme, host and port (4318 is the usual one), an
+optional **Base path** if the endpoint is not at the root (Opportun adds `/v1/metrics`,
+`/v1/traces` and `/v1/logs`), and, if the endpoint needs a key, the **Header name** and **Header
+value** it reads it from (for example `x-api-key`). gRPC is not supported.
+
+### The catalogued names
+
+These are the only attribute names a record can carry. **Exported** says whether export sends
+the name; the others stay in the instance.
+
+<!-- catalog-keys:start -->
+
+| Name                                    | Value                    | Exported |
+| --------------------------------------- | ------------------------ | -------- |
+| `http.request.method`                   | one of a fixed list      | yes      |
+| `http.route`                            | route template           | yes      |
+| `http.response.status_code`             | whole number             | yes      |
+| `error.type`                            | class or code            | yes      |
+| `opportun.outbound.target`              | one of a fixed list      | yes      |
+| `server.address`                        | one of a fixed list      | yes      |
+| `db.system.name`                        | one of a fixed list      | yes      |
+| `db.operation.name`                     | one of a fixed list      | yes      |
+| `db.collection.name`                    | one of a fixed list      | yes      |
+| `opportun.job.kind`                     | one of a fixed list      | yes      |
+| `opportun.job.outcome`                  | one of a fixed list      | yes      |
+| `opportun.obs.signal`                   | one of a fixed list      | yes      |
+| `opportun.obs.reason`                   | one of a fixed list      | yes      |
+| `user.id`                               | row id                   | no       |
+| `client.address`                        | IP address               | no       |
+| `opportun.process.signal`               | one of a fixed list      | yes      |
+| `opportun.mocks.count`                  | whole number             | yes      |
+| `server.port`                           | whole number             | yes      |
+| `opportun.db.gate_label`                | class or code            | yes      |
+| `opportun.db.gate_held_ms`              | whole number             | yes      |
+| `opportun.db.filesystem`                | class or code            | yes      |
+| `opportun.count.described`              | whole number             | yes      |
+| `opportun.count.deferred`               | whole number             | yes      |
+| `opportun.count.skipped`                | whole number             | yes      |
+| `opportun.count.truncated`              | whole number             | yes      |
+| `opportun.count.read`                   | whole number             | yes      |
+| `opportun.count.set`                    | whole number             | yes      |
+| `opportun.count.changed`                | whole number             | yes      |
+| `opportun.count.cleared`                | whole number             | yes      |
+| `opportun.mail.channel`                 | one of a fixed list      | yes      |
+| `opportun.db.awaited_outside`           | true or false            | yes      |
+| `opportun.warning.type`                 | class or code            | yes      |
+| `opportun.warning.code`                 | class or code            | yes      |
+| `opportun.job.id`                       | row id                   | no       |
+| `opportun.job.attempt`                  | whole number             | yes      |
+| `opportun.job.max_attempts`             | whole number             | yes      |
+| `opportun.route.id`                     | row id                   | no       |
+| `opportun.setting`                      | one of a fixed list      | yes      |
+| `opportun.discovery.run_outcome`        | one of a fixed list      | yes      |
+| `opportun.count.fetched`                | whole number             | yes      |
+| `opportun.count.inserted`               | whole number             | yes      |
+| `opportun.count.duplicates`             | whole number             | yes      |
+| `opportun.count.invalid`                | whole number             | yes      |
+| `opportun.count.suppressed`             | whole number             | yes      |
+| `opportun.count.filtered`               | whole number             | yes      |
+| `opportun.communication.id`             | row id                   | no       |
+| `opportun.company.id`                   | row id                   | no       |
+| `opportun.source.id`                    | row id                   | no       |
+| `opportun.opportunity.id`               | row id                   | no       |
+| `opportun.discovery_result.id`          | row id                   | no       |
+| `opportun.dedupe_candidate.id`          | row id                   | no       |
+| `opportun.resume.id`                    | row id                   | no       |
+| `opportun.discovery.source_kind`        | one of a fixed list      | yes      |
+| `opportun.ats.kind`                     | one of a fixed list      | yes      |
+| `opportun.fetch.blocked_reason`         | class or code            | yes      |
+| `opportun.oauth.provider`               | one of a fixed list      | yes      |
+| `opportun.artifact.target`              | one of a fixed list      | yes      |
+| `gen_ai.operation.name`                 | one of a fixed list      | yes      |
+| `gen_ai.provider.name`                  | one of a fixed list      | yes      |
+| `opportun.ai.provider`                  | one of a fixed list      | yes      |
+| `gen_ai.request.model`                  | model id                 | yes      |
+| `gen_ai.response.model`                 | model id                 | yes      |
+| `gen_ai.request.max_tokens`             | whole number             | yes      |
+| `gen_ai.request.temperature`            | number                   | yes      |
+| `gen_ai.request.stream`                 | true or false            | yes      |
+| `gen_ai.output.type`                    | one of a fixed list      | yes      |
+| `gen_ai.prompt.name`                    | one of a fixed list      | yes      |
+| `gen_ai.prompt.version`                 | whole number             | yes      |
+| `gen_ai.usage.input_tokens`             | whole number             | yes      |
+| `gen_ai.usage.output_tokens`            | whole number             | yes      |
+| `gen_ai.usage.cache_read.input_tokens`  | whole number             | yes      |
+| `gen_ai.usage.cache_write.input_tokens` | whole number             | yes      |
+| `gen_ai.response.id`                    | class or code            | no       |
+| `gen_ai.response.finish_reasons`        | a list from a fixed list | yes      |
+| `gen_ai.response.time_to_first_chunk`   | number                   | yes      |
+| `gen_ai.conversation.id`                | row id                   | no       |
+| `opportun.ai.task`                      | one of a fixed list      | yes      |
+| `opportun.ai.feature`                   | one of a fixed list      | yes      |
+| `opportun.ai.prompt.id`                 | row id                   | no       |
+| `opportun.ai.attempts`                  | whole number             | yes      |
+| `opportun.gen_ai.usage.cost`            | number                   | yes      |
+| `gen_ai.agent.name`                     | one of a fixed list      | yes      |
+| `gen_ai.token.modality`                 | one of a fixed list      | yes      |
+| `opportun.ai.cost.estimated`            | true or false            | yes      |
+
+<!-- catalog-keys:end -->
 
 <!-- nav:bottom -->
 

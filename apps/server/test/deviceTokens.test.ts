@@ -338,7 +338,9 @@ describe('secrecy', () => {
       const { token } = await create(a);
       await bearer(app, 'GET', '/api/v1/test/device/mail', token);
       await bearer(app, 'GET', '/api/v1/auth/me', token);
-      expect(logs.text()).toContain('/api/v1/test/device/mail');
+      // The capture is live at info level (a catalogued boot line is in it), so the checks below
+      // cannot pass on an empty log (#240). No request url is ever logged (#345, design 14.9).
+      expect(logs.text()).toContain('serving the API only');
       expect(logs.text()).not.toContain(token);
     } finally {
       await app.close();

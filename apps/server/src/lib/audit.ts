@@ -3,6 +3,8 @@
 import { newId } from '@opportun/core';
 import type { Exec } from '../db/client';
 import { auditLog } from '../db/schema';
+import { obs } from '../obs';
+import { isEventName } from '../obs/catalog';
 
 // `answers`, `fields`, `resume` and `text` (assisted apply M1c, issue #116; design Part A 7.3):
 // a submission's answers and profile values are the user's own words, like notes, so a careless
@@ -58,4 +60,10 @@ export async function audit(
       createdAt: Date.now(),
     })
     .run();
+  // Every audit action is also an event (design 14.9), emitted here so no call site changes:
+  // its name and its user only, never its detail or address. With collection off this returns
+  // after one check. A name the catalog does not list (a test's) is not an event.
+  if (isEventName(event)) {
+    obs.event(event, {}, opts.userId === undefined ? {} : { userId: opts.userId });
+  }
 }

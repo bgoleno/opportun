@@ -26,7 +26,7 @@ so a few AI-written lines read "Mock answer." where your own model would write a
    you are looking at, and why it works the way it does.
 8. [Network](network.md): contacts, the LinkedIn export, and referrals.
 9. [Settings](settings.md): AI keys and models, prompts, AI traces, security, users, device
-   tokens, import and export, backups, and metrics.
+   tokens, import and export, backups, metrics, and telemetry collection and export.
 
 ## A word on AI
 

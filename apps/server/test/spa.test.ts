@@ -70,8 +70,9 @@ describe('SPA static serving', () => {
     const res = await app.inject({ method: 'GET', url: '/assets/app-newhash.js' });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({ error: { code: 'not_found' } });
-    expect(logs.text()).toContain('/assets/app-newhash.js');
     expect(logs.text()).toMatch(/restart/i);
+    // The request's path is not logged (#345, design 14.9).
+    expect(logs.text()).not.toContain('/assets/app-newhash.js');
   });
 
   it('stays quiet for unknown API paths, which are ordinary 404s', async () => {

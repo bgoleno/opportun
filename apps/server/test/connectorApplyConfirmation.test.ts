@@ -414,9 +414,9 @@ describe('POST /connector/apply/:id/confirmation (#121)', () => {
     await app.jobs.drain();
     expect(JSON.stringify(await app.db.select().from(auditLog).all())).not.toContain(SENTINEL);
     expect(JSON.stringify(await app.db.select().from(jobs).all())).not.toContain(SENTINEL);
-    // This test's own request is in the log, so the next line cannot pass on an empty one: at the
-    // harness's default `silent` level it did (https://github.com/bgoleno/opportun/issues/240).
-    expect(logs.text()).toContain(`/api/v1/connector/apply/${s.id}/confirmation`);
+    // The capture is live at info level (a catalogued boot line is in it), so the checks below
+    // cannot pass on an empty log (#240). No request url is ever logged (#345, design 14.9).
+    expect(logs.text()).toContain('serving the API only');
     expect(logs.text()).not.toContain(SENTINEL);
   });
 
@@ -640,10 +640,10 @@ describe('GET /connector/apply/confirmable (tl on #121)', () => {
       reason: null,
     });
     expect(res.body).not.toContain('applicant@example.com');
-    // The page's address is in no log line, and the audit keeps its host only. This request's
-    // redacted line is in the log, so the check after it cannot pass on an empty one: at the
-    // harness's default `silent` level it did (https://github.com/bgoleno/opportun/issues/240).
-    expect(logs.text()).toContain('/api/v1/connector/apply/confirmable?[redacted]');
+    // The page's address is in no log line, and the audit keeps its host only.
+    // The capture is live at info level (a catalogued boot line is in it), so the checks below
+    // cannot pass on an empty log (#240). No request url is ever logged (#345, design 14.9).
+    expect(logs.text()).toContain('serving the API only');
     expect(logs.text()).not.toContain('lookup-secret-9');
     expect(logs.text()).not.toContain(thanksOn(s.ats));
     expect(

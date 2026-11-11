@@ -268,7 +268,7 @@ export const classifyJob: JobHandler<z.infer<typeof PayloadSchema>> = {
         return await provider.fetchBody(db, user, row.externalId);
       } catch (err) {
         ctx.services.log?.warn(
-          { communicationId: row.id, channel: row.channel, err },
+          { 'opportun.communication.id': row.id, 'opportun.mail.channel': row.channel, err },
           'could not read the message again; classifying on the snippet',
         );
         return null;
@@ -289,7 +289,7 @@ export const classifyJob: JobHandler<z.infer<typeof PayloadSchema>> = {
     // a refetch that came back empty).
     if (run.status === 'classified' && run.bodySource === 'snippet') {
       ctx.services.log?.warn(
-        { communicationId: payload.communicationId },
+        { 'opportun.communication.id': payload.communicationId },
         'classified from the snippet only; the full message text was not available',
       );
     }

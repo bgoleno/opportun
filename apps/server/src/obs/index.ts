@@ -34,6 +34,7 @@ import {
   withoutLocalOnly,
 } from './catalog';
 import { gateAttributes } from './gate';
+import { setLogDropCounter } from './log';
 import { flushPoints, MetricAggregator, seriesKey } from './metrics';
 
 /** The logger obs.event() writes to: today's (app.log, pino). FR-T5 moves it to obs/log.ts. */
@@ -140,14 +141,10 @@ function countDrop(signal: Signal, reason: DropReason): void {
   if (!collecting || aggregator === undefined || runtime === undefined) return;
   // Known-good attributes, so straight to the aggregator, and always admitted past the series
   // cap: a drop must stay countable when the buffer is full.
-  aggregator.add(
-    'opportun.obs.dropped',
-    1,
-    { 'opportun.obs.signal': signal, 'opportun.obs.reason': reason },
-    null,
-    runtime.now(),
-    true,
-  );
+  const attributes = { 'opportun.obs.signal': signal, 'opportun.obs.reason': reason };
+  aggregator.add('opportun.obs.dropped', 1, attributes, null, runtime.now(), true);
+  // And to the exporter, so an operator can see telemetry being dropped (tl on #359, FR-T2).
+  sinks.metrics?.record('opportun.obs.dropped', 1, attributes);
 }
 
 async function flush(): Promise<void> {
@@ -209,6 +206,8 @@ export interface StartObsOptions {
 /** Binds observability to the server's database and logger, and applies the Collect switch. */
 export async function startObs(db: Db, opts: StartObsOptions): Promise<void> {
   await stopObs();
+  // What the log gate (obs/log.ts) drops is counted like any other drop (opportun.obs.dropped).
+  setLogDropCounter(countDrop);
   runtime = {
     db,
     log: opts.log,

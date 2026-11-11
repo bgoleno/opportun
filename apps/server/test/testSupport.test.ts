@@ -32,6 +32,7 @@ const CFG = {
   db: { dialect: 'sqlite' },
   demo: false,
   aiAllowLoopbackHttp: false,
+  telemetryAllowPrivate: false,
   trustedProxies: [],
 } satisfies Config;
 

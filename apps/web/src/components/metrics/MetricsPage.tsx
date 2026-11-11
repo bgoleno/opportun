@@ -167,9 +167,9 @@ export function MetricsPage({ isAdmin, search, onSearchChange }: MetricsPageProp
 }
 
 /**
- * While collection is off nothing new is recorded (design.md 14.1). The switch has no Settings
- * card until FR-T2 (https://github.com/bgoleno/opportun/issues/342), so an admin gets the words
- * and no link, as on the traces page (tl on https://github.com/bgoleno/opportun/issues/347).
+ * While collection is off nothing new is recorded (design.md 14.1). An admin gets a link to the
+ * switch, Settings > Telemetry (FR-T2, https://github.com/bgoleno/opportun/issues/342), as on the
+ * traces page.
  */
 function CollectOff({ isAdmin, available }: { isAdmin: boolean; available: boolean }) {
   // On the demo no admin can turn collection on (#360), so "off" would be untrue there and an
@@ -187,9 +187,13 @@ function CollectOff({ isAdmin, available }: { isAdmin: boolean; available: boole
     <div role="status" className="rounded-md border bg-muted/50 p-3 text-sm">
       <p className="font-medium">Collection is off, so no new points are being recorded.</p>
       <p className="text-muted-foreground">
-        {isAdmin
-          ? 'An admin can turn it on in Settings once telemetry settings are available.'
-          : 'Ask an admin to turn it on.'}{' '}
+        {isAdmin ? (
+          <>
+            Turn it on in <Link to="/settings/telemetry">Settings &gt; Telemetry</Link>.
+          </>
+        ) : (
+          'Ask an admin to turn it on.'
+        )}{' '}
         Points collected earlier are still shown.
       </p>
     </div>
