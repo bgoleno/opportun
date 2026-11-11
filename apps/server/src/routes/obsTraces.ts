@@ -30,7 +30,7 @@ import {
 } from '../db/schema';
 import { notFound } from '../lib/errors';
 import { ATTRIBUTE_TYPES } from '../obs/catalog';
-import { collectInEffect } from '../obs/config';
+import { collectAvailable, collectInEffect } from '../obs/config';
 import { requireUser } from '../repos/base';
 
 /** The most spans one trace keeps (14.11): the waterfall never needs more. */
@@ -110,6 +110,8 @@ const SpanView = z.object({
 const ListView = z.object({
   /** Whether collection is on now. Traces collected earlier are listed either way (14.1). */
   collect: z.boolean(),
+  /** Whether collection can be turned on here at all: false on the demo (#364). */
+  collectAvailable: z.boolean(),
   items: z.array(TraceView),
   next: z.string().nullable(),
 });
@@ -264,6 +266,7 @@ export async function obsTraceRoutes(app: FastifyInstance): Promise<void> {
       return {
         // The switch in effect: off on the demo whatever is stored (#360).
         collect: await collectInEffect(db, app.config),
+        collectAvailable: collectAvailable(app.config),
         items: page.map(toTraceView),
         next:
           rows.length > q.limit && last !== undefined ? `${last.startedAt}.${last.traceId}` : null,

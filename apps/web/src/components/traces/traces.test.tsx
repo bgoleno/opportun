@@ -193,9 +193,21 @@ describe('TracesPage', () => {
     expect(second).toBe(first);
   });
 
+  it('where collection is unavailable, says so, to an admin too, and offers no switch (#364)', async () => {
+    mockApi({
+      'GET /obs/traces': { collect: false, collectAvailable: false, items: [], next: null },
+      'GET /obs/traces/filters': FILTER_VALUES,
+    });
+    renderWithProviders(<Harness isAdmin />);
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent('Collection is not available on this deployment');
+    expect(notice).not.toHaveTextContent(/off|turn it on|Ask an admin/i);
+    expect(within(notice).queryByRole('link')).toBeNull();
+  });
+
   it('while collection is off, tells an admin where it is turned on, without a link yet', async () => {
     mockApi({
-      'GET /obs/traces': { collect: false, items: [], next: null },
+      'GET /obs/traces': { collect: false, collectAvailable: true, items: [], next: null },
       'GET /obs/traces/filters': FILTER_VALUES,
     });
     renderWithProviders(<Harness isAdmin />);
@@ -208,7 +220,7 @@ describe('TracesPage', () => {
 
   it('while collection is off, tells a user to ask an admin, and still lists earlier traces', async () => {
     mockApi({
-      'GET /obs/traces': { collect: false, items: [trace()], next: null },
+      'GET /obs/traces': { collect: false, collectAvailable: true, items: [trace()], next: null },
       'GET /obs/traces/filters': FILTER_VALUES,
     });
     renderWithProviders(<Harness />);
