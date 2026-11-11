@@ -242,6 +242,34 @@ describe("Find posting resolves the opportunity's own careers link (tl on #414, 
   });
 });
 
+describe("the own link is matched only on the company's own boards (sec on #414, R4)", () => {
+  it('a board a message names, holding the same job id, never gives the identity, and is never asked', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a);
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: CAREERS });
+    // A message links a job on another board; that board also holds the own link's job id.
+    await linkedMail(app, a, id, 'See https://job-boards.greenhouse.io/othercorp/jobs/999');
+    const reads: string[] = [];
+    const source: DiscoverySource = {
+      kind: 'ats_greenhouse',
+      async *fetchPostings(_sctx, config) {
+        const org = String((config as { org?: unknown }).org);
+        reads.push(org);
+        if (org === 'othercorp') {
+          yield { posting: embedded('Staff Platform Engineer', JID), nextCursor: null };
+        }
+      },
+    };
+    registerSource(source);
+    await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    const ref = await refOf(app, a, id);
+    expect(ref?.org ?? null).not.toBe('othercorp');
+    expect((await getOpportunity(app.db, ctxOf(a), id)).descriptionMd ?? null).toBeNull();
+    expect(api.asked.some((u) => u.includes('othercorp'))).toBe(false);
+    expect(reads).toContain('examplecorp');
+  });
+});
+
 describe('attach from a board read keeps the identity of the link it keeps (tl on #414, blocking 3)', () => {
   it('a posting with no link of its own keeps the verified identity of the stored careers link', async () => {
     const { app, a } = await boot();
