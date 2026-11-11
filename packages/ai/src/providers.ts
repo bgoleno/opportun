@@ -90,13 +90,13 @@ export function createLanguageModel(
     case 'anthropic':
       return createAnthropic({
         apiKey,
-        fetch: opts.fetch,
+        fetch: opts.officialFetch ?? opts.fetch,
         baseURL: opts.baseUrls?.anthropic ?? OFFICIAL_BASE_URLS.anthropic,
       })(policy.model);
     case 'openai':
       return createOpenAI({
         apiKey,
-        fetch: opts.fetch,
+        fetch: opts.officialFetch ?? opts.fetch,
         baseURL: opts.baseUrls?.openai ?? OFFICIAL_BASE_URLS.openai,
       })(policy.model);
     case 'openai_compatible':

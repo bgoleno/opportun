@@ -170,6 +170,43 @@ describe("the operator's own ANTHROPIC_BASE_URL or OPENAI_BASE_URL keeps working
   });
 });
 
+describe('an OpenAI-compatible endpoint is checked whatever its origin (#344)', () => {
+  const GATEWAY = 'https://gateway.corp.internal';
+  const env = { OPENAI_BASE_URL: `${GATEWAY}/v1` };
+  const compatible: ModelPolicy = {
+    provider: 'openai_compatible',
+    model: 'llama',
+    maxOutputTokens: 100,
+    baseUrl: `${GATEWAY}/other/v1`,
+  };
+
+  it('a call is refused before any request when the host answers with a private address', async () => {
+    const { app, a } = await boot();
+    setProviderResolveOverride(app.db, resolvePrivate);
+    await expect(
+      runStructured(await depsFor(app, a.userId, compatible, env), 'comms.classify', call),
+    ).rejects.toMatchObject({ reason: 'provider_error' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('so is its key check, which lists models through the same fetch', async () => {
+    const { app, a } = await boot();
+    setProviderResolveOverride(app.db, resolvePrivate);
+    const deps = await depsFor(app, a.userId, compatible, env);
+    await expect(deps.providerFetch.fetch(`${GATEWAY}/other/v1/models`)).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('the control: an OpenAI call to that origin is still reached', async () => {
+    const { app, a } = await boot();
+    setProviderResolveOverride(app.db, resolvePrivate);
+    await runStructured(await depsFor(app, a.userId, OPENAI, env), 'comms.classify', call).catch(
+      () => undefined,
+    );
+    expect(requested().url.startsWith(`${GATEWAY}/v1/`)).toBe(true);
+  });
+});
+
 describe('an OpenAI key is checked where its calls go (#344, decision 40)', () => {
   it('lists the models under the operator\u2019s OPENAI_BASE_URL when set, else the official API', async () => {
     const { app, a } = await boot();

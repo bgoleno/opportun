@@ -281,6 +281,19 @@ describe('end-to-end: a directly-written policy row cannot reach a prohibited or
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('an openai_compatible key check is checked whatever its origin (#344)', async () => {
+    const { app, a } = await boot();
+    setProviderResolveOverride(app.db, resolvePrivate);
+    await writeCompatiblePolicy(a, app, 'comms.classify', 'https://gateway.corp.internal/other/v1');
+    const secretId = await addCompatibleKey(a);
+    fetchMock.mockClear();
+    const v = await validateAiKey(app.db, { userId: a.userId, isAdmin: false }, secretId, {
+      env: { OPENAI_BASE_URL: 'https://gateway.corp.internal/v1' },
+    });
+    expect(v.ok).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('a safe baseUrl still works: the invariant above is about the specific hosts, not fetch in general', async () => {
     const { app, a } = await boot();
     setProviderResolveOverride(app.db, resolvePublic);

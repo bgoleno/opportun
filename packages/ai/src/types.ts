@@ -94,6 +94,13 @@ export interface SafeBaseUrlOptions {
 export interface ProviderFetchOptions extends SafeBaseUrlOptions {
   fetch: typeof fetch;
   /**
+   * The fetch for the Anthropic and OpenAI clients only, whose base URL is the operator's own
+   * (baseUrls below), so it may trust that origin (#344, decision 40). Absent: `fetch`. An
+   * openai_compatible client always gets `fetch`, which trusts no origin: its baseUrl is a
+   * user's.
+   */
+  officialFetch?: typeof fetch;
+  /**
    * Where Anthropic and OpenAI calls go, when not the official API: the operator's own
    * ANTHROPIC_BASE_URL and OPENAI_BASE_URL as the server read them
    * (https://github.com/bgoleno/opportun/issues/344, decision 40). Passed to the SDK explicitly,

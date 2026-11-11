@@ -193,7 +193,12 @@ async function validateOpenAi(
   policies: ModelPolicy[],
   providerFetch: ProviderFetchOptions,
 ): Promise<Pick<KeyValidation, 'ok' | 'models' | 'error'>> {
-  const list = await listModels(openAiModelsUrl(providerFetch), apiKey, providerFetch.fetch);
+  // The OpenAI client's own fetch: its base URL is the operator's, never a user's.
+  const list = await listModels(
+    openAiModelsUrl(providerFetch),
+    apiKey,
+    providerFetch.officialFetch ?? providerFetch.fetch,
+  );
   const models = membership(
     policies.map((p) => p.model),
     list,
@@ -298,6 +303,8 @@ export async function validateAiKey(
   db: Db,
   ctx: UserCtx,
   secretId: string,
+  /** Where the operator's base URLs are read from (buildAiDeps): the process's own by default. */
+  opts: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<KeyValidation> {
   const row = await db
     .select({ id: secrets.id, label: secrets.label })
@@ -315,7 +322,9 @@ export async function validateAiKey(
   }
   const apiKey = await getSecretValue(db, ctx, row.id);
   const policies = await referencedPolicies(db, ctx, provider);
-  const providerFetch = (await buildAiDeps(db, ctx)).providerFetch;
+  const providerFetch = (
+    await buildAiDeps(db, ctx, opts.env === undefined ? {} : { env: opts.env })
+  ).providerFetch;
   try {
     const result =
       provider === 'anthropic'

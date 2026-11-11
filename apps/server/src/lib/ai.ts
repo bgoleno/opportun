@@ -260,31 +260,37 @@ export function recordGenAiMetrics(userId: string, run: TaskRunRecord): void {
 }
 
 /**
- * The fetch every AI provider's requests leave through (issue #334, and for Anthropic and OpenAI
- * since https://github.com/bgoleno/opportun/issues/344): checked (aiProviderFetch.ts), then
- * observed under its provider's target (obs/outbound.ts, design 14.2). The operator's own
- * ANTHROPIC_BASE_URL and OPENAI_BASE_URL are trusted (decision 40); buildAiDeps hands the same
- * values to the SDKs, which never read the environment themselves.
+ * The fetches every AI provider's requests leave through (issue #334, and for Anthropic and
+ * OpenAI since https://github.com/bgoleno/opportun/issues/344): checked (aiProviderFetch.ts),
+ * then observed under the provider's target (obs/outbound.ts, design 14.2). Two of them:
+ * `official`, for the Anthropic and OpenAI clients, trusts the origin of the operator's own
+ * ANTHROPIC_BASE_URL and OPENAI_BASE_URL (decision 40), which buildAiDeps hands the same clients
+ * as their base URL; `strict`, for every other request (an openai_compatible endpoint, its key
+ * check), trusts no origin.
  */
-function providerFetchFor(
+function providerFetchesFor(
   allowLoopbackHttp: boolean,
   baseUrls: OperatorBaseUrls,
   resolve?: ResolveHost,
-): typeof fetch {
+): { strict: typeof fetch; official: typeof fetch } {
   const operator = operatorProviderOrigins(baseUrls);
-  const checked = createProviderFetch(
-    { allowLoopbackHttp, operatorOrigins: [...operator.keys()] },
-    resolve,
-  );
-  return ((input, init) =>
-    observeOutbound(
-      {
-        target: providerTarget(input, operator),
-        method: init?.method ?? (input instanceof Request ? input.method : 'GET'),
-        url: input instanceof Request ? input.url : input,
-      },
-      () => checked(input, init),
-    )) as typeof fetch;
+  const observed =
+    (checked: typeof fetch): typeof fetch =>
+    (input, init) =>
+      observeOutbound(
+        {
+          target: providerTarget(input, operator),
+          method: init?.method ?? (input instanceof Request ? input.method : 'GET'),
+          url: input instanceof Request ? input.url : input,
+        },
+        () => checked(input, init),
+      );
+  return {
+    strict: observed(createProviderFetch({ allowLoopbackHttp }, resolve)),
+    official: observed(
+      createProviderFetch({ allowLoopbackHttp, operatorOrigins: [...operator.keys()] }, resolve),
+    ),
+  };
 }
 
 export async function buildAiDeps(
@@ -310,6 +316,7 @@ export async function buildAiDeps(
     override?.allowLoopbackHttp ??
     opts.allowLoopbackHttp ??
     process.env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1';
+  const fetches = providerFetchesFor(allowLoopbackHttp, baseUrls, resolveOverrides.get(db));
   return {
     getKey: async (provider) =>
       override === undefined ? getProviderKey(db, ctx, provider) : override.getKey(provider),
@@ -328,7 +335,8 @@ export async function buildAiDeps(
     budget: await readBudget(db, ctx),
     spentTodayUsd: async (task) => await spentTodayUsd(db, ctx, task),
     providerFetch: {
-      fetch: providerFetchFor(allowLoopbackHttp, baseUrls, resolveOverrides.get(db)),
+      fetch: fetches.strict,
+      officialFetch: fetches.official,
       allowLoopbackHttp,
       baseUrls,
     },
