@@ -447,15 +447,19 @@ const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/;
 
 /**
  * The context of a stored W3C traceparent (jobs.trace_context), for a job's span to continue
- * (14.6); undefined for anything that is not one, so the job starts a new trace instead.
+ * (14.6); undefined for anything that is not one, so the job starts a new trace instead. `base`
+ * is what the span context is set on: the root, or the root with the job's user in it.
  */
-export function contextFromTraceparent(value: string | null | undefined): Context | undefined {
+export function contextFromTraceparent(
+  value: string | null | undefined,
+  base: Context = ROOT_CONTEXT,
+): Context | undefined {
   const m = typeof value === 'string' ? TRACEPARENT.exec(value) : null;
   if (m === null) return undefined;
   const [, traceId = '', spanId = '', flags = '00'] = m;
   const spanContext = { traceId, spanId, traceFlags: Number.parseInt(flags, 16), isRemote: true };
   if (!trace.isSpanContextValid(spanContext)) return undefined;
-  return trace.setSpanContext(ROOT_CONTEXT, spanContext);
+  return trace.setSpanContext(base, spanContext);
 }
 
 /** The active span's W3C traceparent, for enqueue's continueTrace (14.6); null when none. */

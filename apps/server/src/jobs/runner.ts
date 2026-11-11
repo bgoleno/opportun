@@ -5,7 +5,9 @@
 // expression) into the next pending job for that kind.
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
+import { USER_CONTEXT_KEY } from '@opportun/ai';
 import { newId } from '@opportun/core';
+import { ROOT_CONTEXT } from '@opentelemetry/api';
 import { CronExpressionParser } from 'cron-parser';
 import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -265,7 +267,13 @@ async function processJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<vo
   }
   // An unregistered kind is not on the catalog's list: _OTHER, so a stray row adds no series.
   const kind = getJobHandler(job.kind) === undefined ? OTHER : job.kind;
-  const parent = contextFromTraceparent(job.traceContext);
+  // A job is a trace of its own unless it continues the one stored with it (14.6): it starts
+  // from the root, never from whatever span or user the runner's caller had active. Its user goes
+  // on that parent (not on an outer context), so the AI router finds it in the job's span; an
+  // instance job has none, and the router starts one trace per user it calls for.
+  const root =
+    job.userId === null ? ROOT_CONTEXT : ROOT_CONTEXT.setValue(USER_CONTEXT_KEY, job.userId);
+  const continued = contextFromTraceparent(job.traceContext, root);
   const started = performance.now();
   await obs.span(
     'job',
@@ -287,7 +295,7 @@ async function processJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<vo
         job.userId === null ? {} : { userId: job.userId },
       );
     },
-    parent === undefined ? {} : { parent, kind: 'consumer' },
+    continued === undefined ? { parent: root } : { parent: continued, kind: 'consumer' },
   );
 }
 

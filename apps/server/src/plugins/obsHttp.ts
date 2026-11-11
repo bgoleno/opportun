@@ -10,10 +10,16 @@
 // `request.obsContext` for a handler that passes it to a workflow span explicitly. onResponse
 // ends the span.
 //
+// The user (14.6): preValidation also puts the request's user in that context, under the key
+// packages/ai defines, so the AI router knows whose request a model call belongs to. It is set
+// there, not in onRequest, because the session lookup (plugins/session.ts) and a connector
+// route's device-token check are onRequest hooks that run after this plugin's.
+//
 // With collection off, onRequest returns after one check and leaves nothing on the request, so
 // the other hooks find nothing to do (14.11).
 import type { Context } from '@opentelemetry/api';
 import { context } from '@opentelemetry/api';
+import { USER_CONTEXT_KEY } from '@opportun/ai';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { isCollecting, obs, type StartedSpan } from '../obs';
@@ -61,11 +67,18 @@ function onRequest(req: FastifyRequest, _reply: FastifyReply, done: () => void):
   context.with(span.context, done);
 }
 
+/** The signed-in user, by session cookie or device token; undefined when nobody is. */
+function requestUser(req: FastifyRequest): string | undefined {
+  return req.userCtx?.userId ?? req.deviceCtx?.userId;
+}
+
 function preValidation(req: FastifyRequest, _reply: FastifyReply, done: () => void): void {
   if (req.obsContext === null) {
     done();
     return;
   }
+  const userId = requestUser(req);
+  if (userId !== undefined) req.obsContext = req.obsContext.setValue(USER_CONTEXT_KEY, userId);
   context.with(req.obsContext, done);
 }
 
@@ -93,7 +106,7 @@ function onResponse(req: FastifyRequest, reply: FastifyReply, done: () => void):
   };
   obs.record('http.server.request.duration', (performance.now() - o.started) / 1000, attributes);
   if (failure !== undefined) {
-    const userId = req.userCtx?.userId;
+    const userId = requestUser(req);
     // Inside the request's context, so the event carries the span's trace id.
     context.with(o.span?.context ?? context.active(), () =>
       obs.event(
