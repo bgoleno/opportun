@@ -38,22 +38,38 @@ function stage(name: string): string[] {
 
 const PGDG_APT = 'https://apt.postgresql.org/pub/repos/apt';
 
+/** Every http(s) address in a piece of text. */
+const urlsIn = (text: string): string[] => text.match(/https?:\/\/[^\s"'`]+/g) ?? [];
+
+/** Whether an address is on postgresql.org or one of its subdomains, by its host. */
+function onPostgresqlOrg(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  return host === 'postgresql.org' || host.endsWith('.postgresql.org');
+}
+
 describe('the image gets nothing from postgresql.org but its apt packages (#442)', () => {
   it('names no postgresql.org address except the apt repository, in its source line', () => {
     for (const line of instructions(DOCKERFILE)) {
-      const urls = line.match(/https?:\/\/[^\s"'`]*postgresql\.org[^\s"'`]*/g) ?? [];
-      for (const url of urls) {
+      for (const url of urlsIn(line).filter(onPostgresqlOrg)) {
         expect(url, line).toBe(PGDG_APT);
-        expect(line, url).toMatch(/deb \[signed-by=\/usr\/share\/keyrings\/pgdg\.asc\]/);
+        expect(line, url).toContain('deb [signed-by=/usr/share/keyrings/pgdg.asc]');
       }
     }
   });
 
   it('never downloads with curl, wget or ADD from postgresql.org', () => {
     for (const line of instructions(DOCKERFILE)) {
-      if (!/postgresql\.org/.test(line)) continue;
-      expect(line).not.toMatch(/\b(curl|wget)\b[^|&;]*postgresql\.org/);
-      expect(line).not.toMatch(/^ADD\s+https?:/i);
+      // One shell command at a time: the runtime's RUN installs curl and, later in the same
+      // line, writes the apt source, which is not a download by curl.
+      for (const command of line.split(/&&|\|\||;|\|/)) {
+        const fetcher = /\b(curl|wget)\b/.test(command) || /^ADD\s/i.test(command.trim());
+        if (fetcher) expect(urlsIn(command).filter(onPostgresqlOrg), command).toEqual([]);
+      }
     }
   });
 });
