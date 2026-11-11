@@ -52,6 +52,29 @@ describe('Settings > Profile > Application details (#401)', () => {
     expect(within(c).queryByLabelText('Phone')).toBeNull();
   });
 
+  // #435 (slice 1 of #402).
+  it('asks for country, school, degree and how you heard, each written as the list shows it', async () => {
+    setup();
+    const c = await card();
+    for (const [label, hint] of [
+      ['Country', /as the form's list shows it, for example United States/],
+      ['School', /as the form's list shows it, for example University of/],
+      ['Degree', /as the form's list shows it, for example Bachelor's Degree/],
+      ['How did you hear about this role?', /as the form's list shows it, for example LinkedIn/],
+    ] as const) {
+      expect(within(c).getByLabelText(label)).toHaveAccessibleDescription(hint);
+    }
+    // The city is the profile's own Location column, on the profile card above.
+    expect(screen.getByLabelText('Location (city)')).toHaveAccessibleDescription(
+      /as the form's list shows it, for example Seattle, Washington/,
+    );
+    // Its placeholder shows the same wording as its hint (tl on #437).
+    expect(screen.getByLabelText('Location (city)')).toHaveAttribute(
+      'placeholder',
+      'Seattle, Washington, United States',
+    );
+  });
+
   it('saves the details with the profile as stored, and only the details change', async () => {
     const { api, user } = setup();
     const c = await card();

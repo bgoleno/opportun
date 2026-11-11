@@ -168,18 +168,20 @@ Contacts who could refer you, ranked by the AI, and the asks you have made. See
 ### Assisted apply
 
 Where assisted apply is on, the opportunity has an **Assisted apply** panel beside the tabs.
-Before you apply, it offers **Apply on _ATS_** once the posting is confirmed on Greenhouse, Lever
-or Ashby (Workday as a handoff only), or says why it can't yet. **Apply**
-takes you through the resume, your details and your answers, then one review of everything.
-**Confirm review and open** opens the real application form in a new tab. Opportun never
-submits anything: you press the site's own Submit button.
+Before you apply, it offers **Apply on _ATS_** when the posting is confirmed and is on a
+recognised application system (Greenhouse, Lever or Ashby; Workday as a handoff only), its stage
+is Interested, Preparing or Applied, and you have a resume marked Final. When one of these is
+missing, the panel says which. **Apply** takes you through the resume, your details and your
+answers, then one review of everything. **Confirm review and open** opens the real application
+form in a new tab. Opportun never submits anything: you press the site's own Submit button.
 
 #### Your details when you apply
 
 The **Details** step opens already filled with what Opportun holds for you, field by field:
 
 1. your profile: **Settings > Profile**, and its **Application details** card for first and
-   last name, LinkedIn profile, website and links;
+   last name, country, school, degree, how you heard about the role, LinkedIn profile, website
+   and links;
 2. your account, for Email (your sign-in email) and Full name (your display name) only;
 3. the same field of the application you reviewed most recently, to any company.
 
@@ -194,6 +196,12 @@ says **Not in your profile** or **Differs from your profile**, with a **Save to 
 off by default. Changes you make on the step apply to this application only. To keep one for
 next time, tick **Save to my profile** before **Next: Review**: the application and your profile
 are saved together. On a field you emptied, the tick reads **Remove from my profile**.
+
+Country, Location (city), School, Degree and "How did you hear about this role?" are usually lists
+on the employer's form. Write each as the form's list shows it ("United States", not "USA"). The
+browser extension fills Location (city) and how you heard where the form asks them as a text
+question with the same label, and leaves a list for any of the five to you, saying "choose it on
+the form".
 
 #### Finish on the application site
 

@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   APPLICATION_DETAIL_FIELDS,
   ApplicationDetailsSchema,
+  detailValuePasses,
   PROFILE_DETAIL_KEYS,
   resolveApplicationDetails,
   type DetailSources,
@@ -47,19 +48,55 @@ describe('the detail field list', () => {
       ['fullName', 'fullName'],
       ['email', 'email'],
       ['phone', 'phone'],
+      ['country', 'details'],
       ['location', 'location'],
       ['workAuthorization', 'workAuth'],
+      ['school', 'details'],
+      ['degree', 'details'],
       ['linkedinUrl', 'details'],
       ['websiteUrl', 'details'],
       ['links', 'details'],
+      ['heardFrom', 'details'],
     ]);
     expect(PROFILE_DETAIL_KEYS).toEqual([
       'firstName',
       'lastName',
+      'country',
+      'school',
+      'degree',
       'linkedinUrl',
       'websiteUrl',
       'links',
+      'heardFrom',
     ]);
+  });
+
+  // #435 (slice 1 of #402): four details a form asks for, and Location read as the city.
+  it('labels the new details, and Location as the city', () => {
+    const label = (key: string) => APPLICATION_DETAIL_FIELDS.find((f) => f.key === key)?.label;
+    expect(label('country')).toBe('Country');
+    expect(label('location')).toBe('Location (city)');
+    expect(label('school')).toBe('School');
+    expect(label('degree')).toBe('Degree');
+    expect(label('heardFrom')).toBe('How did you hear about this role?');
+  });
+
+  it('the new details are text: any one line or more passes, within 2,000 characters', () => {
+    for (const key of ['country', 'school', 'degree', 'heardFrom']) {
+      expect(detailValuePasses(key, 'United States'), key).toBe(true);
+      expect(detailValuePasses(key, "Bachelor's Degree\nin two lines"), key).toBe(true);
+      expect(detailValuePasses(key, 'x'.repeat(2_000)), key).toBe(true);
+      expect(detailValuePasses(key, 'x'.repeat(2_001)), key).toBe(false);
+    }
+    expect(
+      ApplicationDetailsSchema.safeParse({
+        country: 'United States',
+        school: 'University of Example',
+        degree: "Bachelor's Degree",
+        heardFrom: 'LinkedIn',
+      }).success,
+    ).toBe(true);
+    expect(ApplicationDetailsSchema.safeParse({ school: 'x'.repeat(2_001) }).success).toBe(false);
   });
 });
 

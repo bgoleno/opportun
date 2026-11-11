@@ -21,7 +21,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db, Exec } from '../db/client';
 import { secrets, settings } from '../db/schema';
-import { obs } from '../obs';
+import { obs, prepareRecord, recordPrepared, type PreparedRecord } from '../obs';
 import type { UserCtx } from '../repos/base';
 import { recordTaskRun, spentTodayUsd } from '../repos/taskRuns';
 import { observeOutbound } from '../obs/outbound';
@@ -223,8 +223,36 @@ export async function aiAvailable(db: Db, ctx: UserCtx): Promise<boolean> {
  * the conventions require, so a call refused before the provider records its duration only.
  * With collection off each obs.record returns after one check.
  */
-export function recordGenAiMetrics(userId: string, run: TaskRunRecord): void {
-  if (!obs.isCollecting()) return;
+/**
+ * The four Gen AI records of a successful call, gated once per user, task, model, provider and
+ * pricing, then reused (https://github.com/bgoleno/opportun/issues/374, tl's 2b): their
+ * attributes repeat call after call, and gating them was most of what recording cost. A failed
+ * call, whose error.type varies, is recorded through obs.record as before. Bounded: past it, a
+ * call is gated as before.
+ */
+export const GEN_AI_PREPARED_MAX = 1_000;
+
+interface GenAiPrepared {
+  duration: PreparedRecord;
+  input: PreparedRecord;
+  output: PreparedRecord;
+  cost: PreparedRecord;
+}
+
+const genAiPrepared = new Map<string, GenAiPrepared>();
+
+/** How many calls' records are prepared; for tests. */
+export function genAiPreparedCount(): number {
+  return genAiPrepared.size;
+}
+
+/** Empties the cache; for tests. */
+export function clearGenAiPrepared(): void {
+  genAiPrepared.clear();
+}
+
+/** The attributes every Gen AI metric of this call carries (14.4). */
+function genAiBase(run: TaskRunRecord): Record<string, unknown> {
   const provider = (PROVIDERS as readonly string[]).includes(run.provider)
     ? (run.provider as ProviderId)
     : undefined;
@@ -238,13 +266,46 @@ export function recordGenAiMetrics(userId: string, run: TaskRunRecord): void {
     base[ATTR.providerName] = wireProvider(provider);
     base[ATTR.aiProvider] = provider;
   }
+  return base;
+}
+
+function preparedFor(userId: string, run: TaskRunRecord): GenAiPrepared {
+  const fallback = run.fallbackPricing === true;
+  const key = `${userId}\n${run.taskKey}\n${run.model}\n${run.provider}\n${fallback}`;
+  const known = genAiPrepared.get(key);
+  if (known !== undefined) return known;
+  const base = genAiBase(run);
   const owner = { userId };
+  const text = { ...base, [ATTR.tokenModality]: 'text' };
+  const p: GenAiPrepared = {
+    duration: prepareRecord(GEN_AI_METRIC.inferenceDuration, base, owner),
+    input: prepareRecord(GEN_AI_METRIC.inputTokens, text, owner),
+    output: prepareRecord(GEN_AI_METRIC.outputTokens, text, owner),
+    cost: prepareRecord(GEN_AI_METRIC.cost, { ...base, [ATTR.costEstimated]: fallback }, owner),
+  };
+  if (genAiPrepared.size < GEN_AI_PREPARED_MAX) genAiPrepared.set(key, p);
+  return p;
+}
+
+export function recordGenAiMetrics(userId: string, run: TaskRunRecord): void {
+  if (!obs.isCollecting()) return;
   // The router's reason is the error's first word (router.ts Run.record): never its detail.
   const reason = run.status === 'error' ? run.error?.split(':')[0] : undefined;
+  if (reason === undefined) {
+    const p = preparedFor(userId, run);
+    recordPrepared(p.duration, run.durationMs / 1000);
+    // A zero is not recorded, as the conventions require (14.4).
+    if (run.inputTokens > 0) recordPrepared(p.input, run.inputTokens);
+    if (run.outputTokens > 0) recordPrepared(p.output, run.outputTokens);
+    if (run.estCostUsd > 0) recordPrepared(p.cost, run.estCostUsd);
+    return;
+  }
+  const base = genAiBase(run);
+  const owner = { userId };
   obs.record(
     GEN_AI_METRIC.inferenceDuration,
     run.durationMs / 1000,
-    reason === undefined ? base : { ...base, [ATTR.errorType]: reason },
+    { ...base, [ATTR.errorType]: reason },
     owner,
   );
   const text = { ...base, [ATTR.tokenModality]: 'text' };

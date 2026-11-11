@@ -302,18 +302,29 @@ function record(
 export interface PreparedRecord {
   metric: MetricName;
   attributes: Attributes;
+  /** The user the points belong to, for a user-scoped metric; null for the instance's. */
+  owner: string | null;
   key: string;
 }
 
-/** Gates `attributes` once for an instance metric; drops are counted as for record(). */
+/**
+ * Gates `attributes` once; drops are counted as for record(). A user-scoped metric (the Gen AI
+ * ones, 14.4) is prepared for one user, whose points they are: its series key includes them,
+ * so a prepared record and an obs.record() with the same values write the same series. Preparing
+ * a user metric without its user is a mistake in code, and throws.
+ */
 export function prepareRecord(
   metric: MetricName,
   attributes: Readonly<Record<string, unknown>>,
+  opts: { userId?: string } = {},
 ): PreparedRecord {
   const def = metricDef(metric);
-  if (def.scope !== 'instance') throw new Error(`obs: ${metric} is not an instance metric`);
+  const owner = def.scope === 'user' ? (opts.userId ?? null) : null;
+  if (def.scope === 'user' && owner === null) {
+    throw new Error(`obs: ${metric} is a user metric and needs its user`);
+  }
   const gated = gateAttributes('metrics', def.attributes, attributes, countDrop);
-  return { metric, attributes: gated, key: seriesKey(metric, null, gated) };
+  return { metric, attributes: gated, owner, key: seriesKey(metric, owner, gated) };
 }
 
 /** Records one value with attributes prepareRecord() already gated. */
@@ -323,8 +334,8 @@ export function recordPrepared(prepared: PreparedRecord, value: number): void {
     countDrop('metrics', 'invalid_value');
     return;
   }
-  const { metric, attributes, key } = prepared;
-  if (!aggregator.add(metric, value, attributes, null, runtime.now(), false, key)) {
+  const { metric, attributes, owner, key } = prepared;
+  if (!aggregator.add(metric, value, attributes, owner, runtime.now(), false, key)) {
     countDrop('metrics', 'series_cap');
     return;
   }
@@ -332,8 +343,13 @@ export function recordPrepared(prepared: PreparedRecord, value: number): void {
 }
 
 /** A started span's handle: further attributes pass the same gate. */
+/** Span attributes prepareSpanAttributes() already gated: only it makes one. */
+export type GatedSpanAttributes = Attributes & { readonly __gatedSpanAttributes: unique symbol };
+
 export interface ObsSpan {
   set(attributes: Readonly<Record<string, unknown>>): void;
+  /** Sets attributes prepareSpanAttributes() gated once, for a hot path that repeats them. */
+  setGated(attributes: GatedSpanAttributes): void;
   /** Marks the span failed with a class or code, never a message (14.8). */
   fail(errorType: string): void;
 }
@@ -353,7 +369,11 @@ export interface SpanOptions {
   kind?: SpanKindName;
 }
 
-const NOOP_SPAN: ObsSpan = { set: () => undefined, fail: () => undefined };
+const NOOP_SPAN: ObsSpan = {
+  set: () => undefined,
+  setGated: () => undefined,
+  fail: () => undefined,
+};
 
 const KINDS = new Map<SpanKindName, SpanKind>([
   ['server', SpanKind.SERVER],
@@ -374,23 +394,63 @@ function spanName(template: string, attributes: Attributes): string {
 
 type OtelAttributes = Record<string, string | number | boolean>;
 
+/**
+ * A span's name and attributes, gated once, for a boundary that opens the same span again and
+ * again (the HTTP plugin, per route and method: https://github.com/bgoleno/opportun/issues/374).
+ */
+export interface PreparedSpan {
+  readonly name: SpanName;
+  readonly attributes: Attributes;
+  readonly spanName: string;
+}
+
+/** Gates a span's attributes once; drops are counted as for any span. */
+export function prepareSpan(
+  name: SpanName,
+  attributes: Readonly<Record<string, unknown>>,
+): PreparedSpan {
+  const def = spanDef(name);
+  const gated = gateAttributes('spans', def.attributes, attributes, countDrop);
+  return { name, attributes: gated, spanName: spanName(def.template, gated) };
+}
+
+/** Gates attributes for a span's handle once, for setGated(). */
+export function prepareSpanAttributes(
+  name: SpanName,
+  attributes: Readonly<Record<string, unknown>>,
+): GatedSpanAttributes {
+  return gateAttributes(
+    'spans',
+    spanDef(name).attributes,
+    attributes,
+    countDrop,
+  ) as GatedSpanAttributes;
+}
+
 /** Opens a catalogued span under `parent`, with a gated handle; collection is known to be on. */
 function open(
   name: SpanName,
   attributes: Readonly<Record<string, unknown>>,
   opts: SpanOptions,
 ): { span: Span; handle: ObsSpan; failed: () => boolean } {
-  const def = spanDef(name);
-  const gated = gateAttributes('spans', def.attributes, attributes, countDrop);
+  return openPrepared(prepareSpan(name, attributes), opts);
+}
+
+function openPrepared(
+  prepared: PreparedSpan,
+  opts: SpanOptions,
+): { span: Span; handle: ObsSpan; failed: () => boolean } {
+  const def = spanDef(prepared.name);
   const kind =
     opts.kind !== undefined && def.kinds?.includes(opts.kind) === true ? opts.kind : def.kind;
-  const span = trace
-    .getTracer('opportun')
-    .startSpan(
-      spanName(def.template, gated),
-      { kind: KINDS.get(kind) ?? SpanKind.INTERNAL, attributes: gated as OtelAttributes },
-      opts.parent ?? context.active(),
-    );
+  const span = trace.getTracer('opportun').startSpan(
+    prepared.spanName,
+    {
+      kind: KINDS.get(kind) ?? SpanKind.INTERNAL,
+      attributes: prepared.attributes as OtelAttributes,
+    },
+    opts.parent ?? context.active(),
+  );
   // A failure the callee already recorded (an outbound error's code) stands: a later catch of
   // the rethrown error must not replace it with that error's class name.
   let failed = false;
@@ -399,6 +459,9 @@ function open(
       span.setAttributes(
         gateAttributes('spans', def.attributes, more, countDrop) as OtelAttributes,
       );
+    },
+    setGated: (more) => {
+      span.setAttributes(more as unknown as OtelAttributes);
     },
     fail: (errorType) => {
       failed = true;
@@ -448,7 +511,20 @@ function startSpan(
 ): StartedSpan {
   const parent = opts.parent ?? context.active();
   if (!collecting || isSuppressed()) return { ...NOOP_SPAN, context: parent, end: () => undefined };
-  const { span: s, handle } = open(name, attributes, { ...opts, parent });
+  return started(open(name, attributes, { ...opts, parent }), parent);
+}
+
+/** startSpan with attributes prepareSpan() already gated. */
+function startPreparedSpan(prepared: PreparedSpan, opts: SpanOptions = {}): StartedSpan {
+  const parent = opts.parent ?? context.active();
+  if (!collecting || isSuppressed()) return { ...NOOP_SPAN, context: parent, end: () => undefined };
+  return started(openPrepared(prepared, { ...opts, parent }), parent);
+}
+
+function started(
+  { span: s, handle }: { span: Span; handle: ObsSpan },
+  parent: Context,
+): StartedSpan {
   let ended = false;
   return {
     ...handle,
@@ -510,4 +586,4 @@ function event(
   sinks.logs?.emit({ event: name, timeMs, traceId, fields: withoutLocalOnly(gated) });
 }
 
-export const obs = { record, span, startSpan, event, isCollecting };
+export const obs = { record, span, startSpan, startPreparedSpan, event, isCollecting };

@@ -277,12 +277,30 @@ const PREFILL_FIELDS: readonly {
     name: 'LinkedIn profile',
   },
   { key: 'websiteUrl', id: null, labels: ['Website'], name: 'Website' },
+  // #435 (slice 1 of #402; tl's ruling on #437): the city and how you heard fill a text question
+  // with exactly one of these labels, compared whole like every other. Country, School and Degree
+  // are not planned yet: on Greenhouse they are lists, which the filler leaves alone and reports
+  // as choose it on the form whatever the plan holds, and slice 2 adds them when it can choose.
+  { key: 'location', id: null, labels: ['Location (City)'], name: 'Location (city)' },
+  {
+    key: 'heardFrom',
+    id: null,
+    labels: [
+      'How did you hear about this role?',
+      'How did you hear about this job?',
+      'How did you hear about this position?',
+      'How did you hear about this opportunity?',
+      'How did you hear about us?',
+    ],
+    name: 'How did you hear about this role?',
+  },
 ];
 
 /**
  * What the filler fills, from the reviewed attempt only (tl's mapping): the four standard
- * fields by the form's ids, LinkedIn and website by the question's exact label, and each
- * reviewed answer by its exact label. Empty values are left out: nothing is invented.
+ * fields by the form's ids, the other details (LinkedIn, website, and #435's city and how you
+ * heard) by the question's exact label, and each reviewed answer by
+ * its exact label. Empty values are left out: nothing is invented.
  */
 export function buildPlan(
   attempt: PrefillAttempt,
