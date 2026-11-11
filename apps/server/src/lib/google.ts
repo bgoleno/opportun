@@ -822,7 +822,10 @@ export function createGoogleConn(opts: {
         // behind, silently until now, surfacing later as an unexplained google_reauth_required
         // with nothing connecting it back to this.
         storeRefreshedTokens(db, ctx, fresh).catch((err: unknown) => {
-          opts.log.error({ err, userId: ctx.userId }, 'failed to persist a refreshed Google token');
+          opts.log.error(
+            { err, 'user.id': ctx.userId },
+            'failed to persist a refreshed Google token',
+          );
         });
       });
       return client;

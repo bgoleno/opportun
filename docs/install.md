@@ -299,6 +299,14 @@ If your server must go through a proxy, or is such a host, set `ANTHROPIC_BASE_U
 request to that address is sent as it is, private address or plain http included, because you
 chose it. Do not put a user name or password in the URL: such a URL is refused.
 
+**What the log holds.** Every log line, Opportun's own and any library's, passes through one
+filter before it is written: it keeps a fixed message and a few typed values (row ids, counts,
+codes), and nothing else. So a log line never holds a name, an email address, a phone number, a
+company's name, a request's URL or query string, an error's message, or the server's host name.
+An error is written as its type and the code frames it passed through. A message the server
+does not know, such as one a library builds, is written as `[message withheld]`. The one
+exception is a configuration error at startup, which names the variable that is wrong.
+
 **Password pepper.** `OPPORTUN_PEPPER` is an extra secret mixed into every password hash
 (Argon2id's keyed `secret` input), so a stolen database file alone cannot be used to
 guess passwords. Keep it outside the database, like the master key (for example

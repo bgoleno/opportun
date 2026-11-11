@@ -175,8 +175,11 @@ describe('job queue', () => {
       expect((await jobRow(app.db, id)).status).toBe('pending');
       expect(logs.text()).toContain('"level":40');
       expect(logs.text()).toContain('job failed; will retry');
-      expect(logs.text()).toContain(id);
-      expect(logs.text()).toContain('handler exploded');
+      expect(logs.text()).toContain(`"opportun.job.id":"${id}"`);
+      expect(logs.text()).toContain('"opportun.job.kind":"test.fail"');
+      // The error by its type, never its message (#345, design 14.8): that stays on the row.
+      expect(logs.text()).toContain('"error.type":"Error"');
+      expect(logs.text()).not.toContain('handler exploded');
     } finally {
       await app.close();
     }
@@ -199,8 +202,11 @@ describe('job queue', () => {
       expect((await jobRow(app.db, id)).status).toBe('dead');
       expect(logs.text()).toContain('"level":50');
       expect(logs.text()).toContain('job exhausted its retries; marked dead');
-      expect(logs.text()).toContain(id);
-      expect(logs.text()).toContain('handler exploded');
+      expect(logs.text()).toContain(`"opportun.job.id":"${id}"`);
+      expect(logs.text()).toContain('"opportun.job.kind":"test.fail"');
+      // The error by its type, never its message (#345, design 14.8): that stays on the row.
+      expect(logs.text()).toContain('"error.type":"Error"');
+      expect(logs.text()).not.toContain('handler exploded');
     } finally {
       await app.close();
     }

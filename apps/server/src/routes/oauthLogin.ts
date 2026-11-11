@@ -666,7 +666,8 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
       } catch (err) {
         // The message names the step and status only; never the request (client secret).
         req.log.warn(
-          { provider, reason: err instanceof Error ? err.message : 'unknown' },
+          // The error's class, never its message (14.8): it can quote the provider's response.
+          { 'opportun.oauth.provider': provider, err },
           'oauth sign-in exchange failed',
         );
         return fail('error');

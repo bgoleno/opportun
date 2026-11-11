@@ -305,7 +305,10 @@ export async function reconcilePosting(
     // `searching` renders a spinner with no action, so anything that escapes here would be a
     // permanent dead end: the job retries, dies, and the banner spins forever. Whatever went
     // wrong, the opportunity ends in a state the user can act on.
-    sctx.log.warn({ err, opportunityId }, 'posting reconciliation failed');
+    sctx.log.warn(
+      { err, 'opportun.opportunity.id': opportunityId },
+      'posting reconciliation failed',
+    );
     return await flag(
       db,
       ctx,

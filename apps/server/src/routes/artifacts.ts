@@ -166,7 +166,10 @@ export async function artifactRoutes(app: FastifyInstance): Promise<void> {
       try {
         tree = readOperatorTree(targetDir(artifactsDir, target.id), MAX_ARTIFACT_BYTES);
       } catch (err) {
-        req.log.error({ err, target: target.id }, 'refusing to build an oversized artifact');
+        req.log.error(
+          { err, 'opportun.artifact.target': target.id },
+          'refusing to build an oversized artifact',
+        );
         throw notFound();
       }
       tree[SERVER_FILE] = new Uint8Array(

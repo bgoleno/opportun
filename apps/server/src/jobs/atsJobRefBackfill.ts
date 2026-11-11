@@ -151,7 +151,15 @@ export const backfillAtsJobRefsJob: JobHandler<z.infer<typeof PayloadSchema>> = 
     if (ctx.userId === null) throw new Error(`${BACKFILL_ATS_JOB_REFS_KIND} needs a user`);
     const outcome = await backfillAtsJobRefs(db, { userId: ctx.userId, isAdmin: false });
     // Counts only (the EM on #140): no ids, URLs or company names leave the database this way.
-    ctx.services.log?.info({ ...outcome }, 'ats job ref backfill');
+    ctx.services.log?.info(
+      {
+        'opportun.count.read': outcome.read,
+        'opportun.count.set': outcome.set,
+        'opportun.count.changed': outcome.changed,
+        'opportun.count.cleared': outcome.cleared,
+      },
+      'ats job ref backfill',
+    );
     await ctx.setResult(outcome);
   },
 };

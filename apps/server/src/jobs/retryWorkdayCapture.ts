@@ -149,7 +149,11 @@ export async function retryWorkdayCapture(
     } catch (err) {
       // A tenant in its weekly maintenance window, or any other transient failure, costs this
       // row nothing beyond staying bare for another day: the next sweep tries again.
-      sctx.log.warn({ resultId: row.id, host, err }, 'workday capture retry failed');
+      // The host is the company's Workday tenant: only the result's id is logged (14.8).
+      sctx.log.warn(
+        { 'opportun.discovery_result.id': row.id, err },
+        'workday capture retry failed',
+      );
       continue;
     }
     if (detail === null) continue; // Still gone or still unusable; try again tomorrow.

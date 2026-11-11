@@ -134,7 +134,7 @@ export async function runOpportunityDedupeAi(
     } catch (err) {
       if (err instanceof AiUnavailableError) {
         sctx.log.warn(
-          { candidateId: row.id, reason: err.reason },
+          { 'opportun.dedupe_candidate.id': row.id, 'error.type': err.reason },
           'opportunity dedupe AI unavailable',
         );
         continue;
@@ -156,7 +156,8 @@ export async function runOpportunityDedupeAi(
     else if (verdict === 'rejected') rejected += 1;
     else
       sctx.log.warn(
-        { candidateId: row.id, ref: out.duplicateOfRef },
+        // The ref is what the model returned: model output is never logged (14.8).
+        { 'opportun.dedupe_candidate.id': row.id },
         'opportunity dedupe AI returned an unrecognized ref',
       );
   }

@@ -122,7 +122,11 @@ export const mcpSource: DiscoverySource = {
     }
     if (skipped > 0 || items.length > MCP_MAX_ITEMS) {
       sctx.log.info(
-        { tool: config.tool, skipped, truncated: Math.max(0, items.length - MCP_MAX_ITEMS) },
+        // The tool's name is the user's own configuration: only the counts are logged (14.8).
+        {
+          'opportun.count.skipped': skipped,
+          'opportun.count.truncated': Math.max(0, items.length - MCP_MAX_ITEMS),
+        },
         'MCP items skipped',
       );
     }

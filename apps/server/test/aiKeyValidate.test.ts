@@ -126,9 +126,9 @@ describe('openai keys', () => {
     expect(list.body).not.toContain(KEY);
     const settingsRows = await queryAll(app, `SELECT value FROM settings`);
     expect(JSON.stringify(settingsRows)).not.toContain(KEY);
-    // This test's own request is in the log, so the next line cannot pass on an empty one: at the
-    // harness's default `silent` level it did (https://github.com/bgoleno/opportun/issues/258).
-    expect(logs.text()).toContain('/api/v1/secrets');
+    // The capture is live at info level (a catalogued boot line is in it), so the checks below
+    // cannot pass on an empty log (#240). No request url is ever logged (#345, design 14.9).
+    expect(logs.text()).toContain('serving the API only');
     expect(logs.text()).not.toContain(KEY);
   });
 
