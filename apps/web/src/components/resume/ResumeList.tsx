@@ -2,7 +2,7 @@
 // Settings > Integrations) and list every resume.
 import { Link } from '@tanstack/react-router';
 import { Search, Trash2 } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FormError } from '@/components/FormError';
 import { Badge } from '@/components/ui/badge';
@@ -76,8 +76,20 @@ function ReactiveResumeConnectHint() {
  * one, it registers and attaches in one step (#77), landing as tailored with no parent since
  * nothing was copied.
  */
-export function RegisterDocCard({ opportunityId }: { opportunityId?: string } = {}) {
+export function RegisterDocCard({
+  opportunityId,
+  quiet = false,
+  onRegistered,
+}: {
+  opportunityId?: string;
+  /** An outline button: on the Resume tab, the flow above it has the one filled button (#440). */
+  quiet?: boolean;
+  /** Told once a resume is registered, so the resume flow can move focus to where it led. */
+  onRegistered?: () => void;
+} = {}) {
   const create = useCreateResume();
+  // One id per card: the Resume tab can show the base card and the attaching one together (#440).
+  const docRefId = useId();
   const pref = useDocumentStore();
   const [docRef, setDocRef] = useState('');
   const [searching, setSearching] = useState(false);
@@ -85,6 +97,7 @@ export function RegisterDocCard({ opportunityId }: { opportunityId?: string } = 
   const attaching = opportunityId !== undefined;
 
   function registered(r: { title: string }) {
+    onRegistered?.();
     toast({
       title: attaching ? 'Resume registered and attached' : 'Base resume registered',
       description: r.title,
@@ -159,11 +172,9 @@ export function RegisterDocCard({ opportunityId }: { opportunityId?: string } = 
           )}
           <form onSubmit={submit} className="grid gap-3">
             <div className="grid gap-2">
-              <Label htmlFor="base-doc-ref">
-                {rr ? 'Reactive Resume link' : 'Google Doc link'}
-              </Label>
+              <Label htmlFor={docRefId}>{rr ? 'Reactive Resume link' : 'Google Doc link'}</Label>
               <Input
-                id="base-doc-ref"
+                id={docRefId}
                 value={docRef}
                 maxLength={500}
                 placeholder={
@@ -178,7 +189,11 @@ export function RegisterDocCard({ opportunityId }: { opportunityId?: string } = 
               <FormError message={resumeErrorMessage(create.error) ?? errorMessage(create.error)} />
             ) : null}
             <div>
-              <Button type="submit" disabled={create.isPending || docRef.trim().length === 0}>
+              <Button
+                type="submit"
+                variant={quiet ? 'outline' : 'default'}
+                disabled={create.isPending || docRef.trim().length === 0}
+              >
                 {create.isPending
                   ? attaching
                     ? 'Attaching...'

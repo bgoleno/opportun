@@ -41,9 +41,15 @@ export function sentAtFor(day: string, today = todayIso()): number | undefined {
 export function RecordSendFields({
   opportunityId,
   resume,
+  quiet = false,
+  onRecorded,
 }: {
   opportunityId: string;
   resume: Resume;
+  /** An outline button, where the next action is elsewhere on the page (#440). */
+  quiet?: boolean;
+  /** Told once the send is recorded, so the resume flow can move focus to where it led. */
+  onRecorded?: () => void;
 }) {
   const record = useRecordSend(opportunityId);
   const [via, setVia] = useState('');
@@ -59,6 +65,7 @@ export function RecordSendFields({
       {
         onSuccess: () => {
           setVia('');
+          onRecorded?.();
           toast({ title: 'Recorded as sent', description: resume.title, variant: 'success' });
         },
       },
@@ -68,8 +75,9 @@ export function RecordSendFields({
   return (
     <form onSubmit={submit} className="grid gap-3">
       <p className="text-sm text-muted-foreground">
-        A base resume stays as it is. This records that you sent it for this opportunity, and it can
-        still be sent for others and tailored from.
+        {resume.kind === 'base'
+          ? 'A base resume stays as it is. This records that you sent it for this opportunity, and it can still be sent for others and tailored from.'
+          : 'This records that you sent it for this opportunity, and how.'}
       </p>
       <div className="grid gap-2">
         <Label htmlFor={viaId}>Sent via</Label>
@@ -95,7 +103,11 @@ export function RecordSendFields({
         <FormError message={resumeErrorMessage(record.error) ?? errorMessage(record.error)} />
       ) : null}
       {/* eslint-disable-next-line opportun/no-stretched-grid-button -- full width by default, not by decision: w-fit or w-full is still to be chosen (https://github.com/bgoleno/opportun/issues/9) */}
-      <Button type="submit" disabled={record.isPending || via.trim() === '' || day === ''}>
+      <Button
+        type="submit"
+        variant={quiet ? 'outline' : 'default'}
+        disabled={record.isPending || via.trim() === '' || day === ''}
+      >
         {record.isPending ? 'Recording...' : 'Record as sent'}
       </Button>
     </form>
