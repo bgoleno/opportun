@@ -52,7 +52,7 @@ import {
 import { observeStatement, observeStatementAsync } from '../obs/database';
 import {
   armGateWatchdog,
-  dbLogger,
+  dbLog,
   reportSlowTransaction,
   SLOW_TRANSACTION_MS,
   WriteGate,
@@ -780,8 +780,7 @@ async function openPostgres(cfg: PostgresConfig, opts: ConnectOptions): Promise<
   pool.on(
     'error',
     // #345: through the gated logger, the error as its type and frames (design 14.9).
-    opts.onIdleError ??
-      ((err: Error) => dbLogger().error({ err }, 'postgres idle connection error')),
+    opts.onIdleError ?? ((err: Error) => dbLog('error', { err }, 'postgres idle connection error')),
   );
   try {
     await migrateLockedPg(pool);
@@ -898,7 +897,7 @@ export async function openPgSession(cfg: PostgresConfig): Promise<PgSession> {
   installPgTypeParsers();
   // Two connections: the session's own, and one for migrate().
   const pool = new pg.Pool({ ...pgPoolConfig(cfg), max: 2, application_name: 'opportun-copy' });
-  pool.on('error', (err: Error) => dbLogger().error({ err }, 'postgres idle connection error'));
+  pool.on('error', (err: Error) => dbLog('error', { err }, 'postgres idle connection error'));
   let client: pg.PoolClient | undefined;
   try {
     const [collation] = await collationWarnings(pool);

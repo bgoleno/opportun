@@ -114,3 +114,13 @@ describe('the lists the catalog keeps by hand (#345)', () => {
     );
   });
 });
+
+describe('what test setup loads (#345)', () => {
+  it('db/gate.ts imports nothing of obs/ statically: it would load the catalog and @opportun/ai first', () => {
+    // test/setup.ts imports db/gate.ts before any test file's vi.mock: a static import of the
+    // logger there loads the catalog, @opportun/ai and its real providers, and every test that
+    // mocks a provider then calls the real one (found merging #366, 44 tests reaching the network).
+    const gate = FILES.find((f) => f.path === join('db', 'gate.ts'))!.text;
+    expect(gate).not.toMatch(/^import [^;]*from '\.\.\/obs\//m);
+  });
+});
