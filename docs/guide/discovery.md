@@ -52,8 +52,9 @@ cost, based on your average cost per ranking call over the last 30 days, before 
 you confirm, they go through your [discovery budget](settings.md#models-and-budgets) like any other
 posting, so any that do not fit today wait for a later budget day. Later runs of that board are not
 capped, and a large Workday board brings in its postings over several runs, so those runs can still
-fill the budget for a while. At the [measured cost](#the-review-queue) of about $0.008 a
-ranking call, the 25 postings of a first run are about $0.20.
+fill the budget for a while. At the [measured cost](#the-review-queue) of about $0.0065 a
+ranking call with prompt caching (about $0.008 without it), the 25 postings of a first run are
+about $0.16.
 
 ### The pre-filter
 
@@ -278,14 +279,28 @@ times the prices in Opportun's price table on that date.
 | `discovery.rank`, one posting (46 calls)                    | `claude-sonnet-5-5`, $2 / $10                 | 2,719 / 3,778                           | 235 / 257                                | $0.0079 / $0.0094                         |
 | `discovery.company_tags`, 20 companies in one call (1 call) | `claude-haiku-5-5`, $0.10 / $0.50             | 9,501                                   | 897                                      | $0.0014                                   |
 
-- **The default budget.** $1.00 a day ranks about 125 postings (about 106 if every call cost as
-  much as the 90th percentile). While a company waits for an industry tag, ranking stops at 90% of
-  the budget, which is about 114 postings.
-- **A new board's first run** ranks 25 postings, about $0.20.
-- **Tagging** costs about $0.07 per 1,000 companies, once for each company. Ranking is nearly all of
-  the cost.
-- **A backlog** drains at the same rate: 500 waiting postings take about four budget days at the
-  default.
+- **Prompt caching.** Opportun marks the part of a call that stays the same for Anthropic's
+  prompt cache: for ranking, the instructions and your role target, which come before the posting;
+  for tagging, the industry table. The first call writes that part to the cache, at 1.25 times the
+  input price, and each call in the next five minutes reads it at a tenth of the input price or
+  less. Measured on 2026-11-11 the same way as the table, on 76 postings against one role target:
+  the first ranking call wrote 721 tokens and each of the other 75 read them, and the mean cost of
+  a ranking call fell from $0.0078 to $0.0065 (17.7% less). Tagging, measured the same way on
+  2026-11-10, costs 31% less. So a posting costs about $0.0065 when postings for one role target
+  are ranked within five minutes of each other, as a board's run does. A posting ranked on its own gets no saving: its
+  call is the one that writes the cache, which by the price table costs about 5% more than a call
+  without it. The cache is per role target, so a run that switches between role targets pays one
+  more cache write for each role target. Only Anthropic models are marked; the table's figures are
+  without the cache.
+- **The default budget.** $1.00 a day ranks about 150 postings with prompt caching (about 125
+  without it, or about 106 if every call cost as much as the 90th percentile). While a company
+  waits for an industry tag, ranking stops at 90% of the budget, which is about 135 postings
+  (about 114 without caching).
+- **A new board's first run** ranks 25 postings, about $0.16 ($0.20 without caching).
+- **Tagging** costs about $0.05 per 1,000 companies with caching ($0.07 without), once for each
+  company. Ranking is nearly all of the cost.
+- **A backlog** drains at the same rate: 500 waiting postings take between three and four budget
+  days at the default.
 - **These are estimates at list price, not a bill.** Your AI provider's own console has the real
   one. They come from one role target and three boards, so read them as a guide, not a guarantee.
 - **They change with** the model and its prices (a different model on the task, prices you set on

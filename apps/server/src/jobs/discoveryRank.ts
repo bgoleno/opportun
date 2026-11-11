@@ -143,8 +143,9 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
   try {
     out = await runStructured(await buildAiDeps(db, ctx), 'discovery.rank', {
       // Split before the posting (https://github.com/bgoleno/opportun/issues/356). The router
-      // marks the part before it for the cache only when it is long enough to cache, which the
-      // default rank prompt's is not today; a longer prompt of the user's then caches as is.
+      // marks the part before it for the cache only when it is long enough to cache. The default
+      // puts its output instructions before the posting (0061) so that, with the structured-output
+      // prompt, it is (https://github.com/bgoleno/opportun/issues/388).
       ...systemWithCacheBreak(resolved.prompt.body, {
         role_target: roleTarget,
         posting_untrusted: postingText(result.posting),
