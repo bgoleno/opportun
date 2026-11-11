@@ -65,7 +65,7 @@ function notEligible(opp: OpportunityView, resumes: Resume[]): string | null {
       (r) => r.kind === 'tailored' && r.opportunityId === opp.id && r.archivedAt === null,
     );
     if (attached !== undefined) {
-      return `The resume attached here ("${attached.title}") is ${statusLabel(attached.status)}. Set its Status to Final on the Resume tab.`;
+      return `The resume attached here ("${attached.title}") is ${statusLabel(attached.status)}. Open it from the Resume tab and set its Status to Final.`;
     }
     return 'Attach a final resume first.';
   }
@@ -77,8 +77,9 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const resumes = useResumes();
   const reasonId = useId();
   const [howOpen, setHowOpen] = useState(false);
-  // A click on the refused button (#395): it says so, rather than doing nothing.
-  const [refusedClick, setRefusedClick] = useState(false);
+  // A click on the refused button (#395): it says so, rather than doing nothing. Kept as the
+  // reason that was clicked, so a different reason later reads plainly until it is clicked too.
+  const [clickedReason, setClickedReason] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const cancel = useCancelSubmission(opp.id);
 
@@ -131,7 +132,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
               aria-describedby={reasonId}
               onClick={(e) => {
                 e.preventDefault();
-                setRefusedClick(true);
+                setClickedReason(reason);
               }}
             >
               {refusedLabel}
@@ -141,9 +142,15 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
             <p
               id={reasonId}
               aria-live="polite"
-              className={refusedClick ? 'text-sm text-foreground' : 'text-sm text-muted-foreground'}
+              className={
+                clickedReason === reason
+                  ? 'text-sm text-foreground'
+                  : 'text-sm text-muted-foreground'
+              }
             >
-              {refusedClick ? `${refusedLabel} is not available yet. ${reason}` : reason}
+              {clickedReason === reason
+                ? `${refusedLabel} is not available yet. ${reason}`
+                : reason}
             </p>
           </>
         )}

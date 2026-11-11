@@ -307,14 +307,14 @@ describe('#395: a refused Apply button says why, and never swallows a click', ()
       { stage: 'interested' },
       [TAILORED_IN_REVIEW],
       'Apply on Greenhouse',
-      'The resume attached here ("Acme tailored") is In review. Set its Status to Final on the Resume tab.',
+      'The resume attached here ("Acme tailored") is In review. Open it from the Resume tab and set its Status to Final.',
     ],
     [
       'an attached resume in Draft',
       { stage: 'interested' },
       [{ ...TAILORED_IN_REVIEW, status: 'draft' }],
       'Apply on Greenhouse',
-      'The resume attached here ("Acme tailored") is Draft. Set its Status to Final on the Resume tab.',
+      'The resume attached here ("Acme tailored") is Draft. Open it from the Resume tab and set its Status to Final.',
     ],
     // Brian's second case on #395: Interested, nothing attached.
     [
