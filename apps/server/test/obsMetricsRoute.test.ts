@@ -108,8 +108,12 @@ describe('GET /obs/metrics (FR-T6)', () => {
     expect(body.metrics.filter((m: { scope: string }) => m.scope === 'instance')).toEqual([]);
   });
 
-  it('says whether collection is on', async () => {
+  it('says whether collection is on, and that it is available (#364)', async () => {
     const { app, a, b } = await boot();
+    expect((await b.request({ method: 'GET', url: '/api/v1/obs/metrics' })).json()).toMatchObject({
+      collect: false,
+      collectAvailable: true,
+    });
     await writeCollect(app.db, true, { userId: a.userId });
     expect((await b.request({ method: 'GET', url: '/api/v1/obs/metrics' })).json().collect).toBe(
       true,
@@ -124,9 +128,11 @@ describe('GET /obs/metrics (FR-T6)', () => {
       .values({ key: OBS_COLLECT_KEY, userId: null, value: true, updatedAt: now })
       .onConflictDoUpdate({ target: settings.key, set: { value: true, updatedAt: now } })
       .run();
-    expect((await a.request({ method: 'GET', url: '/api/v1/obs/metrics' })).json().collect).toBe(
-      false,
-    );
+    expect((await a.request({ method: 'GET', url: '/api/v1/obs/metrics' })).json()).toMatchObject({
+      collect: false,
+      // Not available on the demo at all (#364).
+      collectAvailable: false,
+    });
   });
 
   it('needs a signed-in user', async () => {

@@ -23,7 +23,7 @@ import type { Db } from '../db/client';
 import { obsMetricPoints } from '../db/schema';
 import { forbidden, HttpError } from '../lib/errors';
 import { type MetricDef, METRICS, OTHER } from '../obs/catalog';
-import { collectInEffect } from '../obs/config';
+import { collectAvailable, collectInEffect } from '../obs/config';
 import { HOUR_MS, MINUTE_MS } from '../obs/metrics';
 import { requireUser, type UserCtx } from '../repos/base';
 
@@ -70,6 +70,8 @@ const MetricInfo = z.object({
 const CatalogView = z.object({
   /** Whether collection is on now. Points collected earlier are shown either way (14.1). */
   collect: z.boolean(),
+  /** Whether collection can be turned on here at all: false on the demo (#364). */
+  collectAvailable: z.boolean(),
   metrics: z.array(MetricInfo),
 });
 
@@ -318,7 +320,11 @@ export async function obsMetricRoutes(app: FastifyInstance): Promise<void> {
         stats: statsOf(def),
       }));
     // The switch in effect: off on the demo whatever is stored (#360).
-    return { collect: await collectInEffect(db, app.config), metrics };
+    return {
+      collect: await collectInEffect(db, app.config),
+      collectAvailable: collectAvailable(app.config),
+      metrics,
+    };
   });
 
   api.get(
