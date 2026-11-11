@@ -229,6 +229,10 @@ export async function flushBatch(
   for (let i = 0; i < batch.length; i += size) {
     if (i > 0) {
       await yieldToEventLoop();
+      // Collection was turned off meanwhile: the chunks still waiting are dropped without being
+      // counted, as stop() drops the buffer. The count is itself a metric (opportun.obs.dropped),
+      // and obs.record() records nothing once collection is off, so there is nothing to count it
+      // in; spans are not written either way.
       if (opts.stillBound?.() === false) break;
     }
     const chunk = batch.slice(i, i + size);

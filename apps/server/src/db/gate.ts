@@ -121,18 +121,33 @@ export interface SlowTransaction {
   stack: string;
 }
 
-let slowReporter: (slow: SlowTransaction) => void = (slow) => {
-  // Through the gated logger (obs/log.ts): the stack as frame lines only, and fixed text.
+/**
+ * The default slow-transaction reporter, through the gated logger (obs/log.ts): the stack as
+ * frame lines only, and fixed text. The caller's stack is `new Error('withTransaction caller')`'s
+ * (db/client.ts), but the record has no message (a `message` would make pino's error serializer
+ * rename the type to Object), so its header line becomes the name alone, the header the log gate
+ * then skips (tl on #389).
+ */
+export function logSlowTransaction(slow: SlowTransaction): void {
   dbLog(
     'warn',
     {
       'opportun.db.gate_held_ms': Math.round(slow.durationMs),
       'opportun.db.awaited_outside': slow.awaitedOutside,
-      err: { type: 'SlowTransaction', stack: slow.stack },
+      err: { type: 'SlowTransaction', stack: underName('SlowTransaction', slow.stack) },
     },
     'slow transaction held the database write gate',
   );
-};
+}
+
+/** A stack's frames under a header of `name` alone, in place of its own first line. */
+function underName(name: string, stack: string | undefined): string | undefined {
+  if (stack === undefined) return undefined;
+  const at = stack.indexOf('\n');
+  return at < 0 ? name : `${name}${stack.slice(at)}`;
+}
+
+let slowReporter: (slow: SlowTransaction) => void = logSlowTransaction;
 
 /** Test hook: test/setup.ts fails the running test on a transaction that awaited outside. */
 export function onSlowTransaction(reporter: (slow: SlowTransaction) => void): void {
@@ -152,8 +167,21 @@ export interface GateHeld {
   heldMs: number;
 }
 
-let watchdogMs = GATE_WATCHDOG_MS;
-let watchdogReport: (held: GateHeld) => void = (held) => {
+/**
+ * A held gate as the error both watchdog reporters log: this file's default one, and the app's
+ * (app.ts configureGateWatchdog), which must stay in step with it. The call site that names the
+ * holder when no label was set is a frame line, so it goes in as the error's frame, after a
+ * header line as a V8 stack has one: the log gate skips a stack's header unread (obs/log.ts
+ * frameLines), and a stack of the call site alone lost it (#381). It has no message, so the
+ * header is the name alone (a `message` would also make pino's error serializer rename the type
+ * to Object). A label set in code is not frame-shaped and gives no frame.
+ */
+export function gateHeldError(label: string): { type: 'GateHeld'; stack: string } {
+  return { type: 'GateHeld', stack: `GateHeld\n${label}` };
+}
+
+/** The default held-gate reporter, when no app wired its own (a CLI). */
+export function logHeldGate(held: GateHeld): void {
   dbLog(
     'warn',
     {
@@ -161,11 +189,15 @@ let watchdogReport: (held: GateHeld) => void = (held) => {
       // the error's frame (the gate reduces it to its path in the install root), not as a code.
       'opportun.db.gate_label': held.label,
       'opportun.db.gate_held_ms': Math.round(held.heldMs),
-      err: { type: 'GateHeld', stack: held.label },
+      // gateHeldError: the same value as the app's reporter logs (app.ts).
+      err: gateHeldError(held.label),
     },
     'database write gate held too long',
   );
-};
+}
+
+let watchdogMs = GATE_WATCHDOG_MS;
+let watchdogReport: (held: GateHeld) => void = logHeldGate;
 
 /**
  * What armGateWatchdog schedules against: real setTimeout/performance.now() in production.

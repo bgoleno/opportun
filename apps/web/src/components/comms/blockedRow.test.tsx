@@ -102,6 +102,8 @@ describe('BlockedRow', () => {
       ['ai_gate', /not part of the job search/i],
       ['thread', /linked to an opportunity/i],
       ['job_sender', /known job sender/i],
+      // #392: the request a mail app's Unsubscribe button sent from the account itself.
+      ['auto_unsubscribe', /unsubscribe request your mail app sent/i],
     ] as const) {
       const { container, unmount } = renderWithProviders(
         <BlockedRow comm={blocked({ triageRule: rule })} />,

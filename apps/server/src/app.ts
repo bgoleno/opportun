@@ -8,7 +8,7 @@ import {
 import { z } from 'zod';
 import { submissionsEnabled, type Config } from './config';
 import { closeDatabase, connectDatabase, pingDatabase, type Db } from './db/client';
-import { configureGateWatchdog } from './db/gate';
+import { configureGateWatchdog, gateHeldError } from './db/gate';
 import { SCHEMA_DIALECT } from './db/schema';
 import { obsHttpPlugin } from './plugins/obsHttp';
 import { securityPlugin } from './plugins/security';
@@ -364,7 +364,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
           // The label, or the call site as a frame when no label was set (it is not a code).
           'opportun.db.gate_label': held.label,
           'opportun.db.gate_held_ms': held.heldMs,
-          err: { type: 'GateHeld', stack: held.label },
+          // gateHeldError: the same value as db/gate.ts's default reporter logs.
+          err: gateHeldError(held.label),
         },
         'database write gate held too long',
       ),
