@@ -277,12 +277,14 @@ function TraceRow({ trace: t }: { trace: TraceView }) {
       className="block rounded-md border bg-card p-3 text-sm outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="min-w-0 font-medium break-words">{traceTitle(t)}</span>
+        <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{traceTitle(t)}</span>
         <StatusBadge status={t.status} />
       </div>
       <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground tabular-nums">
         <span>{formatDateTime(t.startedAt)}</span>
-        {t.models.length > 0 ? <span className="break-all">{t.models.join(', ')}</span> : null}
+        {t.models.length > 0 ? (
+          <span className="[overflow-wrap:anywhere]">{t.models.join(', ')}</span>
+        ) : null}
         <span>{formatDuration(t.durationMs)}</span>
         <span>
           {formatInt(t.inputTokens)} in, {formatInt(t.outputTokens)} out

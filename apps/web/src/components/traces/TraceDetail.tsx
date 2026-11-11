@@ -66,7 +66,9 @@ function TraceView({ detail }: { detail: TraceDetail }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex flex-wrap items-center gap-2">
-            <span className="break-words">{t.workflow ?? (t.tasks.join(', ') || t.origin)}</span>
+            <span className="[overflow-wrap:anywhere]">
+              {t.workflow ?? (t.tasks.join(', ') || t.origin)}
+            </span>
             <Badge variant={t.status === 'ok' ? 'secondary' : 'destructive'}>
               {statusLabel(t.status)}
             </Badge>
@@ -77,12 +79,12 @@ function TraceView({ detail }: { detail: TraceDetail }) {
             <Fact term="Started">{formatDateTime(t.startedAt)}</Fact>
             <Fact term="Duration">{formatDuration(t.durationMs)}</Fact>
             <Fact term="Started by">
-              <span className="break-all">{t.origin}</span>
+              <span className="[overflow-wrap:anywhere]">{t.origin}</span>
             </Fact>
             {t.feature !== null ? <Fact term="Feature">{t.feature}</Fact> : null}
             {t.models.length > 0 ? (
               <Fact term="Models">
-                <span className="break-all">{t.models.join(', ')}</span>
+                <span className="[overflow-wrap:anywhere]">{t.models.join(', ')}</span>
               </Fact>
             ) : null}
             <Fact term="Tokens">
@@ -205,7 +207,7 @@ function Waterfall({
               className="flex min-w-0 flex-wrap items-baseline gap-x-2"
               style={{ paddingLeft: `${Math.min(r.depth, MAX_INDENT_LEVELS) * INDENT_REM}rem` }}
             >
-              <span className="min-w-0 font-medium break-all">{s.name}</span>
+              <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{s.name}</span>
               <span className="text-muted-foreground tabular-nums">
                 +{formatDuration(r.offsetMs)}, {formatDuration(s.durationMs)}
               </span>
@@ -239,7 +241,7 @@ function SpanDetails({ span: s }: { span: SpanView }) {
   const attrs = Object.entries(s.attributes).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return (
     <section aria-labelledby={headingId} className="grid gap-2 rounded-md border p-3 text-sm">
-      <h3 id={headingId} className="font-semibold break-all">
+      <h3 id={headingId} className="font-semibold [overflow-wrap:anywhere]">
         Span details: {s.name}
       </h3>
       <dl className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
@@ -252,7 +254,7 @@ function SpanDetails({ span: s }: { span: SpanView }) {
         {s.task !== null ? <Fact term="Task">{s.task}</Fact> : null}
         {s.model !== null ? (
           <Fact term="Model">
-            <span className="break-all">{s.model}</span>
+            <span className="[overflow-wrap:anywhere]">{s.model}</span>
           </Fact>
         ) : null}
         {s.provider !== null ? <Fact term="Provider">{s.provider}</Fact> : null}
@@ -275,14 +277,16 @@ function SpanDetails({ span: s }: { span: SpanView }) {
           <dl className="grid gap-1">
             {attrs.map(([k, v]) => (
               <div key={k} className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
-                <dt className="font-mono text-xs break-all text-muted-foreground">{k}</dt>
-                <dd className="font-mono text-xs break-all">{formatValue(v)}</dd>
+                <dt className="font-mono text-xs [overflow-wrap:anywhere] text-muted-foreground">
+                  {k}
+                </dt>
+                <dd className="font-mono text-xs [overflow-wrap:anywhere]">{formatValue(v)}</dd>
               </div>
             ))}
           </dl>
         </>
       ) : (
-        <p className="text-muted-foreground">No attributes were recorded for this span.</p>
+        <p className="text-muted-foreground">No attributes to show for this span.</p>
       )}
     </section>
   );
