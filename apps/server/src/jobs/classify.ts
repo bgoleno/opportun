@@ -75,16 +75,14 @@ export async function roleTargetsText(db: Db, ctx: UserCtx): Promise<string> {
 }
 
 /**
- * Tracked opportunities that are still open (company, title, stage), newest first. Rendered as
- * open_opportunities_untrusted: names and titles can come from model output on earlier hostile
- * mail (FR-M3), so they are fenced like the message itself; line() stays as defense in depth.
- */
-/**
- * The open opportunities, as the comms.classify prompt lists them: the MAX_OPEN_OPPORTUNITIES
- * most recently updated, in the order they were created, then by id. A stable order, because the
- * list sits in the provider-cached prefix, and one cache entry covers the whole prefix: listed
- * by updatedAt, every message a sync batch linked reordered it and made the next call write the
- * whole prefix again, rules included (#380, tl). The template asks for no order.
+ * Tracked opportunities that are still open (company, title, stage), as the comms.classify prompt
+ * lists them: the MAX_OPEN_OPPORTUNITIES most recently updated, in the order they were created,
+ * then by id. A stable order, because the list sits in the provider-cached prefix, and one cache
+ * entry covers the whole prefix: listed by updatedAt, every message a sync batch linked reordered
+ * it and made the next call write the whole prefix again, rules included (#380, tl). The template
+ * asks for no order. Rendered as open_opportunities_untrusted: names and titles can come from
+ * model output on earlier hostile mail (FR-M3), so they are fenced like the message itself;
+ * line() stays as defense in depth.
  */
 export async function openOpportunitiesText(db: Db, ctx: UserCtx): Promise<string> {
   const rows = await db
