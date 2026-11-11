@@ -302,18 +302,29 @@ function record(
 export interface PreparedRecord {
   metric: MetricName;
   attributes: Attributes;
+  /** The user the points belong to, for a user-scoped metric; null for the instance's. */
+  owner: string | null;
   key: string;
 }
 
-/** Gates `attributes` once for an instance metric; drops are counted as for record(). */
+/**
+ * Gates `attributes` once; drops are counted as for record(). A user-scoped metric (the Gen AI
+ * ones, 14.4) is prepared for one user, whose points they are: its series key includes them,
+ * so a prepared record and an obs.record() with the same values write the same series. Preparing
+ * a user metric without its user is a mistake in code, and throws.
+ */
 export function prepareRecord(
   metric: MetricName,
   attributes: Readonly<Record<string, unknown>>,
+  opts: { userId?: string } = {},
 ): PreparedRecord {
   const def = metricDef(metric);
-  if (def.scope !== 'instance') throw new Error(`obs: ${metric} is not an instance metric`);
+  const owner = def.scope === 'user' ? (opts.userId ?? null) : null;
+  if (def.scope === 'user' && owner === null) {
+    throw new Error(`obs: ${metric} is a user metric and needs its user`);
+  }
   const gated = gateAttributes('metrics', def.attributes, attributes, countDrop);
-  return { metric, attributes: gated, key: seriesKey(metric, null, gated) };
+  return { metric, attributes: gated, owner, key: seriesKey(metric, owner, gated) };
 }
 
 /** Records one value with attributes prepareRecord() already gated. */
@@ -323,8 +334,8 @@ export function recordPrepared(prepared: PreparedRecord, value: number): void {
     countDrop('metrics', 'invalid_value');
     return;
   }
-  const { metric, attributes, key } = prepared;
-  if (!aggregator.add(metric, value, attributes, null, runtime.now(), false, key)) {
+  const { metric, attributes, owner, key } = prepared;
+  if (!aggregator.add(metric, value, attributes, owner, runtime.now(), false, key)) {
     countDrop('metrics', 'series_cap');
     return;
   }
