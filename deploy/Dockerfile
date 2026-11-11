@@ -33,6 +33,26 @@ RUN pnpm --filter @opportun/server --prod deploy /out/server \
  && rm -rf /out/server/test /out/server/scripts /out/server/data /out/server/drizzle.config.ts \
     /out/server/drizzle-pg.config.ts
 
+# The PostgreSQL project's apt signing key (PGDG), kept in the repository and checked here by
+# its full fingerprint (https://github.com/bgoleno/opportun/issues/438): fetching it from
+# www.postgresql.org on every build failed now and then (curl 18), and the fetch was never
+# checked beyond TLS. The fingerprint is the one postgresql.org publishes for this key
+# (https://www.postgresql.org/download/linux/debian/). The build fails unless the file holds
+# exactly one primary key with that fingerprint. A stage of its own, so gnupg never ships.
+# Replacing the key (if PGDG ever rotates it) means committing the new file and its
+# fingerprint together, checked against postgresql.org's page.
+FROM node:${NODE_VERSION}-slim AS pgdg-key
+ARG PGDG_FINGERPRINT=B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8
+COPY deploy/pgdg-ACCC4CF8.asc /pgdg.asc
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gnupg \
+ && keys="$(gpg --show-keys --with-colons /pgdg.asc | grep -c '^pub:')" \
+ && fpr="$(gpg --show-keys --with-colons /pgdg.asc | awk -F: '$1 == "fpr" { print $10; exit }')" \
+ && if [ "$keys" != 1 ] || [ "$fpr" != "$PGDG_FINGERPRINT" ]; then \
+      echo "PGDG key check failed: $keys key(s), fingerprint $fpr, expected $PGDG_FINGERPRINT" >&2; \
+      exit 1; \
+    fi
+
 FROM node:${NODE_VERSION}-slim AS runtime
 # OCI labels, on the runtime stage because that is the image that ships. `source` is what
 # GitHub reads to link the container package to its repository: with it, the package is listed
@@ -44,14 +64,13 @@ LABEL org.opencontainers.image.source="https://github.com/bgoleno/opportun" \
 # The Postgres client tools' major version: pg_dump must be at least the server's and its
 # archives restore cleanly only into the same major (DB_DIALECT=postgres backups, Task 12).
 ARG PG_CLIENT_MAJOR=16
-# curl is for HEALTHCHECK and for fetching the PGDG signing key. postgresql-client (pg_dump,
-# pg_restore) comes from the PostgreSQL project's apt repository (PGDG), pinned to
-# PG_CLIENT_MAJOR: Debian's own repository carries one other major only. Fixed uid/gid so a
-# bind-mounted ./data can be chowned to it.
+# curl is for HEALTHCHECK. postgresql-client (pg_dump, pg_restore) comes from the PostgreSQL
+# project's apt repository (PGDG), pinned to PG_CLIENT_MAJOR: Debian's own repository carries
+# one other major only. apt checks its packages against the PGDG key checked in the stage
+# above. Fixed uid/gid so a bind-mounted ./data can be chowned to it.
+COPY --from=pgdg-key /pgdg.asc /usr/share/keyrings/pgdg.asc
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
- && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
-      -o /usr/share/keyrings/pgdg.asc \
  && . /etc/os-release \
  && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
       > /etc/apt/sources.list.d/pgdg.list \
