@@ -266,6 +266,26 @@ the per-IP rate limits collapse to one bucket and, over HTTPS, cookies are not m
 
 ## 4. Configuration reference
 
+**On Compose, there are two ways to set an application setting.** Compose reads `deploy/.env`
+only to fill in `${...}` in `deploy/compose.yml`; it does not hand the file to the container. So
+`deploy/compose.yml` lists each optional setting below and passes it on, and a line in
+`deploy/.env` reaches the server. The settings it does not pass are `OPPORTUN_HOST`, `WEB_DIR`
+(the image sets both, and an empty value would not mean "unset" to the server), `OPPORTUN_DEMO`
+(the [demo overlay](#16-demo-deployment) passes it), an inline `OPPORTUN_MASTER_KEY` (Compose uses
+the key file), `SMTP_URL` (reserved), and an `OPPORTUN_PEPPER_V<N>` above 9. Set any of those, or
+any other variable the server reads, in `deploy/compose.override.yml`, which Compose merges with
+`compose.yml` automatically:
+
+```yaml
+services:
+  opportun:
+    environment:
+      OPPORTUN_PEPPER_V10: <the old pepper>
+```
+
+A test fails when a setting this section documents is neither passed by `compose.yml` nor listed
+in it as not passed, so the two stay in step.
+
 Application settings (read by the server process):
 
 | Variable                                           | Default                                        | Purpose                                                                                                                                                                                                                                                                                                                                  |
