@@ -394,12 +394,15 @@ describe('streamChat', () => {
     expect(runs[0]).toMatchObject({ taskKey: 'resume.tailor', status: 'ok' });
   });
 
-  it('a ledger write failure during streamChat is reported, not thrown, and the stream still delivers its text', async () => {
+  it('a ledger write failure during streamChat is reported through onRecordError, not thrown or logged, and the stream still delivers its text', async () => {
     const h = harness({ model: streamModel('Hello there') });
     h.deps.record = async () => {
       throw new Error('db unavailable');
     };
-    const reported = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const reported = vi.fn();
+    h.deps.onRecordError = reported;
+    // The router does no IO of its own: a console write here would be a regression.
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       const res = await streamChat(h.deps, 'resume.tailor', {
         system: 'sys',
@@ -408,12 +411,10 @@ describe('streamChat', () => {
       let text = '';
       for await (const delta of res.textStream) text += delta;
       expect(text).toBe('Hello there');
-      expect(reported).toHaveBeenCalledWith(
-        expect.stringContaining('resume.tailor'),
-        expect.any(Error),
-      );
+      expect(reported).toHaveBeenCalledWith('resume.tailor', expect.any(Error));
+      expect(logged).not.toHaveBeenCalled();
     } finally {
-      reported.mockRestore();
+      logged.mockRestore();
     }
   });
 

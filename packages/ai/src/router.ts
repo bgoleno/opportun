@@ -16,6 +16,7 @@ import {
 import type { z } from 'zod';
 import { estimateCost } from './pricing';
 import { createLanguageModel } from './providers';
+import { InferenceSpan, SDK_TELEMETRY_OFF } from './telemetry';
 import {
   AiUnavailableError,
   type AiDeps,
@@ -38,11 +39,31 @@ const MAX_ERROR_DETAIL = 300;
 interface Tokens {
   input: number;
   output: number;
+  /** Part of `input` already; kept for the span only, the ledger has no column for them. */
+  cacheRead: number;
+  cacheWrite: number;
 }
 
 function addUsage(acc: Tokens, usage: LanguageModelUsage | undefined): void {
   acc.input += usage?.inputTokens ?? 0;
   acc.output += usage?.outputTokens ?? 0;
+  acc.cacheRead += usage?.inputTokenDetails?.cacheReadTokens ?? 0;
+  acc.cacheWrite += usage?.inputTokenDetails?.cacheWriteTokens ?? 0;
+}
+
+/** Why a run failed, as the ledger and the span each say it (the span never gets `detail`). */
+interface Failure {
+  reason: AiUnavailableReason;
+  detail?: string | undefined;
+}
+
+/** What a call tells its span at the start; the policy and the user come from the run. */
+interface CallInfo {
+  stream: boolean;
+  outputType: 'json' | 'text';
+  promptId?: string | undefined;
+  promptVersion?: string | undefined;
+  conversationId?: string | undefined;
 }
 
 /** Strips the key (and anything shaped like a bearer credential) from provider text. */
@@ -68,17 +89,37 @@ function isKeyRejected(err: unknown): boolean {
 class Run {
   private readonly started = Date.now();
   private recorded = false;
-  readonly tokens: Tokens = { input: 0, output: 0 };
+  readonly tokens: Tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  /** Provider calls made so far: zero means a refusal before the provider was reached. */
+  attempts = 0;
+  /** One span per run (https://github.com/bgoleno/opportun/issues/344). */
+  readonly span: InferenceSpan;
 
   constructor(
     private readonly deps: AiDeps,
     private readonly task: TaskKey,
     private readonly policy: ModelPolicy,
     private readonly promptId: string | undefined,
-  ) {}
+    info: CallInfo,
+  ) {
+    this.span = new InferenceSpan({
+      task,
+      policy,
+      stream: info.stream,
+      outputType: info.outputType,
+      promptId,
+      promptVersion: info.promptVersion,
+      conversationId: info.conversationId,
+      userId: deps.userId,
+    });
+  }
 
-  /** Records once; later calls are ignored (a stream can report both an error and an end). */
-  async record(status: 'ok' | 'error', error?: string): Promise<void> {
+  /**
+   * Records once; later calls are ignored (a stream can report both an error and an end). The span
+   * ends first and the ledger write follows, so a ledger that fails or is slow neither leaves the
+   * span open nor delays it. The span says what the ledger says: the same tokens and the same cost.
+   */
+  async record(status: 'ok' | 'error', failure?: Failure): Promise<void> {
     if (this.recorded) return;
     this.recorded = true;
     const cost = estimateCost(
@@ -88,6 +129,27 @@ class Run {
       this.tokens.output,
       this.policy,
     );
+    this.span.end({
+      ...(failure === undefined ? {} : { errorType: failure.reason }),
+      ...(this.attempts === 0
+        ? {}
+        : {
+            usage: {
+              input: this.tokens.input,
+              output: this.tokens.output,
+              cacheRead: this.tokens.cacheRead,
+              cacheWrite: this.tokens.cacheWrite,
+            },
+            attempts: this.attempts,
+            costUsd: cost.usd,
+          }),
+    });
+    const error =
+      failure === undefined
+        ? undefined
+        : failure.detail === undefined
+          ? failure.reason
+          : `${failure.reason}: ${failure.detail}`;
     const rec: TaskRunRecord = {
       taskKey: this.task,
       provider: this.policy.provider,
@@ -110,7 +172,7 @@ class Run {
     detail?: string,
     opts: { keyRejected?: boolean } = {},
   ): Promise<AiUnavailableError> {
-    await this.record('error', detail === undefined ? reason : `${reason}: ${detail}`);
+    await this.record('error', { reason, detail });
     return new AiUnavailableError(reason, detail, opts);
   }
 }
@@ -119,12 +181,14 @@ class Run {
 async function prepare(
   deps: AiDeps,
   task: TaskKey,
-  promptId: string | undefined,
+  info: CallInfo,
 ): Promise<{ run: Run; model: LanguageModel; policy: ModelPolicy; apiKey: string }> {
   const policy = await deps.policyFor(task);
-  const run = new Run(deps, task, policy, promptId);
-
+  // Before the run, so before its span: a lookup that rejects (the ledger's database is down)
+  // throws with no span started, rather than leaving one open for good. It leaves no ledger row
+  // either, as before.
   const spent = await deps.spentTodayUsd(task);
+  const run = new Run(deps, task, policy, info.promptId, info);
   if (spent >= deps.budget.perTaskDailyUsd) throw await run.fail('budget_exceeded');
 
   let apiKey: string;
@@ -158,26 +222,53 @@ function callSettings(policy: ModelPolicy): { maxOutputTokens: number; temperatu
 export async function runStructured<T>(
   deps: AiDeps,
   task: TaskKey,
-  opts: { system: string; prompt: string; schema: z.ZodType<T>; promptId?: string },
+  opts: {
+    system: string;
+    prompt: string;
+    schema: z.ZodType<T>;
+    promptId?: string;
+    /** The version of the prompt, for the span, when the caller has one. */
+    promptVersion?: string;
+  },
 ): Promise<T> {
-  const { run, model, policy, apiKey } = await prepare(deps, task, opts.promptId);
+  const { run, model, policy, apiKey } = await prepare(deps, task, {
+    stream: false,
+    outputType: 'json',
+    promptId: opts.promptId,
+    promptVersion: opts.promptVersion,
+  });
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     let output: T;
     try {
-      const result = await generateText({
-        model,
-        system: opts.system,
-        prompt: opts.prompt,
-        output: Output.object({ schema: opts.schema }),
-        maxRetries: SDK_MAX_RETRIES,
-        ...callSettings(policy),
-      });
+      run.attempts++;
+      // Inside the span, so the request the SDK makes is the span's child.
+      const result = await run.span.run(() =>
+        generateText({
+          model,
+          system: opts.system,
+          prompt: opts.prompt,
+          output: Output.object({ schema: opts.schema }),
+          maxRetries: SDK_MAX_RETRIES,
+          telemetry: SDK_TELEMETRY_OFF,
+          ...callSettings(policy),
+        }),
+      );
       addUsage(run.tokens, result.totalUsage);
+      run.span.setResponse({
+        id: result.response.id,
+        modelId: result.response.modelId,
+        finishReason: result.finishReason,
+      });
       output = result.output as T;
     } catch (err) {
       if (NoObjectGeneratedError.isInstance(err)) {
         addUsage(run.tokens, err.usage);
+        run.span.setResponse({
+          id: err.response?.id,
+          modelId: err.response?.modelId,
+          finishReason: err.finishReason,
+        });
         if (attempt < MAX_ATTEMPTS) continue;
         throw await run.fail('invalid_output');
       }
@@ -202,37 +293,76 @@ export async function runStructured<T>(
  * returning the record promise from these callbacks, rather than firing it and forgetting it,
  * is what makes the ledger write land before a caller observes the stream as finished. A write
  * failure must still not crash the stream (it is not a provider failure), so it is caught and
- * reported here rather than left to reject the callback the SDK is awaiting.
+ * handed to deps.onRecordError (the server logs it; this package does no IO) rather than left to
+ * reject the callback the SDK is awaiting.
  */
 export async function streamChat(
   deps: AiDeps,
   task: TaskKey,
-  opts: { system: string; messages: CoreMessage[]; promptId?: string },
+  opts: {
+    system: string;
+    messages: CoreMessage[];
+    promptId?: string;
+    promptVersion?: string;
+    /** The tailoring session id, for the span. Never made up here. */
+    conversationId?: string;
+  },
 ): Promise<ChatStreamResult> {
-  const { run, model, policy, apiKey } = await prepare(deps, task, opts.promptId);
-  const recordSafely = async (status: 'ok' | 'error', error?: string): Promise<void> => {
+  const { run, model, policy, apiKey } = await prepare(deps, task, {
+    stream: true,
+    outputType: 'text',
+    promptId: opts.promptId,
+    promptVersion: opts.promptVersion,
+    conversationId: opts.conversationId,
+  });
+  const recordSafely = async (status: 'ok' | 'error', failure?: Failure): Promise<void> => {
     try {
-      await run.record(status, error);
+      await run.record(status, failure);
     } catch (err) {
-      console.error(`[ai] streamChat: failed to record task_runs row for ${task}:`, err);
+      // This package does no IO, so it does not log: the server says where a failure goes.
+      try {
+        deps.onRecordError?.(task, err);
+      } catch {
+        // A broken reporter must not break the stream either.
+      }
     }
   };
 
-  return streamText<ToolSet>({
-    model,
-    system: opts.system,
-    messages: opts.messages,
-    maxRetries: SDK_MAX_RETRIES,
-    ...callSettings(policy),
-    onFinish: async (event) => {
-      addUsage(run.tokens, event.totalUsage);
-      await recordSafely('ok');
-    },
-    onError: async ({ error }) => {
-      await recordSafely('error', `provider_error: ${errorDetail(error, apiKey)}`);
-    },
-    onAbort: async () => {
-      await recordSafely('error', 'provider_error: aborted');
-    },
-  });
+  run.attempts = 1;
+  return run.span.run(() =>
+    streamText<ToolSet>({
+      model,
+      system: opts.system,
+      messages: opts.messages,
+      maxRetries: SDK_MAX_RETRIES,
+      telemetry: SDK_TELEMETRY_OFF,
+      ...callSettings(policy),
+      onChunk: ({ chunk }) => {
+        if (
+          (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta') &&
+          chunk.text.length > 0
+        ) {
+          run.span.markFirstChunk();
+        }
+      },
+      onFinish: async (event) => {
+        addUsage(run.tokens, event.totalUsage);
+        run.span.setResponse({
+          id: event.response.id,
+          modelId: event.response.modelId,
+          finishReason: event.finishReason,
+        });
+        await recordSafely('ok');
+      },
+      onError: async ({ error }) => {
+        await recordSafely('error', {
+          reason: 'provider_error',
+          detail: errorDetail(error, apiKey),
+        });
+      },
+      onAbort: async () => {
+        await recordSafely('error', { reason: 'provider_error', detail: 'aborted' });
+      },
+    }),
+  );
 }
