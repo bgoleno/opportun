@@ -8,12 +8,11 @@
 // so statements issued by the transaction body (however deeply nested) pass straight through.
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Logger } from 'pino';
-import { createLogger } from '../obs/log';
+import { processLogger } from '../obs/log';
 
 /** The default reporters' logger, for a process with no app to configure them (a CLI). */
-let defaultLogger: Logger | undefined;
-const gateLogger = (): Logger =>
-  (defaultLogger ??= createLogger({ level: process.env.LOG_LEVEL ?? 'info' }));
+export const dbLogger = (): Logger => processLogger();
+const gateLogger = dbLogger;
 
 export type Release = () => void;
 

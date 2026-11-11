@@ -17,6 +17,7 @@ import type { UserCtx } from '../repos/base';
 import { recordTaskRun, spentTodayUsd } from '../repos/taskRuns';
 import { createProviderFetch, type ResolveHost } from './aiProviderFetch';
 import { getSecretValue } from './secretBox';
+import { processLogger } from '../obs/log';
 
 export const DEFAULT_PER_TASK_DAILY_USD = 5;
 
@@ -235,9 +236,10 @@ export async function buildAiDeps(
       allowLoopbackHttp,
     },
     // packages/ai does no IO, so it hands a failed ledger write after a streamed call to the
-    // server instead of logging it (issue #344). Same line the router logged itself before.
-    onRecordError: (task, err) => {
-      console.error(`[ai] streamChat: failed to record task_runs row for ${task}:`, err);
+    // server (issue #344), which logs it through the gate: a fixed message, the error as its type
+    // and frames (#345, design 14.9).
+    onRecordError: (_task, err) => {
+      processLogger().error({ err }, 'failed to record a streamed AI call');
     },
   };
 }

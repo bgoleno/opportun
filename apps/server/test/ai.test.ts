@@ -14,6 +14,7 @@ import { useApi } from './api';
 import { bool, exec, queryAll, queryOne } from './db';
 import { testApp } from './helpers';
 import { registerTwoUsers } from './isolation';
+import { processLogger } from '../src/obs/log';
 
 // The provider is always mocked: no network calls and no real keys in tests.
 vi.mock('../../../packages/ai/src/providers', async (importOriginal) => {
@@ -124,7 +125,7 @@ describe('server AiDeps', () => {
         }),
       }),
     );
-    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const logged = vi.spyOn(processLogger(), 'error').mockImplementation(() => undefined);
     try {
       const deps = await buildAiDeps(
         app.db,
@@ -143,9 +144,10 @@ describe('server AiDeps', () => {
       for await (const delta of res.textStream) text += delta;
       // The stream is unaffected, and the failure is reported with the task it belongs to.
       expect(text).toBe('Hello');
+      // Through the gated logger (#345): a fixed message, the error as an object it reduces.
       expect(logged).toHaveBeenCalledWith(
-        expect.stringContaining('resume.tailor'),
-        expect.objectContaining({ message: 'ledger hook failed' }),
+        { err: expect.objectContaining({ message: 'ledger hook failed' }) },
+        'failed to record a streamed AI call',
       );
     } finally {
       logged.mockRestore();

@@ -303,10 +303,33 @@ describe('logging', () => {
     await a.inject({ method: 'GET', url: '/healthz?probe=visible' });
     const text = logs.text();
     expect(logs.lines.length).toBeGreaterThan(0);
-    for (const leak of ['OAUTHCODE123', 'OAUTHSTATE456', 'probe=visible', '/callback']) {
+    // The route's template may be written (the access line); its values never are.
+    for (const leak of ['OAUTHCODE123', 'OAUTHSTATE456', 'probe=visible', 'code=', 'state=']) {
       expect(text).not.toContain(leak);
     }
     for (const line of logs.lines) expect(JSON.parse(line)).not.toHaveProperty('req');
+  });
+
+  it('writes Opportun\u2019s own access line per request: the route template, not the url (#345)', async () => {
+    const logs = captureLogs();
+    const a = await boot({ logLevel: 'info' }, { logStream: logs });
+    await a.inject({ method: 'GET', url: '/healthz?probe=visible', remoteAddress: '203.0.113.7' });
+    const lines = logs.lines
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .filter((r) => r.msg === 'request completed');
+    expect(lines).toEqual([
+      {
+        level: 30,
+        time: expect.any(Number),
+        msg: 'request completed',
+        'http.request.method': 'GET',
+        'http.route': '/healthz',
+        'http.response.status_code': 200,
+        'client.address': '203.0.113.7',
+      },
+    ]);
+    // Fastify's own request lines, which carried the url, are off.
+    expect(logs.text()).not.toContain('incoming request');
   });
 });
 

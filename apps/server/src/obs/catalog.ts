@@ -215,6 +215,10 @@ export const ATTRIBUTES = {
   'opportun.count.cleared': int,
   'opportun.mail.channel': { kind: 'enum', values: COMM_CHANNELS },
   'opportun.db.awaited_outside': { kind: 'bool' },
+  // The job a runner line or job.finished is about (jobs/runner.ts, 14.9). Its row id is local.
+  'opportun.job.id': { kind: 'id' },
+  'opportun.job.attempt': int,
+  'opportun.job.max_attempts': int,
   // The route's own id parameter (`:id`), a row id. Local only, like every user's row id (14.8).
   'opportun.route.id': { kind: 'id' },
   'opportun.setting': { kind: 'enum', values: () => SETTING_NAMES },
@@ -481,6 +485,10 @@ const SYSTEM_EVENTS = {
     description: 'A setting was changed: which one, never its value.',
     fields: ['opportun.setting'],
   },
+  'job.finished': {
+    description: 'A background job ended: its kind, how it ended, and which attempt it was.',
+    fields: ['opportun.job.kind', 'opportun.job.outcome', 'opportun.job.attempt'],
+  },
   'discovery.run.finished': {
     description: "A discovery source's run ended: its kind, how it ended, and its counts.",
     fields: [
@@ -547,6 +555,20 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   ],
   // Jobs, health, requests
   'job runner': [],
+  'no handler registered for this job kind': ['opportun.job.id', 'opportun.job.kind'],
+  'invalid stored payload; job marked dead': ['opportun.job.id', 'opportun.job.kind'],
+  'job exhausted its retries; marked dead': [
+    'opportun.job.id',
+    'opportun.job.kind',
+    'opportun.job.attempt',
+    'opportun.job.max_attempts',
+  ],
+  'job failed; will retry': [
+    'opportun.job.id',
+    'opportun.job.kind',
+    'opportun.job.attempt',
+    'opportun.job.max_attempts',
+  ],
   'healthz database check failed': [],
   'healthz queue lag check failed': [],
   'healthz integrity read failed': [],

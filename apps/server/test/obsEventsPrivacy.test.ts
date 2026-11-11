@@ -21,6 +21,9 @@ import { WITHHELD } from '../src/obs/log';
 import { useApi } from './api';
 import { captureLogs } from './helpers';
 import { useTestContextManager } from './otelContext';
+import { z } from 'zod';
+import { enqueue } from '../src/jobs/runner';
+import { registerJob } from '../src/jobs/registry';
 
 const NAME = 'Jane Doe';
 const EMAIL = 'jane.doe@example.com';
@@ -157,6 +160,33 @@ describe('an event record (#345, criterion 1)', () => {
       'user.id': a.userId,
       trace_id: traceId,
     });
+  });
+
+  it('job.finished says the job\u2019s kind, how it ended and its attempt (#345, 14.9)', async () => {
+    registerJob({
+      kind: 'test.finished',
+      payloadSchema: z.object({}),
+      maxAttempts: 2,
+      run: async () => {
+        throw new Error(`failed for ${EMAIL}`);
+      },
+    });
+    const { app, a } = await boot({ logLevel: 'trace' });
+    await setCollecting(true);
+    await enqueue(app.db, 'test.finished', {}, { userId: a.userId });
+    await app.jobs.drain();
+    const finished = logs.lines
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .filter((r) => r.event === 'job.finished');
+    expect(finished).toEqual([
+      expect.objectContaining({
+        'opportun.job.kind': 'test.finished',
+        'opportun.job.outcome': 'retry',
+        'opportun.job.attempt': 1,
+        'user.id': a.userId,
+      }),
+    ]);
+    assertClean(logs.text());
   });
 
   it('is not written while collection is off; the ordinary log still is, through the gate', async () => {

@@ -23,6 +23,7 @@ import { USER_CONTEXT_KEY } from '@opportun/ai';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { isCollecting, obs, type StartedSpan } from '../obs';
+import { logRequest } from '../obs/log';
 import { OTHER } from '../obs/catalog';
 import { errorType, httpMethod } from '../obs/outbound';
 
@@ -89,6 +90,15 @@ function onError(req: FastifyRequest, _reply: FastifyReply, err: Error, done: ()
 }
 
 function onResponse(req: FastifyRequest, reply: FastifyReply, done: () => void): void {
+  // #345: Opportun's own access log line, collection on or off (design 14.9): the route's
+  // template, never the request's url. Fastify's own request logging is off (app.ts).
+  logRequest(req.log, {
+    method: req.method,
+    route: req.routeOptions.url,
+    statusCode: reply.statusCode,
+    ip: req.ip,
+    params: req.params,
+  });
   const o = observed.get(req);
   if (o === undefined) {
     done();

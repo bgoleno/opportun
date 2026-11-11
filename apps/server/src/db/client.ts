@@ -50,7 +50,13 @@ import {
   removeOperatorFile,
 } from '../lib/storage';
 import { observeStatement, observeStatementAsync } from '../obs/database';
-import { armGateWatchdog, reportSlowTransaction, SLOW_TRANSACTION_MS, WriteGate } from './gate';
+import {
+  armGateWatchdog,
+  dbLogger,
+  reportSlowTransaction,
+  SLOW_TRANSACTION_MS,
+  WriteGate,
+} from './gate';
 import type { DbConfig, DbSsl, PostgresConfig } from '../config';
 import { SCHEMA_DIALECT } from './schema';
 import * as pgSchema from './schema.pg';
@@ -773,8 +779,9 @@ async function openPostgres(cfg: PostgresConfig, opts: ConnectOptions): Promise<
   // Without a listener an idle connection's error would crash the process.
   pool.on(
     'error',
+    // #345: through the gated logger, the error as its type and frames (design 14.9).
     opts.onIdleError ??
-      ((err: Error) => console.error(`postgres: idle connection error: ${err.message}`)),
+      ((err: Error) => dbLogger().error({ err }, 'postgres idle connection error')),
   );
   try {
     await migrateLockedPg(pool);
@@ -891,9 +898,7 @@ export async function openPgSession(cfg: PostgresConfig): Promise<PgSession> {
   installPgTypeParsers();
   // Two connections: the session's own, and one for migrate().
   const pool = new pg.Pool({ ...pgPoolConfig(cfg), max: 2, application_name: 'opportun-copy' });
-  pool.on('error', (err: Error) =>
-    console.error(`postgres: idle connection error: ${err.message}`),
-  );
+  pool.on('error', (err: Error) => dbLogger().error({ err }, 'postgres idle connection error'));
   let client: pg.PoolClient | undefined;
   try {
     const [collation] = await collationWarnings(pool);

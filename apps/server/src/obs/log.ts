@@ -240,3 +240,13 @@ export function logRequest(log: InfoLogger, line: RequestLine): void {
     'request completed',
   );
 }
+
+let process_logger: Logger | undefined;
+
+/**
+ * The logger for what logs with no app at hand (a library seam, a CLI, the database's default
+ * reporters): created on first use, with the same options and gate as app.log.
+ */
+export function processLogger(): Logger {
+  return (process_logger ??= createLogger({ level: process.env.LOG_LEVEL ?? 'info' }));
+}
