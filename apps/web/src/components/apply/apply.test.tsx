@@ -1981,6 +1981,8 @@ describe('#401: the details step, filled from the profile, the account and the l
   }
 
   const fieldBox = (label: string) => screen.getByLabelText(label).parentElement as HTMLElement;
+  const fieldBoxAsync = async (label: string) =>
+    (await screen.findByLabelText(label)).parentElement as HTMLElement;
 
   it('says where each value came from, and which ones the profile does not hold', async () => {
     const api = mockApi(withDetails(filled));
@@ -1996,9 +1998,13 @@ describe('#401: the details step, filled from the profile, the account and the l
     // The account's email and the application's phone are not in the profile: a tick each,
     // off by default. The full name is the profile's own: no tick.
     expect(within(fieldBox('Email')).getByText('Not in your profile')).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: 'Save to my profile: Email' })).not.toBeChecked();
-    expect(screen.getByRole('checkbox', { name: 'Save to my profile: Phone' })).not.toBeChecked();
-    expect(screen.queryByRole('checkbox', { name: /: Full name$/ })).toBeNull();
+    expect(
+      within(fieldBox('Email')).getByRole('checkbox', { name: 'Save to my profile' }),
+    ).not.toBeChecked();
+    expect(
+      within(fieldBox('Phone')).getByRole('checkbox', { name: 'Save to my profile' }),
+    ).not.toBeChecked();
+    expect(within(fieldBox('Full name')).queryByRole('checkbox')).toBeNull();
     expect(screen.getByText(/unless you tick Save to my profile/)).toBeInTheDocument();
     expect(calls(api.calls, 'GET', '/profile/application-details')[0]?.search).toBe(
       '?excluding=sub-1',
@@ -2030,8 +2036,12 @@ describe('#401: the details step, filled from the profile, the account and the l
     await screen.findByText('From your profile');
     await user.clear(name);
     await user.type(name, 'Jane Q. Doe');
-    await user.click(screen.getByRole('checkbox', { name: 'Save to my profile: Full name' }));
-    await user.click(screen.getByRole('checkbox', { name: 'Save to my profile: Phone' }));
+    await user.click(
+      within(fieldBox('Full name')).getByRole('checkbox', { name: 'Save to my profile' }),
+    );
+    await user.click(
+      within(fieldBox('Phone')).getByRole('checkbox', { name: 'Save to my profile' }),
+    );
     await user.click(screen.getByRole('button', { name: 'Next: Review' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ step: 'review' }));
     const edits = calls(api.calls, 'PATCH', '/submissions/sub-1');
@@ -2046,7 +2056,11 @@ describe('#401: the details step, filled from the profile, the account and the l
     const reviewed = submission({ ...filled, status: 'reviewed', reviewExpiresAt: NOW + 30 * MIN });
     const api = mockApi(withDetails(reviewed));
     const { user } = renderStep('details');
-    await user.click(await screen.findByRole('checkbox', { name: 'Save to my profile: Email' }));
+    await user.click(
+      await within(await fieldBoxAsync('Email')).findByRole('checkbox', {
+        name: 'Save to my profile',
+      }),
+    );
     await user.click(screen.getByRole('button', { name: 'Next: Review' }));
     await waitFor(() => expect(calls(api.calls, 'PATCH', '/submissions/sub-1')).toHaveLength(1));
     expect(calls(api.calls, 'PATCH', '/submissions/sub-1')[0]?.body).toMatchObject({
@@ -2060,7 +2074,9 @@ describe('#401: the details step, filled from the profile, the account and the l
     const name = await screen.findByLabelText('Full name');
     await screen.findByText('From your profile');
     await user.clear(name);
-    await user.click(screen.getByRole('checkbox', { name: 'Remove from my profile: Full name' }));
+    await user.click(
+      within(fieldBox('Full name')).getByRole('checkbox', { name: 'Remove from my profile' }),
+    );
     await user.click(screen.getByRole('button', { name: 'Next: Review' }));
     await waitFor(() => expect(router.state.location.search).toEqual({ step: 'review' }));
     const body = calls(api.calls, 'PATCH', '/submissions/sub-1')[0]?.body as {

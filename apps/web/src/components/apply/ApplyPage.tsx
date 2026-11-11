@@ -573,7 +573,9 @@ function DetailsStep({
               const sourceId = `field-${f.key}-source`;
               return (
                 <div key={f.key} className="grid gap-1.5">
-                  <Label htmlFor={`field-${f.key}`}>{f.label}</Label>
+                  <Label id={`field-${f.key}-label`} htmlFor={`field-${f.key}`}>
+                    {f.label}
+                  </Label>
                   <Input
                     id={`field-${f.key}`}
                     type={f.type}
@@ -594,8 +596,12 @@ function DetailsStep({
                         {diff === 'missing' ? 'Not in your profile' : 'Differs from your profile'}
                       </span>
                       <span className="flex items-center gap-1.5">
+                        {/* Named for what it does; the field it belongs to is its description,
+                            so the field's own label names one control only (getByLabel, and a
+                            screen reader's list of form fields). */}
                         <Checkbox
                           id={`save-${f.key}`}
+                          aria-describedby={`field-${f.key}-label`}
                           checked={ticked.has(f.key)}
                           disabled={!canEdit}
                           onCheckedChange={(v) =>
@@ -609,7 +615,6 @@ function DetailsStep({
                         />
                         <Label htmlFor={`save-${f.key}`} className="text-xs font-normal">
                           {diff === 'removing' ? 'Remove from my profile' : 'Save to my profile'}
-                          <span className="sr-only">: {f.label}</span>
                         </Label>
                       </span>
                     </div>

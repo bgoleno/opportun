@@ -284,9 +284,11 @@ function ApplicationDetailsCard({ profile }: { profile: Profile }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={submit} noValidate className="grid gap-4">
+        {/* grid-cols-1 and a row that wraps: at 320 px the two buttons are wider than the card,
+            and an implicit grid column would not shrink below them (mobile.spec). */}
+        <form onSubmit={submit} noValidate className="grid grid-cols-1 gap-4">
           <FormError message={formError} />
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {OWN_DETAILS.map((f) => (
               <FormField key={f.key} label={f.label} error={problems.get(f.key)}>
                 {(p) => (
@@ -301,7 +303,7 @@ function ApplicationDetailsCard({ profile }: { profile: Profile }) {
               </FormField>
             ))}
           </div>
-          <div className="flex justify-end gap-2">
+          <div className="flex flex-wrap justify-end gap-2">
             <Button
               variant="outline"
               disabled={!dirty || saving}
