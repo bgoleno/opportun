@@ -9,3 +9,4 @@ export * from './discovery';
 export * from './seniority';
 export * from './onboarding';
 export * from './submission';
+export * from './applicationDetails';

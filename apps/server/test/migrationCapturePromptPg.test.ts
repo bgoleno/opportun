@@ -104,7 +104,7 @@ describe.runIf(livePgUrl !== undefined)('0022 capture.linkedin verbatim on Postg
         const known = new Set(othersBefore.map((r) => r.id));
         const othersAfter = await promptsOf(pool, `task_key <> 'capture.linkedin'`);
         // company.suggest v2 (0039, #221), the rank default's reorder (0043, #388) and the
-        // classify default's reorder (0044, #380) rewrote their system defaults in place, after
+        // classify default's reorder (0045, #380) rewrote their system defaults in place, after
         // 0022: those rows are checked apart, and every other row is as it was.
         const rewritten = (r: PromptRow) =>
           r.userId === null &&

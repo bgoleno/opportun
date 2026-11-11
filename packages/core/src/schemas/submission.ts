@@ -178,9 +178,13 @@ function isWebAddress(value: string): boolean {
  * globalThis because this package's types carry no DOM or Node lib. Null when it cannot parse,
  * or is missing: the caller then refuses, never assumes.
  */
-function parseUrl(value: string): { username: string; password: string } | null {
+export function parseUrl(
+  value: string,
+): { username: string; password: string; hostname: string } | null {
   const Url = (
-    globalThis as { URL?: new (input: string) => { username: string; password: string } }
+    globalThis as {
+      URL?: new (input: string) => { username: string; password: string; hostname: string };
+    }
   ).URL;
   if (Url === undefined) return null;
   try {
