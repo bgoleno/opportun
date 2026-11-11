@@ -12,6 +12,7 @@ import {
 } from '../adapters/sources/alertEmail';
 import { settings } from '../db/schema';
 import { CronSchema, discoveryDefaultCron, setDiscoveryDefaultCron } from '../jobs/atsDetect';
+import { NETWORK_BOARD_CHECK_SETTING, readNetworkBoardCheck } from '../jobs/networkBoardProbe';
 import type { UserCtx } from '../repos/base';
 import { deleteUserSetting, userSettingExists, writeUserSetting } from '../repos/userSettings';
 import { obs } from '../obs';
@@ -23,6 +24,8 @@ const themeKey = (userId: string): string => `theme:${userId}`;
 
 /** The cron new and followed company sources poll on (FR-D5). */
 const DiscoveryBody = z.object({ cron: CronSchema });
+/** The nightly network probe's switch (#296). */
+const NetworkBoardCheckBody = z.object({ enabled: z.boolean() }).strict();
 
 /**
  * `senders: null` resets to the defaults by removing the override, rather than writing a copy of
@@ -86,6 +89,27 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
       const ctx = app.requireUser(req);
       await setDiscoveryDefaultCron(db, ctx, req.body.cron);
       return { cron: req.body.cron };
+    },
+  );
+
+  // Off unless the user turns it on (#296): each night, up to 20 companies in the user's network
+  // are looked up by name on Greenhouse, Lever and Ashby.
+  api.get(
+    '/settings/network-board-check',
+    { schema: { response: { 200: NetworkBoardCheckBody } } },
+    async (req) => {
+      const ctx = app.requireUser(req);
+      return { enabled: await readNetworkBoardCheck(db, ctx) };
+    },
+  );
+
+  api.put(
+    '/settings/network-board-check',
+    { schema: { body: NetworkBoardCheckBody, response: { 200: NetworkBoardCheckBody } } },
+    async (req) => {
+      const ctx = app.requireUser(req);
+      await writeUserSetting(db, ctx, NETWORK_BOARD_CHECK_SETTING, req.body.enabled);
+      return { enabled: req.body.enabled };
     },
   );
 

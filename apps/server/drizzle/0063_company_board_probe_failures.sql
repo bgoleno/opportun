@@ -1,0 +1,1 @@
+ALTER TABLE `companies` ADD `board_probe_failed_nights` integer DEFAULT 0 NOT NULL;

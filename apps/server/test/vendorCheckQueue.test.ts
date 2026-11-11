@@ -13,6 +13,7 @@ import { claimNextJob } from '../src/db/dialect';
 import { jobs } from '../src/db/schema';
 import { ATS_DETECT_KIND, atsDetectDedupeKey, enqueueAtsDetect } from '../src/jobs/atsDetect';
 import { BOARD_PROBE_KIND, enqueueBoardProbe } from '../src/jobs/companyBoardProbe';
+import { NETWORK_PROBE_KIND } from '../src/jobs/networkBoardProbe';
 import {
   VENDOR_CHECK_CAP,
   VENDOR_CHECK_KINDS,
@@ -64,9 +65,11 @@ const follows = async (app: FastifyInstance, c: TestClient, n: number) => {
 };
 
 describe('#321: a user alone is not slowed', () => {
-  it('the cap is 3, and the kinds are detection and the board probe', () => {
+  it('the cap is 3, and the kinds are detection, the board probe and the network probe', () => {
     expect(VENDOR_CHECK_CAP).toBe(3);
-    expect([...VENDOR_CHECK_KINDS].sort()).toEqual([ATS_DETECT_KIND, BOARD_PROBE_KIND].sort());
+    expect([...VENDOR_CHECK_KINDS].sort()).toEqual(
+      [ATS_DETECT_KIND, BOARD_PROBE_KIND, NETWORK_PROBE_KIND].sort(),
+    );
   });
 
   it("qa's 30 follows by one user, and no one else waiting: every one is due at once, as before", async () => {

@@ -442,6 +442,13 @@
       "when": 1795900000000,
       "tag": "0062_profile_application_details",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "6",
+      "when": 1796100000000,
+      "tag": "0063_company_board_probe_failures",
+      "breakpoints": true
     }
   ]
 }

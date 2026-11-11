@@ -647,6 +647,7 @@ export const SETTING_NAMES = [
   'discovery_default_cron',
   'onboarding_tour',
   'onboarding_checklist',
+  'network_board_check',
 ] as const;
 
 /** The events that are not audit actions (14.9). */
@@ -779,6 +780,7 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'ats probe failed': ['opportun.ats.kind'],
   'greenhouse job check failed': ['opportun.ats.kind'],
   'careers page fetch blocked': ['opportun.company.id', 'opportun.fetch.blocked_reason'],
+  'network board probe failed': ['opportun.company.id', 'error.type'],
   'lead resolution lookup failed': ['opportun.source.id'],
   'workday capture retry failed': ['opportun.discovery_result.id'],
   'posting reconciliation failed': ['opportun.opportunity.id'],

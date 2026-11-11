@@ -379,6 +379,12 @@ export const companies = pgTable(
      * has read a listing with a title in it.
      */
     boardTitles: json<string[]>('board_titles'),
+    /**
+     * How many nights the nightly network probe (#296) found the company's board provider failing.
+     * At NETWORK_PROBE_FAILED_NIGHTS the company is recorded as having no board, so it stops holding
+     * a place in each night's picks.
+     */
+    boardProbeFailedNights: int('board_probe_failed_nights').notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
