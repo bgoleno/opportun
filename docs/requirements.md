@@ -148,7 +148,9 @@ Priority: **P0** (MVP, milestone M1), **P1** (near-term, M2/M3), **P2** (later).
 - FR-O2 (P0): Track each opportunity through an explicit lifecycle:
   `discovered → triaged (interested | dismissed) → preparing → applied → in_process
 (screen, interview rounds) → offer → closed (accepted | rejected | withdrawn |
-ghosted)`. Stage history with timestamps is preserved.
+ghosted)`. Stage history with timestamps is preserved. An opportunity can move to any
+  earlier or later stage of the chain in one move, so a stage set by mistake is corrected
+  directly; a closed or dismissed one moves back through Reopen (design 4.7).
 - FR-O3 (P0): Record an **activity timeline** per opportunity: applications,
   meetings and interviews (with participants), emails and messages, notes, links to
   external notes and transcripts, and stage changes.
