@@ -12,8 +12,9 @@ refer you. This is not intended as a tool to spam your auto generated resumes to
 ## Why Opportun
 
 - **Own your search.** Your pipeline, resumes, and communications live in your
-  deployment, not in a job board's cloud. No telemetry, no third parties in the
-  token path.
+  deployment, not in a job board's cloud. Telemetry is off by default, and nothing
+  leaves your deployment for it unless an administrator turns on export to a
+  destination they name. No third parties in the token path.
 - **Bring your own AI.** Works with Anthropic, OpenAI, or any OpenAI-compatible
   endpoint (including local models). Each task is routed to a model you choose:
   small and fast for classification, your best model for resume work.

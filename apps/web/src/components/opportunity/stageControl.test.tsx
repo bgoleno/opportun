@@ -53,7 +53,10 @@ describe('StageControl', () => {
   it('offers exactly the valid targets for an opportunity in applied', async () => {
     const { user } = setup('applied');
     await user.click(await screen.findByRole('button', { name: 'Stage: Applied' }));
+    // Every other chain stage, earlier ones included (#397), then the terminal ones.
     expect(items(await screen.findByRole('menu'))).toEqual([
+      'New',
+      'Interested',
       'Preparing',
       'In process',
       'Offer',

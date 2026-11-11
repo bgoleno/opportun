@@ -6,13 +6,12 @@ import type { OpportunityStage } from '@opportun/core';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useState, type ReactNode } from 'react';
 import { toast } from '@/components/ui/toast';
-import { errorMessage } from '@/lib/api';
 import {
   changeStage,
-  isTerminal,
   qk,
   reopenTargets,
-  stageLabel,
+  stageErrorMessage,
+  stageRefusal,
   stageTargets,
   type OpportunityView,
   type Page,
@@ -44,12 +43,13 @@ export function subjectLabel(opp: Pick<StageSubject, 'companyName' | 'title'>): 
   return `${opp.companyName}: ${opp.title}`;
 }
 
-/** The refusal message for a move the stage rules do not allow, or null when they do. */
+/**
+ * The refusal message for a move the stage rules do not allow (stageRefusal, #397: Reopen, or
+ * the stages allowed), or null when they allow it.
+ */
 function refusalOf(from: OpportunityStage, to: OpportunityStage): string | null {
   if (from === to || stageTargets(from).includes(to)) return null;
-  return isTerminal(from) && !isTerminal(to)
-    ? `Use Reopen to move a ${stageLabel(from).toLowerCase()} opportunity back to ${stageLabel(to)}.`
-    : `${stageLabel(from)} cannot move to ${stageLabel(to)}.`;
+  return stageRefusal(from, to);
 }
 
 export function useStageFlow(): StageFlow {
@@ -72,7 +72,11 @@ export function useStageFlow(): StageFlow {
       qc.setQueryData(qk.opportunity(updated.id), updated);
     },
     onError: (err) =>
-      toast({ title: 'Stage not changed', description: errorMessage(err), variant: 'destructive' }),
+      toast({
+        title: 'Stage not changed',
+        description: stageErrorMessage(err),
+        variant: 'destructive',
+      }),
     onSettled: async (_data, _err, { id }) => {
       setOverrides((o) => {
         const next = new Map(o);

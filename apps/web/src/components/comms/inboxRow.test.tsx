@@ -71,6 +71,33 @@ describe('InboxRow', () => {
     expect(await screen.findByText('Moved to Closed')).toBeInTheDocument();
   });
 
+  // #397: a refusal from the server names what is allowed, not its raw stage ids.
+  it('a refused proposal says which stages the opportunity can move to', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'POST /communications/c1/accept-transition': () => ({
+        status: 422,
+        body: {
+          error: {
+            code: 'invalid_transition',
+            message: 'Invalid stage transition closed -> closed',
+            from: 'closed',
+            to: 'closed',
+          },
+        },
+      }),
+    });
+    renderWithProviders(
+      <ul>
+        <InboxRow comm={BASE} mode="linked" />
+      </ul>,
+    );
+    const row = await screen.findByRole('listitem', { name: 'Your application at Acme' });
+    await user.click(within(row).getByRole('button', { name: 'Move to Closed' }));
+    expect(await screen.findByText('Closed can move to Dismissed.')).toBeInTheDocument();
+    expect(screen.queryByText(/Invalid stage transition/)).toBeNull();
+  });
+
   it('does not offer a proposal the opportunity already reached by another route', async () => {
     // issue #143: the server already suppresses this (proposedTransition comes back null), but
     // a row already sitting in the client's cache from before a refetch should not keep
