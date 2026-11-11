@@ -126,7 +126,7 @@ export function LineChart({
         onKeyDown={onKeyDown}
         className="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <div className="flex gap-2">
+        <div className="flex gap-2 pt-2">
           <div
             aria-hidden="true"
             className="relative w-12 shrink-0 text-right text-xs text-muted-foreground tabular-nums"

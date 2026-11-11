@@ -3,7 +3,7 @@
 [Guide home](README.md) · Previous: [Network](network.md)
 
 **Settings** has these sections: Account, Security, Profile, Role targets, Resume rules, AI,
-Integrations, Import/Export and, for administrators, Users. Profile, role targets and resume
+Integrations, Import/Export, Metrics and, for administrators, Users and Jobs. Profile, role targets and resume
 rules are covered in [Getting started](getting-started.md#first-run-setup) and
 [Resumes](resumes.md#the-tailoring-chat); Google and Gmail in [Resumes](resumes.md#connect-google)
 and [Inbox](inbox.md#connect-gmail).
@@ -223,6 +223,37 @@ _The LinkedIn export import once it finished: how many rows were created, update
 
 Back up the data directory (or at least the backups and attachments) somewhere other than the
 server itself; a snapshot on the same disk does not survive losing that disk.
+
+## Metrics
+
+**Settings > Metrics** charts how Opportun is used and how it runs, from the instance's own
+store: nothing has to be exported, and no outside service is involved. You see the metrics of
+your own AI use. An administrator also sees the instance's: HTTP requests, background jobs,
+database statements and outbound requests. Nobody sees another user's.
+
+The page lists every metric you can see, with what it measures and its unit. Narrow the list by
+name with **Search metrics**, or with **Carries attribute** to the metrics that record one, such
+as a route (`http.route`) or a job (`opportun.job.kind`). Select a metric to chart it:
+
+- **Statistic**: for a duration, the number of calls, the errors among them, the mean duration
+  or the longest; for a count, its total.
+- **Time range**: the last hour, 6 hours, 24 hours, 7 days or 30 days, or a **Custom range**
+  with its own start and end. **Zoom in** halves the range and **Zoom out** doubles it. Points
+  are kept 30 days, minute by minute for the last 48 hours, so a range of a few hours inside
+  those 48 hours is drawn minute by minute, and a longer one hour by hour.
+- **Break down by** draws one line per value of an attribute, such as one per route. The eight
+  largest get a line each, and the rest are added up as **Other**.
+- **Filters** keep only the points with the values you choose, such as `POST` requests.
+
+Move the pointer along the chart to read the values at that time below it. With the keyboard,
+tab to the chart and use the arrow keys (Home and End jump to the ends, `+` and `-` zoom around
+the cursor). The same numbers are in the table under the chart, one row per step.
+
+![The HTTP request metric over the last 24 hours, broken down by route, with the cursor reading out each route's calls at 10:00](images/settings-metrics.png)
+
+**Collection is off by default.** An administrator turns it on for the whole instance. While it
+is off the page says so and nothing new is recorded; points recorded earlier are still shown
+until they age out.
 
 <!-- nav:bottom -->
 

@@ -12,8 +12,9 @@
 //   Values are compared here, in code, after the rows are read: no value from the request goes
 //   into SQL at all, and the only values the rows can hold are the ones the gate let through.
 // - The resolution follows the range: 1-minute points for a range of up to 6 hours inside the
-//   48 hours they are kept, 1-hour points otherwise (14.7). Steps are whole multiples of it, at
-//   most MAX_STEPS of them, so a chart never has more points than it can draw.
+//   48 hours they are kept, 1-hour points otherwise (14.7). Steps are whole multiples of it,
+//   aligned to the step, so a range has MAX_STEPS of them, or one more when it does not start
+//   on a step: a chart never has more points than it can draw.
 import { and, eq, gte, isNull, lt } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
