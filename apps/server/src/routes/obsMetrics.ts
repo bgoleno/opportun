@@ -23,7 +23,7 @@ import type { Db } from '../db/client';
 import { obsMetricPoints } from '../db/schema';
 import { forbidden, HttpError } from '../lib/errors';
 import { type MetricDef, METRICS, OTHER } from '../obs/catalog';
-import { readCollect } from '../obs/config';
+import { collectInEffect } from '../obs/config';
 import { HOUR_MS, MINUTE_MS } from '../obs/metrics';
 import { requireUser, type UserCtx } from '../repos/base';
 
@@ -317,7 +317,8 @@ export async function obsMetricRoutes(app: FastifyInstance): Promise<void> {
         attributes: [...def.attributes],
         stats: statsOf(def),
       }));
-    return { collect: await readCollect(db), metrics };
+    // The switch in effect: off on the demo whatever is stored (#360).
+    return { collect: await collectInEffect(db, app.config), metrics };
   });
 
   api.get(

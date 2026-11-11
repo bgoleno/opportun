@@ -2,9 +2,9 @@
 // https://github.com/bgoleno/opportun/issues/346). Every test inserts its own rows into
 // obs_metric_points: the dashboards read the table, not the instrumentation (14.12).
 import { afterEach, describe, expect, it } from 'vitest';
-import { obsMetricPoints } from '../src/db/schema';
+import { obsMetricPoints, settings } from '../src/db/schema';
 import { METRICS, type MetricDef } from '../src/obs/catalog';
-import { writeCollect } from '../src/obs/config';
+import { OBS_COLLECT_KEY, writeCollect } from '../src/obs/config';
 import { setCollecting } from '../src/obs';
 import { HOUR_MS, MINUTE_MS, seriesId } from '../src/obs/metrics';
 import { readSeries } from '../src/routes/obsMetrics';
@@ -113,6 +113,19 @@ describe('GET /obs/metrics (FR-T6)', () => {
     await writeCollect(app.db, true, { userId: a.userId });
     expect((await b.request({ method: 'GET', url: '/api/v1/obs/metrics' })).json().collect).toBe(
       true,
+    );
+  });
+
+  it('says collection is off on the demo, whatever the stored switch says (#360)', async () => {
+    const { app, a } = await boot({ demo: true });
+    const now = Date.now();
+    await app.db
+      .insert(settings)
+      .values({ key: OBS_COLLECT_KEY, userId: null, value: true, updatedAt: now })
+      .onConflictDoUpdate({ target: settings.key, set: { value: true, updatedAt: now } })
+      .run();
+    expect((await a.request({ method: 'GET', url: '/api/v1/obs/metrics' })).json().collect).toBe(
+      false,
     );
   });
 
