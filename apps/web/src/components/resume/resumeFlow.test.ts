@@ -153,9 +153,10 @@ describe('resumeFlowState: which state wins', () => {
   // tl on #431: a send means the user has applied, whatever copy is tailored afterwards.
   it('a recorded send comes before a tailored copy in Draft (H, not C)', () => {
     const draft = resume({ status: 'draft' });
-    expect(
-      resumeFlowState(input({ resumes: [BASE, draft], sends: [send({})] })),
-    ).toMatchObject({ state: 'H', send: { id: 'send' } });
+    expect(resumeFlowState(input({ resumes: [BASE, draft], sends: [send({})] }))).toMatchObject({
+      state: 'H',
+      send: { id: 'send' },
+    });
   });
 
   it("this opportunity's resume is its newest tailored one that is not archived", () => {
