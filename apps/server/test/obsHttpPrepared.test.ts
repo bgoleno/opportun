@@ -16,8 +16,10 @@ import {
   obsHttpPlugin,
 } from '../src/plugins/obsHttp';
 import { useApi } from './api';
+import { useInMemoryTracing } from './otelProvider';
 
 const boot = useApi();
+const exporter = useInMemoryTracing();
 const servers: FastifyInstance[] = [];
 afterEach(async () => {
   await setCollecting(false);
@@ -31,7 +33,11 @@ async function server(): Promise<FastifyInstance> {
   const s = Fastify();
   servers.push(s);
   await s.register(obsHttpPlugin);
-  s.get('/api/v1/things/:id', async () => ({ ok: true }));
+  s.get('/api/v1/things/:id', async (req, reply) =>
+    (req.params as { id: string }).id === 'missing'
+      ? reply.code(404).send({ ok: false })
+      : { ok: true },
+  );
   s.get('/api/v1/boom', async () => {
     throw new TypeError('boom');
   });
@@ -83,5 +89,36 @@ describe('the HTTP boundary prepares its attributes (#374)', () => {
     );
     expect(routes.has(`/api/v1/route${MANY - 1}`)).toBe(true);
     expect(routes.size).toBe(MANY);
+  });
+
+  it('one route answering two statuses keeps two series and each span its own status (tl on #387)', async () => {
+    const { app } = await boot();
+    await setCollecting(true);
+    const s = await server();
+    clearHttpPrepared();
+    exporter.reset();
+    expect((await s.inject({ method: 'GET', url: '/api/v1/things/1' })).statusCode).toBe(200);
+    expect((await s.inject({ method: 'GET', url: '/api/v1/things/missing' })).statusCode).toBe(404);
+    expect((await s.inject({ method: 'GET', url: '/api/v1/things/2' })).statusCode).toBe(200);
+    await flushNow();
+    const series = (
+      await app.db
+        .select()
+        .from(obsMetricPoints)
+        .where(eq(obsMetricPoints.metric, 'http.server.request.duration'))
+        .all()
+    )
+      .filter((p) => p.resolution === MINUTE_MS)
+      .map((p) => ({ status: p.attributes['http.response.status_code'], count: p.count }))
+      .sort((x, y) => Number(x.status) - Number(y.status));
+    expect(series).toEqual([
+      { status: 200, count: 2 },
+      { status: 404, count: 1 },
+    ]);
+    const statuses = exporter
+      .getFinishedSpans()
+      .filter((x) => x.name === 'GET /api/v1/things/:id')
+      .map((x) => x.attributes['http.response.status_code']);
+    expect(statuses).toEqual([200, 404, 200]);
   });
 });
