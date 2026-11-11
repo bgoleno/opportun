@@ -296,21 +296,31 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       await h.checkpointer!.ready;
       await rawRun(h.db, sql`CREATE TABLE IF NOT EXISTS bench_383 (v TEXT)`);
       const started = Date.now();
-      // Small writes back to back, one per turn of the loop, for ten age bounds: a frame is
-      // waiting at every look the worker takes, the one straight after a checkpoint included.
-      // Three seconds, not fewer: a checkpoint that stops short of frames that were there when it
-      // started waits the 1 s retry delay (RETRY_MS) before the next try, so even a run where
-      // every checkpoint does that has three. That once counted frames committed during the
-      // checkpoint too (one CI run had 2 in 1.5 s); it no longer does, but one run in six here
-      // still had a checkpoint stop short.
-      while (Date.now() - started < 3_000) {
-        await rawRun(h.db, sql`INSERT INTO bench_383 (v) VALUES ('x')`);
-        await new Promise((r) => setImmediate(r));
+      // Small writes back to back, one per turn of the loop: a frame is waiting at every look the
+      // worker takes, the one straight after a checkpoint included. They go on until 3 s have
+      // passed and 3 checkpoints have come, whichever is later (at most 15 s): a busy machine
+      // can delay a checkpoint by more than its age bound, so a fixed window can miss one
+      // (tl on #393), and the bound below is measured against the time the writes took.
+      let writing = true;
+      const writer = (async () => {
+        while (writing) {
+          await rawRun(h.db, sql`INSERT INTO bench_383 (v) VALUES ('x')`);
+          await new Promise((r) => setImmediate(r));
+        }
+      })();
+      try {
+        await until(
+          () => Date.now() - started >= 3_000 && h.checkpointer!.checkpoints >= 3,
+          15_000,
+        );
+      } finally {
+        writing = false;
+        await writer;
       }
-      // At most one checkpoint per age bound (ten in 3 s; 4 to 9 measured), not one per poll:
-      // with a bound that never re-arms, 17 to 91 were measured.
-      expect(h.checkpointer!.checkpoints).toBeGreaterThanOrEqual(3);
-      expect(h.checkpointer!.checkpoints).toBeLessThanOrEqual(12);
+      const elapsed = Date.now() - started;
+      // At most one checkpoint per age bound, plus two, not one per poll: with a bound that never
+      // re-arms, 232 to 533 were measured in about 3 s.
+      expect(h.checkpointer!.checkpoints).toBeLessThanOrEqual(Math.ceil(elapsed / 300) + 2);
     } finally {
       await opened.close();
     }
