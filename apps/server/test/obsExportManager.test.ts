@@ -349,3 +349,67 @@ describe('applyExport: the switches (14.1, 14.10)', () => {
     expect(metrics).toContain('invalid_value');
   });
 });
+
+describe('the Gen AI token and cost metrics are exported (criterion 3; FR-T4 part 2 records them)', () => {
+  it('by task, feature, provider and model, as input and output counters and a cost, with no user', async () => {
+    const { app, a } = await boot();
+    const { port, got } = await receiver();
+    await writeExport(app.db, { enabled: true, destination: otlp(port), sealedCredential: null });
+    await setCollecting(true);
+    await applyExport(app.db, { demo: false, telemetryAllowPrivate: true }, opts);
+    const call = (model: string) => ({
+      'gen_ai.operation.name': 'chat',
+      'gen_ai.provider.name': 'anthropic',
+      'opportun.ai.provider': 'anthropic',
+      'gen_ai.request.model': model,
+      'opportun.ai.task': 'resume.tailor',
+      'opportun.ai.feature': 'resume_tailoring',
+    });
+    const text = { 'gen_ai.token.modality': 'text' };
+    // A user's metrics (14.4 scope user): recorded for the user, exported without them.
+    const forUser = { userId: a.userId };
+    obs.record(
+      'gen_ai.client.inference.usage.input_tokens',
+      1200,
+      { ...call('claude-sonnet-5-5'), ...text },
+      forUser,
+    );
+    obs.record(
+      'gen_ai.client.inference.usage.output_tokens',
+      300,
+      { ...call('claude-sonnet-5-5'), ...text },
+      forUser,
+    );
+    obs.record(
+      'opportun.gen_ai.usage.cost',
+      0.0081,
+      { ...call('claude-sonnet-5-5'), 'opportun.ai.cost.estimated': false },
+      forUser,
+    );
+    // A model the price table does not list leaves as _OTHER (14.8).
+    obs.record(
+      'gen_ai.client.inference.usage.input_tokens',
+      50,
+      { ...call('my-private-finetune'), ...text },
+      forUser,
+    );
+    await flushExport();
+    const body = got.find((g) => g.url === '/v1/metrics')?.body.toString('latin1') ?? '';
+    for (const name of [
+      'gen_ai.client.inference.usage.input_tokens',
+      'gen_ai.client.inference.usage.output_tokens',
+      'opportun.gen_ai.usage.cost',
+      'opportun.ai.task',
+      'resume.tailor',
+      'opportun.ai.feature',
+      'gen_ai.provider.name',
+      'claude-sonnet-5-5',
+      '_OTHER',
+    ]) {
+      expect(body, name).toContain(name);
+    }
+    expect(body).not.toContain('my-private-finetune');
+    expect(body).not.toContain(a.userId);
+    expect(body).not.toContain('user.id');
+  });
+});

@@ -415,23 +415,50 @@ the name; the others stay in the instance.
 
 <!-- catalog-keys:start -->
 
-| Name                        | Value               | Exported |
-| --------------------------- | ------------------- | -------- |
-| `http.request.method`       | one of a fixed list | yes      |
-| `http.route`                | route template      | yes      |
-| `http.response.status_code` | whole number        | yes      |
-| `error.type`                | class or code       | yes      |
-| `opportun.outbound.target`  | one of a fixed list | yes      |
-| `server.address`            | one of a fixed list | yes      |
-| `db.system.name`            | one of a fixed list | yes      |
-| `db.operation.name`         | one of a fixed list | yes      |
-| `db.collection.name`        | one of a fixed list | yes      |
-| `opportun.job.kind`         | one of a fixed list | yes      |
-| `opportun.job.outcome`      | one of a fixed list | yes      |
-| `opportun.obs.signal`       | one of a fixed list | yes      |
-| `opportun.obs.reason`       | one of a fixed list | yes      |
-| `user.id`                   | row id              | no       |
-| `client.address`            | IP address          | no       |
+| Name                                    | Value                    | Exported |
+| --------------------------------------- | ------------------------ | -------- |
+| `http.request.method`                   | one of a fixed list      | yes      |
+| `http.route`                            | route template           | yes      |
+| `http.response.status_code`             | whole number             | yes      |
+| `error.type`                            | class or code            | yes      |
+| `opportun.outbound.target`              | one of a fixed list      | yes      |
+| `server.address`                        | one of a fixed list      | yes      |
+| `db.system.name`                        | one of a fixed list      | yes      |
+| `db.operation.name`                     | one of a fixed list      | yes      |
+| `db.collection.name`                    | one of a fixed list      | yes      |
+| `opportun.job.kind`                     | one of a fixed list      | yes      |
+| `opportun.job.outcome`                  | one of a fixed list      | yes      |
+| `opportun.obs.signal`                   | one of a fixed list      | yes      |
+| `opportun.obs.reason`                   | one of a fixed list      | yes      |
+| `user.id`                               | row id                   | no       |
+| `client.address`                        | IP address               | no       |
+| `gen_ai.operation.name`                 | one of a fixed list      | yes      |
+| `gen_ai.provider.name`                  | one of a fixed list      | yes      |
+| `opportun.ai.provider`                  | one of a fixed list      | yes      |
+| `gen_ai.request.model`                  | model id                 | yes      |
+| `gen_ai.response.model`                 | model id                 | yes      |
+| `gen_ai.request.max_tokens`             | whole number             | yes      |
+| `gen_ai.request.temperature`            | number                   | yes      |
+| `gen_ai.request.stream`                 | true or false            | yes      |
+| `gen_ai.output.type`                    | one of a fixed list      | yes      |
+| `gen_ai.prompt.name`                    | one of a fixed list      | yes      |
+| `gen_ai.prompt.version`                 | whole number             | yes      |
+| `gen_ai.usage.input_tokens`             | whole number             | yes      |
+| `gen_ai.usage.output_tokens`            | whole number             | yes      |
+| `gen_ai.usage.cache_read.input_tokens`  | whole number             | yes      |
+| `gen_ai.usage.cache_write.input_tokens` | whole number             | yes      |
+| `gen_ai.response.id`                    | class or code            | no       |
+| `gen_ai.response.finish_reasons`        | a list from a fixed list | yes      |
+| `gen_ai.response.time_to_first_chunk`   | number                   | yes      |
+| `gen_ai.conversation.id`                | row id                   | no       |
+| `opportun.ai.task`                      | one of a fixed list      | yes      |
+| `opportun.ai.feature`                   | one of a fixed list      | yes      |
+| `opportun.ai.prompt.id`                 | row id                   | no       |
+| `opportun.ai.attempts`                  | whole number             | yes      |
+| `opportun.gen_ai.usage.cost`            | number                   | yes      |
+| `gen_ai.agent.name`                     | one of a fixed list      | yes      |
+| `gen_ai.token.modality`                 | one of a fixed list      | yes      |
+| `opportun.ai.cost.estimated`            | true or false            | yes      |
 
 <!-- catalog-keys:end -->
 
