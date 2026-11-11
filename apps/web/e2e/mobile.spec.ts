@@ -787,3 +787,74 @@ for (const width of DISCOVERY_WIDTHS) {
     });
   });
 }
+
+// ---------------------------------------------------------------------------
+// The metric chart at phone width (FR-T6, https://github.com/bgoleno/opportun/issues/346; tl on
+// https://github.com/bgoleno/opportun/pull/363). The width walk sees the page only as a user,
+// whose list is empty until the Gen AI metrics land, so this opens an admin's metric with a
+// breakdown of long route names: the chart, its axis, the legend, the filters and the table
+// must all fit. The series is stubbed (no metric is recorded on a fresh instance); the catalog
+// and the page come from the real server.
+
+const LONG_ROUTES = Array.from(
+  { length: 9 },
+  (_, i) => `/api/v1/opportunities/:id/applications/:submissionId/attachments/${i}`,
+);
+
+async function stubMetricSeries(page: Page): Promise<void> {
+  await page.route(/\/api\/v1\/obs\/metrics\/series/, async (route) => {
+    const q = new URL(route.request().url()).searchParams;
+    const from = Number(q.get('from'));
+    const to = Number(q.get('to'));
+    const step = Math.max(60_000, Math.ceil((to - from) / 120 / 60_000) * 60_000);
+    const times: number[] = [];
+    for (let t = Math.floor(from / step) * step; t < to; t += step) times.push(t);
+    const labels = q.get('by') === null ? [null] : [...LONG_ROUTES.slice(0, 8), '_OTHER'];
+    await route.fulfill({
+      json: {
+        metric: q.get('metric'),
+        stat: q.get('stat'),
+        from,
+        to,
+        step,
+        resolution: 60_000,
+        series: labels.map((label, k) => ({
+          label,
+          points: times.map((t, i) => ({ t, v: 1_000_000 + ((i * 37 + k * 101) % 900_000) })),
+        })),
+        values: {
+          'http.request.method': ['GET', 'POST'],
+          'http.route': LONG_ROUTES,
+          'http.response.status_code': ['200', '500'],
+          'error.type': ['ProviderErrorWithAVeryLongClassNameThatDoesNotBreak'],
+        },
+        truncated: false,
+      },
+    });
+  });
+}
+
+for (const width of WIDTHS) {
+  test.describe(`metric chart at ${width}px`, () => {
+    test.use({ viewport: { width, height: 844 } });
+
+    test('an admin metric broken down by long routes fits, with its table', async ({ page }) => {
+      await stubMetricSeries(page);
+      await page.goto('/login');
+      await page.getByLabel('Email').fill(ADMIN.email);
+      await page.getByLabel('Password', { exact: true }).fill(ADMIN.password);
+      await page.getByRole('button', { name: 'Sign in' }).click();
+      await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
+      await page.goto('/settings/metrics?metric=http.server.request.duration');
+      await page.getByLabel('Break down by').selectOption('http.route');
+      await expect(page.getByRole('list', { name: 'Legend' }).getByRole('listitem')).toHaveCount(9);
+      await expect(page.getByRole('region', { name: "The chart's numbers" })).toBeVisible();
+      await expectFits(page, 'the metric chart with a breakdown');
+      // The keyboard cursor's readout, the longest line the chart writes, fits as well.
+      await page.getByRole('group', { name: /Chart of Calls/ }).focus();
+      await page.keyboard.press('End');
+      await expect(page.getByTestId('chart-readout')).toContainText('Other');
+      await expectFits(page, 'the metric chart with its readout');
+    });
+  });
+}

@@ -1,4 +1,10 @@
-import { AiUnavailableError, FALLBACK_PRICE, runStructured, TASK_KEYS } from '@opportun/ai';
+import {
+  AiUnavailableError,
+  FALLBACK_PRICE,
+  runStructured,
+  streamChat,
+  TASK_KEYS,
+} from '@opportun/ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -91,6 +97,59 @@ describe('server AiDeps', () => {
       b.userId,
     );
     expect(bRows).toEqual([{ status: 'error', error: 'no_key' }]);
+  });
+
+  it('a ledger write that fails after a streamed call is logged by the server, not dropped (issue #344)', async () => {
+    const { app, a } = await boot();
+    await addKey(a, 'anthropic');
+    vi.mocked(createLanguageModel).mockReturnValue(
+      new MockLanguageModelV4({
+        doStream: async () => ({
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'text-start', id: 't' });
+              controller.enqueue({ type: 'text-delta', id: 't', delta: 'Hello' });
+              controller.enqueue({ type: 'text-end', id: 't' });
+              controller.enqueue({
+                type: 'finish',
+                finishReason: { unified: 'stop' as const, raw: 'stop' },
+                usage: {
+                  inputTokens: { total: 5, noCache: 5, cacheRead: 0, cacheWrite: 0 },
+                  outputTokens: { total: 2, text: 2, reasoning: 0 },
+                },
+              });
+              controller.close();
+            },
+          }),
+        }),
+      }),
+    );
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const deps = await buildAiDeps(
+        app.db,
+        { userId: a.userId, isAdmin: false },
+        {
+          onRecorded: () => {
+            throw new Error('ledger hook failed');
+          },
+        },
+      );
+      const res = await streamChat(deps, 'resume.tailor', {
+        system: 's',
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+      let text = '';
+      for await (const delta of res.textStream) text += delta;
+      // The stream is unaffected, and the failure is reported with the task it belongs to.
+      expect(text).toBe('Hello');
+      expect(logged).toHaveBeenCalledWith(
+        expect.stringContaining('resume.tailor'),
+        expect.objectContaining({ message: 'ledger hook failed' }),
+      );
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it('a key labelled for another provider is not used', async () => {
