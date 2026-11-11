@@ -7,8 +7,8 @@ import { buffer } from 'node:stream/consumers';
 import {
   AiUnavailableError,
   ClassifyOutputSchema as AiClassifyOutputSchema,
-  renderPrompt,
   runStructured,
+  systemWithCacheBreak,
 } from '@opportun/ai';
 import { seniorityRangeText, type BodySource } from '@opportun/core';
 import { and, desc, eq, notInArray } from 'drizzle-orm';
@@ -75,13 +75,24 @@ export async function roleTargetsText(db: Db, ctx: UserCtx): Promise<string> {
 }
 
 /**
- * Tracked opportunities that are still open (company, title, stage), newest first. Rendered as
- * open_opportunities_untrusted: names and titles can come from model output on earlier hostile
- * mail (FR-M3), so they are fenced like the message itself; line() stays as defense in depth.
+ * Tracked opportunities that are still open (company, title, stage), as the comms.classify prompt
+ * lists them: the MAX_OPEN_OPPORTUNITIES most recently updated, in the order they were created,
+ * then by id. A stable order, because the list sits in the provider-cached prefix, and one cache
+ * entry covers the whole prefix: listed by updatedAt, every message a sync batch linked reordered
+ * it and made the next call write the whole prefix again, rules included (#380, tl). The template
+ * asks for no order. Rendered as open_opportunities_untrusted: names and titles can come from
+ * model output on earlier hostile mail (FR-M3), so they are fenced like the message itself;
+ * line() stays as defense in depth.
  */
 export async function openOpportunitiesText(db: Db, ctx: UserCtx): Promise<string> {
   const rows = await db
-    .select({ company: companies.name, title: opportunities.title, stage: opportunities.stage })
+    .select({
+      id: opportunities.id,
+      createdAt: opportunities.createdAt,
+      company: companies.name,
+      title: opportunities.title,
+      stage: opportunities.stage,
+    })
     .from(opportunities)
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
     .where(
@@ -94,6 +105,7 @@ export async function openOpportunitiesText(db: Db, ctx: UserCtx): Promise<strin
     .limit(MAX_OPEN_OPPORTUNITIES)
     .all();
   if (rows.length === 0) return 'None.';
+  rows.sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
   return rows.map((r) => `- ${line(r.company)} | ${line(r.title)} | ${r.stage}`).join('\n');
 }
 
@@ -182,15 +194,23 @@ export async function classifyCommunication(
   const prompt = await getActivePrompt(db, ctx, 'comms.classify');
   if (prompt === undefined) return { status: 'skipped', reason: 'no_prompt' };
   const { text: message, source: bodySource } = await messageText(storage, row, body, refetch);
-  const system = renderPrompt(prompt.body, {
-    role_targets: await roleTargetsText(db, ctx),
-    open_opportunities_untrusted: await openOpportunitiesText(db, ctx),
-    message_untrusted: message,
-  });
+  // The cacheable prefix ends before the message (#380): the instructions, the role targets and
+  // the open opportunities repeat for every message of a sync batch; the router marks it for the
+  // provider's cache when the provider and the prefix's size allow.
+  const { system, cacheBreak } = systemWithCacheBreak(
+    prompt.body,
+    {
+      role_targets: await roleTargetsText(db, ctx),
+      open_opportunities_untrusted: await openOpportunitiesText(db, ctx),
+      message_untrusted: message,
+    },
+    'comms.classify',
+  );
   let output: ClassifyOutput;
   try {
     output = await runStructured(await buildAiDeps(db, ctx), 'comms.classify', {
       system,
+      cacheBreak,
       prompt: 'Classify the message and return the result.',
       schema: ClassifyOutputSchema,
       promptId: prompt.id,
