@@ -46,6 +46,7 @@ import { OBS_PRUNE_CRON, OBS_PRUNE_JOB_KIND } from './jobs/obsPrune';
 import { stopObs } from './obs';
 import { startObsFromSettings } from './obs/config';
 import { obsSettingsRoutes } from './routes/obsSettings';
+import { obsTraceRoutes } from './routes/obsTraces';
 import {
   DB_INTEGRITY_CHECK_CRON,
   DB_INTEGRITY_CHECK_CRON_POSTGRES,
@@ -467,7 +468,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   });
   // Observability (design.md 14.1, #353): bound to this database, Collect as stored (off by
   // default). Stopped before the database closes, so a last flush still has somewhere to go.
-  await startObsFromSettings(db, app.log);
+  await startObsFromSettings(db, app.log, { demo: cfg.demo });
   app.addHook('onClose', async () => {
     // Let an in-flight job finish before the database goes away.
     await runner?.stop();
@@ -554,6 +555,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       // Assisted apply (#114): every route 404s unless OPPORTUN_SUBMISSIONS=1, never on the demo.
       await api.register(submissionRoutes);
       await api.register(obsSettingsRoutes);
+      await api.register(obsTraceRoutes);
     },
     { prefix: '/api/v1' },
   );

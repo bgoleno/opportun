@@ -105,6 +105,18 @@ export interface AiDeps {
   spentTodayUsd(task: TaskKey): Promise<number>;
   /** issue #334: handed to createLanguageModel for the openai_compatible case. */
   providerFetch: ProviderFetchOptions;
+  /**
+   * The user the call is for: an opaque row id, put on the call's span as `user.id`. When it is not
+   * the user in the trace context, the call starts a trace of its own (design 14.6), so a job that
+   * works through every user's rows makes one trace per user. Absent: no `user.id`.
+   */
+  userId?: string;
+  /**
+   * Told when the run ledger could not be written after a streamed call (the stream itself is
+   * unaffected). This package does no IO, so it does not log: the server wires this to its logger.
+   * Absent: the failure is dropped. It never throws into the stream: an error from this is dropped.
+   */
+  onRecordError?(task: TaskKey, error: unknown): void;
 }
 
 export type AiUnavailableReason =

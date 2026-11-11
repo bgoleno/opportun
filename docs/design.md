@@ -786,7 +786,8 @@ Two instance-wide switches, both admin-only:
   collection is on.
 - **On the demo deployment (`OPPORTUN_DEMO=1`) collection cannot be turned on**, because the
   demo's admin account is public (as for export, 14.10 rule 6). The switch's `PUT` answers
-  403 `unavailable_on_demo` to every caller, for on and off alike.
+  403 `unavailable_on_demo` to every caller, for on and off alike. A Collect value stored before
+  the instance became the demo is ignored there: boot and the switch's `GET` both read it as off.
 - **Turning either on or off applies without a restart.**
 - **Changing the Collect switch is audited** (`telemetry.collect.updated`, with the new
   state), as an export change is (14.10 rule 1), because turning it on starts recording every

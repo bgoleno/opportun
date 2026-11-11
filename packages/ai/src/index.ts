@@ -12,3 +12,12 @@ export {
 export * from './tasks';
 export * from './features';
 export { pingModel, type PingOutcome } from './keyCheck';
+export {
+  ATTR,
+  isModelId,
+  SDK_TELEMETRY_OFF,
+  spanNameFor,
+  USER_CONTEXT_KEY,
+  userInContext,
+  withUser,
+} from './telemetry';
