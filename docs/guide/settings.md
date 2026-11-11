@@ -301,8 +301,9 @@ administrator turns them on, and both apply at once, with no restart.
 - **Collection** records how Opportun runs, in its own database: HTTP requests, background
   jobs, database statements, outbound requests and AI calls, as metrics and traces. The
   **Metrics** and **AI traces** pages read it. It also writes an event record to the server's
-  log for each sign-in, settings change, job run, discovery source run, import, export, AI key
-  change and error: what happened, never the details. Nothing leaves the instance.
+  log for every action in the audit log (a sign-in, an import, an AI key change and the like),
+  and for each settings change, job run, discovery source run and error: what happened and
+  who, never the details. Nothing leaves the instance.
 - **Export** sends the same metrics, traces and event records to one outside destination an
   administrator names. It can be on only while collection is: turning collection off turns
   export off too, and turning collection back on does not resume export by itself.

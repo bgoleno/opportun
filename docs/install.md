@@ -489,9 +489,9 @@ marked **on Postgres** instead.
   that way. `sqlite3 <file> 'PRAGMA integrity_check;'` (see the risk above) is how to
   check a backup you are not certain was taken that way.
 
-  Opportun sets one SQLite option itself: `wal_autocheckpoint = 100`. SQLite folds the WAL
-  back into `opportun.db` whenever it passes 100 pages, rather than at its default of 1,000,
-  so `opportun.db-wal` stays small and no single write waits long for a checkpoint. There is
+  Opportun also sets `wal_autocheckpoint = 100`. SQLite folds the WAL back into
+  `opportun.db` whenever it passes 100 pages, rather than at its default of 1,000, so
+  `opportun.db-wal` stays small and no single write waits long for a checkpoint. There is
   nothing to configure.
 
 - **Restore**: pick which snapshot first. Settings → Import/Export lists every snapshot
