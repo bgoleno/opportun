@@ -155,11 +155,15 @@ its own remove control, which removes only that record. See [Resumes](resumes.md
 
 ### Your details when you apply
 
-Where assisted apply is on, an opportunity whose posting is confirmed has **Apply**. Its
-**Details** step opens already filled with what Opportun holds for you, field by field:
+Where assisted apply is on, an opportunity has **Apply** when its posting is confirmed and is on
+a recognised application system (such as Greenhouse), its stage is Interested, Preparing or
+Applied, and you have a resume marked Final. When one of these is missing, the opportunity's
+apply panel says which. The **Details** step opens already filled with what Opportun holds for
+you, field by field:
 
 1. your profile: **Settings > Profile**, and its **Application details** card for first and
-   last name, LinkedIn profile, website and links;
+   last name, country, school, degree, how you heard about the role, LinkedIn profile, website
+   and links;
 2. your account, for Email (your sign-in email) and Full name (your display name) only;
 3. the same field of the application you reviewed most recently, to any company.
 
@@ -174,6 +178,12 @@ says **Not in your profile** or **Differs from your profile**, with a **Save to 
 off by default. Changes you make on the step apply to this application only. To keep one for
 next time, tick **Save to my profile** before **Next: Review**: the application and your profile
 are saved together. On a field you emptied, the tick reads **Remove from my profile**.
+
+Country, Location (city), School, Degree and "How did you hear about this role?" are usually lists
+on the employer's form. Write each as the form's list shows it ("United States", not "USA"). The
+browser extension fills Location (city) and how you heard where the form asks them as a text
+question with the same label, and leaves a list for any of the five to you, saying "choose it on
+the form".
 
 ### Communications
 

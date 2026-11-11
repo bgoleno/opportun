@@ -47,22 +47,40 @@ export type SubmissionView = Submission & {
  * themselves (key, label, where each lives in the profile) are core's APPLICATION_DETAIL_FIELDS
  * (#411), one list for the server, the details step and Settings > Profile.
  */
+/** How to write a value meant for one of the form's lists (#435): the list's own wording. */
+const asListed = (example: string): string =>
+  `Write it as the form's list shows it, for example ${example}.`;
+
 const DETAIL_INPUTS = new Map<
   ApplicationDetailKey,
-  { type: 'text' | 'email' | 'tel' | 'url'; autoComplete: string }
+  { type: 'text' | 'email' | 'tel' | 'url'; autoComplete: string; hint?: string }
 >([
   ['firstName', { type: 'text', autoComplete: 'given-name' }],
   ['lastName', { type: 'text', autoComplete: 'family-name' }],
   ['fullName', { type: 'text', autoComplete: 'name' }],
   ['email', { type: 'email', autoComplete: 'email' }],
   ['phone', { type: 'tel', autoComplete: 'tel' }],
-  ['location', { type: 'text', autoComplete: 'address-level2' }],
+  ['country', { type: 'text', autoComplete: 'country-name', hint: asListed('United States') }],
+  [
+    'location',
+    {
+      type: 'text',
+      autoComplete: 'address-level2',
+      hint: asListed('Seattle, Washington, United States'),
+    },
+  ],
   ['workAuthorization', { type: 'text', autoComplete: 'off' }],
+  ['school', { type: 'text', autoComplete: 'off', hint: asListed('University of Washington') }],
+  ['degree', { type: 'text', autoComplete: 'off', hint: asListed("Bachelor's Degree") }],
   // 'off', not 'url': the browser's one "url" value is a home page, which belongs in Website.
   ['linkedinUrl', { type: 'url', autoComplete: 'off' }],
   ['websiteUrl', { type: 'url', autoComplete: 'url' }],
   ['links', { type: 'text', autoComplete: 'url' }],
+  ['heardFrom', { type: 'text', autoComplete: 'off', hint: asListed('LinkedIn') }],
 ]);
+
+/** The hint under the city, also on the profile card's own Location field (#435). */
+export const LOCATION_HINT = asListed('Seattle, Washington, United States');
 
 /**
  * The profile values a form usually asks for, in the order the details step shows them.
@@ -73,6 +91,7 @@ export const DETAIL_FIELDS = APPLICATION_DETAIL_FIELDS.map((f) => ({
   key: f.key,
   label: f.label,
   home: f.home,
+  hint: undefined as string | undefined,
   ...(DETAIL_INPUTS.get(f.key) ?? { type: 'text' as const, autoComplete: 'off' }),
 }));
 
