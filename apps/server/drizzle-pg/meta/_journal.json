@@ -295,6 +295,13 @@
       "when": 1795600000000,
       "tag": "0041_obs_store",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1795700000000,
+      "tag": "0042_discovery_company_tags_cache_order",
+      "breakpoints": true
     }
   ]
 }
