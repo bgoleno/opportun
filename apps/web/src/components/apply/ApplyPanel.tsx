@@ -21,7 +21,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { ApiError, errorMessage } from '@/lib/api';
-import { formatDateTime, stageLabel, type OpportunityView } from '@/lib/opportunities';
+import { formatDate, formatDateTime, stageLabel, type OpportunityView } from '@/lib/opportunities';
 import {
   atsLabel,
   clockTime,
@@ -114,6 +114,19 @@ function notEligible(opp: OpportunityView, resumes: Resume[]): string | null {
   return null;
 }
 
+/** The statuses that mean the user has applied (#404): Submitted, Confirmed, No confirmation seen
+ *  or Rejected. */
+const APPLIED: readonly string[] = ['submitted', 'confirmed', 'unknown', 'rejected'];
+
+/**
+ * The application the panel leads with once the user has applied (#404, tl's decision 1): the
+ * newest attempt that is Submitted, Confirmed, No confirmation seen or Rejected, whatever newer
+ * attempt was cancelled or expired after it. `items` are newest first, as the server lists them.
+ */
+export function appliedAttempt(items: readonly SubmissionView[]): SubmissionView | undefined {
+  return items.find((s) => APPLIED.includes(s.status));
+}
+
 export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const submissions = useOpportunitySubmissions(opp.id);
   const resumes = useResumes();
@@ -138,9 +151,21 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const reportable = items.find((s) => REPORTABLE.includes(s.status));
   const reportableIsLast = live === undefined && reportable !== undefined && reportable === latest;
 
+  // Once the user has applied and nothing is in progress, the outcome leads (#404).
+  const outcome = live === undefined ? appliedAttempt(items) : undefined;
+
   let body: React.ReactNode;
   if (live !== undefined) {
     body = <InProgress live={live} opp={opp} ats={ats} onStop={() => setStopping(true)} />;
+  } else if (outcome !== undefined) {
+    body = (
+      <Applied
+        attempt={outcome}
+        opp={opp}
+        // Offered only when the server would accept a new attempt, so it never leads to a refusal.
+        canApplyAgain={notEligible(opp, resumes.data?.items ?? []) === null}
+      />
+    );
   } else {
     const reason = notEligible(opp, resumes.data?.items ?? []);
     const refusedLabel = opp.atsJobRef ? `Apply on ${ats}` : 'Apply on an ATS';
@@ -233,7 +258,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   }
 
   const earlierReport =
-    reportable !== undefined && !reportableIsLast ? (
+    reportable !== undefined && !reportableIsLast && reportable !== outcome ? (
       <EarlierAttempt attempt={reportable} companyName={opp.companyName} />
     ) : null;
 
@@ -327,6 +352,64 @@ function InProgress({
       >
         Cancel this application
       </button>
+    </div>
+  );
+}
+
+/**
+ * The panel once the user has applied (#404, tl's decision 1): the outcome, the application
+ * itself as the filled button, the follow-up questions, and applying again as a quiet link under
+ * one line of why. The apply flow it opens asks for the reason (owner decision 6).
+ */
+function Applied({
+  attempt,
+  opp,
+  canApplyAgain,
+}: {
+  attempt: SubmissionView;
+  opp: OpportunityView;
+  canApplyAgain: boolean;
+}) {
+  const ats = atsLabel(attempt.atsKind);
+  const when =
+    attempt.submittedAt === null
+      ? `You applied through ${ats}.`
+      : `You applied on ${formatDate(attempt.submittedAt)} through ${ats}.`;
+  const confirmed =
+    attempt.status === 'confirmed' && attempt.confirmedAt !== null
+      ? ` ${ats} confirmed it on ${formatDate(attempt.confirmedAt)}.`
+      : '';
+  return (
+    <div className="grid gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <SubmissionStatusChip status={attempt.status} />
+      </div>
+      <p className="text-sm">{`${when}${confirmed}`}</p>
+      <Button asChild className="w-full">
+        <Link
+          to="/opportunities/$id/applications/$submissionId"
+          params={{ id: attempt.opportunityId, submissionId: attempt.id }}
+        >
+          View application
+        </Link>
+      </Button>
+      <OutcomeActions attempt={attempt} companyName={opp.companyName} />
+      {canApplyAgain ? (
+        <div className="grid gap-1">
+          <p className="text-sm text-muted-foreground">
+            Apply again only if the first application did not go through, or the employer asked you
+            to. You will be asked for the reason.
+          </p>
+          <Link
+            to="/opportunities/$id/apply"
+            params={{ id: opp.id }}
+            search={{ step: 'resume' }}
+            className="w-fit text-sm text-primary underline-offset-4 hover:underline"
+          >
+            Apply again
+          </Link>
+        </div>
+      ) : null}
     </div>
   );
 }
