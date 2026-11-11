@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { auditLog } from '../src/db/schema';
 import { attachedExporters, isCollecting, setCollecting } from '../src/obs';
 import { stopExport } from '../src/obs/export/manager';
-import { readExport } from '../src/obs/export/settings';
+import { readExport, writeExport } from '../src/obs/export/settings';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 
@@ -309,6 +309,53 @@ describe('POST /api/v1/obs/export/test (14.10 rule 7)', () => {
         payload: { password: PASSWORD },
       });
       codes.push(r.statusCode);
+    }
+    expect(codes.slice(0, 10).every((c) => c === 200)).toBe(true);
+    expect(codes[10]).toBe(429);
+  });
+});
+
+describe('what pins the guards of the export routes (sec on #377)', () => {
+  it('Send a test checks the stored destination itself: private without the flag is blocked, no request', async () => {
+    // Saved while export is off, a destination is stored without the address check, so the
+    // test send's own check is its only guard (X32).
+    const { app, a } = await boot({ telemetryAllowPrivate: false });
+    const { port, hits } = await receiver();
+    await writeExport(app.db, {
+      enabled: false,
+      destination: { type: 'otlp', scheme: 'http', host: '127.0.0.1', port },
+      sealedCredential: null,
+    });
+    const r = await a.request({
+      method: 'POST',
+      url: '/api/v1/obs/export/test',
+      payload: { password: PASSWORD },
+    });
+    expect(r.json()).toEqual({ outcome: 'blocked' });
+    expect(hits).toEqual([]);
+  });
+
+  it('a wrong password on Send a test makes no request (X22b)', async () => {
+    const { a } = await boot({ telemetryAllowPrivate: true });
+    const { port, hits } = await receiver();
+    await putExport(a, { password: PASSWORD, enabled: false, destination: local(port) });
+    const r = await a.request({
+      method: 'POST',
+      url: '/api/v1/obs/export/test',
+      payload: { password: 'not-it' },
+    });
+    expect(r.statusCode).toBe(403);
+    // The 403 is sent by confirmPassword itself, so the response alone cannot show that the
+    // handler stopped there: give a send that should not happen the time to arrive.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(hits).toEqual([]);
+  });
+
+  it('the PUT is rate-limited with the re-confirmation: the eleventh in the window is refused (X20)', async () => {
+    const { a } = await boot({ telemetryAllowPrivate: true });
+    const codes: number[] = [];
+    for (let i = 0; i < 11; i += 1) {
+      codes.push((await putExport(a, { password: PASSWORD, enabled: false })).statusCode);
     }
     expect(codes.slice(0, 10).every((c) => c === 200)).toBe(true);
     expect(codes[10]).toBe(429);
