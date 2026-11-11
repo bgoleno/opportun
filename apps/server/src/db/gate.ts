@@ -121,18 +121,33 @@ export interface SlowTransaction {
   stack: string;
 }
 
-let slowReporter: (slow: SlowTransaction) => void = (slow) => {
-  // Through the gated logger (obs/log.ts): the stack as frame lines only, and fixed text.
+/**
+ * The default slow-transaction reporter, through the gated logger (obs/log.ts): the stack as
+ * frame lines only, and fixed text. The caller's stack is `new Error('withTransaction caller')`'s
+ * (db/client.ts), but the record has no message (a `message` would make pino's error serializer
+ * rename the type to Object), so its header line becomes the name alone, the header the log gate
+ * then skips (tl on #389).
+ */
+export function logSlowTransaction(slow: SlowTransaction): void {
   dbLog(
     'warn',
     {
       'opportun.db.gate_held_ms': Math.round(slow.durationMs),
       'opportun.db.awaited_outside': slow.awaitedOutside,
-      err: { type: 'SlowTransaction', stack: slow.stack },
+      err: { type: 'SlowTransaction', stack: underName('SlowTransaction', slow.stack) },
     },
     'slow transaction held the database write gate',
   );
-};
+}
+
+/** A stack's frames under a header of `name` alone, in place of its own first line. */
+function underName(name: string, stack: string | undefined): string | undefined {
+  if (stack === undefined) return undefined;
+  const at = stack.indexOf('\n');
+  return at < 0 ? name : `${name}${stack.slice(at)}`;
+}
+
+let slowReporter: (slow: SlowTransaction) => void = logSlowTransaction;
 
 /** Test hook: test/setup.ts fails the running test on a transaction that awaited outside. */
 export function onSlowTransaction(reporter: (slow: SlowTransaction) => void): void {
@@ -165,8 +180,8 @@ export function gateHeldError(label: string): { type: 'GateHeld'; stack: string 
   return { type: 'GateHeld', stack: `GateHeld\n${label}` };
 }
 
-let watchdogMs = GATE_WATCHDOG_MS;
-let watchdogReport: (held: GateHeld) => void = (held) => {
+/** The default held-gate reporter, when no app wired its own (a CLI). */
+export function logHeldGate(held: GateHeld): void {
   dbLog(
     'warn',
     {
@@ -179,7 +194,10 @@ let watchdogReport: (held: GateHeld) => void = (held) => {
     },
     'database write gate held too long',
   );
-};
+}
+
+let watchdogMs = GATE_WATCHDOG_MS;
+let watchdogReport: (held: GateHeld) => void = logHeldGate;
 
 /**
  * What armGateWatchdog schedules against: real setTimeout/performance.now() in production.

@@ -123,6 +123,44 @@ function headerMatches(header: string, message: string): boolean {
 }
 
 /**
+ * The messages a stack's header may have been written with, longest first: the message as pino
+ * gives it, then each shorter prefix ending where pino joined a cause's message to it
+ * (`outer: inner`, pino-std-serializers' messageWithCauses), as a stack's header holds the
+ * error's own message only (tl on #389). The error's own message is always one of them.
+ */
+function headerMessages(message: string): string[] {
+  const out = [message];
+  for (let at = message.lastIndexOf(': '); at > 0; at = message.lastIndexOf(': ', at - 1)) {
+    out.push(message.slice(0, at));
+  }
+  return out;
+}
+
+/** How many lines the stack's header has, for the first of headerMessages it matches. */
+function headerLength(lines: readonly string[], message: string): number | undefined {
+  for (const candidate of headerMessages(message)) {
+    const length = candidate.split('\n').length;
+    if (headerMatches(lines.slice(0, length).join('\n'), candidate)) return length;
+  }
+  return undefined;
+}
+
+/**
+ * A V8 frame with no location to give: a builtin's (`at JSON.parse (<anonymous>)`, `(native)`),
+ * an `async Promise.all (index 0)`, or `at <anonymous>`. Never ours, so it stands as
+ * EXTERNAL_FRAME, and the frames after it are still read (tl on #389).
+ */
+function isLocationless(line: string): boolean {
+  if (line === 'at <anonymous>') return true;
+  if (!line.startsWith('at ')) return false;
+  if (line.endsWith(' (<anonymous>)') || line.endsWith(' (native)')) return true;
+  const at = line.lastIndexOf(' (index ');
+  if (at < 0 || !line.endsWith(')')) return false;
+  const digits = line.slice(at + ' (index '.length, -1);
+  return digits.length > 0 && [...digits].every((c) => c >= '0' && c <= '9');
+}
+
+/**
  * The frame lines of a stack, paths made relative to the install root (14.8). A V8 stack begins
  * with the error's name and message, which can quote data and can be shaped like a frame (sec on
  * #376): those lines are skipped by count, never parsed, and only when they are the header of the
@@ -138,13 +176,17 @@ function headerMatches(header: string, message: string): boolean {
  */
 export function frameLines(stack: unknown, message?: unknown): string[] {
   if (typeof stack !== 'string') return [];
-  const text = typeof message === 'string' ? message : '';
   const lines = stack.split('\n');
-  const header = text.split('\n').length;
-  if (!headerMatches(lines.slice(0, header).join('\n'), text)) return [];
+  const header = headerLength(lines, typeof message === 'string' ? message : '');
+  if (header === undefined) return [];
   const out: string[] = [];
   for (const raw of lines.slice(header)) {
-    const frame = parseFrame(raw.trim());
+    const line = raw.trim();
+    const frame = parseFrame(line);
+    if (frame === undefined && isLocationless(line)) {
+      if (out.at(-1) !== EXTERNAL_FRAME) out.push(EXTERNAL_FRAME);
+      continue;
+    }
     if (frame === undefined) break;
     if (!frame.path.startsWith(INSTALL_ROOT + sep)) {
       if (out.at(-1) !== EXTERNAL_FRAME) out.push(EXTERNAL_FRAME);
