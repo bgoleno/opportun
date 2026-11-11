@@ -166,11 +166,11 @@ function headerLength(lines: readonly string[], message: string): number | undef
 function causeAfterFrames(lines: readonly string[], from: number): string | undefined {
   let i = from;
   while (i < lines.length) {
-    const line = (lines[i] ?? '').trim();
+    const line = (lines.at(i) ?? '').trim();
     if (parseFrame(line) === undefined && !isLocationless(line)) break;
     i++;
   }
-  const next = lines[i];
+  const next = lines.at(i);
   if (next === undefined || !next.startsWith(CAUSED_BY)) return undefined;
   const cause = next.slice(CAUSED_BY.length);
   const named = cause.indexOf(': ');
