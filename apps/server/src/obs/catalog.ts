@@ -776,6 +776,7 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'ats detection failed': ['opportun.company.id'],
   'discovery run failed': ['opportun.source.id', 'opportun.discovery.source_kind'],
   'ats probe failed': ['opportun.ats.kind'],
+  'greenhouse job check failed': ['opportun.ats.kind'],
   'careers page fetch blocked': ['opportun.company.id', 'opportun.fetch.blocked_reason'],
   'lead resolution lookup failed': ['opportun.source.id'],
   'workday capture retry failed': ['opportun.discovery_result.id'],
