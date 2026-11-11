@@ -58,6 +58,10 @@ const FIND_SAID = new Map<FindPostingResult['outcome'], string>([
   ],
 ]);
 
+/** Find posting offering exactly one posting to choose (tl on #414). */
+const ONE_CANDIDATE =
+  "A posting on the company's board could be this job. Check it on the Details tab.";
+
 const NOT_ON_A_KNOWN_BOARD =
   'This job was not found on a Greenhouse board known for this company. Check the posting link on the Details tab.';
 
@@ -215,7 +219,9 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                   </p>
                 ) : find.data !== undefined ? (
                   <p role="status" className="text-sm text-muted-foreground">
-                    {FIND_SAID.get(find.data.outcome) ?? ''}
+                    {find.data.outcome === 'candidates' && find.data.candidates?.length === 1
+                      ? ONE_CANDIDATE
+                      : (FIND_SAID.get(find.data.outcome) ?? '')}
                   </p>
                 ) : null}
               </>

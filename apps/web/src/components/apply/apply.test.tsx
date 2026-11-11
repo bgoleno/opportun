@@ -372,8 +372,13 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
     ['identified', { outcome: 'identified' }, 'Recognised on Greenhouse.'],
     [
       'candidates',
-      { outcome: 'candidates', candidates: [], board: [] },
+      { outcome: 'candidates', candidates: [{}, {}], board: [] },
       'Several postings could be this job. Choose it on the Details tab.',
+    ],
+    [
+      'one candidate',
+      { outcome: 'candidates', candidates: [{}], board: [] },
+      "A posting on the company's board could be this job. Check it on the Details tab.",
     ],
     [
       'none',
