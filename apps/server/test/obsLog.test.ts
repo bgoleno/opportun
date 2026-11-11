@@ -133,6 +133,41 @@ describe('frame lines (#345, 14.8)', () => {
   });
 });
 
+describe('what an error and a record\u2019s shape may carry (#345, sec on #376)', () => {
+  it('a frame-shaped line in an error\u2019s message, or a cause\u2019s text, is not taken for a frame', () => {
+    const c = capture();
+    const err = new Error(`first line\n    at Leak.Name (${process.cwd()}/leak.ts:1:1)`);
+    // What an errWithCause serializer appends after the frames: never read.
+    err.stack = `${err.stack}\ncaused by: Error: ${NAME}\n    at Cause.Leak (${process.cwd()}/c.ts:2:2)`;
+    c.log.error({ err }, 'unhandled error');
+    const stack = c.records()[0]!.stack as string[];
+    expect(stack.length).toBeGreaterThan(0);
+    expect(c.text()).not.toContain('Leak.Name');
+    expect(c.text()).not.toContain('Cause.Leak');
+    expect(c.text()).not.toContain(NAME);
+  });
+
+  it('a record naming an event keeps a different message only if that message is catalogued', () => {
+    setUnknownKeyMode('drop');
+    const c = capture();
+    c.log.info({ event: 'job.finished' }, `job done for ${EMAIL}`);
+    expect(c.records()[0]).toEqual({ level: 30, time: expect.any(Number), msg: WITHHELD });
+  });
+
+  it('drops a trace id not shaped as 32 hex digits, and an error type not shaped as a code', () => {
+    const c = capture();
+    c.log.error(
+      { trace_id: EMAIL, err: { type: `${NAME} Error`, stack: 'Error: x' } },
+      'unhandled error',
+    );
+    const r = c.records()[0]!;
+    expect(r).not.toHaveProperty('trace_id');
+    expect(r).not.toHaveProperty('error.type');
+    expect(c.text()).not.toContain(NAME);
+    expect(c.text()).not.toContain(EMAIL);
+  });
+});
+
 describe('the access log line (#345, 14.9)', () => {
   it('says the method, the route template, the status, the route id and the address, nothing else', () => {
     const c = capture();

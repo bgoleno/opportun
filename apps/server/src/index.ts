@@ -1,10 +1,12 @@
 import { pathToFileURL } from 'node:url';
 import { buildApp } from './app';
 import { ConfigError, loadConfig } from './config';
-import { createLogger } from './obs/log';
+import { createLogger, installProcessHandlers } from './obs/log';
 
 /** Server entry point: load config, build the app, listen. */
 export async function main(): Promise<void> {
+  // Before anything else: a crash or a warning from here on goes through the log gate (#345).
+  installProcessHandlers();
   const cfg = loadConfig();
   // End-to-end fakes (OPPORTUN_*_MOCK=1, never in production): loaded only when asked for.
   const env = process.env;
@@ -39,6 +41,8 @@ export async function main(): Promise<void> {
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
   await app.listen({ port: cfg.port, host: cfg.host });
+  // Fastify's own "Server listening at <address>" is not a catalogued message (14.8): this one is.
+  app.log.info({ 'server.port': cfg.port }, 'server listening');
 }
 
 const entry = process.argv[1];

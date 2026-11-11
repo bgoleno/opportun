@@ -250,6 +250,15 @@ export const ATTRIBUTES = {
   'opportun.count.cleared': int,
   'opportun.mail.channel': { kind: 'enum', values: COMM_CHANNELS },
   'opportun.db.awaited_outside': { kind: 'bool' },
+  // A process warning's class and code (index.ts's handlers): never its text.
+  'opportun.warning.type': {
+    kind: 'code',
+    source: "a process warning's name (DeprecationWarning), as Node sets it; never its message",
+  },
+  'opportun.warning.code': {
+    kind: 'code',
+    source: "a process warning's code (FSTDEP023), as its emitter sets it; never its message",
+  },
   // The job a runner line or job.finished is about (jobs/runner.ts, 14.9). Its row id is local.
   'opportun.job.id': { kind: 'id' },
   'opportun.job.attempt': int,
@@ -702,6 +711,10 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'error during shutdown': [],
   'TEST MOCKS ENABLED: external provider calls are fake': ['opportun.mocks.count'],
   'no web build found; serving the API only': [],
+  'server listening': ['server.port'],
+  'uncaught exception': [],
+  'unhandled rejection': [],
+  'process warning': ['opportun.warning.type', 'opportun.warning.code'],
   'listening on localhost only: this instance cannot be reached from another device until OPPORTUN_HOST names a reachable address (docs/install.md, "Reaching it from another device")':
     ['server.port'],
   // Database

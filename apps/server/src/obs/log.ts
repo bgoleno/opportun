@@ -103,13 +103,24 @@ function parseFrame(
   return { fn, path: body.slice(0, rowAt), row, col };
 }
 
-/** The frame lines of a stack, paths made relative to the install root or dropped (14.8). */
-export function frameLines(stack: unknown): string[] {
+/**
+ * The frame lines of a stack, paths made relative to the install root or dropped (14.8). A V8
+ * stack begins with the error's name and message, which can quote data and can be shaped like a
+ * frame (sec on #376): those lines are skipped by count, never parsed. Only the frames right after
+ * them are taken, so a cause's text appended below them (`caused by: ...`) is not read either.
+ */
+export function frameLines(stack: unknown, message?: unknown): string[] {
   if (typeof stack !== 'string') return [];
+  const header = typeof message === 'string' ? message.split('\n').length : 1;
   const out: string[] = [];
-  for (const raw of stack.split('\n')) {
+  let started = false;
+  for (const raw of stack.split('\n').slice(header)) {
     const frame = parseFrame(raw.trim());
-    if (frame === undefined) continue;
+    if (frame === undefined) {
+      if (started) break;
+      continue;
+    }
+    started = true;
     const name = frame.fn === undefined ? undefined : functionName(frame.fn);
     const inside = frame.path.startsWith(INSTALL_ROOT + sep);
     const where = inside
@@ -192,7 +203,10 @@ export function gateLogLine(line: string, dropped: LogDropCounter): string | und
   if (typeof err === 'object' && err !== null) {
     const type = (err as { type?: unknown }).type;
     if (typeof type === 'string' && CODE.test(type)) out['error.type'] = type;
-    const frames = frameLines((err as { stack?: unknown }).stack);
+    const frames = frameLines(
+      (err as { stack?: unknown }).stack,
+      (err as { message?: unknown }).message,
+    );
     if (frames.length > 0) out.stack = frames;
   }
   if (typeof record.trace_id === 'string' && TRACE_ID.test(record.trace_id)) {
@@ -296,5 +310,49 @@ let process_logger: Logger | undefined;
  * reporters): created on first use, with the same options and gate as app.log.
  */
 export function processLogger(): Logger {
-  return (process_logger ??= createLogger({ level: process.env.LOG_LEVEL ?? 'info' }));
+  // stderr, as the console.warn it replaces wrote: a CLI's own output (a reset password, a copy's
+  // report) keeps stdout to itself.
+  return (process_logger ??= createLogger({
+    level: process.env.LOG_LEVEL ?? 'info',
+    stream: process.stderr,
+  }));
+}
+
+/**
+ * The process's own last words, through the gate (sec on #376): Node would print an uncaught
+ * error's stack, message and properties to stderr, and every warning's text. With these handlers
+ * an uncaught exception or unhandled rejection is one gated line (its type and frames) and then
+ * the exit Node would make, and a warning is its type and code only. Installed by the server
+ * process (index.ts), not by tests or CLIs.
+ */
+export function installProcessHandlers(): void {
+  // A line written just before exiting must reach stderr first: on a pipe that write can be
+  // asynchronous, so the crash path exits from the write's callback (or after a second at most).
+  const exitAfter = (): LogLineSink => ({
+    write(line: string) {
+      process.stderr.write(line, () => process.exit(1));
+    },
+  });
+  const crash = (msg: string, err: unknown): void => {
+    setTimeout(() => process.exit(1), 1_000).unref();
+    createLogger({ level: 'fatal', stream: exitAfter() }).fatal({ err }, msg);
+  };
+  process.on('uncaughtException', (err) => crash('uncaught exception', err));
+  process.on('unhandledRejection', (reason) =>
+    crash(
+      'unhandled rejection',
+      reason instanceof Error ? reason : { type: typeof reason === 'object' ? 'Object' : 'Value' },
+    ),
+  );
+  // Node's own listener prints the warning's text: replaced by one that names it only.
+  process.removeAllListeners('warning');
+  process.on('warning', (warning) => {
+    processLogger().warn(
+      {
+        'opportun.warning.type': warning.name,
+        'opportun.warning.code': (warning as { code?: unknown }).code,
+      },
+      'process warning',
+    );
+  });
 }
