@@ -92,7 +92,12 @@ describe('nextExport: the change rules', () => {
   });
 
   it('an OTLP credential needs the header it goes in', () => {
-    const { headerName: _h, ...bare } = otlp;
+    const bare: Destination = {
+      type: 'otlp',
+      scheme: 'https',
+      host: 'otel.example.com',
+      port: 4318,
+    };
     expect(nextExport(OFF, { enabled: false, destination: bare, credential: 'k' }, seal)).toEqual({
       ok: false,
       error: 'header_name_required',
