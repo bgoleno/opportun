@@ -39,10 +39,15 @@ export const MAX_TRACE_SPANS = 2000;
 // The shapes the store's columns hold (14.8): a task key or `key_check`, a model id, a provider
 // id. A filter value of any other shape matches nothing anyway, so it is refused up front.
 const TASK = z.string().regex(/^[a-z][a-z0-9_.]{0,63}$/);
+const MODEL_SEGMENT = /^[A-Za-z0-9._:-]+$/;
+/** A model id (14.8): segments of letters, digits and `. _ : -`, at most one `/`, not first. */
 const MODEL = z
   .string()
-  .regex(/^[A-Za-z0-9._:-]+(\/[A-Za-z0-9._:-]+)?$/)
-  .max(128);
+  .max(128)
+  .refine((v) => {
+    const parts = v.split('/');
+    return parts.length <= 2 && parts.every((p) => MODEL_SEGMENT.test(p));
+  });
 const PROVIDER = z.string().regex(/^[a-z][a-z0-9_]{0,31}$/);
 const ROW_ID = z.string().regex(/^[A-Za-z0-9-]{1,64}$/);
 const TIME = z.coerce.number().int().min(0);
@@ -158,13 +163,13 @@ function isShowable(v: unknown): v is z.infer<typeof AttrValue> {
 export function shownAttributes(
   stored: Record<string, unknown>,
 ): Record<string, z.infer<typeof AttrValue>> {
-  const out: Record<string, z.infer<typeof AttrValue>> = {};
+  const shown: [string, z.infer<typeof AttrValue>][] = [];
   for (const [key, value] of Object.entries(stored)) {
     const type = ATTRIBUTE_TYPES.get(key);
     if (type === undefined || type.kind === 'id' || type.kind === 'ip') continue;
-    if (isShowable(value)) out[key] = value;
+    if (isShowable(value)) shown.push([key, value]);
   }
-  return out;
+  return Object.fromEntries(shown);
 }
 
 const TASK_KEY_SET: ReadonlySet<string> = new Set(TASK_KEYS);
