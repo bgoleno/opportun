@@ -146,13 +146,13 @@ The container runs as a non-root user with a read-only root filesystem, no Linux
 capabilities and `no-new-privileges`; only `/data` and a `/tmp` tmpfs are writable. Its
 health is reported by `GET /healthz`
 (`{"status":"ok","db":"ok","queueLagMs":0,"databaseIntegrity":null}`), which the image's
-`HEALTHCHECK` and `docker compose ps` use — but only the HTTP status code: both only see
+`HEALTHCHECK` and `docker compose ps` use, but only the HTTP status code: both only see
 "healthy" or not, never the body. `status` is `"degraded"` (HTTP 503) when the database
 itself cannot be reached, the one case restarting the container could plausibly help.
 `databaseIntegrity` carries the most recent scheduled integrity check (SQLite; see
 [section 6](#6-upgrades-and-backups) and section 15's engine comparison below for why
 Postgres has none), `null` before the first one has run. A known-corrupt database reports
-`status: "corrupted"` here — deliberately still HTTP 200, since restarting does not repair
+`status: "corrupted"` here, deliberately still HTTP 200, since restarting does not repair
 a corrupt file on disk and the server keeps answering most requests correctly regardless
 (only the specific damaged rows are affected). `docker compose ps` and the image's own
 `HEALTHCHECK` will show this instance as healthy throughout: checking for `"corrupted"`
@@ -304,7 +304,8 @@ chose it. Do not put a user name or password in the URL: such a URL is refused.
 filter before it is written: it keeps a fixed message and a few typed values (row ids, counts,
 codes), and nothing else. So a log line never holds a name, an email address, a phone number, a
 company's name, a request's URL or query string, an error's message, or the server's host name.
-An error is written as its type and the code frames it passed through. A message the server
+An error is written as its type and the code frames it passed through; a run of frames outside
+Opportun's code (a library's or Node's) is written as one fixed `at <external>`. A message the server
 does not know, such as one a library builds, is written as `[message withheld]`. Two
 exceptions: a configuration error at startup, which names the variable that is wrong, and a
 warning from the TypeScript loader (tsx) on a start with a cold cache, which Node prints itself.
