@@ -8,7 +8,7 @@ import { runStructured } from './router';
 import type { AiDeps, ModelPolicy, TaskKey } from './types';
 
 const longPrefix = 'Fixed instructions and a table. '.repeat(80);
-const split = { prefix: longPrefix, rest: '<untrusted>\nper-call\n</untrusted>' };
+const rest = '<untrusted>\nper-call\n</untrusted>';
 
 async function bodyOf(policy?: ModelPolicy): Promise<Record<string, unknown>> {
   const bodies: Record<string, unknown>[] = [];
@@ -28,7 +28,8 @@ async function bodyOf(policy?: ModelPolicy): Promise<Record<string, unknown>> {
   };
   await expect(
     runStructured(deps, task, {
-      system: split,
+      system: longPrefix + rest,
+      cacheBreak: longPrefix.length,
       prompt: 'Tag them.',
       schema: z.object({ ok: z.boolean() }),
     }),
@@ -42,7 +43,7 @@ describe('the prompt-caching split on the wire (#356)', () => {
     const body = await bodyOf();
     expect(body['system']).toEqual([
       { type: 'text', text: longPrefix, cache_control: { type: 'ephemeral' } },
-      { type: 'text', text: split.rest },
+      { type: 'text', text: rest },
     ]);
   });
 
@@ -50,6 +51,6 @@ describe('the prompt-caching split on the wire (#356)', () => {
     const body = await bodyOf({ provider: 'openai', model: 'gpt-5', maxOutputTokens: 2000 });
     const text = JSON.stringify(body);
     expect(text).not.toContain('cache_control');
-    expect(text).toContain(JSON.stringify(split.prefix + split.rest).slice(1, -1));
+    expect(text).toContain(JSON.stringify(longPrefix + rest).slice(1, -1));
   });
 });

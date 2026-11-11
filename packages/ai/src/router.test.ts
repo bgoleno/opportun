@@ -436,7 +436,8 @@ describe('streamChat', () => {
 describe('prompt caching (#356)', () => {
   // Over 2,048 characters, so over 512 tokens even at 4 characters a token.
   const longPrefix = 'Fixed instructions and a table. '.repeat(80);
-  const split = { prefix: longPrefix, rest: '<untrusted>\nper-call\n</untrusted>' };
+  const rest = '<untrusted>\nper-call\n</untrusted>';
+  const split = { system: longPrefix + rest, cacheBreak: longPrefix.length };
 
   function systemMessages(model: MockLanguageModelV4) {
     const prompt = model.doGenerateCalls[0]!.prompt;
@@ -445,14 +446,14 @@ describe('prompt caching (#356)', () => {
 
   it('marks the prefix for an Anthropic model when it reaches the minimum', async () => {
     const h = harness();
-    await runStructured(h.deps, 'discovery.company_tags', { ...call, system: split });
+    await runStructured(h.deps, 'discovery.company_tags', { ...call, ...split });
     const sys = systemMessages(h.model);
     expect(sys).toHaveLength(2);
     expect(sys[0]).toMatchObject({
       content: longPrefix,
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     });
-    expect(sys[1]?.content).toBe(split.rest);
+    expect(sys[1]?.content).toBe(rest);
     expect(sys[1]?.providerOptions?.anthropic).toBeUndefined();
   });
 
@@ -460,7 +461,8 @@ describe('prompt caching (#356)', () => {
     const h = harness();
     await runStructured(h.deps, 'discovery.company_tags', {
       ...call,
-      system: { prefix: 'Short.\n', rest: 'rest' },
+      system: 'Short.\nrest',
+      cacheBreak: 'Short.\n'.length,
     });
     const sys = systemMessages(h.model);
     expect(sys).toHaveLength(1);
@@ -485,10 +487,10 @@ describe('prompt caching (#356)', () => {
     ],
   ] as const)('sends the prompt whole and unmarked for %s', async (_name, policy) => {
     const h = harness({ overrides: { 'discovery.company_tags': policy as ModelPolicy } });
-    await runStructured(h.deps, 'discovery.company_tags', { ...call, system: split });
+    await runStructured(h.deps, 'discovery.company_tags', { ...call, ...split });
     const sys = systemMessages(h.model);
     expect(sys).toHaveLength(1);
-    expect(sys[0]?.content).toBe(split.prefix + split.rest);
+    expect(sys[0]?.content).toBe(split.system);
     expect(sys[0]?.providerOptions).toBeUndefined();
   });
 
@@ -503,7 +505,7 @@ describe('prompt caching (#356)', () => {
       },
     });
     const h = harness({ model });
-    await runStructured(h.deps, 'discovery.company_tags', { ...call, system: split });
+    await runStructured(h.deps, 'discovery.company_tags', { ...call, ...split });
     const run = h.runs[0]!;
     expect(run.inputTokens).toBe(1000);
     const expected = estimateCost(run.provider, run.model, 1000, 50, undefined, {

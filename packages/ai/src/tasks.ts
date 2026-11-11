@@ -475,3 +475,15 @@ export function renderPromptParts(
   const prefix = renderPrompt(template.slice(0, first.index), vars);
   return { prefix, rest: full.slice(prefix.length) };
 }
+
+/**
+ * The rendered system prompt, with where its unchanging part ends (renderPromptParts), as
+ * runStructured takes them: `system` is exactly renderPrompt's result.
+ */
+export function systemWithCacheBreak(
+  template: string,
+  vars: Record<string, string>,
+): { system: string; cacheBreak: number } {
+  const { prefix, rest } = renderPromptParts(template, vars);
+  return { system: prefix + rest, cacheBreak: prefix.length };
+}

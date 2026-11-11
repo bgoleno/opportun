@@ -217,16 +217,6 @@ function callSettings(policy: ModelPolicy): { maxOutputTokens: number; temperatu
   };
 }
 
-/**
- * A system prompt split where a provider's cache can start reusing it: `prefix` is the same from
- * call to call (instructions, a table, a role target), `rest` is the per-call data and what follows
- * it (renderPromptParts). The model reads `prefix + rest` either way.
- */
-export interface SplitSystem {
-  prefix: string;
-  rest: string;
-}
-
 /** Characters per token assumed when sizing a prefix: high, so a prefix is never overestimated. */
 const CHARS_PER_TOKEN = 4;
 
@@ -238,19 +228,18 @@ const CHARS_PER_TOKEN = 4;
  * already gives, and an OpenAI-compatible endpoint (a local model, a gateway) gets exactly what
  * it got before.
  */
-function systemFor(policy: ModelPolicy, system: string | SplitSystem): Instructions {
-  if (typeof system === 'string') return system;
-  const whole = system.prefix + system.rest;
+function systemFor(policy: ModelPolicy, system: string, cacheBreak?: number): Instructions {
+  if (cacheBreak === undefined || cacheBreak <= 0 || cacheBreak >= system.length) return system;
   // Only Anthropic models have a minimum (cacheMinTokens), so only they are ever marked.
   const min = cacheMinTokens(policy.provider, policy.model);
-  if (min === undefined || system.prefix.length / CHARS_PER_TOKEN < min) return whole;
+  if (min === undefined || cacheBreak / CHARS_PER_TOKEN < min) return system;
   return [
     {
       role: 'system',
-      content: system.prefix,
+      content: system.slice(0, cacheBreak),
       providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
     },
-    { role: 'system', content: system.rest },
+    { role: 'system', content: system.slice(cacheBreak) },
   ];
 }
 
@@ -262,7 +251,12 @@ export async function runStructured<T>(
   deps: AiDeps,
   task: TaskKey,
   opts: {
-    system: string | SplitSystem;
+    system: string;
+    /**
+     * Where the part of `system` that stays the same from call to call ends, in characters
+     * (systemWithCacheBreak). The router may mark the part before it for the provider's cache.
+     */
+    cacheBreak?: number;
     prompt: string;
     schema: z.ZodType<T>;
     promptId?: string;
@@ -285,7 +279,7 @@ export async function runStructured<T>(
       const result = await run.span.run(() =>
         generateText({
           model,
-          system: systemFor(policy, opts.system),
+          system: systemFor(policy, opts.system, opts.cacheBreak),
           prompt: opts.prompt,
           output: Output.object({ schema: opts.schema }),
           maxRetries: SDK_MAX_RETRIES,
