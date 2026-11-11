@@ -207,6 +207,12 @@ export function requireDeviceToken(scope: DeviceTokenScope): preHandlerAsyncHook
  * route deviceAuth (no CSRF, which guards cookies; and no session resolution, so a handler
  * can never mistake a cookie for the device's identity) and installs requireDeviceToken.
  * The security plugin refuses a deviceAuth route without this preHandler.
+ *
+ * Telemetry: the device user reaches the trace context (design 14.6) only if the route also
+ * authenticates in `onRequest`, as every connector route does today (`onRequest:
+ * [requireDeviceToken(...), ...]`). plugins/obsHttp.ts puts the user in the context in
+ * preValidation, which runs after `onRequest` but before this preHandler: a route that
+ * authenticates here alone gets no user in its trace (#371, tl on #368).
  */
 export function deviceRoute(scope: DeviceTokenScope): {
   config: { deviceAuth: true };
