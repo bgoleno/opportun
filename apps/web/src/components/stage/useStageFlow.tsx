@@ -25,6 +25,11 @@ export type StageSubject = Pick<OpportunityView, 'id' | 'stage' | 'title' | 'com
 export interface StageFlow {
   /** Asks to move `opp` to `to`; closed and dismissed open the reason dialog first. */
   request: (opp: StageSubject, to: OpportunityStage) => void;
+  /**
+   * Why `request` would refuse moving `opp` to `to`, in the words its message uses, or null when
+   * it would go ahead (#413): the board's drag announcement says the same as the toast.
+   */
+  refusal: (opp: StageSubject, to: OpportunityStage) => string | null;
   /** Explicit reopen out of closed or dismissed (sends reopen: true). */
   reopen: (opp: StageSubject, to: OpportunityStage) => void;
   /** Opens the dismiss dialog for `opp`. */
@@ -37,6 +42,14 @@ export interface StageFlow {
 
 export function subjectLabel(opp: Pick<StageSubject, 'companyName' | 'title'>): string {
   return `${opp.companyName}: ${opp.title}`;
+}
+
+/** The refusal message for a move the stage rules do not allow, or null when they do. */
+function refusalOf(from: OpportunityStage, to: OpportunityStage): string | null {
+  if (from === to || stageTargets(from).includes(to)) return null;
+  return isTerminal(from) && !isTerminal(to)
+    ? `Use Reopen to move a ${stageLabel(from).toLowerCase()} opportunity back to ${stageLabel(to)}.`
+    : `${stageLabel(from)} cannot move to ${stageLabel(to)}.`;
 }
 
 export function useStageFlow(): StageFlow {
@@ -80,15 +93,9 @@ export function useStageFlow(): StageFlow {
   const request = useCallback(
     (opp: StageSubject, to: OpportunityStage) => {
       if (opp.stage === to) return;
-      if (!stageTargets(opp.stage).includes(to)) {
-        toast({
-          title: 'Stage not changed',
-          description:
-            isTerminal(opp.stage) && !isTerminal(to)
-              ? `Use Reopen to move a ${stageLabel(opp.stage).toLowerCase()} opportunity back to ${stageLabel(to)}.`
-              : `${stageLabel(opp.stage)} cannot move to ${stageLabel(to)}.`,
-          variant: 'destructive',
-        });
+      const refused = refusalOf(opp.stage, to);
+      if (refused !== null) {
+        toast({ title: 'Stage not changed', description: refused, variant: 'destructive' });
         return;
       }
       if (to === 'closed' || to === 'dismissed') {
@@ -139,5 +146,10 @@ export function useStageFlow(): StageFlow {
     />
   );
 
-  return { request, reopen, dismiss, overrides, dialogs };
+  const refusal = useCallback(
+    (opp: StageSubject, to: OpportunityStage) => refusalOf(opp.stage, to),
+    [],
+  );
+
+  return { request, refusal, reopen, dismiss, overrides, dialogs };
 }
