@@ -33,7 +33,7 @@ import {
   stageHistory,
   resumeSends,
 } from '../db/schema';
-import { postingAtsJobRef } from '../lib/atsJobRef';
+import { postingAtsJobRefKeeping } from '../lib/atsJobRef';
 import { racePoint } from '../lib/racePoints';
 import { lockAttemptsOf, lockLiveAttempt, markPostingChanged } from './submissions';
 import { duplicate, HttpError, notFound } from '../lib/errors';
@@ -473,6 +473,12 @@ export async function updateOpportunity(
   ctx: UserCtx,
   id: string,
   patch: UpdateOpportunityInput,
+  /**
+   * The identity the new posting URL was given by a check made before this write (#398: a
+   * `gh_jid` link proven on Greenhouse's API, lib/greenhouseEmbed). Without it a new URL keeps
+   * or drops the identity by postingAtsJobRefKeeping, which asks nobody.
+   */
+  opts: { atsJobRef?: AtsJobRef | null } = {},
 ): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
     const current = await getViewSync(tx, ctx, id);
@@ -497,13 +503,18 @@ export async function updateOpportunity(
     const now = Date.now();
     // A new posting URL brings its own ATS identity, or none (issue #137): a ref kept from the
     // old URL would name another requisition while the posting still reads confirmed (a URL
-    // edit through PATCH leaves postingState as it is).
+    // edit through PATCH leaves postingState as it is). A verified `gh_jid` identity survives
+    // only while the new link names its job (#398).
     const urlChanged = fields.postingUrl !== undefined && fields.postingUrl !== current.postingUrl;
+    const newRef =
+      opts.atsJobRef !== undefined
+        ? opts.atsJobRef
+        : postingAtsJobRefKeeping(fields.postingUrl, current.atsJobRef);
     await tx
       .update(opportunities)
       .set({
         ...fields,
-        ...(urlChanged ? { atsJobRef: postingAtsJobRef(fields.postingUrl) } : {}),
+        ...(urlChanged ? { atsJobRef: newRef } : {}),
         companyId,
         dedupeKey: key,
         updatedAt: now,

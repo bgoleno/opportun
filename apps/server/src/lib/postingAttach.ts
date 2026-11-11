@@ -17,7 +17,10 @@ import {
   type OpportunityView,
   type UpdateOpportunityInput,
 } from '../repos/opportunities';
-import { postingAtsJobRef } from './atsJobRef';
+import type { SourceContext } from '../adapters/discoverySource';
+import { boardReadAtsJobRef, postingAtsJobRefKeeping } from './atsJobRef';
+import { resolvePostingAtsJobRef } from './greenhouseEmbed';
+import type { ReadFrom } from './postingSearch';
 import { HttpError } from './errors';
 import {
   descriptionFingerprint,
@@ -64,6 +67,12 @@ export async function attachPosting(
   raw: NormalizedPosting,
   how: AttachSource,
   note?: string,
+  /**
+   * Where the identity of an embedded Greenhouse job (`?gh_jid=`, #398) comes from: `readFrom`
+   * when the posting came out of a board read just made, which is the proof itself; else `sctx`
+   * to check a link on Greenhouse's API. With neither, a verified identity is only kept.
+   */
+  identity: { readFrom?: ReadFrom; sctx?: Pick<SourceContext, 'fetch' | 'log'> } = {},
 ): Promise<OpportunityView> {
   const posting = sanitizePosting(raw);
   if (posting.descriptionMd == null || posting.descriptionMd === '') {
@@ -94,14 +103,22 @@ export async function attachPosting(
   if (current.location == null && posting.location != null) patch.location = posting.location;
   if (current.remote == null && posting.remote != null) patch.remote = posting.remote;
   if (current.compNote == null && posting.compNote != null) patch.compNote = posting.compNote;
-  await updateOpportunity(db, ctx, opportunityId, patch);
+  // Worked out before any write: a check on Greenhouse's API is a request (#398).
+  const atsJobRef =
+    identity.readFrom !== undefined
+      ? boardReadAtsJobRef(posting, identity.readFrom, Date.now())
+      : identity.sctx !== undefined
+        ? await resolvePostingAtsJobRef(db, ctx, current, patch.postingUrl, identity.sctx)
+        : postingAtsJobRefKeeping(patch.postingUrl, current.atsJobRef);
+  await updateOpportunity(db, ctx, opportunityId, patch, { atsJobRef });
   // A posting the user chose or pasted is settled, not waiting on a board search (design D17).
   // Its ATS identity is the stored URL's, written with the confirm (issue #137): null when that
-  // URL is not a recognised board, so a ref from an earlier posting never survives this one.
+  // URL is not a recognised board, so a ref from an earlier posting never survives this one. A
+  // `gh_jid` link's is the board's, proven above (#398).
   const updated = await setPostingState(db, ctx, opportunityId, {
     postingState: 'confirmed',
     postingStateDetail: null,
-    atsJobRef: postingAtsJobRef(patch.postingUrl),
+    atsJobRef,
   });
   const howSaid = (refetch ? HOW_SAID_REFETCH : HOW_SAID).get(how) ?? '';
   await createActivity(db, ctx, opportunityId, {

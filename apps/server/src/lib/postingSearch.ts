@@ -85,9 +85,19 @@ const MAX_SHOWN = 50;
  */
 export const MAX_WORKDAY_LOOKUP_PAGES = 10;
 
+/**
+ * The board a posting was read from just now (#398): its kind and slug. A posting out of a
+ * Greenhouse board read is proven to be on that board, which is what an embedded job's identity
+ * needs (lib/atsJobRef boardReadAtsJobRef). Absent when the posting came from no board read.
+ */
+export interface ReadFrom {
+  kind: SourceKind;
+  org: string;
+}
+
 export type FindOutcome = (
-  | { status: 'exact'; candidate: PostingCandidate; via: 'email_link' }
-  | { status: 'single'; candidate: PostingCandidate; via: 'board' }
+  | { status: 'exact'; candidate: PostingCandidate; via: 'email_link'; readFrom?: ReadFrom }
+  | { status: 'single'; candidate: PostingCandidate; via: 'board'; readFrom?: ReadFrom }
   | {
       status: 'candidates';
       candidates: PostingCandidate[];
@@ -364,7 +374,10 @@ async function readBoards(
  * about last wins. A reference with no board of its own (a bare `gh_jid` link on a company
  * page) matches any board of its provider.
  */
-function referenceHit(reads: BoardRead[], refs: AtsJobRef[]): NormalizedPosting | null {
+function referenceHit(
+  reads: BoardRead[],
+  refs: AtsJobRef[],
+): { posting: NormalizedPosting; board: Board } | null {
   for (const ref of refs) {
     const wanted = ref.externalId.toLowerCase();
     for (const read of reads) {
@@ -373,10 +386,16 @@ function referenceHit(reads: BoardRead[], refs: AtsJobRef[]): NormalizedPosting 
       const hit = read.postings.find(
         (p) => p.externalId != null && p.externalId.toLowerCase() === wanted,
       );
-      if (hit !== undefined) return hit;
+      if (hit !== undefined) return { posting: hit, board: read.board };
     }
   }
   return null;
+}
+
+/** The board a posting of `reads` came from, by identity: ranking keeps the posting objects. */
+function readFromOf(reads: BoardRead[], posting: NormalizedPosting): ReadFrom | undefined {
+  const read = reads.find((r) => r.postings.includes(posting));
+  return read === undefined ? undefined : { kind: read.board.kind, org: read.board.org };
 }
 
 /**
@@ -490,16 +509,18 @@ export async function findPosting(
         };
   const hit = referenceHit(reads, refs);
   if (hit !== null) {
-    const candidate = exactly(await describeWorkdayPosting(sctx, hit));
+    const candidate = exactly(await describeWorkdayPosting(sctx, hit.posting));
+    const readFrom = { kind: hit.board.kind, org: hit.board.org };
     return hasDescription(candidate.posting)
-      ? { status: 'exact', candidate, via: 'email_link' }
+      ? { status: 'exact', candidate, via: 'email_link', readFrom }
       : unattachable(candidate);
   }
 
   if (foreign.length > 0) {
     const elsewhere =
       (await directWorkdayHit(sctx, refs, foreign)) ??
-      referenceHit(await readBoards(sctx, lookup, foreign), refs);
+      referenceHit(await readBoards(sctx, lookup, foreign), refs)?.posting ??
+      null;
     if (elsewhere !== null) {
       const candidate = exactly(await describeWorkdayPosting(sctx, elsewhere));
       return {
@@ -529,9 +550,16 @@ export async function findPosting(
   const perfect = confident.filter((c) => c.score === 1);
   const [best] = confident;
   if (best !== undefined && (perfect.length === 1 || confident.length === 1)) {
+    const readFrom = readFromOf(reads, best.posting);
     const candidate = { ...best, posting: await describeWorkdayPosting(sctx, best.posting) };
     return hasDescription(candidate.posting)
-      ? { status: 'single', candidate, via: 'board', ...note }
+      ? {
+          status: 'single',
+          candidate,
+          via: 'board',
+          ...(readFrom === undefined ? {} : { readFrom }),
+          ...note,
+        }
       : { ...unattachable(candidate), ...note };
   }
   if (confident.length > 1) {

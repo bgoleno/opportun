@@ -128,6 +128,11 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           outcome.candidate.posting,
           outcome.status === 'exact' ? 'email_link' : 'board',
           outcome.note,
+          // The board this posting was just read from is the proof an embedded Greenhouse job
+          // needs (#398): no further request.
+          outcome.readFrom === undefined
+            ? { sctx: { fetch: app.jobs.services.sourceFetch, log: req.log } }
+            : { readFrom: outcome.readFrom },
         );
         const note = outcome.note === undefined ? {} : { note: outcome.note };
         return { outcome: 'attached' as const, opportunity, candidate: outcome.candidate, ...note };
@@ -163,13 +168,16 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
         const { id } = req.params;
         const opp = await getOpportunity(db, ctx, id);
         const { posting, text, url } = req.body;
+        // Anything handed over here, a picked board row included, comes from the client: an
+        // embedded Greenhouse link in it is checked on Greenhouse's API, never taken on trust (#398).
+        const identity = { sctx: { fetch: app.jobs.services.sourceFetch, log: req.log } };
         if (posting !== undefined) {
           // A Workday board row is listed without its description: fetch it now (FR-D10).
           const described = await describeWorkdayPosting(
             { fetch: app.jobs.services.sourceFetch, log: req.log },
             posting,
           );
-          return attachPosting(db, ctx, id, described, 'board');
+          return attachPosting(db, ctx, id, described, 'board', undefined, identity);
         }
         if (text !== undefined) {
           return attachPosting(
@@ -178,6 +186,8 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
             id,
             { company: opp.companyName, title: opp.title, descriptionMd: text },
             'paste',
+            undefined,
+            identity,
           );
         }
         const page = await fetchPageText(app.jobs.services.sourceFetch, url as string);
@@ -197,6 +207,8 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
             compNote: out.compNote,
           },
           'paste',
+          undefined,
+          identity,
         );
       });
     },
