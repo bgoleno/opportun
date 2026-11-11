@@ -79,9 +79,22 @@ export async function roleTargetsText(db: Db, ctx: UserCtx): Promise<string> {
  * open_opportunities_untrusted: names and titles can come from model output on earlier hostile
  * mail (FR-M3), so they are fenced like the message itself; line() stays as defense in depth.
  */
+/**
+ * The open opportunities, as the comms.classify prompt lists them: the MAX_OPEN_OPPORTUNITIES
+ * most recently updated, in the order they were created, then by id. A stable order, because the
+ * list sits in the provider-cached prefix, and one cache entry covers the whole prefix: listed
+ * by updatedAt, every message a sync batch linked reordered it and made the next call write the
+ * whole prefix again, rules included (#380, tl). The template asks for no order.
+ */
 export async function openOpportunitiesText(db: Db, ctx: UserCtx): Promise<string> {
   const rows = await db
-    .select({ company: companies.name, title: opportunities.title, stage: opportunities.stage })
+    .select({
+      id: opportunities.id,
+      createdAt: opportunities.createdAt,
+      company: companies.name,
+      title: opportunities.title,
+      stage: opportunities.stage,
+    })
     .from(opportunities)
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
     .where(
@@ -94,6 +107,7 @@ export async function openOpportunitiesText(db: Db, ctx: UserCtx): Promise<strin
     .limit(MAX_OPEN_OPPORTUNITIES)
     .all();
   if (rows.length === 0) return 'None.';
+  rows.sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
   return rows.map((r) => `- ${line(r.company)} | ${line(r.title)} | ${r.stage}`).join('\n');
 }
 
