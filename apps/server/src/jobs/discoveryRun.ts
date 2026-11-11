@@ -59,6 +59,7 @@ import {
 } from './discoveryKinds';
 import { requireService, type JobHandler } from './registry';
 import { enqueue } from './runner';
+import { continuesTrace, workflow } from '../obs/workflow';
 
 export { DISCOVERY_RUN_KIND, MULTI_POSTED_PREFIX, MULTI_POSTED_SCORE_CAP, sourceScheduleName };
 
@@ -284,7 +285,8 @@ export async function enqueueFollowUps(
     db,
     kind,
     { resultId: result.id },
-    { dedupeKey: `${kind}:${result.id}`, userId: ctx.userId },
+    // Continues the discovery_run trace when queued from inside it (14.6), not otherwise.
+    { dedupeKey: `${kind}:${result.id}`, userId: ctx.userId, continueTrace: continuesTrace() },
   );
 }
 
@@ -646,9 +648,10 @@ export const discoveryRunJob: JobHandler<z.infer<typeof PayloadSchema>> = {
       fetch: requireService(ctx, 'sourceFetch'),
       log: requireService(ctx, 'log'),
     };
-    const outcome = await runDiscoverySource(db, user, payload.sourceId, sctx, {
-      jobId: ctx.jobId,
-    });
+    // The discovery_run workflow (design 14.5): its lead_resolve and rank jobs continue it.
+    const outcome = await workflow('discovery_run', { userId: user.userId }, () =>
+      runDiscoverySource(db, user, payload.sourceId, sctx, { jobId: ctx.jobId }),
+    );
     if (outcome.status === 'done') {
       await ctx.setResult({ status: outcome.status, runId: outcome.runId, stats: outcome.stats });
     } else {

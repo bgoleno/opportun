@@ -25,6 +25,7 @@ import type { Db } from '../db/client';
 import { isCollecting, isSuppressed, spanExportSink } from './index';
 import { guarded, rebuildSpan } from './spanRebuild';
 import { SpanStore } from './spanStore';
+import { setKeptCheck } from './workflow';
 
 /** Hands each finished span, rebuilt for export, to FR-T2's exporter while one is attached. */
 const exportProcessor: SpanProcessor = {
@@ -71,6 +72,7 @@ export async function startTracing(db: Db, now: () => number): Promise<void> {
     trace.setGlobalTracerProvider(provider);
   }
   store.start(db, now);
+  setKeptCheck((spanId) => store.isKept(spanId));
 }
 
 /** Called when collection turns off: what waits unflushed is dropped (nothing may be written). */

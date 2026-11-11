@@ -101,6 +101,11 @@ export class SpanStore {
     this.db = undefined;
   }
 
+  /** Whether a started span is one the store keeps (obs/workflow.ts continuesTrace). */
+  isKept(spanId: string): boolean {
+    return this.db !== undefined && this.kept.has(spanId);
+  }
+
   private remember(spanId: string, kept: Kept): void {
     if (this.kept.size >= KEPT_MEMORY) {
       const oldest = this.kept.keys().next().value;

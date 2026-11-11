@@ -13,6 +13,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { MAX_EDITS, RESUME_EDIT_OUTCOMES, ResumeEditSchema } from '../adapters/documentStore';
+import { workflow } from '../obs/workflow';
 import { buildAiDeps, expiredKeyHint } from '../lib/ai';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
@@ -294,84 +295,97 @@ export async function tailoringRoutes(app: FastifyInstance): Promise<void> {
       if (streaming.has(sessionId)) throw new HttpError(409, 'reply_in_progress');
       streaming.add(sessionId);
       try {
-        // Persisted before anything that can fail, so a failed call never loses it.
-        const userTurn: TranscriptTurn = {
-          role: 'user',
-          content: req.body.content,
-          at: Date.now(),
-        };
-        await appendTurn(db, ctx, sessionId, userTurn);
+        // One turn is the tailoring_chat workflow (design 14.5): its trace is the user's, and the
+        // session is the conversation (gen_ai.conversation.id, local only).
+        await workflow(
+          'tailoring_chat',
+          { userId: ctx.userId, conversationId: sessionId },
+          async () => {
+            // Persisted before anything that can fail, so a failed call never loses it.
+            const userTurn: TranscriptTurn = {
+              role: 'user',
+              content: req.body.content,
+              at: Date.now(),
+            };
+            await appendTurn(db, ctx, sessionId, userTurn);
 
-        const resume = await getResume(db, ctx, session.resumeId);
-        const { system, promptId } = await tailorSystem(app, ctx, resume);
-        const messages = toModelMessages((await getSession(db, ctx, sessionId)).transcript);
-        const deps = await buildAiDeps(db, ctx, {
-          onRecorded: async (runId) => await addTaskRunId(db, ctx, sessionId, runId),
-        });
-        let result;
-        try {
-          result = await streamChat(deps, 'resume.tailor', { system, messages, promptId });
-        } catch (err) {
-          if (err instanceof AiUnavailableError) {
-            throw await aiUnavailable(db, ctx, 'resume.tailor', err);
-          }
-          throw err;
-        }
-
-        const send = openSse(reply);
-        send({ type: 'start', message: toMessageView(userTurn) });
-        let text = '';
-        let index: number | undefined;
-        let lastFlush = 0;
-        const at = Date.now();
-        const persist = async (
-          incomplete: boolean,
-          edits?: TranscriptTurn['edits'],
-        ): Promise<TranscriptTurn> => {
-          const turn: TranscriptTurn = {
-            role: 'assistant',
-            content: text,
-            at,
-            ...(edits === undefined ? {} : { edits }),
-            ...(incomplete ? { incomplete: true } : {}),
-          };
-          if (index === undefined) index = await appendTurn(db, ctx, sessionId, turn);
-          else await replaceTurn(db, ctx, sessionId, index, turn);
-          lastFlush = Date.now();
-          return turn;
-        };
-        try {
-          for await (const part of result.stream) {
-            if (part.type === 'text-delta') {
-              text += part.text;
-              send({ type: 'delta', text: part.text });
-              if (Date.now() - lastFlush >= FLUSH_INTERVAL_MS) await persist(true);
-            } else if (part.type === 'error') {
-              throw part.error;
-            } else if (part.type === 'abort') {
-              throw new Error('aborted');
+            const resume = await getResume(db, ctx, session.resumeId);
+            const { system, promptId } = await tailorSystem(app, ctx, resume);
+            const messages = toModelMessages((await getSession(db, ctx, sessionId)).transcript);
+            const deps = await buildAiDeps(db, ctx, {
+              onRecorded: async (runId) => await addTaskRunId(db, ctx, sessionId, runId),
+            });
+            let result;
+            try {
+              result = await streamChat(deps, 'resume.tailor', {
+                system,
+                messages,
+                promptId,
+                conversationId: sessionId,
+              });
+            } catch (err) {
+              if (err instanceof AiUnavailableError) {
+                throw await aiUnavailable(db, ctx, 'resume.tailor', err);
+              }
+              throw err;
             }
-          }
-          const turn = await persist(false, parseSuggestions(text).edits);
-          send({ type: 'done', message: toMessageView(turn) });
-        } catch {
-          // The provider error text stays server-side (the router records a sanitized copy).
-          if (text.length > 0) await persist(true);
-          const keyHint = await expiredKeyHint(
-            db,
-            ctx,
-            'resume.tailor',
-            new AiUnavailableError('provider_error'),
-          ).catch(() => undefined);
-          send({
-            type: 'error',
-            code: 'ai_unavailable',
-            reason: 'provider_error',
-            ...(keyHint === undefined ? {} : { keyHint }),
-          });
-        } finally {
-          reply.raw.end();
-        }
+
+            const send = openSse(reply);
+            send({ type: 'start', message: toMessageView(userTurn) });
+            let text = '';
+            let index: number | undefined;
+            let lastFlush = 0;
+            const at = Date.now();
+            const persist = async (
+              incomplete: boolean,
+              edits?: TranscriptTurn['edits'],
+            ): Promise<TranscriptTurn> => {
+              const turn: TranscriptTurn = {
+                role: 'assistant',
+                content: text,
+                at,
+                ...(edits === undefined ? {} : { edits }),
+                ...(incomplete ? { incomplete: true } : {}),
+              };
+              if (index === undefined) index = await appendTurn(db, ctx, sessionId, turn);
+              else await replaceTurn(db, ctx, sessionId, index, turn);
+              lastFlush = Date.now();
+              return turn;
+            };
+            try {
+              for await (const part of result.stream) {
+                if (part.type === 'text-delta') {
+                  text += part.text;
+                  send({ type: 'delta', text: part.text });
+                  if (Date.now() - lastFlush >= FLUSH_INTERVAL_MS) await persist(true);
+                } else if (part.type === 'error') {
+                  throw part.error;
+                } else if (part.type === 'abort') {
+                  throw new Error('aborted');
+                }
+              }
+              const turn = await persist(false, parseSuggestions(text).edits);
+              send({ type: 'done', message: toMessageView(turn) });
+            } catch {
+              // The provider error text stays server-side (the router records a sanitized copy).
+              if (text.length > 0) await persist(true);
+              const keyHint = await expiredKeyHint(
+                db,
+                ctx,
+                'resume.tailor',
+                new AiUnavailableError('provider_error'),
+              ).catch(() => undefined);
+              send({
+                type: 'error',
+                code: 'ai_unavailable',
+                reason: 'provider_error',
+                ...(keyHint === undefined ? {} : { keyHint }),
+              });
+            } finally {
+              reply.raw.end();
+            }
+          },
+        );
       } finally {
         streaming.delete(sessionId);
       }

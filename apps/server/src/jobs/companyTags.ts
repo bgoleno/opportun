@@ -37,6 +37,7 @@ import { discoveryBudgetHasRoom } from '../repos/discoveryBudget';
 import { getActivePrompt } from '../repos/prompts';
 import type { JobHandler } from './registry';
 import { enqueue } from './runner';
+import { workflow } from '../obs/workflow';
 
 export const COMPANY_TAGS_KIND = 'discovery.company_tags';
 export const COMPANY_TAGS_SWEEP_KIND = 'discovery.company_tags_sweep';
@@ -448,8 +449,12 @@ export const companyTagsJob: JobHandler<Record<string, never>> = {
   maxAttempts: 1,
   async run(db, _payload, ctx) {
     if (ctx.userId === null) throw new Error(`${COMPANY_TAGS_KIND} needs a user`);
+    const userId = ctx.userId;
+    // The company_tags workflow (design 14.5): one AI call per batch, all under it.
     await ctx.setResult(
-      await tagCompanies(db, { userId: ctx.userId, isAdmin: false }, { stopping: ctx.stopping }),
+      await workflow('company_tags', { userId }, () =>
+        tagCompanies(db, { userId, isAdmin: false }, { stopping: ctx.stopping }),
+      ),
     );
   },
 };

@@ -47,6 +47,7 @@ import { upsertCapturedProfile } from '../repos/contacts';
 import { getActivePrompt } from '../repos/prompts';
 import { CAPTURE_MAX_TEXT } from './capture';
 import { HttpsUrl } from './common';
+import { workflow } from '../obs/workflow';
 
 export const CAPTURE_TEXT_MAX = 200_000;
 
@@ -207,76 +208,79 @@ export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void
     },
     async (req, reply) => {
       const ctx = requireDevice(req);
-      const { url, title, text } = req.body;
-      const page = recognizeCapturedPage({ url, title, text });
-      if (page.kind === 'unrecognized') {
-        throw new HttpError(422, 'unrecognized_page', undefined, { reason: page.reason });
-      }
-      const refinement = await refine(db, ctx, page, title, text);
-      const refined = refinement?.task === 'capture.linkedin' ? refinement.out : null;
+      // The capture workflow (design 14.5), from the extension.
+      return workflow('capture', { userId: ctx.userId }, async () => {
+        const { url, title, text } = req.body;
+        const page = recognizeCapturedPage({ url, title, text });
+        if (page.kind === 'unrecognized') {
+          throw new HttpError(422, 'unrecognized_page', undefined, { reason: page.reason });
+        }
+        const refinement = await refine(db, ctx, page, title, text);
+        const refined = refinement?.task === 'capture.linkedin' ? refinement.out : null;
 
-      if (page.kind === 'profile') {
-        const slug = profileSlugOf(page.profileUrl) as string;
-        const { contact, created } = await upsertCapturedProfile(db, ctx, {
-          profileUrl: page.profileUrl,
-          slug,
-          // The name is the page's own; the model never renames a contact.
-          name: page.name,
-          // Model fields must be grounded in the page: an injected About section must not be
-          // able to plant an employer (a referral candidate) that the page never shows.
-          headline: grounded(refined?.headline ?? null, 300, text) ?? page.headline,
-          company: grounded(refined?.company ?? null, 200, text),
-          title: grounded(refined?.title ?? null, 300, text),
-        });
-        return reply.code(created ? 201 : 200).send({
-          kind: 'profile' as const,
-          contactId: contact.id,
-          created,
+        if (page.kind === 'profile') {
+          const slug = profileSlugOf(page.profileUrl) as string;
+          const { contact, created } = await upsertCapturedProfile(db, ctx, {
+            profileUrl: page.profileUrl,
+            slug,
+            // The name is the page's own; the model never renames a contact.
+            name: page.name,
+            // Model fields must be grounded in the page: an injected About section must not be
+            // able to plant an employer (a referral candidate) that the page never shows.
+            headline: grounded(refined?.headline ?? null, 300, text) ?? page.headline,
+            company: grounded(refined?.company ?? null, 200, text),
+            title: grounded(refined?.title ?? null, 300, text),
+          });
+          return reply.code(created ? 201 : 200).send({
+            kind: 'profile' as const,
+            contactId: contact.id,
+            created,
+            refined: refinement !== null,
+          });
+        }
+
+        // Title, company and description come from the page: the first two are the lead's dedupe
+        // identity, and the description is the recognizer's reading of the page the user captured.
+        // The model adds only what the shape check does not read, the location and the pay, and
+        // keeps each only when the page text contains it (isGroundedIn, the check profile fields
+        // get). One rule for every site: Indeed since #76, LinkedIn since
+        // https://github.com/bgoleno/opportun/issues/88, where the owner decided its job fields get
+        // the same check. Before #88 a LinkedIn job stored the model's location, pay and Markdown
+        // description unchecked, so an invented figure or link could reach the stored posting.
+        // sanitizePosting cleans all of it on insert.
+        const jobRefine = refinement === null ? null : refinement.out;
+        const posting: NormalizedPosting = {
+          company: page.company,
+          title: page.title,
+          location: grounded(jobRefine?.location ?? null, 300, text),
+          compNote: grounded(jobRefine?.compNote ?? null, 500, text),
+          descriptionMd: page.descriptionMd,
+          postingUrl: page.jobUrl,
+          // `<site>:<jobId>`, the identity lib/captureSites reads back (design D20).
+          externalId: `${page.siteId}:${page.jobId}`,
+        };
+        // Capturing a job is an act of interest, so it resolves to an opportunity at
+        // `interested` rather than to a review-queue card (design D1). A capture is therefore
+        // never a duplicate: it completes the lead it matches instead of twinning it (#17).
+        //
+        // The response shape is frozen for already-installed extensions, which classify an
+        // unrecognized success body as a hard server error (packages/extension/src/api.ts).
+        // `duplicate` stays in the contract and is now always false for a job capture; an old
+        // build therefore says "already in your review queue" where a current one says what
+        // actually happened. Wrong copy, not a broken capture.
+        // In the user's one capture slot (#309): see withCaptureSlot. resolveCapture bounds its own
+        // waits for the ingest lock.
+        const resolved = await withCaptureSlot(db, ctx.userId, () =>
+          resolveCapture(db, ctx, { posting, captureText: text, siteId: page.siteId }),
+        );
+        return reply.code(resolved.createdOpportunity ? 201 : 200).send({
+          kind: 'job' as const,
+          resultId: resolved.resultId,
+          duplicate: false,
           refined: refinement !== null,
+          opportunityId: resolved.opportunityId,
+          stage: resolved.stageMovedTo,
         });
-      }
-
-      // Title, company and description come from the page: the first two are the lead's dedupe
-      // identity, and the description is the recognizer's reading of the page the user captured.
-      // The model adds only what the shape check does not read, the location and the pay, and
-      // keeps each only when the page text contains it (isGroundedIn, the check profile fields
-      // get). One rule for every site: Indeed since #76, LinkedIn since
-      // https://github.com/bgoleno/opportun/issues/88, where the owner decided its job fields get
-      // the same check. Before #88 a LinkedIn job stored the model's location, pay and Markdown
-      // description unchecked, so an invented figure or link could reach the stored posting.
-      // sanitizePosting cleans all of it on insert.
-      const jobRefine = refinement === null ? null : refinement.out;
-      const posting: NormalizedPosting = {
-        company: page.company,
-        title: page.title,
-        location: grounded(jobRefine?.location ?? null, 300, text),
-        compNote: grounded(jobRefine?.compNote ?? null, 500, text),
-        descriptionMd: page.descriptionMd,
-        postingUrl: page.jobUrl,
-        // `<site>:<jobId>`, the identity lib/captureSites reads back (design D20).
-        externalId: `${page.siteId}:${page.jobId}`,
-      };
-      // Capturing a job is an act of interest, so it resolves to an opportunity at
-      // `interested` rather than to a review-queue card (design D1). A capture is therefore
-      // never a duplicate: it completes the lead it matches instead of twinning it (#17).
-      //
-      // The response shape is frozen for already-installed extensions, which classify an
-      // unrecognized success body as a hard server error (packages/extension/src/api.ts).
-      // `duplicate` stays in the contract and is now always false for a job capture; an old
-      // build therefore says "already in your review queue" where a current one says what
-      // actually happened. Wrong copy, not a broken capture.
-      // In the user's one capture slot (#309): see withCaptureSlot. resolveCapture bounds its own
-      // waits for the ingest lock.
-      const resolved = await withCaptureSlot(db, ctx.userId, () =>
-        resolveCapture(db, ctx, { posting, captureText: text, siteId: page.siteId }),
-      );
-      return reply.code(resolved.createdOpportunity ? 201 : 200).send({
-        kind: 'job' as const,
-        resultId: resolved.resultId,
-        duplicate: false,
-        refined: refinement !== null,
-        opportunityId: resolved.opportunityId,
-        stage: resolved.stageMovedTo,
       });
     },
   );
