@@ -30,7 +30,7 @@ import {
   type SpanExportSink,
 } from '../src/obs';
 import { flushSpans } from '../src/obs/tracing';
-import { TRACE_SPAN_CAP } from '../src/obs/spanStore';
+import { SPAN_BUFFER_MAX, TRACE_SPAN_CAP } from '../src/obs/spanStore';
 import { useApi } from './api';
 import { countRows } from './db';
 import type { TestClient } from './isolation';
@@ -399,6 +399,75 @@ describe('the span store (#344)', () => {
     const root = stored.find((s) => s.name === 'invoke_workflow discovery_run');
     expect(root).toMatchObject({ parentSpanId: null });
     for (const s of stored) if (s !== root) expect(s.parentSpanId).toBe(root!.spanId);
+  });
+});
+
+describe('the span cap holds for lone calls too (#344, 14.11)', () => {
+  it('a trace of inference spans under a span that is not kept stops at the cap', async () => {
+    const { app, a } = await boot();
+    await setCollecting(true);
+    const tracer = trace.getTracer('test');
+    const route = tracer.startSpan('POST /api/v1/capture', { kind: SpanKind.SERVER });
+    await withUser(a.userId, () =>
+      context.with(trace.setSpan(context.active(), route), async () => {
+        for (let i = 0; i < TRACE_SPAN_CAP + 5; i++) {
+          // Let the store flush as it fills, as it does in a real run: else the buffer cap, not
+          // the trace's, is what holds (the next test).
+          if (i % 100 === 0) await flushSpans();
+          tracer
+            .startSpan(`chat ${MODEL}`, {
+              kind: SpanKind.CLIENT,
+              attributes: {
+                'gen_ai.operation.name': 'chat',
+                'gen_ai.request.model': MODEL,
+                'user.id': a.userId,
+              },
+            })
+            .end();
+        }
+      }),
+    );
+    route.end();
+    await flushSpans();
+    expect(await countRows(app, obsSpans)).toBe(TRACE_SPAN_CAP);
+    expect(await traces(app)).toEqual([
+      expect.objectContaining({ spanCount: TRACE_SPAN_CAP, truncated: true }),
+    ]);
+  });
+});
+
+describe('the span buffer (#344, 14.11)', () => {
+  it('holds at most its cap between flushes: the newest beyond it are dropped and counted', async () => {
+    const { app, a } = await boot();
+    await setCollecting(true);
+    const tracer = trace.getTracer('test');
+    // Ended in one synchronous run, so no flush can start before the buffer is full.
+    withUser(a.userId, () => {
+      for (let i = 0; i < SPAN_BUFFER_MAX + 5; i++) {
+        tracer
+          .startSpan(`chat ${MODEL}`, {
+            kind: SpanKind.CLIENT,
+            attributes: { 'gen_ai.operation.name': 'chat', 'gen_ai.request.model': MODEL },
+          })
+          .end();
+      }
+    });
+    await flushSpans();
+    await flushNow();
+    expect(await countRows(app, obsSpans)).toBe(SPAN_BUFFER_MAX);
+    const dropped = (
+      await app.db
+        .select()
+        .from(obsMetricPoints)
+        .where(eq(obsMetricPoints.metric, 'opportun.obs.dropped'))
+        .all()
+    ).filter(
+      (p) =>
+        p.attributes['opportun.obs.signal'] === 'spans' &&
+        p.attributes['opportun.obs.reason'] === 'buffer_full' &&
+        p.resolution === 60_000,
+    );
+    expect(dropped.reduce((n, p) => n + p.sum, 0)).toBe(5);
   });
 });
 

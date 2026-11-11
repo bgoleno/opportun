@@ -43,7 +43,11 @@ interface Kept {
   traceUserId: string | undefined;
   /** Set on the first kept span of a subtree: what contained it (14.7). */
   origin: string | undefined;
-  /** The first kept span of a subtree (a workflow span, a lone call, a continued job's span). */
+  /**
+   * A workflow span: the root the cap always keeps (tl on #366). Only these: any other first kept
+   * span (a lone call under a route) counts against the cap like the rest, or a trace made only of
+   * lone calls would escape it.
+   */
   root: boolean;
 }
 
@@ -143,7 +147,7 @@ export class SpanStore {
       userId,
       traceUserId,
       origin,
-      root: keptParent === undefined,
+      root: str(span.attributes[ATTR.operationName]) === 'invoke_workflow',
     });
   }
 
