@@ -408,6 +408,23 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
       'GET /resumes': { items: [RESUME], total: 1 },
       'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
       'POST /opportunities/opp-1/find-posting': () => ({
+        status: 502,
+        body: { error: { code: 'upstream_unavailable', message: 'The job board did not answer.' } },
+      }),
+    });
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+    );
+    await user.click(await screen.findByRole('button', { name: 'Find posting' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The job board did not answer.');
+  });
+
+  it('a description of your own and no known board holding the job: says so, and where to go', async () => {
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'POST /opportunities/opp-1/find-posting': () => ({
         status: 409,
         body: {
           error: {
@@ -422,7 +439,11 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
       <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
     );
     await user.click(await screen.findByRole('button', { name: 'Find posting' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('already has a description');
+    const said = await screen.findByText(
+      'This job was not found on a Greenhouse board known for this company. Check the posting link on the Details tab.',
+    );
+    expect(said.closest('[role="status"]')).not.toBeNull();
+    expect(screen.queryByText(/already_described/)).toBeNull();
   });
 
   it('a link without a numeric gh_jid keeps the general reason, and no Find posting here', async () => {

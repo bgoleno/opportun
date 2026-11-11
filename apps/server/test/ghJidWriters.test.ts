@@ -21,6 +21,7 @@ import { createCompany } from '../src/repos/companies';
 import {
   createOpportunity,
   getOpportunity,
+  recordAtsJobRef,
   setPostingState,
   updateOpportunity,
 } from '../src/repos/opportunities';
@@ -270,6 +271,58 @@ describe('attach from a board read keeps the identity of the link it keeps (tl o
       externalId: JID,
       url: BOARD_PAGE,
     });
+  });
+});
+
+describe('recordAtsJobRef writes only for the link that was checked (tl on #414)', () => {
+  it('a link other than the stored one: nothing is written', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a);
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: CAREERS });
+    const before = await getOpportunity(app.db, ctxOf(a), id);
+    // Proven for another link than the one stored now (the user changed it meanwhile).
+    expect(
+      await recordAtsJobRef(
+        app.db,
+        ctxOf(a),
+        id,
+        'https://careers.examplecorp.example/jobs?gh_jid=42',
+        VERIFIED,
+      ),
+    ).toBeNull();
+    const after = await getOpportunity(app.db, ctxOf(a), id);
+    expect(after.atsJobRef ?? null).toBeNull();
+    expect(after.updatedAt).toBe(before.updatedAt);
+  });
+
+  it('an identity already set: nothing is written over it', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a);
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: CAREERS });
+    const other = {
+      ...VERIFIED,
+      org: 'othercorp',
+      url: 'https://job-boards.greenhouse.io/othercorp/jobs/8136554',
+    };
+    await setPostingState(app.db, ctxOf(a), id, {
+      postingState: 'confirmed',
+      postingStateDetail: null,
+      atsJobRef: other,
+    });
+    const before = await getOpportunity(app.db, ctxOf(a), id);
+    expect(await recordAtsJobRef(app.db, ctxOf(a), id, CAREERS, VERIFIED)).toBeNull();
+    const after = await getOpportunity(app.db, ctxOf(a), id);
+    expect(after.atsJobRef).toEqual(other);
+    expect(after.updatedAt).toBe(before.updatedAt);
+  });
+
+  it('the stored link and no identity: written', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a);
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: CAREERS });
+    expect((await recordAtsJobRef(app.db, ctxOf(a), id, CAREERS, VERIFIED))?.atsJobRef).toEqual(
+      VERIFIED,
+    );
   });
 });
 

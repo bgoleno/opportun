@@ -20,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { errorMessage } from '@/lib/api';
+import { ApiError, errorMessage } from '@/lib/api';
 import { formatDateTime, stageLabel, type OpportunityView } from '@/lib/opportunities';
 import {
   atsLabel,
@@ -57,6 +57,14 @@ const FIND_SAID = new Map<FindPostingResult['outcome'], string>([
     'No job board is known for this company yet. Add its careers page on the Details tab.',
   ],
 ]);
+
+const NOT_ON_A_KNOWN_BOARD =
+  'This job was not found on a Greenhouse board known for this company. Check the posting link on the Details tab.';
+
+/** Find posting's 409 for a description the user wrote (the server found no board for the link). */
+function isAlreadyDescribed(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'already_described';
+}
 
 const EMBEDDED_GREENHOUSE =
   "This looks like a Greenhouse job on the company's own careers page. Find the posting on Greenhouse to apply with assisted apply.";
@@ -195,7 +203,13 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                 </Button>
                 {/* What Find posting found, and where to go next: never a silent button
                     (#395, tl on #414). */}
-                {find.isError ? (
+                {find.isError && isAlreadyDescribed(find.error) ? (
+                  // A description of the user's own, and no known board holds the job (#398):
+                  // an answer, not a failure.
+                  <p role="status" className="text-sm text-muted-foreground">
+                    {NOT_ON_A_KNOWN_BOARD}
+                  </p>
+                ) : find.isError ? (
                   <p role="alert" className="text-sm text-destructive">
                     {errorMessage(find.error)}
                   </p>
