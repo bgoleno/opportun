@@ -17,6 +17,12 @@ export interface FlowInput {
   attempts: readonly SubmissionView[];
   /** Why assisted apply cannot start for a reason other than the resume, or null. */
   applyBlocked: string | null;
+  /**
+   * 'unavailable' when assisted apply is not available here at all (the feature off, or the
+   * demo): a value of its own, not an empty reason, so nothing of the feature is named (tl on
+   * #440, ruling 2).
+   */
+  assistedApply?: 'unavailable';
 }
 
 export type ResumeFlowState =
@@ -32,11 +38,15 @@ export type ResumeFlowState =
   | { state: 'E'; step: 4; resume: Resume }
   /** It is Final, but assisted apply cannot start, for `reason`. */
   | { state: 'F'; step: 4; resume: Resume; reason: string }
+  /** It is Final, and assisted apply is not available here: it is sent by hand. */
+  | { state: 'F'; step: 4; resume: Resume; unavailable: true }
   /** An assisted apply attempt is in progress. */
   | { state: 'G'; step: 4; attempt: SubmissionView }
   /**
    * Done: an application was made (the attempt #404's panel leads with), a send is recorded,
-   * or the resume is Submitted.
+   * or the resume is Submitted. `again` is this opportunity's resume when it was made since and
+   * has gone nowhere yet (tl on #440, ruling 6), so the flow names it rather than offering to
+   * tailor again.
    */
   | {
       state: 'H';
@@ -44,6 +54,7 @@ export type ResumeFlowState =
       attempt?: SubmissionView;
       send?: ResumeSend;
       resume?: Resume;
+      again?: Resume;
     };
 
 /** This opportunity's resume: its newest tailored copy that is not archived. */
@@ -60,6 +71,24 @@ function currentResume(input: FlowInput): Resume | undefined {
 }
 
 /**
+ * H with this opportunity's resume as `again`, when it has gone nowhere yet: no send of it here,
+ * no attempt made with it, and not Submitted (tl on #440, ruling 6).
+ */
+function withAgain(
+  h: Extract<ResumeFlowState, { state: 'H' }>,
+  resume: Resume | undefined,
+  input: FlowInput,
+): ResumeFlowState {
+  if (resume === undefined || resume.status === 'submitted') return h;
+  if (input.sends.some((s) => s.resumeId === resume.id)) return h;
+  // An attempt that applied with it (one in progress is G, before H).
+  if (input.attempts.some((a) => a.resumeId === resume.id && appliedAttempt([a]) !== undefined)) {
+    return h;
+  }
+  return { ...h, again: resume };
+}
+
+/**
  * Where the user is in the resume flow. An attempt in progress comes first, then anything that
  * shows the user has applied (so state H is exactly #404's applied state when an attempt was
  * made), then this opportunity's resume by its status, then whether a base exists.
@@ -67,15 +96,20 @@ function currentResume(input: FlowInput): Resume | undefined {
 export function resumeFlowState(input: FlowInput): ResumeFlowState {
   const live = input.attempts.find(isLive);
   if (live !== undefined) return { state: 'G', step: 4, attempt: live };
-  const applied = appliedAttempt(input.attempts);
-  if (applied !== undefined) return { state: 'H', step: 'done', attempt: applied };
-  const [send] = input.sends;
-  if (send !== undefined) return { state: 'H', step: 'done', send };
   const resume = currentResume(input);
+  const applied = appliedAttempt(input.attempts);
+  if (applied !== undefined) {
+    return withAgain({ state: 'H', step: 'done', attempt: applied }, resume, input);
+  }
+  const [send] = input.sends;
+  if (send !== undefined) return withAgain({ state: 'H', step: 'done', send }, resume, input);
   if (resume !== undefined) {
     if (resume.status === 'submitted') return { state: 'H', step: 'done', resume };
     if (resume.status === 'draft') return { state: 'C', step: 2, resume };
     if (resume.status === 'in_review') return { state: 'D', step: 3, resume };
+    if (input.assistedApply === 'unavailable') {
+      return { state: 'F', step: 4, resume, unavailable: true };
+    }
     return input.applyBlocked === null
       ? { state: 'E', step: 4, resume }
       : { state: 'F', step: 4, resume, reason: input.applyBlocked };
@@ -100,6 +134,9 @@ export function flowSentence(state: ResumeFlowState): string | null {
     case 'D':
       return `"${state.resume.title}" is still ${statusLabel(state.resume.status)}. Mark it as final to apply.`;
     case 'H':
+      // A copy made since, not Final yet: its own words, as in C and D (tl on #440, ruling 6).
+      if (state.again?.status === 'draft') return flowSentence({ state: 'C', step: 2, resume: state.again });
+      if (state.again?.status === 'in_review') return flowSentence({ state: 'D', step: 3, resume: state.again });
       // Sent another way (a base sent as it is), and no resume assisted apply can use yet.
       return state.send !== undefined
         ? 'A resume is already recorded as sent for this opportunity. To apply here too, mark a resume as final.'
