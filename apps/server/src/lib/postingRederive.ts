@@ -119,7 +119,7 @@ export async function rederivePosting(
   });
 
   if (outcome.status === 'exact' || outcome.status === 'single') {
-    await confirm(db, ctx, opp, outcome.candidate.posting);
+    await confirm(db, ctx, opp, outcome.candidate.posting, outcome.readFrom);
     await note(
       db,
       ctx,

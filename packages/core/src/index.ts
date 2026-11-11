@@ -10,4 +10,5 @@ export * from './mailText';
 export * from './mailPattern';
 export * from './consumerDomains';
 export * from './jobSenders';
+export * from './greenhouseJid';
 export * from './triageGate';
