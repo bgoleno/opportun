@@ -34,7 +34,7 @@ let operations: ReadonlySet<string> | undefined;
 const FIRST_WORD = /^\s*([A-Za-z]+)/;
 // One identifier after the keyword, optionally quoted: no nested quantifier.
 const FIRST_TABLE = /\b(?:FROM|INTO|UPDATE|TABLE)\s+["`]?([A-Za-z_][A-Za-z0-9_]*)/i;
-const SHAPES_MAX = 2_000;
+const SHAPES_MAX = 1_000; // design 14.4: a cache of 1,000 entries
 const shapes = new Map<string, StatementShape>();
 
 /** A statement's verb and first table. Pure, and cached by text (bounded). */
