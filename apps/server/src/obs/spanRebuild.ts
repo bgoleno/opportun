@@ -53,7 +53,7 @@ const isModelKey = (key: AttrKey): boolean => ATTRIBUTE_TYPES.get(key)?.kind ===
 function fillName(template: string, attributes: Attributes): string {
   const { prefix, key } = templateParts(template);
   if (key === undefined) return template;
-  const value = (attributes as Record<string, unknown>)[key];
+  const value = new Map(Object.entries(attributes)).get(key);
   if (isModelKey(key) && (value === undefined || value === OTHER)) return prefix;
   if (typeof value !== 'string' && typeof value !== 'number') return prefix;
   return template.replace(`{${key}}`, String(value));
@@ -75,7 +75,8 @@ export function spanDefOf(span: ReadableSpan): SpanDef | undefined {
       continue;
     }
     // Only the template's own key is checked here, so no other key can throw in test mode.
-    const one = gateAttributes('spans', [key], { [key]: span.attributes[key] }, noDrop);
+    const value = new Map(Object.entries(span.attributes)).get(key);
+    const one = gateAttributes('spans', [key], { [key]: value }, noDrop);
     if (span.name === fillName(def.template, one)) return def;
     if (prefix !== '' && span.name === prefix && isModelKey(key)) return def;
   }
@@ -102,12 +103,14 @@ export function rebuildSpan(span: ReadableSpan, sink: 'local' | 'export'): Gated
     countSpanDrop(reason),
   );
   if (sink === 'export') {
-    attributes = withoutLocalOnly(attributes);
-    for (const [key, value] of Object.entries(attributes)) {
-      if (isModelKey(key as AttrKey) && typeof value === 'string' && !PRICED.has(value)) {
-        (attributes as Record<string, unknown>)[key] = OTHER;
-      }
-    }
+    attributes = Object.fromEntries(
+      Object.entries(withoutLocalOnly(attributes)).map(([key, value]) => [
+        key,
+        isModelKey(key as AttrKey) && typeof value === 'string' && !PRICED.has(value)
+          ? OTHER
+          : value,
+      ]),
+    ) as Attributes;
   }
   const ctx = span.spanContext();
   return {

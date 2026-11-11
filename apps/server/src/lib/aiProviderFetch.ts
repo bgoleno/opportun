@@ -176,8 +176,11 @@ export function operatorBaseUrls(env: NodeJS.ProcessEnv): OperatorBaseUrls {
  */
 export function operatorProviderOrigins(urls: OperatorBaseUrls): Map<string, ProviderTarget> {
   const out = new Map<string, ProviderTarget>();
-  for (const target of ['anthropic', 'openai'] as const) {
-    const raw = urls[target];
+  const pairs: [ProviderTarget, string | undefined][] = [
+    ['anthropic', urls.anthropic],
+    ['openai', urls.openai],
+  ];
+  for (const [target, raw] of pairs) {
     if (raw === undefined) continue;
     try {
       out.set(new URL(raw).origin, target);

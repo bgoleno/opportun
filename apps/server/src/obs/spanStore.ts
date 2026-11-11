@@ -23,6 +23,7 @@ import { inArray } from 'drizzle-orm';
 import { withTransaction, type Db, type Exec } from '../db/client';
 import { obsSpans, obsTraces, users } from '../db/schema';
 import { OTHER } from './catalog';
+import { checkValue } from './gate';
 import { isCollecting, runSuppressed, type GatedSpan } from './index';
 import { countSpanDrop, guarded, rebuildSpan } from './spanRebuild';
 
@@ -42,6 +43,8 @@ interface Kept {
   traceUserId: string | undefined;
   /** Set on the first kept span of a subtree: what contained it (14.7). */
   origin: string | undefined;
+  /** The first kept span of a subtree (a workflow span, a lone call, a continued job's span). */
+  root: boolean;
 }
 
 interface Pending {
@@ -49,14 +52,21 @@ interface Pending {
   userId: string;
   traceUserId: string;
   origin: string | undefined;
+  root: boolean;
 }
 
 /** What contained the first Gen AI span: a route template, or `job {kind}` (14.7). */
 function originOf(parent: Span | undefined): string | undefined {
-  if (parent === undefined) return undefined;
-  const route = parent.attributes['http.route'];
-  if (typeof route === 'string') return route;
-  return parent.name.startsWith('job ') ? parent.name : undefined;
+  // A parent that does not record (started before collection was on) has no name or attributes.
+  const attributes = (parent as { attributes?: unknown } | undefined)?.attributes;
+  const name = (parent as { name?: unknown } | undefined)?.name;
+  const route =
+    typeof attributes === 'object' && attributes !== null
+      ? (attributes as Record<string, unknown>)['http.route']
+      : undefined;
+  // Through the gate's own type, so the origin is a route template or a job's span name only.
+  if (typeof route === 'string' && checkValue({ kind: 'route' }, route) !== undefined) return route;
+  return typeof name === 'string' && /^job [a-z0-9_.]{1,64}$/.test(name) ? name : undefined;
 }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
@@ -129,7 +139,12 @@ export class SpanStore {
         ? originOf(trace.getSpan(parentContext) as Span | undefined)
         : undefined;
     const traceUserId = keptParent === undefined ? userId : keptParent.traceUserId;
-    this.remember(span.spanContext().spanId, { userId, traceUserId, origin });
+    this.remember(span.spanContext().spanId, {
+      userId,
+      traceUserId,
+      origin,
+      root: keptParent === undefined,
+    });
   }
 
   private onEnd(span: ReadableSpan): void {
@@ -148,7 +163,7 @@ export class SpanStore {
       countSpanDrop('buffer_full');
       return;
     }
-    this.buffer.push({ span: rebuilt, userId, traceUserId, origin: kept.origin });
+    this.buffer.push({ span: rebuilt, userId, traceUserId, origin: kept.origin, root: kept.root });
     if (this.buffer.length >= SPAN_FLUSH_AT) void this.flush().catch(() => undefined);
   }
 
@@ -166,7 +181,13 @@ export class SpanStore {
     if (db === undefined || this.buffer.length === 0) return;
     const batch = this.buffer;
     this.buffer = [];
-    await runSuppressed(() => withTransaction(db, (tx) => writeBatch(tx, batch, this.now())));
+    try {
+      await runSuppressed(() => withTransaction(db, (tx) => writeBatch(tx, batch, this.now())));
+    } catch (err) {
+      // A failed transaction loses its batch (nothing is retried into a backlog, 14.11): counted.
+      for (let i = 0; i < batch.length; i++) countSpanDrop('buffer_full');
+      throw err;
+    }
   }
 }
 
@@ -258,8 +279,13 @@ async function writeBatch(tx: Exec, batch: Pending[], now: number): Promise<void
     // dropped and counted (a span started for user b inside user a's workflow).
     const own = pending.filter((p) => p.userId === row.userId && p.traceUserId === row.userId);
     for (let i = own.length; i < pending.length; i++) countSpanDrop('invalid_value');
-    const room = Math.max(0, TRACE_SPAN_CAP - (row.spanCount ?? 0));
-    const taken = own.slice(0, room);
+    // A subtree's root (the workflow span, which ends last) is kept whatever the cap, so a
+    // truncated trace still has its root and its workflow name (tl on #366). The rest fill what
+    // room the cap leaves, in the order they ended.
+    const roots = own.filter((p) => p.root);
+    const rest = own.filter((p) => !p.root);
+    const room = Math.max(0, TRACE_SPAN_CAP - (row.spanCount ?? 0) - roots.length);
+    const taken = [...roots, ...rest.slice(0, room)];
     if (taken.length < own.length) {
       row.truncated = true;
       for (let i = taken.length; i < own.length; i++) countSpanDrop('buffer_full');

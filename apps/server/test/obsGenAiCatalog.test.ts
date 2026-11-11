@@ -159,13 +159,9 @@ describe('the Gen AI metrics in the catalog (#344, 14.4)', () => {
     expect([...METRICS[GEN_AI_METRIC.inferenceDuration].attributes].sort()).toEqual(
       [...base, ATTR.errorType].sort(),
     );
-    for (const m of [GEN_AI_METRIC.inputTokens, GEN_AI_METRIC.outputTokens]) {
-      expect(METRICS[m], m).toMatchObject({
-        instrument: 'counter',
-        unit: '{token}',
-        scope: 'user',
-      });
-      expect([...METRICS[m].attributes].sort(), m).toEqual([...base, ATTR.tokenModality].sort());
+    for (const def of [METRICS[GEN_AI_METRIC.inputTokens], METRICS[GEN_AI_METRIC.outputTokens]]) {
+      expect(def).toMatchObject({ instrument: 'counter', unit: '{token}', scope: 'user' });
+      expect([...def.attributes].sort()).toEqual([...base, ATTR.tokenModality].sort());
     }
     expect(METRICS[GEN_AI_METRIC.cost]).toMatchObject({
       instrument: 'counter',

@@ -388,8 +388,17 @@ describe('the span store (#344)', () => {
     await flushSpans();
     expect(await countRows(app, obsSpans)).toBe(TRACE_SPAN_CAP);
     expect(await traces(app)).toEqual([
-      expect.objectContaining({ spanCount: TRACE_SPAN_CAP, truncated: true }),
+      expect.objectContaining({
+        spanCount: TRACE_SPAN_CAP,
+        truncated: true,
+        // The root ends last, and is kept anyway: the trace keeps its name and its root.
+        workflow: 'discovery_run',
+      }),
     ]);
+    const stored = await spans(app);
+    const root = stored.find((s) => s.name === 'invoke_workflow discovery_run');
+    expect(root).toMatchObject({ parentSpanId: null });
+    for (const s of stored) if (s !== root) expect(s.parentSpanId).toBe(root!.spanId);
   });
 });
 
@@ -462,11 +471,24 @@ describe('the traces dashboard reads what the store writes (#344 with #347)', ()
     expect(detail.statusCode, detail.body).toBe(200);
     const spansShown = (
       detail.json() as {
-        spans: { name: string; prompt: { name: string; version: number | null } | null }[];
+        spans: {
+          spanId: string;
+          parentSpanId: string | null;
+          name: string;
+          prompt: { name: string; version: number | null } | null;
+        }[];
       }
     ).spans;
-    expect(spansShown.map((s) => s.name)).toEqual(['invoke_workflow capture', `chat ${MODEL}`]);
-    expect(spansShown[1]!.prompt).toEqual({ name: 'resume.match', version: 4 });
+    // By nesting, not by list order: spans that start in the same millisecond come back in
+    // span-id order, which is random.
+    const wf = spansShown.find((s) => s.name === 'invoke_workflow capture');
+    const inference = spansShown.find((s) => s.name === `chat ${MODEL}`);
+    expect(spansShown).toHaveLength(2);
+    expect(wf).toMatchObject({ parentSpanId: null });
+    expect(inference).toMatchObject({
+      parentSpanId: wf!.spanId,
+      prompt: { name: 'resume.match', version: 4 },
+    });
   });
 });
 
