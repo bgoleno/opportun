@@ -543,10 +543,17 @@ export async function findPosting(
       : unattachable(candidate);
   }
 
+  // The own link names a job the company's boards were read without (qa and tl on #414): any
+  // other posting found below is for the user to choose, never attached or confirmed by itself,
+  // or a title match would swap the link for another job's. Boards that could not be read at
+  // all change nothing.
+  const ownMissed = ownRef !== null && reads.length > 0;
+
   const hit = referenceHit(reads, refs);
   if (hit !== null) {
     const candidate = exactly(await describeWorkdayPosting(sctx, hit.posting));
     const readFrom = { kind: hit.board.kind, org: hit.board.org };
+    if (ownMissed) return unattachable(candidate);
     return hasDescription(candidate.posting)
       ? { status: 'exact', candidate, via: 'email_link', readFrom }
       : unattachable(candidate);
@@ -585,7 +592,7 @@ export async function findPosting(
   // ratio, this `=== 1` stops being safe and needs an epsilon (or a different signal) again.
   const perfect = confident.filter((c) => c.score === 1);
   const [best] = confident;
-  if (best !== undefined && (perfect.length === 1 || confident.length === 1)) {
+  if (best !== undefined && !ownMissed && (perfect.length === 1 || confident.length === 1)) {
     const readFrom = readFromOf(reads, best.posting);
     const candidate = { ...best, posting: await describeWorkdayPosting(sctx, best.posting) };
     return hasDescription(candidate.posting)
@@ -598,7 +605,7 @@ export async function findPosting(
         }
       : { ...unattachable(candidate), ...note };
   }
-  if (confident.length > 1) {
+  if (confident.length > 1 || (ownMissed && confident.length > 0)) {
     return {
       status: 'candidates',
       candidates: confident.slice(0, MAX_SHOWN),

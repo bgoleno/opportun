@@ -242,6 +242,78 @@ describe("Find posting resolves the opportunity's own careers link (tl on #414, 
   });
 });
 
+describe('an own link whose job the board does not list never attaches another job (qa and tl on #414)', () => {
+  const MISSING = 'https://careers.examplecorp.example/jobs?gh_jid=1234567';
+  // Two locations of one role, as rankCandidates groups them: a perfect title match.
+  const sameRole = () =>
+    embeddedBoardServes([
+      {
+        ...embedded(
+          'Staff Platform Engineer',
+          '1',
+          'https://careers.examplecorp.example/jobs?gh_jid=1',
+        ),
+        location: 'London',
+      },
+      {
+        ...embedded(
+          'Staff Platform Engineer',
+          '2',
+          'https://careers.examplecorp.example/jobs?gh_jid=2',
+        ),
+        location: 'Warsaw',
+      },
+    ]);
+
+  it('Find posting: candidates, not attached; the link and the identity unchanged', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Staff Platform Engineer' });
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: MISSING });
+    sameRole();
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().outcome).toBe('candidates');
+    const after = await getOpportunity(app.db, ctxOf(a), id);
+    expect(after.postingUrl).toBe(MISSING);
+    expect(after.atsJobRef ?? null).toBeNull();
+    expect(after.descriptionMd ?? null).toBeNull();
+  });
+
+  it('one confident title match is offered too, never attached', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Staff Platform Engineer' });
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: MISSING });
+    embeddedBoardServes([
+      embedded('Staff Platform Engineer', '1', 'https://careers.examplecorp.example/jobs?gh_jid=1'),
+    ]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.json().outcome).toBe('candidates');
+    expect((await getOpportunity(app.db, ctxOf(a), id)).postingUrl).toBe(MISSING);
+  });
+
+  it('reconcile flags it for review instead of confirming', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Staff Platform Engineer' });
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: MISSING });
+    sameRole();
+    const out = await reconcilePosting(app.db, ctxOf(a), id, {
+      fetch: api.fetch,
+      log: { warn: () => {}, info: () => {}, error: () => {} } as never,
+    });
+    expect(out).toMatchObject({ status: 'needs_review' });
+    const after = await getOpportunity(app.db, ctxOf(a), id);
+    expect(after.postingUrl).toBe(MISSING);
+    expect(after.postingState).toBe('needs_review');
+    expect(after.atsJobRef ?? null).toBeNull();
+  });
+});
+
 describe("the own link is matched only on the company's own boards (sec on #414, R4)", () => {
   it('a board a message names, holding the same job id, never gives the identity, and is never asked', async () => {
     const { app, a } = await boot();
