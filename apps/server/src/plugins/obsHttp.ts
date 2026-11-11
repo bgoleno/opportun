@@ -61,7 +61,7 @@ function routeLabel(url: string | undefined): string {
   return url.startsWith('/assets/') ? SPA_ASSET_ROUTE : url;
 }
 
-function onRequest(req: FastifyRequest, _reply: FastifyReply, done: () => void): void {
+function onRequest(req: FastifyRequest, reply: FastifyReply, done: () => void): void {
   if (!isCollecting()) {
     done();
     return;
@@ -73,6 +73,14 @@ function onRequest(req: FastifyRequest, _reply: FastifyReply, done: () => void):
       ? obs.startSpan('http.server', { 'http.request.method': method, 'http.route': route })
       : undefined;
   observed.set(req, { started: performance.now(), method, route, span, errorType: undefined });
+  // The one place an abort shows for every method: the response closes before it finished. A
+  // request whose body was read has already ended its own stream normally, so Fastify's
+  // onRequestAbort never fires for it, and a slow POST (an AI call) is the likeliest to be
+  // abandoned (tl on #391). A completed request closes after onResponse, finished, and its entry
+  // is gone by then.
+  reply.raw.once('close', () => {
+    if (!reply.raw.writableFinished) recordAbort(req);
+  });
   if (span === undefined) {
     done();
     return;
@@ -99,14 +107,15 @@ function preValidation(req: FastifyRequest, _reply: FastifyReply, done: () => vo
 /**
  * A request the client closed before it was answered (#371): no onResponse comes, so without this
  * it recorded no metric and its span never ended. Recorded with no status code, none having been
- * sent, and error.type `aborted`; the entry is removed, so nothing records it twice.
+ * sent, and error.type `aborted`, with the span failed: an unanswered request is not a success. A
+ * proxy giving up on a slow request looks exactly like this to the server, and it is not like a
+ * 4xx, which the server answered; design 14.4 counts a request's errors as its points with
+ * error.type. No `error` event: the server did not fail. The entry is removed, so nothing records
+ * it twice.
  */
-function onRequestAbort(req: FastifyRequest, done: () => void): void {
+function recordAbort(req: FastifyRequest): void {
   const o = observed.get(req);
-  if (o === undefined) {
-    done();
-    return;
-  }
+  if (o === undefined) return;
   observed.delete(req);
   obs.record('http.server.request.duration', (performance.now() - o.started) / 1000, {
     'http.request.method': o.method,
@@ -115,7 +124,6 @@ function onRequestAbort(req: FastifyRequest, done: () => void): void {
   });
   o.span?.fail(ABORTED);
   o.span?.end();
-  done();
 }
 
 const ABORTED = 'aborted';
@@ -177,7 +185,6 @@ async function obsHttp(app: FastifyInstance): Promise<void> {
   app.addHook('preValidation', preValidation);
   app.addHook('onError', onError);
   app.addHook('onResponse', onResponse);
-  app.addHook('onRequestAbort', onRequestAbort);
 }
 
 /** Not encapsulated: its hooks see every route. Register first, so its onRequest runs first. */
