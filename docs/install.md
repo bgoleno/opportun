@@ -332,7 +332,8 @@ it. If `opportun.db` is on such a disk, set `OPPORTUN_SQLITE_BACKGROUND_CHECKPOI
   - a burst of writes with no pause, past 10,000 pages (about 40 MB), still checkpoints inside
     a write about once per 10,000 pages, because the log cannot start again while writes keep
     landing. Each such pause copies what the thread has not yet copied, so it is longer than a
-    default checkpoint's: tens of milliseconds;
+    default checkpoint's: tens of milliseconds on an ordinary disk, a few hundred on a slow one
+    (up to 335 ms measured in a 50,000-write burst);
   - a write can also wait behind the thread's own sync, which shares the same disk.
 
   So the setting makes writes faster in total, and most of them much faster, but in a long burst
