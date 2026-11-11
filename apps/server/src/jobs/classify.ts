@@ -7,8 +7,8 @@ import { buffer } from 'node:stream/consumers';
 import {
   AiUnavailableError,
   ClassifyOutputSchema as AiClassifyOutputSchema,
-  renderPrompt,
   runStructured,
+  systemWithCacheBreak,
 } from '@opportun/ai';
 import { seniorityRangeText, type BodySource } from '@opportun/core';
 import { and, desc, eq, notInArray } from 'drizzle-orm';
@@ -182,15 +182,23 @@ export async function classifyCommunication(
   const prompt = await getActivePrompt(db, ctx, 'comms.classify');
   if (prompt === undefined) return { status: 'skipped', reason: 'no_prompt' };
   const { text: message, source: bodySource } = await messageText(storage, row, body, refetch);
-  const system = renderPrompt(prompt.body, {
-    role_targets: await roleTargetsText(db, ctx),
-    open_opportunities_untrusted: await openOpportunitiesText(db, ctx),
-    message_untrusted: message,
-  });
+  // The cacheable prefix ends before the message (#380): the instructions, the role targets and
+  // the open opportunities repeat for every message of a sync batch; the router marks it for the
+  // provider's cache when the provider and the prefix's size allow.
+  const { system, cacheBreak } = systemWithCacheBreak(
+    prompt.body,
+    {
+      role_targets: await roleTargetsText(db, ctx),
+      open_opportunities_untrusted: await openOpportunitiesText(db, ctx),
+      message_untrusted: message,
+    },
+    'comms.classify',
+  );
   let output: ClassifyOutput;
   try {
     output = await runStructured(await buildAiDeps(db, ctx), 'comms.classify', {
       system,
+      cacheBreak,
       prompt: 'Classify the message and return the result.',
       schema: ClassifyOutputSchema,
       promptId: prompt.id,
