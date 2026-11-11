@@ -1,7 +1,14 @@
 // The AI trace dashboard (FR-T7, https://github.com/bgoleno/opportun/issues/347): the list, its
 // filters and conversation groups, the empty state while collection is off, and one trace's
 // waterfall with its span details and links.
-import { screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterProvider,
+} from '@tanstack/react-router';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -341,6 +348,25 @@ describe('TraceDetailPage', () => {
       '/settings/ai',
     );
     expect(document.body).not.toHaveTextContent('9'.repeat(8));
+  });
+
+  it('says a trace is not found at once, without retrying the 404 (#365)', async () => {
+    // As the app's own client is set up (app.tsx: retry 1). The test helper turns retries off,
+    // which is why the delay never showed in a test.
+    const { calls } = mockApi({});
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1 } } });
+    const rootRoute = createRootRoute({
+      component: () => <TraceDetailPage traceId={'e'.repeat(32)} />,
+    });
+    const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory() });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    // Well inside the 1 s a retry waits before its second request.
+    expect(await screen.findByText(/not found/i, {}, { timeout: 500 })).toBeInTheDocument();
+    expect(calls.filter((c) => c.path === `/obs/traces/${'e'.repeat(32)}`)).toHaveLength(1);
   });
 
   it('says so when the trace is not found', async () => {

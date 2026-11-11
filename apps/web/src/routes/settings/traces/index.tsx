@@ -11,15 +11,29 @@ import { TracesPage } from '@/components/traces/TracesPage';
  * shape is dropped rather than failing the route: people type and paste these. The server
  * checks every value again and binds it.
  */
-const text = (v: unknown, max: number): string | undefined =>
-  typeof v === 'string' && v.length > 0 && v.length <= max ? v : undefined;
+// The shapes the server accepts (apps/server/src/routes/obsTraces.ts: TASK, MODEL, PROVIDER,
+// ROW_ID). A value of any other shape would be refused there with its validation text, so it is
+// dropped here and never sent (https://github.com/bgoleno/opportun/issues/365). Keep the two in
+// step: a shape the server widens is refused here until this follows.
+const TASK = /^[a-z][a-z0-9_.]{0,63}$/;
+const PROVIDER = /^[a-z][a-z0-9_]{0,31}$/;
+const ROW_ID = /^[A-Za-z0-9-]{1,64}$/;
+const MODEL_SEGMENT = /^[A-Za-z0-9._:-]+$/;
+/** A model id: up to 128 characters, at most one `/`, each side of it a model segment. */
+const isModel = (v: string) => {
+  const parts = v.split('/');
+  return v.length <= 128 && parts.length <= 2 && parts.every((p) => MODEL_SEGMENT.test(p));
+};
+
+const shaped = (v: unknown, ok: (s: string) => boolean): string | undefined =>
+  typeof v === 'string' && ok(v) ? v : undefined;
 
 export function parseTraceSearch(search: Record<string, unknown>): TraceFilters {
   const out: TraceFilters = {};
-  const task = text(search['task'], 64);
-  const model = text(search['model'], 128);
-  const provider = text(search['provider'], 32);
-  const conversation = text(search['conversation'], 64);
+  const task = shaped(search['task'], (v) => TASK.test(v));
+  const model = shaped(search['model'], isModel);
+  const provider = shaped(search['provider'], (v) => PROVIDER.test(v));
+  const conversation = shaped(search['conversation'], (v) => ROW_ID.test(v));
   const status =
     search['status'] === 'ok' || search['status'] === 'error' ? search['status'] : undefined;
   const range = RANGES.find((r) => r.value === search['range'])?.value;
