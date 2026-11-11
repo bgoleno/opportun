@@ -5,7 +5,7 @@
 // Opportun never submits an application. The last step hands off: the server returns the
 // employer's address, the browser opens it in a new tab, and the user fills in and submits the
 // form there themselves.
-import { submissionFieldProblem } from '@opportun/core';
+import { submissionFieldProblem, type ApplicationDetailKey } from '@opportun/core';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { ArrowLeft, Check, Copy, Download, Loader2 } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
@@ -42,8 +42,11 @@ import {
   detailLabel,
   detailRows,
   isLive,
+  profileDetail,
   snapshotErrorText,
+  sourceText,
   submissionErrorText,
+  useApplicationDetails,
   useAttestSubmission,
   useCancelSubmission,
   useCreateSubmission,
@@ -65,6 +68,7 @@ import {
   type StepId,
 } from './parts';
 import { ReviewUsageLine } from './ReviewUsage';
+import { useProfile } from '@/routes/settings/-api';
 
 export function ApplyPage({
   opportunityId,
@@ -231,9 +235,12 @@ function ResumeStep({
           const entries = Object.entries(expired.fields);
           const passes = ([k, v]: [string, string]) =>
             submissionFieldProblem(Object.fromEntries([[k, v]])) === null;
-          const fields = Object.fromEntries(entries.filter(passes));
+          const carried = Object.fromEntries(entries.filter(passes));
           cleared = entries.filter((e) => !passes(e)).map(([k]) => k);
-          if (expired.answers.length > 0 || Object.keys(fields).length > 0) {
+          // Merged over what the server filled the new draft with (#401): the expired attempt's
+          // values win, and the profile fills only the fields that attempt left empty.
+          const fields = { ...draft.fields, ...carried };
+          if (expired.answers.length > 0 || Object.keys(carried).length > 0) {
             await patch.mutateAsync({
               id: draft.id,
               patch: { fields, answers: expired.answers },
@@ -426,6 +433,9 @@ function sortedEntries(o: Record<string, string>): [string, string][] {
   return Object.entries(o).sort(([a], [b]) => a.localeCompare(b));
 }
 
+/** "From your profile" as it reads inside a sentence: "from your profile". */
+const lowerFirst = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1);
+
 function DetailsStep({
   opp,
   live,
@@ -443,9 +453,59 @@ function DetailsStep({
   );
   const [error, setError] = useState<string | null>(null);
   const canEdit = live.status === 'draft' || live.status === 'reviewed';
+  // What Opportun holds, with sources, and the profile as saved (#401). Either may be missing
+  // (not loaded yet, or unreadable): the step then shows no source line and no tick, and works.
+  const prefill = useApplicationDetails(live.id).data ?? null;
+  const profile = useProfile().data ?? null;
+  const [ticked, setTicked] = useState<ReadonlySet<ApplicationDetailKey>>(() => new Set());
+  const valueOf = (key: string): string | undefined => new Map(Object.entries(fields)).get(key);
+
+  /**
+   * How a field's value stands against the profile: null when the profile holds the same (or is
+   * not known); `missing` when the profile has none; `differs` when it holds another value;
+   * `removing` when the step's field is empty and the profile's is not (tl on #415: the tick then
+   * removes it).
+   */
+  function profileDiff(key: ApplicationDetailKey): 'missing' | 'differs' | 'removing' | null {
+    if (profile === null) return null;
+    const held = profileDetail(profile, key).trim();
+    const value = (valueOf(key) ?? '').trim();
+    // A value the server gives from the profile with no detail saved (LinkedIn profile, or Links,
+    // from the profile's links) is the profile's too (tl on #430): unchanged it needs no tick,
+    // changed it differs, and emptied there is nothing saved to remove.
+    const given =
+      held === ''
+        ? prefill?.values.find((v) => v.key === key && v.source.kind === 'profile')
+        : undefined;
+    if (given !== undefined) {
+      return value === '' || value === given.value.trim() ? null : 'differs';
+    }
+    if (value === held) return null;
+    if (held === '') return 'missing';
+    return value === '' ? 'removing' : 'differs';
+  }
+
+  /** The source line under a field: only while it still holds the value it was filled with. */
+  function sourceOf(key: ApplicationDetailKey): string | null {
+    const filled = prefill?.values.find((v) => v.key === key);
+    return filled !== undefined && (valueOf(key) ?? '') === filled.value
+      ? sourceText(filled.source)
+      : null;
+  }
+
+  // What Opportun holds but could not fill in, because it fails today's checks (#411, tl rule 4),
+  // for fields still empty here and not already named by the start-again notice.
+  const notFilled = (prefill?.leftOut ?? []).filter(
+    (l) => (valueOf(l.key) ?? '').trim() === '' && !cleared.includes(l.key),
+  );
 
   async function save() {
     setError(null);
+    // The ticked fields that still differ from the profile: a tick on a field changed back to
+    // the profile's value saves nothing.
+    const saveToProfile = DETAIL_FIELDS.map((f) => f.key).filter(
+      (k) => ticked.has(k) && profileDiff(k) !== null,
+    );
     const cleanFields = Object.fromEntries(
       Object.entries(fields)
         .map(([k, v]) => [k, v.trim()] as const)
@@ -460,9 +520,16 @@ function DetailsStep({
         value: a.value,
         source: 'user' as const,
       }));
-    const body: SubmissionPatch = { fields: cleanFields, answers: cleanAnswers };
-    // Nothing changed: no write, so stepping back and forward keeps a valid review.
+    // The draft and the ticked names in one request: the server writes both, or neither.
+    const body: SubmissionPatch = {
+      fields: cleanFields,
+      answers: cleanAnswers,
+      ...(saveToProfile.length > 0 ? { saveToProfile } : {}),
+    };
+    // Nothing changed and nothing to save: no write, so stepping back and forward keeps a valid
+    // review.
     const unchanged =
+      saveToProfile.length === 0 &&
       JSON.stringify(sortedEntries(cleanFields)) === JSON.stringify(sortedEntries(live.fields)) &&
       JSON.stringify(cleanAnswers.map((a) => [a.label, a.value])) ===
         JSON.stringify(live.answers.map((a) => [a.label, a.value]));
@@ -490,28 +557,82 @@ function DetailsStep({
           </span>
         </Notice>
       ) : null}
+      {notFilled.length > 0 ? (
+        <Notice label="Details not filled in">
+          <span>
+            Not filled in, because the value Opportun holds does not pass the checks:{' '}
+            {notFilled
+              .map((l) => `${detailLabel(l.key)} (${lowerFirst(sourceText(l.source))})`)
+              .join(', ')}
+            . Enter them if you need them.
+          </span>
+        </Notice>
+      ) : null}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Your details</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4">
           <p className="text-sm text-muted-foreground">
-            Used to fill the form. Changes here apply to this application only, not to your profile.
+            Used to fill the form. Filled in from your profile where it has a value. Changes here
+            apply to this application only, unless you tick Save to my profile.
           </p>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {DETAIL_FIELDS.map((f) => (
-              <div key={f.key} className="grid gap-1.5">
-                <Label htmlFor={`field-${f.key}`}>{f.label}</Label>
-                <Input
-                  id={`field-${f.key}`}
-                  type={f.type}
-                  autoComplete={f.autoComplete}
-                  value={fields[f.key] ?? ''}
-                  disabled={!canEdit}
-                  onChange={(e) => setFields((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                />
-              </div>
-            ))}
+            {DETAIL_FIELDS.map((f) => {
+              const source = sourceOf(f.key);
+              const diff = profileDiff(f.key);
+              const sourceId = `field-${f.key}-source`;
+              return (
+                <div key={f.key} className="grid gap-1.5">
+                  <Label id={`field-${f.key}-label`} htmlFor={`field-${f.key}`}>
+                    {f.label}
+                  </Label>
+                  <Input
+                    id={`field-${f.key}`}
+                    type={f.type}
+                    autoComplete={f.autoComplete}
+                    value={fields[f.key] ?? ''}
+                    disabled={!canEdit}
+                    aria-describedby={source === null ? undefined : sourceId}
+                    onChange={(e) => setFields((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                  />
+                  {source === null ? null : (
+                    <p id={sourceId} className="text-xs text-muted-foreground">
+                      {source}
+                    </p>
+                  )}
+                  {diff === null ? null : (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                      <span className="text-muted-foreground">
+                        {diff === 'missing' ? 'Not in your profile' : 'Differs from your profile'}
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        {/* Named for what it does; the field it belongs to is its description,
+                            so the field's own label names one control only (getByLabel, and a
+                            screen reader's list of form fields). */}
+                        <Checkbox
+                          id={`save-${f.key}`}
+                          aria-describedby={`field-${f.key}-label`}
+                          checked={ticked.has(f.key)}
+                          disabled={!canEdit}
+                          onCheckedChange={(v) =>
+                            setTicked((prev) => {
+                              const next = new Set(prev);
+                              if (v === true) next.add(f.key);
+                              else next.delete(f.key);
+                              return next;
+                            })
+                          }
+                        />
+                        <Label htmlFor={`save-${f.key}`} className="text-xs font-normal">
+                          {diff === 'removing' ? 'Remove from my profile' : 'Save to my profile'}
+                        </Label>
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </CardContent>
       </Card>
