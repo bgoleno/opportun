@@ -157,6 +157,18 @@ describe('verifyEmbeddedGreenhouse (#398 criteria 1, 2 and 5)', () => {
     expect(await verifyEmbeddedGreenhouse(app.db, ctx, opp, CAREERS, gh.sctx)).toBeNull();
   });
 
+  it('a 404 is a no, even when its body names the job (sec on #414)', async () => {
+    const { app, a } = await boot();
+    const { ctx, opp } = await company(app, a, 'examplecorp');
+    const fetch = (async () => ({
+      status: 404,
+      headers: new Headers(),
+      body: Buffer.from(JSON.stringify({ id: 8136554 })),
+    })) as unknown as typeof safeFetch;
+    const sctx = { fetch, log: { warn: () => {} } as never };
+    expect(await verifyEmbeddedGreenhouse(app.db, ctx, opp, CAREERS, sctx)).toBeNull();
+  });
+
   it("ignores the link's board= parameter: it is never asked, and never the token", async () => {
     const { app, a } = await boot();
     const { ctx, opp } = await company(app, a, 'examplecorp');

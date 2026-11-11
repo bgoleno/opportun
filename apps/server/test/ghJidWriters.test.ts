@@ -293,6 +293,41 @@ describe('a careers link from anywhere else needs its own check (criterion 1)', 
   });
 });
 
+describe('a picked board row comes from the client: never a board read (sec on #414)', () => {
+  const picked = {
+    ...embedded('Staff Platform Engineer', JID, `${CAREERS}&board=othercorp`),
+  };
+
+  it("is checked with one request to the company's own board; board= is never asked", async () => {
+    const { app, a } = await boot();
+    api = greenhouseApi({ examplecorp: [JID], othercorp: [JID] });
+    const id = await seed(app, a);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/posting`,
+      payload: { posting: picked },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await refOf(app, a, id)).toMatchObject({ org: 'examplecorp', url: BOARD_PAGE });
+    expect(api.asked).toEqual([
+      `https://boards-api.greenhouse.io/v1/boards/examplecorp/jobs/${JID}`,
+    ]);
+  });
+
+  it('gets no identity when the known board says no, whatever the row claims', async () => {
+    const { app, a } = await boot();
+    api = greenhouseApi({ othercorp: [JID] });
+    const id = await seed(app, a);
+    await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/posting`,
+      payload: { posting: picked },
+    });
+    expect(await refOf(app, a, id)).toBeNull();
+    expect(api.asked.some((u) => u.includes('othercorp'))).toBe(false);
+  });
+});
+
 describe('the handoff destination (criterion 2)', () => {
   it('is the board page; the careers link itself is still refused as a destination', () => {
     const sub = { atsKind: 'ats_greenhouse' as const, atsExternalId: JID, atsRef: 'examplecorp' };
