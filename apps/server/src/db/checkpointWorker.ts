@@ -86,6 +86,18 @@ export interface CheckpointWorkerData {
   retryMs: number;
 }
 
+/**
+ * Whether a checkpoint stopped short because a reader held frames back, so that the next try waits
+ * the retry delay. Only frames that were in the WAL when the worker read its header, just before
+ * the checkpoint, count: frames a writer committed while the checkpoint ran are in its `log` but
+ * could not have been copied, and under steady writes counting them made the worker wait as if a
+ * reader held it (tl on #393). The smaller of the two counts covers a WAL that started again
+ * between the read and the checkpoint.
+ */
+export function heldBackByReader(framesAtRead: number, log: number, checkpointed: number): boolean {
+  return checkpointed < Math.min(log, framesAtRead);
+}
+
 /** What the worker tells the parent. */
 export type CheckpointWorkerMessage =
   | {
@@ -157,10 +169,11 @@ function run(data: CheckpointWorkerData, port: NonNullable<typeof parentPort>): 
         // did nothing, so it is not reported as a checkpoint, and it is tried again later.
         heldBack = true;
       } else {
-        heldBack = checkpointed < log;
-        // A checkpoint that copied everything leaves no frame waiting: the age bound starts
-        // again with the next frame written, or a steady writer would find something waiting on
-        // every poll and the bound, once passed, would checkpoint on every poll (tl on #393).
+        heldBack = heldBackByReader(index.mxFrame, log, checkpointed);
+        // A checkpoint that copied every frame there was when it started: the age bound starts
+        // again from the next look that finds a frame waiting, or a steady writer would find
+        // something waiting on every poll and the bound, once passed, would checkpoint on every
+        // poll (tl on #393).
         if (!heldBack) waitingSince = undefined;
         tell({
           type: 'checkpoint',

@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadDbConfig } from '../src/config';
 import { rawRun, type SqliteHandle } from '../src/db/client';
 import { startBackgroundCheckpointer, type CheckpointRecord } from '../src/db/checkpointer';
-import { readWalIndex } from '../src/db/checkpointWorker';
+import { heldBackByReader, readWalIndex } from '../src/db/checkpointWorker';
 import { readOperatorBytesAt } from '../src/lib/storage';
 import { sqliteOnly } from './db';
 import { openTestDb } from './helpers';
@@ -58,6 +58,26 @@ describe('the background checkpointer flag (#383)', () => {
       dialect: 'sqlite',
       backgroundCheckpoint: true,
     });
+  });
+});
+
+describe('which checkpoint a reader held back (#383, tl on #393)', () => {
+  // Arguments: the frames in the WAL when the worker read its header just before the checkpoint,
+  // then the checkpoint's own log and checkpointed counts.
+  it('not one that copied every frame there was when it started: the rest came in while it ran', () => {
+    // Logged in "keeps up under steady writes": three frames were committed during the checkpoint.
+    expect(heldBackByReader(123, 129, 126)).toBe(false);
+    expect(heldBackByReader(123, 123, 123)).toBe(false);
+  });
+
+  it('one that stopped short of frames that were there when it started: a reader holds them', () => {
+    expect(heldBackByReader(123, 123, 100)).toBe(true);
+    expect(heldBackByReader(123, 129, 120)).toBe(true);
+  });
+
+  it('not one on a WAL that started again after the read, when it copied all of the new one', () => {
+    expect(heldBackByReader(123, 10, 10)).toBe(false);
+    expect(heldBackByReader(123, 10, 8)).toBe(true);
   });
 });
 
@@ -278,9 +298,11 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       const started = Date.now();
       // Small writes back to back, one per turn of the loop, for ten age bounds: a frame is
       // waiting at every look the worker takes, the one straight after a checkpoint included.
-      // Three seconds, not fewer: a checkpoint racing a commit can copy all but the last frame,
-      // and the worker then waits its 1 s retry delay (RETRY_MS) before the next try, so even a
-      // run where every checkpoint does that has three (one CI run had 2 in 1.5 s).
+      // Three seconds, not fewer: a checkpoint that stops short of frames that were there when it
+      // started waits the 1 s retry delay (RETRY_MS) before the next try, so even a run where
+      // every checkpoint does that has three. That once counted frames committed during the
+      // checkpoint too (one CI run had 2 in 1.5 s); it no longer does, but one run in six here
+      // still had a checkpoint stop short.
       while (Date.now() - started < 3_000) {
         await rawRun(h.db, sql`INSERT INTO bench_383 (v) VALUES ('x')`);
         await new Promise((r) => setImmediate(r));
