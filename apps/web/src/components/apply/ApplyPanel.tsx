@@ -4,9 +4,11 @@
 //
 // With the flag off, or on the demo, the submission routes answer 404 and this renders nothing
 // at all: no card, no teaser (#117 criterion 5).
+import { greenhouseJidOf } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { useFindPosting } from '@/components/opportunity/api';
 import { statusLabel, useResumes, type Resume } from '@/components/resume/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -43,6 +45,17 @@ export function usableResumes(resumes: Resume[], opportunityId: string): Resume[
   );
 }
 
+const EMBEDDED_GREENHOUSE =
+  "This looks like a Greenhouse job on the company's own careers page. Find the posting on Greenhouse to apply with assisted apply.";
+
+/** A posting link with a numeric `gh_jid` and no ATS identity yet (#398). */
+function embeddedGreenhouse(opp: OpportunityView): boolean {
+  return (
+    (opp.atsJobRef === null || opp.atsJobRef === undefined) &&
+    greenhouseJidOf(opp.postingUrl) !== null
+  );
+}
+
 /** Why an attempt cannot start, in the user's words, or null when it can. */
 function notEligible(opp: OpportunityView, resumes: Resume[]): string | null {
   if (opp.stage === 'closed' || opp.stage === 'dismissed') {
@@ -53,6 +66,10 @@ function notEligible(opp: OpportunityView, resumes: Resume[]): string | null {
     return `This opportunity is ${stageLabel(opp.stage)}. Applying is available at Interested, Preparing or Applied. Change its stage to apply.`;
   }
   if (opp.atsJobRef === null || opp.atsJobRef === undefined) {
+    // A Greenhouse job on the company's own page (`?gh_jid=`) whose board is not proven yet
+    // (#398): Find posting looks for it on the company's board, detecting the board first when
+    // there is none, and the identity follows from that read.
+    if (embeddedGreenhouse(opp)) return EMBEDDED_GREENHOUSE;
     return "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.";
   }
   if (opp.postingState !== 'confirmed') {
@@ -76,6 +93,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const submissions = useOpportunitySubmissions(opp.id);
   const resumes = useResumes();
   const reasonId = useId();
+  const find = useFindPosting(opp.id);
   const [howOpen, setHowOpen] = useState(false);
   // A click on the refused button (#395): it says so, rather than doing nothing. Kept as the
   // reason that was clicked, so a different reason later reads plainly until it is clicked too.
@@ -152,6 +170,16 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                 ? `${refusedLabel} is not available yet. ${reason}`
                 : reason}
             </p>
+            {reason === EMBEDDED_GREENHOUSE ? (
+              <Button
+                variant="outline"
+                className="w-fit"
+                disabled={find.isPending}
+                onClick={() => find.mutate()}
+              >
+                {find.isPending ? 'Searching...' : 'Find posting'}
+              </Button>
+            ) : null}
           </>
         )}
       </div>
