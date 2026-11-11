@@ -174,7 +174,7 @@ export interface InferenceStart {
   outputType: 'json' | 'text';
   /** The prompt row's id, and the version of the prompt when the caller has one. */
   promptId?: string | undefined;
-  promptVersion?: string | undefined;
+  promptVersion?: number | undefined;
   /** The tailoring session id, for the chat's spans only. Never made up. */
   conversationId?: string | undefined;
   /** The user the call is for. A key check has none of its own and reads the context's. */
@@ -245,7 +245,14 @@ export class InferenceSpan {
     if (start.task !== KEY_CHECK_TASK) {
       attributes[ATTR.promptName] = start.task;
       attributes[ATTR.aiFeature] = TASK_FEATURE[start.task];
-      if (start.promptVersion !== undefined) attributes[ATTR.promptVersion] = start.promptVersion;
+      // The prompt row's version, a whole number (prompts.prompt_version): nothing else is one.
+      if (
+        start.promptVersion !== undefined &&
+        Number.isSafeInteger(start.promptVersion) &&
+        start.promptVersion >= 0
+      ) {
+        attributes[ATTR.promptVersion] = start.promptVersion;
+      }
       if (start.promptId !== undefined) attributes[ATTR.aiPromptId] = start.promptId;
     }
     if (start.conversationId !== undefined) attributes[ATTR.conversationId] = start.conversationId;

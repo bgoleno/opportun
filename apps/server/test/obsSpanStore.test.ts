@@ -440,6 +440,36 @@ describe('one user per trace: opportunity.dedupe_ai_pass (#344, 14.6)', () => {
   });
 });
 
+describe('the traces dashboard reads what the store writes (#344 with #347)', () => {
+  it('lists the stored trace for its user only, and shows its spans with their prompt', async () => {
+    const { app, a, b } = await boot();
+    await setCollecting(true);
+    await workflow(a.userId, 'capture', async () =>
+      runStructured(await deps(app, a.userId), 'resume.match', { ...call, promptVersion: 4 }),
+    );
+    await flushSpans();
+    const list = await a.request({ method: 'GET', url: '/api/v1/obs/traces' });
+    expect(list.statusCode, list.body).toBe(200);
+    const items = (list.json() as { items: { traceId: string; workflow: string | null }[] }).items;
+    expect(items).toEqual([expect.objectContaining({ workflow: 'capture' })]);
+    const other = await b.request({ method: 'GET', url: '/api/v1/obs/traces' });
+    expect((other.json() as { items: unknown[] }).items).toEqual([]);
+
+    const detail = await a.request({
+      method: 'GET',
+      url: `/api/v1/obs/traces/${items[0]!.traceId}`,
+    });
+    expect(detail.statusCode, detail.body).toBe(200);
+    const spansShown = (
+      detail.json() as {
+        spans: { name: string; prompt: { name: string; version: number | null } | null }[];
+      }
+    ).spans;
+    expect(spansShown.map((s) => s.name)).toEqual(['invoke_workflow capture', `chat ${MODEL}`]);
+    expect(spansShown[1]!.prompt).toEqual({ name: 'resume.match', version: 4 });
+  });
+});
+
 describe('the export slot (#344, 14.8)', () => {
   it('gets each span rebuilt with no user id or response id, and only a priced model', async () => {
     const { app, a } = await boot();

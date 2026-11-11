@@ -201,10 +201,8 @@ export const ATTRIBUTES = {
   [ATTR.requestStream]: { kind: 'bool' },
   [ATTR.outputType]: { kind: 'enum', values: OUTPUT_TYPES },
   [ATTR.promptName]: { kind: 'enum', values: TASK_KEYS },
-  [ATTR.promptVersion]: {
-    kind: 'code',
-    source: "the caller's own version of its prompt, a number it keeps; never prompt text",
-  },
+  // The prompt row's version (prompts.prompt_version), a whole number.
+  [ATTR.promptVersion]: int,
   [ATTR.usageInputTokens]: int,
   [ATTR.usageOutputTokens]: int,
   [ATTR.usageCacheReadInputTokens]: int,

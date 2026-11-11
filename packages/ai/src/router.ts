@@ -62,7 +62,7 @@ interface CallInfo {
   stream: boolean;
   outputType: 'json' | 'text';
   promptId?: string | undefined;
-  promptVersion?: string | undefined;
+  promptVersion?: number | undefined;
   conversationId?: string | undefined;
 }
 
@@ -228,7 +228,7 @@ export async function runStructured<T>(
     schema: z.ZodType<T>;
     promptId?: string;
     /** The version of the prompt, for the span, when the caller has one. */
-    promptVersion?: string;
+    promptVersion?: number;
   },
 ): Promise<T> {
   const { run, model, policy, apiKey } = await prepare(deps, task, {
@@ -303,7 +303,7 @@ export async function streamChat(
     system: string;
     messages: CoreMessage[];
     promptId?: string;
-    promptVersion?: string;
+    promptVersion?: number;
     /** The tailoring session id, for the span. Never made up here. */
     conversationId?: string;
   },
