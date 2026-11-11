@@ -1,0 +1,351 @@
+// The export manager (design.md 14.3, 14.8, 14.10; https://github.com/bgoleno/opportun/issues/342).
+// It builds one exporter per signal the destination's type sends, attaches them to the slots in
+// obs/index.ts while Collect and Export are both on, and sends every batch through the one
+// allowlist, the destination check and the pinned sender. Checked here against local listeners:
+// the shared-helper criterion over all three signals, each type's endpoint and credential header,
+// the switches, drop forwarding, OTEL_* variables having no effect, and a refused destination
+// sending nothing.
+import { spawn } from 'node:child_process';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { fileURLToPath } from 'node:url';
+import { afterEach, describe, expect, it } from 'vitest';
+import { encryptSecret } from '../src/lib/secretBox';
+import {
+  attachedExporters,
+  flushNow,
+  obs,
+  setCollecting,
+  type GatedLogRecord,
+  type GatedSpan,
+} from '../src/obs';
+import type { Destination } from '../src/obs/export/destination';
+import {
+  applyExport,
+  buildExporters,
+  exportStatus,
+  flushExport,
+  stopExport,
+} from '../src/obs/export/manager';
+import { writeExport } from '../src/obs/export/settings';
+import { useApi } from './api';
+
+const boot = useApi();
+
+interface Captured {
+  method: string;
+  url: string;
+  headers: IncomingMessage['headers'];
+  body: Buffer;
+}
+
+const servers: Server[] = [];
+afterEach(async () => {
+  await stopExport();
+  await setCollecting(false);
+  await Promise.all(servers.splice(0).map((s) => new Promise<void>((r) => s.close(() => r()))));
+});
+
+async function receiver(status = 200): Promise<{ port: number; got: Captured[] }> {
+  const got: Captured[] = [];
+  const s = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      got.push({
+        method: req.method ?? '',
+        url: req.url ?? '',
+        headers: req.headers,
+        body: Buffer.concat(chunks),
+      });
+      res.writeHead(status).end();
+    });
+  });
+  servers.push(s);
+  await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
+  return { port: (s.address() as AddressInfo).port, got };
+}
+
+const USER = '01a1c881-cef3-7b31-86a2-501450372158';
+const LEAK = { 'secret.key': 'leak-value-9f2' };
+const opts = { allowPrivate: true, metricIntervalMs: 60_000, batchIntervalMs: 60_000 };
+
+const span: GatedSpan = {
+  traceId: '0af7651916cd43dd8448eb211c80319c',
+  spanId: 'b7ad6b7169203331',
+  parentSpanId: null,
+  name: 'GET',
+  kind: 'client',
+  startMs: Date.now(),
+  durationMs: 3,
+  status: 'ok',
+  attributes: { 'http.request.method': 'GET', ...LEAK } as GatedSpan['attributes'],
+};
+const logRecord: GatedLogRecord = {
+  event: 'error',
+  timeMs: Date.now(),
+  traceId: span.traceId,
+  fields: { 'error.type': 'TypeError', 'user.id': USER, ...LEAK } as GatedLogRecord['fields'],
+};
+
+function otlp(port: number, over: Partial<Destination> = {}): Destination {
+  return { type: 'otlp', scheme: 'http', host: '127.0.0.1', port, ...over };
+}
+
+describe('the shared export helper criterion (#342)', () => {
+  it('a metric, a span and a log record, each with a key the catalog does not list: removed from all three', async () => {
+    await boot();
+    const { port, got } = await receiver();
+    const ex = await buildExporters(otlp(port), undefined, opts);
+    ex.sinks.metrics?.record('http.server.request.duration', 0.1, {
+      'http.route': '/api/v1/x',
+      ...LEAK,
+    } as never);
+    ex.sinks.spans?.export(span);
+    ex.sinks.logs?.emit(logRecord);
+    await ex.flush();
+    await ex.shutdown();
+    const byPath = new Map(got.map((g) => [g.url, g.body.toString('latin1')]));
+    expect([...byPath.keys()].sort()).toEqual(['/v1/logs', '/v1/metrics', '/v1/traces']);
+    expect(byPath.get('/v1/metrics')).toContain('http.route');
+    expect(byPath.get('/v1/traces')).toContain('http.request.method');
+    expect(byPath.get('/v1/logs')).toContain('error.type');
+    for (const [path, body] of byPath) {
+      expect(body, path).not.toContain('secret.key');
+      expect(body, path).not.toContain('leak-value-9f2');
+      // Export identifies no user (14.8).
+      expect(body, path).not.toContain(USER);
+      expect(body, path).not.toContain('user.id');
+    }
+  });
+});
+
+describe('each type: its endpoints and its credential header (14.10)', () => {
+  it('OTLP: protobuf to /v1/* under the base path, the credential in the header it names', async () => {
+    await boot();
+    const { port, got } = await receiver();
+    const ex = await buildExporters(
+      otlp(port, { basePath: '/otlp', headerName: 'X-Api-Key' }),
+      'k1',
+      opts,
+    );
+    ex.sinks.spans?.export(span);
+    await ex.flush();
+    await ex.shutdown();
+    expect(got.map((g) => g.url)).toEqual(['/otlp/v1/traces']);
+    expect(got[0]?.headers['x-api-key']).toBe('k1');
+    expect(got[0]?.headers['content-type']).toBe('application/x-protobuf');
+    expect(got[0]?.headers.authorization).toBeUndefined();
+  });
+
+  it("Datadog: the Agent's three OTLP paths, no credential", async () => {
+    await boot();
+    const { port, got } = await receiver();
+    const ex = await buildExporters({ ...otlp(port), type: 'datadog' }, undefined, opts);
+    expect(Object.keys(ex.sinks).sort()).toEqual(['logs', 'metrics', 'spans']);
+    ex.sinks.logs?.emit(logRecord);
+    await ex.flush();
+    await ex.shutdown();
+    expect(got.map((g) => g.url)).toEqual(['/v1/logs']);
+  });
+
+  it('Prometheus: metrics only, to its OTLP receiver, the credential as the Authorization value', async () => {
+    await boot();
+    const { port, got } = await receiver();
+    const ex = await buildExporters({ ...otlp(port), type: 'prometheus' }, 'Bearer p1', opts);
+    expect(Object.keys(ex.sinks)).toEqual(['metrics']);
+    ex.sinks.metrics?.record('opportun.obs.dropped', 1, {
+      'opportun.obs.signal': 'spans',
+      'opportun.obs.reason': 'buffer_full',
+    });
+    await ex.flush();
+    await ex.shutdown();
+    expect(got.map((g) => g.url)).toEqual(['/api/v1/otlp/v1/metrics']);
+    expect(got[0]?.headers.authorization).toBe('Bearer p1');
+  });
+
+  it('InfluxDB: line protocol to /api/v2/write, the token as Token', async () => {
+    await boot();
+    const { port, got } = await receiver(204);
+    const ex = await buildExporters(
+      { ...otlp(port), type: 'influxdb', org: 'home', bucket: 'opportun' },
+      'tok',
+      opts,
+    );
+    expect(Object.keys(ex.sinks)).toEqual(['metrics']);
+    ex.sinks.metrics?.record('http.server.request.duration', 0.2, { 'http.route': '/x' });
+    await ex.flush();
+    await ex.shutdown();
+    expect(got.map((g) => g.url)).toEqual(['/api/v2/write?org=home&bucket=opportun&precision=ms']);
+    expect(got[0]?.headers.authorization).toBe('Token tok');
+    expect(got[0]?.headers['content-type']).toBe('text/plain; charset=utf-8');
+    expect(got[0]?.body.toString()).toMatch(
+      /^http\.server\.request\.duration,http\.route=\/x count=1i,/,
+    );
+  });
+});
+
+describe('the destination is checked before every batch (14.10 rules 2 to 4)', () => {
+  it('a private destination without OPPORTUN_TELEMETRY_ALLOW_PRIVATE sends nothing, and says blocked', async () => {
+    await boot();
+    const { port, got } = await receiver();
+    const ex = await buildExporters(otlp(port), undefined, { ...opts, allowPrivate: false });
+    ex.sinks.spans?.export(span);
+    await ex.flush();
+    await ex.shutdown();
+    expect(got).toEqual([]);
+    expect(exportStatus().lastFailure?.outcome).toBe('blocked');
+  });
+
+  it('a refusal by the destination is reported as its class, and a success clears nothing else', async () => {
+    await boot();
+    const failing = await receiver(503);
+    const ex = await buildExporters(otlp(failing.port), undefined, opts);
+    ex.sinks.spans?.export(span);
+    await ex.flush();
+    await ex.shutdown();
+    expect(exportStatus().lastFailure?.outcome).toBe('http_5xx');
+    const ok = await receiver();
+    const ex2 = await buildExporters(otlp(ok.port), undefined, opts);
+    ex2.sinks.spans?.export(span);
+    await ex2.flush();
+    await ex2.shutdown();
+    expect(exportStatus().lastSuccessAt).toBeGreaterThan(0);
+    expect(exportStatus().lastFailure?.outcome).toBe('http_5xx');
+  });
+});
+
+const CHILD = fileURLToPath(new URL('./fixtures/exportEnvChild.ts', import.meta.url));
+
+function runChild(
+  port: number,
+  env: Record<string, string>,
+): Promise<{ code: number | null; out: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ['--import', 'tsx', CHILD, String(port)], {
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    child.stdout.setEncoding('utf8').on('data', (c: string) => (out += c));
+    child.stderr.resume();
+    child.once('close', (code) => resolve({ code, out }));
+  });
+}
+
+describe('no OTEL_* variable changes anything (14.8)', () => {
+  const VARS = {
+    OTEL_EXPORTER_OTLP_ENDPOINT: '',
+    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: '',
+    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: '',
+    OTEL_EXPORTER_OTLP_HEADERS: 'x-leak=env-header',
+    OTEL_EXPORTER_OTLP_TRACES_HEADERS: 'x-leak2=env-header',
+    OTEL_SERVICE_NAME: 'env-service-name',
+    OTEL_RESOURCE_ATTRIBUTES: 'host.name=env-host,deployment.environment=env-deploy',
+    OTEL_METRIC_EXPORT_INTERVAL: '1',
+    OTEL_BSP_SCHEDULE_DELAY: '1',
+    OTEL_TRACES_SAMPLER: 'always_off',
+    OTEL_SDK_DISABLED: 'true',
+    OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT: '1',
+  };
+
+  it('a captured batch goes to the configured address with only the configured header', async () => {
+    await boot();
+    const wrong = await receiver();
+    const { port, got } = await receiver();
+    const set = { ...VARS };
+    set.OTEL_EXPORTER_OTLP_ENDPOINT = `http://127.0.0.1:${wrong.port}`;
+    set.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `http://127.0.0.1:${wrong.port}/v1/traces`;
+    set.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = `http://127.0.0.1:${wrong.port}/v1/metrics`;
+    // In a child process with the variables in its own environment: set before any
+    // OpenTelemetry package loads, and never in this runner's process.env (issue #292).
+    const { code, out } = await runChild(port, set);
+    expect({ code, out }).toEqual({ code: 0, out: 'done env-service-name\n' });
+    expect(wrong.got).toEqual([]);
+    expect(got.map((g) => g.url).sort()).toEqual(['/v1/metrics', '/v1/traces']);
+    for (const g of got) {
+      expect(Object.keys(g.headers).sort()).toEqual([
+        'accept-encoding',
+        'connection',
+        'content-length',
+        'content-type',
+        'host',
+        'user-agent',
+        'x-api-key',
+      ]);
+      const body = g.body.toString('latin1');
+      expect(body).not.toContain('env-');
+      expect(body).not.toContain('host.name');
+      expect(body).toContain('service.instance.id');
+    }
+    // The span was exported whole: no limit or sampler from the environment applied.
+    expect(got.find((g) => g.url === '/v1/traces')?.body.toString('latin1')).toContain(
+      'http.request.method',
+    );
+  });
+});
+
+describe('applyExport: the switches (14.1, 14.10)', () => {
+  async function stored(app: Awaited<ReturnType<typeof boot>>['app'], d: Destination) {
+    await writeExport(app.db, { enabled: true, destination: d, sealedCredential: null });
+  }
+  const deployment = { demo: false, telemetryAllowPrivate: true };
+
+  it('on while Collect and Export are both on: the type’s signals attached; else none', async () => {
+    const { app } = await boot();
+    const { port } = await receiver();
+    await stored(app, otlp(port));
+    await applyExport(app.db, deployment, opts);
+    expect(attachedExporters()).toEqual([]); // Collect is off
+    await setCollecting(true);
+    await applyExport(app.db, deployment, opts);
+    expect(attachedExporters()).toEqual(['metrics', 'spans', 'logs']);
+    // Another type rebuilds it without a restart.
+    await stored(app, { ...otlp(port), type: 'prometheus' });
+    await applyExport(app.db, deployment, opts);
+    expect(attachedExporters()).toEqual(['metrics']);
+    // Turned off: detached.
+    await writeExport(app.db, { enabled: false, destination: otlp(port), sealedCredential: null });
+    await applyExport(app.db, deployment, opts);
+    expect(attachedExporters()).toEqual([]);
+  });
+
+  it('never on the demo deployment (rule 6)', async () => {
+    const { app } = await boot();
+    const { port } = await receiver();
+    await stored(app, otlp(port));
+    await setCollecting(true);
+    await applyExport(app.db, { ...deployment, demo: true }, opts);
+    expect(attachedExporters()).toEqual([]);
+  });
+
+  it('the stored credential is unsealed for the header', async () => {
+    const { app } = await boot();
+    const { port, got } = await receiver();
+    await writeExport(app.db, {
+      enabled: true,
+      destination: otlp(port, { headerName: 'x-api-key' }),
+      sealedCredential: encryptSecret(app.db, 'stored-k'),
+    });
+    await setCollecting(true);
+    await applyExport(app.db, deployment, opts);
+    obs.record('http.server.request.duration', 0.1, { 'http.route': '/x' });
+    await flushExport();
+    expect(got[0]?.headers['x-api-key']).toBe('stored-k');
+  });
+
+  it('drop counts reach the exporter: opportun.obs.dropped is exported (tl on #359)', async () => {
+    const { app } = await boot();
+    const { port, got } = await receiver();
+    await stored(app, otlp(port));
+    await setCollecting(true);
+    await applyExport(app.db, deployment, opts);
+    // A non-finite value is dropped and counted by obs.record itself, before any sink.
+    obs.record('http.server.request.duration', Number.NaN, { 'http.route': '/x' });
+    await flushNow();
+    await flushExport();
+    const metrics = got.find((g) => g.url === '/v1/metrics')?.body.toString('latin1') ?? '';
+    expect(metrics).toContain('opportun.obs.dropped');
+    expect(metrics).toContain('invalid_value');
+  });
+});
