@@ -104,8 +104,8 @@ describe('Country, School and Degree are not planned yet (#435)', () => {
     expect(names).toEqual(['Location (city)', 'How did you hear about this role?']);
     // Whole values, as the city itself ends in "United States".
     const values = plan.questions.map((q) => q.value);
-    for (const key of ['country', 'school', 'degree'] as const) {
-      expect(values).not.toContain(DETAILS[key]);
+    for (const value of [DETAILS.country, DETAILS.school, DETAILS.degree]) {
+      expect(values).not.toContain(value);
     }
   });
 
