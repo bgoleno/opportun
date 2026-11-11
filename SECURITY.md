@@ -118,9 +118,9 @@ since it was not a deliberate choice.)
 - **One Content Security Policy loosening.** The policy is `default-src 'self'` plus
   `img-src 'self' data:`, the latter only so the TOTP enrollment QR code renders.
 - **HTTP MCP sources, the AI provider path, and DNS rebinding.** An MCP source reached
-  over https (`apps/server/src/lib/mcpClient.ts`'s `checkMcpUrl`), and an
-  `openai_compatible` AI provider policy's `baseUrl` reached over https
-  (`apps/server/src/lib/aiProviderFetch.ts`'s `checkProviderUrl`), each check the same
+  over https (`apps/server/src/lib/mcpClient.ts`'s `checkMcpUrl`), and every AI provider
+  request reached over https, an `openai_compatible` policy's `baseUrl` as well as Anthropic
+  and OpenAI (`apps/server/src/lib/aiProviderFetch.ts`'s `checkProviderUrl`), each check the same
   two things before fetching: the host is not on the C-1 prohibited list (`isProhibitedHost`,
   which is what keeps the LinkedIn carve-out above intact on both paths), and every
   address its hostname resolves to is public (`isPrivateAddress`). Neither check is
@@ -139,6 +139,14 @@ since it was not a deliberate choice.)
   `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP=1`. That allowance matches one of those three literal
   strings an operator typed themselves, never a resolved address, so it carries none of
   the DNS-rebinding exposure described above.
+- **The operator's own AI provider base URL.** The origin of `ANTHROPIC_BASE_URL` or
+  `OPENAI_BASE_URL`, when the operator sets one, skips the https and public-address checks of
+  the AI provider path, so a proxy on the compose network or a private gateway keeps working
+  (https://github.com/bgoleno/opportun/issues/344, decision 40). Both are environment
+  variables of the server process, which no user can set, and the SDKs send every Anthropic or
+  OpenAI call there anyway. A URL with credentials in it is still refused, and redirects are
+  still not followed. Any other origin, a user's own `openai_compatible` `baseUrl` among them,
+  is checked as before.
 - **Postgres TLS is encrypted but not verified by default.** For a Postgres host that is not
   loopback, `DB_SSL` defaults to `require`: the connection is encrypted, but the server
   certificate chain and hostname are not checked. An attacker positioned on the network
