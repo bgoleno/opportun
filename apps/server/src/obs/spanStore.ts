@@ -19,7 +19,7 @@
 import { ATTR, userInContext } from '@opportun/ai';
 import { trace, type Context } from '@opentelemetry/api';
 import type { ReadableSpan, Span, SpanProcessor } from '@opentelemetry/sdk-trace';
-import { inArray } from 'drizzle-orm';
+import { getTableColumns, inArray, sql, type SQL } from 'drizzle-orm';
 import { withTransaction, type Db, type Exec } from '../db/client';
 import { obsSpans, obsTraces, users } from '../db/schema';
 import { OTHER } from './catalog';
@@ -51,7 +51,8 @@ interface Kept {
   root: boolean;
 }
 
-interface Pending {
+/** A kept span waiting for the next flush (exported for the flush's row tests). */
+export interface Pending {
   span: GatedSpan;
   userId: string;
   traceUserId: string;
@@ -185,14 +186,50 @@ export class SpanStore {
     if (db === undefined || this.buffer.length === 0) return;
     const batch = this.buffer;
     this.buffer = [];
+    // Stops between chunks if collection was turned off meanwhile: nothing may be written then.
+    await flushBatch(db, batch, this.now(), { stillBound: () => this.db === db });
+  }
+}
+
+/**
+ * Spans per flush transaction (https://github.com/bgoleno/opportun/issues/375). On SQLite a
+ * transaction is synchronous on the event loop, so a chunk is sized to stay well under 10 ms
+ * there (measured in obsFlushBench.test.ts and stated in its PR); Postgres is asynchronous.
+ */
+export const SPAN_FLUSH_CHUNK = 25;
+
+const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+/**
+ * Writes a batch of kept spans in chunks, one transaction each, with a yield to the event loop
+ * between chunks, so no single stretch of a flush blocks a request for long (#375). Flushes run
+ * one after another (SpanStore.flush), so a later chunk reads what an earlier one wrote: a trace
+ * may span two chunks, and its row adds up the same. A failed chunk's spans are dropped and
+ * counted (nothing is retried into a backlog, 14.11); the rest are still written, and the first
+ * failure is thrown at the end.
+ */
+export async function flushBatch(
+  db: Db,
+  batch: Pending[],
+  now: number,
+  opts: { chunkSize?: number; stillBound?: () => boolean } = {},
+): Promise<void> {
+  const size = opts.chunkSize ?? SPAN_FLUSH_CHUNK;
+  let failure: unknown;
+  for (let i = 0; i < batch.length; i += size) {
+    if (i > 0) {
+      await yieldToEventLoop();
+      if (opts.stillBound?.() === false) break;
+    }
+    const chunk = batch.slice(i, i + size);
     try {
-      await runSuppressed(() => withTransaction(db, (tx) => writeBatch(tx, batch, this.now())));
+      await runSuppressed(() => withTransaction(db, (tx) => writeBatch(tx, chunk, now)));
     } catch (err) {
-      // A failed transaction loses its batch (nothing is retried into a backlog, 14.11): counted.
-      for (let i = 0; i < batch.length; i++) countSpanDrop('buffer_full');
-      throw err;
+      for (let j = 0; j < chunk.length; j++) countSpanDrop('buffer_full');
+      failure ??= err;
     }
   }
+  if (failure !== undefined) throw failure;
 }
 
 type TraceRow = typeof obsTraces.$inferInsert;
@@ -226,7 +263,7 @@ function addSpan(row: TraceRow, p: Pending): void {
   if (row.origin === OTHER && p.origin !== undefined) row.origin = p.origin;
 }
 
-async function writeBatch(tx: Exec, batch: Pending[], now: number): Promise<void> {
+export async function writeBatch(tx: Exec, batch: Pending[], now: number): Promise<void> {
   // A user deleted since their span started takes its spans along (the rows cascade with it).
   const userIds = [...new Set(batch.flatMap((p) => [p.userId, p.traceUserId]))];
   const known = new Set(
@@ -252,6 +289,8 @@ async function writeBatch(tx: Exec, batch: Pending[], now: number): Promise<void
     ).map((r) => [r.traceId, r]),
   );
 
+  const traceRows: TraceRow[] = [];
+  const spanRows: (typeof obsSpans.$inferInsert)[] = [];
   for (const [traceId, pending] of byTrace) {
     const prior = stored.get(traceId);
     const first = pending[0]!;
@@ -295,37 +334,47 @@ async function writeBatch(tx: Exec, batch: Pending[], now: number): Promise<void
       for (let i = taken.length; i < own.length; i++) countSpanDrop('buffer_full');
     }
     for (const p of taken) addSpan(row, p);
-    // Everything but the key: an upsert's set may not change the row's own id.
-    const figures: Partial<TraceRow> = { ...row };
-    delete figures.traceId;
-    await tx
-      .insert(obsTraces)
-      .values(row)
-      .onConflictDoUpdate({ target: obsTraces.traceId, set: figures })
-      .run();
+    traceRows.push(row);
     for (const p of taken) {
       const a = p.span.attributes as Record<string, unknown>;
       const inference = a[ATTR.operationName] === 'chat';
-      await tx
-        .insert(obsSpans)
-        .values({
-          traceId,
-          spanId: p.span.spanId,
-          parentSpanId: p.span.parentSpanId,
-          userId: p.userId,
-          name: p.span.name,
-          kind: p.span.kind as (typeof obsSpans.$inferInsert)['kind'],
-          startedAt: Math.round(p.span.startMs),
-          durationMs: p.span.durationMs,
-          status: p.span.status,
-          errorType: str(a['error.type']) ?? null,
-          attributes: a,
-          task: inference ? (str(a[ATTR.aiTask]) ?? null) : null,
-          model: inference ? (str(a[ATTR.requestModel]) ?? null) : null,
-          provider: inference ? (str(a[ATTR.aiProvider]) ?? null) : null,
-        })
-        .onConflictDoNothing()
-        .run();
+      spanRows.push({
+        traceId,
+        spanId: p.span.spanId,
+        parentSpanId: p.span.parentSpanId,
+        userId: p.userId,
+        name: p.span.name,
+        kind: p.span.kind as (typeof obsSpans.$inferInsert)['kind'],
+        startedAt: Math.round(p.span.startMs),
+        durationMs: p.span.durationMs,
+        status: p.span.status,
+        errorType: str(a['error.type']) ?? null,
+        attributes: a,
+        task: inference ? (str(a[ATTR.aiTask]) ?? null) : null,
+        model: inference ? (str(a[ATTR.requestModel]) ?? null) : null,
+        provider: inference ? (str(a[ATTR.aiProvider]) ?? null) : null,
+      });
     }
   }
+  // One statement each for the chunk's traces and spans, not one per row (#375): traces first,
+  // since a span refers to its trace. A trace row is replaced whole by the one computed above,
+  // which already added the stored figures to the new ones.
+  if (traceRows.length > 0) {
+    await tx
+      .insert(obsTraces)
+      .values(traceRows)
+      .onConflictDoUpdate({ target: obsTraces.traceId, set: TRACE_UPDATE })
+      .run();
+  }
+  if (spanRows.length > 0) await tx.insert(obsSpans).values(spanRows).onConflictDoNothing().run();
 }
+
+/**
+ * The trace upsert's set: every column but the key, from the row being inserted (`excluded`, in
+ * both SQLite and Postgres), so one multi-row upsert sets each row to its own new figures.
+ */
+const TRACE_UPDATE = Object.fromEntries(
+  Object.entries(getTableColumns(obsTraces))
+    .filter(([key]) => key !== 'traceId')
+    .map(([key, column]) => [key, sql`excluded.${sql.identifier(column.name)}`]),
+) as Partial<Record<keyof TraceRow, SQL>>;
