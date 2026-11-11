@@ -122,40 +122,70 @@ function headerMatches(header: string, message: string): boolean {
   return !name.includes(': ') && !name.includes('\n');
 }
 
-/**
- * The messages a stack's header may have been written with, longest first. The first is the
- * message as pino gives it. When the error has a cause, pino joins the cause's message onto the
- * error's own (`outer: inner`, pino-std-serializers' messageWithCauses) and appends the cause's
- * stack as a `caused by: <name>: <message>` line, while the stack's header holds the error's own
- * message only (tl on #389). So a shorter prefix is tried only at a `: ` where the rest of the
- * message begins with the first cause's message, as that line gives it, and never when the stack
- * has no such line: an error with no cause and a `: ` in its message is not cut, or a message
- * reassigned after its stack was read could match a prefix and have old lines read (sec on #389).
- */
-function headerMessages(message: string, lines: readonly string[]): string[] {
-  const out = [message];
-  const causedBy = lines.find((l) => l.startsWith(CAUSED_BY));
-  if (causedBy === undefined) return out;
-  const cause = causedBy.slice(CAUSED_BY.length);
-  const named = cause.indexOf(': ');
-  const causeMessage = named < 0 ? '' : cause.slice(named + 2);
-  if (causeMessage === '') return out;
-  for (let at = message.lastIndexOf(': '); at > 0; at = message.lastIndexOf(': ', at - 1)) {
-    if (message.slice(at + 2).startsWith(causeMessage)) out.push(message.slice(0, at));
-  }
-  return out;
-}
-
 /** The line pino's error serializer puts before a cause's stack (stackWithCauses). */
 const CAUSED_BY = 'caused by: ';
 
-/** How many lines the stack's header has, for the first of headerMessages it matches. */
+/**
+ * How many lines the stack's header has, or undefined when no reading of the message fits it.
+ *
+ * First the message as pino gives it. When the error has a cause, pino joins the cause's message
+ * onto the error's own (`outer: inner`, pino-std-serializers' messageWithCauses) and appends the
+ * cause's stack as a `caused by: <name>: <message>` line after the error's own frames, while the
+ * stack's header holds the error's own message only (tl on #389). So the message is then cut at
+ * a `: `, longest first, but only where that cut's header is followed by a run of frames and
+ * then a `caused by:` line whose message is what follows the cut (sec on #389, #399): never for
+ * an error with no cause, so a message reassigned after its stack was read is not cut to fit; and
+ * never at a `caused by:`-shaped line inside the error's own message, which comes before its
+ * frames. A cause with no message (`caused by: Error`) fits only a cut at the very end
+ * (`outer: `), and an error with no message of its own is the cut at the start (`: inner`).
+ */
 function headerLength(lines: readonly string[], message: string): number | undefined {
-  for (const candidate of headerMessages(message, lines)) {
-    const length = candidate.split('\n').length;
-    if (headerMatches(lines.slice(0, length).join('\n'), candidate)) return length;
+  const whole = message.split('\n').length;
+  if (headerMatches(lines.slice(0, whole).join('\n'), message)) return whole;
+  for (let at = message.lastIndexOf(': '); at >= 0; at = message.lastIndexOf(': ', at - 1)) {
+    const own = message.slice(0, at);
+    const length = own.split('\n').length;
+    if (headerMatches(lines.slice(0, length).join('\n'), own)) {
+      const cause = causeAfterFrames(lines, length);
+      const rest = message.slice(at + 2);
+      if (cause !== undefined && (cause === '' ? rest === '' : rest.startsWith(cause))) {
+        return length;
+      }
+    }
+    if (at === 0) break;
   }
   return undefined;
+}
+
+/**
+ * The message of the `caused by:` line that ends the run of frames starting at line `from`, as
+ * pino writes it ('' for a cause with no message), or undefined when that run is followed by
+ * anything else. (A run of no frames needs no rule of its own: a cut whose header is followed
+ * straight by a `caused by:` line gives no frames either way.)
+ */
+function causeAfterFrames(lines: readonly string[], from: number): string | undefined {
+  let i = from;
+  while (i < lines.length) {
+    const line = (lines[i] ?? '').trim();
+    if (parseFrame(line) === undefined && !isLocationless(line)) break;
+    i++;
+  }
+  const next = lines[i];
+  if (next === undefined || !next.startsWith(CAUSED_BY)) return undefined;
+  const cause = next.slice(CAUSED_BY.length);
+  const named = cause.indexOf(': ');
+  return named < 0 ? '' : cause.slice(named + 2);
+}
+
+/**
+ * Whether a frame's file is the app's own code: under the install root, and not under any
+ * `node_modules` folder there. A dependency installed under the root (where it lives in the
+ * image and in a checkout) is not the app's, so its frames are EXTERNAL_FRAME and cannot fill
+ * the cap before the app's own frames appear (#399).
+ */
+function isAppFile(path: string): boolean {
+  if (!path.startsWith(INSTALL_ROOT + sep)) return false;
+  return !relative(INSTALL_ROOT, path).split(sep).includes('node_modules');
 }
 
 /**
@@ -181,11 +211,11 @@ function isLocationless(line: string): boolean {
  * message lines as frames (#381). Only the frames right after the header are taken, so a cause's
  * text appended below them (`caused by: ...`) is not read either.
  *
- * A frame inside the install root keeps its function name and relative path. A frame outside it
- * keeps neither, not even its name: one message case the header check cannot see (a message cut
- * to its own first lines after the stack was read) still leaves its old lines to parse as frames,
- * and their paths are not ours. Each run of such frames is one EXTERNAL_FRAME, so a dependency's
- * or Node's frames never fill the cap.
+ * A frame in the app's own code (isAppFile) keeps its function name and relative path. Any other
+ * frame keeps neither, not even its name: one message case the header check cannot see (a
+ * message cut to its own first lines after the stack was read) still leaves its old lines to
+ * parse as frames, and their paths are not ours. Each run of such frames is one EXTERNAL_FRAME,
+ * so a dependency's or Node's frames never fill the cap.
  */
 export function frameLines(stack: unknown, message?: unknown): string[] {
   if (typeof stack !== 'string') return [];
@@ -201,7 +231,7 @@ export function frameLines(stack: unknown, message?: unknown): string[] {
       continue;
     }
     if (frame === undefined) break;
-    if (!frame.path.startsWith(INSTALL_ROOT + sep)) {
+    if (!isAppFile(frame.path)) {
       if (out.at(-1) !== EXTERNAL_FRAME) out.push(EXTERNAL_FRAME);
     } else {
       const name = frame.fn === undefined ? undefined : functionName(frame.fn);

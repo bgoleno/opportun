@@ -3,6 +3,7 @@
 // any other message becomes a fixed marker with no keys, an error keeps its type and frame lines,
 // and pino's pid and hostname are never written. Driven through a real pino logger, so what the
 // gate sees is what pino writes: a child's bindings, the error serializer's output, the message.
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { withTransaction } from '../src/db/client';
 import {
@@ -379,6 +380,74 @@ describe('a stack whose header no longer matches its message (#381, sec)', () =>
       'x',
     );
     expect(lines).toEqual(['at <external>', 'at ours (apps/server/src/a.ts:1:2)']);
+  });
+});
+
+describe("a dependency's frames under the install root are not the app's (#399)", () => {
+  const root = join(process.cwd(), '..', '..');
+  const dep = (i: number) =>
+    `    at Dep${i}.call (${root}/node_modules/.pnpm/fastify@5.0.0/node_modules/fastify/lib/x.js:${i + 1}:1)`;
+
+  it('25 dependency frames before an app frame: one placeholder, then the app frame', () => {
+    const stack = [
+      'Error: x',
+      ...Array.from({ length: 25 }, (_, i) => dep(i)),
+      `    at ours (${process.cwd()}/src/a.ts:1:2)`,
+    ].join('\n');
+    expect(frameLines(stack, 'x')).toEqual(['at <external>', 'at ours (apps/server/src/a.ts:1:2)']);
+  });
+
+  it("a dependency inside the app's own folder too, and the app's frames are unchanged", () => {
+    const stack = [
+      'Error: x',
+      `    at first (${process.cwd()}/src/a.ts:1:2)`,
+      `    at Lib.run (${process.cwd()}/node_modules/dep/index.js:3:4)`,
+      dep(1),
+      `    at second (${process.cwd()}/src/b.ts:5:6)`,
+    ].join('\n');
+    expect(frameLines(stack, 'x')).toEqual([
+      'at first (apps/server/src/a.ts:1:2)',
+      'at <external>',
+      'at second (apps/server/src/b.ts:5:6)',
+    ]);
+  });
+});
+
+describe('a cause, taken from where pino puts it (#399, sec on #389)', () => {
+  const logged = (err: Error) => {
+    const c = capture();
+    c.log.error({ err }, 'unhandled error');
+    return c.records()[0]!;
+  };
+  const ours = (r: Record<string, unknown>) =>
+    (r.stack as string[] | undefined)?.some((f) => f.includes('obsLog.test.ts')) === true;
+
+  it('a cause with no message: pino writes "outer: " and "caused by: Error", frames kept', () => {
+    expect(ours(logged(new Error('outer', { cause: new Error('') })))).toBe(true);
+  });
+
+  it('an error with no message of its own and a cause: frames kept', () => {
+    expect(ours(logged(new Error('', { cause: new Error('inner') })))).toBe(true);
+  });
+
+  it('a cause with no message fits only the cut at the very end of the message', () => {
+    // pino would give `x: ` for this error; `x: y` is a message reassigned after the stack was
+    // read, and the empty cause cannot account for its `y`.
+    const stack = [
+      'Error: x',
+      `    at Jane (${process.cwd()}/src/a.ts:1:2)`,
+      'caused by: Error',
+      `    at inner (${process.cwd()}/src/b.ts:3:4)`,
+    ].join('\n');
+    expect(frameLines(stack, 'x: y')).toEqual([]);
+    expect(frameLines(stack, 'x: ')).toEqual(['at Jane (apps/server/src/a.ts:1:2)']);
+  });
+
+  it("a caused-by line in the error's own message is not taken for the cause's", () => {
+    // Its own message has a line shaped like pino's; the real cause's line comes after the
+    // frames, and it is that one the cut is tied to.
+    const err = new Error('x\ncaused by: Error: z', { cause: new Error('y') });
+    expect(ours(logged(err))).toBe(true);
   });
 });
 
