@@ -20,11 +20,17 @@ export const APPLICATION_DETAIL_FIELDS = [
   { key: 'fullName', label: 'Full name', home: 'fullName' },
   { key: 'email', label: 'Email', home: 'email' },
   { key: 'phone', label: 'Phone', home: 'phone' },
-  { key: 'location', label: 'Location', home: 'location' },
+  // #435 (slice 1 of #402): country, school and degree are lists on most forms, and "how did you
+  // hear" a list or a text question. They are text here, written as the form's list shows them.
+  { key: 'country', label: 'Country', home: 'details' },
+  { key: 'location', label: 'Location (city)', home: 'location' },
   { key: 'workAuthorization', label: 'Work authorisation', home: 'workAuth' },
+  { key: 'school', label: 'School', home: 'details' },
+  { key: 'degree', label: 'Degree', home: 'details' },
   { key: 'linkedinUrl', label: 'LinkedIn profile', home: 'details' },
   { key: 'websiteUrl', label: 'Website', home: 'details' },
   { key: 'links', label: 'Links', home: 'details' },
+  { key: 'heardFrom', label: 'How did you hear about this role?', home: 'details' },
 ] as const;
 
 export type ApplicationDetailField = (typeof APPLICATION_DETAIL_FIELDS)[number];

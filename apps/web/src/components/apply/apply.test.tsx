@@ -2400,6 +2400,73 @@ describe('#401: the details step, filled from the profile, the account and the l
     });
   });
 
+  // tl's optional points on #430, folded into #435.
+  it('a tick left on a field changed back to the profile value is not sent', async () => {
+    const api = mockApi(withDetails(filled));
+    const { user, router } = renderStep('details');
+    const name = await screen.findByLabelText('Full name');
+    await screen.findByText('From your profile');
+    await user.clear(name);
+    await user.type(name, 'Jane Q. Doe');
+    await user.click(
+      within(fieldBox('Full name')).getByRole('checkbox', { name: 'Save to my profile' }),
+    );
+    // Back to what the profile holds: the tick goes with the marker, and nothing is saved.
+    await user.clear(name);
+    await user.type(name, 'Jane Doe');
+    expect(within(fieldBox('Full name')).queryByRole('checkbox')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'review' }));
+    for (const edit of calls(api.calls, 'PATCH', '/submissions/sub-1')) {
+      expect(edit.body).not.toHaveProperty('saveToProfile');
+    }
+  });
+
+  it('the not-filled notice skips a field since filled, and one the start-again notice names', async () => {
+    mockApi(
+      withDetails(submission({ fields: { fullName: 'Jane Doe' } }), {
+        'GET /profile/application-details': {
+          values: [PREFILL.values[0]],
+          leftOut: [
+            { key: 'phone', source: { kind: 'profile' } },
+            { key: 'linkedinUrl', source: { kind: 'profile' } },
+          ],
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ApplyPage opportunityId="opp-1" step="details" cleared={['linkedinUrl']} />,
+      { path: '/opportunities/opp-1/apply?step=details' },
+    );
+    const notice = await screen.findByRole('status', { name: /not filled in/i });
+    // LinkedIn is named by the start-again notice already: only Phone here.
+    expect(notice).toHaveTextContent('Phone (from your profile)');
+    expect(notice).not.toHaveTextContent('LinkedIn');
+    // Filled in now: the notice goes.
+    await user.type(screen.getByLabelText('Phone'), '+1 555 0100');
+    await waitFor(() =>
+      expect(screen.queryByRole('status', { name: /not filled in/i })).toBeNull(),
+    );
+  });
+
+  // #435 (slice 1 of #402): the new details, each with how to write it.
+  it('asks for country, city, school, degree and how you heard, each written as the list shows it', async () => {
+    mockApi(withDetails(filled));
+    renderStep('details');
+    const hints: [string, RegExp][] = [
+      ['Country', /as the form's list shows it, for example United States/],
+      ['Location (city)', /as the form's list shows it, for example Seattle, Washington/],
+      ['School', /as the form's list shows it, for example University of/],
+      ['Degree', /as the form's list shows it, for example Bachelor's Degree/],
+      ['How did you hear about this role?', /as the form's list shows it, for example LinkedIn/],
+    ];
+    for (const [label, hint] of hints) {
+      const input = await screen.findByLabelText(label);
+      expect(input).toHaveAccessibleDescription(hint);
+    }
+  });
+
   it('an empty profile and nothing held: empty inputs, no source lines, no ticks', async () => {
     mockApi(
       withDetails(submission({ fields: {} }), {

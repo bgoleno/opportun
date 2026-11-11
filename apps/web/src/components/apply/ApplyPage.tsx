@@ -581,6 +581,11 @@ function DetailsStep({
               const source = sourceOf(f.key);
               const diff = profileDiff(f.key);
               const sourceId = `field-${f.key}-source`;
+              const hintId = `field-${f.key}-hint`;
+              const describedBy = [
+                ...(f.hint === undefined ? [] : [hintId]),
+                ...(source === null ? [] : [sourceId]),
+              ].join(' ');
               return (
                 <div key={f.key} className="grid gap-1.5">
                   <Label id={`field-${f.key}-label`} htmlFor={`field-${f.key}`}>
@@ -592,9 +597,14 @@ function DetailsStep({
                     autoComplete={f.autoComplete}
                     value={fields[f.key] ?? ''}
                     disabled={!canEdit}
-                    aria-describedby={source === null ? undefined : sourceId}
+                    aria-describedby={describedBy === '' ? undefined : describedBy}
                     onChange={(e) => setFields((prev) => ({ ...prev, [f.key]: e.target.value }))}
                   />
+                  {f.hint === undefined ? null : (
+                    <p id={hintId} className="text-xs text-muted-foreground">
+                      {f.hint}
+                    </p>
+                  )}
                   {source === null ? null : (
                     <p id={sourceId} className="text-xs text-muted-foreground">
                       {source}
