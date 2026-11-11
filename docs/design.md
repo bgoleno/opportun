@@ -1140,9 +1140,19 @@ so a mistake in code fails CI instead of passing in silence.
   the user configured, a page they captured, and a tenant's own host such as a Workday board,
   whose name is the company's.
 - **Errors** carry `error.type`, never the message. The local log keeps a stack made of frame
-  lines only (`at ...`): a frame inside the install root keeps its path relative to it, a
-  frame outside loses its path, and every other line of a stack, where a message can quote
-  data, is dropped. The store and the export carry no stack.
+  lines only (`at ...`), and only when the stack's header is the one for the error's current
+  message: a message reassigned after its stack was formatted gives no frames, rather than a
+  miscount that would read message lines as frames
+  (https://github.com/bgoleno/opportun/issues/381). A frame inside the install root keeps its
+  function name and its path relative to the root. Each run of frames outside it is one fixed
+  `at <external>`, with no name and no path. Every other line of a stack, where a message can
+  quote data, is dropped. The store and the export carry no stack. The server's own crashes
+  and warnings take the same path: its process handlers log an uncaught exception or rejection
+  as one gated line, and a warning as its type and code only. **One known exception:** a
+  warning raised on tsx's loader thread (the image runs `node --import tsx`), seen on a start
+  with a cold cache, is printed by Node in full, because the handlers run on the main thread.
+  Only tsx's loader and code an operator adds with `--import` or `NODE_OPTIONS` run on that
+  thread, never the server's code or user data.
 - **Export identifies no user.** No row id that belongs to a user leaves the instance:
   `user.id`, `gen_ai.conversation.id`, `opportun.ai.prompt.id`, a company's id. Each would
   group the export by user. They stay in the local store and the local log, and the exporter
