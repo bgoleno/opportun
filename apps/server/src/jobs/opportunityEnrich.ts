@@ -48,6 +48,7 @@ import {
 import { TITLE_MATCH_THRESHOLD, titleOverlap } from './leadResolve';
 import { enqueue } from './runner';
 import { requireService, type JobContext, type JobHandler } from './registry';
+import { continuesTrace } from '../obs/workflow';
 
 export const OPPORTUNITY_ENRICH_KIND = 'opportunity.enrich';
 export const enrichDedupeKey = (opportunityId: string): string =>
@@ -811,6 +812,7 @@ export async function enqueueEnrich(db: Db, userId: string, opportunityId: strin
     db,
     OPPORTUNITY_ENRICH_KIND,
     { opportunityId },
-    { dedupeKey: enrichDedupeKey(opportunityId), userId },
+    // Continues the mail_sync trace when the classify job that queues it does (14.5).
+    { dedupeKey: enrichDedupeKey(opportunityId), userId, continueTrace: continuesTrace() },
   );
 }

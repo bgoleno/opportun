@@ -826,6 +826,26 @@ Why wrappers, and why boundaries:
   the enclosing route or job span does not, and costs the same. A step inside a workflow that
   is worth naming gets a span of its own through `obs.span()` (14.3).
 
+**The AI providers' fetch** (decision 40, https://github.com/bgoleno/opportun/issues/344). Every
+AI request, to Anthropic, OpenAI or an OpenAI-compatible endpoint, leaves through one fetch
+(`lib/aiProviderFetch.ts`), which is where it is observed and where it is checked: https only,
+no prohibited host, every address the host resolves to public, and `redirect: 'error'`. Before
+FR-T4 part 2 only an OpenAI-compatible endpoint went through it; Anthropic and OpenAI used the
+SDK's own global fetch. What this costs and what it changes:
+
+- **One DNS lookup per call** to `api.anthropic.com` or `api.openai.com`, before the request.
+- **A host that reaches the internet only through NAT64 cannot reach Anthropic or OpenAI.**
+  DNS64 answers in `64:ff9b::/96`, which `isPrivateAddress` refuses, as it already did for an
+  OpenAI-compatible endpoint. Such a host needs a proxy (next point) or IPv4.
+- **The operator's own `ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` keep working.** The server
+  reads them once and gives them to the SDKs itself (never letting an SDK read the environment
+  behind the fetch's back), for task calls and key checks alike. An operator who points one at
+  a proxy (a LiteLLM container on the compose network, a corporate gateway) chose it, as with
+  `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP`. A request to the origin of either skips the https and
+  public-address checks. It keeps the rest: credentials in the URL are refused, and redirects
+  are not followed. No user can set either variable, and any other origin, a user's own
+  OpenAI-compatible `baseUrl` among them, is checked as before.
+
 **The request's context in Fastify.** A hook cannot wrap the code that runs after it, and the
 async context set in `onRequest` is lost while the body is parsed. So the plugin starts the
 span in a callback-style `onRequest` hook and calls `done` inside the span's context, enters

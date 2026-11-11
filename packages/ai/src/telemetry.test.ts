@@ -244,7 +244,7 @@ describe('one structured call', () => {
     await runStructured(h.deps, 'resume.tailor', {
       ...call,
       promptId: 'prompt-row-1',
-      promptVersion: '3',
+      promptVersion: 3,
     });
 
     const span = only();
@@ -264,7 +264,7 @@ describe('one structured call', () => {
         : { 'gen_ai.request.temperature': policy.temperature }),
       'gen_ai.output.type': 'json',
       'gen_ai.prompt.name': 'resume.tailor',
-      'gen_ai.prompt.version': '3',
+      'gen_ai.prompt.version': 3,
       'opportun.ai.prompt.id': 'prompt-row-1',
       'gen_ai.usage.input_tokens': 100,
       'gen_ai.usage.output_tokens': 50,
@@ -276,6 +276,17 @@ describe('one structured call', () => {
       'opportun.gen_ai.usage.cost': estimateCostUsd(policy.provider, policy.model, 100, 50),
       'user.id': 'user-1',
     });
+  });
+
+  it('puts a prompt version on the span only when it is a whole number', async () => {
+    for (const promptVersion of [1.5, -1, Number.NaN]) {
+      exporter.reset();
+      const h = harness();
+      await runStructured(h.deps, 'resume.match', { ...call, promptVersion });
+      expect(Object.keys(only().attributes), String(promptVersion)).not.toContain(
+        'gen_ai.prompt.version',
+      );
+    }
   });
 
   it('has no stream attribute, no prompt version and no prompt id when none was given', async () => {
@@ -705,7 +716,7 @@ describe('content is never on a span', () => {
     await runStructured(harness({ model }).deps, 'resume.tailor', {
       ...content,
       promptId: 'p1',
-      promptVersion: '2',
+      promptVersion: 2,
     });
     const res = await streamChat(
       harness({ model: streamModel(`Dear ${CANARY}`) }).deps,

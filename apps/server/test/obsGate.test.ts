@@ -64,26 +64,21 @@ describe('the catalog (#353)', () => {
     for (const k of used) expect(keys.has(k), k).toBe(true);
   });
 
-  it('has no Gen AI entry: FR-T4 part 2 adds them', () => {
-    const names = [
-      ...Object.keys(METRICS),
-      ...Object.keys(SPANS),
-      ...Object.keys(EVENTS),
-      ...Object.keys(ATTRIBUTES),
-    ];
-    expect(names.filter((n) => n.startsWith('gen_ai.') || n.includes('.gen_ai.'))).toEqual([]);
-  });
-
-  it('holds the five instance metrics of 14.4, with bucket boundaries for each histogram', () => {
+  it('holds the five instance metrics of 14.4 and the four Gen AI ones, with bucket boundaries for each histogram', () => {
     expect(Object.keys(METRICS).sort()).toEqual([
       'db.client.operation.duration',
+      'gen_ai.client.inference.duration',
+      'gen_ai.client.inference.usage.input_tokens',
+      'gen_ai.client.inference.usage.output_tokens',
       'http.client.request.duration',
       'http.server.request.duration',
+      'opportun.gen_ai.usage.cost',
       'opportun.job.duration',
       'opportun.obs.dropped',
     ]);
     for (const [name, m] of Object.entries(METRICS)) {
-      expect(m.scope, name).toBe('instance');
+      // The Gen AI metrics are the user's (14.7): a user sees their own AI use, never another's.
+      expect(m.scope, name).toBe(name.includes('gen_ai.') ? 'user' : 'instance');
       if (m.instrument === 'histogram') {
         const b = 'buckets' in m ? m.buckets : [];
         expect(b.length, name).toBeGreaterThan(0);

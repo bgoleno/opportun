@@ -286,7 +286,19 @@ Application settings (read by the server process):
 | `DB_POOL_MAX`                                      | `10`                                           | Postgres connection pool size                                                                                                                                                                                                                                                                                                            |
 | `DB_SSL`                                           | `disable` for localhost, else `require`        | Postgres TLS: `disable`, `require` (encrypted, certificate not verified) or `verify-full` (certificate and host checked); `sslmode` in the URL is honored when unset                                                                                                                                                                     |
 | `OPPORTUN_DEMO`                                    | (unset)                                        | `1` declares this deployment the invitation-only demo instance; see **Demo mode** below                                                                                                                                                                                                                                                  |
+| `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`           | (unset: the official API)                      | Send every Anthropic or OpenAI call to a proxy or gateway you run instead; see **AI provider requests** below                                                                                                                                                                                                                            |
+| `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP`                  | (unset)                                        | `1` lets an OpenAI-compatible endpoint use plain http on `localhost`, `127.0.0.1` or `[::1]` (a local Ollama or LM Studio)                                                                                                                                                                                                               |
 | `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`                 | (unset)                                        | `1` lets telemetry export send to loopback, a private network or `100.64.0.0/10` (a Prometheus or a Datadog Agent next to Opportun), over http or https. Unset, export goes only to a public https destination. Link-local and cloud metadata addresses are refused either way; see [Telemetry](guide/settings.md#where-export-may-send) |
+
+**AI provider requests.** Every AI call, to Anthropic, OpenAI or an OpenAI-compatible
+endpoint, is checked before it is sent: https only, and every address the host's name resolves
+to must be public. Redirects are not followed. So each call to `api.anthropic.com` or
+`api.openai.com` makes one DNS lookup first, and a host that reaches the internet only
+through NAT64 cannot reach either (DNS64 answers in `64:ff9b::/96`, which counts as private).
+If your server must go through a proxy, or is such a host, set `ANTHROPIC_BASE_URL` or
+`OPENAI_BASE_URL` to the proxy (for example `http://litellm:4000` on the compose network). A
+request to that address is sent as it is, private address or plain http included, because you
+chose it. Do not put a user name or password in the URL: such a URL is refused.
 
 **Password pepper.** `OPPORTUN_PEPPER` is an extra secret mixed into every password hash
 (Argon2id's keyed `secret` input), so a stolen database file alone cannot be used to

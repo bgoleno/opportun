@@ -14,7 +14,15 @@ export * from './features';
 export { pingModel, type PingOutcome } from './keyCheck';
 export {
   ATTR,
+  FINISH_REASONS,
+  GEN_AI_METRIC,
   isModelId,
+  KEY_CHECK_TASK,
+  OPERATION_CHAT,
+  OPERATION_INVOKE_WORKFLOW,
+  OUTPUT_TYPES,
+  WIRE_PROVIDERS,
+  wireProvider,
   SDK_TELEMETRY_OFF,
   spanNameFor,
   USER_CONTEXT_KEY,

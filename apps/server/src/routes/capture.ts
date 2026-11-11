@@ -36,6 +36,7 @@ import {
 import { getActivePrompt } from '../repos/prompts';
 import { HttpsUrl } from './common';
 import type { Exec as AsyncExec } from '../db/client';
+import { continuesTrace, workflow } from '../obs/workflow';
 
 /** Characters of page or pasted text the model sees. */
 export const CAPTURE_MAX_TEXT = 50_000;
@@ -210,7 +211,12 @@ async function resolveLeadInPlace(
     db,
     DISCOVERY_RANK_KIND,
     { resultId },
-    { dedupeKey: `${DISCOVERY_RANK_KIND}:${resultId}`, userId: ctx.userId },
+    // Continues the capture trace (14.5).
+    {
+      dedupeKey: `${DISCOVERY_RANK_KIND}:${resultId}`,
+      userId: ctx.userId,
+      continueTrace: continuesTrace(),
+    },
   );
   return updated;
 }
@@ -229,32 +235,35 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req, reply) => {
       const ctx = app.requireUser(req);
-      const { url, resultId } = req.body;
-      // Checked before any fetch or AI call, so a bad resultId costs nothing.
-      if (resultId !== undefined) await capturableLead(db, ctx, resultId);
-      const text =
-        req.body.text ?? (await fetchPageText(app.jobs.services.sourceFetch, url as string));
-      const posting = toPosting(await extract(db, ctx, url, text), url, text);
-      if (resultId !== undefined) {
-        const resolved = await resolveLeadInPlace(db, ctx, resultId, posting);
-        return reply.code(200).send({ posting: resolved.posting, resultId: resolved.id });
-      }
-      const source = await ensureChannelSource(db, ctx, 'manual');
-      // In the user's one capture slot, with a bounded wait for their ingest lock (#309), so
-      // captures queued behind a slow holder cannot take every pool connection.
-      const { stats, inserted } = await withCaptureSlot(db, ctx.userId, () =>
-        insertLeads(db, ctx, [posting], source.id, undefined, {
-          lockTimeoutMs: CAPTURE_SLOT.lockTimeoutMs,
-        }),
-      );
-      const result = inserted[0];
-      if (result === undefined) {
-        throw new HttpError(
-          stats.duplicates > 0 ? 409 : 422,
-          stats.duplicates > 0 ? 'duplicate' : 'invalid_posting',
+      // The capture workflow (design 14.5): posting.reconcile and discovery.rank continue it.
+      return workflow('capture', { userId: ctx.userId }, async () => {
+        const { url, resultId } = req.body;
+        // Checked before any fetch or AI call, so a bad resultId costs nothing.
+        if (resultId !== undefined) await capturableLead(db, ctx, resultId);
+        const text =
+          req.body.text ?? (await fetchPageText(app.jobs.services.sourceFetch, url as string));
+        const posting = toPosting(await extract(db, ctx, url, text), url, text);
+        if (resultId !== undefined) {
+          const resolved = await resolveLeadInPlace(db, ctx, resultId, posting);
+          return reply.code(200).send({ posting: resolved.posting, resultId: resolved.id });
+        }
+        const source = await ensureChannelSource(db, ctx, 'manual');
+        // In the user's one capture slot, with a bounded wait for their ingest lock (#309), so
+        // captures queued behind a slow holder cannot take every pool connection.
+        const { stats, inserted } = await withCaptureSlot(db, ctx.userId, () =>
+          insertLeads(db, ctx, [posting], source.id, undefined, {
+            lockTimeoutMs: CAPTURE_SLOT.lockTimeoutMs,
+          }),
         );
-      }
-      return reply.code(201).send({ posting: result.posting, resultId: result.id });
+        const result = inserted[0];
+        if (result === undefined) {
+          throw new HttpError(
+            stats.duplicates > 0 ? 409 : 422,
+            stats.duplicates > 0 ? 'duplicate' : 'invalid_posting',
+          );
+        }
+        return reply.code(201).send({ posting: result.posting, resultId: result.id });
+      });
     },
   );
 }

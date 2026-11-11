@@ -35,6 +35,7 @@ import {
 import { DISCOVERY_RANK_KIND, LEAD_RESOLVE_KIND } from './discoveryKinds';
 import { requireService, type JobHandler } from './registry';
 import { enqueue } from './runner';
+import { continuesTrace } from '../obs/workflow';
 
 export { LEAD_RESOLVE_KIND };
 
@@ -272,7 +273,12 @@ export const leadResolveJob: JobHandler<z.infer<typeof PayloadSchema>> = {
         db,
         DISCOVERY_RANK_KIND,
         { resultId: payload.resultId },
-        { dedupeKey: `${DISCOVERY_RANK_KIND}:${payload.resultId}`, userId: user.userId },
+        {
+          dedupeKey: `${DISCOVERY_RANK_KIND}:${payload.resultId}`,
+          userId: user.userId,
+          // Still the discovery_run trace, when this job continues it (14.5).
+          continueTrace: continuesTrace(),
+        },
       );
     }
   },

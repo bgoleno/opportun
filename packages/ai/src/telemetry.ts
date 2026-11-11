@@ -54,7 +54,39 @@ export const ATTR = {
   aiPromptId: 'opportun.ai.prompt.id',
   aiAttempts: 'opportun.ai.attempts',
   usageCost: 'opportun.gen_ai.usage.cost',
+  // Set by the server, not by this package: the workflow span (design 14.5) and the Gen AI
+  // metrics (14.4). Here so every Gen AI name is in this one file.
+  agentName: 'gen_ai.agent.name',
+  tokenModality: 'gen_ai.token.modality',
+  costEstimated: 'opportun.ai.cost.estimated',
 } as const;
+
+/** The Gen AI metrics (design 14.4), which the server records from each task_runs record. */
+export const GEN_AI_METRIC = {
+  inferenceDuration: 'gen_ai.client.inference.duration',
+  inputTokens: 'gen_ai.client.inference.usage.input_tokens',
+  outputTokens: 'gen_ai.client.inference.usage.output_tokens',
+  cost: 'opportun.gen_ai.usage.cost',
+} as const;
+
+/** The operation of a workflow's parent span (design 14.5): Opportun's code decides the flow. */
+export const OPERATION_INVOKE_WORKFLOW = 'invoke_workflow';
+
+/** The AI SDK's closed list of finish reasons, which is all gen_ai.response.finish_reasons holds. */
+export const FINISH_REASONS = [
+  'stop',
+  'length',
+  'content-filter',
+  'tool-calls',
+  'error',
+  'other',
+] as const;
+
+/** gen_ai.output.type: runStructured asks for JSON, streamChat for text. */
+export const OUTPUT_TYPES = ['json', 'text'] as const;
+
+/** gen_ai.provider.name names the wire format, so it is one of two values. */
+export const WIRE_PROVIDERS = ['anthropic', 'openai'] as const;
 
 /** The only operation a router call has. A workflow's parent span is the server's, not ours. */
 export const OPERATION_CHAT = 'chat';
@@ -128,7 +160,7 @@ export function spanNameFor(model: string): string {
 }
 
 /** The provider of the wire format: an OpenAI-compatible endpoint speaks OpenAI's. */
-function wireProvider(provider: ModelPolicy['provider']): 'anthropic' | 'openai' {
+export function wireProvider(provider: ModelPolicy['provider']): (typeof WIRE_PROVIDERS)[number] {
   return provider === 'anthropic' ? 'anthropic' : 'openai';
 }
 
@@ -142,7 +174,7 @@ export interface InferenceStart {
   outputType: 'json' | 'text';
   /** The prompt row's id, and the version of the prompt when the caller has one. */
   promptId?: string | undefined;
-  promptVersion?: string | undefined;
+  promptVersion?: number | undefined;
   /** The tailoring session id, for the chat's spans only. Never made up. */
   conversationId?: string | undefined;
   /** The user the call is for. A key check has none of its own and reads the context's. */
@@ -213,7 +245,14 @@ export class InferenceSpan {
     if (start.task !== KEY_CHECK_TASK) {
       attributes[ATTR.promptName] = start.task;
       attributes[ATTR.aiFeature] = TASK_FEATURE[start.task];
-      if (start.promptVersion !== undefined) attributes[ATTR.promptVersion] = start.promptVersion;
+      // The prompt row's version, a whole number (prompts.prompt_version): nothing else is one.
+      if (
+        start.promptVersion !== undefined &&
+        Number.isSafeInteger(start.promptVersion) &&
+        start.promptVersion >= 0
+      ) {
+        attributes[ATTR.promptVersion] = start.promptVersion;
+      }
       if (start.promptId !== undefined) attributes[ATTR.aiPromptId] = start.promptId;
     }
     if (start.conversationId !== undefined) attributes[ATTR.conversationId] = start.conversationId;

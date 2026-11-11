@@ -40,6 +40,7 @@ import { enqueueFollowUps } from './discoveryRun';
 import { LEAD_RESOLVE_KIND, RANK_WAITING_KIND } from './discoveryKinds';
 import { rankBudgetHasRoom } from './rankBudget';
 import { requireService, type JobHandler } from './registry';
+import { workflow } from '../obs/workflow';
 
 export { enqueueRankWaiting, RANK_WAITING_KIND };
 
@@ -259,11 +260,15 @@ export const rankWaitingJob: JobHandler<Record<string, never>> = {
   maxAttempts: 3,
   async run(db, _payload, ctx) {
     if (ctx.userId === null) throw new Error(`${RANK_WAITING_KIND} needs a user`);
+    const userId = ctx.userId;
+    // The rank_backlog workflow (design 14.5): it ranks in a loop, so it continues into no job.
     await ctx.setResult(
-      await drainWaitingResults(
-        db,
-        { userId: ctx.userId, isAdmin: false },
-        { log: requireService(ctx, 'log'), stopping: ctx.stopping },
+      await workflow('rank_backlog', { userId }, () =>
+        drainWaitingResults(
+          db,
+          { userId, isAdmin: false },
+          { log: requireService(ctx, 'log'), stopping: ctx.stopping },
+        ),
       ),
     );
   },
