@@ -50,6 +50,7 @@ import {
   useAttestSubmission,
   useCancelSubmission,
   useCreateSubmission,
+  useExtensionCanFill,
   useHandoffSubmission,
   useOpportunitySubmissions,
   usePatchSubmission,
@@ -752,6 +753,7 @@ function ReviewStep({
   host: string;
 }) {
   const navigate = useNavigate();
+  const canFill = useExtensionCanFill(live, opp);
   const review = useReviewSubmission(opp.id);
   const handoff = useHandoffSubmission(opp.id);
   const patch = usePatchSubmission(opp.id);
@@ -1195,6 +1197,16 @@ function ReviewStep({
             Cancel application
           </Button>
         </div>
+        {/* What to do once the tab opens, said before it takes over (#416), and only where the
+            extension can fill this form. */}
+        {canFill ? (
+          <p className="text-sm">
+            {/* "then press Fill in this application" until #403 slice 2 fills on the click itself
+                (tl's ruling on #416): never more than the extension does today. */}
+            When the form opens, click the Opportun icon in your browser&apos;s toolbar, then press
+            Fill in this application. It fills in what you reviewed here.
+          </p>
+        ) : null}
         <p id={hintId} className="text-sm text-muted-foreground" aria-live="polite">
           {hint ??
             (reviewedAndValid
@@ -1269,6 +1281,7 @@ function OpenStep({
   const cancel = useCancelSubmission(opp.id);
   const [stopping, setStopping] = useState(false);
   const [attesting, setAttesting] = useState(false);
+  const canFill = useExtensionCanFill(live, opp);
 
   if (live.status !== 'handed_off') {
     return (
@@ -1325,12 +1338,7 @@ function OpenStep({
             <CardTitle className="text-base">On the application site</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-3 text-sm">
-            <ol className="grid list-decimal gap-1 pl-5">
-              <li>Fill in the form, copying from your details below.</li>
-              <li>Attach your resume.</li>
-              <li>Answer any other questions the site asks.</li>
-              <li>Press the site&apos;s own Submit button. Only you can do this.</li>
-            </ol>
+            {canFill ? <ExtensionSteps host={host} /> : <CopySteps />}
             <p>Did the tab not open? {link}.</p>
           </CardContent>
         </Card>
@@ -1377,6 +1385,61 @@ function OpenStep({
         }}
       />
     </div>
+  );
+}
+
+/**
+ * The steps on the application site where the extension can fill the form (#416, tl's note on
+ * #403): where to click, and that the user still checks and submits. The details to copy stay
+ * below, as the way without the extension.
+ */
+function ExtensionSteps({ host }: { host: string }) {
+  return (
+    <ol className="grid list-decimal gap-1 pl-5">
+      <li>
+        Go to the <span className="font-mono [overflow-wrap:anywhere]">{host}</span> tab.
+      </li>
+      <li>
+        Click the Opportun icon{' '}
+        <img
+          src="/favicon.svg"
+          // Decorative: the text beside it already names it, so a screen reader hears it once.
+          alt=""
+          className="inline size-4 align-text-bottom"
+        />{' '}
+        in the toolbar, then press Fill in this application. Not there? Open your browser&apos;s
+        Extensions menu and pin Opportun.
+      </li>
+      <li>Check every field. The extension lists what it filled and what it left for you.</li>
+      <li>Press the site&apos;s own Submit button. Only you can do this.</li>
+    </ol>
+  );
+}
+
+/**
+ * The steps where the extension cannot fill this form (no usable token, or a site it does not
+ * fill): today's copying, and where to set the extension up, promising nothing more (#416).
+ */
+function CopySteps() {
+  return (
+    <>
+      <ol className="grid list-decimal gap-1 pl-5">
+        <li>Fill in the form, copying from your details below.</li>
+        <li>Attach your resume.</li>
+        <li>Answer any other questions the site asks.</li>
+        <li>Press the site&apos;s own Submit button. Only you can do this.</li>
+      </ol>
+      <p>
+        The Opportun browser extension can fill this form for you:{' '}
+        <Link
+          to="/settings/integrations"
+          className="text-primary underline-offset-4 hover:underline"
+        >
+          Settings &gt; Integrations &gt; Extensions and Connectors
+        </Link>
+        .
+      </p>
+    </>
   );
 }
 

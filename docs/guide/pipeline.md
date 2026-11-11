@@ -153,13 +153,31 @@ then listed here as a **Base resume** with that send, and the resume itself does
 the same base can be recorded for other opportunities and still tailored from. Each send has
 its own remove control, which removes only that record. See [Resumes](resumes.md).
 
-### Your details when you apply
+### Communications
 
-Where assisted apply is on, an opportunity has **Apply** when its posting is confirmed and is on
-a recognised application system (such as Greenhouse), its stage is Interested, Preparing or
-Applied, and you have a resume marked Final. When one of these is missing, the opportunity's
-apply panel says which. The **Details** step opens already filled with what Opportun holds for
-you, field by field:
+Every message linked to this opportunity, with the same actions as the inbox (open, change
+link, reclassify, accept a suggested stage). See [Inbox](inbox.md). The newest message is at the
+top; **Newest** at the top right switches to oldest first and back. Each time you open the
+opportunity it starts newest first again.
+
+### Referrals
+
+Contacts who could refer you, ranked by the AI, and the asks you have made. See
+[Network](network.md#referrals).
+
+### Assisted apply
+
+Where assisted apply is on, the opportunity has an **Assisted apply** panel beside the tabs.
+Before you apply, it offers **Apply on _ATS_** when the posting is confirmed and is on a
+recognised application system (Greenhouse, Lever or Ashby; Workday as a handoff only), its stage
+is Interested, Preparing or Applied, and you have a resume marked Final. When one of these is
+missing, the panel says which. **Apply** takes you through the resume, your details and your
+answers, then one review of everything. **Confirm review and open** opens the real application
+form in a new tab. Opportun never submits anything: you press the site's own Submit button.
+
+#### Your details when you apply
+
+The **Details** step opens already filled with what Opportun holds for you, field by field:
 
 1. your profile: **Settings > Profile**, and its **Application details** card for first and
    last name, country, school, degree, how you heard about the role, LinkedIn profile, website
@@ -185,27 +203,31 @@ browser extension fills Location (city) and how you heard where the form asks th
 question with the same label, and leaves a list for any of the five to you, saying "choose it on
 the form".
 
-### Communications
+#### Finish on the application site
 
-Every message linked to this opportunity, with the same actions as the inbox (open, change
-link, reclassify, accept a suggested stage). See [Inbox](inbox.md). The newest message is at the
-top; **Newest** at the top right switches to oldest first and back. Each time you open the
-opportunity it starts newest first again.
+The last step, **Finish on the application site**, says what to do on that tab:
 
-### Referrals
+- **Where the browser extension can fill the form** (a Greenhouse form on Greenhouse's own
+  pages, not a job shown on the company's own careers page, and an extension token with the
+  **Assisted apply** permission): go to the form's tab, click the Opportun icon in the toolbar,
+  then press **Fill in this application**. The review step says this too, under the button that
+  opens the form. Check every field (the extension lists what it filled and what it left for
+  you), then press the site's own Submit. See
+  [Browser extension](browser-extension.md#filling-an-application-assisted-apply).
+- **Otherwise:** fill in the form yourself, copying from **Your details to copy**, with a link
+  to **Settings > Integrations > Extensions and Connectors**, where the extension is set up.
 
-Contacts who could refer you, ranked by the AI, and the asks you have made. See
-[Network](network.md#referrals).
+**Your details to copy** stays below either way. When you are done, tell Opportun: **I submitted
+it** or **I did not submit it**.
 
-### The Assisted apply panel
+#### After you apply
 
-Where assisted apply is on, the opportunity has an **Assisted apply** panel beside the tabs.
-Before you apply, it offers **Apply on _ATS_** or says why it can't yet. Once you have applied
-(Submitted, Confirmed, No confirmation seen or ATS refused), it leads with that: the status,
-when you applied and through which site (and when it was confirmed), and **View application**.
-For an application with no confirmation yet it asks what happened since. **Apply again** stays
-available as a link, with one line on when to use it: only if the first application did not go
-through, or the employer asked you to. The apply flow then asks for the reason.
+Once you have applied (Submitted, Confirmed, No confirmation seen or ATS refused), the panel
+leads with that: the status, when you applied and through which site (and when it was
+confirmed), and **View application**. For an application with no confirmation yet it asks what
+happened since. **Apply again** stays available as a link, with one line on when to use it: only
+if the first application did not go through, or the employer asked you to. The apply flow then
+asks for the reason.
 
 ## Find a posting
 
