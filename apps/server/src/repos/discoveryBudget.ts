@@ -10,6 +10,7 @@ import type { Exec } from '../db/client';
 import { taskRuns } from '../db/schema';
 import { readSetting, writeSetting } from '../lib/ai';
 import type { Db, UserCtx } from './base';
+import { batchHoldUsd } from './rankBatches';
 import { startOfUtcDay } from './taskRuns';
 
 export const DEFAULT_DISCOVERY_DAILY_USD = 1;
@@ -61,12 +62,21 @@ export async function writeDiscoveryBudget(
   await writeSetting(db, ctx, settingKey(ctx.userId), { dailyUsd });
 }
 
-/** Today's (UTC) recorded est cost over the tasks the budget covers. */
+/**
+ * Today's (UTC) recorded est cost over the tasks the budget covers, and what a ranking batch in
+ * flight holds (#441): its estimate for each posting whose result is not applied yet. Applying a
+ * result releases its share and records its real cost, in one transaction, so a posting is never
+ * counted twice or not at all. With no batch in flight the hold is 0, and this is the ledger alone.
+ */
 export async function discoverySpentTodayUsd(
   db: Db,
   ctx: UserCtx,
   now: number = Date.now(),
 ): Promise<number> {
+  return (await ledgerSpentTodayUsd(db, ctx, now)) + (await batchHoldUsd(db, ctx));
+}
+
+async function ledgerSpentTodayUsd(db: Db, ctx: UserCtx, now: number): Promise<number> {
   const row = await db
     .select({ total: sql<number>`coalesce(sum(${taskRuns.estCost}), 0)` })
     .from(taskRuns)
