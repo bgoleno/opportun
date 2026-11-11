@@ -78,6 +78,10 @@ Design points from reviews, now in Part A:
   captcha, and never submits (recorded on #120).
 - M1c (#129) dropped career-page destinations, so a handoff goes only to a recognised ATS host
   (recorded on #120).
+- A Greenhouse job embedded on a company's own careers page (`?gh_jid=`) gets a Greenhouse
+  identity only once Greenhouse's API shows one of the company's known boards holds that job, or
+  a board read just made did. The handoff still goes to that board's page, never to the careers
+  link (#398).
 
 The requirements and decision-log changes landed with M2a: FR-X in
 [requirements.md](../requirements.md), the NG-3 note, C-6, and
