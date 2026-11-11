@@ -178,6 +178,18 @@ describe('PUT /api/v1/obs/export', () => {
     expect((await readExport(app.db)).enabled).toBe(false);
   });
 
+  it('an IPv6 literal with a zone id is refused by field, not a server error (tl on #377)', async () => {
+    const { a } = await boot({ telemetryAllowPrivate: true });
+    await collectOn(a);
+    const r = await putExport(a, {
+      password: PASSWORD,
+      enabled: true,
+      destination: { ...local(4318), host: '[fe80::1%en0]' },
+    });
+    expect(r.statusCode).toBe(422);
+    expect(r.json()).toEqual({ error: { code: 'invalid_destination', field: 'host' } });
+  });
+
   it('a malformed destination is refused by field', async () => {
     const { a } = await boot({ telemetryAllowPrivate: true });
     await collectOn(a);

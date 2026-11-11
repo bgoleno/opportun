@@ -44,7 +44,11 @@ export type ExportSignal = 'metrics' | 'spans' | 'logs';
 /** A host name of LDH labels, an IPv4 literal, or a bracketed IPv6 literal. Nothing else. */
 const LABEL = /^[A-Za-z0-9-]{1,63}$/;
 function isHostField(host: string): boolean {
-  if (host.startsWith('[') && host.endsWith(']')) return isIP(host.slice(1, -1)) === 6;
+  if (host.startsWith('[') && host.endsWith(']')) {
+    // isIP accepts a zone id (fe80::1%en0); a zone names an interface, not a host (tl on #377).
+    const inner = host.slice(1, -1);
+    return !inner.includes('%') && isIP(inner) === 6;
+  }
   if (host.length === 0 || host.length > 253) return false;
   return host
     .split('.')
@@ -158,10 +162,14 @@ function mappedIpv4(ip: string): string | undefined {
   return [hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join('.');
 }
 
-/** The canonical text of an IPv6 address, for the exact metadata match. */
-function canonical(ip: string, family: 4 | 6): string {
+/** The canonical text of an IPv6 address, for the exact metadata match; undefined if none. */
+function canonical(ip: string, family: 4 | 6): string | undefined {
   if (family === 4) return ip;
-  return new URL(`http://[${ip}]/`).hostname.slice(1, -1);
+  try {
+    return new URL(`http://[${ip}]/`).hostname.slice(1, -1);
+  } catch {
+    return undefined;
+  }
 }
 
 export type AddressClass = 'public' | 'private' | 'refused';
@@ -172,7 +180,11 @@ export function classifyAddress(raw: string): AddressClass {
   const ip = v4 ?? raw;
   const family = isIP(ip);
   if (family !== 4 && family !== 6) return 'refused';
-  if (METADATA.has(canonical(ip, family))) return 'refused';
+  // A scoped address (a zone id) is bound to an interface, link-local in practice: refused, as
+  // is anything that cannot be put in canonical form, rather than an error (tl on #377).
+  if (ip.includes('%')) return 'refused';
+  const text = canonical(ip, family);
+  if (text === undefined || METADATA.has(text)) return 'refused';
   if (allowedPrivate.check(ip, family === 4 ? 'ipv4' : 'ipv6')) return 'private';
   // Every other non-public range (link-local, unspecified, multicast, reserved, documentation,
   // the IPv6 transition prefixes) is refused: safeFetch's list is the backstop.

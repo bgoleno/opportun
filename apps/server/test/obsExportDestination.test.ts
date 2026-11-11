@@ -77,6 +77,14 @@ describe('classifyAddress (14.10 rule 3)', () => {
     expect(classifyAddress(ip)).toBe(expected);
   });
 
+  it.each(['fe80::1%en0', 'fe80::1%1', 'fd00:ec2::254%eth0', '::1%lo0'])(
+    'an address with a zone id is refused, never thrown on: %s (tl on #377)',
+    (ip) => {
+      expect(() => classifyAddress(ip)).not.toThrow();
+      expect(classifyAddress(ip)).toBe('refused');
+    },
+  );
+
   it('just outside each allowed range is not private', () => {
     expect(classifyAddress('172.32.0.1')).toBe('public');
     expect(classifyAddress('100.128.0.1')).toBe('public');
@@ -191,6 +199,12 @@ describe('checkDestination (14.10 rules 2 and 3)', () => {
     expect(LOOKUP_TIMEOUT_MS).toBeLessThan(10_000);
   });
 
+  it('a name that resolves to a scoped link-local address is refused, not an error', async () => {
+    expect(
+      await checkDestination(dest(), { allowPrivate: true, lookup: fixed('fe80::1%en0') }),
+    ).toEqual({ ok: false, reason: 'refused_address' });
+  });
+
   it('a prohibited host is refused before any lookup', async () => {
     expect(
       await checkDestination(dest({ host: 'www.linkedin.com' }), {
@@ -214,6 +228,9 @@ describe('parseDestination: the fields, never a URL (14.10)', () => {
     'a'.repeat(254),
     '[::1',
     '::1',
+    // A zone id names an interface, not a host (tl on #377).
+    '[fe80::1%en0]',
+    '[fe80::1%25en0]',
   ])('refuses the host %j', (host) => {
     expect(parseDestination({ ...dest(), host }).ok).toBe(false);
   });
