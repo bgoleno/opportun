@@ -44,8 +44,11 @@ import {
   createSubmittingBatch,
   deleteBatch,
   endBatchWait,
+  batchHoldUsd,
+  failIfSubmitting,
   findInFlightBatch,
   getBatch,
+  hasResult,
   listBatchWaitingIds,
   listStaleSubmitting,
   listSubmittedBatches,
@@ -62,7 +65,7 @@ import {
   type BatchItem,
   type RankBatchRow,
 } from '../repos/rankBatches';
-import { recordTaskRun } from '../repos/taskRuns';
+import { recordTaskRun, spentTodayUsd } from '../repos/taskRuns';
 import {
   buildRankCall,
   enqueueRankWaiting,
@@ -94,6 +97,8 @@ const CHECK_SLACK_MS = MINUTE;
 const RESULTS_KEPT_MS = 29 * 86_400_000;
 
 const lockFor = (ctx: UserCtx): string => `discovery.rank_batch:${ctx.userId}`;
+
+const RANK_TASK = 'discovery.rank';
 
 /**
  * Postings back in the wait need something to take them: with batching on, a submit (one in
@@ -140,17 +145,20 @@ export async function failStaleSubmitting(
   now: number = Date.now(),
 ): Promise<number> {
   const stale = await listStaleSubmitting(db, now);
+  await racePoint('rankBatch.stale_listed');
   for (const batch of stale) {
     const ctx: UserCtx = { userId: batch.userId, isAdmin: false };
     const batching = await readRankBatching(db, ctx);
     const returned = await withTransaction(
       db,
       async (tx) => {
-        await setBatchState(tx, batch.id, 'failed', now);
+        // Only if it is still being sent: its id may have been saved since it was listed.
+        if (!(await failIfSubmitting(tx, batch.id, now))) return null;
         return await unlinkBatch(tx, ctx, batch.id, { batching });
       },
       { scope: lockFor(ctx) },
     );
+    if (returned === null) continue;
     log?.warn(
       { 'opportun.rank_batch.id': batch.id, 'opportun.count.returned': returned },
       'a ranking batch was never confirmed as sent: its postings wait again, and may be sent twice',
@@ -184,17 +192,29 @@ export async function submitRankBatch(
     return { status: 'off', released: await releaseToLive(db, ctx) };
   }
   await failStaleSubmitting(db, log);
-  if ((await findInFlightBatch(db, ctx)) !== undefined) return { status: 'in_flight' };
+  // Before the in-flight check (tl's blocking 2 on #444): with a batch out and no batch provider
+  // now, the waiting postings would otherwise wait for a batch that is never sent.
   const client = await rankBatchClient(db, ctx, services);
   if (client === null) {
     // On, but the provider in use has no batches (or no key): the waiting postings are ranked live
     // (tl's ruling 3 on #441). The drain says so if there is no key.
     return { status: 'no_batches', released: await releaseToLive(db, ctx) };
   }
+  if ((await findInFlightBatch(db, ctx)) !== undefined) return { status: 'in_flight' };
 
   const ids = await listBatchWaitingIds(db, ctx);
   if (ids.length === 0) return { status: 'nothing_waiting' };
-  const room = await rankBudgetRoomUsd(db, ctx);
+  // The room is the discovery budget's, bounded by what is left of the router's per-task daily
+  // limit for ranking, holds counted (tl's blocking 4 on #444): a live call stops there too.
+  const taskLeft =
+    client.perTaskDailyUsd -
+    ((await spentTodayUsd(db, ctx, RANK_TASK)) + (await batchHoldUsd(db, ctx)));
+  const room = Math.min(await rankBudgetRoomUsd(db, ctx), taskLeft);
+  // Where a live call would start, a batch takes at least its first posting (tl's blocking 3): an
+  // estimate is an upper bound, and a first batch over the room would otherwise never be sent, so
+  // the history that brings the estimate down would never come. That one can pass the room by its
+  // estimate's error, as a live call that passed the check can.
+  const liveWouldStart = taskLeft > 0 && (await rankBudgetHasRoom(db, ctx));
   const history = await rankOutputHistory(db, ctx);
   const requests: BatchRequest[] = [];
   const items: BatchItem[] = [];
@@ -221,7 +241,7 @@ export async function submitRankBatch(
     }
     const request = structuredRequest(client.policy, call.opts);
     const estUsd = estimateBatchRequestUsd(client.policy, request, history);
-    if (held + estUsd > room) break;
+    if (held + estUsd > room && !(requests.length === 0 && liveWouldStart)) break;
     requests.push({ customId: id, request });
     items.push({
       resultId: id,
@@ -233,6 +253,7 @@ export async function submitRankBatch(
   }
   if (requests.length === 0) return { status: 'no_room', waiting: ids.length };
 
+  await racePoint('rankBatch.before_create');
   const made = await withTransaction(
     db,
     async (tx) => {
@@ -273,8 +294,19 @@ export async function submitRankBatch(
   return { status: 'submitted', batchId: made.id, requests: send.length };
 }
 
-/** What applying one result did. */
-type Applied = 'ranked' | 'changed' | 'dropped' | 'invalid_output' | 'failed' | 'returned' | 'done';
+/**
+ * What applying one result did. `unmatched`: no posting of the user's has its id any more (deleted
+ * while the batch ran, as deleting a source does) or ever had it.
+ */
+type Applied =
+  | 'ranked'
+  | 'changed'
+  | 'dropped'
+  | 'invalid_output'
+  | 'failed'
+  | 'returned'
+  | 'unmatched'
+  | 'done';
 
 /**
  * Applies one result in one transaction: the posting's link is taken first, so a result applied
@@ -289,8 +321,15 @@ async function applyBatchResult(
   item: BatchResultItem,
 ): Promise<Applied> {
   return await withTransaction(db, async (tx) => {
+    await racePoint('rankBatch.applying');
     const link = await takeBatchLink(tx, ctx, batch.id, item.customId);
-    if (link === undefined) return 'done';
+    if (link === undefined) {
+      // Applied already (a second collect after a crash), or its posting is gone. The link is what
+      // makes a result apply once, and it went with the posting, so a deleted posting's result is
+      // not costed: that spend is not recorded (tl on #444, as point 7's double send is accepted).
+      // The collect counts and logs it.
+      return (await hasResult(tx, ctx, item.customId)) ? 'done' : 'unmatched';
+    }
     if (item.kind !== 'succeeded') {
       // A request the provider refused would be refused again: a failed ranking, as a live one is.
       if (item.kind === 'errored' && item.invalidRequest) {
@@ -339,30 +378,45 @@ async function applyBatchResult(
   });
 }
 
+type Counted = Exclude<Applied, 'done'> | 'errors';
+
 export type CollectOutcome =
   | { status: 'not_in_flight' }
   | { status: 'no_client' }
   | { status: 'in_progress' }
   | { status: 'gone'; returned: number }
-  | ({ status: 'collected' } & Record<Exclude<Applied, 'done'>, number>);
+  | ({ status: 'collected' } & Record<Counted, number>);
 
-/** Looks at one sent batch, and applies its results once it has ended. */
+/**
+ * Looks at one sent batch, and applies its results once it has ended. `userId`: the job's user,
+ * which must be the batch's (only the sweep queues this job, and this keeps that true).
+ */
 export async function collectRankBatch(
   db: Db,
   batchId: string,
   services: Partial<JobServices>,
-  now: number = Date.now(),
+  opts: { now?: number; userId?: string } = {},
 ): Promise<CollectOutcome> {
+  const now = opts.now ?? Date.now();
+  const log = services.log;
   const batch = await getBatch(db, batchId);
-  if (batch?.state !== 'submitted' || batch.providerBatchId === null) {
+  if (
+    batch?.state !== 'submitted' ||
+    batch.providerBatchId === null ||
+    (opts.userId !== undefined && opts.userId !== batch.userId)
+  ) {
     return { status: 'not_in_flight' };
   }
   const ctx: UserCtx = { userId: batch.userId, isAdmin: false };
   const policy = batch.policy as unknown as ModelPolicy;
   const batching = await readRankBatching(db, ctx);
   const sentAt = batch.submittedAt ?? batch.createdAt;
-  const client = await rankBatchClient(db, ctx, services, policy);
-  if (client === null && now - sentAt <= RESULTS_KEPT_MS) {
+  // Past the provider's 29 days the batch ends, whether or not it can be asked about (tl's
+  // blocking 1 on #444): a key revoked at the provider makes every state call fail, and the batch
+  // would otherwise stay in flight for ever, and no new one would be sent.
+  const expired = now - sentAt > RESULTS_KEPT_MS;
+  const client = expired ? null : await rankBatchClient(db, ctx, services, policy);
+  if (!expired && client === null) {
     // No key now (removed or replaced by none): tried again on a later sweep (point 8).
     await touchBatchChecked(db, batch.id, now);
     return { status: 'no_client' };
@@ -387,21 +441,41 @@ export async function collectRankBatch(
 
   const items = await client.provider.results(batch.providerBatchId);
   await racePoint('rankBatch.results_read');
-  const tally = new Map<Applied, number>();
+  const tally = new Map<Applied | 'errors', number>();
   for (const item of items) {
-    const applied = await applyBatchResult(db, ctx, batch, policy, item);
+    let applied: Applied | 'errors';
+    try {
+      applied = await applyBatchResult(db, ctx, batch, policy, item);
+    } catch (err) {
+      // One result that cannot be applied does not stop the others (tl's blocking 1): its
+      // transaction rolled back, so its posting is still linked, and it waits again below with the
+      // ones the provider gave no result for.
+      log?.error(
+        { err, 'opportun.rank_batch.id': batch.id, 'opportun.discovery_result.id': item.customId },
+        'applying a ranking batch result failed',
+      );
+      applied = 'errors';
+    }
     tally.set(applied, (tally.get(applied) ?? 0) + 1);
     await racePoint('rankBatch.result_applied');
   }
-  const n = (kind: Applied): number => tally.get(kind) ?? 0;
-  const counts: Record<Exclude<Applied, 'done'>, number> = {
+  const n = (kind: Applied | 'errors'): number => tally.get(kind) ?? 0;
+  const counts: Record<Counted, number> = {
     ranked: n('ranked'),
     changed: n('changed'),
     dropped: n('dropped'),
     invalid_output: n('invalid_output'),
     failed: n('failed'),
     returned: n('returned'),
+    unmatched: n('unmatched'),
+    errors: n('errors'),
   };
+  if (counts.unmatched > 0) {
+    log?.warn(
+      { 'opportun.rank_batch.id': batch.id, 'opportun.count.unmatched': counts.unmatched },
+      'ranking batch results for postings no longer there: their cost is not recorded',
+    );
+  }
   // Any posting the provider gave no result for waits again too.
   counts.returned += await withTransaction(
     db,
@@ -466,7 +540,10 @@ export const rankBatchCollectJob: JobHandler<z.infer<typeof CollectPayload>> = {
   payloadSchema: CollectPayload,
   maxAttempts: 3,
   async run(db, payload, ctx) {
-    await ctx.setResult(await collectRankBatch(db, payload.batchId, ctx.services));
+    await ctx.setResult(
+      // A job with no user matches no batch, so it does nothing.
+      await collectRankBatch(db, payload.batchId, ctx.services, { userId: ctx.userId ?? '' }),
+    );
   },
 };
 

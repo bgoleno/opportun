@@ -28,6 +28,14 @@ export const RANK_BATCH_MAX = 500;
 /** A batch still `submitting` this long after it was made never got its id saved (point 7). */
 export const SUBMITTING_STALE_MS = 15 * 60_000;
 
+/**
+ * How long a batch's estimate is held against the budget, from sending (tl's blocking 1 on #444):
+ * a provider ends a batch within a day, and after that the money is spent or it is not. Held for as
+ * long as the row is in flight, a batch nobody can collect would keep live ranking and tagging out
+ * of budget they have. The real cost is still recorded on the day the batch is collected.
+ */
+export const HOLD_MS = 24 * 3_600_000;
+
 /** The task whose calls are batched, and whose history sizes a batch's estimate. */
 const RANK_TASK = 'discovery.rank';
 
@@ -167,7 +175,11 @@ export async function getBatch(exec: Exec, id: string): Promise<RankBatchRow | u
  * each batch's estimate for each of its postings still linked, so applying a result releases that
  * posting's share. Counted today, whichever day the batch was sent.
  */
-export async function batchHoldUsd(exec: Exec, ctx: UserCtx): Promise<number> {
+export async function batchHoldUsd(
+  exec: Exec,
+  ctx: UserCtx,
+  now: number = Date.now(),
+): Promise<number> {
   const rows = await exec
     .select({
       est: rankBatches.estCostUsd,
@@ -176,7 +188,13 @@ export async function batchHoldUsd(exec: Exec, ctx: UserCtx): Promise<number> {
     })
     .from(rankBatches)
     .leftJoin(discoveryResults, eq(discoveryResults.rankBatchId, rankBatches.id))
-    .where(and(eq(rankBatches.userId, ctx.userId), inArray(rankBatches.state, IN_FLIGHT)))
+    .where(
+      and(
+        eq(rankBatches.userId, ctx.userId),
+        inArray(rankBatches.state, IN_FLIGHT),
+        gte(sql`coalesce(${rankBatches.submittedAt}, ${rankBatches.createdAt})`, now - HOLD_MS),
+      ),
+    )
     .groupBy(rankBatches.id, rankBatches.estCostUsd, rankBatches.requestCount)
     .all();
   return rows.reduce(
@@ -391,6 +409,34 @@ export async function takeBatchLink(
     .returning({ id: discoveryResults.id })
     .all();
   return taken.length > 0 ? linked : undefined;
+}
+
+/**
+ * Fails a batch stuck in `submitting`, only if it still is: a send that took longer and has just
+ * saved its id must not be failed after it (tl on #444). Returns whether it was.
+ */
+export async function failIfSubmitting(
+  tx: Exec,
+  id: string,
+  now: number = Date.now(),
+): Promise<boolean> {
+  const rows = await tx
+    .update(rankBatches)
+    .set({ state: 'failed', updatedAt: now })
+    .where(and(eq(rankBatches.id, id), eq(rankBatches.state, 'submitting')))
+    .returning({ id: rankBatches.id })
+    .all();
+  return rows.length > 0;
+}
+
+/** Whether the user has a posting with this id at all, linked or not. */
+export async function hasResult(exec: Exec, ctx: UserCtx, id: string): Promise<boolean> {
+  const row = await exec
+    .select({ id: discoveryResults.id })
+    .from(discoveryResults)
+    .where(owned(ctx, id))
+    .get();
+  return row !== undefined;
 }
 
 /**

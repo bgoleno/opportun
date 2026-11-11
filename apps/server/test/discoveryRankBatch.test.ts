@@ -22,12 +22,14 @@ import {
   resetSources,
   type DiscoverySource,
 } from '../src/adapters/discoverySource';
-import { discoveryResults, jobs, rankBatches, taskRuns } from '../src/db/schema';
+import { discoveryResults, jobs, rankBatches, secrets, taskRuns, users } from '../src/db/schema';
+import { MULTI_POSTED_PREFIX } from '../src/jobs/discoveryKinds';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { drainWaitingResults, sweepWaitingResults } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND, rankAnyway, rankBelowCut } from '../src/jobs/discoveryRun';
 import {
   collectRankBatch,
+  RANK_BATCH_COLLECT_KIND,
   RANK_BATCH_SEND_KIND,
   setRankBatching,
   submitRankBatch,
@@ -35,6 +37,7 @@ import {
 } from '../src/jobs/rankBatch';
 import { rankBudgetHasRoom } from '../src/jobs/rankBudget';
 import { enqueue } from '../src/jobs/runner';
+import { budgetKey, writeSetting } from '../src/lib/ai';
 import { setRaceHook } from '../src/lib/racePoints';
 import type { UserCtx } from '../src/repos/base';
 import { createSource, getResult, listResults } from '../src/repos/discovery';
@@ -43,7 +46,18 @@ import {
   discoverySpentTodayUsd,
   writeDiscoveryBudget,
 } from '../src/repos/discoveryBudget';
-import { rankOutputHistory, setBatchWaiting } from '../src/repos/rankBatches';
+import {
+  endBatchWait,
+  hasResult,
+  listBatchWaitingIds,
+  markBatchSubmitted,
+  rankOutputHistory,
+  releaseBatchWaiting,
+  setBatchWaiting,
+  takeBatchLink,
+  unlinkBatch,
+  writeRankBatching,
+} from '../src/repos/rankBatches';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 
@@ -57,26 +71,41 @@ class FakeBatches implements BatchProvider {
   sent: { batchId: string; requests: BatchRequest[] }[] = [];
   private readonly states = new Map<string, BatchState>();
   private readonly answers = new Map<string, BatchResultItem[]>();
+  /** Thrown by every state call while set: a key revoked at the provider, say. */
+  stateError: Error | null = null;
+  /** Thrown by the next submit while set, with nothing taken: a refused batch. */
+  submitError: Error | null = null;
   async submit(requests: readonly BatchRequest[]): Promise<{ batchId: string }> {
+    if (this.submitError !== null) throw this.submitError;
     const batchId = `msgbatch_fake_${this.sent.length + 1}`;
     this.sent.push({ batchId, requests: [...requests] });
     this.states.set(batchId, 'in_progress');
     return { batchId };
   }
   async state(batchId: string): Promise<BatchState> {
+    if (this.stateError !== null) throw this.stateError;
     return this.states.get(batchId) ?? 'gone';
   }
   async results(batchId: string): Promise<BatchResultItem[]> {
     return this.answers.get(batchId) ?? [];
   }
   /** Ends the nth batch sent (1-based), each request answered by `answer`. */
-  end(n: number, answer: (r: BatchRequest) => BatchResultItem): void {
+  end(n: number, answer: (r: BatchRequest) => BatchResultItem | null): void {
     const batch = this.sent[n - 1]!;
-    this.answers.set(batch.batchId, batch.requests.map(answer));
+    this.answers.set(
+      batch.batchId,
+      batch.requests.map(answer).filter((r): r is BatchResultItem => r !== null),
+    );
     this.states.set(batch.batchId, 'ended');
   }
   forget(n: number): void {
     this.states.set(this.sent[n - 1]!.batchId, 'gone');
+  }
+  /** Sets the nth batch's results by hand, ids and all (a provider naming another's posting). */
+  answer(n: number, items: BatchResultItem[]): void {
+    const batch = this.sent[n - 1]!;
+    this.answers.set(batch.batchId, items);
+    this.states.set(batch.batchId, 'ended');
   }
   /** Every result id sent, across batches, once for each time it was sent. */
   sentIds(): string[] {
@@ -338,6 +367,8 @@ describe('batching on', () => {
     const { app, a } = await boot();
     await batching(app, a);
     await writeDiscoveryBudget(app.db, ctxOf(a), 10_000);
+    // The per-task daily limit bounds a batch too ($5 by default, about 240 requests here).
+    await writeSetting(app.db, ctxOf(a), budgetKey(a.userId), { perTaskDailyUsd: 10_000 });
     // A first run sends 25 and holds the rest below the cut; Rank these sends them the same way.
     const src = await discover(app, a, 501);
     expect(await rankBelowCut(app.db, ctxOf(a), src, 1_000)).toBe(476);
@@ -736,5 +767,439 @@ describe('where a posting is ranked live with batching on', () => {
       stopped: null,
     });
     expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
+  });
+});
+
+// tl's review of https://github.com/bgoleno/opportun/pull/444 (issuecomment-6807650055) and sec's.
+describe('a batch that cannot be collected (tl, blocking 1)', () => {
+  const DAY = 86_400_000;
+
+  it('29 days on, it ends though the provider keeps failing: its postings wait again, and a new batch is sent', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 2);
+    await submit(app, a);
+    fake!.stateError = new Error('401 from the provider');
+    await expect(collect(app, a)).rejects.toThrow('401');
+    vi.setSystemTime(Date.now() + 30 * DAY);
+    const [batch] = await batchRows(app, a);
+    expect(await collectRankBatch(app.db, batch!.id, app.jobs.services)).toEqual({
+      status: 'gone',
+      returned: 2,
+    });
+    for (const r of await results(app, a)) {
+      expect(r).toMatchObject({ rankSkipReason: 'batch_waiting', rankBatchId: null });
+    }
+    fake!.stateError = null;
+    expect(await submit(app, a)).toMatchObject({ status: 'submitted', requests: 2 });
+  });
+
+  it('the estimate is held for 24 hours from sending, not for as long as the batch is out', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    await submit(app, a);
+    const [batch] = await batchRows(app, a);
+    vi.setSystemTime(Date.now() + 23 * 3_600_000);
+    expect(await discoverySpentTodayUsd(app.db, ctxOf(a))).toBeCloseTo(batch!.estCostUsd, 12);
+    vi.setSystemTime(Date.now() + 2 * 3_600_000);
+    expect(await discoverySpentTodayUsd(app.db, ctxOf(a))).toBe(0);
+  });
+
+  it('a result that cannot be applied does not stop the others: it is logged, counted, and waits again', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 3);
+    await submit(app, a);
+    fake!.end(1, succeeded(52));
+    let n = 0;
+    setRaceHook((p) => {
+      if (p === 'rankBatch.applying' && ++n === 2) throw new Error('one result fails');
+    });
+    const error = vi.fn();
+    const log = { error, warn: vi.fn() } as unknown as NonNullable<typeof app.jobs.services.log>;
+    const out = await collectRankBatch(app.db, (await batchRows(app, a))[0]!.id, {
+      ...app.jobs.services,
+      log,
+    });
+    setRaceHook(undefined);
+    expect(out).toMatchObject({ status: 'collected', ranked: 2, errors: 1, returned: 1 });
+    expect(error).toHaveBeenCalledTimes(1);
+    const left = (await results(app, a)).filter((r) => r.aiScore === null);
+    expect(left).toHaveLength(1);
+    expect(left[0]).toMatchObject({ rankSkipReason: 'batch_waiting', rankBatchId: null });
+    expect(await rankRows(app, a)).toHaveLength(2);
+  });
+});
+
+describe("the rest of tl's blocking points", () => {
+  it('no batch provider while a batch is in flight: the waiting postings still go live (blocking 2)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    await submit(app, a);
+    await discover(app, a, 1, 2);
+    fake = null;
+    expect(await submit(app, a)).toEqual({ status: 'no_batches', released: 1 });
+    await app.jobs.drain();
+    expect((await results(app, a)).filter((r) => r.aiScore === 40)).toHaveLength(1);
+  });
+
+  it('where a live call would start, a batch takes at least its first posting (blocking 3)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await writeDiscoveryBudget(app.db, ctxOf(a), 0.015);
+    await discover(app, a, 2);
+    expect(await rankBudgetHasRoom(app.db, ctxOf(a))).toBe(true);
+    expect(await submit(app, a)).toMatchObject({ status: 'submitted', requests: 1 });
+  });
+
+  it('with the budget spent, no batch is sent', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await writeDiscoveryBudget(app.db, ctxOf(a), 0.015);
+    await discover(app, a, 1);
+    await app.db
+      .insert(taskRuns)
+      .values({
+        id: newId(),
+        userId: a.userId,
+        taskKey: DISCOVERY_RANK_KIND,
+        provider: 'anthropic',
+        model: POLICY.model,
+        inputTokens: 1,
+        outputTokens: 1,
+        estCost: 0.015,
+        durationMs: 1,
+        status: 'ok',
+        createdAt: Date.now(),
+      })
+      .run();
+    expect(await submit(app, a)).toEqual({ status: 'no_room', waiting: 1 });
+  });
+
+  it('the per-task daily limit bounds a batch as it stops a live call (blocking 4)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await writeDiscoveryBudget(app.db, ctxOf(a), 100);
+    await discover(app, a, 3);
+    expect(await submit(app, a)).toMatchObject({ requests: 3 });
+    const one = (await batchRows(app, a))[0]!.estCostUsd / 3;
+    await app.db.delete(rankBatches).run();
+    await writeSetting(app.db, ctxOf(a), budgetKey(a.userId), { perTaskDailyUsd: one * 2.5 });
+    expect(await submit(app, a)).toMatchObject({ status: 'submitted', requests: 2 });
+    // At the limit, nothing more, though the discovery budget has room.
+    await writeSetting(app.db, ctxOf(a), budgetKey(a.userId), { perTaskDailyUsd: 0 });
+    await app.db.delete(rankBatches).run();
+    expect(await submit(app, a)).toMatchObject({ status: 'no_room' });
+  });
+
+  it('a posting deleted while its batch runs: the result is counted and logged, its cost not recorded (blocking 5)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 2);
+    await submit(app, a);
+    const [gone] = await results(app, a);
+    await app.db.delete(discoveryResults).where(eq(discoveryResults.id, gone!.id)).run();
+    fake!.end(1, succeeded(70));
+    const warn = vi.fn();
+    const log = { warn, error: vi.fn() } as unknown as NonNullable<typeof app.jobs.services.log>;
+    const out = await collectRankBatch(app.db, (await batchRows(app, a))[0]!.id, {
+      ...app.jobs.services,
+      log,
+    });
+    expect(out).toMatchObject({ status: 'collected', ranked: 1, unmatched: 1 });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]![1]).toMatch(/not recorded/);
+    expect(await rankRows(app, a)).toHaveLength(1);
+  });
+});
+
+describe('the rules tl found untested (blocking 6)', () => {
+  it('two sends at once make one batch: the in-flight check is made again under the lock', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 2);
+    const [, second] = await results(app, a);
+    let raced = false;
+    setRaceHook(async (p) => {
+      if (p !== 'rankBatch.before_create' || raced) return;
+      raced = true;
+      // The other send takes only the first posting: the second is out of the wait meanwhile.
+      await app.db
+        .update(discoveryResults)
+        .set({ disposition: 'dismissed' })
+        .where(eq(discoveryResults.id, second!.id))
+        .run();
+      expect(await submit(app, a)).toMatchObject({ status: 'submitted', requests: 1 });
+      await app.db
+        .update(discoveryResults)
+        .set({ disposition: 'pending' })
+        .where(eq(discoveryResults.id, second!.id))
+        .run();
+    });
+    expect(await submit(app, a)).toEqual({ status: 'in_flight' });
+    setRaceHook(undefined);
+    expect(fake!.sent).toHaveLength(1);
+    expect(await batchRows(app, a)).toHaveLength(1);
+  });
+
+  it('a posting the provider gave no result for waits again', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 2);
+    await submit(app, a);
+    const [first] = fake!.sent[0]!.requests;
+    fake!.end(1, (r) => (r.customId === first!.customId ? succeeded(64)(r) : null));
+    expect(await collect(app, a)).toMatchObject({ ranked: 1, returned: 1 });
+    const waiting = (await results(app, a)).filter((r) => r.aiScore === null);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]).toMatchObject({ rankSkipReason: 'batch_waiting', rankBatchId: null });
+  });
+
+  it('a send the provider refuses fails the batch and puts its postings back', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 2);
+    fake!.submitError = new Error('400 from the provider');
+    expect(await submit(app, a)).toEqual({ status: 'provider_error', returned: 2 });
+    expect((await batchRows(app, a))[0]).toMatchObject({ state: 'failed' });
+    for (const r of await results(app, a)) {
+      expect(r).toMatchObject({ rankSkipReason: 'batch_waiting', rankBatchId: null });
+    }
+    fake!.submitError = null;
+    expect(await submit(app, a)).toMatchObject({ status: 'submitted', requests: 2 });
+  });
+
+  it('a send queued before batching was turned off hands the wait to live ranking', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    await writeRankBatching(app.db, ctxOf(a), false);
+    expect(await submit(app, a)).toEqual({ status: 'off', released: 1 });
+    await app.jobs.drain();
+    expect((await results(app, a))[0]!.aiScore).toBe(40);
+  });
+
+  it('the sweep queues a collect when one is due, and not again before the next look', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    await submit(app, a);
+    const collects = () =>
+      app.db.select().from(jobs).where(eq(jobs.kind, RANK_BATCH_COLLECT_KIND)).all();
+    expect(await sweepRankBatches(app.db, undefined)).toEqual({ failed: 0, collect: 1 });
+    await collect(app, a);
+    await app.db.delete(jobs).where(eq(jobs.kind, RANK_BATCH_COLLECT_KIND)).run();
+    expect(await sweepRankBatches(app.db, undefined)).toEqual({ failed: 0, collect: 0 });
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    expect(await sweepRankBatches(app.db, undefined)).toEqual({ failed: 0, collect: 1 });
+    expect(await collects()).toHaveLength(1);
+  });
+
+  it('with no key now, collecting is tried again later and the batch stays sent', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    await submit(app, a);
+    await app.db.delete(secrets).where(eq(secrets.userId, a.userId)).run();
+    expect(await collect(app, a)).toEqual({ status: 'no_client' });
+    expect((await batchRows(app, a))[0]).toMatchObject({ state: 'submitted' });
+    expect((await results(app, a))[0]!.rankBatchId).not.toBeNull();
+  });
+
+  it("the estimate's history reads discovery.rank's calls only", async () => {
+    const { app, a } = await boot();
+    for (let i = 0; i < 25; i++) {
+      await app.db
+        .insert(taskRuns)
+        .values({
+          id: newId(),
+          userId: a.userId,
+          taskKey: 'company.suggest',
+          provider: 'anthropic',
+          model: POLICY.model,
+          inputTokens: 1,
+          outputTokens: 900,
+          estCost: 0.01,
+          durationMs: 1,
+          status: 'ok',
+          createdAt: Date.now(),
+        })
+        .run();
+    }
+    expect(await rankOutputHistory(app.db, ctxOf(a))).toEqual({ outputTokens: null, calls: 0 });
+  });
+
+  it('Rank anyway stays live through lead resolution', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    const [r] = await results(app, a);
+    await app.db
+      .update(discoveryResults)
+      .set({ rankSkipReason: 'filtered', rankDeferredAt: null, resolution: 'needs_capture' })
+      .where(eq(discoveryResults.id, r!.id))
+      .run();
+    expect(await rankAnyway(app.db, ctxOf(a), r!.id)).toBe(1);
+    await app.jobs.drain();
+    expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(1);
+    expect((await getResult(app.db, ctxOf(a), r!.id)).aiScore).toBe(40);
+  });
+
+  it('a batch result keeps the multi-posted cap', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    const [r] = await results(app, a);
+    await app.db
+      .update(discoveryResults)
+      .set({ aiRationale: `${MULTI_POSTED_PREFIX} earlier` })
+      .where(eq(discoveryResults.id, r!.id))
+      .run();
+    await submit(app, a);
+    fake!.end(1, succeeded(95));
+    await collect(app, a);
+    const { MULTI_POSTED_SCORE_CAP } = await import('../src/jobs/discoveryKinds');
+    expect((await getResult(app.db, ctxOf(a), r!.id)).aiScore).toBe(MULTI_POSTED_SCORE_CAP);
+  });
+
+  it('after a collect, a send is queued for the postings still waiting', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    await submit(app, a);
+    await discover(app, a, 1, 2);
+    await app.db.delete(jobs).where(eq(jobs.kind, RANK_BATCH_SEND_KIND)).run();
+    fake!.end(1, succeeded(60));
+    await collect(app, a);
+    const sends = await app.db.select().from(jobs).where(eq(jobs.kind, RANK_BATCH_SEND_KIND)).all();
+    expect(sends).toHaveLength(1);
+  });
+
+  it('the hourly waiting sweep queues a send for a user with postings waiting for a batch', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    await app.db.delete(jobs).where(eq(jobs.kind, RANK_BATCH_SEND_KIND)).run();
+    await sweepWaitingResults(app.db);
+    const sends = await app.db.select().from(jobs).where(eq(jobs.kind, RANK_BATCH_SEND_KIND)).all();
+    expect(sends.map((j) => j.userId)).toEqual([a.userId]);
+  });
+});
+
+describe("tl's smaller points", () => {
+  it('a batch whose id was saved while it was being failed as stuck is not failed', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    crashAt('rankBatch.provider_answered');
+    await expect(submit(app, a)).rejects.toThrow('crash');
+    vi.setSystemTime(Date.now() + 16 * 60_000);
+    const [batch] = await batchRows(app, a);
+    setRaceHook(async (p) => {
+      if (p === 'rankBatch.stale_listed') {
+        await markBatchSubmitted(app.db, batch!.id, fake!.sent[0]!.batchId);
+      }
+    });
+    await sweepRankBatches(app.db, undefined);
+    setRaceHook(undefined);
+    expect((await batchRows(app, a))[0]).toMatchObject({ state: 'submitted' });
+    expect((await results(app, a))[0]!.rankBatchId).toBe(batch!.id);
+  });
+
+  it("a collect job for another user's batch does nothing", async () => {
+    const { app, a, b } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    await submit(app, a);
+    fake!.end(1, succeeded(60));
+    const [batch] = await batchRows(app, a);
+    expect(
+      await collectRankBatch(app.db, batch!.id, app.jobs.services, { userId: b.userId }),
+    ).toEqual({ status: 'not_in_flight' });
+    expect((await results(app, a))[0]!.aiScore).toBeNull();
+  });
+});
+
+describe('two users batching (sec)', () => {
+  it("each has their own batch; one's in flight neither delays nor counts against the other's; collecting one leaves the other's rows alone", async () => {
+    const { app, a, b } = await boot();
+    await batching(app, a);
+    await batching(app, b);
+    await discover(app, a, 1);
+    await discover(app, b, 1, 2);
+    expect(await submit(app, a)).toMatchObject({ status: 'submitted', requests: 1 });
+    expect(await submit(app, b)).toMatchObject({ status: 'submitted', requests: 1 });
+    const [batchA] = await batchRows(app, a);
+    const [batchB] = await batchRows(app, b);
+    expect(fake!.sentIds()).toHaveLength(2);
+    expect(await discoverySpentTodayUsd(app.db, ctxOf(a))).toBeCloseTo(batchA!.estCostUsd, 12);
+    expect(await discoverySpentTodayUsd(app.db, ctxOf(b))).toBeCloseTo(batchB!.estCostUsd, 12);
+    const [ra] = await results(app, a);
+    const [rb] = await results(app, b);
+    // a's batch's answer names b's posting too.
+    fake!.answer(1, [
+      {
+        customId: ra!.id,
+        kind: 'succeeded',
+        text: JSON.stringify({ score: 61, rationale: 'A.', disqualifiers: [] }),
+        usage: USAGE,
+      },
+      {
+        customId: rb!.id,
+        kind: 'succeeded',
+        text: JSON.stringify({ score: 99, rationale: 'B.', disqualifiers: [] }),
+        usage: USAGE,
+      },
+    ]);
+    await collectRankBatch(app.db, batchA!.id, app.jobs.services);
+    expect((await getResult(app.db, ctxOf(a), ra!.id)).aiScore).toBe(61);
+    expect(await getResult(app.db, ctxOf(b), rb!.id)).toMatchObject({
+      aiScore: null,
+      rankBatchId: batchB!.id,
+    });
+    expect(await rankRows(app, b)).toHaveLength(0);
+    expect((await batchRows(app, b))[0]).toMatchObject({ state: 'submitted' });
+    expect(await discoverySpentTodayUsd(app.db, ctxOf(b))).toBeCloseTo(batchB!.estCostUsd, 12);
+  });
+
+  it("each read and write of a posting's batch state is scoped to its user", async () => {
+    const { app, a, b } = await boot();
+    await batching(app, a);
+    await batching(app, b);
+    await discover(app, a, 1);
+    await discover(app, b, 1, 2);
+    const asA = ctxOf(a);
+    const [rb] = await results(app, b);
+    // Waiting and in no batch yet: a's list has its own posting only.
+    expect(await listBatchWaitingIds(app.db, asA)).toEqual(
+      (await results(app, a)).map((r) => r.id),
+    );
+    await submit(app, b);
+    const [batchB] = await batchRows(app, b);
+    const before = await getResult(app.db, ctxOf(b), rb!.id);
+    expect(await hasResult(app.db, asA, rb!.id)).toBe(false);
+    expect(await setBatchWaiting(app.db, asA, rb!.id)).toBe(false);
+    expect(await takeBatchLink(app.db, asA, batchB!.id, rb!.id)).toBeUndefined();
+    expect(await unlinkBatch(app.db, asA, batchB!.id, { batching: false })).toBe(0);
+    await endBatchWait(app.db, asA, rb!.id, 'provider_error');
+    await releaseBatchWaiting(app.db, asA);
+    expect(await getResult(app.db, ctxOf(b), rb!.id)).toEqual(before);
+  });
+
+  it("a user's batches go with the user; a posting's link goes with its batch", async () => {
+    const { app, a, b } = await boot();
+    await batching(app, a);
+    await batching(app, b);
+    await discover(app, a, 1);
+    await discover(app, b, 1, 2);
+    await submit(app, a);
+    await submit(app, b);
+    await app.db.delete(users).where(eq(users.id, b.userId)).run();
+    expect(await batchRows(app, b)).toEqual([]);
+    const [batchA] = await batchRows(app, a);
+    await app.db.delete(rankBatches).where(eq(rankBatches.id, batchA!.id)).run();
+    expect((await results(app, a))[0]!.rankBatchId).toBeNull();
   });
 });

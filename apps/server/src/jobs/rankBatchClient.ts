@@ -34,7 +34,7 @@ export async function rankBatchClient(
   ctx: UserCtx,
   services: Partial<JobServices>,
   policy?: ModelPolicy,
-): Promise<{ provider: BatchProvider; policy: ModelPolicy } | null> {
+): Promise<{ provider: BatchProvider; policy: ModelPolicy; perTaskDailyUsd: number } | null> {
   const deps = await buildAiDeps(db, ctx);
   const used = policy ?? (await deps.policyFor('discovery.rank'));
   let apiKey: string;
@@ -46,7 +46,10 @@ export async function rankBatchClient(
   }
   const factory = services.rankBatchProvider ?? batchProviderFor;
   const provider = factory({ policy: used, apiKey, providerFetch: deps.providerFetch });
-  return provider === null ? null : { provider, policy: used };
+  return provider === null
+    ? null
+    : // The router's per-task daily limit, which a batch is bound by as a live call is (tl on #444).
+      { provider, policy: used, perTaskDailyUsd: deps.budget.perTaskDailyUsd };
 }
 
 /**

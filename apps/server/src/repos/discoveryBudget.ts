@@ -73,7 +73,10 @@ export async function discoverySpentTodayUsd(
   ctx: UserCtx,
   now: number = Date.now(),
 ): Promise<number> {
-  return (await ledgerSpentTodayUsd(db, ctx, now)) + (await batchHoldUsd(db, ctx));
+  // The hold first: a result applied between the two reads is then in both (high), never in
+  // neither (tl on #444).
+  const hold = await batchHoldUsd(db, ctx, now);
+  return (await ledgerSpentTodayUsd(db, ctx, now)) + hold;
 }
 
 async function ledgerSpentTodayUsd(db: Db, ctx: UserCtx, now: number): Promise<number> {

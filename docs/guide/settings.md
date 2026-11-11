@@ -478,6 +478,7 @@ the name; the others stay in the instance.
 | `opportun.count.truncated`              | whole number             | yes      |
 | `opportun.count.read`                   | whole number             | yes      |
 | `opportun.count.returned`               | whole number             | yes      |
+| `opportun.count.unmatched`              | whole number             | yes      |
 | `opportun.count.set`                    | whole number             | yes      |
 | `opportun.count.changed`                | whole number             | yes      |
 | `opportun.count.cleared`                | whole number             | yes      |

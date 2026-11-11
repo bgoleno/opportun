@@ -249,6 +249,7 @@ export const ATTRIBUTES = {
   'opportun.count.changed': int,
   'opportun.count.cleared': int,
   'opportun.count.returned': int,
+  'opportun.count.unmatched': int,
   'opportun.mail.channel': { kind: 'enum', values: COMM_CHANNELS },
   'opportun.db.awaited_outside': { kind: 'bool' },
   // A process warning's class and code (index.ts's handlers): never its text.
@@ -797,6 +798,14 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.count.returned',
   ],
   'sending a ranking batch failed': ['opportun.rank_batch.id'],
+  'applying a ranking batch result failed': [
+    'opportun.rank_batch.id',
+    'opportun.discovery_result.id',
+  ],
+  'ranking batch results for postings no longer there: their cost is not recorded': [
+    'opportun.rank_batch.id',
+    'opportun.count.unmatched',
+  ],
   'could not read the message again; classifying on the snippet': [
     'opportun.communication.id',
     'opportun.mail.channel',
