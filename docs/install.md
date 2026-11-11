@@ -287,6 +287,14 @@ Application settings (read by the server process):
 | `DB_SSL`                                           | `disable` for localhost, else `require`        | Postgres TLS: `disable`, `require` (encrypted, certificate not verified) or `verify-full` (certificate and host checked); `sslmode` in the URL is honored when unset           |
 | `OPPORTUN_DEMO`                                    | (unset)                                        | `1` declares this deployment the invitation-only demo instance; see **Demo mode** below                                                                                        |
 
+**What the log holds.** Every log line, Opportun's own and any library's, passes through one
+filter before it is written: it keeps a fixed message and a few typed values (row ids, counts,
+codes), and nothing else. So a log line never holds a name, an email address, a phone number, a
+company's name, a request's URL or query string, an error's message, or the server's host name.
+An error is written as its type and the code frames it passed through. A message the server
+does not know, such as one a library builds, is written as `[message withheld]`. The one
+exception is a configuration error at startup, which names the variable that is wrong.
+
 **Password pepper.** `OPPORTUN_PEPPER` is an extra secret mixed into every password hash
 (Argon2id's keyed `secret` input), so a stolen database file alone cannot be used to
 guess passwords. Keep it outside the database, like the master key (for example
