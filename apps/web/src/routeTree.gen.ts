@@ -35,6 +35,7 @@ import { Route as SettingsDataRouteImport } from './routes/settings/data';
 import { Route as SettingsIntegrationsRouteImport } from './routes/settings/integrations';
 import { Route as SettingsJobsRouteImport } from './routes/settings/jobs';
 import { Route as SettingsMailFiltersRouteImport } from './routes/settings/mail-filters';
+import { Route as SettingsMetricsRouteImport } from './routes/settings/metrics';
 import { Route as SettingsProfileRouteImport } from './routes/settings/profile';
 import { Route as SettingsResumeRulesRouteImport } from './routes/settings/resume-rules';
 import { Route as SettingsRoleTargetsRouteImport } from './routes/settings/role-targets';
@@ -175,6 +176,11 @@ const SettingsMailFiltersRoute = SettingsMailFiltersRouteImport.update({
   path: '/mail-filters',
   getParentRoute: () => SettingsRouteRoute,
 } as any);
+const SettingsMetricsRoute = SettingsMetricsRouteImport.update({
+  id: '/metrics',
+  path: '/metrics',
+  getParentRoute: () => SettingsRouteRoute,
+} as any);
 const SettingsProfileRoute = SettingsProfileRouteImport.update({
   id: '/profile',
   path: '/profile',
@@ -244,6 +250,7 @@ export interface FileRoutesByFullPath {
   '/settings/integrations': typeof SettingsIntegrationsRoute;
   '/settings/jobs': typeof SettingsJobsRoute;
   '/settings/mail-filters': typeof SettingsMailFiltersRoute;
+  '/settings/metrics': typeof SettingsMetricsRoute;
   '/settings/profile': typeof SettingsProfileRoute;
   '/settings/resume-rules': typeof SettingsResumeRulesRoute;
   '/settings/role-targets': typeof SettingsRoleTargetsRoute;
@@ -279,6 +286,7 @@ export interface FileRoutesByTo {
   '/settings/integrations': typeof SettingsIntegrationsRoute;
   '/settings/jobs': typeof SettingsJobsRoute;
   '/settings/mail-filters': typeof SettingsMailFiltersRoute;
+  '/settings/metrics': typeof SettingsMetricsRoute;
   '/settings/profile': typeof SettingsProfileRoute;
   '/settings/resume-rules': typeof SettingsResumeRulesRoute;
   '/settings/role-targets': typeof SettingsRoleTargetsRoute;
@@ -317,6 +325,7 @@ export interface FileRoutesById {
   '/settings/integrations': typeof SettingsIntegrationsRoute;
   '/settings/jobs': typeof SettingsJobsRoute;
   '/settings/mail-filters': typeof SettingsMailFiltersRoute;
+  '/settings/metrics': typeof SettingsMetricsRoute;
   '/settings/profile': typeof SettingsProfileRoute;
   '/settings/resume-rules': typeof SettingsResumeRulesRoute;
   '/settings/role-targets': typeof SettingsRoleTargetsRoute;
@@ -356,6 +365,7 @@ export interface FileRouteTypes {
     | '/settings/integrations'
     | '/settings/jobs'
     | '/settings/mail-filters'
+    | '/settings/metrics'
     | '/settings/profile'
     | '/settings/resume-rules'
     | '/settings/role-targets'
@@ -391,6 +401,7 @@ export interface FileRouteTypes {
     | '/settings/integrations'
     | '/settings/jobs'
     | '/settings/mail-filters'
+    | '/settings/metrics'
     | '/settings/profile'
     | '/settings/resume-rules'
     | '/settings/role-targets'
@@ -428,6 +439,7 @@ export interface FileRouteTypes {
     | '/settings/integrations'
     | '/settings/jobs'
     | '/settings/mail-filters'
+    | '/settings/metrics'
     | '/settings/profile'
     | '/settings/resume-rules'
     | '/settings/role-targets'
@@ -647,6 +659,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsMailFiltersRouteImport;
       parentRoute: typeof SettingsRouteRoute;
     };
+    '/settings/metrics': {
+      id: '/settings/metrics';
+      path: '/metrics';
+      fullPath: '/settings/metrics';
+      preLoaderRoute: typeof SettingsMetricsRouteImport;
+      parentRoute: typeof SettingsRouteRoute;
+    };
     '/settings/profile': {
       id: '/settings/profile';
       path: '/profile';
@@ -740,6 +759,7 @@ interface SettingsRouteRouteChildren {
   SettingsIntegrationsRoute: typeof SettingsIntegrationsRoute;
   SettingsJobsRoute: typeof SettingsJobsRoute;
   SettingsMailFiltersRoute: typeof SettingsMailFiltersRoute;
+  SettingsMetricsRoute: typeof SettingsMetricsRoute;
   SettingsProfileRoute: typeof SettingsProfileRoute;
   SettingsResumeRulesRoute: typeof SettingsResumeRulesRoute;
   SettingsRoleTargetsRoute: typeof SettingsRoleTargetsRoute;
@@ -757,6 +777,7 @@ const SettingsRouteRouteChildren: SettingsRouteRouteChildren = {
   SettingsIntegrationsRoute: SettingsIntegrationsRoute,
   SettingsJobsRoute: SettingsJobsRoute,
   SettingsMailFiltersRoute: SettingsMailFiltersRoute,
+  SettingsMetricsRoute: SettingsMetricsRoute,
   SettingsProfileRoute: SettingsProfileRoute,
   SettingsResumeRulesRoute: SettingsResumeRulesRoute,
   SettingsRoleTargetsRoute: SettingsRoleTargetsRoute,

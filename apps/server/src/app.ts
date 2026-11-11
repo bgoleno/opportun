@@ -44,6 +44,7 @@ import { JOB_PRUNE_CRON, JOB_PRUNE_JOB_KIND } from './jobs/jobPrune';
 import { OBS_PRUNE_CRON, OBS_PRUNE_JOB_KIND } from './jobs/obsPrune';
 import { stopObs } from './obs';
 import { startObsFromSettings } from './obs/config';
+import { obsMetricRoutes } from './routes/obsMetrics';
 import { obsSettingsRoutes } from './routes/obsSettings';
 import { obsTraceRoutes } from './routes/obsTraces';
 import {
@@ -553,6 +554,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       await api.register(submissionRoutes);
       await api.register(obsSettingsRoutes);
       await api.register(obsTraceRoutes);
+      await api.register(obsMetricRoutes);
     },
     { prefix: '/api/v1' },
   );
