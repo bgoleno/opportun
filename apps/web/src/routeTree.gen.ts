@@ -40,6 +40,7 @@ import { Route as SettingsProfileRouteImport } from './routes/settings/profile';
 import { Route as SettingsResumeRulesRouteImport } from './routes/settings/resume-rules';
 import { Route as SettingsRoleTargetsRouteImport } from './routes/settings/role-targets';
 import { Route as SettingsSecurityRouteImport } from './routes/settings/security';
+import { Route as SettingsTelemetryRouteImport } from './routes/settings/telemetry';
 import { Route as SettingsUsersRouteImport } from './routes/settings/users';
 import { Route as OpportunitiesIdApplyRouteImport } from './routes/opportunities.$id_.apply';
 import { Route as SettingsTracesIndexRouteImport } from './routes/settings/traces/index';
@@ -201,6 +202,11 @@ const SettingsSecurityRoute = SettingsSecurityRouteImport.update({
   path: '/security',
   getParentRoute: () => SettingsRouteRoute,
 } as any);
+const SettingsTelemetryRoute = SettingsTelemetryRouteImport.update({
+  id: '/telemetry',
+  path: '/telemetry',
+  getParentRoute: () => SettingsRouteRoute,
+} as any);
 const SettingsUsersRoute = SettingsUsersRouteImport.update({
   id: '/users',
   path: '/users',
@@ -255,6 +261,7 @@ export interface FileRoutesByFullPath {
   '/settings/resume-rules': typeof SettingsResumeRulesRoute;
   '/settings/role-targets': typeof SettingsRoleTargetsRoute;
   '/settings/security': typeof SettingsSecurityRoute;
+  '/settings/telemetry': typeof SettingsTelemetryRoute;
   '/settings/users': typeof SettingsUsersRoute;
   '/contacts/': typeof ContactsIndexRoute;
   '/discovery/': typeof DiscoveryIndexRoute;
@@ -291,6 +298,7 @@ export interface FileRoutesByTo {
   '/settings/resume-rules': typeof SettingsResumeRulesRoute;
   '/settings/role-targets': typeof SettingsRoleTargetsRoute;
   '/settings/security': typeof SettingsSecurityRoute;
+  '/settings/telemetry': typeof SettingsTelemetryRoute;
   '/settings/users': typeof SettingsUsersRoute;
   '/contacts': typeof ContactsIndexRoute;
   '/discovery': typeof DiscoveryIndexRoute;
@@ -330,6 +338,7 @@ export interface FileRoutesById {
   '/settings/resume-rules': typeof SettingsResumeRulesRoute;
   '/settings/role-targets': typeof SettingsRoleTargetsRoute;
   '/settings/security': typeof SettingsSecurityRoute;
+  '/settings/telemetry': typeof SettingsTelemetryRoute;
   '/settings/users': typeof SettingsUsersRoute;
   '/contacts/': typeof ContactsIndexRoute;
   '/discovery/': typeof DiscoveryIndexRoute;
@@ -370,6 +379,7 @@ export interface FileRouteTypes {
     | '/settings/resume-rules'
     | '/settings/role-targets'
     | '/settings/security'
+    | '/settings/telemetry'
     | '/settings/users'
     | '/contacts/'
     | '/discovery/'
@@ -406,6 +416,7 @@ export interface FileRouteTypes {
     | '/settings/resume-rules'
     | '/settings/role-targets'
     | '/settings/security'
+    | '/settings/telemetry'
     | '/settings/users'
     | '/contacts'
     | '/discovery'
@@ -444,6 +455,7 @@ export interface FileRouteTypes {
     | '/settings/resume-rules'
     | '/settings/role-targets'
     | '/settings/security'
+    | '/settings/telemetry'
     | '/settings/users'
     | '/contacts/'
     | '/discovery/'
@@ -694,6 +706,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsSecurityRouteImport;
       parentRoute: typeof SettingsRouteRoute;
     };
+    '/settings/telemetry': {
+      id: '/settings/telemetry';
+      path: '/telemetry';
+      fullPath: '/settings/telemetry';
+      preLoaderRoute: typeof SettingsTelemetryRouteImport;
+      parentRoute: typeof SettingsRouteRoute;
+    };
     '/settings/users': {
       id: '/settings/users';
       path: '/users';
@@ -764,6 +783,7 @@ interface SettingsRouteRouteChildren {
   SettingsResumeRulesRoute: typeof SettingsResumeRulesRoute;
   SettingsRoleTargetsRoute: typeof SettingsRoleTargetsRoute;
   SettingsSecurityRoute: typeof SettingsSecurityRoute;
+  SettingsTelemetryRoute: typeof SettingsTelemetryRoute;
   SettingsUsersRoute: typeof SettingsUsersRoute;
   SettingsIndexRoute: typeof SettingsIndexRoute;
   SettingsTracesTraceIdRoute: typeof SettingsTracesTraceIdRoute;
@@ -782,6 +802,7 @@ const SettingsRouteRouteChildren: SettingsRouteRouteChildren = {
   SettingsResumeRulesRoute: SettingsResumeRulesRoute,
   SettingsRoleTargetsRoute: SettingsRoleTargetsRoute,
   SettingsSecurityRoute: SettingsSecurityRoute,
+  SettingsTelemetryRoute: SettingsTelemetryRoute,
   SettingsUsersRoute: SettingsUsersRoute,
   SettingsIndexRoute: SettingsIndexRoute,
   SettingsTracesTraceIdRoute: SettingsTracesTraceIdRoute,

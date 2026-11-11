@@ -281,12 +281,22 @@ describe('MetricsPage', () => {
     expect(screen.getByLabelText('Time range')).toHaveValue('custom');
   });
 
-  it('while collection is off, says so, and tells an admin where it is turned on, without a link yet', async () => {
+  it('while collection is off, says so, and links an admin to the switch in Settings > Telemetry', async () => {
     mockApi({ 'GET /obs/metrics': { ...CATALOG, collect: false } });
     renderWithProviders(<Harness />);
     const notice = await screen.findByRole('status');
     expect(notice).toHaveTextContent('Collection is off');
-    expect(notice).toHaveTextContent(/An admin can turn it on in Settings/);
+    expect(within(notice).getByRole('link', { name: 'Settings > Telemetry' })).toHaveAttribute(
+      'href',
+      '/settings/telemetry',
+    );
+  });
+
+  it('while collection is off, tells a user to ask an admin, with no link', async () => {
+    mockApi({ 'GET /obs/metrics': { ...CATALOG, collect: false } });
+    renderWithProviders(<Harness isAdmin={false} />);
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent(/Ask an admin/);
     expect(within(notice).queryByRole('link')).toBeNull();
   });
 

@@ -186,7 +186,7 @@ describe('TracesPage', () => {
     expect(second).toBe(first);
   });
 
-  it('while collection is off, tells an admin where it is turned on, without a link yet', async () => {
+  it('while collection is off, links an admin to the switch in Settings > Telemetry', async () => {
     mockApi({
       'GET /obs/traces': { collect: false, items: [], next: null },
       'GET /obs/traces/filters': FILTER_VALUES,
@@ -194,9 +194,11 @@ describe('TracesPage', () => {
     renderWithProviders(<Harness isAdmin />);
     const notice = await screen.findByRole('status');
     expect(notice).toHaveTextContent('Collection is off');
-    expect(notice).toHaveTextContent(/An admin can turn it on in Settings/);
-    // The switch has no Settings card until FR-T2: a link would lead nowhere (tl on #347).
-    expect(within(notice).queryByRole('link')).toBeNull();
+    // FR-T2's card exists now, so the words become a link (tl on #347; decision 41).
+    expect(within(notice).getByRole('link', { name: 'Settings > Telemetry' })).toHaveAttribute(
+      'href',
+      '/settings/telemetry',
+    );
   });
 
   it('while collection is off, tells a user to ask an admin, and still lists earlier traces', async () => {
@@ -208,6 +210,7 @@ describe('TracesPage', () => {
     const notice = await screen.findByRole('status');
     expect(notice).toHaveTextContent('Collection is off');
     expect(notice).toHaveTextContent(/Ask an admin/);
+    expect(within(notice).queryByRole('link')).toBeNull();
     expect(notice).toHaveTextContent(/collected earlier are still shown/);
     expect(await screen.findByRole('list', { name: 'Traces' })).toBeInTheDocument();
   });
