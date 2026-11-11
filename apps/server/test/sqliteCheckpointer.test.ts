@@ -276,15 +276,19 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       await h.checkpointer!.ready;
       await rawRun(h.db, sql`CREATE TABLE IF NOT EXISTS bench_383 (v TEXT)`);
       const started = Date.now();
-      // Small writes back to back, one per turn of the loop, for five age bounds: a frame is
+      // Small writes back to back, one per turn of the loop, for ten age bounds: a frame is
       // waiting at every look the worker takes, the one straight after a checkpoint included.
-      while (Date.now() - started < 1_500) {
+      // Three seconds, not fewer: a checkpoint racing a commit can copy all but the last frame,
+      // and the worker then waits its 1 s retry delay (RETRY_MS) before the next try, so even a
+      // run where every checkpoint does that has three (one CI run had 2 in 1.5 s).
+      while (Date.now() - started < 3_000) {
         await rawRun(h.db, sql`INSERT INTO bench_383 (v) VALUES ('x')`);
         await new Promise((r) => setImmediate(r));
       }
-      // About one checkpoint per age bound; not one per poll (about 60).
+      // At most one checkpoint per age bound (ten in 3 s; 4 to 9 measured), not one per poll:
+      // with a bound that never re-arms, 17 to 91 were measured.
       expect(h.checkpointer!.checkpoints).toBeGreaterThanOrEqual(3);
-      expect(h.checkpointer!.checkpoints).toBeLessThanOrEqual(8);
+      expect(h.checkpointer!.checkpoints).toBeLessThanOrEqual(12);
     } finally {
       await opened.close();
     }
