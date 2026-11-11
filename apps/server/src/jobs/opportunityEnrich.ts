@@ -572,9 +572,13 @@ async function findCareersPage(
     return page === null ? null : { page, source: 'stored' };
   }
   const fromName = new Set(nameDomains(company.name));
+  const sender = senderDomain((await sourceFrom(db, ctx, opp.id)) ?? '');
+  // A sender on a domain the name gives is not probed first: it keeps that domain's own place,
+  // so the page saved is the one the name-derived domains give in their order, as with no
+  // message. Only a sender on another domain goes first, and its page is not saved.
   for (const domain of candidateDomains(
     company.name,
-    senderDomain((await sourceFrom(db, ctx, opp.id)) ?? ''),
+    sender !== null && fromName.has(sender) ? null : sender,
   )) {
     const home = await getPage(fetch, `https://${domain}/`);
     if (home === null || !pageNamesCompany(home.html, company.name)) continue;

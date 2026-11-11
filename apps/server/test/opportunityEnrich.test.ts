@@ -497,6 +497,56 @@ describe('enrichOpportunity', () => {
         await app.db.select().from(jobs).where(eq(jobs.kind, ATS_DETECT_KIND)).all(),
       ).toHaveLength(1);
     });
+
+    // What is saved is what would be saved with no message: the first page the name-derived
+    // domains give, in their own order. A sender on one of them only takes that domain's place.
+    it('a sender on a later name-derived domain does not go first: the first one is saved', async () => {
+      const { app, a } = await boot();
+      const id = await fromSender(app, a, '"Recruiter" <talent@initechlabs.io>');
+      const { fetch } = net({
+        'https://initechlabs.io/': '<html><body>Initech Labs hiring</body></html>',
+        'https://initechlabs.io/careers':
+          '<html><body>Open positions: <a href="https://boards.greenhouse.io/initech">All jobs</a></body></html>',
+        'https://boards-api.greenhouse.io/v1/boards/initech/jobs': board,
+        'https://boards.greenhouse.io/initech/jobs/123': POSTING,
+        'https://initechlabs.com/': HOME,
+        'https://initechlabs.com/careers': CAREERS,
+        'https://initechlabs.com/job/staff-platform-engineer/': POSTING,
+      });
+      await enrichOpportunity(app.db, ctxOf(a), fetch, id);
+      expect((await companyOf(app, id)).careersUrl).toBe('https://initechlabs.com/careers');
+      expect(
+        await app.db.select().from(jobs).where(eq(jobs.kind, ATS_DETECT_KIND)).all(),
+      ).toHaveLength(1);
+    });
+
+    it('a sender on a later name-derived domain, with no earlier one answering, is saved as it would be', async () => {
+      const { app, a } = await boot();
+      const id = await fromSender(app, a, '"Recruiter" <talent@initechlabs.io>');
+      const { fetch } = net({
+        'https://initechlabs.io/': HOME,
+        'https://initechlabs.io/careers': CAREERS,
+        'https://initechlabs.io/job/staff-platform-engineer/': POSTING,
+      });
+      await enrichOpportunity(app.db, ctxOf(a), fetch, id);
+      expect((await companyOf(app, id)).careersUrl).toBe('https://initechlabs.io/careers');
+    });
+
+    it('a sender on a subdomain of a name-derived domain is a sender page: not saved', async () => {
+      const { app, a } = await boot();
+      const id = await fromSender(app, a, '"Recruiter" <talent@jobs.initechlabs.com>');
+      const { fetch } = net({
+        'https://jobs.initechlabs.com/': HOME,
+        'https://jobs.initechlabs.com/careers': CAREERS,
+        'https://jobs.initechlabs.com/job/staff-platform-engineer/': POSTING,
+      });
+      const outcome = await enrichOpportunity(app.db, ctxOf(a), fetch, id);
+      expect(outcome).toMatchObject({ outcome: 'enriched' });
+      expect((await companyOf(app, id)).careersUrl).toBeNull();
+      expect(
+        await app.db.select().from(jobs).where(eq(jobs.kind, ATS_DETECT_KIND)).all(),
+      ).toHaveLength(0);
+    });
   });
 
   it('a Workday job link on the careers page is read from the CXS detail, not its JS shell', async () => {
