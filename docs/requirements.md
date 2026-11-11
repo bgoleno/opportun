@@ -428,6 +428,61 @@ sits behind `OPPORTUN_SUBMISSIONS=1`, off by default and never on the demo.
   viewing, on an explicit click. It never presses the form's submit control.
 - FR-X5 (P1): The feature is unavailable on the demo deployment.
 
+### 5.12 Observability (FR-T)
+
+The design is in [design.md, section 14](./design.md#14-observability), and the work is
+tracked on https://github.com/bgoleno/opportun/issues/340. FR-T1 is built; the rest is
+designed. Collection and export are each behind an admin's switch, and both are off by
+default: an instance that does not turn the feature on pays nothing for it (NFR-OPS7), and
+FR-T1 works either way. Everything here obeys NFR-PRV6 and NFR-PRV7: telemetry holds no
+personal information and no prompt or response content, and nothing leaves the deployment
+unless an admin turns export on and names where it goes.
+
+- FR-T1 (P1): **Token use per feature.** For every AI task the user can see calls, failed
+  calls, input tokens, output tokens and estimated cost, grouped by the product feature the
+  task belongs to and by model, over the last 7, 30 or 90 days. A task that has not run shows
+  zero. Each call keeps the cost estimated at the price in force when it ran. The numbers
+  come from the usage ledger (FR-A5).
+- FR-T2 (P1): **Export.** An admin can send Opportun's telemetry to one destination:
+  Prometheus, a Datadog Agent, InfluxDB, or any OTLP endpoint. Settings holds a switch for
+  collecting and a switch for exporting, both off by default, the destination's type and
+  address, and its credential,
+  which is stored encrypted and never shown again. Token use is exported as metrics that carry
+  the AI task, feature, provider and model, with input and output tokens as separate metrics,
+  and estimated cost as a metric that adds each call's cost at the price in force when it ran.
+  Turning export off stops it without a restart.
+- FR-T3 (P1): **Server operation metrics.** Every HTTP route, background job, database
+  operation and outbound request records its duration as a histogram, from which its call
+  count and its error count are read, labelled by a low-cardinality operation name (a route
+  template, a job kind, a statement's verb and table, a named outbound target). Points are
+  aggregated every 60 seconds. An error (a thrown error, a 5xx response, a failed job)
+  writes an error record linked to its trace.
+- FR-T4 (P1): **AI traces.** Every AI call produces a span that follows the OpenTelemetry
+  Gen AI semantic conventions at the version the design pins, with the Opportun task and
+  feature. A chat turn and a multi-step AI workflow each appear as one trace: a parent span
+  with a child span for each model call and each tool call, across background jobs where the
+  workflow continues in one. A chat's spans carry its conversation id.
+- FR-T5 (P1): **System event log.** Sign-ins, settings changes, job runs, discovery source
+  runs, imports and exports, AI key changes and errors are each logged as one structured
+  record with an event name, a time, the user's opaque id and a trace id where one exists.
+  A record names a company by its id, not its name. These event records are written while
+  collection is on. The server's ordinary log works either way, under the same privacy rule,
+  and an exported record leaves out every id that belongs to a user.
+- FR-T6 (P1): **Metric dashboards.** A page linked from Settings lists every metric with its
+  description and unit, filters the list by the attributes the metrics carry, and charts a
+  chosen metric over a chosen time range with zoom, the value under the cursor, and a
+  breakdown by a chosen attribute. It reads the app's own store, so it works with export off.
+  A user sees their own AI metrics. An admin also sees the instance's metrics. While
+  collection is off the page says so, with a link to the switch for an admin.
+- FR-T7 (P1): **AI trace dashboard.** A page lists the user's AI traces, newest first, with
+  time, feature or task, model, duration, tokens, estimated cost and status, filterable by
+  task, model, provider, status, time range and conversation. Opening a trace shows a
+  waterfall of its spans on one time axis, nested by parent, and a span's attributes on
+  selection. A chat's turns are grouped by conversation. It shows no prompt or response
+  content: it links to the tailoring session or the prompt where that content already lives.
+  Every user, an admin included, sees only their own traces. While collection is off the page
+  says so, with a link to the switch for an admin.
+
 ## 6. Non-functional requirements (NFR)
 
 ### 6.1 Security (NFR-SEC)
@@ -514,6 +569,31 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
   nothing the user cannot get back in one click. One exception, stated honestly
   rather than claimed absolute: a row written before this guarantee existed can
   still carry a stored body, readable until a purge clears that row.
+- NFR-PRV6: Telemetry (metrics, traces and log records, whether stored in the app's own
+  database, written to the log or exported) carries only attributes from a closed, documented
+  list, each with a typed value: a number, a flag, an opaque id, a name from a fixed list, or
+  an identifier of a narrow, checked shape (a model id, an error code, a route template). It
+  never carries prompt or response content, resume text, a person's name, an email address,
+  a phone number, a company's name, an error message, a URL's path or query, SQL text, a
+  request header or an IP address, except the request's address in the server's own access
+  log, which is never stored in the telemetry tables or exported. The rule is enforced in one
+  place that every stored, logged and exported record passes through, not at each call site, and it is tested by sending known
+  personal data through every record type and finding none of it in the output. Exported
+  telemetry identifies no user: no row id that belongs to a user leaves (the user's id, a
+  conversation's, a prompt's, a company's), and a model's name leaves only when it is a
+  listed model. On an instance with few users, the timing of activity can still tell them
+  apart.
+- NFR-PRV7: Telemetry collection is off by default, and with it off Opportun stores no
+  telemetry. Telemetry export is a second switch, also off by default, and with it off
+  Opportun makes no outbound connection for telemetry. Only an admin can turn it on or change where it sends, with their
+  password confirmed again. The destination must be `https` at a public address, or, only
+  where the operator has allowed it in the environment, a loopback or private-network address,
+  never a link-local or metadata address; it never follows a redirect, its URL never holds a
+  credential, and its stored credential is cleared when the destination changes. Every user of the instance
+  can see that export is on and what kind of data it sends, because export covers every
+  user's telemetry. Collection and export are unavailable on the demo deployment. The user guide states what
+  is sent to each kind of destination. This is the opt-in telemetry NFR-PRV1 allows for:
+  NFR-PRV1 itself is unchanged.
 
 ### 6.3 Platform, footprint, and operations (NFR-OPS)
 
@@ -526,6 +606,11 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
 - NFR-OPS5: Health endpoint, structured logs, and a visible job/queue status page.
 - NFR-OPS6: Versioned releases with migrations that run automatically and safely on
   upgrade; a downgrade/restore story documented.
+- NFR-OPS7: Observability stays within a stated budget (design section 14.11). With
+  collection off it costs one check per operation and writes nothing. With collection on it
+  does no IO on a request's path, writes in bounded batches, and its tables are capped in rows
+  and in age. An export that fails is counted and shown, and never delays a request or a job.
+  A test or benchmark shows each bound.
 
 ### 6.4 Quality (NFR-QLT)
 

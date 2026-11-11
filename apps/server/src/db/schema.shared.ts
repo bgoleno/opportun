@@ -93,6 +93,12 @@ export type DedupeCandidateDecision = (typeof DEDUPE_CANDIDATE_DECISIONS)[number
 export const DEDUPE_CANDIDATE_DECIDED_BY = ['heuristic', 'ai', 'user'] as const;
 export type DedupeCandidateDecidedBy = (typeof DEDUPE_CANDIDATE_DECIDED_BY)[number];
 
+/** An observability span's kind and status (obs_spans, obs_traces; design.md 14.7, #353). */
+export const OBS_SPAN_KINDS = ['server', 'client', 'internal', 'producer', 'consumer'] as const;
+export type ObsSpanKind = (typeof OBS_SPAN_KINDS)[number];
+export const OBS_SPAN_STATUSES = ['ok', 'error'] as const;
+export type ObsSpanStatus = (typeof OBS_SPAN_STATUSES)[number];
+
 /**
  * Every table both twins define, by export name. The FTS5 `search_index` is not here: it is
  * a SQLite virtual table outside the Drizzle schema, and its Postgres twin is Task 11's.
@@ -132,5 +138,8 @@ export const TABLE_EXPORTS = [
   'syncState',
   'jobs',
   'settings',
+  'obsMetricPoints',
+  'obsTraces',
+  'obsSpans',
 ] as const;
 export type TableExport = (typeof TABLE_EXPORTS)[number];

@@ -92,6 +92,9 @@ importers:
       '@node-rs/argon2':
         specifier: ^2.2.2
         version: 2.2.2
+      '@opentelemetry/api':
+        specifier: 1.9.1
+        version: 1.9.1
       '@opportun/ai':
         specifier: workspace:^
         version: link:../../packages/ai

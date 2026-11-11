@@ -202,6 +202,8 @@ export interface ClaimedJob {
   attempts: number;
   maxAttempts: number;
   userId: string | null;
+  /** The enqueuer's W3C traceparent, when it asked to continue its trace (design.md 14.6). */
+  traceContext: string | null;
 }
 
 interface ClaimedRow {
@@ -211,6 +213,7 @@ interface ClaimedRow {
   attempts: number;
   max_attempts: number;
   user_id: string | null;
+  trace_context: string | null;
 }
 
 /**
@@ -242,7 +245,7 @@ export function claimJobSql(
            attempts = attempts + 1, updated_at = ${now}
      WHERE id = (SELECT id FROM jobs WHERE status = 'pending' AND run_at <= ${now}${skip}
                   ORDER BY run_at, created_at LIMIT 1${lock})
-    RETURNING id, kind, payload, attempts, max_attempts, user_id`;
+    RETURNING id, kind, payload, attempts, max_attempts, user_id, trace_context`;
 }
 
 /** Runs the claim (claimJobSql) and decodes the claimed row. */
@@ -272,5 +275,6 @@ export async function claimNextJob(
     attempts: Number(row.attempts),
     maxAttempts: Number(row.max_attempts),
     userId: row.user_id,
+    traceContext: row.trace_context ?? null,
   };
 }

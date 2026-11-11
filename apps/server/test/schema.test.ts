@@ -26,6 +26,9 @@ const EXPECTED_TABLES = [
   'network_contacts',
   'next_steps',
   'oauth_accounts',
+  'obs_metric_points',
+  'obs_spans',
+  'obs_traces',
   'opportunities',
   'opportunity_dedupe_candidates',
   'profiles',
@@ -46,8 +49,10 @@ const EXPECTED_TABLES = [
 ];
 
 // Tables that hold one user's data must carry user_id NOT NULL with an index.
+// obs_metric_points is left out like jobs: a point is a user's or the instance's (user_id null),
+// design.md 14.7 (https://github.com/bgoleno/opportun/issues/353).
 const USER_DATA_TABLES = EXPECTED_TABLES.filter(
-  (t) => !['users', 'jobs', 'settings', 'audit_log', 'prompts'].includes(t),
+  (t) => !['users', 'jobs', 'settings', 'audit_log', 'prompts', 'obs_metric_points'].includes(t),
 );
 
 const NOW = 1_760_000_000_000;
