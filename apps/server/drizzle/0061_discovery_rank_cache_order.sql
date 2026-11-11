@@ -1,12 +1,13 @@
 -- The discovery.rank system default puts "## Output" before "## Posting", so the instructions that
 -- are the same for every posting join the part of the prompt a provider can cache
 -- (https://github.com/bgoleno/opportun/issues/388). The schema-plus-prefix token counts on #390
--- put every role target measured at or above claude-sonnet-5-5's 512-token minimum this way, and
--- under it before. The Output section moved up word for word. One fixed line now follows the
--- posting, outside its fence and after the cache break, so the posting is not the last thing the
--- model reads (sec on #390). Hand-written (the 0010/0060 pattern): the system default stays
--- version 1 and is rewritten in place, and only while it is still the old text; users' own
--- versions keep their order. Re-running changes nothing.
+-- put all four role targets measured at or above claude-sonnet-5-5's 512-token minimum this way
+-- (612 to 806); before, two were at or above it (653, 519) and two under (509, 459). The Output
+-- section moved up word for word. One fixed line now follows the posting, outside its fence and
+-- after the cache break, so the posting is not the last thing the model reads (sec on #390).
+-- Hand-written (the 0010/0060 pattern): the system default stays version 1 and is rewritten in
+-- place, and only while it is still the old text; users' own versions keep their order.
+-- Re-running changes nothing.
 UPDATE `prompts`
    SET `body` = 'You score one job posting for a job seeker against one of their role targets.
 
