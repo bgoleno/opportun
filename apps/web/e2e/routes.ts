@@ -27,5 +27,10 @@ export const USER_ROUTES = [
   '/settings/metrics',
 ] as const;
 
-/** The views only an administrator reaches. */
-export const ADMIN_ROUTES = ['/settings/users', '/settings/jobs', '/settings/metrics'] as const;
+/**
+ * The views only an administrator reaches. A path is in one list or the other, never both: the
+ * specs name a test after its path, and Playwright refuses a suite with two tests of one name.
+ * `/settings/metrics` is a user route (a user sees their own AI metrics); the admin's fuller view
+ * of it is walked by e2e/metrics.spec.ts.
+ */
+export const ADMIN_ROUTES = ['/settings/users', '/settings/jobs'] as const;
