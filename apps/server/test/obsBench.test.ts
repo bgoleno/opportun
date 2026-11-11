@@ -8,10 +8,22 @@
 // No tracer provider is registered (FR-T4 part 2's), so a span here costs what the API's
 // no-op span costs; the provider's own cost is measured with that slice.
 import { writeFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { runStructured, withUser } from '@opportun/ai';
+import { MockLanguageModelV4 } from 'ai/test';
+import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
+import { createLanguageModel } from '../../../packages/ai/src/providers';
+import { buildAiDeps } from '../src/lib/ai';
 import { obs, setCollecting } from '../src/obs';
 import { observeStatement } from '../src/obs/database';
+import { flushSpans } from '../src/obs/tracing';
 import { useApi } from './api';
+
+// A stub model, so an AI call reaches no network (as test/aiGenAiMetrics.test.ts does).
+vi.mock('../../../packages/ai/src/providers', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../packages/ai/src/providers')>();
+  return { ...real, createLanguageModel: vi.fn() };
+});
 
 const boot = useApi();
 const RUN = process.env.OBS_BENCH === '1';
@@ -56,3 +68,102 @@ describe.runIf(RUN)('collection on: cost per call (#343, reported in the PR)', (
     await setCollecting(false);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// Whole operations, collection off against on (design.md 14.11; https://github.com/bgoleno/opportun/issues/374).
+// A crossing measured alone leaves out what a whole request adds around it: the plugin's hooks,
+// the context switches around the handler, the statements and the garbage. So these run whole
+// operations in alternated batches, collection off then on, in one process and one database, and
+// report process CPU time per operation as the median of the pairs' differences: the machine is
+// shared, and only alternation cancels its noise. The method is qa's
+// (qa-tools/qa-bench1411.test.ts, reported on #374). Turning collection on registers the real
+// tracer provider and span store (#366); the span flush is outside the request path and is
+// #375's to bound, so it runs between batches and is not counted.
+
+const PAIRS = 20;
+const cpuMicros = (): number => {
+  const u = process.cpuUsage();
+  return u.user + u.system;
+};
+const median = (xs: readonly number[]): number =>
+  [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)] ?? Number.NaN;
+const round = (x: number): number => Math.round(x * 10) / 10;
+
+async function perOperation(k: number, fn: () => Promise<unknown>): Promise<number> {
+  const started = cpuMicros();
+  for (let i = 0; i < k; i += 1) await fn();
+  return (cpuMicros() - started) / k;
+}
+
+/** Alternated off/on batches; the medians, and the median of the pairs' differences. */
+async function alternate(k: number, fn: () => Promise<unknown>) {
+  const off: number[] = [];
+  const on: number[] = [];
+  for (let r = 0; r < PAIRS; r += 1) {
+    await setCollecting(false);
+    off.push(await perOperation(k, fn));
+    await setCollecting(true);
+    on.push(await perOperation(k, fn));
+    await flushSpans();
+  }
+  await setCollecting(false);
+  return {
+    offUs: round(median(off)),
+    onUs: round(median(on)),
+    addedUs: round(median(on.map((x, i) => x - (off.at(i) ?? 0)))),
+  };
+}
+
+function modelAnswer(text: string) {
+  return {
+    content: [{ type: 'text' as const, text }],
+    finishReason: { unified: 'stop' as const, raw: 'end_turn' },
+    usage: {
+      inputTokens: { total: 100, noCache: 100, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 20, text: 20, reasoning: 0 },
+    },
+    warnings: [],
+    response: { id: 'msg_bench', modelId: 'claude-haiku-5-5' },
+  };
+}
+
+describe.runIf(RUN)(
+  'collection off against on, whole operations (#374, reported in the PR)',
+  () => {
+    it('a whole request and an AI call: CPU per operation, and what collection adds', async () => {
+      const { app, a } = await boot();
+      // A request: GET /api/v1/opportunities/:id, one HTTP crossing and its statements.
+      const made = await a.request({
+        method: 'POST',
+        url: '/api/v1/opportunities',
+        payload: { companyName: 'Bench Co', title: 'Role', sourceKind: 'manual' },
+      });
+      const id = (made.json() as { id: string }).id;
+      const request = () => a.request({ method: 'GET', url: `/api/v1/opportunities/${id}` });
+      // An AI call: runStructured with a stub model, through the router, the budget check and the
+      // task_runs ledger, as a request or a job makes it.
+      vi.mocked(createLanguageModel).mockImplementation(
+        () =>
+          new MockLanguageModelV4({ doGenerate: modelAnswer(JSON.stringify({ s: 'x' })) }) as never,
+      );
+      const deps = await buildAiDeps(app.db, { userId: a.userId, isAdmin: false });
+      deps.getKey = async () => 'bench-key';
+      deps.spentTodayUsd = async () => 0;
+      const call = { system: 'sys', prompt: 'prompt', schema: z.object({ s: z.string() }) };
+      const ai = () => withUser(a.userId, () => runStructured(deps, 'resume.match', call));
+      // Warm both, with collection on, so first sights (statement shapes, series) are not counted.
+      await setCollecting(true);
+      for (let i = 0; i < 500; i += 1) await request();
+      for (let i = 0; i < 100; i += 1) await ai();
+      await flushSpans();
+      const results = {
+        request: await alternate(300, request),
+        aiCall: await alternate(200, ai),
+      };
+      const out = process.env.OBS_BENCH_OUT;
+      if (out !== undefined) writeFileSync(`${out}.whole.json`, `${JSON.stringify(results)}\n`);
+      else console.log('obs bench, whole operations (CPU microseconds)', JSON.stringify(results));
+      expect(results.request.offUs).toBeGreaterThan(0);
+    }, 900_000);
+  },
+);
