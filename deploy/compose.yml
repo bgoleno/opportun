@@ -76,14 +76,14 @@ services:
       # file to the container. Each is `${VAR:-}`, an empty string when unset, which the server
       # reads as unset (apps/server/test/composeSettings.test.ts shows it for each). Left out on
       # purpose, with the reason: OPPORTUN_HOST and WEB_DIR (the image sets them, and an empty
-      # value is not "unset" to the server), OPPORTUN_DEMO (compose.demo.yml passes it), an inline
-      # OPPORTUN_MASTER_KEY (it would override the key file above) and SMTP_URL (reserved).
+      # value is not "unset" to the server), ANTHROPIC_BASE_URL and OPENAI_BASE_URL (the AI SDK
+      # reads them itself when it loads and refuses an empty string, so the server would not
+      # start), OPPORTUN_DEMO (compose.demo.yml passes it), an inline OPPORTUN_MASTER_KEY (it
+      # would override the key file above) and SMTP_URL (reserved).
       OPPORTUN_SUBMISSIONS: ${OPPORTUN_SUBMISSIONS:-}
       OPPORTUN_DAILY_REVIEW_CAP: ${OPPORTUN_DAILY_REVIEW_CAP:-}
       OPPORTUN_AI_ALLOW_LOOPBACK_HTTP: ${OPPORTUN_AI_ALLOW_LOOPBACK_HTTP:-}
       OPPORTUN_TELEMETRY_ALLOW_PRIVATE: ${OPPORTUN_TELEMETRY_ALLOW_PRIVATE:-}
-      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       DB_POOL_MAX: ${DB_POOL_MAX:-}
       DATA_DIR: /data
       # opportun.db's own directory, separate from /data (issue #179, incident #165): SQLite

@@ -6,8 +6,11 @@
 // compose.yml nor named below as deliberately not passed, with the reason.
 //
 // A second test shows that what compose.yml passes as `${VAR:-}` (an empty string when VAR is
-// unset) is read by the server exactly as if VAR were not set at all, which is the promise that
-// passing it changes no default.
+// unset) is read by the server's own config exactly as if VAR were not set at all. That is the
+// promise that passing it changes no default, but it only covers what config.ts and the code
+// beside it read: a library that reads the environment itself can still refuse an empty string
+// (the AI SDK does, for the two base URLs, which is why they are in NOT_PASSED). Only a started
+// container shows that, so a variable is added to compose.yml after it has been tried in one.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -37,6 +40,16 @@ const NOT_PASSED: ReadonlyMap<string, string> = new Map([
     'WEB_DIR',
     "the image sets the built web app's path; an empty value falls back to a source-tree path " +
       'that does not exist in the image',
+  ],
+  [
+    'ANTHROPIC_BASE_URL',
+    'the AI SDK reads it from the environment itself when it loads and throws on an empty ' +
+      'string, so `${ANTHROPIC_BASE_URL:-}` would stop the server starting (qa on #421)',
+  ],
+  [
+    'OPENAI_BASE_URL',
+    'the AI SDK reads it from the environment itself when it loads and throws on an empty ' +
+      'string, so `${OPENAI_BASE_URL:-}` would stop the server starting (qa on #421)',
   ],
   ['SMTP_URL', 'reserved: nothing reads it yet (install.md says email reset is not implemented)'],
   [
@@ -133,8 +146,6 @@ describe('compose.yml passes the documented settings (issue 417)', () => {
       'OPPORTUN_DAILY_REVIEW_CAP',
       'OPPORTUN_TELEMETRY_ALLOW_PRIVATE',
       'OPPORTUN_AI_ALLOW_LOOPBACK_HTTP',
-      'ANTHROPIC_BASE_URL',
-      'OPENAI_BASE_URL',
       'DB_POOL_MAX',
       'OPPORTUN_PEPPER_VERSION',
       'OPPORTUN_PEPPER_V1',
