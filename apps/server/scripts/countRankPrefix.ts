@@ -24,7 +24,8 @@
 // the breakpoint. So the script also counts the discovery.company_tags prefix both ways, beside the
 // cache write qa measured live for that same prefix on #378 (6,472 tokens for 14,531 characters,
 // https://github.com/bgoleno/opportun/pull/378#issuecomment-6790450354). Whichever count matches
-// the live write says whether the schema is cached with the prefix.
+// the live write says whether the schema is cached with the prefix. Run on 2026-11-11, it was the
+// count with the schema, 6,469 (https://github.com/bgoleno/opportun/pull/390#issuecomment-6792185611).
 //
 // Output: characters and tokens only.
 import Database from 'better-sqlite3';

@@ -457,41 +457,43 @@ describe('prompt caching (#356)', () => {
     expect(sys[1]?.providerOptions?.anthropic).toBeUndefined();
   });
 
-  // https://github.com/bgoleno/opportun/issues/388: the structured-output schema is ASSUMED to be
-  // cached with the prefix, so it counts toward the minimum. The #388 count script's tags control
-  // settles it; if the schema is outside the cached span, these two tests change with cachedChars.
-  it('counts the output schema toward the minimum (assumed cached with the prefix)', async () => {
-    // 1,600 characters: 400 tokens at 4 characters a token, under 512 alone.
-    const prefix = 'Fixed instructions and a table. '.repeat(50);
-    // Over 600 characters of JSON schema: the two together are over 512 tokens.
-    const schema = z.object({
-      score: z.number().describe('A description of the score. '.repeat(25)),
-    });
-    const h = harness();
-    await runStructured(h.deps, 'discovery.company_tags', {
-      ...call,
-      schema,
-      system: prefix + rest,
-      cacheBreak: prefix.length,
-    });
-    const sys = systemMessages(h.model);
-    expect(sys).toHaveLength(2);
-    expect(sys[0]).toMatchObject({
-      content: prefix,
-      providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
-    });
+  // https://github.com/bgoleno/opportun/issues/388: the token counts on #390 for the rank default,
+  // by prefix length in characters. Each row is the prefix plus the structured-output schema, in
+  // tokens, on claude-sonnet-5-5, against its 512-token minimum. The size check has to agree with
+  // every one, or the reorder in 0061 caches nothing.
+  const RankOutput = z.object({
+    score: z.number().int().min(0).max(100),
+    rationale: z.string().max(1000),
+    disqualifiers: z.array(z.string().max(200)).max(10),
   });
-
-  it('leaves that prefix unmarked with a small schema', async () => {
-    const prefix = 'Fixed instructions and a table. '.repeat(50);
-    const h = harness();
-    await runStructured(h.deps, 'discovery.company_tags', {
-      ...call,
-      system: prefix + rest,
-      cacheBreak: prefix.length,
-    });
-    expect(systemMessages(h.model)).toHaveLength(1);
-  });
+  it.each([
+    // Output before Posting (migration 0061): all over the minimum.
+    [1441, 806, true],
+    [870, 612, true],
+    [1004, 662, true],
+    [1047, 672, true],
+    // The order before 0061.
+    [937, 653, true],
+    [543, 519, true],
+    [500, 509, false],
+    [366, 459, false],
+  ])(
+    'a %i-character rank prefix (%i tokens counted with the schema): marked %s',
+    async (chars, _tokens, marked) => {
+      const prefix = 'x'.repeat(chars);
+      const model = new MockLanguageModelV4({
+        doGenerate: result('{"score":50,"rationale":"r","disqualifiers":[]}'),
+      });
+      const h = harness({ model });
+      await runStructured(h.deps, 'discovery.rank', {
+        ...call,
+        schema: RankOutput,
+        system: prefix + rest,
+        cacheBreak: prefix.length,
+      });
+      expect(systemMessages(h.model)).toHaveLength(marked ? 2 : 1);
+    },
+  );
 
   it('sends the prompt whole and unmarked when the prefix is below the minimum', async () => {
     const h = harness();

@@ -12,6 +12,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MIGRATIONS_DIR, openDatabase } from '../src/db/client';
+import { outputBeforePosting } from '../src/lib/rankPrefixCount';
 import { sqliteOnly } from './db';
 
 interface Journal {
@@ -463,11 +464,15 @@ describe.runIf(sqliteOnly)('migration journal', () => {
       expect(refineSeed.body).toContain('When it scores job postings');
       for (const r of rows) expect(r.body).not.toContain('\u2014');
 
-      const sql = await readFile(
-        join(MIGRATIONS_DIR, '0010_discovery_rank_per_posting.sql'),
-        'utf8',
-      );
-      for (const stmt of sql.split('--> statement-breakpoint')) sqlite.exec(stmt);
+      // Re-run with the later migration that rewrites the same default (0061 moves its Output
+      // section up, #388), as the chain would: the result is the same.
+      for (const file of [
+        '0010_discovery_rank_per_posting.sql',
+        '0061_discovery_rank_cache_order.sql',
+      ]) {
+        const sql = await readFile(join(MIGRATIONS_DIR, file), 'utf8');
+        for (const stmt of sql.split('--> statement-breakpoint')) sqlite.exec(stmt);
+      }
       expect(read()).toEqual(rows);
     } finally {
       sqlite.close();
@@ -750,14 +755,19 @@ describe.runIf(sqliteOnly)('migration journal', () => {
       // (discovery.title_variants, #217): such a row is a system default of a task that had none.
       const known = new Set(othersBefore.map((r) => r.id));
       const rowsAfter = others(sqlite);
-      // company.suggest v2 (#221) rewrote its system default in place, after 0040: that one row is
-      // checked apart, and every other row is untouched.
+      // company.suggest v2 (#221) and the rank default's reorder (0061, #388) rewrote their system
+      // defaults in place, after 0040: those rows are checked apart, and every other row is
+      // untouched.
       const rewritten = (r: { user_id: string | null; task_key: string }) =>
-        r.user_id === null && r.task_key === 'company.suggest';
+        r.user_id === null && (r.task_key === 'company.suggest' || r.task_key === 'discovery.rank');
       expect(rowsAfter.filter((r) => known.has(r.id) && !rewritten(r))).toEqual(
         othersBefore.filter((r) => !rewritten(r)),
       );
-      expect(rowsAfter.find(rewritten)!.body).toContain('{{industry_profile_untrusted}}');
+      const rewrittenRow = (task: string) =>
+        rowsAfter.find((r) => rewritten(r) && r.task_key === task)!;
+      expect(rewrittenRow('company.suggest').body).toContain('{{industry_profile_untrusted}}');
+      const rank = rewrittenRow('discovery.rank').body;
+      expect(rank.indexOf('## Output')).toBeLessThan(rank.indexOf('## Posting'));
       const tasksBefore = new Set(othersBefore.map((r) => r.task_key));
       for (const added of rowsAfter.filter((r) => !known.has(r.id))) {
         expect(added.user_id, added.task_key).toBeNull();
@@ -1030,6 +1040,74 @@ describe.runIf(sqliteOnly)('0060: the company_tags default, reordered for cachin
       // Running it again changes nothing.
       const sql = await readFile(
         join(MIGRATIONS_DIR, '0060_discovery_company_tags_cache_order.sql'),
+        'utf8',
+      );
+      for (const stmt of sql.split('--> statement-breakpoint')) sqlite.exec(stmt);
+      expect(read(sqlite)).toEqual(rows);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
+
+describe.runIf(sqliteOnly)('0061: the rank default, Output moved up for caching', () => {
+  it('moves Output before Posting in the system default only, word for word, once', async () => {
+    const { entries } = await readJournal(MIGRATIONS_DIR);
+    const before =
+      entries.findIndex((e) => e.tag === '0060_discovery_company_tags_cache_order') + 1;
+    const partial = await tempDir();
+    await cp(MIGRATIONS_DIR, partial, { recursive: true });
+    const journal = await readJournal(partial);
+    journal.entries = journal.entries.slice(0, before);
+    await writeFile(join(partial, 'meta', '_journal.json'), JSON.stringify(journal));
+
+    const dataDir = await tempDir();
+    const old = new Database(join(dataDir, 'opportun.db'));
+    migrate(drizzle(old), { migrationsFolder: partial });
+    const read = (db: Database.Database) =>
+      db
+        .prepare(
+          `SELECT user_id AS userId, body, version FROM prompts
+            WHERE task_key = 'discovery.rank' ORDER BY user_id IS NULL DESC, user_id`,
+        )
+        .all() as { userId: string | null; body: string; version: number }[];
+    const [oldSeed] = read(old);
+    // A user's own version, made from the old default.
+    const userId = newId();
+    old
+      .prepare(
+        `INSERT INTO users (id, email, display_name, password_hash, created_at, updated_at)
+                 VALUES (?, ?, 'U', 'x', 0, 0)`,
+      )
+      .run(userId, `${userId}@example.com`);
+    old
+      .prepare(
+        `INSERT INTO prompts (id, user_id, task_key, name, body, version, is_active, created_at, updated_at)
+                 VALUES (?, ?, 'discovery.rank', 'mine', ?, 2, 1, 0, 0)`,
+      )
+      .run(newId(), userId, oldSeed!.body);
+    old.close();
+
+    const { sqlite } = openDatabase(dataDir);
+    try {
+      const rows = read(sqlite);
+      const seed = rows.find((r) => r.userId === null)!;
+      const mine = rows.find((r) => r.userId === userId)!;
+      expect(seed.version).toBe(1);
+      // Exactly the old text with its Output section moved up: no word changed.
+      expect(seed.body).not.toBe(oldSeed!.body);
+      expect(seed.body).toBe(outputBeforePosting(oldSeed!.body));
+      expect(seed.body.indexOf('## Output')).toBeLessThan(seed.body.indexOf('## Posting'));
+      expect(seed.body.trimEnd().endsWith('{{posting_untrusted}}')).toBe(true);
+      expect(promptVariables(seed.body).sort()).toEqual(
+        [...TASK_PROMPT_VARS['discovery.rank']].sort(),
+      );
+      // The user's own version keeps its order.
+      expect(mine.body).toBe(oldSeed!.body);
+
+      // Running it again changes nothing.
+      const sql = await readFile(
+        join(MIGRATIONS_DIR, '0061_discovery_rank_cache_order.sql'),
         'utf8',
       );
       for (const stmt of sql.split('--> statement-breakpoint')) sqlite.exec(stmt);

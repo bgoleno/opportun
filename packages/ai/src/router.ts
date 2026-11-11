@@ -3,7 +3,6 @@
 // TaskRunRecord, whether the call succeeded or failed.
 import {
   APICallError,
-  asSchema,
   generateText,
   NoObjectGeneratedError,
   Output,
@@ -218,26 +217,22 @@ function callSettings(policy: ModelPolicy): { maxOutputTokens: number; temperatu
   };
 }
 
-/** Characters per token assumed when sizing a prefix: high, so a prefix is never overestimated. */
-const CHARS_PER_TOKEN = 4;
-
 /**
- * How many characters of the call the provider would cache at the break: the system text before
- * the break and the structured-output schema (https://github.com/bgoleno/opportun/issues/388).
- * That the schema is cached with the prefix is ASSUMED: Anthropic documents only that structured
- * outputs add a system prompt explaining the format, not where it sits against the breakpoint.
- * The #388 count script compares both counts with a cache write measured live; if the schema
- * turns out to be outside the cached span, this goes back to the break alone, since counting it
- * would mark prefixes that cannot cache. The schema is measured as the SDK converts it.
- *
- * It runs before the run exists, so a schema the SDK cannot convert throws without a failed-run
- * record. Schemas are fixed in code, so that is a programming error the tests show.
+ * Sizing a prefix against the model's cache minimum, from the token counts on
+ * https://github.com/bgoleno/opportun/pull/390 (count_tokens, 2026-11-11):
+ * - The system text ran at 3.0 to 3.25 characters a token for the rank prompt (claude-sonnet-5-5)
+ *   and 2.4 for the NAICS table (claude-haiku-5-5). 3 counts that prose up to 8% high and the
+ *   table low; with the allowance below it put every measured rank row on the right side of 512.
+ * - Structured output added exactly 344 tokens on both models, for two schemas of 442 and 461
+ *   characters: the system prompt the provider adds to explain the format, not the schema's
+ *   characters. It is inside the cached span: the tags prefix counted 6,469 tokens with it and
+ *   6,125 without, and a live call wrote 6,472 to the cache.
+ * Every structured call carries that allowance. A much larger schema would add more, which only
+ * makes the estimate low. Marking a prefix that turns out to be short costs nothing at the
+ * provider (it is simply not cached), so the estimate can sit this close to the counts.
  */
-async function cachedChars(schema: z.ZodType, cacheBreak: number | undefined): Promise<number> {
-  if (cacheBreak === undefined) return 0;
-  const json = await asSchema(schema).jsonSchema;
-  return JSON.stringify(json).length + cacheBreak;
-}
+const CHARS_PER_TOKEN = 3;
+const STRUCTURED_OUTPUT_TOKENS = 344;
 
 /**
  * The system prompt as the SDK takes it (https://github.com/bgoleno/opportun/issues/356). The
@@ -247,16 +242,13 @@ async function cachedChars(schema: z.ZodType, cacheBreak: number | undefined): P
  * already gives, and an OpenAI-compatible endpoint (a local model, a gateway) gets exactly what
  * it got before.
  */
-function systemFor(
-  policy: ModelPolicy,
-  system: string,
-  cacheBreak: number | undefined,
-  cachedLength: number,
-): Instructions {
+function systemFor(policy: ModelPolicy, system: string, cacheBreak?: number): Instructions {
   if (cacheBreak === undefined || cacheBreak <= 0 || cacheBreak >= system.length) return system;
   // Only Anthropic models have a minimum (cacheMinTokens), so only they are ever marked.
   const min = cacheMinTokens(policy.provider, policy.model);
-  if (min === undefined || cachedLength / CHARS_PER_TOKEN < min) return system;
+  if (min === undefined) return system;
+  // What the provider caches at the break: the structured-output allowance and the prefix.
+  if (STRUCTURED_OUTPUT_TOKENS + cacheBreak / CHARS_PER_TOKEN < min) return system;
   return [
     {
       role: 'system',
@@ -288,8 +280,6 @@ export async function runStructured<T>(
     promptVersion?: number;
   },
 ): Promise<T> {
-  // Before the run starts, so nothing here can leave its span open.
-  const cached = await cachedChars(opts.schema, opts.cacheBreak);
   const { run, model, policy, apiKey } = await prepare(deps, task, {
     stream: false,
     outputType: 'json',
@@ -297,7 +287,6 @@ export async function runStructured<T>(
     promptVersion: opts.promptVersion,
   });
 
-  const system = systemFor(policy, opts.system, opts.cacheBreak, cached);
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     let output: T;
     try {
@@ -306,7 +295,7 @@ export async function runStructured<T>(
       const result = await run.span.run(() =>
         generateText({
           model,
-          system,
+          system: systemFor(policy, opts.system, opts.cacheBreak),
           prompt: opts.prompt,
           output: Output.object({ schema: opts.schema }),
           maxRetries: SDK_MAX_RETRIES,
