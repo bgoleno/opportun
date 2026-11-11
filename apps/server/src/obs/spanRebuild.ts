@@ -36,49 +36,66 @@ const KIND_NAMES: Record<SpanKind, SpanDef['kind']> = {
   [SpanKind.CONSUMER]: 'consumer',
 };
 
-/** A template's literal part before its first `{key}` (`chat`), and that key. */
-function templateParts(template: string): { prefix: string; key: AttrKey | undefined } {
+/** Every `{key}` a template names, in order. */
+function templateKeys(template: string): AttrKey[] {
+  return [...template.matchAll(/\{([a-z0-9_.]+)\}/g)].map((m) => m[1] as AttrKey);
+}
+
+/** A template's literal part before its first `{key}` (`chat`): its name when a model is OTHER. */
+function templatePrefix(template: string): string {
   const at = template.indexOf('{');
-  if (at < 0) return { prefix: template, key: undefined };
-  const end = template.indexOf('}', at);
-  return { prefix: template.slice(0, at).trimEnd(), key: template.slice(at + 1, end) as AttrKey };
+  return at < 0 ? template : template.slice(0, at).trimEnd();
 }
 
 const isModelKey = (key: AttrKey): boolean => ATTRIBUTE_TYPES.get(key)?.kind === 'model';
 
 /**
- * A span's name from its template, filled with checked values only. A model that is OTHER (not
- * shaped like one, or not priced, for export) leaves the template's literal part: `chat`.
+ * A span's name from its template, filled with checked values only, every key of it (a route's
+ * span has two). A model that is OTHER (not shaped like one, or not priced, for export) leaves the
+ * template's literal part: `chat`. Any other key with no checked value leaves its place empty.
  */
 function fillName(template: string, attributes: Attributes): string {
-  const { prefix, key } = templateParts(template);
-  if (key === undefined) return template;
-  const value = new Map(Object.entries(attributes)).get(key);
-  if (isModelKey(key) && (value === undefined || value === OTHER)) return prefix;
-  if (typeof value !== 'string' && typeof value !== 'number') return prefix;
-  return template.replace(`{${key}}`, String(value));
+  const values = new Map(Object.entries(attributes));
+  for (const key of templateKeys(template)) {
+    const value = values.get(key);
+    if (isModelKey(key) && (value === undefined || value === OTHER))
+      return templatePrefix(template);
+  }
+  return template.replace(/\{([a-z0-9_.]+)\}/g, (_m, key: string) => {
+    const value = values.get(key);
+    return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+  });
 }
 
 const noDrop = (): void => undefined;
 
+/** The kinds a catalog entry allows: `kinds` when it has several (a job), else its `kind`. */
+const kindsOf = (def: SpanDef): readonly SpanDef['kind'][] => def.kinds ?? [def.kind];
+
 /**
- * The catalog entry a span was made from: the same kind, and the name its template gives from
- * the span's own checked value (or the literal part, when that value is not shaped right).
+ * The catalog entry a span was made from: one of its kinds, and the name its template gives from
+ * the span's own checked values (or the literal part, when a model is not shaped right).
  */
 export function spanDefOf(span: ReadableSpan): SpanDef | undefined {
   const kind = KIND_NAMES[span.kind];
   for (const def of Object.values(SPANS) as SpanDef[]) {
-    if (def.kind !== kind) continue;
-    const { prefix, key } = templateParts(def.template);
-    if (key === undefined) {
+    if (!kindsOf(def).includes(kind)) continue;
+    const keys = templateKeys(def.template);
+    if (keys.length === 0) {
       if (span.name === def.template) return def;
       continue;
     }
-    // Only the template's own key is checked here, so no other key can throw in test mode.
-    const value = new Map(Object.entries(span.attributes)).get(key);
-    const one = gateAttributes('spans', [key], { [key]: value }, noDrop);
-    if (span.name === fillName(def.template, one)) return def;
-    if (prefix !== '' && span.name === prefix && isModelKey(key)) return def;
+    // Only the template's own keys are checked here, so no other key can throw in test mode.
+    const own = new Map(Object.entries(span.attributes));
+    const checked = gateAttributes(
+      'spans',
+      keys,
+      Object.fromEntries(keys.map((k) => [k, own.get(k)])),
+      noDrop,
+    );
+    if (span.name === fillName(def.template, checked)) return def;
+    const prefix = templatePrefix(def.template);
+    if (prefix !== '' && span.name === prefix && keys.some(isModelKey)) return def;
   }
   return undefined;
 }
@@ -118,7 +135,8 @@ export function rebuildSpan(span: ReadableSpan, sink: 'local' | 'export'): Gated
     spanId: ctx.spanId,
     parentSpanId: span.parentSpanContext?.spanId ?? null,
     name: fillName(def.template, attributes),
-    kind: def.kind,
+    // The span's own kind, one of the entry's (a continued job is a consumer, 14.2).
+    kind: KIND_NAMES[span.kind],
     startMs: hrMs(span.startTime),
     durationMs: Math.max(0, hrMs(span.duration)),
     status: span.status.code === SpanStatusCode.ERROR ? 'error' : 'ok',

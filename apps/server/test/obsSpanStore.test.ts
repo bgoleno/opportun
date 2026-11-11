@@ -266,6 +266,31 @@ describe('the span store (#344)', () => {
     ]);
   });
 
+  it('keeps a continued job\u2019s own span, a consumer, with its kind (#343\u2019s runner)', async () => {
+    const { app, a } = await boot();
+    await setCollecting(true);
+    // As the runner starts it from jobs.trace_context (#343): a remote parent, with the user.
+    const parent = trace.setSpanContext(ROOT_CONTEXT.setValue(USER_CONTEXT_KEY, a.userId), {
+      traceId: '0af7651916cd43dd8448eb211c80319c',
+      spanId: 'b7ad6b7169203331',
+      traceFlags: TraceFlags.SAMPLED,
+      isRemote: true,
+    });
+    await obs.span('job', { 'opportun.job.kind': 'discovery.rank' }, async () => undefined, {
+      parent,
+      kind: 'consumer',
+    });
+    await flushSpans();
+    expect(await spans(app)).toEqual([
+      expect.objectContaining({
+        name: 'job discovery.rank',
+        kind: 'consumer',
+        parentSpanId: 'b7ad6b7169203331',
+        userId: a.userId,
+      }),
+    ]);
+  });
+
   it('drops a span that matches no catalogued name whole, and counts it', async () => {
     const { app, a } = await boot();
     await setCollecting(true);
@@ -562,6 +587,21 @@ describe('the traces dashboard reads what the store writes (#344 with #347)', ()
 });
 
 describe('the export slot (#344, 14.8)', () => {
+  it('gets a span whose name has two keys (a route\u2019s) with both, and its own kind', async () => {
+    await boot();
+    await setCollecting(true);
+    const got: GatedSpan[] = [];
+    attachExporter('spans', { export: (s) => got.push(s), shutdown: async () => undefined });
+    await obs.span(
+      'http.server',
+      { 'http.request.method': 'GET', 'http.route': '/api/v1/opportunities/:id' },
+      async () => undefined,
+    );
+    expect(got).toEqual([
+      expect.objectContaining({ name: 'GET /api/v1/opportunities/:id', kind: 'server' }),
+    ]);
+  });
+
   it('gets each span rebuilt with no user id or response id, and only a priced model', async () => {
     const { app, a } = await boot();
     await setCollecting(true);
