@@ -4,9 +4,9 @@
 // main connection's own automatic checkpoint moves to a backstop. When the worker stops, for any
 // reason, the main connection goes back to its default.
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { endianness, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { sql } from 'drizzle-orm';
@@ -75,6 +75,26 @@ describe('readOperatorBytesAt, the read the worker makes (#383, NFR-SEC11)', () 
       expect(readOperatorBytesAt(link, 0, 3)).toBeUndefined();
       expect(readOperatorBytesAt('f', 0, 3)).toBeUndefined();
       expect(readOperatorBytesAt(join(dir, 'missing'), 0, 3)).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reads nothing from a FIFO, or through a relative path to a file that exists (sec)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'opportun-383-'));
+    try {
+      // A FIFO is not a regular file: it is refused before any open, which on a FIFO with no
+      // writer would wait forever.
+      const fifo = join(dir, 'fifo');
+      expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+      expect(readOperatorBytesAt(fifo, 0, 3)).toBeUndefined();
+      // A relative path is refused even when it names a real file from the working directory.
+      const file = join(dir, 'f');
+      writeFileSync(file, 'abcdefgh');
+      const fromCwd = relative(process.cwd(), file);
+      expect(isAbsolute(fromCwd)).toBe(false);
+      expect(existsSync(fromCwd)).toBe(true);
+      expect(readOperatorBytesAt(fromCwd, 0, 3)).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
