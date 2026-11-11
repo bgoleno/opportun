@@ -54,8 +54,10 @@ describe('the log message catalog (#345)', () => {
   it('lists every fixed message Opportun’s own log calls write', () => {
     const missing: string[] = [];
     for (const { path, text } of FILES) {
-      // The first argument may be an object literal or a variable holding one (`fields`).
+      // The first argument may be an object literal or a variable holding one (`fields`). Run
+      // over this repository's own source in a test, never over input from outside.
       const re =
+        // eslint-disable-next-line security/detect-unsafe-regex
         /\.(?:trace|debug|info|warn|error|fatal)\(\s*(?:(?:\{[^}]*\}|[\w.]+)\s*,\s*)?'((?:[^'\\]|\\.)+)'/g;
       for (const m of text.matchAll(re)) {
         if (!LOG_MESSAGES.has(m[1]!)) missing.push(`${path}: ${m[1]}`);

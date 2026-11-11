@@ -53,8 +53,7 @@ function exportSink(): LogExportSink & { records: GatedLogRecord[] } {
 
 /** Every field an event lists, and some it does not, all holding the personal data. */
 function poisoned(name: EventName): Record<string, unknown> {
-  const fields: Record<string, unknown> = {};
-  for (const key of eventDef(name).fields) fields[key] = PAYLOAD;
+  const fields = Object.fromEntries(eventDef(name).fields.map((key) => [key, PAYLOAD]));
   return { ...fields, person: NAME, email: EMAIL, phone: PHONE, company: COMPANY, url: PAYLOAD };
 }
 

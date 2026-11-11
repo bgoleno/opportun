@@ -46,29 +46,74 @@ const INSTALL_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..'
 
 const TRACE_ID = /^[0-9a-f]{32}$/;
 const CODE = /^[A-Za-z0-9_.-]{1,64}$/;
-/** `at fn (path:line:col)` or `at path:line:col`. */
-const FRAME = /^at (?:(.+?) \()?(.+?):(\d+):(\d+)\)?$/;
-/**
- * A function name in a frame, as V8 writes one from code: an identifier path, optionally after
- * `async ` or `new `, optionally `[as name]`. Anything else (a name with spaces) is not kept.
- */
-const FUNCTION_NAME =
-  /^(?:async |new )?[A-Za-z_$][\w$]{0,60}(?:\.(?:<anonymous>|[\w$]{1,60})){0,4}(?: \[as [\w$]{1,60}\])?$/;
 const MAX_FRAMES = 20;
+/** One segment of a function's name in a frame: an identifier, as V8 writes one from code. */
+const NAME_SEGMENT = /^[A-Za-z_$][\w$]{0,60}$/;
+const LINE_COL = /^\d{1,7}$/;
+
+/**
+ * A function name in a frame, as V8 writes one from code: an identifier path (`Object.run`,
+ * `Object.<anonymous>`), optionally after `async ` or `new `, optionally `[as name]`. Anything
+ * else (a name with spaces, a person's) is not kept. Checked part by part, with no pattern that
+ * could backtrack on a long line.
+ */
+function functionName(raw: string): string | undefined {
+  let rest = raw;
+  let suffix = '';
+  const as = rest.lastIndexOf(' [as ');
+  if (as >= 0 && rest.endsWith(']')) {
+    const alias = rest.slice(as + 5, -1);
+    if (!NAME_SEGMENT.test(alias)) return undefined;
+    suffix = ` [as ${alias}]`;
+    rest = rest.slice(0, as);
+  }
+  let prefix = '';
+  for (const p of ['async ', 'new ']) {
+    if (rest.startsWith(p)) {
+      prefix = p;
+      rest = rest.slice(p.length);
+    }
+  }
+  const parts = rest.split('.');
+  if (parts.length > 5) return undefined;
+  const ok = parts.every((part, i) =>
+    i > 0 && part === '<anonymous>' ? true : NAME_SEGMENT.test(part),
+  );
+  return ok ? `${prefix}${rest}${suffix}` : undefined;
+}
+
+/** `at fn (path:line:col)` or `at path:line:col`, split without a backtracking pattern. */
+function parseFrame(
+  line: string,
+): { fn: string | undefined; path: string; row: string; col: string } | undefined {
+  if (!line.startsWith('at ')) return undefined;
+  let body = line.slice(3);
+  let fn: string | undefined;
+  const open = body.lastIndexOf(' (');
+  if (open >= 0 && body.endsWith(')')) {
+    fn = body.slice(0, open);
+    body = body.slice(open + 2, -1);
+  }
+  const colAt = body.lastIndexOf(':');
+  const rowAt = colAt > 0 ? body.lastIndexOf(':', colAt - 1) : -1;
+  if (rowAt <= 0) return undefined;
+  const row = body.slice(rowAt + 1, colAt);
+  const col = body.slice(colAt + 1);
+  if (!LINE_COL.test(row) || !LINE_COL.test(col)) return undefined;
+  return { fn, path: body.slice(0, rowAt), row, col };
+}
 
 /** The frame lines of a stack, paths made relative to the install root or dropped (14.8). */
 export function frameLines(stack: unknown): string[] {
   if (typeof stack !== 'string') return [];
   const out: string[] = [];
   for (const raw of stack.split('\n')) {
-    const line = raw.trim();
-    const m = FRAME.exec(line);
-    if (m === null) continue;
-    const [, fn, path, row, col] = m;
-    const name = fn !== undefined && FUNCTION_NAME.test(fn) ? fn : undefined;
-    const inside = path !== undefined && path.startsWith(INSTALL_ROOT + sep);
+    const frame = parseFrame(raw.trim());
+    if (frame === undefined) continue;
+    const name = frame.fn === undefined ? undefined : functionName(frame.fn);
+    const inside = frame.path.startsWith(INSTALL_ROOT + sep);
     const where = inside
-      ? `${relative(INSTALL_ROOT, path).split(sep).join('/')}:${row}:${col}`
+      ? `${relative(INSTALL_ROOT, frame.path).split(sep).join('/')}:${frame.row}:${frame.col}`
       : '';
     if (name === undefined && where === '') continue;
     out.push(`at ${[name, where === '' ? undefined : `(${where})`].filter(Boolean).join(' ')}`);
@@ -126,7 +171,7 @@ export function gateLogLine(line: string, dropped: LogDropCounter): string | und
   }
   if (isEvent) out.event = eventName;
 
-  const rest: Record<string, unknown> = {};
+  const rest = new Map<string, unknown>();
   for (const [key, value] of Object.entries(record)) {
     if (STRUCTURAL.has(key) || key === 'event' || LIBRARY_BINDINGS.has(key)) continue;
     if (allowed === undefined) {
@@ -134,10 +179,13 @@ export function gateLogLine(line: string, dropped: LogDropCounter): string | und
       dropped('logs', 'unknown_key');
       continue;
     }
-    rest[key] = value;
+    rest.set(key, value);
   }
   if (allowed !== undefined) {
-    Object.assign(out, gateAttributes('logs', allowed, rest, dropped, { localLog: true }));
+    Object.assign(
+      out,
+      gateAttributes('logs', allowed, Object.fromEntries(rest), dropped, { localLog: true }),
+    );
   }
 
   const err = record.err;
