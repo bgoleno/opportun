@@ -251,15 +251,15 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
     });
     try {
       const h = opened.handle as SqliteHandle;
-      const started = Date.now();
-      // 60 pages at a time, each burst over the threshold, well inside a second.
-      for (let burst = 0; burst < 6 && Date.now() - started < 900; burst++) {
+      // Six bursts of 60 pages, each over the threshold. Each one's checkpoint comes within
+      // 900 ms, so none waited the 1 s retry delay: a burst that did times out here. That wait
+      // is the assertion; a bound on the whole run's time would only measure the machine's load.
+      for (let burst = 0; burst < 6; burst++) {
         const before = h.checkpointer!.checkpoints;
         await write(h, 60);
         await until(() => h.checkpointer!.checkpoints > before, 900);
       }
-      expect(h.checkpointer!.checkpoints).toBeGreaterThanOrEqual(3);
-      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(h.checkpointer!.checkpoints).toBeGreaterThanOrEqual(6);
     } finally {
       await opened.close();
     }
