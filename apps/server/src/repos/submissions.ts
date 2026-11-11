@@ -17,6 +17,7 @@ import {
   type SubmissionFields,
   type SubmissionSnapshotState,
   type SubmissionStatus,
+  type ApplicationDetailKey,
 } from '@opportun/core';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
@@ -38,6 +39,8 @@ import type { Db, Exec, UserCtx } from './base';
 import { destinationAllowed } from './submissionReview';
 import { countWhere, type ListOpts, type Page } from './list';
 import { effectiveSubmission, latestSends } from './resumeSends';
+import { applicationDetailsFor } from './applicationDetails';
+import { saveDetailsToProfile } from './profile';
 
 export type SubmissionRow = typeof applicationSubmissions.$inferSelect;
 
@@ -299,6 +302,11 @@ export async function createSubmissionDraft(
     throw ineligible('destination_not_allowed');
   }
   const resume = await finalResume(db, ctx, input.resumeId);
+  // A new draft starts as a copy of what Opportun holds for the user (#411): the profile, then
+  // the account, then the last reviewed application, each value passing today's checks. After
+  // this the draft is its own. A replay returned above, so a repeated create fills nothing.
+  const prefill = await applicationDetailsFor(db, ctx);
+  const fields = Object.fromEntries(prefill.values.map((v) => [v.key, v.value]));
 
   // Two creates can both pass the checks above; the unique indexes then decide (test/races).
   await racePoint('submissions.create');
@@ -322,7 +330,7 @@ export async function createSubmissionDraft(
         resumeStore: resume.store,
         resumeDocRef: resume.docRef,
         snapshotState: 'pending',
-        fields: {},
+        fields,
         answers: [],
         createdAt: now,
         updatedAt: now,
@@ -410,6 +418,11 @@ export interface SubmissionPatch {
   resumeId?: string;
   fields?: SubmissionFields;
   answers?: SubmissionAnswer[];
+  /**
+   * Detail fields to save to the caller's profile too (#411), with the draft's values as this
+   * request leaves them: both are written, or neither.
+   */
+  saveToProfile?: ApplicationDetailKey[];
 }
 
 /**
@@ -463,6 +476,12 @@ export async function updateSubmissionDraft(
       .where(and(owned(ctx, id), eq(applicationSubmissions.status, row.status)))
       .returning();
     if (changed === undefined) throw notNow(await getRow(tx, ctx, id), 'draft');
+    // After the attempt's lock (above), as every writer of an attempt takes it first; the
+    // profile's own lock is taken inside. A refused value throws, and the whole transaction,
+    // the draft's update included, is rolled back.
+    if (patch.saveToProfile !== undefined && patch.saveToProfile.length > 0) {
+      await saveDetailsToProfile(tx, ctx, changed.fields, patch.saveToProfile);
+    }
     return changed;
   });
   // After the commit, so the job never runs ahead of the row it reads.

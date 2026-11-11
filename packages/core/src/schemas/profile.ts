@@ -17,6 +17,12 @@ export const ProfileSchema = z.object({
   location: z.string().nullish(),
   workAuth: z.string().nullish(),
   links: z.array(ProfileLinkSchema).default([]),
+  /**
+   * The details an application asks for that have no column of their own (#411): first and last
+   * name, LinkedIn, website, links. Written through ApplicationDetailsSchema, so the keys are
+   * the shared list's; read back as stored.
+   */
+  applicationDetails: z.record(z.string(), z.string()).default({}),
   updatedAt: TimestampSchema,
 });
 export type Profile = z.infer<typeof ProfileSchema>;
