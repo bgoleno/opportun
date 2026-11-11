@@ -5,8 +5,8 @@
 //
 // - busy: 12,000 writes back to back, one per turn of the event loop, a burst the worker keeps
 //   up with: the backstop is never reached, so no checkpoint runs on the main thread;
-// - long: 50,000 writes, a burst past the backstop, which then fires on the main thread (at
-//   least twice on the slow disk: tl wanted each firing's cost);
+// - long: 50,000 writes, a burst past the backstop, which fires on the main thread when the
+//   worker falls behind (reported with each firing's cost; not asserted, as it varies by run);
 // - quiet: one small write every 1.5 s, past the worker's 60-second age bound, so the window
 //   holds an age checkpoint and the restart that follows it.
 //
@@ -211,11 +211,10 @@ describe.runIf(RUN)('the background checkpointer on a slow disk (#383, reported 
     if (!backstopFires) for (const r of on) expect(r.mainCheckpointTotalMs).toBe(0);
     const { off: offSummary, on: onSummary } = report(rounds);
     expect(onSummary.p99Ms).toBeLessThan(offSummary.p99Ms);
-    // Only the slow disk is sure to reach it: on an ordinary one the worker keeps the WAL
-    // restarting through the same burst, which is the better outcome.
-    if (backstopFires && SLOW === 1) {
-      for (const r of on) expect(r.checkpointsInCommit.count).toBeGreaterThanOrEqual(2);
-    }
+    // Whether the long burst reaches the backstop is not asserted: it depends on how fast the
+    // worker copies on the day (on the slow disk one run fired it 3 and 6 times, the next not at
+    // all, the worker keeping the WAL restarting), and either is the design working. Each
+    // firing's cost and the WAL's peak are reported.
     return off;
   };
 
