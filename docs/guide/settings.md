@@ -11,7 +11,9 @@ and [Inbox](inbox.md#connect-gmail).
 ## Application details
 
 **Settings > Profile** has an **Application details** card below your profile: first name, last
-name, LinkedIn profile, website and links. With your profile's own fields, these are what a new
+name, country, school, degree, how you heard about the role, LinkedIn profile, website and links.
+Write country, school, degree and how you heard as an employer's form lists them (for example
+"United States"); the profile's **Location (city)** is written the same way. With your profile's own fields, these are what a new
 application starts with (see [Your details when you apply](pipeline.md#your-details-when-you-apply)).
 Change them here, or tick **Save to my profile** on an application's Details step. **Save
 application details** checks each value first: a web address must be the whole address, starting

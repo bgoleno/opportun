@@ -9,7 +9,7 @@ import { FormError } from '@/components/FormError';
 import { FormField } from '@/components/FormField';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
-import { DETAIL_FIELDS, detailProblemText } from '@/components/apply/api';
+import { DETAIL_FIELDS, detailProblemText, LOCATION_HINT } from '@/components/apply/api';
 import { ReviewCapCard } from '@/components/apply/ReviewUsage';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -134,7 +134,11 @@ function ProfileForm({ profile }: { profile: Profile }) {
             <FormField label="Phone" error={errors.phone?.message}>
               {(p) => <Input {...p} type="tel" autoComplete="tel" {...form.register('phone')} />}
             </FormField>
-            <FormField label="Location" error={errors.location?.message}>
+            <FormField
+              label="Location (city)"
+              hint={LOCATION_HINT}
+              error={errors.location?.message}
+            >
               {(p) => <Input {...p} placeholder="Seattle, WA" {...form.register('location')} />}
             </FormField>
             <FormField label="Work authorization" error={errors.workAuth?.message}>
@@ -290,7 +294,12 @@ function ApplicationDetailsCard({ profile }: { profile: Profile }) {
           <FormError message={formError} />
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {OWN_DETAILS.map((f) => (
-              <FormField key={f.key} label={f.label} error={problems.get(f.key)}>
+              <FormField
+                key={f.key}
+                label={f.label}
+                error={problems.get(f.key)}
+                {...(f.hint === undefined ? {} : { hint: f.hint })}
+              >
                 {(p) => (
                   <Input
                     {...p}
