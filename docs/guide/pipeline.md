@@ -192,8 +192,9 @@ press the site's own Submit button.
 
 The last step, **Finish on the application site**, says what to do on that tab:
 
-- **Where the browser extension can fill the form** (a Greenhouse form, and an extension token
-  with the **Assisted apply** permission): go to the form's tab, click the Opportun icon in
+- **Where the browser extension can fill the form** (a Greenhouse form on Greenhouse's own
+  pages, not a job shown on the company's own careers page, and an extension token with the
+  **Assisted apply** permission): go to the form's tab, click the Opportun icon in
   the toolbar, then press **Fill in this application**. The review step says this too, under
   the button that opens the form. Check every field (the extension lists what it filled and
   what it left for you), then press the site's own Submit. See
