@@ -8,13 +8,14 @@ import {
   Output,
   RetryError,
   streamText,
+  type Instructions,
   type LanguageModel,
   type LanguageModelUsage,
   type ModelMessage,
   type ToolSet,
 } from 'ai';
 import type { z } from 'zod';
-import { estimateCost } from './pricing';
+import { cacheMinTokens, estimateCost } from './pricing';
 import { createLanguageModel } from './providers';
 import { InferenceSpan, SDK_TELEMETRY_OFF } from './telemetry';
 import {
@@ -39,7 +40,7 @@ const MAX_ERROR_DETAIL = 300;
 interface Tokens {
   input: number;
   output: number;
-  /** Part of `input` already; kept for the span only, the ledger has no column for them. */
+  /** Part of `input` already; priced at their own rates (#356) and given to the span. */
   cacheRead: number;
   cacheWrite: number;
 }
@@ -128,6 +129,7 @@ class Run {
       this.tokens.input,
       this.tokens.output,
       this.policy,
+      { readTokens: this.tokens.cacheRead, writeTokens: this.tokens.cacheWrite },
     );
     this.span.end({
       ...(failure === undefined ? {} : { errorType: failure.reason }),
@@ -215,6 +217,32 @@ function callSettings(policy: ModelPolicy): { maxOutputTokens: number; temperatu
   };
 }
 
+/** Characters per token assumed when sizing a prefix: high, so a prefix is never overestimated. */
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * The system prompt as the SDK takes it (https://github.com/bgoleno/opportun/issues/356). The
+ * prefix is marked for Anthropic's cache only when the model caches a prefix of its size: a
+ * marked prefix the model would not cache would earn nothing. Everywhere else the prompt goes
+ * whole: OpenAI caches on its own when the start of a prompt repeats, which the split's order
+ * already gives, and an OpenAI-compatible endpoint (a local model, a gateway) gets exactly what
+ * it got before.
+ */
+function systemFor(policy: ModelPolicy, system: string, cacheBreak?: number): Instructions {
+  if (cacheBreak === undefined || cacheBreak <= 0 || cacheBreak >= system.length) return system;
+  // Only Anthropic models have a minimum (cacheMinTokens), so only they are ever marked.
+  const min = cacheMinTokens(policy.provider, policy.model);
+  if (min === undefined || cacheBreak / CHARS_PER_TOKEN < min) return system;
+  return [
+    {
+      role: 'system',
+      content: system.slice(0, cacheBreak),
+      providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+    },
+    { role: 'system', content: system.slice(cacheBreak) },
+  ];
+}
+
 /**
  * One structured call: the model output must validate against `schema`. Schema-invalid output
  * is retried once; a second failure throws AiUnavailableError('invalid_output').
@@ -224,6 +252,11 @@ export async function runStructured<T>(
   task: TaskKey,
   opts: {
     system: string;
+    /**
+     * Where the part of `system` that stays the same from call to call ends, in characters
+     * (systemWithCacheBreak). The router may mark the part before it for the provider's cache.
+     */
+    cacheBreak?: number;
     prompt: string;
     schema: z.ZodType<T>;
     promptId?: string;
@@ -246,7 +279,7 @@ export async function runStructured<T>(
       const result = await run.span.run(() =>
         generateText({
           model,
-          system: opts.system,
+          system: systemFor(policy, opts.system, opts.cacheBreak),
           prompt: opts.prompt,
           output: Output.object({ schema: opts.schema }),
           maxRetries: SDK_MAX_RETRIES,
