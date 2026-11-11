@@ -112,6 +112,7 @@ export function startBackgroundCheckpointer(
       checkpoints += 1;
       opts.onCheckpoint?.({
         reason: message.reason,
+        startedAt: message.startedAt,
         log: message.log,
         checkpointed: message.checkpointed,
         ms: message.ms,

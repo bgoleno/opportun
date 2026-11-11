@@ -92,6 +92,8 @@ export type CheckpointWorkerMessage =
   | {
       type: 'checkpoint';
       reason: 'size' | 'age';
+      /** When it started, as Date.now(): the benchmark lines a write's stall up against it. */
+      startedAt: number;
       log: number;
       checkpointed: number;
       ms: number;
@@ -139,6 +141,7 @@ function run(data: CheckpointWorkerData, port: NonNullable<typeof parentPort>): 
     // A checkpoint that a reader held back is retried, but not on every poll.
     if (reason !== undefined && (!heldBack || now - lastAttempt >= data.retryMs)) {
       lastAttempt = now;
+      const startedAt = Date.now();
       const started = performance.now();
       const [result] = db.pragma('wal_checkpoint(PASSIVE)') as {
         log: number;
@@ -148,6 +151,7 @@ function run(data: CheckpointWorkerData, port: NonNullable<typeof parentPort>): 
       tell({
         type: 'checkpoint',
         reason,
+        startedAt,
         log: result?.log ?? 0,
         checkpointed: result?.checkpointed ?? 0,
         ms: performance.now() - started,

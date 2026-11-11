@@ -136,7 +136,7 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
     });
     try {
       const h = opened.handle as SqliteHandle;
-      expect(autocheckpoint(h)).toBe(2_000);
+      expect(autocheckpoint(h)).toBe(10_000);
       const file = join(opened.dataDir, 'opportun.db');
       const before = statSync(file).size;
       await write(h, 300);
@@ -191,7 +191,7 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
     const h = opened.handle as SqliteHandle;
     try {
       // What db/client.ts starts, with a short time bound and the checkpoints recorded.
-      h.sqlite.pragma('wal_autocheckpoint = 2000');
+      h.sqlite.pragma('wal_autocheckpoint = 10000');
       const cp = startBackgroundCheckpointer(join(opened.dataDir, 'opportun.db'), {
         pragmas: [],
         pageSize: Number(h.sqlite.pragma('page_size', { simple: true })),

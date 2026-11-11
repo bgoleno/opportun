@@ -580,12 +580,19 @@ const AUTOCHECKPOINT_PAGES = 100;
 
 /**
  * The main connection's automatic checkpoint while the background checkpointer runs: a
- * backstop, not off. The worker checkpoints at CHECKPOINT_PAGES; under a write rate it cannot
- * keep up with, SQLite restarts the WAL only when a writer finds all of it copied, and with the
- * main connection's checkpoint off the WAL grew 5 MB a second. At 2,000 pages it held at 8 MB,
- * and while the worker keeps up it never fires (tl on #393).
+ * backstop, not off, and well above the worker's CHECKPOINT_PAGES (tl on #393).
+ *
+ * - Not 0: SQLite restarts the WAL only when a writer finds all of it copied, which never
+ *   happens while commits keep landing. With the main connection's checkpoint off, a steady
+ *   stream grew the WAL 5 MB a second without limit. 10,000 pages (about 40 MB) still bounds it.
+ * - Not 2,000: wal_autocheckpoint counts every frame, copied or not, so in a long burst it
+ *   fired every 2,000 frames whatever the worker did, and did the worker's job on the main
+ *   thread: a stall as long as with the checkpointer off on a slow disk, longer on an ordinary
+ *   one. At 10,000 a 12,000-page burst never reached it, and a longer burst reaches it about
+ *   once per 10,000 pages (sqliteCheckpointBench.test.ts).
+ * - It also leaves the catch-up after a long reader (the nightly VACUUM INTO) to the worker.
  */
-const BACKSTOP_PAGES = 2_000;
+const BACKSTOP_PAGES = 10_000;
 
 /** How long closeDatabase waits for the worker to stop before closing the main connection. */
 const CHECKPOINTER_CLOSE_WAIT_MS = 2_000;

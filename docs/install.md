@@ -292,19 +292,41 @@ Application settings (read by the server process):
 | `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`                 | (unset)                                        | `1` lets telemetry export send to loopback, a private network or `100.64.0.0/10` (a Prometheus or a Datadog Agent next to Opportun), over http or https. Unset, export goes only to a public https destination. Link-local and cloud metadata addresses are refused either way; see [Telemetry](guide/settings.md#where-export-may-send) |
 
 **SQLite on a slow disk.** SQLite writes new data to a write-ahead log first, and copies it
-into `opportun.db` from time to time: a checkpoint. By default the server checkpoints every 100
-pages, inside whichever write takes the log past that size, and while a checkpoint waits for
-the disk nothing else in the server runs. On an SSD that takes about 2 ms. On a slow disk, such
-as an SD card in a small board computer or a network volume, it can take tens of milliseconds,
-and every request in flight waits for it. If `opportun.db` is on such a disk, set
-`OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT=1`: a background thread then checkpoints once a second,
-on a connection of its own, and writes no longer wait for the disk's sync. What it costs:
-between checkpoints the log grows by whatever was written in that second, a second connection
-to the database stays open, and a long read (a backup or an export) still keeps a checkpoint
-from finishing until it ends, as it does without the setting. If the background thread ever
-stops, the server logs `background checkpointer stopped: automatic checkpoints are back on` and
-goes back to checkpointing as it does by default. Leave it unset on an SSD, where the default
-already costs little. It has no effect on Postgres.
+into `opportun.db` from time to time: a checkpoint. A checkpoint is also when the log is synced
+to the disk, so a power cut can roll back what was written since the last one (the server runs
+SQLite with `synchronous=NORMAL`). By default the server checkpoints every 100 pages, inside
+whichever write takes the log past that size, and while a checkpoint waits for the disk nothing
+else in the server runs. On an SSD that takes about 2 ms. On a slow disk, such as an SD card in
+a small board computer, it can take tens of milliseconds, and every request in flight waits for
+it. If `opportun.db` is on such a disk, set `OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT=1`.
+
+- **What it does:** a background thread checkpoints on a connection of its own once 1,000 pages
+  (about 4 MB) wait to be copied, or once anything has waited a minute. Writes no longer wait
+  for the checkpoint's copy and sync.
+- **What still runs in a write:**
+  - after a checkpoint has copied everything, the next write starts the log again from its
+    beginning and syncs the log's new header. With the setting on, that happens about once per
+    1,000 pages written instead of once per 100;
+  - a burst of writes with no pause, past 10,000 pages (about 40 MB), still checkpoints inside
+    a write about once per 10,000 pages, because the log cannot start again while writes keep
+    landing.
+- **Durability:** writes are synced within about a minute, or sooner under load. Without the
+  setting they are synced every 100 pages, which on a quiet server can be hours apart.
+- **What it costs:**
+  - the log holds about 4 MB between checkpoints, instead of about 400 KB. During a long burst
+    it can reach about 40 MB, where the server's own checkpoint takes over as a backstop, and
+    the file keeps that size on disk afterwards (SQLite reuses it);
+  - a second connection to the database stays open;
+  - a long read (a backup or an export) still keeps a checkpoint from finishing until it ends,
+    as it does without the setting.
+- **If the thread stops:** the server logs `background checkpointer stopped: automatic
+checkpoints are back on` and goes back to checkpointing as it does by default.
+- **A disk that stops answering:** if it does so in the middle of a checkpoint, shutdown waits up
+  to 2 s for the thread and closes the database anyway. The process itself cannot exit until
+  the disk answers, as it could not with the setting off.
+
+Leave it unset on an SSD: there the default already costs a few milliseconds at most, and the
+setting buys little. It has no effect on Postgres.
 
 **AI provider requests.** Every AI call, to Anthropic, OpenAI or an OpenAI-compatible
 endpoint, is checked before it is sent: https only, and every address the host's name resolves
