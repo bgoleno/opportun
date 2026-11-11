@@ -15,7 +15,7 @@
 //   48 hours they are kept, 1-hour points otherwise (14.7). Steps are whole multiples of it,
 //   aligned to the step, so a range has MAX_STEPS of them, or one more when it does not start
 //   on a step: a chart never has more points than it can draw.
-import { and, eq, gte, isNull, lt } from 'drizzle-orm';
+import { and, desc, eq, gte, isNull, lt } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -112,6 +112,8 @@ export interface SeriesRequest {
   by?: string;
   filters: readonly { key: string; value: string }[];
   now: number;
+  /** The most rows read; MAX_ROWS unless a test sets a smaller one. */
+  maxRows?: number;
 }
 
 /** An attribute's value as the dashboards show and compare it: absent is null. */
@@ -144,6 +146,20 @@ interface Acc {
 
 const emptyAcc = (): Acc => ({ count: 0, sum: 0, errors: 0, max: null });
 
+/**
+ * What ranks a breakdown's groups: the statistic shown, so a chart of errors keeps the groups
+ * with errors on their own lines (tl on #363). Mean and max rank by calls, as an average of a
+ * handful of calls is not what a reader looks for first.
+ */
+function rankWeight(
+  stat: Stat,
+  r: { attributes: Record<string, unknown>; count: number; sum: number },
+): number {
+  if (stat === 'sum') return r.sum;
+  if (stat === 'errors') return attrText(r.attributes, 'error.type') === null ? 0 : r.count;
+  return r.count;
+}
+
 function valueOf(stat: Stat, acc: Acc | undefined): number | null {
   const a = acc ?? emptyAcc();
   switch (stat) {
@@ -173,6 +189,7 @@ export async function readSeries(
 ): Promise<SeriesResult> {
   if (!mayRead(viewer, def)) throw forbidden();
   const { resolution, step } = stepFor(req.from, req.to, req.now);
+  const maxRows = req.maxRows ?? MAX_ROWS;
   const firstStep = Math.floor(req.from / step) * step;
 
   // The owner rule of 14.7, and nothing from the request but bound numbers and the metric's
@@ -194,15 +211,20 @@ export async function readSeries(
       and(
         eq(obsMetricPoints.metric, name),
         eq(obsMetricPoints.resolution, resolution),
-        gte(obsMetricPoints.bucketStart, Math.floor(req.from / resolution) * resolution),
+        // From the first step's start, so the first point counts its whole step, not only the
+        // part after the range's own start (tl on #363). firstStep is a multiple of resolution.
+        gte(obsMetricPoints.bucketStart, firstStep),
         lt(obsMetricPoints.bucketStart, req.to),
         owner,
       ),
     )
-    .limit(MAX_ROWS + 1)
+    // Newest first: past the row limit, the oldest points are the ones left out, not whichever
+    // the database happened to return first (tl on #363).
+    .orderBy(desc(obsMetricPoints.bucketStart))
+    .limit(maxRows + 1)
     .all();
-  const truncated = rows.length > MAX_ROWS;
-  const kept = rows.slice(0, MAX_ROWS);
+  const truncated = rows.length > maxRows;
+  const kept = rows.slice(0, maxRows);
 
   const values = Object.fromEntries(
     def.attributes.map((key) => {
@@ -233,7 +255,7 @@ export async function readSeries(
     if (attrText(r.attributes, 'error.type') !== null) acc.errors += r.count;
     acc.max = acc.max === null ? r.max : Math.max(acc.max, r.max);
     steps.set(t, acc);
-    totals.set(group, (totals.get(group) ?? 0) + (def.instrument === 'counter' ? r.sum : r.count));
+    totals.set(group, (totals.get(group) ?? 0) + rankWeight(req.stat, r));
   }
 
   // The largest groups keep their own series; the rest are added up under OTHER (a literal

@@ -20,6 +20,19 @@ export function niceMax(max: number): number {
   return Number((nice * magnitude).toPrecision(12));
 }
 
+/** The y axis has this many steps (five labels, the bottom one zero). */
+export const Y_TICKS = 4;
+
+/**
+ * The top of the y axis. For a statistic in whole numbers (calls, errors, a count), it is a
+ * multiple of Y_TICKS, so every tick is a whole number and no two labels read the same: at a
+ * maximum of 1 the axis reads 4, 3, 2, 1, 0 rather than 1, 1, 1, 0, 0 (tl on #363).
+ */
+export function axisMax(max: number, wholeNumbers: boolean): number {
+  const top = niceMax(max);
+  return wholeNumbers ? Y_TICKS * Math.ceil(top / Y_TICKS) : top;
+}
+
 /**
  * An SVG path through the values, spread evenly across `width`, scaled so `yMax` is the top.
  * A missing value breaks the line: a step with no data is a gap, not a zero.

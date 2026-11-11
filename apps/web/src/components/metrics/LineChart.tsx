@@ -9,12 +9,11 @@
 import { type KeyboardEvent, type PointerEvent, useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { SeriesPoint, Stat } from './api';
-import { formatStatValue, indexAt, linePath, niceMax, statLabel } from './chartModel';
+import { axisMax, formatStatValue, indexAt, linePath, statLabel, Y_TICKS } from './chartModel';
 
 /** The SVG's own coordinate box. It stretches to the chart's size; strokes do not. */
 const W = 1000;
 const H = 300;
-const Y_TICKS = 4;
 
 export interface ChartSeries {
   label: string | null;
@@ -58,7 +57,13 @@ export function LineChart({
   const n = times.length;
   const [cursor, setCursor] = useState<number | null>(null);
   const at = cursor === null ? null : Math.min(cursor, n - 1);
-  const yMax = niceMax(Math.max(0, ...series.flatMap((s) => s.points.map((p) => p.v ?? 0))));
+  // Calls, errors and counts are whole numbers; durations and dollars are not.
+  const wholeNumbers =
+    stat === 'count' || stat === 'errors' || (stat === 'sum' && unit !== '{USD}' && unit !== 's');
+  const yMax = axisMax(
+    Math.max(0, ...series.flatMap((s) => s.points.map((p) => p.v ?? 0))),
+    wholeNumbers,
+  );
   const label = statLabel(stat, unit);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -141,8 +146,10 @@ export function LineChart({
               </span>
             ))}
           </div>
+          {/* mr-1.5: the cursor's dot on the last point is centred on the right edge; the
+              margin keeps it inside the chart's focus ring. */}
           <div
-            className="relative h-48 min-w-0 flex-1 sm:h-64"
+            className="relative mr-1.5 h-48 min-w-0 flex-1 sm:h-64"
             onPointerMove={onPointerMove}
             onPointerLeave={() => setCursor(null)}
           >

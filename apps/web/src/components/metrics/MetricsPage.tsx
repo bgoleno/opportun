@@ -206,6 +206,7 @@ function MetricButton({
   );
 }
 
+const MINUTE = 60_000;
 const HOUR = 3_600_000;
 const PRESETS = [
   { value: '1h', label: 'Last hour', ms: HOUR },
@@ -270,10 +271,14 @@ function MetricView({ metric: m }: { metric: MetricInfo }) {
     const now = Date.now();
     if (!Number.isFinite(f) || !Number.isFinite(t)) return setRangeError('Enter both times.');
     if (t <= f) return setRangeError('That range ends before it starts.');
-    if (t - f > MAX_SPAN_MS || f < now - MAX_SPAN_MS) {
+    if (f >= now) return setRangeError('That range starts in the future.');
+    // The inputs hold whole minutes, so a range shown as the last 30 days can start up to a
+    // minute earlier than that: allow the minute, then keep the range inside what is kept.
+    if (t - f > MAX_SPAN_MS + MINUTE || f < now - MAX_SPAN_MS - MINUTE) {
       return setRangeError('Points are kept 30 days: choose a range inside the last 30 days.');
     }
-    setCustom({ from: f, to: Math.min(t, now) });
+    const to = Math.min(t, now);
+    setCustom({ from: Math.max(f, now - MAX_SPAN_MS, to - MAX_SPAN_MS), to });
   };
 
   const label = statLabel(stat, m.unit);

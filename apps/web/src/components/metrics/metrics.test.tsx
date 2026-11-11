@@ -11,6 +11,13 @@ import { MetricsPage, type MetricsSearch } from './MetricsPage';
 
 const H = 3_600_000;
 
+/** A time as a datetime-local input takes it, to the minute, in the browser's zone. */
+function localInput(t: number): string {
+  const d = new Date(t);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 const CATALOG: MetricCatalog = {
   collect: true,
   metrics: [
@@ -144,13 +151,17 @@ describe('MetricsPage', () => {
     const from = screen.getByLabelText('From');
     const to = screen.getByLabelText('To');
     await user.clear(from);
-    await user.type(from, '2026-11-01T10:00');
+    // Relative to now: the page refuses a range older than the 30 days points are kept, so a
+    // fixed date would start failing a month later (tl on #363).
+    const start = localInput(Date.now() - 3 * H);
+    const end = localInput(Date.now() - H);
+    await user.type(from, start);
     await user.clear(to);
-    await user.type(to, '2026-11-01T12:00');
+    await user.type(to, end);
     await user.click(screen.getByRole('button', { name: 'Apply' }));
     const q = lastSeries(calls);
-    expect(Number(q.get('from'))).toBe(new Date('2026-11-01T10:00').getTime());
-    expect(Number(q.get('to'))).toBe(new Date('2026-11-01T12:00').getTime());
+    expect(Number(q.get('from'))).toBe(new Date(start).getTime());
+    expect(Number(q.get('to'))).toBe(new Date(end).getTime());
   });
 
   it('refuses a custom range that ends before it starts', async () => {
@@ -160,11 +171,45 @@ describe('MetricsPage', () => {
     await screen.findByRole('table', { name: /Calls/ });
     await user.selectOptions(screen.getByLabelText('Time range'), 'custom');
     await user.clear(screen.getByLabelText('From'));
-    await user.type(screen.getByLabelText('From'), '2026-11-01T12:00');
+    await user.type(screen.getByLabelText('From'), localInput(Date.now() - H));
     await user.clear(screen.getByLabelText('To'));
-    await user.type(screen.getByLabelText('To'), '2026-11-01T10:00');
+    await user.type(screen.getByLabelText('To'), localInput(Date.now() - 3 * H));
     await user.click(screen.getByRole('button', { name: 'Apply' }));
     expect(screen.getByRole('alert')).toHaveTextContent(/ends before it starts/);
+  });
+
+  it('applies the last 30 days unchanged as a custom range', async () => {
+    // The inputs hold whole minutes, so the start they show can be a few seconds older than 30
+    // days: that is still the range the preset showed, not one past what is kept (tl on #363).
+    const { calls } = mockApi({
+      'GET /obs/metrics': CATALOG,
+      'GET /obs/metrics/series': seriesFor,
+    });
+    renderWithProviders(<Harness initial={{ metric: 'http.server.request.duration' }} />);
+    const user = userEvent.setup();
+    await screen.findByRole('table', { name: /Calls/ });
+    await user.selectOptions(screen.getByLabelText('Time range'), '30d');
+    await user.selectOptions(screen.getByLabelText('Time range'), 'custom');
+    const before = calls.length;
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    await waitFor(() => expect(calls.length).toBeGreaterThan(before));
+    const q = lastSeries(calls);
+    expect(Number(q.get('to')) - Number(q.get('from'))).toBeLessThanOrEqual(30 * 24 * H);
+  });
+
+  it('refuses a custom range that starts in the future', async () => {
+    mockApi({ 'GET /obs/metrics': CATALOG, 'GET /obs/metrics/series': seriesFor });
+    renderWithProviders(<Harness initial={{ metric: 'http.server.request.duration' }} />);
+    const user = userEvent.setup();
+    await screen.findByRole('table', { name: /Calls/ });
+    await user.selectOptions(screen.getByLabelText('Time range'), 'custom');
+    await user.clear(screen.getByLabelText('From'));
+    await user.type(screen.getByLabelText('From'), localInput(Date.now() + H));
+    await user.clear(screen.getByLabelText('To'));
+    await user.type(screen.getByLabelText('To'), localInput(Date.now() + 2 * H));
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/starts in the future/);
   });
 
   it('sends the statistic, a filter and a breakdown, and draws a line per group', async () => {

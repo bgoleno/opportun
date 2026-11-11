@@ -2,6 +2,7 @@
 // the line paths with gaps, the cursor's step, zooming, and how values read.
 import { describe, expect, it } from 'vitest';
 import {
+  axisMax,
   MAX_SPAN_MS,
   MIN_SPAN_MS,
   formatStatValue,
@@ -21,6 +22,24 @@ describe('niceMax', () => {
     expect(niceMax(11)).toBe(20);
     expect(niceMax(0.034)).toBe(0.05);
     expect(niceMax(420)).toBe(500);
+  });
+});
+
+describe('axisMax', () => {
+  it('for whole numbers, gives four whole, distinct ticks, so no label repeats (tl on #363)', () => {
+    const ticks = (top: number) => [4, 3, 2, 1, 0].map((i) => (top * i) / 4);
+    for (const max of [0, 1, 2, 3, 5, 7, 10, 20, 420]) {
+      const top = axisMax(max, true);
+      expect(top, String(max)).toBeGreaterThanOrEqual(max);
+      expect(ticks(top).every(Number.isInteger), String(max)).toBe(true);
+      expect(new Set(ticks(top)).size, String(max)).toBe(5);
+    }
+    expect(axisMax(1, true)).toBe(4);
+    expect(axisMax(500, true)).toBe(500);
+  });
+
+  it('for fractions, is the nice maximum', () => {
+    expect(axisMax(0.034, false)).toBe(0.05);
   });
 });
 

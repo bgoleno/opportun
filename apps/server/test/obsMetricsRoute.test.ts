@@ -3,7 +3,7 @@
 // obs_metric_points: the dashboards read the table, not the instrumentation (14.12).
 import { afterEach, describe, expect, it } from 'vitest';
 import { obsMetricPoints } from '../src/db/schema';
-import type { MetricDef } from '../src/obs/catalog';
+import { METRICS, type MetricDef } from '../src/obs/catalog';
 import { writeCollect } from '../src/obs/config';
 import { setCollecting } from '../src/obs';
 import { HOUR_MS, MINUTE_MS, seriesId } from '../src/obs/metrics';
@@ -355,6 +355,60 @@ describe('GET /obs/metrics/series (FR-T6)', () => {
       const res = await a.request({ method: 'GET', url: `/api/v1/obs/metrics/series?${q}` });
       expect(res.statusCode, q).toBe(400);
     }
+  });
+});
+
+describe('series edges (tl on #363)', () => {
+  const HTTP_DEF = METRICS['http.server.request.duration'];
+  const admin = (a: TestClient) => ({ userId: a.userId, isAdmin: true });
+
+  it('past the row limit, keeps the newest rows, not whichever the database returns', async () => {
+    const { app, a } = await boot();
+    for (const [i, count] of [3, 5, 7].entries()) {
+      await insertPoint(app, { bucketStart: NOW - (30 - i * 10) * MINUTE_MS, count });
+    }
+    const out = await readSeries(app.db, admin(a), HTTP, HTTP_DEF, {
+      stat: 'count',
+      from: NOW - HOUR_MS,
+      to: NOW,
+      filters: [],
+      now: NOW,
+      maxRows: 2,
+    });
+    expect(out.truncated).toBe(true);
+    expect(out.series[0]!.points.reduce((n, p) => n + (p.v ?? 0), 0)).toBe(5 + 7);
+  });
+
+  it('counts the whole first step, from its start, not from the range’s', async () => {
+    const { app, a } = await boot();
+    const STEP = 4 * HOUR_MS;
+    // A 29.5-day range draws 4-hour steps of 1-hour points; it starts 2 hours into a step.
+    const stepStart = Math.ceil((NOW - 29.5 * 24 * HOUR_MS) / STEP) * STEP;
+    const from = stepStart + 2 * HOUR_MS;
+    await insertPoint(app, { bucketStart: stepStart, count: 11, resolution: HOUR_MS });
+    await insertPoint(app, { bucketStart: stepStart + 3 * HOUR_MS, count: 1, resolution: HOUR_MS });
+    const body = await series(a, `metric=${HTTP}&stat=count&from=${from}&to=${NOW}`);
+    expect(body.step).toBe(STEP);
+    expect(body.series[0]!.points[0]).toEqual({ t: stepStart, v: 12 });
+  });
+
+  it('ranks a breakdown by the statistic shown, so errors keep their own line', async () => {
+    const { app, a } = await boot();
+    const at = NOW - 5 * MINUTE_MS;
+    for (let i = 0; i < 9; i++) {
+      await insertPoint(app, {
+        bucketStart: at,
+        count: 50,
+        attributes: { 'http.route': `/busy/${i}` },
+      });
+    }
+    await insertPoint(app, {
+      bucketStart: at,
+      count: 5,
+      attributes: { 'http.route': '/failing', 'error.type': '500' },
+    });
+    const body = await series(a, `metric=${HTTP}&stat=errors&by=http.route&${lastHour}`);
+    expect(body.series[0]!.label).toBe('/failing');
   });
 });
 
