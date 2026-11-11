@@ -746,8 +746,10 @@ Accepted decisions will move into `docs/adr/` as individual records once reviewe
 
 Requirements: FR-T1 to FR-T7, NFR-PRV6, NFR-PRV7 and NFR-OPS7. The work is tracked on
 https://github.com/bgoleno/opportun/issues/340, and this section is the design every slice
-follows (https://github.com/bgoleno/opportun/issues/348). **Status: designed; only FR-T1 is
-built.** A name in `code` below that does not exist yet is the name its slice creates.
+follows (https://github.com/bgoleno/opportun/issues/348). **Status: built.** FR-T1 to FR-T7
+have shipped. This section was written before the code, so where it and the code differ, the
+code is right: 14.13 lists the differences found so far. 14.12 is the plan the work followed,
+not a list of what is left.
 
 | Slice | Requirement                          | Issue                                          |
 | ----- | ------------------------------------ | ---------------------------------------------- |
@@ -762,8 +764,8 @@ built.** A name in `code` below that does not exist yet is the name its slice cr
 
 ### 14.1 What it is
 
-Everything below except FR-T1 describes the design, in the present tense. It is not shipped
-behaviour until its slice merges.
+Everything below describes the design in the present tense. It has shipped; see the status
+line above for how to read a difference.
 
 Opportun measures itself with OpenTelemetry names and data shapes: metrics, traces and log
 records for HTTP routes, background jobs, database access, outbound requests and, most of
@@ -1263,8 +1265,10 @@ holds a credential.
    the timeout is 10 seconds, and the response body is discarded.
 5. The credential is sealed with the vault key and kept in the instance's settings row, as
    an OAuth provider's client secret is. It is never returned, and it is sent to the
-   configured destination only. It is cleared whenever the type, scheme, host or port changes:
-   a new scheme could send it in clear, and a new port to another service. The OTLP header's
+   configured destination only. It is cleared whenever the type, scheme, host, port or OTLP header name changes
+   (the name compared without case): a new scheme could send it in clear, a new port could send
+   it to another service, and a new header name would carry it where the admin did not choose.
+   The OTLP header's
    name is token characters only, and may not be `Host`, `Content-Length`,
    `Transfer-Encoding`, `Connection` or `Content-Type`.
 6. Export is unavailable when `OPPORTUN_DEMO=1`: the demo's admin account is public.
@@ -1351,6 +1355,11 @@ parts.
 - **Jobs use `opportun.job.*`**, not the messaging conventions, which are not stable and
   describe brokers.
 - **Company names are not used**, though the original request allowed them in logs (14.8).
+- **A blocked send says why.** Rule 7 has "Send a test" report only its outcome class. When the
+  destination check blocks the send, the card also shows the check's reason (for example that
+  a private address needs `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`), and an export that is on but
+  blocked shows a notice with it (https://github.com/bgoleno/opportun/issues/382). The reason is
+  the admin's to see and holds no host or credential.
 - **Out of scope:** a scrape endpoint, gRPC, more than one destination at a time, sampling
   (volume does not need it), an in-app log viewer, alerting, and storing or showing prompt or
   response content in traces.
