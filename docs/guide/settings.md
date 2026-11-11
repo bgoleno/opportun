@@ -300,13 +300,22 @@ administrator turns them on, and both apply at once, with no restart.
 
 - **Collection** records how Opportun runs, in its own database: HTTP requests, background
   jobs, database statements, outbound requests and AI calls, as metrics and traces. The
-  **Metrics** and **AI traces** pages read it. Nothing leaves the instance.
-- **Export** sends the same metrics, traces and error records to one outside destination an
+  **Metrics** and **AI traces** pages read it. It also writes an event record to the server's
+  log for every action in the audit log (a sign-in, an import, an AI key change and the like),
+  and for each settings change, job run, discovery source run and error: what happened and
+  who, never the details. Nothing leaves the instance.
+- **Export** sends the same metrics, traces and event records to one outside destination an
   administrator names. It can be on only while collection is: turning collection off turns
   export off too, and turning collection back on does not resume export by itself.
 
 Everyone signed in sees whether each switch is on, export's destination type, and which kinds
 of data it sends. Only an administrator sees where it sends them.
+
+Collected metrics and traces stay in Opportun's own database. They are pruned every hour: metric
+points are kept 30 days (minute by minute for the last 48 hours), traces 30 days, and the store
+holds at most 250,000 metric rows and 100,000 span rows, oldest first. They are not in your
+**Export** zip, because they describe the instance and not your data, and they are in a
+[backup](../install.md#6-upgrades-and-backups), which copies the whole database.
 
 ### What export sends, and what it never sends
 
@@ -323,7 +332,7 @@ Each record is tagged with `service.name` (`opportun`), `service.version` and a 
 `OTEL_*` environment variables change nothing: the destination and its settings come from
 this card only.
 
-Metrics leave every 60 seconds. Traces and error records leave in batches every 5 seconds.
+Metrics leave every 60 seconds. Traces and event records leave in batches every 5 seconds.
 
 ### Setting it up
 
@@ -333,15 +342,26 @@ Tick **Send telemetry to this destination** and **Save**. Saving asks for your p
 and is recorded in the audit log with the type and the kinds of data, never the host or the
 credential.
 
+![Settings > Telemetry as an administrator sees it: the Collection card with collection on, and the Export card with export off, an OTLP destination type, https, a host and port 4318 filled in, and the Save and Send a test buttons](images/settings-telemetry.png)
+
 A credential (a header value, a token) is stored encrypted and is never shown again. Leave the
 field blank to keep the stored one, or tick **Remove the stored credential**. Changing the type,
-scheme, host or port clears it, so it cannot follow the destination somewhere else.
+scheme, host, port or, for OTLP, the header name clears it, so it cannot follow the destination
+somewhere else or go out in a header you did not choose for it.
 
 **Send a test** makes one request to the saved destination and says how it went: accepted,
-refused, timed out, a TLS failure, a refused credential, or an error from the destination.
-It asks for your password too, and shares its limit of 10 tries in 15 minutes with the other
+refused, timed out, a TLS failure, a refused credential, a redirect (which export never
+follows), or an error from the destination. If the destination is not allowed, it says why:
+for example that it is a private address and the server's operator has not set
+`OPPORTUN_TELEMETRY_ALLOW_PRIVATE`. It asks for your password too, and shares its limit of 10 tries in 15 minutes with the other
 password checks. Below the form, the card shows the last successful send, the last failure, and
 how many records were dropped in the last 24 hours (by a full buffer, for example).
+
+If export is on but cannot send at all, the card shows **Export is blocked: nothing is sent**,
+when it last tried and why. This happens, for example, when you saved a private address while
+`OPPORTUN_TELEMETRY_ALLOW_PRIVATE=1` was set and the server later started without it. The
+notice goes away after a send succeeds; to fix it, change the destination or set the variable
+again.
 
 ### Where export may send
 
@@ -378,13 +398,13 @@ Prometheus's usual names, for example `http_server_request_duration_seconds_coun
 
 ### Datadog
 
-Opportun sends metrics, traces and error records to a Datadog Agent's OTLP receiver over HTTP.
+Opportun sends metrics, traces and event records to a Datadog Agent's OTLP receiver over HTTP.
 The Agent holds your Datadog API key, so the card takes no credential. Turn the receiver on in
 the Agent's configuration:
 
 ```sh
 DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT=0.0.0.0:4318
-DD_OTLP_CONFIG_LOGS_ENABLED=true   # for the error records
+DD_OTLP_CONFIG_LOGS_ENABLED=true   # for the event records
 DD_LOGS_ENABLED=true
 ```
 
