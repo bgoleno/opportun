@@ -1,6 +1,6 @@
 // Company homepage resolution (issue #239): a candidate domain is only ever written once a
 // fetched homepage actually names the company. Mirrors opportunityEnrich.test.ts's net() fixture
-// since this reuses that module's candidateDomains/getPage/pageNamesCompany/senderDomain.
+// since this reuses that module's candidateDomains/getPage/pageNamesCompany.
 import { newId } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
@@ -158,6 +158,38 @@ describe('resolveCompanyDomain', () => {
 
     expect(outcome).toEqual({ outcome: 'resolved', domain: 'initechlabs.com' });
     expect(requested).toEqual(['https://initechlabs.com/']);
+  });
+
+  // The homepage must name the company: a domain that answers without naming it is passed over
+  // (tl on the fix: with the sender no longer probed, nothing else checked this).
+  it('passes over a name-derived domain whose homepage does not name the company', async () => {
+    const { app, a } = await boot();
+    const ctx: UserCtx = { userId: a.userId, isAdmin: false };
+    const company = await createCompany(app.db, ctx, { name: 'Initech Labs' });
+    const { fetch, requested } = net({
+      'https://initechlabs.com/': '<html><body>Domain for sale</body></html>',
+      'https://initechlabs.co/': '<html><body>Initech Labs builds billing software.</body></html>',
+    });
+
+    const outcome = await resolveCompanyDomain(app.db, ctx, fetch, company.id);
+
+    expect(outcome).toEqual({ outcome: 'resolved', domain: 'initechlabs.co' });
+    expect(requested.slice(0, 2)).toEqual(['https://initechlabs.com/', 'https://initechlabs.co/']);
+  });
+
+  it('a homepage that answers without naming the company resolves nothing', async () => {
+    const { app, a } = await boot();
+    const ctx: UserCtx = { userId: a.userId, isAdmin: false };
+    const company = await createCompany(app.db, ctx, { name: 'Initech Labs' });
+    const { fetch } = net({
+      'https://initechlabs.com/': '<html><body>Domain for sale</body></html>',
+    });
+
+    const outcome = await resolveCompanyDomain(app.db, ctx, fetch, company.id);
+
+    expect(outcome).toEqual({ outcome: 'unresolved' });
+    const row = await app.db.select().from(companies).where(eq(companies.id, company.id)).get();
+    expect(row?.domain).toBeNull();
   });
 
   it('leaves the company unresolved when no candidate verifies', async () => {
