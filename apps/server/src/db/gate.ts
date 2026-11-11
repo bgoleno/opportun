@@ -17,7 +17,11 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  */
 export function dbLog(level: 'warn' | 'error', obj: Record<string, unknown>, msg: string): void {
   void import('../obs/log')
-    .then(({ processLogger }) => processLogger()[level](obj, msg))
+    .then(({ processLogger }) => {
+      const logger = processLogger();
+      if (level === 'error') logger.error(obj, msg);
+      else logger.warn(obj, msg);
+    })
     .catch(() => undefined);
 }
 
