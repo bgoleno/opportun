@@ -57,6 +57,26 @@ describe('nextExport: the change rules', () => {
     expect(r.ok && r.value.sealedCredential).toBe(null);
   });
 
+  it('a new OTLP header name clears the stored credential: it would go out in another header (#382)', () => {
+    const prev = { enabled: true, destination: otlp, sealedCredential: seal(SECRET) };
+    const r = nextExport(
+      prev,
+      { enabled: false, destination: { ...otlp, headerName: 'authorization' } },
+      seal,
+    );
+    expect(r.ok && r.value.sealedCredential).toBe(null);
+  });
+
+  it('the same header name in other letter case keeps it: header names ignore case (#382)', () => {
+    const prev = { enabled: true, destination: otlp, sealedCredential: seal(SECRET) };
+    const r = nextExport(
+      prev,
+      { enabled: false, destination: { ...otlp, headerName: 'X-API-Key' } },
+      seal,
+    );
+    expect(r.ok && r.value.sealedCredential).toBe(seal(SECRET));
+  });
+
   it('a new credential with a new endpoint is sealed for the new one', () => {
     const prev = { enabled: false, destination: otlp, sealedCredential: seal(SECRET) };
     const r = nextExport(

@@ -174,6 +174,49 @@ describe('TelemetrySettings, as an admin', () => {
     expect(drops).toHaveTextContent('7');
   });
 
+  it('says export is blocked, and why, when a private destination meets a server without the flag (#382)', async () => {
+    // Saved while OPPORTUN_TELEMETRY_ALLOW_PRIVATE=1 was set; the server now runs without it.
+    mockApi({
+      'GET /obs/settings': { collect: true },
+      'GET /obs/export': {
+        ...ON,
+        admin: {
+          ...ADMIN_OFF.admin,
+          destination: DEST,
+          allowPrivate: false,
+          lastFailure: {
+            outcome: 'blocked',
+            reason: 'private_not_allowed',
+            at: Date.now() - 30_000,
+          },
+        },
+      },
+    });
+    renderWithProviders(<TelemetrySettings isAdmin />);
+    const exp = await screen.findByRole('region', { name: 'Export' });
+    const notice = await within(exp).findByRole('status', { name: /export is blocked/i });
+    expect(notice).toHaveTextContent(/Export is blocked/);
+    expect(notice).toHaveTextContent(/private network/);
+    expect(notice).toHaveTextContent(/OPPORTUN_TELEMETRY_ALLOW_PRIVATE=1/);
+    expect(notice).toHaveTextContent(/nothing is sent/i);
+  });
+
+  it('Send a test says why a destination is blocked (#382)', async () => {
+    mockApi({
+      'GET /obs/settings': { collect: true },
+      'GET /obs/export': { ...ADMIN_OFF, admin: { ...ADMIN_OFF.admin, destination: DEST } },
+      'POST /obs/export/test': { outcome: 'blocked', reason: 'private_not_allowed' },
+    });
+    renderWithProviders(<TelemetrySettings isAdmin />);
+    const user = userEvent.setup();
+    const exp = await screen.findByRole('region', { name: 'Export' });
+    await user.click(await within(exp).findByRole('button', { name: 'Send a test' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText(/password/i), 'pw');
+    await user.click(within(dialog).getByRole('button', { name: /continue|confirm/i }));
+    expect(await screen.findByText(/OPPORTUN_TELEMETRY_ALLOW_PRIVATE=1/)).toBeInTheDocument();
+  });
+
   it('export can be turned on only while collection is on', async () => {
     mockApi({ 'GET /obs/settings': { collect: false }, 'GET /obs/export': ADMIN_OFF });
     renderWithProviders(<TelemetrySettings isAdmin />);
