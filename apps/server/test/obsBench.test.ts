@@ -80,7 +80,11 @@ describe.runIf(RUN)('collection on: cost per call (#343, reported in the PR)', (
 // tracer provider and span store (#366); the span flush is outside the request path and is
 // #375's to bound, so it runs between batches and is not counted.
 
-const PAIRS = 20;
+const PAIRS = 30;
+// Under SPAN_FLUSH_AT (200, obs/spanStore.ts): a request or an AI call makes one span, and a
+// batch of 200 or more would trigger a span flush inside the timed region, which is how a flush's
+// cost was first read as a per-call cost (#374). Flushes run between batches and are timed apart.
+const BATCH = 150;
 const cpuMicros = (): number => {
   const u = process.cpuUsage();
   return u.user + u.system;
@@ -95,22 +99,31 @@ async function perOperation(k: number, fn: () => Promise<unknown>): Promise<numb
   return (cpuMicros() - started) / k;
 }
 
-/** Alternated off/on batches; the medians, and the median of the pairs' differences. */
-async function alternate(k: number, fn: () => Promise<unknown>) {
+/**
+ * Alternated off/on batches: the medians, the median of the pairs' differences, and the span
+ * flush that follows each on batch, timed on its own and given per span (it is #375's to bound,
+ * not part of a request's or a call's path).
+ */
+async function alternate(fn: () => Promise<unknown>) {
   const off: number[] = [];
   const on: number[] = [];
+  const flush: number[] = [];
   for (let r = 0; r < PAIRS; r += 1) {
     await setCollecting(false);
-    off.push(await perOperation(k, fn));
+    off.push(await perOperation(BATCH, fn));
     await setCollecting(true);
-    on.push(await perOperation(k, fn));
     await flushSpans();
+    on.push(await perOperation(BATCH, fn));
+    const started = cpuMicros();
+    await flushSpans();
+    flush.push((cpuMicros() - started) / BATCH);
   }
   await setCollecting(false);
   return {
     offUs: round(median(off)),
     onUs: round(median(on)),
     addedUs: round(median(on.map((x, i) => x - (off.at(i) ?? 0)))),
+    spanFlushUsPerSpan: round(median(flush)),
   };
 }
 
@@ -157,8 +170,8 @@ describe.runIf(RUN)(
       for (let i = 0; i < 100; i += 1) await ai();
       await flushSpans();
       const results = {
-        request: await alternate(300, request),
-        aiCall: await alternate(200, ai),
+        request: await alternate(request),
+        aiCall: await alternate(ai),
       };
       const out = process.env.OBS_BENCH_OUT;
       if (out !== undefined) writeFileSync(`${out}.whole.json`, `${JSON.stringify(results)}\n`);
