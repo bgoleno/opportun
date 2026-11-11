@@ -45,7 +45,26 @@ export async function writeCollect(
   await setCollecting(on);
 }
 
-/** Binds observability to the app's database and applies the stored switch (app.ts, at boot). */
-export async function startObsFromSettings(db: Db, log: ObsLogger): Promise<void> {
-  await startObs(db, { log, collect: await readCollect(db) });
+/**
+ * Whether collection is on in this deployment: never on the demo, else the stored switch. The
+ * one rule both boot and the GET use, so they cannot disagree (#360). On the demo the stored row
+ * is ignored, not cleared: an operator can turn the demo flag on over a database that had
+ * Collect on, the demo's PUT refuses every change and its nightly reset keeps the row (it
+ * belongs to no user), so only this rule keeps collection off there. Left alone, the row means
+ * what it said again if the demo flag is ever removed.
+ */
+export async function collectInEffect(
+  db: Pick<Exec, 'select'>,
+  deployment: { demo: boolean },
+): Promise<boolean> {
+  return !deployment.demo && (await readCollect(db));
+}
+
+/** Binds observability to the app's database and applies the switch in effect (app.ts, at boot). */
+export async function startObsFromSettings(
+  db: Db,
+  log: ObsLogger,
+  deployment: { demo: boolean },
+): Promise<void> {
+  await startObs(db, { log, collect: await collectInEffect(db, deployment) });
 }
