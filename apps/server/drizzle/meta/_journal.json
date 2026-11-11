@@ -428,6 +428,20 @@
       "when": 1795700000000,
       "tag": "0060_discovery_company_tags_cache_order",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1795800000000,
+      "tag": "0061_discovery_rank_cache_order",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "6",
+      "when": 1795900000000,
+      "tag": "0062_profile_application_details",
+      "breakpoints": true
     }
   ]
 }

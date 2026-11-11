@@ -57,6 +57,34 @@ services:
       # same as unset. Kept out of /data deliberately: a pepper in the directory it protects
       # travels with every copy of the database.
       OPPORTUN_PEPPER: ${OPPORTUN_PEPPER:-}
+      # Pepper rotation (docs/install.md section 4): the version of OPPORTUN_PEPPER, and the older
+      # secrets, one per version number. The server reads OPPORTUN_PEPPER_V<N> for any N; compose
+      # lists V1 to V9, and a deployment that has rotated past nine adds the rest in
+      # compose.override.yml.
+      OPPORTUN_PEPPER_VERSION: ${OPPORTUN_PEPPER_VERSION:-}
+      OPPORTUN_PEPPER_V1: ${OPPORTUN_PEPPER_V1:-}
+      OPPORTUN_PEPPER_V2: ${OPPORTUN_PEPPER_V2:-}
+      OPPORTUN_PEPPER_V3: ${OPPORTUN_PEPPER_V3:-}
+      OPPORTUN_PEPPER_V4: ${OPPORTUN_PEPPER_V4:-}
+      OPPORTUN_PEPPER_V5: ${OPPORTUN_PEPPER_V5:-}
+      OPPORTUN_PEPPER_V6: ${OPPORTUN_PEPPER_V6:-}
+      OPPORTUN_PEPPER_V7: ${OPPORTUN_PEPPER_V7:-}
+      OPPORTUN_PEPPER_V8: ${OPPORTUN_PEPPER_V8:-}
+      OPPORTUN_PEPPER_V9: ${OPPORTUN_PEPPER_V9:-}
+      # Optional settings from docs/install.md section 4, so a line in .env reaches the server
+      # (issue #417): compose reads .env only to fill in ${...} in this file, it does not hand the
+      # file to the container. Each is `${VAR:-}`, an empty string when unset, which the server
+      # reads as unset (apps/server/test/composeSettings.test.ts shows it for each). Left out on
+      # purpose, with the reason: OPPORTUN_HOST and WEB_DIR (the image sets them, and an empty
+      # value is not "unset" to the server), ANTHROPIC_BASE_URL and OPENAI_BASE_URL (the AI SDK
+      # reads them itself when it loads and refuses an empty string, so the server would not
+      # start), OPPORTUN_DEMO (compose.demo.yml passes it), an inline OPPORTUN_MASTER_KEY (it
+      # would override the key file above) and SMTP_URL (reserved).
+      OPPORTUN_SUBMISSIONS: ${OPPORTUN_SUBMISSIONS:-}
+      OPPORTUN_DAILY_REVIEW_CAP: ${OPPORTUN_DAILY_REVIEW_CAP:-}
+      OPPORTUN_AI_ALLOW_LOOPBACK_HTTP: ${OPPORTUN_AI_ALLOW_LOOPBACK_HTTP:-}
+      OPPORTUN_TELEMETRY_ALLOW_PRIVATE: ${OPPORTUN_TELEMETRY_ALLOW_PRIVATE:-}
+      DB_POOL_MAX: ${DB_POOL_MAX:-}
       DATA_DIR: /data
       # opportun.db's own directory, separate from /data (issue #179, incident #165): SQLite
       # coordinates concurrent access through this file's WAL and shared-memory index, which
