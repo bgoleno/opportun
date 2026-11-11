@@ -29,7 +29,7 @@ import {
   checkDestination,
   EXPORT_TYPES,
   parseDestination,
-  TYPE_SIGNALS,
+  signalsOf,
 } from '../obs/export/destination';
 import { applyExport, exportStatus, sendTest } from '../obs/export/manager';
 import { nextExport, readExport, writeExport, type StoredExport } from '../obs/export/settings';
@@ -107,7 +107,7 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
     const view: z.infer<typeof ExportView> = {
       enabled: on,
       type,
-      signals: type === null ? [] : [...TYPE_SIGNALS[type]],
+      signals: type === null ? [] : signalsOf(type),
     };
     if (!isAdmin) return view;
     const status = exportStatus();
@@ -177,7 +177,7 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
         detail: {
           enabled: next.value.enabled,
           type,
-          signals: type === null ? [] : [...TYPE_SIGNALS[type]],
+          signals: type === null ? [] : signalsOf(type),
         },
       });
       await applyExport(db, app.config);

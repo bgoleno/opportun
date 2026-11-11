@@ -26,13 +26,17 @@ import { isPrivateAddress, isProhibitedHost } from '../../lib/safeFetch';
 export const EXPORT_TYPES = ['otlp', 'datadog', 'prometheus', 'influxdb'] as const;
 export type ExportType = (typeof EXPORT_TYPES)[number];
 
-/** Which signals each type sends (14.10's table). */
-export const TYPE_SIGNALS: Readonly<Record<ExportType, readonly ExportSignal[]>> = {
-  otlp: ['metrics', 'spans', 'logs'],
-  datadog: ['metrics', 'spans', 'logs'],
-  prometheus: ['metrics'],
-  influxdb: ['metrics'],
-};
+/** Which signals each type sends (14.10's table). A Map, so a lookup by type is a plain get. */
+const TYPE_SIGNALS: ReadonlyMap<ExportType, readonly ExportSignal[]> = new Map([
+  ['otlp', ['metrics', 'spans', 'logs']],
+  ['datadog', ['metrics', 'spans', 'logs']],
+  ['prometheus', ['metrics']],
+  ['influxdb', ['metrics']],
+]);
+
+export function signalsOf(type: ExportType): ExportSignal[] {
+  return [...(TYPE_SIGNALS.get(type) ?? [])];
+}
 export type ExportSignal = 'metrics' | 'spans' | 'logs';
 
 // ---------------------------------------------------------------------------- the fields
