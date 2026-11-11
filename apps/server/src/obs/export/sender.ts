@@ -27,7 +27,9 @@ export type SendOutcome =
   | 'http_4xx'
   | 'http_5xx'
   | 'network'
-  | 'blocked';
+  | 'blocked'
+  /** Export was turned off or changed while this was in flight; not a failure of the destination. */
+  | 'aborted';
 
 export interface SendRequest {
   /** Built by endpointsFor from the destination's fields; never from user text. */
@@ -42,6 +44,8 @@ export interface SendRequest {
 
 export interface SendOptions {
   timeoutMs?: number;
+  /** Aborted when export stops or changes: the request is destroyed at once (sec on #377). */
+  signal?: AbortSignal;
 }
 
 function statusOutcome(status: number): SendOutcome {
@@ -85,6 +89,7 @@ export function send(req: SendRequest, opts: SendOptions = {}): Promise<SendOutc
     }
   };
   const make = url.protocol === 'https:' ? httpsRequest : httpRequest;
+  if (opts.signal?.aborted === true) return Promise.resolve('aborted');
   return new Promise((resolve) => {
     let done = false;
     let timedOut = false;
@@ -92,7 +97,12 @@ export function send(req: SendRequest, opts: SendOptions = {}): Promise<SendOutc
       if (done) return;
       done = true;
       clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onAbort);
       resolve(outcome);
+    };
+    const onAbort = () => {
+      r.destroy(new Error('export stopped'));
+      finish('aborted');
     };
     const r = make(
       url,
@@ -123,6 +133,7 @@ export function send(req: SendRequest, opts: SendOptions = {}): Promise<SendOutc
       finish('timeout');
     }, opts.timeoutMs ?? SEND_TIMEOUT_MS);
     timer.unref();
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
     r.once('error', (err) => finish(errorOutcome(err, timedOut)));
     r.end(req.body);
   });

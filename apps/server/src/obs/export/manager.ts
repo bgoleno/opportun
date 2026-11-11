@@ -67,7 +67,7 @@ export interface Exporters {
 /** What an admin sees (14.10): the last success, and the last failure as a class only. */
 export interface ExportStatus {
   lastSuccessAt: number | null;
-  lastFailure: { outcome: Exclude<SendOutcome, 'ok'>; at: number } | null;
+  lastFailure: { outcome: Exclude<SendOutcome, 'ok' | 'aborted'>; at: number } | null;
 }
 
 const status: ExportStatus = { lastSuccessAt: null, lastFailure: null };
@@ -77,6 +77,7 @@ export function exportStatus(): ExportStatus {
 }
 
 function note(outcome: SendOutcome): void {
+  if (outcome === 'aborted') return; // export stopped: not the destination's failure
   if (outcome === 'ok') status.lastSuccessAt = Date.now();
   else status.lastFailure = { outcome, at: Date.now() };
 }
@@ -89,7 +90,12 @@ function countDrop(signal: Signal, reason: DropReason): void {
   });
 }
 
-/** Checks the destination for this batch and posts it to the address checked. */
+/**
+ * Checks the destination for this batch and posts it to the address checked. `stop` is the
+ * running exporter set's: once export is turned off or changed, a batch still in its address
+ * check never connects, and one already sending is destroyed, so nothing more reaches the old
+ * destination with its credential (design 14.10; sec's Blocking 2 on #377).
+ */
 async function post(
   destination: Destination,
   url: string,
@@ -97,14 +103,17 @@ async function post(
   contentType: string,
   headers: Readonly<Record<string, string>>,
   opts: ExportOptions,
+  stop: AbortSignal,
 ): Promise<boolean> {
   return await runSuppressed(async () => {
+    if (stop.aborted) return false;
     const check = await checkDestination(destination, {
       allowPrivate: opts.allowPrivate,
       ...(opts.lookup === undefined ? {} : { lookup: opts.lookup }),
     });
+    if (stop.aborted) return false;
     const outcome = check.ok
-      ? await send({ url, address: check.address, body, contentType, headers })
+      ? await send({ url, address: check.address, body, contentType, headers }, { signal: stop })
       : 'blocked';
     note(outcome);
     return outcome === 'ok';
@@ -166,6 +175,8 @@ export async function buildExporters(
   const batchMs = opts.batchIntervalMs ?? BATCH_INTERVAL_MS;
   const sinks: Exporters['sinks'] = {};
   const parts: { flush(): Promise<void>; shutdown(): Promise<void> | void }[] = [];
+  // Aborted by any stop: the whole set's, or one sink's (detached when export goes off).
+  const stop = new AbortController();
 
   const metricsUrl = endpoints.metrics;
   if (metricsUrl !== undefined) {
@@ -186,6 +197,7 @@ export async function buildExporters(
             LINE_PROTOCOL,
             headers,
             opts,
+            stop.signal,
           );
         }
         return await post(
@@ -195,6 +207,7 @@ export async function buildExporters(
           PROTOBUF,
           headers,
           opts,
+          stop.signal,
         );
       },
     });
@@ -205,7 +218,10 @@ export async function buildExporters(
           value,
           exportAttributes('metrics', attributes, metricDef(metric).attributes, countDrop),
         ),
-      shutdown: () => pipeline.shutdown(),
+      shutdown: () => {
+        stop.abort();
+        return pipeline.shutdown();
+      },
     };
     parts.push(pipeline);
   }
@@ -213,7 +229,15 @@ export async function buildExporters(
   const spansUrl = endpoints.spans;
   if (spansUrl !== undefined) {
     const queue = batcher<GatedSpan>('spans', batchMs, async (spans) => {
-      await post(destination, spansUrl, otlp.encodeSpans(spans, res), PROTOBUF, headers, opts);
+      await post(
+        destination,
+        spansUrl,
+        otlp.encodeSpans(spans, res),
+        PROTOBUF,
+        headers,
+        opts,
+        stop.signal,
+      );
     });
     sinks.spans = {
       export: (span) =>
@@ -222,7 +246,10 @@ export async function buildExporters(
           name: exportSpanName(span.name),
           attributes: exportAttributes('spans', span.attributes, undefined, countDrop),
         }),
-      shutdown: async () => queue.shutdown(),
+      shutdown: async () => {
+        stop.abort();
+        queue.shutdown();
+      },
     };
     parts.push(queue);
   }
@@ -230,7 +257,15 @@ export async function buildExporters(
   const logsUrl = endpoints.logs;
   if (logsUrl !== undefined) {
     const queue = batcher<GatedLogRecord>('logs', batchMs, async (records) => {
-      await post(destination, logsUrl, otlp.encodeLogs(records, res), PROTOBUF, headers, opts);
+      await post(
+        destination,
+        logsUrl,
+        otlp.encodeLogs(records, res),
+        PROTOBUF,
+        headers,
+        opts,
+        stop.signal,
+      );
     });
     sinks.logs = {
       emit: (record) =>
@@ -238,7 +273,10 @@ export async function buildExporters(
           ...record,
           fields: exportAttributes('logs', record.fields, eventDef(record.event).fields, countDrop),
         }),
-      shutdown: async () => queue.shutdown(),
+      shutdown: async () => {
+        stop.abort();
+        queue.shutdown();
+      },
     };
     parts.push(queue);
   }
@@ -252,6 +290,7 @@ export async function buildExporters(
     shutdown: async () => {
       if (stopped) return;
       stopped = true;
+      stop.abort();
       await Promise.allSettled(parts.map((p) => p.shutdown()));
     },
   };

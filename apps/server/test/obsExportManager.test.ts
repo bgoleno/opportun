@@ -462,3 +462,58 @@ describe('the batches (14.10, 14.11)', () => {
     expect(exportStatus().lastFailure?.outcome).toBe('blocked');
   });
 });
+
+describe("stopping export stops what is in flight (sec's Blocking 2 on #377)", () => {
+  it('a send held open by the destination is destroyed when export stops, and nothing starts after', async () => {
+    await boot();
+    const started: IncomingMessage[] = [];
+    const closed: string[] = [];
+    const s = createServer((req) => {
+      // Accepts the request and never answers.
+      started.push(req);
+      req.socket.once('close', () => closed.push(req.url ?? ''));
+    });
+    servers.push(s);
+    await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
+    const port = (s.address() as AddressInfo).port;
+    const ex = await buildExporters(otlp(port), undefined, opts);
+    ex.sinks.spans?.export(span);
+    const flushing = ex.flush();
+    for (let i = 0; i < 100 && started.length === 0; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(started).toHaveLength(1);
+    const stoppedAt = Date.now();
+    await ex.shutdown();
+    await flushing;
+    for (let i = 0; i < 100 && closed.length === 0; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(closed).toEqual(['/v1/traces']);
+    expect(Date.now() - stoppedAt).toBeLessThan(2_000);
+    ex.sinks.spans?.export(span);
+    await ex.flush();
+    expect(started).toHaveLength(1);
+  });
+
+  it('a batch still in its address check when export stops never connects', async () => {
+    await boot();
+    const { port, got } = await receiver();
+    let answer: (addresses: string[]) => void = () => undefined;
+    const ex = await buildExporters({ ...otlp(port), host: 'collector.test' }, undefined, {
+      ...opts,
+      lookup: () =>
+        new Promise<string[]>((resolve) => {
+          answer = resolve;
+        }),
+    });
+    ex.sinks.spans?.export(span);
+    const flushing = ex.flush();
+    await new Promise((r) => setTimeout(r, 20));
+    await ex.shutdown();
+    answer(['127.0.0.1']);
+    await flushing;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(got).toEqual([]);
+  });
+});
