@@ -331,7 +331,7 @@ describe('what pins the guards of the export routes (sec on #377)', () => {
       url: '/api/v1/obs/export/test',
       payload: { password: PASSWORD },
     });
-    expect(r.json()).toEqual({ outcome: 'blocked' });
+    expect(r.json()).toEqual({ outcome: 'blocked', reason: 'private_not_allowed' });
     expect(hits).toEqual([]);
   });
 
