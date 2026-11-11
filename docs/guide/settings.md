@@ -8,6 +8,15 @@ rules are covered in [Getting started](getting-started.md#first-run-setup) and
 [Resumes](resumes.md#the-tailoring-chat); Google and Gmail in [Resumes](resumes.md#connect-google)
 and [Inbox](inbox.md#connect-gmail).
 
+## Application details
+
+**Settings > Profile** has an **Application details** card below your profile: first name, last
+name, LinkedIn profile, website and links. With your profile's own fields, these are what a new
+application starts with (see [Your details when you apply](pipeline.md#your-details-when-you-apply)).
+Change them here, or tick **Save to my profile** on an application's Details step. **Save
+application details** checks each value first: a web address must be the whole address, starting
+with https:// (or http://), and a name one line of plain text.
+
 ## AI provider keys
 
 Opportun has no AI of its own: it calls Anthropic, OpenAI or any OpenAI-compatible endpoint

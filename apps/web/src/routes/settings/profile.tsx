@@ -9,10 +9,12 @@ import { FormError } from '@/components/FormError';
 import { FormField } from '@/components/FormField';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
+import { DETAIL_FIELDS, detailProblemText } from '@/components/apply/api';
 import { ReviewCapCard } from '@/components/apply/ReviewUsage';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
+import { errorMessage } from '@/lib/api';
 import { applyServerError, optionalString } from '@/lib/forms';
 import { useProfile, useSaveProfile, type ProfileInput } from './-api';
 
@@ -56,7 +58,7 @@ function toForm(p: Profile): FormInput {
   };
 }
 
-function ProfileSettings() {
+export function ProfileSettings() {
   const profile = useProfile();
   if (profile.isPending) return <p className="text-sm text-muted-foreground">Loading profile...</p>;
   if (profile.isError) {
@@ -72,6 +74,7 @@ function ProfileSettings() {
     // and the page would scroll sideways at 320 px.
     <div className="grid grid-cols-1 gap-6">
       <ProfileForm key={profile.data.userId} profile={profile.data} />
+      <ApplicationDetailsCard key={`details-${profile.data.userId}`} profile={profile.data} />
       {/* Assisted apply's daily review limit (#130); renders nothing where the feature is off. */}
       <ReviewCapCard />
     </div>
@@ -200,6 +203,117 @@ function ProfileForm({ profile }: { profile: Profile }) {
             </Button>
             <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? 'Saving...' : 'Save profile'}
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** The details whose home is the profile's Application details (#401): the rest are columns. */
+const OWN_DETAILS = DETAIL_FIELDS.filter((f) => f.home === 'details');
+
+function detailsOf(p: Profile): Record<string, string> {
+  const saved = new Map(Object.entries(p.applicationDetails ?? {}));
+  return Object.fromEntries(OWN_DETAILS.map((f) => [f.key, saved.get(f.key) ?? '']));
+}
+
+/** The profile's columns as stored, for a PUT that changes only the details (a full replace). */
+function columnsOf(p: Profile): ProfileInput {
+  return {
+    fullName: p.fullName ?? null,
+    headline: p.headline ?? null,
+    email: p.email ?? null,
+    phone: p.phone ?? null,
+    location: p.location ?? null,
+    workAuth: p.workAuth ?? null,
+    links: p.links.map((l) => ({ label: l.label, url: l.url })),
+  };
+}
+
+/**
+ * Settings > Profile > Application details (#401): the details an application asks for that have
+ * no column of their own, so they can be seen and changed outside an application. A new
+ * application starts filled with them; the details step's Save to my profile writes here too.
+ */
+function ApplicationDetailsCard({ profile }: { profile: Profile }) {
+  const save = useSaveProfile();
+  const [values, setValues] = useState(() => detailsOf(profile));
+  const [problems, setProblems] = useState<ReadonlyMap<string, string>>(new Map());
+  const [formError, setFormError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const stored = detailsOf(profile);
+  const dirty = OWN_DETAILS.some((f) => (values[f.key] ?? '').trim() !== (stored[f.key] ?? ''));
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setFormError(null);
+    const next = Object.fromEntries(
+      OWN_DETAILS.map((f) => [f.key, (values[f.key] ?? '').trim()] as const).filter(
+        ([, v]) => v !== '',
+      ),
+    );
+    const found = new Map(
+      Object.entries(next).flatMap(([k, v]) => {
+        const text = detailProblemText(k, v);
+        return text === null ? [] : [[k, text] as const];
+      }),
+    );
+    setProblems(found);
+    if (found.size > 0) return;
+    setSaving(true);
+    try {
+      const saved = await save.mutateAsync({ ...columnsOf(profile), applicationDetails: next });
+      setValues(detailsOf(saved));
+      toast({ title: 'Application details saved', variant: 'success' });
+    } catch (err) {
+      setFormError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Application details</CardTitle>
+        <CardDescription>
+          A new application starts filled with these and your profile above. Changes on an
+          application stay on that application unless you tick Save to my profile there.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} noValidate className="grid gap-4">
+          <FormError message={formError} />
+          <div className="grid gap-4 sm:grid-cols-2">
+            {OWN_DETAILS.map((f) => (
+              <FormField key={f.key} label={f.label} error={problems.get(f.key)}>
+                {(p) => (
+                  <Input
+                    {...p}
+                    type={f.type}
+                    autoComplete={f.autoComplete}
+                    value={values[f.key] ?? ''}
+                    onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                  />
+                )}
+              </FormField>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              disabled={!dirty || saving}
+              onClick={() => {
+                setValues(stored);
+                setProblems(new Map());
+              }}
+            >
+              Discard changes
+            </Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? 'Saving...' : 'Save application details'}
             </Button>
           </div>
         </form>

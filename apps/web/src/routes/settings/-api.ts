@@ -15,7 +15,11 @@ export interface Page<T> {
 export type ProfileInput = Pick<
   Profile,
   'fullName' | 'headline' | 'email' | 'phone' | 'location' | 'workAuth'
-> & { links: { label: string; url: string }[] };
+> & {
+  links: { label: string; url: string }[];
+  /** Omitted, the server keeps the stored details (#411); sent, it replaces them. */
+  applicationDetails?: Record<string, string>;
+};
 
 export interface ResumeRuleInput {
   ruleText: string;
