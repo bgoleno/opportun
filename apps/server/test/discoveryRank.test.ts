@@ -99,6 +99,11 @@ describe('discovery.rank job', () => {
     expect(task).toBe(DISCOVERY_RANK_KIND);
     expect(opts.schema).toBe(RankOutputSchema);
     const system = opts.system;
+    // Where the provider's cache may start reusing it (#356): right before the posting's fence.
+    expect(system.slice(opts.cacheBreak).startsWith('<untrusted>\n')).toBe(true);
+    expect(system.slice(0, opts.cacheBreak)).not.toMatch(
+      /Initech|Staff Platform Engineer|Great role/,
+    );
     // The posting sits inside exactly one fence; its fake closing tag is neutralized.
     const open = system.indexOf('<untrusted>\n');
     const close = system.lastIndexOf('\n</untrusted>');

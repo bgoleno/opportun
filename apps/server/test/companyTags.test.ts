@@ -524,7 +524,11 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
     await tagCompanies(app.db, ctxOf(a));
 
     expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(1);
-    const opts = vi.mocked(runStructured).mock.calls[0]?.[2] as { system: string; prompt: string };
+    const opts = vi.mocked(runStructured).mock.calls[0]?.[2] as {
+      system: string;
+      cacheBreak?: number;
+      prompt: string;
+    };
     const prompt = await getActivePrompt(app.db, ctxOf(a), 'discovery.company_tags');
     // Byte for byte: anything added to the request fails here, whatever it is.
     expect(opts.system).toBe(
@@ -538,6 +542,12 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
     );
     expect(opts.prompt).toBe('Tag each company and return the result.');
     expect(`${opts.system}${opts.prompt}`).not.toMatch(/MARKER|marker-/);
+    // Where the provider's cache may start reusing it (#356): the unchanging part ends right
+    // before the companies, and holds the NAICS table and none of the companies.
+    const prefix = opts.system.slice(0, opts.cacheBreak);
+    expect(opts.system.slice(opts.cacheBreak).startsWith('<untrusted>\n')).toBe(true);
+    expect(prefix).toContain(TABLE);
+    expect(prefix).not.toMatch(/Initech|Globex|ref: c/);
   });
 
   it("holds nothing of another user's, and tags none of their companies", async () => {

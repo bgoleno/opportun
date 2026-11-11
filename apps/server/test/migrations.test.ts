@@ -956,3 +956,86 @@ describe.runIf(sqliteOnly)('migration journal', () => {
     }
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/356: the company_tags default puts the NAICS table
+// before the companies, so a provider can cache the part of the prompt that does not change.
+// Only the order changed (tl on #356): every line of the old default is still there.
+describe.runIf(sqliteOnly)('0060: the company_tags default, reordered for caching', () => {
+  it('reorders the system default in place, keeps its wording, and leaves a user’s version alone', async () => {
+    const { entries } = await readJournal(MIGRATIONS_DIR);
+    const before = entries.findIndex((e) => e.tag === '0059_obs_store') + 1;
+    const partial = await tempDir();
+    await cp(MIGRATIONS_DIR, partial, { recursive: true });
+    const journal = await readJournal(partial);
+    journal.entries = journal.entries.slice(0, before);
+    await writeFile(join(partial, 'meta', '_journal.json'), JSON.stringify(journal));
+
+    const dataDir = await tempDir();
+    const old = new Database(join(dataDir, 'opportun.db'));
+    migrate(drizzle(old), { migrationsFolder: partial });
+    const read = (db: Database.Database) =>
+      db
+        .prepare(
+          `SELECT user_id AS userId, body, version FROM prompts
+            WHERE task_key = 'discovery.company_tags' ORDER BY user_id IS NULL DESC, user_id`,
+        )
+        .all() as { userId: string | null; body: string; version: number }[];
+    const [oldSeed] = read(old);
+    // A user's own version, made from the old default.
+    const userId = newId();
+    old
+      .prepare(
+        `INSERT INTO users (id, email, display_name, password_hash, created_at, updated_at)
+                 VALUES (?, ?, 'U', 'x', 0, 0)`,
+      )
+      .run(userId, `${userId}@example.com`);
+    old
+      .prepare(
+        `INSERT INTO prompts (id, user_id, task_key, name, body, version, is_active, created_at, updated_at)
+                 VALUES (?, ?, 'discovery.company_tags', 'mine', ?, 2, 1, 0, 0)`,
+      )
+      .run(newId(), userId, oldSeed!.body);
+    old.close();
+
+    const { sqlite } = openDatabase(dataDir);
+    try {
+      const rows = read(sqlite);
+      const seed = rows.find((r) => r.userId === null)!;
+      const mine = rows.find((r) => r.userId === userId)!;
+      expect(seed.version).toBe(1);
+      // The table and what to return now come before the companies.
+      expect(seed.body.indexOf('{{naics_table}}')).toBeLessThan(
+        seed.body.indexOf('{{companies_untrusted}}'),
+      );
+      expect(seed.body.indexOf('## What to return')).toBeLessThan(
+        seed.body.indexOf('{{companies_untrusted}}'),
+      );
+      expect(seed.body.trimEnd().endsWith('{{companies_untrusted}}')).toBe(true);
+      // Same wording: every line of the old default is there, the closing line with "below".
+      const lines = (s: string) =>
+        s
+          .split('\n')
+          .filter((l) => l !== '')
+          .sort();
+      const oldLines = lines(oldSeed!.body).map((l) =>
+        l.replace('Everything about the companies is', 'Everything about the companies below is'),
+      );
+      expect(lines(seed.body)).toEqual(oldLines);
+      expect(promptVariables(seed.body).sort()).toEqual(
+        [...TASK_PROMPT_VARS['discovery.company_tags']].sort(),
+      );
+      // The user's own version keeps its order.
+      expect(mine.body).toBe(oldSeed!.body);
+
+      // Running it again changes nothing.
+      const sql = await readFile(
+        join(MIGRATIONS_DIR, '0060_discovery_company_tags_cache_order.sql'),
+        'utf8',
+      );
+      for (const stmt of sql.split('--> statement-breakpoint')) sqlite.exec(stmt);
+      expect(read(sqlite)).toEqual(rows);
+    } finally {
+      sqlite.close();
+    }
+  });
+});
