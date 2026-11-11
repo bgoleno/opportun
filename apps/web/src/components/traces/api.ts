@@ -134,15 +134,33 @@ export function useTraceFilterValues() {
   });
 }
 
-export function useTrace(traceId: string) {
+const TRACE_ID = /^[0-9a-f]{32}$/;
+
+/**
+ * A trace id as the server stores it, 32 lower-case hex digits, or null when the URL's id is
+ * no trace id at all. Upper-case hex is the same id (https://github.com/bgoleno/opportun/issues/370).
+ */
+export function normalizeTraceId(raw: string): string | null {
+  const id = raw.toLowerCase();
+  return TRACE_ID.test(id) ? id : null;
+}
+
+/** Whether an error means there is no such trace for the caller: not found, or refused as one. */
+export function isTraceNotFound(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 404 || error.status === 400);
+}
+
+/** One trace, by an id normalizeTraceId returned. A null id asks the server nothing. */
+export function useTrace(traceId: string | null) {
   return useQuery({
     queryKey: [...tracesKey, 'one', traceId],
-    queryFn: () => api<TraceDetail>(`/obs/traces/${encodeURIComponent(traceId)}`),
+    queryFn: () => api<TraceDetail>(`/obs/traces/${encodeURIComponent(traceId ?? '')}`),
+    enabled: traceId !== null,
     // A 404 is an answer, not a failure to get one: asking again cannot change it, and the
     // retry only kept "Trace not found" off the screen for a second
-    // (https://github.com/bgoleno/opportun/issues/365). Anything else is retried once, as the
+    // (https://github.com/bgoleno/opportun/issues/365). A 400 is the server refusing the id's
+    // shape, which a retry cannot change either (#370). Anything else is retried once, as the
     // app's client does everywhere.
-    retry: (failures, error) =>
-      !(error instanceof ApiError && error.status === 404) && failures < 1,
+    retry: (failures, error) => !isTraceNotFound(error) && failures < 1,
   });
 }
