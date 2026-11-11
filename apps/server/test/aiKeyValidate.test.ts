@@ -6,7 +6,6 @@ import { validateAiKey } from '../src/lib/aiKeyValidate';
 import { setAiOverride, setProviderResolveOverride } from '../src/lib/ai';
 import { captureLogs } from './helpers';
 import { useApi } from './api';
-import { withProviderResolver } from './providerDns';
 import type { TestClient } from './isolation';
 import { queryAll, queryOne } from './db';
 
@@ -23,7 +22,7 @@ vi.mock('../../../packages/ai/src/providers', async (importOriginal) => {
 });
 
 const logs = captureLogs();
-const boot = withProviderResolver(useApi(() => ({ logStream: logs })));
+const boot = useApi(() => ({ logStream: logs }));
 const KEY = 'sk-test-VALIDATE-SECRET-0123456789abcdef';
 const fetchMock = vi.fn<typeof fetch>();
 

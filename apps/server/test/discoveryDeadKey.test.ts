@@ -16,10 +16,9 @@ import { enqueue, runNextJob } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import { createSource, setRankDeferred } from '../src/repos/discovery';
 import { useApi } from './api';
-import { withProviderResolver } from './providerDns';
 import type { TestClient } from './isolation';
 
-const boot = withProviderResolver(useApi());
+const boot = useApi();
 const ctxOf = (c: TestClient): UserCtx => ({ userId: c.userId, isAdmin: false });
 const DAY = 24 * 60 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;

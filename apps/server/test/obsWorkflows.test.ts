@@ -22,7 +22,6 @@ import { continuesTrace, workflow } from '../src/obs/workflow';
 import { useApi } from './api';
 import { connectGoogle, fakeGoogle, type FakeGoogle } from './fakeGoogle';
 import type { TestClient } from './isolation';
-import { withProviderResolver } from './providerDns';
 import { BASE_DOC_ID, BASE_TEXT, createOpportunity, registerBase } from './resumeFixtures';
 
 vi.mock('../../../packages/ai/src/providers', async (importOriginal) => {
@@ -31,12 +30,10 @@ vi.mock('../../../packages/ai/src/providers', async (importOriginal) => {
 });
 
 let google: FakeGoogle;
-const boot = withProviderResolver(
-  useApi(() => {
-    google = fakeGoogle({ [BASE_DOC_ID]: { title: 'Jane Base Resume', text: BASE_TEXT } });
-    return { build: { google } };
-  }),
-);
+const boot = useApi(() => {
+  google = fakeGoogle({ [BASE_DOC_ID]: { title: 'Jane Base Resume', text: BASE_TEXT } });
+  return { build: { google } };
+});
 const PASSWORD = 'correct horse battery';
 
 beforeEach(() => {

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildApp, type BuildOptions, type LogStream } from '../src/app';
 import type { Config } from '../src/config';
+import { setProviderResolveOverride } from '../src/lib/ai';
 import { createSafeFetch } from '../src/lib/safeFetch';
 import { mockGoogleTokenFetch } from '../src/testSupport/mockGoogle';
 import {
@@ -14,6 +15,7 @@ import {
   type DbHandle,
 } from '../src/db/client';
 import { testDialect } from './db';
+import { resolvePublicForTests } from './providerDns';
 import { createTestDatabase, type TestDatabase } from './pgHarness';
 
 /** A safeFetch whose DNS always fails: no test reaches the real network by accident. */
@@ -83,6 +85,11 @@ export async function testApp(
     await rm(dataDir, { recursive: true, force: true });
     throw err;
   }
+  // No DNS for an AI provider's host either (https://github.com/bgoleno/opportun/issues/344): every
+  // provider request resolves its host before it is sent (lib/aiProviderFetch.ts), so this answers
+  // with a public address, and each test's own fetch stub still gets the request. A test that
+  // needs another answer sets its own resolver after boot.
+  setProviderResolveOverride(app.db, resolvePublicForTests);
   app.addHook('onClose', async () => {
     await rm(dataDir, { recursive: true, force: true });
   });
