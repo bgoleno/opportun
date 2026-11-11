@@ -4,6 +4,8 @@
 // and pino's pid and hostname are never written. Driven through a real pino logger, so what the
 // gate sees is what pino writes: a child's bindings, the error serializer's output, the message.
 import { join } from 'node:path';
+import pino from 'pino';
+import { z } from 'zod';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { withTransaction } from '../src/db/client';
 import {
@@ -445,6 +447,91 @@ describe("a dependency's frames under the install root are not the app's (#399)"
       'at first (apps/server/src/a.ts:1:2)',
       'at <external>',
       'at second (apps/server/src/b.ts:5:6)',
+    ]);
+  });
+});
+
+describe('the header search (#399)', () => {
+  const serialize = (err: Error) =>
+    pino.stdSerializers.err(err) as { message: string; stack: string };
+  const app = (name: string, file: string) => `    at ${name} (${process.cwd()}/src/${file}:1:1)`;
+
+  it('stops at the first cut whose header matches', () => {
+    // The cut that matches first is the error's own message; its cause's line does not fit, so
+    // there are no frames, and no shorter cut is tried.
+    const cause = new Error('c');
+    void cause.stack;
+    cause.message = 'd';
+    const err = new Error(`z: z\n${app('Early', 'early.ts')}\ncaused by: Error: z`, { cause });
+    const { message, stack } = serialize(err);
+    expect(frameLines(stack, message)).toEqual([]);
+  });
+
+  it('ends for a message that starts with ": " and fits no cut', () => {
+    const stack = ['Error: x', app('ours', 'a.ts')].join('\n');
+    expect(frameLines(stack, ': a: b')).toEqual([]);
+  });
+
+  it('reads the cause from the line that ends the run of frames, and from no later line', () => {
+    const stack = [
+      'Error: outer',
+      app('ours', 'a.ts'),
+      '    something a library appended',
+      'caused by: Error: inner',
+      app('theirs', 'b.ts'),
+    ].join('\n');
+    expect(frameLines(stack, 'outer: inner')).toEqual([]);
+  });
+
+  it('tries no cut past 4,096 characters of the message', () => {
+    const own = 'x'.repeat(5_000);
+    const stack = [
+      `Error: ${own}`,
+      app('ours', 'a.ts'),
+      'caused by: Error: q',
+      app('t', 'b.ts'),
+    ].join('\n');
+    expect(frameLines(stack, `${own}: q`)).toEqual([]);
+  });
+
+  /** The fastest of five runs, so a busy machine's one slow run does not count. */
+  const fastest = (fn: () => unknown) => {
+    fn();
+    let best = Infinity;
+    for (let i = 0; i < 5; i++) {
+      const t = performance.now();
+      fn();
+      best = Math.min(best, performance.now() - t);
+    }
+    return best;
+  };
+
+  it('costs at most 10 ms for a long message: 8,000 lines of key: value', () => {
+    const lines = Array.from({ length: 8_000 }, (_, i) => `k${i}: v${i}`).join('\n');
+    const { message, stack } = serialize(new Error('outer', { cause: new Error(lines) }));
+    expect(fastest(() => frameLines(stack, message))).toBeLessThan(10);
+  });
+
+  it('costs at most 10 ms for a long message: a validation error with 2,000 issues', () => {
+    const shape = Object.fromEntries(
+      Array.from({ length: 2_000 }, (_, i) => [`field${i}`, z.string()]),
+    );
+    const parsed = z.object(shape).safeParse({});
+    expect(parsed.success).toBe(false);
+    const { message, stack } = serialize(new Error('invalid input', { cause: parsed.error }));
+    expect(message.length).toBeGreaterThan(100_000);
+    expect(fastest(() => frameLines(stack, message))).toBeLessThan(10);
+  });
+
+  it('counts a node_modules folder as a dependency, and no other folder whose name contains it', () => {
+    const stack = [
+      'Error: x',
+      `    at kept (${process.cwd()}/node_modules_old/x.js:1:1)`,
+      `    at dep (${process.cwd()}/node_modules/y/z.js:1:1)`,
+    ].join('\n');
+    expect(frameLines(stack, 'x')).toEqual([
+      'at kept (apps/server/node_modules_old/x.js:1:1)',
+      'at <external>',
     ]);
   });
 });

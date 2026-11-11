@@ -10,9 +10,10 @@
 //   other message, such as one a library builds from a request, becomes WITHHELD and is counted;
 // - the keys kept are those the catalog lists for that message, each with a value of its type
 //   (obs/gate.ts); a record whose message is not catalogued keeps none;
-// - an error is reduced to its type and its frame lines: a frame inside the install root keeps its
-//   path relative to it, a frame outside loses its path, and every other line of a stack (where a
-//   message can quote data) is dropped. The error's message and extra properties never pass;
+// - an error is reduced to its type and its frame lines: a frame in the app's own code (under the
+//   install root, not in a node_modules folder) keeps its name and its path relative to the root,
+//   any other frame is a fixed placeholder, and every other line of a stack (where a message can
+//   quote data) is dropped. The error's message and extra properties never pass;
 // - the time, the level and the active trace id are kept. pino's pid and hostname are never
 //   written (`base: null`): a host name is often a person's (14.8).
 //
@@ -104,8 +105,9 @@ function parseFrame(
 }
 
 /**
- * What stands for each run of frames outside the install root: fixed text, never built from the
- * frame (sec on #381), so it shows where a call left Opportun's code and carries nothing else.
+ * What stands for each run of frames that are not the app's own code (isAppFile): fixed text,
+ * never built from the frame (sec on #381), so it shows where a call left Opportun's code and
+ * carries nothing else.
  */
 export const EXTERNAL_FRAME = 'at <external>';
 
@@ -132,30 +134,46 @@ const CAUSED_BY = 'caused by: ';
  * onto the error's own (`outer: inner`, pino-std-serializers' messageWithCauses) and appends the
  * cause's stack as a `caused by: <name>: <message>` line after the error's own frames, while the
  * stack's header holds the error's own message only (tl on #389). So the message is then cut at
- * a `: `, longest first, but only where that cut's header is followed by a run of frames and
- * then a `caused by:` line whose message is what follows the cut (sec on #389, #399): never for
- * an error with no cause, so a message reassigned after its stack was read is not cut to fit; and
- * never at a `caused by:`-shaped line inside the error's own message, which comes before its
- * frames. A cause with no message (`caused by: Error`) fits only a cut at the very end
- * (`outer: `), and an error with no message of its own is the cut at the start (`: inner`).
+ * a `: `, longest first, and the header search stops at the first cut whose header matches: that
+ * cut fits only when its header is followed by a run of frames and then a `caused by:` line
+ * whose message is what follows the cut (sec on #389, #399), and otherwise there are no frames.
+ * So an error with no cause is never cut to fit, nor is a message reassigned after its stack was
+ * read; a `caused by:`-shaped line inside the error's own message, which comes before its frames,
+ * is never taken for the cause's. A cause with no message (`caused by: Error`) fits only a cut at
+ * the very end (`outer: `), and an error with no message of its own is the cut at the start
+ * (`: inner`). One cost of this: a line the parser does not know among an error's own frames (a
+ * wasm frame, or text a library appends) ends the run before the cause's line, so an error with a
+ * cause then has no frames at all; fewer frames is the safe side, and no ordinary error was found
+ * to do it (tl on #399). The cuts are bounded: HEADER_SEARCH_CHARS and HEADER_SEARCH_LINES.
  */
 function headerLength(lines: readonly string[], message: string): number | undefined {
   const whole = message.split('\n').length;
   if (headerMatches(lines.slice(0, whole).join('\n'), message)) return whole;
-  for (let at = message.lastIndexOf(': '); at >= 0; at = message.lastIndexOf(': ', at - 1)) {
+  const last = message.lastIndexOf(': ', HEADER_SEARCH_CHARS);
+  for (let at = last; at >= 0; at = at === 0 ? -1 : message.lastIndexOf(': ', at - 1)) {
     const own = message.slice(0, at);
     const length = own.split('\n').length;
-    if (headerMatches(lines.slice(0, length).join('\n'), own)) {
-      const cause = causeAfterFrames(lines, length);
-      const rest = message.slice(at + 2);
-      if (cause !== undefined && (cause === '' ? rest === '' : rest.startsWith(cause))) {
-        return length;
-      }
-    }
-    if (at === 0) break;
+    if (length > HEADER_SEARCH_LINES) continue;
+    if (!headerMatches(lines.slice(0, length).join('\n'), own)) continue;
+    // The header search stops at the first cut whose header matches: that cut decides.
+    const cause = causeAfterFrames(lines, length);
+    if (cause === undefined) return undefined;
+    const fits = cause === '' ? at + 2 === message.length : message.startsWith(cause, at + 2);
+    return fits ? length : undefined;
   }
   return undefined;
 }
+
+/**
+ * A cost cap on the log gate's header search; an error whose message is longer gets the
+ * whole-message reading only. A cut is tried only at a `: ` within the message's first
+ * HEADER_SEARCH_CHARS characters, and only while the cut's own text has at most
+ * HEADER_SEARCH_LINES lines, so the search costs no more than a few kilobytes of work however
+ * long the message (a cause's message of thousands of lines, a validation error listing every
+ * field).
+ */
+const HEADER_SEARCH_CHARS = 4_096;
+const HEADER_SEARCH_LINES = 50;
 
 /**
  * The message of the `caused by:` line that ends the run of frames starting at line `from`, as
