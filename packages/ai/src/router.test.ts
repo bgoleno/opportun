@@ -457,6 +457,44 @@ describe('prompt caching (#356)', () => {
     expect(sys[1]?.providerOptions?.anthropic).toBeUndefined();
   });
 
+  // https://github.com/bgoleno/opportun/issues/388: the token counts on #390 for the rank default,
+  // by prefix length in characters. Each row is the prefix plus the structured-output schema, in
+  // tokens, on claude-sonnet-5-5, against its 512-token minimum. The size check has to agree with
+  // every one, or the reorder in 0061 caches nothing.
+  const RankOutput = z.object({
+    score: z.number().int().min(0).max(100),
+    rationale: z.string().max(1000),
+    disqualifiers: z.array(z.string().max(200)).max(10),
+  });
+  it.each([
+    // Output before Posting (migration 0061): all over the minimum.
+    [1441, 806, true],
+    [870, 612, true],
+    [1004, 662, true],
+    [1047, 672, true],
+    // The order before 0061.
+    [937, 653, true],
+    [543, 519, true],
+    [500, 509, false],
+    [366, 459, false],
+  ])(
+    'a %i-character rank prefix (%i tokens counted with the schema): marked %s',
+    async (chars, _tokens, marked) => {
+      const prefix = 'x'.repeat(chars);
+      const model = new MockLanguageModelV4({
+        doGenerate: result('{"score":50,"rationale":"r","disqualifiers":[]}'),
+      });
+      const h = harness({ model });
+      await runStructured(h.deps, 'discovery.rank', {
+        ...call,
+        schema: RankOutput,
+        system: prefix + rest,
+        cacheBreak: prefix.length,
+      });
+      expect(systemMessages(h.model)).toHaveLength(marked ? 2 : 1);
+    },
+  );
+
   it('sends the prompt whole and unmarked when the prefix is below the minimum', async () => {
     const h = harness();
     await runStructured(h.deps, 'discovery.company_tags', {

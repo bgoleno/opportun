@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from '@/components/ui/toast';
 import { errorMessage } from '@/lib/api';
-import { formatDateTime, isTerminal, stageLabel } from '@/lib/opportunities';
+import { formatDateTime, isTerminal, stageErrorMessage, stageLabel } from '@/lib/opportunities';
 import {
   channelLabel,
   classificationLabel,
@@ -77,7 +77,7 @@ export function InboxRow({
         onError: (err) =>
           toast({
             title: 'Stage not changed',
-            description: errorMessage(err),
+            description: stageErrorMessage(err),
             variant: 'destructive',
           }),
       },

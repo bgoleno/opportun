@@ -217,8 +217,22 @@ function callSettings(policy: ModelPolicy): { maxOutputTokens: number; temperatu
   };
 }
 
-/** Characters per token assumed when sizing a prefix: high, so a prefix is never overestimated. */
-const CHARS_PER_TOKEN = 4;
+/**
+ * Sizing a prefix against the model's cache minimum, from the token counts on
+ * https://github.com/bgoleno/opportun/pull/390 (count_tokens, 2026-11-11):
+ * - The system text ran at 3.0 to 3.25 characters a token for the rank prompt (claude-sonnet-5-5)
+ *   and 2.4 for the NAICS table (claude-haiku-5-5). 3 counts that prose up to 8% high and the
+ *   table low; with the allowance below it put every measured rank row on the right side of 512.
+ * - Structured output added exactly 344 tokens on both models, for two schemas of 442 and 461
+ *   characters: the system prompt the provider adds to explain the format, not the schema's
+ *   characters. It is inside the cached span: the tags prefix counted 6,469 tokens with it and
+ *   6,125 without, and a live call wrote 6,472 to the cache.
+ * Every structured call carries that allowance. A much larger schema would add more, which only
+ * makes the estimate low. Marking a prefix that turns out to be short costs nothing at the
+ * provider (it is simply not cached), so the estimate can sit this close to the counts.
+ */
+const CHARS_PER_TOKEN = 3;
+const STRUCTURED_OUTPUT_TOKENS = 344;
 
 /**
  * The system prompt as the SDK takes it (https://github.com/bgoleno/opportun/issues/356). The
@@ -232,7 +246,9 @@ function systemFor(policy: ModelPolicy, system: string, cacheBreak?: number): In
   if (cacheBreak === undefined || cacheBreak <= 0 || cacheBreak >= system.length) return system;
   // Only Anthropic models have a minimum (cacheMinTokens), so only they are ever marked.
   const min = cacheMinTokens(policy.provider, policy.model);
-  if (min === undefined || cacheBreak / CHARS_PER_TOKEN < min) return system;
+  if (min === undefined) return system;
+  // What the provider caches at the break: the structured-output allowance and the prefix.
+  if (STRUCTURED_OUTPUT_TOKENS + cacheBreak / CHARS_PER_TOKEN < min) return system;
   return [
     {
       role: 'system',
