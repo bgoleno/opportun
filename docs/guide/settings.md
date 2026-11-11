@@ -72,7 +72,8 @@ _Editing one task's model. Set prices for a model without a list price, such as 
   caching, when postings for one role target are ranked within five minutes of each other (about
   $0.008 without it, measured on 2026-11-10), and tagging 20 companies about $0.0014 without it.
   So $1.00 ranks about 150 postings a day, or about 135 while a company waits for a tag (about 125
-  and 114 without caching). These are list-price estimates from one test, not a provider bill, and
+  and 114 without caching). These are list-price estimates from two measured runs (one with prompt caching, one
+  without), not a provider bill, and
   they change with the model, its prices and the length of your role targets and postings. The
   [measured figures and how they change](discovery.md#the-review-queue) are on the Discovery page,
   and **Discovery ranking cost** on **Settings > AI** shows your own.
