@@ -86,7 +86,8 @@ export function resumeFlowState(input: FlowInput): ResumeFlowState {
 
 /**
  * The flow's own sentence for the states where the resume is what stands in the way of applying
- * (A to D), as the Assisted apply panel says it; null for the others.
+ * (A to D, and H through a send: tl on #428), as the Assisted apply panel says it; null for the
+ * others.
  */
 export function flowSentence(state: ResumeFlowState): string | null {
   switch (state.state) {
@@ -98,6 +99,11 @@ export function flowSentence(state: ResumeFlowState): string | null {
       return `"${state.resume.title}" is still a ${statusLabel(state.resume.status)}. Tailor it, then mark it as final to apply.`;
     case 'D':
       return `"${state.resume.title}" is still ${statusLabel(state.resume.status)}. Mark it as final to apply.`;
+    case 'H':
+      // Sent another way (a base sent as it is), and no resume assisted apply can use yet.
+      return state.send !== undefined
+        ? 'A resume is already recorded as sent for this opportunity. To apply here too, mark a resume as final.'
+        : null;
     default:
       return null;
   }

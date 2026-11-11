@@ -183,6 +183,12 @@ describe("flowSentence: the panel's words for the resume states", () => {
     ).toBe('"Acme Staff Engineer resume" is still In review. Mark it as final to apply.');
   });
 
+  it('H through a send: says it was sent, and what applying here too needs (tl on #428)', () => {
+    expect(flowSentence(resumeFlowState(input({ resumes: [BASE], sends: [send({})] })))).toBe(
+      'A resume is already recorded as sent for this opportunity. To apply here too, mark a resume as final.',
+    );
+  });
+
   it('has nothing to say once the resume is not what blocks applying', () => {
     expect(
       flowSentence(resumeFlowState(input({ resumes: [BASE, resume({ status: 'final' })] }))),

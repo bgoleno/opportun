@@ -7,7 +7,12 @@
 import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { useResumes, type Resume } from '@/components/resume/api';
+import {
+  useOpportunitySends,
+  useResumes,
+  type Resume,
+  type ResumeSend,
+} from '@/components/resume/api';
 import { flowSentence, resumeFlowState } from '@/components/resume/resumeFlow';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -56,6 +61,7 @@ function notEligible(
   opp: OpportunityView,
   resumes: Resume[],
   attempts: readonly SubmissionView[],
+  sends: readonly ResumeSend[],
 ): Refusal | null {
   if (opp.stage === 'closed' || opp.stage === 'dismissed') {
     return { text: `This opportunity is ${stageLabel(opp.stage)}. Reopen it to apply.` };
@@ -82,7 +88,8 @@ function notEligible(
     const state = resumeFlowState({
       opportunityId: opp.id,
       resumes,
-      sends: [],
+      // The same sends the Resume tab lists, so the two agree (tl on #428).
+      sends,
       attempts,
       applyBlocked: null,
     });
@@ -97,6 +104,7 @@ export { appliedAttempt };
 export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const submissions = useOpportunitySubmissions(opp.id);
   const resumes = useResumes();
+  const sends = useOpportunitySends(opp.id);
   const reasonId = useId();
   const [howOpen, setHowOpen] = useState(false);
   // A click on the refused button (#395): it says so, rather than doing nothing. Kept as the
@@ -129,11 +137,13 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
         attempt={outcome}
         opp={opp}
         // Offered only when the server would accept a new attempt, so it never leads to a refusal.
-        canApplyAgain={notEligible(opp, resumes.data?.items ?? [], items) === null}
+        canApplyAgain={
+          notEligible(opp, resumes.data?.items ?? [], items, sends.data?.items ?? []) === null
+        }
       />
     );
   } else {
-    const refusal = notEligible(opp, resumes.data?.items ?? [], items);
+    const refusal = notEligible(opp, resumes.data?.items ?? [], items, sends.data?.items ?? []);
     const reason = refusal?.text ?? null;
     const refusedLabel = opp.atsJobRef ? `Apply on ${ats}` : 'Apply on an ATS';
     body = (

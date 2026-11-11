@@ -379,6 +379,41 @@ describe('#428: the resume reason comes from the resume flow', () => {
     expect(link).toHaveAttribute('href', '/opportunities/opp-1?tab=resume');
   });
 
+  it('a base recorded as sent as it is, nothing tailored: the panel says so, as the Resume tab will', async () => {
+    mockApi({
+      'GET /resumes': { items: [{ ...RESUME, status: 'in_review' }], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'GET /opportunities/opp-1/resume-sends': {
+        items: [
+          {
+            id: 'send-1',
+            opportunityId: 'opp-1',
+            opportunityTitle: 'Staff PM',
+            companyName: 'Acme',
+            resumeId: 'res-1',
+            resumeTitle: 'Jane Final',
+            resumeKind: 'base',
+            sentAt: NOW,
+            sentVia: 'Indeed',
+            submissionId: null,
+            createdAt: NOW,
+          },
+        ],
+      },
+    });
+    renderWithProviders(<ApplyPanel opp={{ ...OPP, stage: 'interested' } as OpportunityView} />);
+    const button = await screen.findByRole('button', { name: 'Apply on Greenhouse' });
+    await waitFor(() =>
+      expect(button).toHaveAccessibleDescription(
+        'A resume is already recorded as sent for this opportunity. To apply here too, mark a resume as final.',
+      ),
+    );
+    expect(screen.getByRole('link', { name: 'Open the Resume tab' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1?tab=resume',
+    );
+  });
+
   it('a reason that is not about the resume has no such link', async () => {
     renderWith([RESUME], { stage: 'in_process' });
     await screen.findByRole('button', { name: 'Apply on Greenhouse' });
