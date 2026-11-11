@@ -176,15 +176,21 @@ export type AddressClass = 'public' | 'private' | 'refused';
 
 /** The class of one resolved address (rule 3). Anything that is not an address is refused. */
 export function classifyAddress(raw: string): AddressClass {
-  const v4 = isIP(raw) === 6 ? mappedIpv4(raw) : undefined;
-  const ip = v4 ?? raw;
-  const family = isIP(ip);
-  if (family !== 4 && family !== 6) return 'refused';
   // A scoped address (a zone id) is bound to an interface, link-local in practice: refused, as
   // is anything that cannot be put in canonical form, rather than an error (tl on #377).
-  if (ip.includes('%')) return 'refused';
-  const text = canonical(ip, family);
-  if (text === undefined || METADATA.has(text)) return 'refused';
+  if (raw.includes('%')) return 'refused';
+  const given = isIP(raw);
+  if (given !== 4 && given !== 6) return 'refused';
+  // Canonical form first, then the unwrap: an IPv4-mapped address has many IPv6 spellings
+  // (0:0:0:0:0:ffff:..., leading zeros, upper case), and only the canonical one starts with
+  // ::ffff:. Unwrapping the raw text missed the others, so a mapped metadata address passed as
+  // private (sec's Blocking 1 on #377). Every check below sees the unwrapped address.
+  const text = canonical(raw, given);
+  if (text === undefined) return 'refused';
+  const ip = given === 6 ? (mappedIpv4(text) ?? text) : text;
+  const family = isIP(ip);
+  if (family !== 4 && family !== 6) return 'refused';
+  if (METADATA.has(ip)) return 'refused';
   if (allowedPrivate.check(ip, family === 4 ? 'ipv4' : 'ipv6')) return 'private';
   // Every other non-public range (link-local, unspecified, multicast, reserved, documentation,
   // the IPv6 transition prefixes) is refused: safeFetch's list is the backstop.

@@ -85,6 +85,21 @@ describe('classifyAddress (14.10 rule 3)', () => {
     },
   );
 
+  // Every spelling of an IPv4-mapped address gets its IPv4 answer, not only the `::ffff:` one
+  // (sec's Blocking 1 on #377): the metadata addresses above all.
+  it.each([
+    ['0:0:0:0:0:ffff:100.100.100.200', 'refused'],
+    ['0:0:0:0:0:ffff:6464:64c8', 'refused'],
+    ['0000:0000:0000:0000:0000:FFFF:6464:64C8', 'refused'],
+    ['::0:ffff:6464:64c8', 'refused'],
+    ['0::ffff:100.100.100.200', 'refused'],
+    ['0:0:0:0:0:ffff:a9fe:a9fe', 'refused'],
+    ['0:0:0:0:0:ffff:7f00:1', 'private'],
+    ['0:0:0:0:0:ffff:808:808', 'public'],
+  ])('another spelling of a mapped address: %s is %s', (ip, expected) => {
+    expect(classifyAddress(ip)).toBe(expected);
+  });
+
   it('just outside each allowed range is not private', () => {
     expect(classifyAddress('172.32.0.1')).toBe('public');
     expect(classifyAddress('100.128.0.1')).toBe('public');
