@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createLanguageModel } from '../../../packages/ai/src/providers';
 import { obsMetricPoints, obsSpans, obsTraces } from '../src/db/schema';
+import { runOpportunityDedupeAi } from '../src/jobs/opportunityDedupeAi';
 import { buildAiDeps } from '../src/lib/ai';
 import {
   attachExporter,
@@ -32,6 +33,7 @@ import { flushSpans } from '../src/obs/tracing';
 import { TRACE_SPAN_CAP } from '../src/obs/spanStore';
 import { useApi } from './api';
 import { countRows } from './db';
+import type { TestClient } from './isolation';
 
 vi.mock('../../../packages/ai/src/providers', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../../packages/ai/src/providers')>();
@@ -388,6 +390,53 @@ describe('the span store (#344)', () => {
     expect(await traces(app)).toEqual([
       expect.objectContaining({ spanCount: TRACE_SPAN_CAP, truncated: true }),
     ]);
+  });
+});
+
+describe('one user per trace: opportunity.dedupe_ai_pass (#344, 14.6)', () => {
+  // An instance job that works through every user's rows: each AI call is its own user's trace,
+  // never a child of the job's span, so no trace holds two users.
+  async function pendingPairFor(c: TestClient) {
+    const key = await c.request({
+      method: 'POST',
+      url: '/api/v1/secrets',
+      payload: { kind: 'ai_api_key', label: 'anthropic', value: KEY },
+    });
+    expect(key.statusCode).toBe(201);
+    for (const [companyName, title] of [
+      ['Acme Robotics', 'Senior Product Manager'],
+      ['Acme Robotics, Inc.', 'Product Manager II'],
+    ]) {
+      const res = await c.request({
+        method: 'POST',
+        url: '/api/v1/opportunities',
+        payload: { companyName, title, sourceKind: 'manual' },
+      });
+      expect(res.statusCode).toBe(201);
+    }
+  }
+
+  it('each user\u2019s call starts that user\u2019s own trace, under no job span', async () => {
+    const { app, a, b } = await boot();
+    await pendingPairFor(a);
+    await pendingPairFor(b);
+    await setCollecting(true);
+    // The instance job's own span (FR-T3's job span): it has no user.
+    const job = trace.getTracer('test').startSpan('job opportunity.dedupe_ai_pass');
+    await context.with(trace.setSpan(ROOT_CONTEXT, job), () =>
+      runOpportunityDedupeAi(app.db, { log: { warn: () => undefined } }),
+    );
+    job.end();
+    await flushSpans();
+    const rows = await traces(app);
+    expect(rows.map((r) => r.userId).sort()).toEqual([a.userId, b.userId].sort());
+    const kept = await spans(app);
+    expect(kept).toHaveLength(2);
+    for (const s of kept) {
+      expect(s.parentSpanId).toBeNull();
+      expect(s.traceId).not.toBe(job.spanContext().traceId);
+      expect(s.userId).toBe(rows.find((r) => r.traceId === s.traceId)!.userId);
+    }
   });
 });
 
