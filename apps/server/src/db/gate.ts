@@ -156,7 +156,13 @@ let watchdogMs = GATE_WATCHDOG_MS;
 let watchdogReport: (held: GateHeld) => void = (held) => {
   dbLog(
     'warn',
-    { 'opportun.db.gate_label': held.label, 'opportun.db.gate_held_ms': Math.round(held.heldMs) },
+    {
+      // A label set in code is a code; the call site used in its place is a frame line, kept as
+      // the error's frame (the gate reduces it to its path in the install root), not as a code.
+      'opportun.db.gate_label': held.label,
+      'opportun.db.gate_held_ms': Math.round(held.heldMs),
+      err: { type: 'GateHeld', stack: held.label },
+    },
     'database write gate held too long',
   );
 };

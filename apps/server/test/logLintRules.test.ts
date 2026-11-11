@@ -38,6 +38,19 @@ describe('the log lint rules (#345)', () => {
     expect(await rules(`${log}${id}log.warn({}, 'failed for ' + id);\n`, SERVER)).toContain(
       'no-restricted-syntax',
     );
+    expect(
+      await rules(
+        `declare const log: { warn(m: string): void };\ndeclare const err: Error;\nlog.warn(err.message);\n`,
+        SERVER,
+      ),
+    ).toContain('no-restricted-syntax');
+    // The AI package's source too.
+    expect(
+      await rules(
+        `declare const log: { warn(m: string): void };\ndeclare const id: string;\nlog.warn(\`x \${id}\`);\n`,
+        AI,
+      ),
+    ).toContain('no-restricted-syntax');
     // db/client.ts has a no-restricted-syntax block of its own: the rule is in it too.
     expect(await rules(`${log}${id}log.warn(\`failed for \${id}\`);\n`, CLIENT)).toContain(
       'no-restricted-syntax',

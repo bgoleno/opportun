@@ -91,6 +91,12 @@ const logMessageBan = [
     message:
       'A log message is a fixed string the catalog lists (design 14.9, #345): write it as one literal, with data in catalogued keys.',
   },
+  {
+    // An error's message as the log message: it can quote data (14.8). Pass the error as `err`.
+    selector: `CallExpression[callee.property.name=${LOG_METHODS}] > MemberExpression[property.name='message']`,
+    message:
+      'A log message is a fixed string (design 14.9, #345): pass the error as { err }, never its message.',
+  },
 ];
 
 const envMutationBan = [
@@ -283,6 +289,15 @@ export default defineConfig(
     files: ['apps/server/src/db/client.ts'],
     rules: {
       'no-restricted-syntax': ['error', ...rawSqlBan, ...logMessageBan],
+    },
+  },
+  {
+    // The AI package's source: no interpolated log message either (it has no log call today).
+    // Its tests are left to the env-mutation block below, so no two blocks set this rule (#305).
+    files: ['packages/ai/src/**/*.ts'],
+    ignores: ['**/*.test.ts'],
+    rules: {
+      'no-restricted-syntax': ['error', ...logMessageBan],
     },
   },
   {

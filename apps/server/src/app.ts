@@ -1,5 +1,5 @@
 import cookie from '@fastify/cookie';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, LogController } from 'fastify';
 import {
   serializerCompiler,
   validatorCompiler,
@@ -300,7 +300,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     },
     // Fastify's own request lines carry the raw url: Opportun's plugin writes the access log
     // instead, with the route's template (plugins/obsHttp.ts, logRequest in obs/log.ts, 14.9).
-    disableRequestLogging: true,
+    // Through a LogController: the top-level disableRequestLogging is deprecated (FSTDEP023).
+    logController: new LogController({ disableRequestLogging: true }),
     // Trust X-Forwarded-* only from explicitly configured proxies (OPPORTUN_TRUSTED_PROXIES,
     // issue #333), empty by default. The previous ['loopback','linklocal','uniquelocal'] default
     // trusted every private-range peer, so on a bare-metal LAN install any client could spoof
@@ -359,7 +360,12 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   configureGateWatchdog({
     report: (held) =>
       app.log.warn(
-        { 'opportun.db.gate_label': held.label, 'opportun.db.gate_held_ms': held.heldMs },
+        {
+          // The label, or the call site as a frame when no label was set (it is not a code).
+          'opportun.db.gate_label': held.label,
+          'opportun.db.gate_held_ms': held.heldMs,
+          err: { type: 'GateHeld', stack: held.label },
+        },
         'database write gate held too long',
       ),
   });
