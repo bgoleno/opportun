@@ -10,6 +10,7 @@ import { submissionsEnabled, type Config } from './config';
 import { closeDatabase, connectDatabase, pingDatabase, type Db } from './db/client';
 import { configureGateWatchdog } from './db/gate';
 import { SCHEMA_DIALECT } from './db/schema';
+import { obsHttpPlugin } from './plugins/obsHttp';
 import { securityPlugin } from './plugins/security';
 import { sessionPlugin } from './plugins/session';
 import {
@@ -310,6 +311,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   });
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
+  // First, so its onRequest runs before every other hook and times the whole request (#343).
+  await app.register(obsHttpPlugin);
   await app.register(cookie);
   await app.register(securityPlugin, { hsts: cfg.baseUrl.startsWith('https:') });
 

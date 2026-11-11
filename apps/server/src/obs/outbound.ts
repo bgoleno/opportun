@@ -32,7 +32,8 @@ const METHODS = new Set<string>(HTTP_METHODS);
 const FIXED_HOSTS = new Set<string>(FIXED_SERVICE_HOSTS);
 const CODE = /^[A-Za-z0-9_.-]{1,64}$/;
 
-function method(m: string): string {
+/** A request's method as the HTTP conventions list it, else OTHER. */
+export function httpMethod(m: string): string {
   const upper = m.toUpperCase();
   return METHODS.has(upper) ? upper : OTHER;
 }
@@ -68,7 +69,7 @@ export async function observeOutbound(
 ): Promise<Response> {
   if (!isCollecting() || isSuppressed()) return send();
   const base: Record<string, unknown> = {
-    'http.request.method': method(call.method),
+    'http.request.method': httpMethod(call.method),
     'opportun.outbound.target': call.target,
   };
   const host = fixedHost(call.url);

@@ -232,15 +232,34 @@ export const METRICS = {
 
 export type MetricName = keyof typeof METRICS;
 
-/** A span the base's own code starts: the name is filled from checked values only (14.8). */
+export type SpanKindName = 'server' | 'client' | 'internal' | 'consumer' | 'producer';
+
+/** A span Opportun's own code starts: the name is filled from checked values only (14.8). */
 export interface SpanDef {
   /** `{key}` is replaced by that attribute's checked value. */
   template: string;
-  kind: 'server' | 'client' | 'internal' | 'consumer' | 'producer';
+  /** The kind it has unless the caller picks another from `kinds`. */
+  kind: SpanKindName;
+  /** Every kind the span may have, when it may have more than one (a job: 14.2). */
+  kinds?: readonly SpanKindName[];
   attributes: readonly AttrKey[];
 }
 
 export const SPANS = {
+  // FR-T3 (#343): the HTTP route's span, /api/v1 only (plugins/obsHttp.ts).
+  'http.server': {
+    template: '{http.request.method} {http.route}',
+    kind: 'server',
+    attributes: ['http.request.method', 'http.route', 'http.response.status_code', 'error.type'],
+  },
+  // FR-T3 (#343): around the whole of processJob (jobs/runner.ts). A consumer when it continues
+  // the trace in jobs.trace_context, else internal (14.2, 14.6).
+  job: {
+    template: 'job {opportun.job.kind}',
+    kind: 'internal',
+    kinds: ['internal', 'consumer'],
+    attributes: ['opportun.job.kind', 'opportun.job.outcome', 'error.type'],
+  },
   'http.client': {
     template: '{http.request.method}',
     kind: 'client',
