@@ -532,7 +532,10 @@ marked **on Postgres** instead.
   Opportun also sets `wal_autocheckpoint = 100`. SQLite folds the WAL back into
   `opportun.db` whenever it passes 100 pages, rather than at its default of 1,000, so
   `opportun.db-wal` stays small and no single write waits long for a checkpoint. There is
-  nothing to configure.
+  nothing to configure. With `OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT=1`, a worker thread
+  checkpoints the WAL instead, once 1,000 pages wait or after a minute, and the main
+  connection's own automatic checkpoint moves to 10,000 pages as a backstop (see **SQLite on
+  a slow disk** in [section 4](#4-configuration-reference)).
 
 - **Restore**: pick which snapshot first. Settings → Import/Export lists every snapshot
   with its own **Verified** badge; use that, not just the newest file on disk, since an
