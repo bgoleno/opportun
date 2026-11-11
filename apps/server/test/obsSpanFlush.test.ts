@@ -246,6 +246,7 @@ describe('the span flush writes the same rows (#375)', () => {
           }),
           userId: a.userId,
           traceUserId: a.userId,
+          origin: undefined,
           root: false,
         });
       }

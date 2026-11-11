@@ -587,6 +587,16 @@ export function openDatabase(
     sqlite.pragma(`busy_timeout = ${MIGRATION_LOCK_TIMEOUT_MS}`);
     enableWal(sqlite, Date.now() + MIGRATION_LOCK_TIMEOUT_MS);
     sqlite.pragma('foreign_keys = ON');
+    // SQLite's automatic WAL checkpoint runs inside whichever commit takes the WAL past this many
+    // pages, on the event loop (better-sqlite3 is synchronous, and this is the only connection).
+    // A smaller WAL means shorter stalls, and more of them. At the default 1,000 pages a
+    // checkpoint stalled the loop for up to 45 ms, in any write; at 100 a checkpoint costs about
+    // 2 ms, a 2,000-span flush's work between two turns of the loop stays under 10 ms, and an
+    // ordinary write's p99 halved (https://github.com/bgoleno/opportun/issues/375:
+    // test/obsFlushBench.test.ts and test/sqliteWriteBench.test.ts, figures in its PR). If this
+    // ever falls short (a slow disk), the next step is a background checkpointer on its own
+    // connection in a worker, with this set to 0.
+    sqlite.pragma('wal_autocheckpoint = 100');
     sqlite.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
     // Migrations run on the raw connection before the async driver exists.
     migrateLocked(sqlite);

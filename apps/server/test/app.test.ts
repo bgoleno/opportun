@@ -142,6 +142,8 @@ describe('app', () => {
     ({ app } = await testApp());
     expect(await queryOne(app, 'PRAGMA journal_mode')).toEqual({ journal_mode: 'wal' });
     expect(await queryOne(app, 'PRAGMA foreign_keys')).toEqual({ foreign_keys: 1 });
+    // A checkpoint every 100 pages keeps each one short (#375).
+    expect(await queryOne(app, 'PRAGMA wal_autocheckpoint')).toEqual({ wal_autocheckpoint: 100 });
   });
 
   it('returns 404 JSON for unknown api routes', async () => {
