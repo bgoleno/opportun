@@ -17,7 +17,7 @@
 //
 // With collection off, or inside the exporter's own requests (runSuppressed), it calls straight
 // through after one check.
-import { FIXED_SERVICE_HOSTS, HTTP_METHODS, OTHER, type OutboundTarget } from './catalog';
+import { fixedServiceHosts, HTTP_METHODS, OTHER, type OutboundTarget } from './catalog';
 import { isCollecting, isSuppressed, obs } from './index';
 
 export interface OutboundCall {
@@ -28,20 +28,25 @@ export interface OutboundCall {
   url: string | URL;
 }
 
-const METHODS = new Set<string>(HTTP_METHODS);
-const FIXED_HOSTS = new Set<string>(FIXED_SERVICE_HOSTS);
+// Read on first use, never at load: safeFetch imports this file and the catalog imports
+// safeFetch, so whichever loads first may find the other still initialising (#343).
+let methods: ReadonlySet<string> | undefined;
+let fixedHosts: ReadonlySet<string> | undefined;
+const isFixedHost = (host: string): boolean =>
+  (fixedHosts ??= new Set(fixedServiceHosts())).has(host);
 const CODE = /^[A-Za-z0-9_.-]{1,64}$/;
 
-function method(m: string): string {
+/** A request's method as the HTTP conventions list it, else OTHER. */
+export function httpMethod(m: string): string {
   const upper = m.toUpperCase();
-  return METHODS.has(upper) ? upper : OTHER;
+  return (methods ??= new Set<string>(HTTP_METHODS)).has(upper) ? upper : OTHER;
 }
 
 /** The host when it is a fixed public service, else nothing (14.8). */
 function fixedHost(url: string | URL): string | undefined {
   try {
     const host = (url instanceof URL ? url : new URL(url)).hostname.toLowerCase();
-    return FIXED_HOSTS.has(host) ? host : undefined;
+    return isFixedHost(host) ? host : undefined;
   } catch {
     return undefined;
   }
@@ -62,13 +67,13 @@ export function errorType(err: unknown): string {
  * Runs one outbound request through `send` and records it: the http.client.request.duration
  * metric, and a CLIENT span named by its method. `send` is the caller's own request.
  */
-export async function observeOutbound(
+export async function observeOutbound<R extends { status: number }>(
   call: OutboundCall,
-  send: () => Promise<Response>,
-): Promise<Response> {
+  send: () => Promise<R>,
+): Promise<R> {
   if (!isCollecting() || isSuppressed()) return send();
   const base: Record<string, unknown> = {
-    'http.request.method': method(call.method),
+    'http.request.method': httpMethod(call.method),
     'opportun.outbound.target': call.target,
   };
   const host = fixedHost(call.url);
@@ -97,6 +102,91 @@ export async function observeOutbound(
     }
   });
 }
+
+/**
+ * A call through a client library that hides its HTTP (the Google API seam, lib/google.ts):
+ * recorded like a request, under `method` as the library sends it. A success has no status the
+ * caller can see, so none is recorded; a failure records the library error's HTTP status
+ * (`status`, or `response.status`) as status and error.type, else its code or class.
+ */
+export async function observeCall<T>(
+  call: { target: OutboundTarget; method: string },
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!isCollecting() || isSuppressed()) return run();
+  const base = {
+    'http.request.method': httpMethod(call.method),
+    'opportun.outbound.target': call.target,
+  };
+  return obs.span('http.client', base, async (span) => {
+    const started = performance.now();
+    try {
+      const value = await run();
+      obs.record('http.client.request.duration', (performance.now() - started) / 1000, base);
+      return value;
+    } catch (err) {
+      const status = statusOf(err);
+      const failure = status === undefined ? errorType(err) : String(status);
+      const attributes = {
+        ...base,
+        ...(status === undefined ? {} : { 'http.response.status_code': status }),
+        'error.type': failure,
+      };
+      span.set(attributes);
+      span.fail(failure);
+      obs.record('http.client.request.duration', (performance.now() - started) / 1000, attributes);
+      throw err;
+    }
+  });
+}
+
+/** An HTTP status a client library's error carries (gaxios: `status`, `response.status`). */
+function statusOf(err: unknown): number | undefined {
+  if (typeof err !== 'object' || err === null) return undefined;
+  const e = err as { status?: unknown; response?: { status?: unknown } };
+  const status = e.status ?? e.response?.status;
+  return typeof status === 'number' && Number.isInteger(status) && status >= 100 && status < 600
+    ? status
+    : undefined;
+}
+
+/**
+ * The target of a safeFetch request (tl on #343): the caller's own when it names one, else
+ * from a literal host map. Never a suffix match on a host a user could configure, except the
+ * one Workday wildcard (a tenant's board lives on its own subdomain). This picks the target
+ * only: server.address still comes from the catalog's fixed list alone, so a tenant's host
+ * never appears.
+ */
+export function outboundTargetFor(req: {
+  url: URL;
+  target?: OutboundTarget;
+  /** The request is one of safeFetch's official API URLs (C-1): an OAuth call. */
+  officialApi?: boolean;
+}): OutboundTarget {
+  if (req.target !== undefined) return req.target;
+  if (req.officialApi === true) return 'oauth';
+  const host = req.url.hostname.toLowerCase().replace(/\.$/, '');
+  const known = TARGET_BY_HOST.get(host);
+  if (known !== undefined) return known;
+  if (host.endsWith(WORKDAY_SUFFIX) && host.length > WORKDAY_SUFFIX.length) return 'ats_workday';
+  return 'public_site';
+}
+
+const WORKDAY_SUFFIX = '.myworkdayjobs.com';
+
+const TARGET_BY_HOST = new Map<string, OutboundTarget>([
+  ['boards-api.greenhouse.io', 'ats_greenhouse'],
+  ['api.lever.co', 'ats_lever'],
+  ['api.ashbyhq.com', 'ats_ashby'],
+  ['api.smartrecruiters.com', 'ats_smartrecruiters'],
+  ['apply.workable.com', 'ats_workable'],
+  ['accounts.google.com', 'google'],
+  ['oauth2.googleapis.com', 'google'],
+  ['openidconnect.googleapis.com', 'google'],
+  ['www.googleapis.com', 'google'],
+  ['gmail.googleapis.com', 'google'],
+  ['docs.googleapis.com', 'google'],
+]);
 
 /** `fetchImpl` with every request observed under one target (the AI providers' fetch, MCP). */
 export function observedFetch(target: OutboundTarget, fetchImpl: typeof fetch): typeof fetch {

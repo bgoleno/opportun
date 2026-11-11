@@ -1,7 +1,14 @@
 // The AI trace dashboard (FR-T7, https://github.com/bgoleno/opportun/issues/347): the list, its
 // filters and conversation groups, the empty state while collection is off, and one trace's
 // waterfall with its span details and links.
-import { screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterProvider,
+} from '@tanstack/react-router';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -186,9 +193,21 @@ describe('TracesPage', () => {
     expect(second).toBe(first);
   });
 
+  it('where collection is unavailable, says so, to an admin too, and offers no switch (#364)', async () => {
+    mockApi({
+      'GET /obs/traces': { collect: false, collectAvailable: false, items: [], next: null },
+      'GET /obs/traces/filters': FILTER_VALUES,
+    });
+    renderWithProviders(<Harness isAdmin />);
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent('Collection is not available on this deployment');
+    expect(notice).not.toHaveTextContent(/off|turn it on|Ask an admin/i);
+    expect(within(notice).queryByRole('link')).toBeNull();
+  });
+
   it('while collection is off, links an admin to the switch in Settings > Telemetry', async () => {
     mockApi({
-      'GET /obs/traces': { collect: false, items: [], next: null },
+      'GET /obs/traces': { collect: false, collectAvailable: true, items: [], next: null },
       'GET /obs/traces/filters': FILTER_VALUES,
     });
     renderWithProviders(<Harness isAdmin />);
@@ -203,7 +222,7 @@ describe('TracesPage', () => {
 
   it('while collection is off, tells a user to ask an admin, and still lists earlier traces', async () => {
     mockApi({
-      'GET /obs/traces': { collect: false, items: [trace()], next: null },
+      'GET /obs/traces': { collect: false, collectAvailable: true, items: [trace()], next: null },
       'GET /obs/traces/filters': FILTER_VALUES,
     });
     renderWithProviders(<Harness />);
@@ -344,6 +363,25 @@ describe('TraceDetailPage', () => {
       '/settings/ai',
     );
     expect(document.body).not.toHaveTextContent('9'.repeat(8));
+  });
+
+  it('says a trace is not found at once, without retrying the 404 (#365)', async () => {
+    // As the app's own client is set up (app.tsx: retry 1). The test helper turns retries off,
+    // which is why the delay never showed in a test.
+    const { calls } = mockApi({});
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1 } } });
+    const rootRoute = createRootRoute({
+      component: () => <TraceDetailPage traceId={'e'.repeat(32)} />,
+    });
+    const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory() });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    // Well inside the 1 s a retry waits before its second request.
+    expect(await screen.findByText(/not found/i, {}, { timeout: 500 })).toBeInTheDocument();
+    expect(calls.filter((c) => c.path === `/obs/traces/${'e'.repeat(32)}`)).toHaveLength(1);
   });
 
   it('says so when the trace is not found', async () => {

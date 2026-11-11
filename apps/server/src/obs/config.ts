@@ -69,7 +69,16 @@ export async function collectInEffect(
   db: Pick<Exec, 'select'>,
   deployment: { demo: boolean },
 ): Promise<boolean> {
-  return !deployment.demo && (await readCollect(db));
+  return collectAvailable(deployment) && (await readCollect(db));
+}
+
+/**
+ * Whether collection can be turned on in this deployment at all: not on the demo, where the
+ * admin account is public (#360). The dashboards say "unavailable" rather than "off" when it is
+ * false, as no admin can turn it on there (https://github.com/bgoleno/opportun/issues/364).
+ */
+export function collectAvailable(deployment: { demo: boolean }): boolean {
+  return !deployment.demo;
 }
 
 /**

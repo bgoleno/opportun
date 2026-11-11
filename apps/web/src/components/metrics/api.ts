@@ -19,6 +19,8 @@ export interface MetricInfo {
 export interface MetricCatalog {
   /** Whether collection is on now. Points collected earlier are shown either way. */
   collect: boolean;
+  /** Whether collection can be turned on here at all: false on the demo (#364). */
+  collectAvailable: boolean;
   metrics: MetricInfo[];
 }
 

@@ -120,10 +120,16 @@ interface TraceView {
   status: string;
 }
 
+// collectAvailable: false on a deployment where collection cannot be turned on (#364).
 async function list(
   c: TestClient,
   query = '',
-): Promise<{ collect: boolean; items: TraceView[]; next: string | null }> {
+): Promise<{
+  collect: boolean;
+  collectAvailable: boolean;
+  items: TraceView[];
+  next: string | null;
+}> {
   const res = await c.request({ method: 'GET', url: `/api/v1/obs/traces${query}` });
   expect(res.statusCode, res.body).toBe(200);
   return res.json();
@@ -170,6 +176,8 @@ describe('GET /obs/traces (FR-T7)', () => {
     const kept = await insertTrace(app, b.userId);
     const off = await list(b);
     expect(off.collect).toBe(false);
+    // Off, but available: an admin can turn it on here (#364).
+    expect(off.collectAvailable).toBe(true);
     expect(ids(off)).toEqual([kept]);
     await writeCollect(app.db, true, { userId: a.userId });
     expect((await list(b)).collect).toBe(true);
@@ -183,7 +191,10 @@ describe('GET /obs/traces (FR-T7)', () => {
       .values({ key: OBS_COLLECT_KEY, userId: null, value: true, updatedAt: now })
       .onConflictDoUpdate({ target: settings.key, set: { value: true, updatedAt: now } })
       .run();
-    expect((await list(b)).collect).toBe(false);
+    const r = await list(b);
+    expect(r.collect).toBe(false);
+    // Not available here at all, so the page says so rather than "off" (#364).
+    expect(r.collectAvailable).toBe(false);
   });
 
   it('filters by task, model and provider through the trace’s inference spans', async () => {

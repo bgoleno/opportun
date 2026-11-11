@@ -8,7 +8,7 @@ import {
   ATTRIBUTES,
   type AttrType,
   EVENTS,
-  FIXED_SERVICE_HOSTS,
+  fixedServiceHosts,
   isLocalOnly,
   METRICS,
   OTHER,
@@ -129,7 +129,7 @@ describe('the catalog (#353)', () => {
 
   it('server.address takes exact hosts from a literal list, never a pattern', () => {
     // 14.8 at b8dcc27: ATS_ALLOW_HOSTS, the AI providers' fixed API hosts, and Google's.
-    expect([...FIXED_SERVICE_HOSTS].sort()).toEqual(
+    expect([...fixedServiceHosts()].sort()).toEqual(
       [
         ...ATS_ALLOW_HOSTS,
         'api.anthropic.com',
@@ -143,7 +143,7 @@ describe('the catalog (#353)', () => {
         'docs.googleapis.com',
       ].sort(),
     );
-    for (const h of FIXED_SERVICE_HOSTS) expect(h, h).toMatch(/^[a-z0-9.-]+$/);
+    for (const h of fixedServiceHosts()) expect(h, h).toMatch(/^[a-z0-9.-]+$/);
     const type = ATTRIBUTES['server.address'];
     expect(checkValue(type, 'api.openai.com')).toBe('api.openai.com');
     expect(checkValue(type, 'apply.workable.com')).toBe('apply.workable.com');
@@ -197,6 +197,9 @@ describe('checkValue (#353)', () => {
       '/api/v1/traces/0af7651916cd43dd8448eb211c80319c',
       '/api/v1/spans/b7ad6b7169203331',
       '/api/v1/jobs/12345',
+      // Uppercase hex is still an id (sec's O6 on #359).
+      '/api/v1/spans/B7AD6B7169203331',
+      '/api/v1/opportunities/0193F3C2-7B1A-7C3E-9A2B-1C2D3E4F5A6B',
     ]) {
       expect(checkValue(route, bad), bad).toBeUndefined();
     }
@@ -205,6 +208,8 @@ describe('checkValue (#353)', () => {
       '/api/v1/oauth2/callback',
       '/healthz',
       '/api/v1/a1b2',
+      // 15 hex digits is under the id bound (sec's O6 on #359): a plain segment.
+      '/api/v1/abcdef012345678',
     ]) {
       expect(checkValue(route, ok), ok).toBe(ok);
     }

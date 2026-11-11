@@ -99,7 +99,9 @@ export function MetricsPage({ isAdmin, search, onSearchChange }: MetricsPageProp
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          {catalog.data?.collect === false ? <CollectOff isAdmin={isAdmin} /> : null}
+          {catalog.data?.collect === false ? (
+            <CollectOff isAdmin={isAdmin} available={catalog.data.collectAvailable !== false} />
+          ) : null}
           {catalog.isError ? <FormError message={errorMessage(catalog.error)} /> : null}
           {catalog.isPending ? (
             <p className="text-sm text-muted-foreground">Loading metrics...</p>
@@ -169,7 +171,18 @@ export function MetricsPage({ isAdmin, search, onSearchChange }: MetricsPageProp
  * switch, Settings > Telemetry (FR-T2, https://github.com/bgoleno/opportun/issues/342), as on the
  * traces page.
  */
-function CollectOff({ isAdmin }: { isAdmin: boolean }) {
+function CollectOff({ isAdmin, available }: { isAdmin: boolean; available: boolean }) {
+  // On the demo no admin can turn collection on (#360), so "off" would be untrue there and an
+  // admin's switch would not exist (https://github.com/bgoleno/opportun/issues/364).
+  if (!available) {
+    return (
+      <div role="status" className="rounded-md border bg-muted/50 p-3 text-sm">
+        <p className="font-medium">
+          Collection is not available on this deployment, so no points are recorded here.
+        </p>
+      </div>
+    );
+  }
   return (
     <div role="status" className="rounded-md border bg-muted/50 p-3 text-sm">
       <p className="font-medium">Collection is off, so no new points are being recorded.</p>

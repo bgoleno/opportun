@@ -10,11 +10,18 @@
 // One process, one runtime: the server binds it to its database at boot (app.ts), and the module
 // state below is that binding. A test that builds an app binds it to that app's database.
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { trace, SpanKind, SpanStatusCode, type Span } from '@opentelemetry/api';
+import {
+  type Context,
+  context,
+  ROOT_CONTEXT,
+  type Span,
+  SpanKind,
+  SpanStatusCode,
+  trace,
+} from '@opentelemetry/api';
 import type { Db } from '../db/client';
 import {
   type Attributes,
-  type AttrKey,
   type DropReason,
   eventDef,
   type EventName,
@@ -22,11 +29,12 @@ import {
   type MetricName,
   type Signal,
   spanDef,
+  type SpanKindName,
   type SpanName,
   withoutLocalOnly,
 } from './catalog';
 import { gateAttributes } from './gate';
-import { flushPoints, MetricAggregator } from './metrics';
+import { flushPoints, MetricAggregator, seriesKey } from './metrics';
 
 /** The logger obs.event() writes to: today's (app.log, pino). FR-T5 moves it to obs/log.ts. */
 export interface ObsLogger {
@@ -264,6 +272,43 @@ function record(
   sinks.metrics?.record(metric, value, withoutLocalOnly(gated));
 }
 
+/**
+ * An instance metric's attributes, gated once, with their series key: what a boundary that
+ * records the same attributes over and over keeps instead of gating them on every value (the
+ * database wrapper, per statement text; 14.11's "after the first sight of its text").
+ */
+export interface PreparedRecord {
+  metric: MetricName;
+  attributes: Attributes;
+  key: string;
+}
+
+/** Gates `attributes` once for an instance metric; drops are counted as for record(). */
+export function prepareRecord(
+  metric: MetricName,
+  attributes: Readonly<Record<string, unknown>>,
+): PreparedRecord {
+  const def = metricDef(metric);
+  if (def.scope !== 'instance') throw new Error(`obs: ${metric} is not an instance metric`);
+  const gated = gateAttributes('metrics', def.attributes, attributes, countDrop);
+  return { metric, attributes: gated, key: seriesKey(metric, null, gated) };
+}
+
+/** Records one value with attributes prepareRecord() already gated. */
+export function recordPrepared(prepared: PreparedRecord, value: number): void {
+  if (!collecting || aggregator === undefined || runtime === undefined) return;
+  if (!Number.isFinite(value)) {
+    countDrop('metrics', 'invalid_value');
+    return;
+  }
+  const { metric, attributes, key } = prepared;
+  if (!aggregator.add(metric, value, attributes, null, runtime.now(), false, key)) {
+    countDrop('metrics', 'series_cap');
+    return;
+  }
+  sinks.metrics?.record(metric, value, withoutLocalOnly(attributes));
+}
+
 /** A started span's handle: further attributes pass the same gate. */
 export interface ObsSpan {
   set(attributes: Readonly<Record<string, unknown>>): void;
@@ -271,22 +316,81 @@ export interface ObsSpan {
   fail(errorType: string): void;
 }
 
+/** A span a hook opens and another hook ends (the HTTP plugin, 14.2). */
+export interface StartedSpan extends ObsSpan {
+  /** The context to run the rest of the work in: the span's own, or the current one when off. */
+  readonly context: Context;
+  /** Ends the span; a second call does nothing. */
+  end(): void;
+}
+
+export interface SpanOptions {
+  /** The parent: a stored traceparent's context (contextFromTraceparent), or a request's. */
+  parent?: Context;
+  /** One of the catalog's `kinds` for this span; any other is ignored for its default. */
+  kind?: SpanKindName;
+}
+
 const NOOP_SPAN: ObsSpan = { set: () => undefined, fail: () => undefined };
 
-const KINDS = {
-  server: SpanKind.SERVER,
-  client: SpanKind.CLIENT,
-  internal: SpanKind.INTERNAL,
-  consumer: SpanKind.CONSUMER,
-  producer: SpanKind.PRODUCER,
-} as const;
+const KINDS = new Map<SpanKindName, SpanKind>([
+  ['server', SpanKind.SERVER],
+  ['client', SpanKind.CLIENT],
+  ['internal', SpanKind.INTERNAL],
+  ['consumer', SpanKind.CONSUMER],
+  ['producer', SpanKind.PRODUCER],
+]);
 
 /** A span name from its template, filled with checked values only. */
 function spanName(template: string, attributes: Attributes): string {
+  const values = new Map(Object.entries(attributes));
   return template.replace(/\{([a-z._]+)\}/g, (_m, key: string) => {
-    const v = (attributes as Record<string, unknown>)[key as AttrKey];
+    const v = values.get(key);
     return typeof v === 'string' || typeof v === 'number' ? String(v) : '';
   });
+}
+
+type OtelAttributes = Record<string, string | number | boolean>;
+
+/** Opens a catalogued span under `parent`, with a gated handle; collection is known to be on. */
+function open(
+  name: SpanName,
+  attributes: Readonly<Record<string, unknown>>,
+  opts: SpanOptions,
+): { span: Span; handle: ObsSpan; failed: () => boolean } {
+  const def = spanDef(name);
+  const gated = gateAttributes('spans', def.attributes, attributes, countDrop);
+  const kind =
+    opts.kind !== undefined && def.kinds?.includes(opts.kind) === true ? opts.kind : def.kind;
+  const span = trace
+    .getTracer('opportun')
+    .startSpan(
+      spanName(def.template, gated),
+      { kind: KINDS.get(kind) ?? SpanKind.INTERNAL, attributes: gated as OtelAttributes },
+      opts.parent ?? context.active(),
+    );
+  // A failure the callee already recorded (an outbound error's code) stands: a later catch of
+  // the rethrown error must not replace it with that error's class name.
+  let failed = false;
+  const handle: ObsSpan = {
+    set: (more) => {
+      span.setAttributes(
+        gateAttributes('spans', def.attributes, more, countDrop) as OtelAttributes,
+      );
+    },
+    fail: (errorType) => {
+      failed = true;
+      const checked = gateAttributes(
+        'spans',
+        def.attributes,
+        { 'error.type': errorType },
+        countDrop,
+      );
+      span.setAttributes(checked as OtelAttributes);
+      span.setStatus({ code: SpanStatusCode.ERROR });
+    },
+  };
+  return { span, handle, failed: () => failed };
 }
 
 /**
@@ -297,49 +401,61 @@ async function span<T>(
   name: SpanName,
   attributes: Readonly<Record<string, unknown>>,
   fn: (span: ObsSpan) => Promise<T>,
+  opts: SpanOptions = {},
 ): Promise<T> {
   if (!collecting || isSuppressed()) return fn(NOOP_SPAN);
-  const def = spanDef(name);
-  const gated = gateAttributes('spans', def.attributes, attributes, countDrop);
-  const tracer = trace.getTracer('opportun');
-  return tracer.startActiveSpan(
-    spanName(def.template, gated),
-    { kind: KINDS[def.kind], attributes: gated as Record<string, string | number | boolean> },
-    async (s: Span) => {
-      // A failure the callee already recorded (an outbound error's code) stands: the catch
-      // below must not replace it with the rethrown error's class name.
-      let failed = false;
-      const handle: ObsSpan = {
-        set: (more) => {
-          s.setAttributes(
-            gateAttributes('spans', def.attributes, more, countDrop) as Record<
-              string,
-              string | number | boolean
-            >,
-          );
-        },
-        fail: (errorType) => {
-          failed = true;
-          const checked = gateAttributes(
-            'spans',
-            def.attributes,
-            { 'error.type': errorType },
-            countDrop,
-          );
-          s.setAttributes(checked as Record<string, string>);
-          s.setStatus({ code: SpanStatusCode.ERROR });
-        },
-      };
-      try {
-        return await fn(handle);
-      } catch (err) {
-        if (!failed) handle.fail(err instanceof Error ? err.name : 'Error');
-        throw err;
-      } finally {
-        s.end();
-      }
+  const { span: s, handle, failed } = open(name, attributes, opts);
+  try {
+    return await context.with(trace.setSpan(opts.parent ?? context.active(), s), () => fn(handle));
+  } catch (err) {
+    if (!failed()) handle.fail(err instanceof Error ? err.name : 'Error');
+    throw err;
+  } finally {
+    s.end();
+  }
+}
+
+/**
+ * Opens a span that another call ends (14.2: a Fastify hook cannot wrap the code after it). With
+ * collection off it returns a handle that does nothing, whose context is the current one.
+ */
+function startSpan(
+  name: SpanName,
+  attributes: Readonly<Record<string, unknown>>,
+  opts: SpanOptions = {},
+): StartedSpan {
+  const parent = opts.parent ?? context.active();
+  if (!collecting || isSuppressed()) return { ...NOOP_SPAN, context: parent, end: () => undefined };
+  const { span: s, handle } = open(name, attributes, { ...opts, parent });
+  let ended = false;
+  return {
+    ...handle,
+    context: trace.setSpan(parent, s),
+    end: () => {
+      if (ended) return;
+      ended = true;
+      s.end();
     },
-  );
+  };
+}
+
+const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/;
+
+/**
+ * The context of a stored W3C traceparent (jobs.trace_context), for a job's span to continue
+ * (14.6); undefined for anything that is not one, so the job starts a new trace instead. `base`
+ * is what the span context is set on: the root, or the root with the job's user in it.
+ */
+export function contextFromTraceparent(
+  value: string | null | undefined,
+  base: Context = ROOT_CONTEXT,
+): Context | undefined {
+  const m = typeof value === 'string' ? TRACEPARENT.exec(value) : null;
+  if (m === null) return undefined;
+  const [, traceId = '', spanId = '', flags = '00'] = m;
+  const spanContext = { traceId, spanId, traceFlags: Number.parseInt(flags, 16), isRemote: true };
+  if (!trace.isSpanContextValid(spanContext)) return undefined;
+  return trace.setSpanContext(base, spanContext);
 }
 
 /** The active span's W3C traceparent, for enqueue's continueTrace (14.6); null when none. */
@@ -372,4 +488,4 @@ function event(
   sinks.logs?.emit({ event: name, timeMs, traceId, fields: withoutLocalOnly(gated) });
 }
 
-export const obs = { record, span, event, isCollecting };
+export const obs = { record, span, startSpan, event, isCollecting };

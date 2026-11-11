@@ -17,6 +17,7 @@ import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/sdk/shared/s
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { CallToolResult, JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { FetchBlockedError, isPrivateAddress, isProhibitedHost } from './safeFetch';
+import { observeOutbound } from '../obs/outbound';
 
 export const MCP_TIMEOUT_MS = 30_000;
 /** Largest single message (and largest HTTP response body) accepted from a server. */
@@ -247,7 +248,10 @@ export function guardedMcpFetch(deps: HttpGuardDeps = realHttpDeps) {
     if ((init?.method ?? 'GET').toUpperCase() === 'GET') {
       return new Response(null, { status: 405 });
     }
-    const res = await deps.fetch(url, { ...init, redirect: 'manual' });
+    // Measured as target mcp (#343): the server's host is the user's, so it is never named.
+    const res = await observeOutbound({ target: 'mcp', method: init?.method ?? 'POST', url }, () =>
+      deps.fetch(url, { ...init, redirect: 'manual' }),
+    );
     const body = await cappedBody(res, MCP_MAX_MESSAGE_BYTES);
     return new Response(res.status === 204 || res.status === 304 ? null : body, {
       status: res.status,

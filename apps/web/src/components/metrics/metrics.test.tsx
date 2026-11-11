@@ -20,6 +20,7 @@ function localInput(t: number): string {
 
 const CATALOG: MetricCatalog = {
   collect: true,
+  collectAvailable: true,
   metrics: [
     {
       name: 'http.server.request.duration',
@@ -281,8 +282,17 @@ describe('MetricsPage', () => {
     expect(screen.getByLabelText('Time range')).toHaveValue('custom');
   });
 
+  it('where collection is unavailable, says so, to an admin too, and offers no switch (#364)', async () => {
+    mockApi({ 'GET /obs/metrics': { ...CATALOG, collect: false, collectAvailable: false } });
+    renderWithProviders(<Harness />);
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent('Collection is not available on this deployment');
+    expect(notice).not.toHaveTextContent(/off|turn it on|Ask an admin/i);
+    expect(within(notice).queryByRole('link')).toBeNull();
+  });
+
   it('while collection is off, says so, and links an admin to the switch in Settings > Telemetry', async () => {
-    mockApi({ 'GET /obs/metrics': { ...CATALOG, collect: false } });
+    mockApi({ 'GET /obs/metrics': { ...CATALOG, collect: false, collectAvailable: true } });
     renderWithProviders(<Harness />);
     const notice = await screen.findByRole('status');
     expect(notice).toHaveTextContent('Collection is off');
@@ -293,7 +303,7 @@ describe('MetricsPage', () => {
   });
 
   it('while collection is off, tells a user to ask an admin, with no link', async () => {
-    mockApi({ 'GET /obs/metrics': { ...CATALOG, collect: false } });
+    mockApi({ 'GET /obs/metrics': { ...CATALOG, collect: false, collectAvailable: true } });
     renderWithProviders(<Harness isAdmin={false} />);
     const notice = await screen.findByRole('status');
     expect(notice).toHaveTextContent(/Ask an admin/);
