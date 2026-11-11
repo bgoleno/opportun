@@ -344,8 +344,8 @@ export async function buildAiDeps(
     // packages/ai does no IO, so it hands a failed ledger write after a streamed call to the
     // server (issue #344), which logs it through the gate: a fixed message, the error as its type
     // and frames (#345, design 14.9).
-    onRecordError: (_task, err) => {
-      processLogger().error({ err }, 'failed to record a streamed AI call');
+    onRecordError: (task, err) => {
+      processLogger().error({ err, [ATTR.aiTask]: task }, 'failed to record a streamed AI call');
     },
   };
 }

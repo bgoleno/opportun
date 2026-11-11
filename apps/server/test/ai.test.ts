@@ -146,7 +146,10 @@ describe('server AiDeps', () => {
       expect(text).toBe('Hello');
       // Through the gated logger (#345): a fixed message, the error as an object it reduces.
       expect(logged).toHaveBeenCalledWith(
-        { err: expect.objectContaining({ message: 'ledger hook failed' }) },
+        {
+          err: expect.objectContaining({ message: 'ledger hook failed' }),
+          'opportun.ai.task': 'resume.tailor',
+        },
         'failed to record a streamed AI call',
       );
     } finally {

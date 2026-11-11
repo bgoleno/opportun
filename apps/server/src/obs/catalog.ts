@@ -783,7 +783,7 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   // AI
   'opportunity dedupe AI unavailable': ['opportun.dedupe_candidate.id', 'error.type'],
   'opportunity dedupe AI returned an unrecognized ref': ['opportun.dedupe_candidate.id'],
-  'failed to record a streamed AI call': [],
+  'failed to record a streamed AI call': [ATTR.aiTask],
   'could not read the base resume': ['opportun.resume.id'],
   // Accounts and integrations
   'failed to persist a refreshed Google token': ['user.id'],
