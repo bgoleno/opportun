@@ -13,10 +13,22 @@ const ALLOWED = new Map<OpportunityStage, readonly OpportunityStage[]>([
     'interested',
     ['discovered', 'preparing', 'applied', 'in_process', 'offer', 'dismissed', 'closed'],
   ],
-  ['preparing', ['interested', 'applied', 'in_process', 'offer', 'dismissed', 'closed']],
-  ['applied', ['preparing', 'in_process', 'offer', 'dismissed', 'closed']],
-  ['in_process', ['applied', 'offer', 'dismissed', 'closed']],
-  ['offer', ['in_process', 'dismissed', 'closed']],
+  [
+    'preparing',
+    ['discovered', 'interested', 'applied', 'in_process', 'offer', 'dismissed', 'closed'],
+  ],
+  [
+    'applied',
+    ['discovered', 'interested', 'preparing', 'in_process', 'offer', 'dismissed', 'closed'],
+  ],
+  [
+    'in_process',
+    ['discovered', 'interested', 'preparing', 'applied', 'offer', 'dismissed', 'closed'],
+  ],
+  [
+    'offer',
+    ['discovered', 'interested', 'preparing', 'applied', 'in_process', 'dismissed', 'closed'],
+  ],
   [
     'dismissed',
     ['discovered', 'interested', 'preparing', 'applied', 'in_process', 'offer', 'closed'],
@@ -66,10 +78,17 @@ describe('applyTransition', () => {
     expect(result.historyEntry.toStage).toBe('applied');
   });
 
-  it('rejects backward moves of more than one step', () => {
-    expect(() => applyTransition({ stage: 'applied' }, 'interested')).toThrow(
-      InvalidTransitionError,
-    );
+  // #397: a mis-click several stages forward is corrected in one move back.
+  it('moves back over several stages in one move and records it like any other', () => {
+    const result = applyTransition({ stage: 'in_process' }, 'preparing');
+    expect(result.stage).toBe('preparing');
+    expect(result.closedReason).toBeNull();
+    expect(result.dismissedReason).toBeNull();
+    expect(result.historyEntry).toMatchObject({
+      fromStage: 'in_process',
+      toStage: 'preparing',
+      note: null,
+    });
   });
 
   it('defaults note to null when none is given', () => {
@@ -79,14 +98,14 @@ describe('applyTransition', () => {
   it('throws InvalidTransitionError carrying from and to for an invalid move', () => {
     let caught: unknown;
     try {
-      applyTransition({ stage: 'offer' }, 'interested');
+      applyTransition({ stage: 'offer' }, 'offer');
     } catch (err) {
       caught = err;
     }
     expect(caught).toBeInstanceOf(InvalidTransitionError);
     expect(caught).toBeInstanceOf(Error);
     expect((caught as InvalidTransitionError).from).toBe('offer');
-    expect((caught as InvalidTransitionError).to).toBe('interested');
+    expect((caught as InvalidTransitionError).to).toBe('offer');
   });
 
   it('throws on self-transition', () => {
