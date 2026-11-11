@@ -285,9 +285,9 @@ times the prices in Opportun's price table on that date.
   input price, and each call in the next five minutes reads it at a tenth of the input price or
   less. Measured on 2026-11-11 the same way as the table, on 76 postings against one role target:
   the first ranking call wrote 721 tokens and each of the other 75 read them, and the mean cost of
-  a ranking call fell from $0.0078 to $0.0065 (17.7% less). Tagging costs 31% less the same way.
-  So a posting costs about $0.0065 when postings for one role target are ranked within five
-  minutes of each other, as a board's run does. A posting ranked on its own gets no saving: its
+  a ranking call fell from $0.0078 to $0.0065 (17.7% less). Tagging, measured the same way on
+  2026-11-10, costs 31% less. So a posting costs about $0.0065 when postings for one role target
+  are ranked within five minutes of each other, as a board's run does. A posting ranked on its own gets no saving: its
   call is the one that writes the cache, which by the price table costs about 5% more than a call
   without it. The cache is per role target, so a run that switches between role targets saves
   less. Only Anthropic models are marked; the table's figures are without the cache.
