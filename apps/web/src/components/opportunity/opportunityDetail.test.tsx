@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { OpportunityView, TimelineItem } from '@/lib/opportunities';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
-import { OpportunityDetail } from './OpportunityDetail';
+import { OpportunityDetail, type OpportunityTab } from './OpportunityDetail';
 
 const NOW = Date.now();
 const DAY = 24 * 60 * 60 * 1000;
@@ -120,6 +120,7 @@ const BASE_RESUME = {
 function setup(
   oppOverride: Partial<OpportunityView> = {},
   extraRoutes: Record<string, unknown> = {},
+  opts: { tab?: OpportunityTab; onTabChange?: (tab: OpportunityTab) => void } = {},
 ) {
   const opp = { ...OPP, ...oppOverride };
   const api = mockApi({
@@ -168,7 +169,14 @@ function setup(
     ...extraRoutes,
   });
   const user = userEvent.setup();
-  renderWithProviders(<OpportunityDetail id="opp-1" />, { path: '/opportunities/opp-1' });
+  renderWithProviders(
+    <OpportunityDetail
+      id="opp-1"
+      {...(opts.tab === undefined ? {} : { tab: opts.tab })}
+      {...(opts.onTabChange === undefined ? {} : { onTabChange: opts.onTabChange })}
+    />,
+    { path: '/opportunities/opp-1' },
+  );
   return { api, user };
 }
 
@@ -245,6 +253,18 @@ describe('OpportunityDetail', () => {
     const resume = await screen.findByRole('tabpanel', { name: 'Resume' });
     await within(resume).findByText('No resume for this opportunity yet.');
     expect(resume.querySelector('[data-slot="main-with-rail"]')).not.toBeNull();
+  });
+
+  // https://github.com/bgoleno/opportun/issues/428: the page opens the tab named in the URL, and a
+  // tab change is reported so the URL can follow.
+  it('opens the tab it is given, and reports a tab change', async () => {
+    const changes: OpportunityTab[] = [];
+    const { user } = setup({}, {}, { tab: 'resume', onTabChange: (t) => changes.push(t) });
+    expect(await screen.findByRole('tabpanel', { name: 'Resume' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Resume' })).toHaveAttribute('aria-selected', 'true');
+    await user.click(screen.getByRole('tab', { name: 'Details' }));
+    expect(changes).toEqual(['details']);
+    expect(await screen.findByRole('tabpanel', { name: 'Details' })).toBeInTheDocument();
   });
 
   it('adds a meeting from the composer', async () => {
