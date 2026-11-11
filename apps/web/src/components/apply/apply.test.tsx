@@ -630,6 +630,121 @@ describe('S5: open the form', () => {
   });
 });
 
+describe('#416: the next step names the extension only where it can fill this form', () => {
+  const REVIEW_LINE =
+    "When the form opens, click the Opportun icon in your browser's toolbar. It fills in what you reviewed here.";
+  const token = (over: Record<string, unknown> = {}) => ({
+    id: 'tok-1',
+    name: 'Laptop',
+    scopes: ['apply:assist'],
+    lastUsedAt: null,
+    revokedAt: null,
+    createdAt: NOW,
+    ...over,
+  });
+  const LEVER = 'https://jobs.lever.co/examplecorp/abcd-1234/apply';
+  const cases: [string, Record<string, unknown>, Partial<SubmissionView>, boolean][] = [
+    ['a usable token on a Greenhouse form', { items: [token()] }, {}, true],
+    ['no token', { items: [] }, {}, false],
+    ['a revoked token', { items: [token({ revokedAt: NOW - MIN })] }, {}, false],
+    [
+      'a token without the Assisted apply scope',
+      { items: [token({ scopes: ['capture:push'] })] },
+      {},
+      false,
+    ],
+    // Greenhouse, but on the company's own site: the extension fills only Greenhouse's hosts.
+    [
+      "a Greenhouse posting on the company's own site",
+      { items: [token()] },
+      { destinationUrl: 'https://careers.example.com/jobs?gh_jid=1000001' },
+      false,
+    ],
+    // Each check on its own: another system's form, recorded at a Greenhouse address.
+    [
+      'another application system at a Greenhouse address',
+      { items: [token()] },
+      { atsKind: 'ats_lever' },
+      false,
+    ],
+    [
+      'an application system the extension does not fill',
+      { items: [token()] },
+      { atsKind: 'ats_lever', destinationUrl: LEVER },
+      false,
+    ],
+  ];
+
+  /** Renders a step once its token list has been read, so a missing line is a decision. */
+  async function renderAfterTokens(step: 'review' | 'open', tokens: unknown, sub: SubmissionView) {
+    const api = mockApi({ ...routes(sub), 'GET /device-tokens': tokens });
+    const out = renderStep(step);
+    await waitFor(() => expect(calls(api.calls, 'GET', '/device-tokens')).toHaveLength(1));
+    await screen.findByRole('heading', { level: 1 });
+    return out;
+  }
+
+  it.each(cases)('the review step, with %s', async (_name, tokens, over, canFill) => {
+    await renderAfterTokens('review', tokens, submission(over));
+    if (canFill) expect(await screen.findByText(REVIEW_LINE)).toBeVisible();
+    else {
+      await screen.findByText(/Ready to open the form\?/);
+      expect(screen.queryByText(REVIEW_LINE)).toBeNull();
+    }
+  });
+
+  it.each(cases)('the Open step, with %s', async (_name, tokens, over, canFill) => {
+    await renderAfterTokens(
+      'open',
+      tokens,
+      submission({ status: 'handed_off', handedOffAt: NOW, ...over }),
+    );
+    const card = (await screen.findByText('On the application site')).closest(
+      '[data-slot="card"]',
+    ) as HTMLElement;
+    const steps = await within(card).findAllByRole('listitem');
+    const text = steps.map((li) => (li.textContent ?? '').replace(/\s+/g, ' ').trim());
+    if (canFill) {
+      await waitFor(() => expect(within(card).getByText(/Go to the/)).toBeVisible());
+      expect(text).toHaveLength(4);
+      expect(text[0]).toMatch(/^Go to the boards\.greenhouse\.io tab\./);
+      expect(text[1]).toContain("Click the Opportun icon in your browser's toolbar");
+      expect(text[1]).toContain("Not there? Open your browser's Extensions menu and pin Opportun.");
+      // The icon itself is shown beside the words.
+      expect(card.querySelector('img[src="/favicon.svg"]')).not.toBeNull();
+      expect(text[2]).toContain(
+        'Check every field. The extension lists what it filled and what it left for you.',
+      );
+      expect(text[3]).toContain("Press the site's own Submit button. Only you can do this.");
+      expect(screen.queryByText(/can fill this form for you/)).toBeNull();
+    } else {
+      // Today's copying steps, and one line about the extension, promising nothing more.
+      expect(text[0]).toBe('Fill in the form, copying from your details below.');
+      expect(text).toContain("Press the site's own Submit button. Only you can do this.");
+      expect(within(card).queryByText(/Click the Opportun icon/)).toBeNull();
+      const line = within(card).getByText(
+        /The Opportun browser extension can fill this form for you/,
+      );
+      expect(within(line).getByRole('link', { name: /Extensions and Connectors/ })).toHaveAttribute(
+        'href',
+        '/settings/integrations',
+      );
+    }
+    // The details to copy stay below either way.
+    expect(screen.getByText('Your details to copy')).toBeVisible();
+  });
+
+  it('a token list the server will not give (an older server) promises nothing', async () => {
+    const api = mockApi(routes(submission({ status: 'handed_off', handedOffAt: NOW })));
+    renderStep('open');
+    await waitFor(() => expect(calls(api.calls, 'GET', '/device-tokens')).toHaveLength(1));
+    expect(
+      await screen.findByText('Fill in the form, copying from your details below.'),
+    ).toBeVisible();
+    expect(screen.queryByText(/Click the Opportun icon/)).toBeNull();
+  });
+});
+
 describe('#144: a posting change under the attempt is shown, and nothing is cancelled', () => {
   const NEW = 'https://boards.greenhouse.io/examplecorp/jobs/2000002';
   const moved = {
