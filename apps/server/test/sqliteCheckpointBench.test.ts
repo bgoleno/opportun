@@ -3,16 +3,16 @@
 // connection checkpoints every 100 pages, inside a commit) and on (a worker checkpoints by WAL
 // size or age, the main connection keeps a 10,000-page backstop), in three runs:
 //
-// - busy: 12,000 writes back to back, one per turn of the event loop, a burst the worker keeps
-//   up with: the backstop is never reached, so no checkpoint runs on the main thread;
-// - long: 50,000 writes, a burst past the backstop, which fires on the main thread when the
-//   worker falls behind (reported with each firing's cost; not asserted, as it varies by run);
+// - busy: 12,000 writes back to back, one per turn of the event loop (about 30,000 frames);
+// - long: 50,000 such writes. In both, the WAL cannot restart while writes keep landing, so the
+//   backstop fires on the main thread about once per 10,000 frames, copying what the worker has
+//   not yet copied: each firing's cost is reported;
 // - quiet: one small write every 1.5 s, past the worker's 60-second age bound, so the window
 //   holds an age checkpoint and the restart that follows it.
 //
 // Asserted is what the design controls, not the single worst stall, one fsync's luck (tl on
 // #393): the worker checkpointed inside each timed window; with it on, checkpoint time on the
-// main thread is under a fifth of off's in total, and zero in the busy run; and p99. The worst
+// main thread is under a fifth of off's in total; and p99. The worst
 // stall and the slowest write, with what it was, are reported.
 //
 // What stays on the main thread is reported by kind. Each write is classed by the wal-index
@@ -42,7 +42,7 @@ const RUN = process.env.OBS_BENCH === '1' && sqliteOnly;
 /** OBS_BENCH_SLOW=0 measures the ordinary disk instead (checkpoint_fullfsync off). */
 const SLOW = process.env.OBS_BENCH_SLOW !== '0' ? 1 : 0;
 const QUIET = process.env.OBS_BENCH_QUIET !== '0';
-/** A burst the worker keeps up with: the backstop is never reached. */
+/** A burst of about 30,000 frames: the backstop fires about three times. */
 const BUSY_WRITES = 12_000;
 const BUSY_ROUNDS = 3;
 /** A burst long enough to reach the backstop at least twice with the worker on. */
@@ -123,14 +123,16 @@ async function round(mode: Mode, writes: number, gapMs: number, size: number) {
         if (after.mxFrame < before.mxFrame) {
           restarts.push(ms);
           kind = 'restart';
-        } else if (after.nBackfill > before.nBackfill) {
-          // Off, every copy is the commit's own. On, the worker copies beside the writes, and a
-          // copy is the commit's only when the backstop's pages were reached before it.
-          const waiting = before.mxFrame - before.nBackfill;
-          if (mode === 'off' || waiting >= BACKSTOP_PAGES - 5) {
-            inCommit.push(ms);
-            kind = 'checkpoint';
-          }
+        } else if (
+          mode === 'off'
+            ? after.nBackfill > before.nBackfill
+            : // On, the worker copies beside the writes, so a copy during the write proves
+              // nothing. The backstop's own is the one that leaves everything copied with the
+              // WAL at or past its threshold, straight after the write (tl on #393).
+              after.nBackfill === after.mxFrame && after.mxFrame >= BACKSTOP_PAGES
+        ) {
+          inCommit.push(ms);
+          kind = 'checkpoint';
         }
         if (kind === 'other' && after.mxFrame > walPeak) kind = 'growth';
       }
@@ -202,13 +204,12 @@ describe.runIf(RUN)('the background checkpointer on a slow disk (#383, reported 
   };
 
   // What the design controls is asserted; the single worst stall, one fsync's luck, is reported.
-  const busyAssertions = (rounds: Round[], backstopFires: boolean) => {
+  const busyAssertions = (rounds: Round[]) => {
     const on = rounds.filter((r) => r.mode === 'on');
     const off = rounds.filter((r) => r.mode === 'off');
     for (const r of on) expect(r.workerCheckpoints).toBeGreaterThanOrEqual(2);
     const sum = (rs: Round[]) => rs.reduce((a, r) => a + r.mainCheckpointTotalMs, 0);
     expect(sum(on)).toBeLessThan(sum(off) / 5);
-    if (!backstopFires) for (const r of on) expect(r.mainCheckpointTotalMs).toBe(0);
     const { off: offSummary, on: onSummary } = report(rounds);
     expect(onSummary.p99Ms).toBeLessThan(offSummary.p99Ms);
     // Whether the long burst reaches the backstop is not asserted: it depends on how fast the
@@ -218,7 +219,7 @@ describe.runIf(RUN)('the background checkpointer on a slow disk (#383, reported 
     return off;
   };
 
-  it('busy: a burst the worker keeps up with, and the main thread runs no checkpoint', async () => {
+  it('busy: 12,000 writes, the stalls mostly off the main thread', async () => {
     const rounds: Round[] = [];
     // Alternated, as the machine is shared.
     for (let i = 0; i < BUSY_ROUNDS; i++) {
@@ -227,10 +228,10 @@ describe.runIf(RUN)('the background checkpointer on a slow disk (#383, reported 
     }
     out.busy = { writes: BUSY_WRITES, backstopPages: BACKSTOP_PAGES, ...report(rounds) };
     save();
-    busyAssertions(rounds, false);
+    busyAssertions(rounds);
   }, 1_800_000);
 
-  it('long: a burst past the backstop, which then fires on the main thread', async () => {
+  it('long: 50,000 writes, the backstop firing about once per 10,000 frames', async () => {
     const rounds: Round[] = [];
     for (let i = 0; i < LONG_ROUNDS; i++) {
       rounds.push(await round('off', LONG_WRITES, 0, 3_500));
@@ -238,7 +239,7 @@ describe.runIf(RUN)('the background checkpointer on a slow disk (#383, reported 
     }
     out.long = { writes: LONG_WRITES, backstopPages: BACKSTOP_PAGES, ...report(rounds) };
     save();
-    busyAssertions(rounds, true);
+    busyAssertions(rounds);
   }, 3_600_000);
 
   it.runIf(QUIET)(

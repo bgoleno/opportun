@@ -588,8 +588,9 @@ const AUTOCHECKPOINT_PAGES = 100;
  * - Not 2,000: wal_autocheckpoint counts every frame, copied or not, so in a long burst it
  *   fired every 2,000 frames whatever the worker did, and did the worker's job on the main
  *   thread: a stall as long as with the checkpointer off on a slow disk, longer on an ordinary
- *   one. At 10,000 a 12,000-page burst never reached it, and a longer burst reaches it about
- *   once per 10,000 pages (sqliteCheckpointBench.test.ts).
+ *   one. At 10,000 a burst reaches it about once per 10,000 frames, each firing a pause of tens
+ *   of milliseconds that copies the worker's lag: per 10,000 frames, one firing of about 45 ms
+ *   against five of about 23 ms at 2,000 (sqliteCheckpointBench.test.ts).
  * - It also leaves the catch-up after a long reader (the nightly VACUUM INTO) to the worker.
  */
 const BACKSTOP_PAGES = 10_000;
@@ -659,7 +660,7 @@ export function openDatabase(
     // ordinary write's p99 halved (https://github.com/bgoleno/opportun/issues/375:
     // test/obsFlushBench.test.ts and test/sqliteWriteBench.test.ts, figures in its PR). If this
     // ever falls short (a slow disk), OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT turns on the
-    // background checkpointer below, which sets this to 0 while it runs.
+    // background checkpointer below, which moves this to a 10,000-page backstop while it runs.
     sqlite.pragma(`wal_autocheckpoint = ${AUTOCHECKPOINT_PAGES}`);
     sqlite.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
     // Migrations run on the raw connection before the async driver exists.

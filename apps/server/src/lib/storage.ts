@@ -551,7 +551,9 @@ export function readOperatorBytesAt(
   if (!isOperatorFile(absPath)) return undefined;
   let fd: number | undefined;
   try {
-    fd = openSync(absPath, 'r');
+    // O_NOFOLLOW as well as isOperatorFile's lstat: a symlink swapped in between the two is not
+    // followed either (sec on #393).
+    fd = openSync(absPath, constants.O_RDONLY | constants.O_NOFOLLOW);
     const bytes = Buffer.alloc(length);
     return bytes.subarray(0, readSync(fd, bytes, 0, length, position));
   } catch {

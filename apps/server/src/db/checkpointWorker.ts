@@ -59,12 +59,15 @@ export function readWalIndex(path: string, pageSize: number): WalIndex | undefin
     const b = readOperatorBytesAt(path, 0, READ_BYTES);
     if (b === undefined || b.length < READ_BYTES) return undefined;
     if (!b.subarray(0, HEADER_BYTES).equals(b.subarray(HEADER_BYTES, 2 * HEADER_BYTES))) continue;
-    if (u32(b, AT_VERSION) !== WAL_INDEX_VERSION) return undefined;
-    if (b.readUInt8(AT_IS_INIT) !== 1 || u16(b, AT_PAGE_SIZE) !== expectedPageSize) {
+    if (u32(b, AT_VERSION) !== WAL_INDEX_VERSION || b.readUInt8(AT_IS_INIT) !== 1) {
       return undefined;
     }
     const mxFrame = u32(b, AT_MX_FRAME);
     const nBackfill = u32(b, AT_N_BACKFILL);
+    // An empty WAL (a database closed cleanly and opened again, before its first write) has an
+    // initialised header whose page size is not set yet: nothing waits (tl on #393).
+    const empty = mxFrame === 0 && u16(b, AT_PAGE_SIZE) === 0;
+    if (!empty && u16(b, AT_PAGE_SIZE) !== expectedPageSize) return undefined;
     if (mxFrame < nBackfill) continue;
     return { mxFrame, nBackfill };
   }
@@ -147,15 +150,31 @@ function run(data: CheckpointWorkerData, port: NonNullable<typeof parentPort>): 
         log: number;
         checkpointed: number;
       }[];
-      heldBack = (result?.checkpointed ?? 0) < (result?.log ?? 0);
-      tell({
-        type: 'checkpoint',
-        reason,
-        startedAt,
-        log: result?.log ?? 0,
-        checkpointed: result?.checkpointed ?? 0,
-        ms: performance.now() - started,
-      });
+      const log = result?.log ?? -1;
+      const checkpointed = result?.checkpointed ?? -1;
+      if (log < 0) {
+        // Another connection held the checkpoint lock (the backstop, or a backup's own): this
+        // did nothing, so it is not reported as a checkpoint, and it is tried again later.
+        heldBack = true;
+      } else {
+        heldBack = checkpointed < log;
+        // A checkpoint that copied everything leaves no frame waiting: the age bound starts
+        // again with the next frame written, or a steady writer would find something waiting on
+        // every poll and the bound, once passed, would checkpoint on every poll (tl on #393).
+        if (!heldBack) waitingSince = undefined;
+        tell({
+          type: 'checkpoint',
+          reason,
+          startedAt,
+          log,
+          checkpointed,
+          ms: performance.now() - started,
+        });
+        // Look again at once: a burst may have written another threshold's worth meanwhile, and
+        // the less the worker lags, the less a backstop firing has to copy (tl on #393).
+        timer = setTimeout(tick, 0);
+        return;
+      }
     }
     timer = setTimeout(tick, data.pollMs);
   };

@@ -5,7 +5,7 @@
 // reason, the main connection goes back to its default.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { endianness, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
@@ -115,6 +115,57 @@ describe.runIf(sqliteOnly)('the wal-index header the worker reads (#383)', () =>
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  /** A -shm file whose two header copies hold these fields, and nBackfill after them. */
+  function shm(fields: {
+    version: number;
+    isInit: number;
+    szPage: number;
+    mxFrame: number;
+    nBackfill: number;
+  }) {
+    const b = Buffer.alloc(100);
+    const little = endianness() === 'LE';
+    const header = Buffer.alloc(48);
+    if (little) header.writeUInt32LE(fields.version, 0);
+    else header.writeUInt32BE(fields.version, 0);
+    header.writeUInt8(fields.isInit, 12);
+    if (little) header.writeUInt16LE(fields.szPage, 14);
+    else header.writeUInt16BE(fields.szPage, 14);
+    if (little) header.writeUInt32LE(fields.mxFrame, 16);
+    else header.writeUInt32BE(fields.mxFrame, 16);
+    header.copy(b, 0);
+    header.copy(b, 48);
+    if (little) b.writeUInt32LE(fields.nBackfill, 96);
+    else b.writeUInt32BE(fields.nBackfill, 96);
+    return b;
+  }
+
+  it('reads a header it recognises, an empty WAL as nothing waiting, and refuses the rest', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'opportun-383-'));
+    try {
+      const at = join(dir, 'x.db-shm');
+      const read = (fields: Parameters<typeof shm>[0]) => {
+        writeFileSync(at, shm(fields));
+        return readWalIndex(at, 4_096);
+      };
+      const ok = { version: 3007000, isInit: 1, szPage: 4_096, mxFrame: 5, nBackfill: 2 };
+      expect(read(ok)).toEqual({ mxFrame: 5, nBackfill: 2 });
+      // A database closed cleanly and opened again: an initialised header for an empty WAL,
+      // whose page size is not set until the first frame (tl on #393).
+      expect(read({ ...ok, szPage: 0, mxFrame: 0, nBackfill: 0 })).toEqual({
+        mxFrame: 0,
+        nBackfill: 0,
+      });
+      expect(read({ ...ok, version: 3007001 })).toBeUndefined();
+      expect(read({ ...ok, isInit: 0 })).toBeUndefined();
+      expect(read({ ...ok, szPage: 8_192 })).toBeUndefined();
+      expect(read({ ...ok, szPage: 0 })).toBeUndefined();
+      expect(read({ ...ok, mxFrame: 1, nBackfill: 2 })).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
@@ -170,6 +221,77 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
     }
   });
 
+  it('starts on an existing database closed cleanly, whose WAL is empty until the first write', async () => {
+    const opened = await openTestDb({
+      backgroundCheckpoint: true,
+      checkpointerTuning: { pollMs: 20 },
+    });
+    try {
+      // The fresh database's migrations wrote frames; a clean close empties the WAL.
+      const h = (await opened.reopen()) as SqliteHandle;
+      await h.checkpointer!.ready;
+      const outcome = await Promise.race([
+        h.checkpointer!.stopped.then(() => 'stopped'),
+        new Promise((r) => setTimeout(() => r('running'), 300)),
+      ]);
+      expect(outcome).toBe('running');
+      expect(autocheckpoint(h)).toBe(10_000);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('the age bound runs from the oldest frame not yet copied: steady writes do not checkpoint on every poll', async () => {
+    const opened = await openTestDb({
+      backgroundCheckpoint: true,
+      // The size threshold out of reach, so every checkpoint here is the age bound's.
+      checkpointerTuning: { maxPages: 1_000_000, maxWaitMs: 300, pollMs: 20 },
+    });
+    try {
+      const h = opened.handle as SqliteHandle;
+      await h.checkpointer!.ready;
+      await rawRun(h.db, sql`CREATE TABLE IF NOT EXISTS bench_383 (v TEXT)`);
+      const started = Date.now();
+      // Small writes back to back, one per turn of the loop, for five age bounds: a frame is
+      // waiting at every look the worker takes, the one straight after a checkpoint included.
+      while (Date.now() - started < 1_500) {
+        await rawRun(h.db, sql`INSERT INTO bench_383 (v) VALUES ('x')`);
+        await new Promise((r) => setImmediate(r));
+      }
+      // About one checkpoint per age bound; not one per poll (about 60).
+      expect(h.checkpointer!.checkpoints).toBeGreaterThanOrEqual(3);
+      expect(h.checkpointer!.checkpoints).toBeLessThanOrEqual(8);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('a checkpoint a reader holds back is retried after a delay, not on every poll', async () => {
+    const opened = await openTestDb({
+      backgroundCheckpoint: true,
+      checkpointerTuning: { maxPages: 50, pollMs: 20 },
+    });
+    const h = opened.handle as SqliteHandle;
+    // A reader with a snapshot from before the writes: no checkpoint can copy past it.
+    const reader = new Database(join(opened.dataDir, 'opportun.db'), { readonly: true });
+    try {
+      await h.checkpointer!.ready;
+      await write(h, 1);
+      reader.exec('BEGIN');
+      reader.prepare('SELECT count(*) FROM bench_383').get();
+      const before = h.checkpointer!.checkpoints;
+      await write(h, 100);
+      await new Promise((r) => setTimeout(r, 800));
+      // Once held back, the next attempt waits a second: one or two, not one per poll (about 40).
+      expect(h.checkpointer!.checkpoints - before).toBeGreaterThanOrEqual(1);
+      expect(h.checkpointer!.checkpoints - before).toBeLessThanOrEqual(2);
+    } finally {
+      if (reader.inTransaction) reader.exec('COMMIT');
+      reader.close();
+      await opened.close();
+    }
+  });
+
   it('under the size threshold and its time bound, nothing is checkpointed', async () => {
     const opened = await openTestDb({
       backgroundCheckpoint: true,
@@ -177,6 +299,8 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
     });
     try {
       const h = opened.handle as SqliteHandle;
+      // Running, not merely not started yet.
+      await h.checkpointer!.ready;
       await write(h, 20);
       await new Promise((r) => setTimeout(r, 400));
       expect(h.checkpointer!.checkpoints).toBe(0);
