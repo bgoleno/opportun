@@ -4,7 +4,7 @@ import { MockLanguageModelV4 } from 'ai/test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { resolvePolicy, DEFAULT_POLICIES } from './policies';
-import { estimateCostUsd, FALLBACK_PRICE } from './pricing';
+import { estimateCost, estimateCostUsd, FALLBACK_PRICE } from './pricing';
 import { createLanguageModel } from './providers';
 import { runStructured, streamChat } from './router';
 import {
@@ -428,5 +428,89 @@ describe('streamChat', () => {
     ).rejects.toMatchObject({ reason: 'budget_exceeded' });
     expect(h.model.doStreamCalls).toHaveLength(0);
     expect(h.runs).toEqual([expect.objectContaining({ error: 'budget_exceeded' })]);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/356: the fixed part of a prompt is marked for the
+// provider's cache when it pays: Anthropic only, and only at or above the model's minimum.
+describe('prompt caching (#356)', () => {
+  // Over 2,048 characters, so over 512 tokens even at 4 characters a token.
+  const longPrefix = 'Fixed instructions and a table. '.repeat(80);
+  const split = { prefix: longPrefix, rest: '<untrusted>\nper-call\n</untrusted>' };
+
+  function systemMessages(model: MockLanguageModelV4) {
+    const prompt = model.doGenerateCalls[0]!.prompt;
+    return prompt.filter((m) => m.role === 'system');
+  }
+
+  it('marks the prefix for an Anthropic model when it reaches the minimum', async () => {
+    const h = harness();
+    await runStructured(h.deps, 'discovery.company_tags', { ...call, system: split });
+    const sys = systemMessages(h.model);
+    expect(sys).toHaveLength(2);
+    expect(sys[0]).toMatchObject({
+      content: longPrefix,
+      providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+    });
+    expect(sys[1]?.content).toBe(split.rest);
+    expect(sys[1]?.providerOptions?.anthropic).toBeUndefined();
+  });
+
+  it('sends the prompt whole and unmarked when the prefix is below the minimum', async () => {
+    const h = harness();
+    await runStructured(h.deps, 'discovery.company_tags', {
+      ...call,
+      system: { prefix: 'Short.\n', rest: 'rest' },
+    });
+    const sys = systemMessages(h.model);
+    expect(sys).toHaveLength(1);
+    expect(sys[0]?.content).toBe('Short.\nrest');
+    expect(sys[0]?.providerOptions?.anthropic).toBeUndefined();
+  });
+
+  it.each([
+    ['openai', { provider: 'openai', model: 'gpt-5', maxOutputTokens: 2000 }],
+    [
+      'openai_compatible',
+      {
+        provider: 'openai_compatible',
+        model: 'local-model',
+        maxOutputTokens: 2000,
+        baseUrl: 'https://llm.example.com/v1',
+      },
+    ],
+    [
+      'an unknown Anthropic model',
+      { provider: 'anthropic', model: 'claude-unknown-9', maxOutputTokens: 2000 },
+    ],
+  ] as const)('sends the prompt whole and unmarked for %s', async (_name, policy) => {
+    const h = harness({ overrides: { 'discovery.company_tags': policy as ModelPolicy } });
+    await runStructured(h.deps, 'discovery.company_tags', { ...call, system: split });
+    const sys = systemMessages(h.model);
+    expect(sys).toHaveLength(1);
+    expect(sys[0]?.content).toBe(split.prefix + split.rest);
+    expect(sys[0]?.providerOptions).toBeUndefined();
+  });
+
+  it('prices the cache tokens the provider reports at their own rates', async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: {
+        ...result('{"score":1}'),
+        usage: {
+          inputTokens: { total: 1000, noCache: 100, cacheRead: 600, cacheWrite: 300 },
+          outputTokens: { total: 50, text: 50, reasoning: 0 },
+        },
+      },
+    });
+    const h = harness({ model });
+    await runStructured(h.deps, 'discovery.company_tags', { ...call, system: split });
+    const run = h.runs[0]!;
+    expect(run.inputTokens).toBe(1000);
+    const expected = estimateCost(run.provider, run.model, 1000, 50, undefined, {
+      readTokens: 600,
+      writeTokens: 300,
+    }).usd;
+    expect(run.estCostUsd).toBeCloseTo(expected, 12);
+    expect(run.estCostUsd).toBeLessThan(estimateCostUsd(run.provider, run.model, 1000, 50));
   });
 });
