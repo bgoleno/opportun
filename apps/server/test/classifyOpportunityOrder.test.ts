@@ -47,6 +47,38 @@ describe('openOpportunitiesText: a stable order (#380)', () => {
     expect(await openOpportunitiesText(app.db, ctxOf(a))).toBe(before);
   });
 
+  it('orders opportunities created at the same time by id, whichever was updated last', async () => {
+    const { app, a } = await boot();
+    const ids: string[] = [];
+    for (const company of ['Initech', 'Globex']) {
+      const o = await createOpportunity(app.db, ctxOf(a), {
+        companyName: company,
+        title: 'Engineer',
+        sourceKind: 'manual',
+      });
+      ids.push(o.id);
+    }
+    const [first, second] = [...ids].sort();
+    const now = Date.now();
+    const set = async (id: string, updatedAt: number) =>
+      app.db
+        .update(opportunities)
+        .set({ createdAt: now, updatedAt })
+        .where(eq(opportunities.id, id))
+        .run();
+    const companyOf = (id: string) => (id === ids[0] ? '- Initech' : '- Globex');
+    const companies = async () =>
+      (await openOpportunitiesText(app.db, ctxOf(a))).split('\n').map((l) => l.split(' | ')[0]);
+    // The lower id updated last, then the higher: the query reads them in the opposite order
+    // each time, and the text stays the same, the lower id first.
+    await set(first!, now + 2);
+    await set(second!, now + 1);
+    const before = await openOpportunitiesText(app.db, ctxOf(a));
+    expect(await companies()).toEqual([companyOf(first!), companyOf(second!)]);
+    await set(second!, now + 3);
+    expect(await openOpportunitiesText(app.db, ctxOf(a))).toBe(before);
+  });
+
   it('keeps the same set: the most recently updated, up to the cap', async () => {
     const { app, a } = await boot();
     const ids: string[] = [];
