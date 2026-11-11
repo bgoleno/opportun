@@ -8,7 +8,7 @@ import type {
   OpportunityStage,
   OutreachKind,
 } from '@opportun/core';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { RejectPayload } from './RejectForm';
 import { qk, type OpportunityView, type Page } from '@/lib/opportunities';
@@ -159,13 +159,22 @@ export function useBulkTriage() {
   });
 }
 
-export function useOpportunityCommunications(opportunityId: string) {
+/**
+ * An opportunity's linked messages in `order` (#394). The server applies its 200 cap after
+ * ordering, so a long thread asked for newest first is its newest messages. While the other
+ * order loads, the page already held stays on screen (the tab re-sorts it at once).
+ */
+export function useOpportunityCommunications(
+  opportunityId: string,
+  order: 'newest' | 'oldest' = 'newest',
+) {
   return useQuery({
-    queryKey: ck.opportunity(opportunityId),
+    queryKey: [...ck.opportunity(opportunityId), order] as const,
     queryFn: () =>
       api<Page<CommunicationView>>(
-        `/communications?view=all&opportunityId=${enc(opportunityId)}&limit=200`,
+        `/communications?view=all&opportunityId=${enc(opportunityId)}&order=${order}&limit=200`,
       ),
+    placeholderData: keepPreviousData,
   });
 }
 

@@ -13,6 +13,7 @@
 // `https://<tenant>.<dc>.myworkdayjobs.com[/<locale>]/<site>/job/<location>/<title>_<reqId>[/apply]`.
 // Requisition ids are not all digits (`1000001`, `1000002-1`, `JR-000001`): the id is whatever
 // follows the last underscore. Reading one needs no network at all.
+import { greenhouseBoardJobUrl, greenhouseJidOf } from '@opportun/core';
 import { boardFromUrl, type AtsBoard, type AtsKind } from '../jobs/atsDetect';
 
 export interface AtsJobRef {
@@ -29,6 +30,14 @@ export interface AtsJobRef {
   externalId: string;
   /** The link the reference came from, with HTML escaping undone. */
   url: string;
+  /**
+   * #398: set on an identity proven for a `gh_jid` link on a company's own page. Greenhouse's
+   * API confirmed board `org` holds job `externalId`, and `url` is then that board's page for
+   * it (greenhouseBoardJobUrl), never the company's link.
+   */
+  verifiedVia?: 'gh_jid';
+  /** When that confirmation was made. */
+  verifiedAt?: number;
 }
 
 /** Default number of references read from one text. */
@@ -168,4 +177,71 @@ export function postingAtsJobRef(postingUrl: string | null | undefined): AtsJobR
   const ref = extractAtsJobRefs(postingUrl, 1)[0];
   if (ref === undefined) return null;
   return { ...ref, org: board.slug };
+}
+
+/**
+ * The identity a posting URL keeps, for the writers that ask nobody (#398 criterion 3: confirm,
+ * the backfill, and every writer when no board read or Greenhouse check applies):
+ * - a board-host URL gives its identity, as postingAtsJobRef;
+ * - a link with a numeric `gh_jid` keeps `current` only while it is a verified `gh_jid` identity
+ *   for that same job id, so a page of the company naming another job drops it;
+ * - anything else gives none.
+ * It never makes an identity up: only a board read (boardReadAtsJobRef) or Greenhouse's API
+ * (lib/greenhouseEmbed) can.
+ */
+export function postingAtsJobRefKeeping(
+  postingUrl: string | null | undefined,
+  current: AtsJobRef | null | undefined,
+): AtsJobRef | null {
+  if (postingUrl == null) return null;
+  if (boardFromUrl(postingUrl) !== null) return postingAtsJobRef(postingUrl);
+  const jid = greenhouseJidOf(postingUrl);
+  if (jid === null || current == null) return null;
+  return current.kind === 'ats_greenhouse' &&
+    current.verifiedVia === 'gh_jid' &&
+    current.externalId === jid
+    ? current
+    : null;
+}
+
+/**
+ * The identity of a posting that came out of a board read just made (tl on #398): reconcile, and
+ * Find posting attaching a posting it read. An embedded Greenhouse board's API gives each posting
+ * the company's careers link as its URL, so the read itself is the proof criterion 1 asks for:
+ * - the token is the board that was read (`read.org`), never anything in the link (its `board=`
+ *   parameter can name another board, #140);
+ * - the id is the posting's own id in the API's answer, and it counts only when the link's
+ *   numeric `gh_jid` is that id.
+ * A board-host link gives its identity as postingAtsJobRef. Nothing else gives one here.
+ */
+export function boardReadAtsJobRef(
+  posting: { postingUrl?: string | null; externalId?: string | null },
+  read: { kind: string; org: string },
+  at: number,
+): AtsJobRef | null {
+  const link = posting.postingUrl;
+  if (link == null) return null;
+  if (boardFromUrl(link) !== null) return postingAtsJobRef(link);
+  if (read.kind !== 'ats_greenhouse' || posting.externalId == null) return null;
+  const jid = greenhouseJidOf(link);
+  if (jid === null || jid !== posting.externalId) return null;
+  return verifiedGreenhouseRef(read.org, jid, at);
+}
+
+/** The identity recorded for a proven embedded job (#398 criteria 1 and 2). */
+export function verifiedGreenhouseRef(token: string, jid: string, at: number): AtsJobRef | null {
+  let url: string;
+  try {
+    url = greenhouseBoardJobUrl(token, jid);
+  } catch {
+    return null;
+  }
+  return {
+    kind: 'ats_greenhouse',
+    org: token,
+    externalId: jid,
+    url,
+    verifiedVia: 'gh_jid',
+    verifiedAt: at,
+  };
 }

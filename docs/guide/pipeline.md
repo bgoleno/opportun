@@ -182,7 +182,9 @@ label; where the form has a list, it leaves it for you and says "choose it on th
 ### Communications
 
 Every message linked to this opportunity, with the same actions as the inbox (open, change
-link, reclassify, accept a suggested stage). See [Inbox](inbox.md).
+link, reclassify, accept a suggested stage). See [Inbox](inbox.md). The newest message is at the
+top; **Newest** at the top right switches to oldest first and back. Each time you open the
+opportunity it starts newest first again.
 
 ### Referrals
 
