@@ -415,6 +415,37 @@ describe('an automatic unsubscribe request from the account itself (#392)', () =
     expect(v.matchedRule).toBe('own_address');
   });
 
+  // A wrong filter here loses the message's subject from storage, so the two guards that keep
+  // the user's own mail passing are pinned (tl's review of #396).
+  it.each([
+    [['undisclosed-recipients:;']], // mail sent with Bcc recipients only
+    [['Jane Recruiter']], // a display name with no address
+    [['']],
+    [['unsubscribe@news.example', 'undisclosed-recipients:;']],
+  ])('a recipient with no single address counts as a person, so %j passes', (recipients) => {
+    const v = message({
+      address: 'me@mine.example',
+      recipients,
+      subject: 'Following up',
+      body: 'Checking in on the role.',
+    });
+    expect(v).toMatchObject({ decision: 'pass', matchedRule: 'own_address' });
+  });
+
+  it.each([
+    'unsubscribe.help@vendor.example',
+    'unsubscribed@list.example',
+    'jane.unsubscribe@acme.example',
+  ])('"unsubscribe" inside a longer local part (%s) is not an unsubscribe address', (to) => {
+    const v = message({
+      address: 'me@mine.example',
+      recipients: [to],
+      subject: 'Question about my account',
+      body: 'Hello, a question about the role.',
+    });
+    expect(v).toMatchObject({ decision: 'pass', matchedRule: 'own_address' });
+  });
+
   it('someone else writing to an unsubscribe address goes through the ordinary rules', () => {
     const v = message({
       address: 'someone@acme.example',
