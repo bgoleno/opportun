@@ -80,6 +80,13 @@ export function frameLines(stack: unknown): string[] {
 /** The keys every record may have, whatever its message: written by pino or by this gate. */
 const STRUCTURAL = new Set(['level', 'time', 'msg', 'trace_id', 'err']);
 
+/**
+ * Bindings a library puts on every record of a child logger, whatever the call site wrote:
+ * Fastify's request counter on `req.log`. Never kept and never a call site's mistake, so they are
+ * dropped without counting and without throwing under the test runner.
+ */
+const LIBRARY_BINDINGS = new Set(['reqId']);
+
 export type LogDropCounter = (signal: Signal, reason: DropReason) => void;
 
 /**
@@ -121,7 +128,7 @@ export function gateLogLine(line: string, dropped: LogDropCounter): string | und
 
   const rest: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(record)) {
-    if (STRUCTURAL.has(key) || key === 'event') continue;
+    if (STRUCTURAL.has(key) || key === 'event' || LIBRARY_BINDINGS.has(key)) continue;
     if (allowed === undefined) {
       // Not Opportun's own catalogued record (a library's): nothing of it is kept but its shape.
       dropped('logs', 'unknown_key');

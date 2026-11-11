@@ -7,7 +7,7 @@
 // Each slice appends its own entries (14.12). The base holds the instance metrics of 14.4 and
 // the `error` event. It has no Gen AI entries: FR-T4 part 2 adds them, importing the names
 // from @opportun/ai.
-import { ATS_REF_KINDS, DISCOVERY_SOURCE_KINDS } from '@opportun/core';
+import { ATS_REF_KINDS, COMM_CHANNELS, DISCOVERY_SOURCE_KINDS } from '@opportun/core';
 import { getTableName } from 'drizzle-orm';
 import * as schema from '../db/schema';
 import { registeredJobKinds } from '../jobs/registry';
@@ -183,6 +183,12 @@ export const ATTRIBUTES = {
   'opportun.count.deferred': int,
   'opportun.count.skipped': int,
   'opportun.count.truncated': int,
+  'opportun.count.read': int,
+  'opportun.count.set': int,
+  'opportun.count.changed': int,
+  'opportun.count.cleared': int,
+  'opportun.mail.channel': { kind: 'enum', values: COMM_CHANNELS },
+  'opportun.db.awaited_outside': { kind: 'bool' },
   'opportun.communication.id': { kind: 'id' },
   'opportun.company.id': { kind: 'id' },
   'opportun.source.id': { kind: 'id' },
@@ -341,6 +347,10 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.db.filesystem',
   ],
   'database write gate held too long': ['opportun.db.gate_label', 'opportun.db.gate_held_ms'],
+  'slow transaction held the database write gate': [
+    'opportun.db.gate_held_ms',
+    'opportun.db.awaited_outside',
+  ],
   // Jobs, health, requests
   'job runner': [],
   'healthz database check failed': [],
@@ -369,6 +379,20 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'lead resolution lookup failed': ['opportun.source.id'],
   'workday capture retry failed': ['opportun.discovery_result.id'],
   'posting reconciliation failed': ['opportun.opportunity.id'],
+  'ats job ref backfill': [
+    'opportun.count.read',
+    'opportun.count.set',
+    'opportun.count.changed',
+    'opportun.count.cleared',
+  ],
+  'ranking a waiting posting failed': ['opportun.discovery_result.id'],
+  'could not read the message again; classifying on the snippet': [
+    'opportun.communication.id',
+    'opportun.mail.channel',
+  ],
+  'classified from the snippet only; the full message text was not available': [
+    'opportun.communication.id',
+  ],
   // AI
   'opportunity dedupe AI unavailable': ['opportun.dedupe_candidate.id', 'error.type'],
   'opportunity dedupe AI returned an unrecognized ref': ['opportun.dedupe_candidate.id'],

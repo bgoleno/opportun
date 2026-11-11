@@ -7,6 +7,13 @@
 // context waits until the gate is free. The holder is identified through AsyncLocalStorage,
 // so statements issued by the transaction body (however deeply nested) pass straight through.
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { Logger } from 'pino';
+import { createLogger } from '../obs/log';
+
+/** The default reporters' logger, for a process with no app to configure them (a CLI). */
+let defaultLogger: Logger | undefined;
+const gateLogger = (): Logger =>
+  (defaultLogger ??= createLogger({ level: process.env.LOG_LEVEL ?? 'info' }));
 
 export type Release = () => void;
 
@@ -105,8 +112,14 @@ export interface SlowTransaction {
 }
 
 let slowReporter: (slow: SlowTransaction) => void = (slow) => {
-  console.warn(
-    `slow transaction: held the database write gate for ${slow.durationMs} ms${slow.awaitedOutside ? ' while awaiting something outside the database' : ''} (budget ${SLOW_TRANSACTION_MS} ms)\n${slow.stack}`,
+  // Through the gated logger (obs/log.ts): the stack as frame lines only, and fixed text.
+  gateLogger().warn(
+    {
+      'opportun.db.gate_held_ms': Math.round(slow.durationMs),
+      'opportun.db.awaited_outside': slow.awaitedOutside,
+      err: { type: 'SlowTransaction', stack: slow.stack },
+    },
+    'slow transaction held the database write gate',
   );
 };
 
@@ -130,8 +143,9 @@ export interface GateHeld {
 
 let watchdogMs = GATE_WATCHDOG_MS;
 let watchdogReport: (held: GateHeld) => void = (held) => {
-  console.warn(
-    `database write gate held for ${held.heldMs} ms by ${held.label}: every other request is waiting`,
+  gateLogger().warn(
+    { 'opportun.db.gate_label': held.label, 'opportun.db.gate_held_ms': Math.round(held.heldMs) },
+    'database write gate held too long',
   );
 };
 

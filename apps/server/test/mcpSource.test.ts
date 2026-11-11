@@ -130,7 +130,8 @@ describe('MCP source over stdio (fake server)', () => {
       },
     ]);
     expect(log.info).toHaveBeenCalledWith(
-      expect.objectContaining({ skipped: 1, tool: 'search_jobs' }),
+      // Counts only: the tool's name is the user's configuration, not logged (#345).
+      expect.objectContaining({ 'opportun.count.skipped': 1 }),
       'MCP items skipped',
     );
   });

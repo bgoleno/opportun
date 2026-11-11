@@ -326,7 +326,7 @@ describe('google connection', () => {
 
     const [meta, msg] = errorSpy.mock.calls[0]!;
     expect(msg).toBe('failed to persist a refreshed Google token');
-    expect(meta).toMatchObject({ userId: a.userId });
+    expect(meta).toMatchObject({ 'user.id': a.userId });
     expect(String((meta as { err: unknown }).err)).toContain('boom');
     // The write really did not land: it is a lost write that got logged, not a cosmetic one.
     expect((await readTokens(app.db, ctx))?.accessToken).not.toBe('ya29.lost-write');
