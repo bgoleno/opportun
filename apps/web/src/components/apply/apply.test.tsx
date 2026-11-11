@@ -12,6 +12,7 @@ import { parseApplySearch } from '@/routes/opportunities.$id_.apply';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { ApplyPage } from './ApplyPage';
 import { clockTime, type SubmissionView } from './api';
+import { flowSentence, resumeFlowState } from '@/components/resume/resumeFlow';
 import { ApplyPanel, appliedAttempt } from './ApplyPanel';
 
 const NOW = Date.now();
@@ -197,7 +198,7 @@ describe('S1: the panel', () => {
     const button = await screen.findByRole('button', { name: 'Apply on Greenhouse' });
     expect(button).not.toBeDisabled();
     expect(button).toHaveAttribute('aria-disabled', 'true');
-    expect(button).toHaveAccessibleDescription('Attach a final resume first.');
+    expect(button).toHaveAccessibleDescription('Add a base resume to start.');
   });
 
   it('shows an attempt in progress with its status in words', async () => {
@@ -300,21 +301,21 @@ describe('#395: a refused Apply button says why, and never swallows a click', ()
       'Apply on Greenhouse',
       "This opportunity's posting needs review. Confirm it on the Details tab first.",
     ],
-    ['no final resume', {}, [], 'Apply on Greenhouse', 'Attach a final resume first.'],
+    ['no resume at all', {}, [], 'Apply on Greenhouse', 'Add a base resume to start.'],
     // Brian's third case on #395: a resume is attached, but not Final. Say so, and how to fix it.
     [
       'an attached resume In review',
       { stage: 'interested' },
       [TAILORED_IN_REVIEW],
       'Apply on Greenhouse',
-      'The resume attached here ("Acme tailored") is In review. Open it from the Resume tab and set its Status to Final.',
+      '"Acme tailored" is still In review. Mark it as final to apply.',
     ],
     [
       'an attached resume in Draft',
       { stage: 'interested' },
       [{ ...TAILORED_IN_REVIEW, status: 'draft' }],
       'Apply on Greenhouse',
-      'The resume attached here ("Acme tailored") is Draft. Open it from the Resume tab and set its Status to Final.',
+      '"Acme tailored" is still a Draft. Tailor it, then mark it as final to apply.',
     ],
     // Brian's second case on #395: Interested, nothing attached.
     [
@@ -322,7 +323,15 @@ describe('#395: a refused Apply button says why, and never swallows a click', ()
       { stage: 'interested' },
       [],
       'Apply on Greenhouse',
-      'Attach a final resume first.',
+      'Add a base resume to start.',
+    ],
+    // #428: a base that is not Final yet, and nothing for this opportunity: state B.
+    [
+      'a base resume not yet Final',
+      { stage: 'interested' },
+      [{ ...RESUME, status: 'in_review' }],
+      'Apply on Greenhouse',
+      'Choose the resume to start from.',
     ],
   ] as const)(
     'refused for %s: the reason is visible next to the button and describes it',
@@ -344,6 +353,62 @@ describe('#395: a refused Apply button says why, and never swallows a click', ()
 
 // https://github.com/bgoleno/opportun/issues/404 (tl's decision 1): once the user has applied, the
 // panel leads with the outcome, and applying again is a quiet link under one line of why.
+// https://github.com/bgoleno/opportun/issues/428: the panel's resume reason is the resume flow's
+// own state, with a link to the Resume tab (?tab=resume).
+describe('#428: the resume reason comes from the resume flow', () => {
+  function renderWith(resumes: unknown[], opp: Partial<OpportunityView> = {}) {
+    mockApi({
+      'GET /resumes': { items: resumes, total: resumes.length },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+    });
+    renderWithProviders(<ApplyPanel opp={{ ...OPP, ...opp } as OpportunityView} />);
+  }
+
+  it('a resume reason links to the Resume tab', async () => {
+    renderWith([
+      {
+        ...RESUME,
+        id: 'r-2',
+        kind: 'tailored',
+        opportunityId: 'opp-1',
+        title: 'Acme tailored',
+        status: 'in_review',
+      },
+    ]);
+    const link = await screen.findByRole('link', { name: 'Open the Resume tab' });
+    expect(link).toHaveAttribute('href', '/opportunities/opp-1?tab=resume');
+  });
+
+  it('a reason that is not about the resume has no such link', async () => {
+    renderWith([RESUME], { stage: 'in_process' });
+    await screen.findByRole('button', { name: 'Apply on Greenhouse' });
+    expect(screen.queryByRole('link', { name: 'Open the Resume tab' })).toBeNull();
+  });
+
+  it('says the same as resumeFlowState for the same data', async () => {
+    const draft = {
+      ...RESUME,
+      id: 'r-2',
+      kind: 'tailored',
+      opportunityId: 'opp-1',
+      title: 'Acme tailored',
+      status: 'draft',
+    };
+    const expected = flowSentence(
+      resumeFlowState({
+        opportunityId: 'opp-1',
+        resumes: [draft as never],
+        sends: [],
+        attempts: [],
+        applyBlocked: null,
+      }),
+    );
+    renderWith([draft]);
+    const button = await screen.findByRole('button', { name: 'Apply on Greenhouse' });
+    expect(button).toHaveAccessibleDescription(expected ?? '');
+  });
+});
+
 describe('#404: after applying, the panel leads with the outcome', () => {
   const DAY = 24 * 60 * MIN;
   const sentOn = NOW - 3 * DAY;

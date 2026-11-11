@@ -7,7 +7,8 @@
 import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { statusLabel, useResumes, type Resume } from '@/components/resume/api';
+import { useResumes, type Resume } from '@/components/resume/api';
+import { flowSentence, resumeFlowState } from '@/components/resume/resumeFlow';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -44,31 +45,48 @@ export function usableResumes(resumes: Resume[], opportunityId: string): Resume[
   );
 }
 
-/** Why an attempt cannot start, in the user's words, or null when it can. */
-function notEligible(opp: OpportunityView, resumes: Resume[]): string | null {
+/** Why an attempt cannot start: its words, and whether it is the resume that stands in the way. */
+interface Refusal {
+  text: string;
+  /** The resume flow's own reason (#428): the panel links to the Resume tab. */
+  resume?: true;
+}
+
+function notEligible(
+  opp: OpportunityView,
+  resumes: Resume[],
+  attempts: readonly SubmissionView[],
+): Refusal | null {
   if (opp.stage === 'closed' || opp.stage === 'dismissed') {
-    return `This opportunity is ${stageLabel(opp.stage)}. Reopen it to apply.`;
+    return { text: `This opportunity is ${stageLabel(opp.stage)}. Reopen it to apply.` };
   }
   if (!ELIGIBLE_STAGES.includes(opp.stage)) {
     // Name the stage it is at, so the reason says what to change (#395).
-    return `This opportunity is ${stageLabel(opp.stage)}. Applying is available at Interested, Preparing or Applied. Change its stage to apply.`;
+    return {
+      text: `This opportunity is ${stageLabel(opp.stage)}. Applying is available at Interested, Preparing or Applied. Change its stage to apply.`,
+    };
   }
   if (opp.atsJobRef === null || opp.atsJobRef === undefined) {
-    return "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.";
+    return {
+      text: "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.",
+    };
   }
   if (opp.postingState !== 'confirmed') {
-    return "This opportunity's posting needs review. Confirm it on the Details tab first.";
+    return {
+      text: "This opportunity's posting needs review. Confirm it on the Details tab first.",
+    };
   }
   if (usableResumes(resumes, opp.id).length === 0) {
-    // A resume made for this opportunity that is not Final yet: "attach one" would mislead, so
-    // say which one it is and what to change (#395).
-    const attached = resumes.find(
-      (r) => r.kind === 'tailored' && r.opportunityId === opp.id && r.archivedAt === null,
-    );
-    if (attached !== undefined) {
-      return `The resume attached here ("${attached.title}") is ${statusLabel(attached.status)}. Open it from the Resume tab and set its Status to Final.`;
-    }
-    return 'Attach a final resume first.';
+    // The resume flow's state says what to do, in its words (#428), so this panel and the Resume
+    // tab can never disagree about it.
+    const state = resumeFlowState({
+      opportunityId: opp.id,
+      resumes,
+      sends: [],
+      attempts,
+      applyBlocked: null,
+    });
+    return { text: flowSentence(state) ?? 'Attach a final resume first.', resume: true };
   }
   return null;
 }
@@ -111,11 +129,12 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
         attempt={outcome}
         opp={opp}
         // Offered only when the server would accept a new attempt, so it never leads to a refusal.
-        canApplyAgain={notEligible(opp, resumes.data?.items ?? []) === null}
+        canApplyAgain={notEligible(opp, resumes.data?.items ?? [], items) === null}
       />
     );
   } else {
-    const reason = notEligible(opp, resumes.data?.items ?? []);
+    const refusal = notEligible(opp, resumes.data?.items ?? [], items);
+    const reason = refusal?.text ?? null;
     const refusedLabel = opp.atsJobRef ? `Apply on ${ats}` : 'Apply on an ATS';
     body = (
       <div className="grid gap-3">
@@ -168,6 +187,16 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                 ? `${refusedLabel} is not available yet. ${reason}`
                 : reason}
             </p>
+            {refusal?.resume === true ? (
+              <Link
+                to="/opportunities/$id"
+                params={{ id: opp.id }}
+                search={{ tab: 'resume' }}
+                className="w-fit text-sm text-primary underline-offset-4 hover:underline"
+              >
+                Open the Resume tab
+              </Link>
+            ) : null}
           </>
         )}
       </div>
