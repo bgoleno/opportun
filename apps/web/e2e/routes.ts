@@ -24,7 +24,8 @@ export const USER_ROUTES = [
   '/settings/integrations',
   '/settings/mail-filters',
   '/settings/data',
+  '/settings/metrics',
 ] as const;
 
 /** The views only an administrator reaches. */
-export const ADMIN_ROUTES = ['/settings/users', '/settings/jobs'] as const;
+export const ADMIN_ROUTES = ['/settings/users', '/settings/jobs', '/settings/metrics'] as const;
