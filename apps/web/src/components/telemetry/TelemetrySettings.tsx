@@ -519,7 +519,7 @@ function ExportAdmin(props: {
         </p>
       )}
       <p className="text-sm text-muted-foreground">
-        Changing the type, scheme, host or port clears a stored credential.
+        Changing the type, scheme, host, port or header name clears a stored credential.
       </p>
       <div className="flex flex-wrap gap-3">
         <Button type="button" onClick={() => setAsking('save')}>
@@ -534,7 +534,7 @@ function ExportAdmin(props: {
           {testResult}
         </p>
       )}
-      <ExportStatusView admin={admin} />
+      <ExportStatusView admin={admin} enabled={props.view.enabled} />
       <PasswordDialog
         open={asking !== null}
         onOpenChange={(open) => {
@@ -560,10 +560,18 @@ function outcomeText(outcome: string, reason: string | undefined): string {
   return new Map(Object.entries(OUTCOME_TEXT)).get(outcome) ?? outcome;
 }
 
-function ExportStatusView({ admin }: { admin: NonNullable<ExportView['admin']> }) {
+function ExportStatusView({
+  admin,
+  enabled,
+}: {
+  admin: NonNullable<ExportView['admin']>;
+  /** Whether export is on: off, nothing is being sent, so nothing is blocked (qa on #385). */
+  enabled: boolean;
+}) {
   // Blocked now only if no send has succeeded since: the status keeps the last failure after a
   // success, so a destination fixed at runtime must not still read as blocked (tl on #385).
   const blockedNow =
+    enabled &&
     admin.lastFailure !== null &&
     admin.lastFailure.outcome === 'blocked' &&
     admin.lastFailure.at > (admin.lastSuccessAt ?? 0);

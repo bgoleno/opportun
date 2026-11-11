@@ -77,6 +77,23 @@ describe('nextExport: the change rules', () => {
     expect(r.ok && r.value.sealedCredential).toBe(seal(SECRET));
   });
 
+  it('a type change between two types without a header clears it too (sec on #385)', () => {
+    // Prometheus to InfluxDB: neither has a header name, so only the type check catches it.
+    const prom: Destination = {
+      type: 'prometheus',
+      scheme: 'https',
+      host: 'metrics.example.com',
+      port: 9090,
+    };
+    const prev = { enabled: true, destination: prom, sealedCredential: seal(SECRET) };
+    const r = nextExport(
+      prev,
+      { enabled: false, destination: { ...prom, type: 'influxdb' } },
+      seal,
+    );
+    expect(r.ok && r.value.sealedCredential).toBe(null);
+  });
+
   it('a new credential with a new endpoint is sealed for the new one', () => {
     const prev = { enabled: false, destination: otlp, sealedCredential: seal(SECRET) };
     const r = nextExport(

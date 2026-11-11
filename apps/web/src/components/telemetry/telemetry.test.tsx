@@ -226,6 +226,41 @@ describe('TelemetrySettings, as an admin', () => {
     expect(exp).not.toHaveTextContent(/nothing is sent/i);
   });
 
+  it('does not say export is blocked while export is off (qa on #385)', async () => {
+    mockApi({
+      'GET /obs/settings': { collect: true },
+      'GET /obs/export': {
+        ...ADMIN_OFF,
+        admin: {
+          ...ADMIN_OFF.admin,
+          destination: DEST,
+          allowPrivate: false,
+          lastFailure: {
+            outcome: 'blocked',
+            reason: 'private_not_allowed',
+            at: Date.now() - 30_000,
+          },
+        },
+      },
+    });
+    renderWithProviders(<TelemetrySettings isAdmin />);
+    const exp = await screen.findByRole('region', { name: 'Export' });
+    expect(await within(exp).findByText(/Last failure/)).toBeInTheDocument();
+    expect(within(exp).queryByRole('status', { name: /export is blocked/i })).toBeNull();
+  });
+
+  it('says a new header name clears a stored credential, as type, scheme, host and port do (qa on #385)', async () => {
+    mockApi({
+      'GET /obs/settings': { collect: true },
+      'GET /obs/export': { ...ADMIN_OFF, admin: { ...ADMIN_OFF.admin, destination: DEST } },
+    });
+    renderWithProviders(<TelemetrySettings isAdmin />);
+    const exp = await screen.findByRole('region', { name: 'Export' });
+    expect(
+      await within(exp).findByText(/scheme, host, port or header name clears a stored credential/),
+    ).toBeInTheDocument();
+  });
+
   it('Send a test says why a destination is blocked (#382)', async () => {
     mockApi({
       'GET /obs/settings': { collect: true },
