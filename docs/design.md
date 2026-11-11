@@ -289,9 +289,48 @@ discovered ──► interested ──► preparing ──► applied ──► 
      └─► dismissed ◄┴─────────────┴─────────────┴────────────┴───────────┴──► closed(rejected|withdrawn|ghosted)
 ```
 
-Transitions are validated in `packages/core`; every transition writes stage_history;
-dismissal from any stage requires no reason but accepts one (FR-O5). Reopening a
+Transitions are validated in `packages/core` (`stateMachine.ts`); every transition writes
+stage_history; dismissal from any stage requires no reason but accepts one (FR-O5). Reopening a
 dismissed/closed opportunity is allowed and recorded.
+
+The rule (#397):
+
+- **Any chain stage can move to any other chain stage in one move,** forward or back. The chain
+  is discovered, interested, preparing, applied, in_process, offer. A stage cannot move to
+  itself.
+- **Any stage can be dismissed or closed;** closing needs a reason.
+- **A dismissed or closed opportunity leaves only through Reopen** (the server refuses a move
+  out of one without `reopen`).
+
+Why any stage, not one step back or a fixed subset: a stage move writes only the stage, the
+card's place in its column and one history row, and nothing in the data depends on the order
+of stages. Forward moves of any length were always allowed, so a mis-click forward has to be
+as easy to correct.
+
+A move back is a recorded correction, not an undo. It changes nothing and deletes nothing
+tied to a later stage:
+
+- **Stage history and timeline:** one new entry (from, to, when), like any move. Earlier
+  entries stay.
+- **Assisted apply attempts** have their own states and do not follow the stage. A live
+  attempt (draft, reviewed, handed off) stays live and can be continued or cancelled. A
+  submitted attempt stays submitted, with its timeline entry and the resume's send record. The
+  attempts' own rules apply as they are: a new attempt starts only in Interested, Preparing or
+  Applied, and marking one submitted moves the stage to Applied only on the user's tick and only
+  from Interested or Preparing.
+- **Resume sends, linked messages, next steps and notes:** untouched.
+- **The card** goes to the end of the target column (#240).
+- **Counts of "ever reached a stage"** read from history still include the mistaken move.
+  Removing a history entry would be a separate feature.
+
+Mail proposals keep their own rule (`proposalFor`): a message proposes only a move forward or
+a close, so a backward move is always the user's own.
+
+A refused move says what is allowed instead. Out of closed or dismissed: "Use Reopen to move a
+closed opportunity back to Preparing." Any other refusal (a page showing a stale stage, or a
+rule added later), including a 422 `invalid_transition` from the server, whose `from` and `to`
+the web reads: "In process can move to New, Interested, Preparing, Applied, Offer, Dismissed or
+Closed.", from the same list the stage control offers.
 
 ## 5. AI subsystem
 

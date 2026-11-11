@@ -933,3 +933,65 @@ describe('an outcome closes the follow-up next step (#148)', () => {
     expect((await rowOf(app, d.id))?.status).toBe('unknown');
   });
 });
+
+// #397 (tl's ruling, https://github.com/bgoleno/opportun/issues/397#issuecomment-6793046358): a
+// stage move back is a recorded correction, not an undo. Attempts have their own states and do
+// not follow the stage; nothing tied to the later stage is changed or deleted.
+describe('a move back several stages changes nothing tied to the later stage (#397)', () => {
+  it('leaves a submitted attempt, a live attempt and the resume send as they were', async () => {
+    const { app, a } = await boot(ON);
+    // Submitted from Preparing with the tick: the stage goes to Applied, and the send is kept.
+    const d = await handedOff(app, a, 'preparing');
+    expect((await attest(a, d.id, { moveToApplied: true })).statusCode).toBe(200);
+    expect(await stageOf(app, d.oppId)).toBe('applied');
+    // A second attempt at the same posting, still a draft: live.
+    const created = await api(a, 'POST', `/opportunities/${d.oppId}/submissions`, {
+      idempotencyKey: crypto.randomUUID(),
+      resumeId: d.resumeId,
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const liveId = created.json<SubmissionJson>().id;
+    await app.jobs.drain();
+    const toInProcess = await api(a, 'POST', `/opportunities/${d.oppId}/stage`, {
+      to: 'in_process',
+    });
+    expect(toInProcess.statusCode, toInProcess.body).toBe(200);
+
+    const submitted = await rowOf(app, d.id);
+    const live = await rowOf(app, liveId);
+    const sends = await sendsOf(app, d.resumeId);
+    const before = await countsFor(app, d.oppId);
+    expect(submitted?.status).toBe('submitted');
+    expect(live?.status).toBe('draft');
+    expect(sends).toHaveLength(1);
+
+    const back = await api(a, 'POST', `/opportunities/${d.oppId}/stage`, { to: 'preparing' });
+    expect(back.statusCode, back.body).toBe(200);
+    expect(back.json()).toMatchObject({ stage: 'preparing' });
+
+    expect(await rowOf(app, d.id)).toEqual(submitted);
+    expect(await rowOf(app, liveId)).toEqual(live);
+    expect(await sendsOf(app, d.resumeId)).toEqual(sends);
+    // Exactly one new history row, and nothing else on the opportunity changes.
+    expect(await countsFor(app, d.oppId)).toEqual({
+      ...before,
+      stageChanges: before.stageChanges + 1,
+    });
+    const history = await app.db
+      .select()
+      .from(stageHistory)
+      .where(eq(stageHistory.opportunityId, d.oppId))
+      .all();
+    const last = history.reduce((x, y) => (y.at > x.at || (y.at === x.at && y.id > x.id) ? y : x));
+    expect(last).toMatchObject({ fromStage: 'in_process', toStage: 'preparing' });
+
+    // The live attempt can still be continued from the earlier stage.
+    const review2 = await api(a, 'GET', `/submissions/${liveId}`);
+    expect(review2.statusCode, review2.body).toBe(200);
+    const res = await review(a, liveId, review2.json<SubmissionJson>().reviewDigest, {
+      reapplyReason: 'Applying again after correcting the stage.',
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ status: 'reviewed', reapplyOf: d.id });
+  });
+});
