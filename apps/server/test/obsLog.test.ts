@@ -5,7 +5,7 @@
 // gate sees is what pino writes: a child's bindings, the error serializer's output, the message.
 import { afterEach, describe, expect, it } from 'vitest';
 import { setUnknownKeyMode, UnknownTelemetryKeyError } from '../src/obs/gate';
-import { createLogger, frameLines, gatedDestination, WITHHELD } from '../src/obs/log';
+import { createLogger, frameLines, gatedDestination, logRequest, WITHHELD } from '../src/obs/log';
 
 const NAME = 'Jane Doe';
 const EMAIL = 'jane.doe@example.com';
@@ -130,5 +130,44 @@ describe('frame lines (#345, 14.8)', () => {
         ].join('\n'),
       ),
     ).toEqual(['at handler']);
+  });
+});
+
+describe('the access log line (#345, 14.9)', () => {
+  it('says the method, the route template, the status, the route id and the address, nothing else', () => {
+    const c = capture();
+    logRequest(c.log, {
+      method: 'get',
+      route: '/api/v1/opportunities/:id',
+      statusCode: 200,
+      ip: '203.0.113.7',
+      params: { id: UUID, note: NAME },
+    });
+    expect(c.records()[0]).toEqual({
+      level: 30,
+      time: expect.any(Number),
+      msg: 'request completed',
+      'http.request.method': 'GET',
+      'http.route': '/api/v1/opportunities/:id',
+      'http.response.status_code': 200,
+      'client.address': '203.0.113.7',
+      'opportun.route.id': UUID,
+    });
+  });
+
+  it('writes no path: a request url given as the route is refused by its type', () => {
+    setUnknownKeyMode('drop');
+    const c = capture();
+    logRequest(c.log, {
+      method: 'GET',
+      route: `/api/v1/opportunities/${UUID}`,
+      statusCode: 404,
+      ip: undefined,
+      params: { id: EMAIL },
+    });
+    expect(c.records()[0]).not.toHaveProperty('http.route');
+    expect(c.records()[0]).not.toHaveProperty('opportun.route.id');
+    expect(c.text()).not.toContain(UUID);
+    expect(c.text()).not.toContain(EMAIL);
   });
 });

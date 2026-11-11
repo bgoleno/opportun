@@ -189,6 +189,8 @@ export const ATTRIBUTES = {
   'opportun.count.cleared': int,
   'opportun.mail.channel': { kind: 'enum', values: COMM_CHANNELS },
   'opportun.db.awaited_outside': { kind: 'bool' },
+  // The route's own id parameter (`:id`), a row id. Local only, like every user's row id (14.8).
+  'opportun.route.id': { kind: 'id' },
   'opportun.setting': { kind: 'enum', values: () => SETTING_NAMES },
   'opportun.discovery.run_outcome': { kind: 'enum', values: ['done', 'error'] },
   'opportun.count.fetched': int,
@@ -504,6 +506,14 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'healthz queue lag check failed': [],
   'healthz integrity read failed': [],
   'unhandled error': [],
+  // The access log (logRequest, obs/log.ts): local only, never exported (14.9).
+  'request completed': [
+    'http.request.method',
+    'http.route',
+    'http.response.status_code',
+    'client.address',
+    'opportun.route.id',
+  ],
   'session lookup failed': [],
   'rate limit onLimited hook failed': [],
   'no route for this asset; if the web build was rebuilt while the server was running, restart the server':

@@ -201,3 +201,42 @@ export function createLogger(opts: { level: string; stream?: LogLineSink }): Log
   const { stream, ...options } = loggerOptions(opts);
   return pino(options, stream);
 }
+
+/** What the access log line of one request may say (design 14.9). */
+export interface RequestLine {
+  method: string;
+  /** The route's template as registered (`/api/v1/opportunities/:id`), never the request's path. */
+  route: string | undefined;
+  statusCode: number;
+  /** The request's address: the log-only `client.address` (14.8), never stored or exported. */
+  ip: string | undefined;
+  /** The route's parameters: only an `id` that is a row id is written. */
+  params: unknown;
+}
+
+/** The minimal logger logRequest writes to: app.log, or a request's child of it. */
+export interface InfoLogger {
+  info(obj: Record<string, unknown>, msg: string): void;
+}
+
+/**
+ * Opportun's own access log line (design 14.9), written by the HTTP plugin when a request ends:
+ * the method, the route template, the status, the route's id and the request's address. Fastify's
+ * own request logging, which writes the raw URL, is off. The gate (above) checks every value.
+ */
+export function logRequest(log: InfoLogger, line: RequestLine): void {
+  const id =
+    typeof line.params === 'object' && line.params !== null
+      ? (line.params as { id?: unknown }).id
+      : undefined;
+  log.info(
+    {
+      'http.request.method': line.method.toUpperCase(),
+      'http.route': line.route ?? '_OTHER',
+      'http.response.status_code': line.statusCode,
+      ...(line.ip === undefined ? {} : { 'client.address': line.ip }),
+      ...(typeof id === 'string' ? { 'opportun.route.id': id } : {}),
+    },
+    'request completed',
+  );
+}
