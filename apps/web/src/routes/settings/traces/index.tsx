@@ -39,7 +39,11 @@ export const Route = createFileRoute('/settings/traces/')({
 
 function TracesRoute() {
   const { user } = Route.useRouteContext();
-  const filters = Route.useSearch();
+  // Parsed again: the router hands a route its own validated search merged over what its parent
+  // routes passed through unvalidated, so a value parseTraceSearch dropped (?status=failed) is
+  // still in useSearch(). Only the parsed filters reach the page and the server (qa on
+  // https://github.com/bgoleno/opportun/pull/361).
+  const filters = parseTraceSearch(Route.useSearch());
   const navigate = Route.useNavigate();
   return (
     <TracesPage
