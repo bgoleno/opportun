@@ -13,10 +13,17 @@ import { type KeyboardEvent, type ReactNode, useId, useRef, useState } from 'rea
 import { FormError } from '@/components/FormError';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ApiError, errorMessage } from '@/lib/api';
+import { errorMessage } from '@/lib/api';
 import { formatDateTime } from '@/lib/opportunities';
 import { cn } from '@/lib/utils';
-import { type AttrValue, type SpanView, type TraceDetail, useTrace } from './api';
+import {
+  type AttrValue,
+  isTraceNotFound,
+  normalizeTraceId,
+  type SpanView,
+  type TraceDetail,
+  useTrace,
+} from './api';
 import { formatDuration, formatInt, formatUsd, statusLabel } from './format';
 import { buildWaterfall, type WaterfallRow } from './waterfall';
 
@@ -32,17 +39,16 @@ function BackLink() {
 }
 
 export function TraceDetailPage({ traceId }: { traceId: string }) {
-  const q = useTrace(traceId);
+  const id = normalizeTraceId(traceId);
+  const q = useTrace(id);
+  // An id of the wrong shape is no trace: said at once, without asking the server (#370).
+  if (id === null) return <NotFound />;
   if (q.isPending) return <p className="text-sm text-muted-foreground">Loading trace...</p>;
   if (q.isError) {
-    const missing = q.error instanceof ApiError && q.error.status === 404;
+    if (isTraceNotFound(q.error)) return <NotFound />;
     return (
       <div className="grid gap-3">
-        {missing ? (
-          <p className="text-sm">Trace not found. It may have aged out: traces are kept 30 days.</p>
-        ) : (
-          <FormError message={errorMessage(q.error)} />
-        )}
+        <FormError message={errorMessage(q.error)} />
         <div>
           <BackLink />
         </div>
@@ -50,6 +56,17 @@ export function TraceDetailPage({ traceId }: { traceId: string }) {
     );
   }
   return <TraceView detail={q.data} />;
+}
+
+function NotFound() {
+  return (
+    <div className="grid gap-3">
+      <p className="text-sm">Trace not found. It may have aged out: traces are kept 30 days.</p>
+      <div>
+        <BackLink />
+      </div>
+    </div>
+  );
 }
 
 function TraceView({ detail }: { detail: TraceDetail }) {

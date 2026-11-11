@@ -10,7 +10,7 @@ import {
 } from '@tanstack/react-router';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState } from 'react';
+import { type ReactElement, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mockApi, renderWithProviders } from '@/test/render';
 import type { SpanView, TraceFilters, TraceView } from './api';
@@ -294,6 +294,19 @@ const DETAIL = {
   conversation: { id: '9'.repeat(8), resumeId: 'resume-1' },
 };
 
+/** Renders `ui` with a query client set up as the app's own (app.tsx: retry 1), unlike the
+ * test helper, which turns retries off. */
+function renderAsApp(ui: ReactElement) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1 } } });
+  const rootRoute = createRootRoute({ component: () => ui });
+  const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory() });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  );
+}
+
 describe('TraceDetailPage', () => {
   it('shows every span on one axis, nested by parent, with its duration', async () => {
     mockApi({ [`GET /obs/traces/${DETAIL.trace.traceId}`]: DETAIL });
@@ -366,22 +379,41 @@ describe('TraceDetailPage', () => {
   });
 
   it('says a trace is not found at once, without retrying the 404 (#365)', async () => {
-    // As the app's own client is set up (app.tsx: retry 1). The test helper turns retries off,
-    // which is why the delay never showed in a test.
     const { calls } = mockApi({});
-    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 1 } } });
-    const rootRoute = createRootRoute({
-      component: () => <TraceDetailPage traceId={'e'.repeat(32)} />,
-    });
-    const router = createRouter({ routeTree: rootRoute, history: createMemoryHistory() });
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    );
+    renderAsApp(<TraceDetailPage traceId={'e'.repeat(32)} />);
     // Well inside the 1 s a retry waits before its second request.
     expect(await screen.findByText(/not found/i, {}, { timeout: 500 })).toBeInTheDocument();
     expect(calls.filter((c) => c.path === `/obs/traces/${'e'.repeat(32)}`)).toHaveLength(1);
+  });
+
+  it('reads an upper-case trace id as the same id, in lower case (#370)', async () => {
+    const { calls } = mockApi({ [`GET /obs/traces/${DETAIL.trace.traceId}`]: DETAIL });
+    renderAsApp(<TraceDetailPage traceId={DETAIL.trace.traceId.toUpperCase()} />);
+    expect(await screen.findByRole('tree', { name: 'Spans' })).toBeInTheDocument();
+    expect(calls.map((c) => c.path)).toEqual([`/obs/traces/${DETAIL.trace.traceId}`]);
+  });
+
+  it.each([['not-a-trace'], ['g'.repeat(32)], ['a'.repeat(31)], ['a'.repeat(33)]])(
+    'says an id of the wrong shape (%s) is not found, without asking the server (#370)',
+    async (id) => {
+      const { calls } = mockApi({});
+      renderAsApp(<TraceDetailPage traceId={id} />);
+      expect(await screen.findByText(/Trace not found/)).toBeInTheDocument();
+      expect(calls.filter((c) => c.path.startsWith('/obs/traces'))).toEqual([]);
+    },
+  );
+
+  it('says a trace the server refuses (400) is not found, at once and without its text (#370)', async () => {
+    const { calls } = mockApi({
+      [`GET /obs/traces/${'e'.repeat(32)}`]: () => ({
+        status: 400,
+        body: { error: { code: 'validation', message: 'params/traceId must match pattern' } },
+      }),
+    });
+    renderAsApp(<TraceDetailPage traceId={'e'.repeat(32)} />);
+    expect(await screen.findByText(/Trace not found/, {}, { timeout: 500 })).toBeInTheDocument();
+    expect(screen.queryByText(/pattern|validation/i)).toBeNull();
+    expect(calls).toHaveLength(1);
   });
 
   it('says so when the trace is not found', async () => {
