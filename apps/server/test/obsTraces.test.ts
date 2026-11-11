@@ -3,8 +3,8 @@
 // obs_traces and obs_spans: the dashboard reads the tables, not the instrumentation (14.12).
 import { newId } from '@opportun/core';
 import { afterEach, describe, expect, it } from 'vitest';
-import { obsSpans, obsTraces, resumes, tailoringSessions } from '../src/db/schema';
-import { writeCollect } from '../src/obs/config';
+import { obsSpans, obsTraces, resumes, settings, tailoringSessions } from '../src/db/schema';
+import { OBS_COLLECT_KEY, writeCollect } from '../src/obs/config';
 import { setCollecting } from '../src/obs';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
@@ -173,6 +173,17 @@ describe('GET /obs/traces (FR-T7)', () => {
     expect(ids(off)).toEqual([kept]);
     await writeCollect(app.db, true, { userId: a.userId });
     expect((await list(b)).collect).toBe(true);
+  });
+
+  it('says collection is off on the demo, whatever the stored switch says (#360)', async () => {
+    const { app, b } = await boot({ demo: true });
+    const now = Date.now();
+    await app.db
+      .insert(settings)
+      .values({ key: OBS_COLLECT_KEY, userId: null, value: true, updatedAt: now })
+      .onConflictDoUpdate({ target: settings.key, set: { value: true, updatedAt: now } })
+      .run();
+    expect((await list(b)).collect).toBe(false);
   });
 
   it('filters by task, model and provider through the trace’s inference spans', async () => {

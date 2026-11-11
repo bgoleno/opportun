@@ -30,7 +30,7 @@ import {
 } from '../db/schema';
 import { notFound } from '../lib/errors';
 import { ATTRIBUTE_TYPES } from '../obs/catalog';
-import { readCollect } from '../obs/config';
+import { collectInEffect } from '../obs/config';
 import { requireUser } from '../repos/base';
 
 /** The most spans one trace keeps (14.11): the waterfall never needs more. */
@@ -262,7 +262,8 @@ export async function obsTraceRoutes(app: FastifyInstance): Promise<void> {
       const page = rows.slice(0, q.limit);
       const last = page.at(-1);
       return {
-        collect: await readCollect(db),
+        // The switch in effect: off on the demo whatever is stored (#360).
+        collect: await collectInEffect(db, app.config),
         items: page.map(toTraceView),
         next:
           rows.length > q.limit && last !== undefined ? `${last.startedAt}.${last.traceId}` : null,
