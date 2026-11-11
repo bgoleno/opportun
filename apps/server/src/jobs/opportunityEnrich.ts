@@ -139,11 +139,14 @@ function coreName(name: string): string {
 export function candidateDomains(companyName: string, sender: string | null): string[] {
   const out: string[] = [];
   if (sender !== null) out.push(sender);
-  const core = coreName(companyName);
-  if (core.length >= 3) {
-    for (const tld of ['com', 'co', 'io', 'ai']) out.push(`${core}.${tld}`);
-  }
+  out.push(...nameDomains(companyName));
   return [...new Set(out)].slice(0, MAX_DOMAIN_PROBES);
+}
+
+/** The domains derived from the company's name alone ("Initech Labs" -> initechlabs.com, ...). */
+export function nameDomains(companyName: string): string[] {
+  const core = coreName(companyName);
+  return core.length >= 3 ? ['com', 'co', 'io', 'ai'].map((tld) => `${core}.${tld}`) : [];
 }
 
 /** Lowercased, diacritics stripped, but letters/digits NOT collapsed together: unlike collapse(),
@@ -544,11 +547,18 @@ async function notePostingUnreadable(
 }
 
 /**
+ * Where a careers page came from: the company's stored careers URL, a domain derived from the
+ * company's name, or the domain of the sender of the message the opportunity came from.
+ */
+type CareersSource = 'stored' | 'name' | 'sender';
+
+/**
  * Finds the careers page for the opportunity's company: the stored careers URL first, else
- * verified candidate domains probed on common paths and homepage links. A guessed page is NOT
- * persisted here: a name collision can pass the homepage check (observed live: a company name
- * resolved to an unrelated company's .io domain), so the guess only sticks once the posting
- * itself matches.
+ * verified candidate domains probed on common paths and homepage links, and says where the page
+ * came from. Nothing is saved here; enrichOpportunity decides that from the source. A page from
+ * a domain the company's name gives is saved on the company as soon as it is found (#260). A page
+ * reached through the sender's domain, and through no name-derived one, serves this opportunity
+ * only: that domain is the message's, so it describes the message, not the company.
  */
 async function findCareersPage(
   db: Db,
@@ -556,11 +566,12 @@ async function findCareersPage(
   fetch: typeof safeFetch,
   opp: OppRow,
   company: CompanyRow,
-): Promise<{ page: Page; guessed: boolean } | null> {
+): Promise<{ page: Page; source: CareersSource } | null> {
   if (company.careersUrl !== null && company.careersUrl !== '') {
     const page = await getPage(fetch, company.careersUrl);
-    return page === null ? null : { page, guessed: false };
+    return page === null ? null : { page, source: 'stored' };
   }
+  const fromName = new Set(nameDomains(company.name));
   for (const domain of candidateDomains(
     company.name,
     senderDomain((await sourceFrom(db, ctx, opp.id)) ?? ''),
@@ -582,7 +593,7 @@ async function findCareersPage(
         if (page !== null && looksLikeCareersPage(page.html)) found = page;
       }
     }
-    if (found !== null) return { page: found, guessed: true };
+    if (found !== null) return { page: found, source: fromName.has(domain) ? 'name' : 'sender' };
   }
   return null;
 }
@@ -697,14 +708,17 @@ export async function enrichOpportunity(
   }
 
   const page = careers.page;
-  // Issue #260: persisted as soon as a guess exists, not only once a posting match confirms
-  // it. detectAts() (queued inside saveCareersUrl) is the real gate -- it makes a live round
-  // trip to the actual ATS vendor and only ever records a hit when real postings come back, so
-  // this is the same bar already trusted for every other detected company, just triggered
-  // earlier instead of behind a posting match that most pages never got. Waiting for a match
-  // was circular: reliable matching needs the board that detection only ever ran to find once
-  // a match had already happened.
-  if (careers.guessed) await saveCareersUrl(db, ctx, company.id, page.url);
+  // Issue #260: a page found from the company's name is persisted as soon as it is found, not
+  // only once a posting match confirms it. detectAts() (queued inside saveCareersUrl) is the
+  // real gate -- it makes a live round trip to the actual ATS vendor and only ever records a hit
+  // when real postings come back, so this is the same bar already trusted for every other
+  // detected company, just triggered earlier instead of behind a posting match that most pages
+  // never got. Waiting for a match was circular: reliable matching needs the board that
+  // detection only ever ran to find once a match had already happened.
+  // A page reached through the sender's domain is read for this opportunity and not saved on
+  // the company (findCareersPage): a message decides that domain, and the company's careers page
+  // is set only from its name, or by the user under Discovery > Companies.
+  if (careers.source === 'name') await saveCareersUrl(db, ctx, company.id, page.url);
 
   const anchors = anchorsOf(page.html, page.url);
   for (const board of scanCareersHtml(page.html).slice(0, 3)) {

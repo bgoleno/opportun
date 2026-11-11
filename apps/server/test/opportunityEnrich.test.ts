@@ -423,6 +423,82 @@ describe('enrichOpportunity', () => {
     });
   });
 
+  // A careers page reached through the domain of the message's sender serves the opportunity
+  // that message created; the company's own record is set only from its name or by the user.
+  describe('a careers page found through the sender of a message', () => {
+    async function fromSender(app: FastifyInstance, c: TestClient, from: string) {
+      const id = await outreachOpportunity(app, c, 'Initech Labs', 'Staff Platform Engineer');
+      await app.db
+        .insert(communications)
+        .values({
+          id: newId(),
+          userId: c.userId,
+          channel: 'gmail',
+          externalId: `ext-${newId()}`,
+          from,
+          to: ['me@example.com'],
+          sentAt: 1,
+          opportunityId: id,
+          createdAt: 1,
+          updatedAt: 1,
+        })
+        .run();
+      return id;
+    }
+    const board = JSON.stringify({
+      jobs: [
+        {
+          title: 'Staff Platform Engineer',
+          absolute_url: 'https://boards.greenhouse.io/initech/jobs/123',
+        },
+      ],
+    });
+    const companyOf = async (app: FastifyInstance, oppId: string) =>
+      (await app.db
+        .select()
+        .from(companies)
+        .where(eq(companies.id, (await oppRow(app, oppId)).companyId))
+        .get())!;
+
+    it('is used for that opportunity, and the company keeps its careers page and its board', async () => {
+      const { app, a } = await boot();
+      const id = await fromSender(app, a, '"Recruiter" <talent@initechhq.dev>');
+      const { fetch } = net({
+        'https://initechhq.dev/': '<html><body>Initech Labs hiring</body></html>',
+        'https://initechhq.dev/careers':
+          '<html><body>Open positions: <a href="https://boards.greenhouse.io/initech">All jobs</a></body></html>',
+        'https://boards-api.greenhouse.io/v1/boards/initech/jobs': board,
+        'https://boards.greenhouse.io/initech/jobs/123': POSTING,
+      });
+      const outcome = await enrichOpportunity(app.db, ctxOf(a), fetch, id);
+      expect(outcome).toEqual({
+        outcome: 'enriched',
+        postingUrl: 'https://boards.greenhouse.io/initech/jobs/123',
+      });
+      expect((await oppRow(app, id)).descriptionMd).toContain('Build the billing platform');
+      expect((await companyOf(app, id)).careersUrl).toBeNull();
+      expect(
+        await app.db.select().from(jobs).where(eq(jobs.kind, ATS_DETECT_KIND)).all(),
+      ).toHaveLength(0);
+    });
+
+    it('a sender on a domain the company name gives is no different from that domain itself', async () => {
+      const { app, a } = await boot();
+      const id = await fromSender(app, a, '"Recruiter" <talent@initechlabs.com>');
+      const { fetch } = net({
+        'https://initechlabs.com/': HOME,
+        'https://initechlabs.com/careers': CAREERS,
+        'https://initechlabs.com/job/staff-platform-engineer/': POSTING,
+      });
+      const outcome = await enrichOpportunity(app.db, ctxOf(a), fetch, id);
+      expect(outcome).toMatchObject({ outcome: 'enriched' });
+      expect((await companyOf(app, id)).careersUrl).toBe('https://initechlabs.com/careers');
+      expect(
+        await app.db.select().from(jobs).where(eq(jobs.kind, ATS_DETECT_KIND)).all(),
+      ).toHaveLength(1);
+    });
+  });
+
   it('a Workday job link on the careers page is read from the CXS detail, not its JS shell', async () => {
     const { app, a } = await boot();
     const id = await outreachOpportunity(
