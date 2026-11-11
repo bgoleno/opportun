@@ -22,7 +22,6 @@ import {
 import type { Db } from '../db/client';
 import {
   type Attributes,
-  type AttrKey,
   type DropReason,
   eventDef,
   type EventName,
