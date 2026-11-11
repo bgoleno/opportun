@@ -48,12 +48,25 @@ const observed = new WeakMap<FastifyRequest, Observed>();
 /** Spans for the API only (14.2); the SPA's files and /healthz get the metric alone. */
 const SPAN_PREFIX = '/api/v1';
 
+/**
+ * The one label of the SPA's built assets (#371). routes/spa.ts registers each file as a route of
+ * its own (wildcard: false), and under /assets/ their names are content hashes, new with every
+ * deploy: as their own templates, each deploy would add a series per file.
+ */
+export const SPA_ASSET_ROUTE = '/assets/*';
+
+/** The route's template, the SPA's assets under one label, or _OTHER when no route matched. */
+function routeLabel(url: string | undefined): string {
+  if (url === undefined) return OTHER;
+  return url.startsWith('/assets/') ? SPA_ASSET_ROUTE : url;
+}
+
 function onRequest(req: FastifyRequest, _reply: FastifyReply, done: () => void): void {
   if (!isCollecting()) {
     done();
     return;
   }
-  const route = req.routeOptions.url ?? OTHER;
+  const route = routeLabel(req.routeOptions.url);
   const method = httpMethod(req.method);
   const span =
     route.startsWith(SPAN_PREFIX) || req.url.startsWith(SPAN_PREFIX)
@@ -82,6 +95,30 @@ function preValidation(req: FastifyRequest, _reply: FastifyReply, done: () => vo
   if (userId !== undefined) req.obsContext = req.obsContext.setValue(USER_CONTEXT_KEY, userId);
   context.with(req.obsContext, done);
 }
+
+/**
+ * A request the client closed before it was answered (#371): no onResponse comes, so without this
+ * it recorded no metric and its span never ended. Recorded with no status code, none having been
+ * sent, and error.type `aborted`; the entry is removed, so nothing records it twice.
+ */
+function onRequestAbort(req: FastifyRequest, done: () => void): void {
+  const o = observed.get(req);
+  if (o === undefined) {
+    done();
+    return;
+  }
+  observed.delete(req);
+  obs.record('http.server.request.duration', (performance.now() - o.started) / 1000, {
+    'http.request.method': o.method,
+    'http.route': o.route,
+    'error.type': ABORTED,
+  });
+  o.span?.fail(ABORTED);
+  o.span?.end();
+  done();
+}
+
+const ABORTED = 'aborted';
 
 function onError(req: FastifyRequest, _reply: FastifyReply, err: Error, done: () => void): void {
   const o = observed.get(req);
@@ -140,6 +177,7 @@ async function obsHttp(app: FastifyInstance): Promise<void> {
   app.addHook('preValidation', preValidation);
   app.addHook('onError', onError);
   app.addHook('onResponse', onResponse);
+  app.addHook('onRequestAbort', onRequestAbort);
 }
 
 /** Not encapsulated: its hooks see every route. Register first, so its onRequest runs first. */
