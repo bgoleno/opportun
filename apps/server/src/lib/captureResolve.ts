@@ -50,6 +50,7 @@ import {
   updateOpportunity,
   type OpportunityView,
 } from '../repos/opportunities';
+import { continuesTrace } from '../obs/workflow';
 
 export interface CaptureInput {
   posting: NormalizedPosting;
@@ -628,6 +629,8 @@ export async function resolveCapture(
       {
         dedupeKey: `${POSTING_RECONCILE_KIND}:${opportunity.id}`,
         userId: ctx.userId,
+        // Continues the capture trace when queued from inside it (14.5), not otherwise.
+        continueTrace: continuesTrace(),
       },
     );
   }

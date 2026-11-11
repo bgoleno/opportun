@@ -18,8 +18,6 @@
     "backtest": "tsx scripts/backtestTriage.ts"
   },
   "devDependencies": {
-    "@opentelemetry/context-async-hooks": "2.12.0",
-    "@opentelemetry/sdk-trace": "2.12.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^22.20.5",
     "@types/pg": "8.23.1",
@@ -39,6 +37,8 @@
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@node-rs/argon2": "^2.2.2",
     "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/context-async-hooks": "2.12.0",
+    "@opentelemetry/sdk-trace": "2.12.0",
     "@opportun/ai": "workspace:^",
     "@opportun/core": "workspace:^",
     "better-sqlite3": "^13.0.3",

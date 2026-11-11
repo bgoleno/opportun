@@ -17,6 +17,7 @@ import { getSyncState, putSyncState } from '../repos/communications';
 import { ingestInbound, type IngestOptions } from './mailIngest';
 import { requireService, type JobHandler } from './registry';
 import { enqueue } from './runner';
+import { workflow } from '../obs/workflow';
 
 export const GMAIL_SYNC_KIND = 'gmail.sync';
 export const GMAIL_INTEGRATION = 'gmail';
@@ -84,12 +85,11 @@ export const gmailSyncJob: JobHandler<Record<string, never>> = {
     if (ctx.userId === null) throw new Error('gmail.sync needs a user');
     const user: UserCtx = { userId: ctx.userId, isAdmin: false };
     try {
-      const outcome = await syncMailbox(
-        db,
-        user,
-        requireService(ctx, 'mailProvider'),
-        requireService(ctx, 'storage'),
-        { submissions: ctx.services.submissions === true },
+      // The mail_sync workflow (design 14.5): the classify and enrich jobs continue it.
+      const outcome = await workflow('mail_sync', { userId: user.userId }, () =>
+        syncMailbox(db, user, requireService(ctx, 'mailProvider'), requireService(ctx, 'storage'), {
+          submissions: ctx.services.submissions === true,
+        }),
       );
       await ctx.setResult(outcome);
     } catch (err) {

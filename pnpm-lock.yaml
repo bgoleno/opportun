@@ -95,6 +95,12 @@ importers:
       '@opentelemetry/api':
         specifier: 1.9.1
         version: 1.9.1
+      '@opentelemetry/context-async-hooks':
+        specifier: 2.12.0
+        version: 2.12.0(@opentelemetry/api@1.9.1)
+      '@opentelemetry/sdk-trace':
+        specifier: 2.12.0
+        version: 2.12.0(@opentelemetry/api@1.9.1)
       '@opportun/ai':
         specifier: workspace:^
         version: link:../../packages/ai
@@ -141,12 +147,6 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
-      '@opentelemetry/context-async-hooks':
-        specifier: 2.12.0
-        version: 2.12.0(@opentelemetry/api@1.9.1)
-      '@opentelemetry/sdk-trace':
-        specifier: 2.12.0
-        version: 2.12.0(@opentelemetry/api@1.9.1)
       '@types/better-sqlite3':
         specifier: ^9.6.0
         version: 9.6.0
