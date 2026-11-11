@@ -199,6 +199,8 @@ describe('the destination is checked before every batch (14.10 rules 2 to 4)', (
     await ex.shutdown();
     expect(got).toEqual([]);
     expect(exportStatus().lastFailure?.outcome).toBe('blocked');
+    // And why, as the check's closed reason, for the admin's card (#382).
+    expect(exportStatus().lastFailure?.reason).toBe('private_not_allowed');
   });
 
   it('a refusal by the destination is reported as its class, and a success clears nothing else', async () => {

@@ -59,7 +59,9 @@ const ExportView = z.object({
       hasCredential: z.boolean(),
       allowPrivate: z.boolean(),
       lastSuccessAt: z.number().nullable(),
-      lastFailure: z.object({ outcome: z.string(), at: z.number() }).nullable(),
+      lastFailure: z
+        .object({ outcome: z.string(), at: z.number(), reason: z.string().optional() })
+        .nullable(),
       dropped: z.array(z.object({ signal: z.string(), reason: z.string(), count: z.number() })),
     })
     .optional(),
@@ -73,7 +75,7 @@ const ExportChangeBody = z.object({
   credential: z.string().max(8192).nullable().optional(),
 });
 const PasswordBody = z.object({ password: z.string().min(1).max(1024) });
-const TestResult = z.object({ outcome: z.string() });
+const TestResult = z.object({ outcome: z.string(), reason: z.string().optional() });
 
 export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
@@ -223,7 +225,7 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
         action: 'telemetry.export_test',
       });
       if (!confirmed) return reply;
-      return { outcome: await sendTest(db, app.config) };
+      return await sendTest(db, app.config);
     },
   );
 }

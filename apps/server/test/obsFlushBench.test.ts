@@ -9,6 +9,8 @@
 // 100 pages (db/client.ts).
 //
 //   OBS_BENCH=1 [OBS_BENCH_CKPT=<pages>] OBS_BENCH_OUT=<file> npx vitest run test/obsFlushBench.test.ts
+//
+// It needs Node 23.9 or later (THREAD_CPU below), and is skipped on an older one.
 import { writeFileSync } from 'node:fs';
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
@@ -18,6 +20,13 @@ import { useApi } from './api';
 
 const boot = useApi();
 const RUN = process.env.OBS_BENCH === '1';
+/**
+ * The bound is measured in the event loop thread's own CPU time, which Node reports from 23.9
+ * (process.threadCpuUsage). An older Node (the repository's .nvmrc is 22) has only the process's
+ * figure, which also counts the GC's helper threads running beside the loop, so it would fail the
+ * bound for work the loop never did (#381): there the bench is skipped rather than run on it.
+ */
+const THREAD_CPU = typeof process.threadCpuUsage === 'function';
 const T = 1_790_000_000_000;
 
 const hex = (n: number, width: number) => n.toString(16).padStart(width, '0');
@@ -84,12 +93,10 @@ async function stalls(work: () => Promise<void>): Promise<{
     }
   });
   obs.observe({ entryTypes: ['gc'] });
-  // The event loop's own thread: the process's figure would add the GC's helper threads, which
-  // run beside it (a 6.7 ms gap read 10.4 ms of process CPU). threadCpuUsage is Node 23.9 and
-  // later; on an older Node the process figure stands in, and can only overstate.
+  // The event loop's own thread (THREAD_CPU): the process's figure would add the GC's helper
+  // threads, which run beside it (a 6.7 ms gap read 10.4 ms of process CPU).
   const cpuNow = () => {
-    const u =
-      typeof process.threadCpuUsage === 'function' ? process.threadCpuUsage() : process.cpuUsage();
+    const u = process.threadCpuUsage();
     return (u.user + u.system) / 1_000;
   };
   const wallMs: number[] = [];
@@ -141,61 +148,64 @@ async function measure(db: Db, userId: string, salt: number, chunkSize: number) 
   };
 }
 
-describe.runIf(RUN)('the span flush yields to the event loop (#375, reported in the PR)', () => {
-  it('a 2,000-span flush never works on the event loop for 10 ms or more at a stretch', async () => {
-    const { app, a } = await boot();
-    // The server's own checkpoint threshold (db/client.ts), unless OBS_BENCH_CKPT sets another
-    // to compare (0 turns automatic checkpoints off).
-    const ckpt = process.env.OBS_BENCH_CKPT;
-    if (ckpt !== undefined) {
-      await rawRun(app.db, sql.raw(`PRAGMA wal_autocheckpoint = ${Number(ckpt)}`));
-    }
-    // A warm-up flush first, so the statements' first sight is not counted.
-    await flushBatch(app.db, batch(a.userId, 9), T, {});
-    // The control: the same heartbeat over an idle wait as long as a flush, for this machine's
-    // own noise (other work, GC) without a flush.
-    const idle = await stalls(() => new Promise((resolve) => setTimeout(resolve, 200)));
-    const rounds = [];
-    for (let i = 0; i < 5; i++) {
-      // Alternated, as the machine is shared: the chunked flush, then the whole batch at once.
-      rounds.push(await measure(app.db, a.userId, i * 2 + 1, SPAN_FLUSH_CHUNK));
-      rounds.push(await measure(app.db, a.userId, i * 2 + 2, SPAN_BUFFER_MAX));
-    }
-    const chunked = rounds.filter((r) => r.chunkSize === SPAN_FLUSH_CHUNK);
-    const whole = rounds.filter((r) => r.chunkSize === SPAN_BUFFER_MAX);
-    const median = (xs: number[]) => quantile(xs, 0.5);
-    const chunkedGaps = chunked.flatMap((r) => r.wallMs);
-    const report = {
-      chunkSize: SPAN_FLUSH_CHUNK,
-      checkpointPages: ckpt ?? 'server default',
-      chunked: {
-        worstCpuInGapMs: Math.max(...chunked.map((r) => r.worstCpuInGapMs)),
-        worstStallMs: Math.max(...chunked.map((r) => r.worstStallMs)),
-        medianWorstStallMs: median(chunked.map((r) => r.worstStallMs)),
-        gapMedianMs: median(chunkedGaps),
-        gapP95Ms: quantile(chunkedGaps, 0.95),
-        medianPerChunkMs: median(chunked.map((r) => r.perChunkMs)),
-        medianTotalMs: median(chunked.map((r) => r.totalMs)),
-      },
-      oneTransaction: {
-        medianWorstStallMs: median(whole.map((r) => r.worstStallMs)),
-        medianTotalMs: median(whole.map((r) => r.totalMs)),
-      },
-      idleControl: {
-        worstStallMs: Math.max(...idle.wallMs),
-        worstCpuInGapMs: Math.max(...idle.cpuMs),
-      },
-      // Every gap of every round would be thousands of numbers: the summary above stands for them.
-      rounds: rounds.map((r) => ({ ...r, wallMs: undefined })),
-    };
-    if (process.env.OBS_BENCH_OUT !== undefined) {
-      writeFileSync(process.env.OBS_BENCH_OUT, `${JSON.stringify(report, null, 2)}\n`);
-    }
-    // The bound is on the work the flush does on the event loop: the process's CPU time inside
-    // any one gap stays under 10 ms. Wall time is reported beside it but not asserted, as it also
-    // counts waiting for the disk or for other processes, which a loaded machine or a shared CI
-    // runner adds without the flush doing more (tl on #375). The CPU figure is the event loop's
-    // thread, SQLite's work on it included, which is the time the loop could not turn.
-    expect(report.chunked.worstCpuInGapMs).toBeLessThan(10);
-  }, 120_000);
-});
+describe.runIf(RUN && THREAD_CPU)(
+  'the span flush yields to the event loop (#375, reported in the PR)',
+  () => {
+    it('a 2,000-span flush never works on the event loop for 10 ms or more at a stretch', async () => {
+      const { app, a } = await boot();
+      // The server's own checkpoint threshold (db/client.ts), unless OBS_BENCH_CKPT sets another
+      // to compare (0 turns automatic checkpoints off).
+      const ckpt = process.env.OBS_BENCH_CKPT;
+      if (ckpt !== undefined) {
+        await rawRun(app.db, sql.raw(`PRAGMA wal_autocheckpoint = ${Number(ckpt)}`));
+      }
+      // A warm-up flush first, so the statements' first sight is not counted.
+      await flushBatch(app.db, batch(a.userId, 9), T, {});
+      // The control: the same heartbeat over an idle wait as long as a flush, for this machine's
+      // own noise (other work, GC) without a flush.
+      const idle = await stalls(() => new Promise((resolve) => setTimeout(resolve, 200)));
+      const rounds = [];
+      for (let i = 0; i < 5; i++) {
+        // Alternated, as the machine is shared: the chunked flush, then the whole batch at once.
+        rounds.push(await measure(app.db, a.userId, i * 2 + 1, SPAN_FLUSH_CHUNK));
+        rounds.push(await measure(app.db, a.userId, i * 2 + 2, SPAN_BUFFER_MAX));
+      }
+      const chunked = rounds.filter((r) => r.chunkSize === SPAN_FLUSH_CHUNK);
+      const whole = rounds.filter((r) => r.chunkSize === SPAN_BUFFER_MAX);
+      const median = (xs: number[]) => quantile(xs, 0.5);
+      const chunkedGaps = chunked.flatMap((r) => r.wallMs);
+      const report = {
+        chunkSize: SPAN_FLUSH_CHUNK,
+        checkpointPages: ckpt ?? 'server default',
+        chunked: {
+          worstCpuInGapMs: Math.max(...chunked.map((r) => r.worstCpuInGapMs)),
+          worstStallMs: Math.max(...chunked.map((r) => r.worstStallMs)),
+          medianWorstStallMs: median(chunked.map((r) => r.worstStallMs)),
+          gapMedianMs: median(chunkedGaps),
+          gapP95Ms: quantile(chunkedGaps, 0.95),
+          medianPerChunkMs: median(chunked.map((r) => r.perChunkMs)),
+          medianTotalMs: median(chunked.map((r) => r.totalMs)),
+        },
+        oneTransaction: {
+          medianWorstStallMs: median(whole.map((r) => r.worstStallMs)),
+          medianTotalMs: median(whole.map((r) => r.totalMs)),
+        },
+        idleControl: {
+          worstStallMs: Math.max(...idle.wallMs),
+          worstCpuInGapMs: Math.max(...idle.cpuMs),
+        },
+        // Every gap of every round would be thousands of numbers: the summary above stands for them.
+        rounds: rounds.map((r) => ({ ...r, wallMs: undefined })),
+      };
+      if (process.env.OBS_BENCH_OUT !== undefined) {
+        writeFileSync(process.env.OBS_BENCH_OUT, `${JSON.stringify(report, null, 2)}\n`);
+      }
+      // The bound is on the work the flush does on the event loop: the process's CPU time inside
+      // any one gap stays under 10 ms. Wall time is reported beside it but not asserted, as it also
+      // counts waiting for the disk or for other processes, which a loaded machine or a shared CI
+      // runner adds without the flush doing more (tl on #375). The CPU figure is the event loop's
+      // thread, SQLite's work on it included, which is the time the loop could not turn.
+      expect(report.chunked.worstCpuInGapMs).toBeLessThan(10);
+    }, 120_000);
+  },
+);
