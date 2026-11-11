@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import { formatDate, formatDateTime, stageLabel, type OpportunityView } from '@/lib/opportunities';
 import {
+  appliedAttempt,
   atsLabel,
   clockTime,
   isLive,
@@ -72,18 +73,8 @@ function notEligible(opp: OpportunityView, resumes: Resume[]): string | null {
   return null;
 }
 
-/** The statuses that mean the user has applied (#404): Submitted, Confirmed, No confirmation seen
- *  or Rejected. */
-const APPLIED: readonly string[] = ['submitted', 'confirmed', 'unknown', 'rejected'];
-
-/**
- * The application the panel leads with once the user has applied (#404, tl's decision 1): the
- * newest attempt that is Submitted, Confirmed, No confirmation seen or Rejected, whatever newer
- * attempt was cancelled or expired after it. `items` are newest first, as the server lists them.
- */
-export function appliedAttempt(items: readonly SubmissionView[]): SubmissionView | undefined {
-  return items.find((s) => APPLIED.includes(s.status));
-}
+// appliedAttempt lives with isLive in ./api, so the resume flow can use it too (#428).
+export { appliedAttempt };
 
 export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const submissions = useOpportunitySubmissions(opp.id);

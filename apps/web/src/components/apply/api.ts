@@ -162,6 +162,19 @@ export const ak = {
 const LIVE: readonly string[] = ['draft', 'reviewed', 'handed_off'];
 export const isLive = (s: Pick<Submission, 'status'>): boolean => LIVE.includes(s.status);
 
+/** The statuses that mean the user has applied (#404): Submitted, Confirmed, No confirmation seen
+ *  or Rejected. */
+const APPLIED: readonly string[] = ['submitted', 'confirmed', 'unknown', 'rejected'];
+
+/**
+ * The application the panel leads with once the user has applied (#404, tl's decision 1): the
+ * newest attempt that is Submitted, Confirmed, No confirmation seen or Rejected, whatever newer
+ * attempt was cancelled or expired after it. `items` are newest first, as the server lists them.
+ */
+export function appliedAttempt(items: readonly SubmissionView[]): SubmissionView | undefined {
+  return items.find((s) => APPLIED.includes(s.status));
+}
+
 /**
  * The opportunity's attempts, or `null` when the feature does not exist here: with the flag off,
  * or on the demo, every submission route answers 404 feature_unavailable (design 7.8), and the
