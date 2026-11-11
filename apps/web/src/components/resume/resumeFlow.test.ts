@@ -224,11 +224,11 @@ describe('resumeFlowState: assisted apply not available here (#440, ruling 2)', 
   });
 });
 
-describe('resumeFlowState: H names a newer copy made since (#440, ruling 6)', () => {
+describe('resumeFlowState: H names a copy that has gone nowhere yet (#440, ruling 6)', () => {
   const sentBase = send({});
   const again = (s: ReturnType<typeof resumeFlowState>) => (s.state === 'H' ? s.again : 'not H');
 
-  it('with no copy made since, H has nothing again', () => {
+  it('with no tailored copy, H has nothing again', () => {
     expect(again(resumeFlowState(input({ resumes: [BASE], sends: [sentBase] })))).toBeUndefined();
   });
 
@@ -258,7 +258,7 @@ describe('resumeFlowState: H names a newer copy made since (#440, ruling 6)', ()
     ).toBeUndefined();
   });
 
-  it("the panel's sentence names a Draft or In review copy made since", () => {
+  it("the panel's sentence names a Draft or In review copy that has gone nowhere", () => {
     const r = resume({ id: 'new', status: 'in_review' });
     expect(flowSentence(resumeFlowState(input({ resumes: [BASE, r], sends: [sentBase] })))).toBe(
       '"Acme Staff Engineer resume" is still In review. Mark it as final to apply.',

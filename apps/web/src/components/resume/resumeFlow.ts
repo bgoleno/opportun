@@ -44,9 +44,10 @@ export type ResumeFlowState =
   | { state: 'G'; step: 4; attempt: SubmissionView }
   /**
    * Done: an application was made (the attempt #404's panel leads with), a send is recorded,
-   * or the resume is Submitted. `again` is this opportunity's resume when it was made since and
-   * has gone nowhere yet (tl on #440, ruling 6), so the flow names it rather than offering to
-   * tailor again.
+   * or the resume is Submitted. `again` is this opportunity's resume (its newest tailored copy)
+   * when that copy has gone nowhere yet: no send of it here, no attempt made with it, and not
+   * Submitted (tl on #440, ruling 6). There is no time check: when it was made, against a send
+   * or an attempt, does not count. The flow names it rather than offering to tailor again.
    */
   | {
       state: 'H';
@@ -134,7 +135,7 @@ export function flowSentence(state: ResumeFlowState): string | null {
     case 'D':
       return `"${state.resume.title}" is still ${statusLabel(state.resume.status)}. Mark it as final to apply.`;
     case 'H':
-      // A copy made since, not Final yet: its own words, as in C and D (tl on #440, ruling 6).
+      // A copy that has gone nowhere yet, not Final: its own words, as in C and D (ruling 6).
       if (state.again?.status === 'draft')
         return flowSentence({ state: 'C', step: 2, resume: state.again });
       if (state.again?.status === 'in_review')

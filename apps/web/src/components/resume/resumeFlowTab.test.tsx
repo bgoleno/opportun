@@ -309,7 +309,7 @@ describe('the Resume tab flow: tl on #440', () => {
     expect(within(region).queryAllByRole('link')).toHaveLength(0);
   });
 
-  it('ruling 6: H with a Draft copy made since names it: "Continue tailoring" it', async () => {
+  it('ruling 6: H with a Draft copy that went nowhere names it: "Continue tailoring" it', async () => {
     setup({ resumes: [BASE, copy({ status: 'draft' })], sends: [SEND] });
     const region = await flow();
     const link = await within(region).findByRole('link', {
@@ -322,7 +322,7 @@ describe('the Resume tab flow: tl on #440', () => {
     expect(region.querySelectorAll('[data-slot="button"][data-variant="default"]')).toHaveLength(0);
   });
 
-  it('ruling 6: H with a Final copy made since: "Record that you sent" it', async () => {
+  it('ruling 6: H with a Final copy that went nowhere: "Record that you sent" it', async () => {
     setup({ resumes: [BASE, copy({ status: 'final' })], sends: [SEND] });
     const region = await flow();
     expect(

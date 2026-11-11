@@ -540,7 +540,8 @@ function CreateCopyButton({
   );
 }
 
-/** H's quiet action when nothing was made since: a new copy of a base, named (ruling 6). */
+/** H's quiet action when no copy here has gone nowhere yet: a new copy of a base, named
+ *  (ruling 6). */
 function TailorAgain({ base, opportunityId }: { base: Resume; opportunityId: string }) {
   return (
     <div className="grid gap-1">
