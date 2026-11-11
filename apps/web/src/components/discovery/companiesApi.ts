@@ -59,6 +59,28 @@ export function atsLabel(kind: string | null | undefined): string {
   return (ATS_KINDS as readonly string[]).includes(kind) ? sourceKindLabel(kind as AtsKind) : kind;
 }
 
+/** The public page of each slug-addressed board kind, as the board's own site shows it. */
+const BOARD_PAGES: ReadonlyMap<string, string> = new Map([
+  ['ats_greenhouse', 'boards.greenhouse.io'],
+  ['ats_lever', 'jobs.lever.co'],
+  ['ats_ashby', 'jobs.ashbyhq.com'],
+]);
+
+/**
+ * The address of a Greenhouse, Lever or Ashby board's public page, or null for any other kind or
+ * no board. Shown on a candidate's row (#296): a board found by guessing names from the company's
+ * name can belong to another company of the same name, and the address lets the user see whose it
+ * is before following.
+ */
+export function boardAddress(
+  kind: string | null | undefined,
+  ref: string | null | undefined,
+): { href: string; text: string } | null {
+  const host = kind == null ? undefined : BOARD_PAGES.get(kind);
+  if (host === undefined || ref == null || ref === '') return null;
+  return { href: `https://${host}/${enc(ref)}`, text: `${host}/${ref}` };
+}
+
 /** While a probe is running the list is read again, so the result shows when it lands. */
 const PROBE_POLL_MS = 3000;
 const probing = (rows: readonly CompanyView[] | undefined): boolean =>

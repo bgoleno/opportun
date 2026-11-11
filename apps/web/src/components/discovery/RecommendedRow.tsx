@@ -5,11 +5,11 @@
 // the contacts' names only behind the "You know N people" disclosure, so a glance at the list does
 // not put everyone's name on screen. Every field is a React text node: a company name, a rationale
 // and a contact's name are third-party or model text.
-import { Check, Search, Sparkles, Undo2, Users, X } from 'lucide-react';
+import { Check, ExternalLink, Search, Sparkles, Undo2, Users, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
-import type { NetworkCompany } from './companiesApi';
+import { boardAddress, type NetworkCompany } from './companiesApi';
 import { AtsStatusChip } from './CompanyCard';
 import { CompanyIndustry } from './CompanyIndustry';
 import { estimateText, type Estimate } from './estimate';
@@ -64,6 +64,8 @@ export function RecommendedRow(props: {
     !c.atsDetectPending &&
     c.boardProbePending !== true;
   const noBoard = c.atsKind === 'none';
+  const board =
+    c.status === 'none' || c.status === 'suggested' ? boardAddress(c.atsKind, c.atsRef) : null;
   return (
     <li
       aria-labelledby={nameId}
@@ -115,6 +117,19 @@ export function RecommendedRow(props: {
         ) : (
           <AtsStatusChip company={c} />
         )}
+        {board !== null ? (
+          <a
+            href={board.href}
+            target="_blank"
+            rel="noopener noreferrer nofollow"
+            aria-label={`Board for ${c.name}: ${board.text} (opens in a new tab)`}
+            className="inline-flex min-w-0 items-center gap-1 text-sm [overflow-wrap:anywhere] underline underline-offset-2"
+            data-board-address
+          >
+            {board.text}
+            <ExternalLink className="size-3.5 shrink-0" aria-hidden="true" />
+          </a>
+        ) : null}
         {checkable ? (
           <Button
             size="sm"

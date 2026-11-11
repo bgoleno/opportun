@@ -1,0 +1,57 @@
+// The switch for the nightly network probe in Settings > AI (#296): off by default, sec's sentence
+// under it, and a change saved for the user.
+import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { describe, expect, it } from 'vitest';
+import { mockApi, renderWithProviders } from '@/test/render';
+import { NetworkBoardCheckCard } from './NetworkBoardCheck';
+
+const LABEL = 'Check job boards for companies in my network';
+
+describe('NetworkBoardCheckCard', () => {
+  it('shows the setting off, with what it sends and to whom', async () => {
+    mockApi({ 'GET /settings/network-board-check': { enabled: false } });
+    renderWithProviders(<NetworkBoardCheckCard />);
+    const box = await screen.findByRole('checkbox', { name: LABEL });
+    await waitFor(() => expect(box).toBeEnabled());
+    expect(box).not.toBeChecked();
+    expect(box).toHaveAccessibleDescription(
+      'Each night, Opportun looks up to 20 of these companies up on Greenhouse, Lever and Ashby by name. Those services see the names it tries, which come from where your contacts work, and your server’s address. No contact’s name or details are sent.',
+    );
+  });
+
+  it('turns it on', async () => {
+    const user = userEvent.setup();
+    const { calls } = mockApi({
+      'GET /settings/network-board-check': { enabled: false },
+      'PUT /settings/network-board-check': { enabled: true },
+    });
+    renderWithProviders(<NetworkBoardCheckCard />);
+    const box = await screen.findByRole('checkbox', { name: LABEL });
+    await waitFor(() => expect(box).toBeEnabled());
+    await user.click(box);
+    await waitFor(() =>
+      expect(calls.filter((c) => c.method === 'PUT').map((c) => c.body)).toEqual([
+        { enabled: true },
+      ]),
+    );
+    await waitFor(() => expect(box).toBeChecked());
+  });
+
+  it('a refused save says why, and the box stays as it was', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /settings/network-board-check': { enabled: false },
+      'PUT /settings/network-board-check': () => ({
+        status: 500,
+        body: { error: { code: 'internal', message: 'Something went wrong' } },
+      }),
+    });
+    renderWithProviders(<NetworkBoardCheckCard />);
+    const box = await screen.findByRole('checkbox', { name: LABEL });
+    await waitFor(() => expect(box).toBeEnabled());
+    await user.click(box);
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(box).not.toBeChecked();
+  });
+});
