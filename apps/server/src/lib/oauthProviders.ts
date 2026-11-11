@@ -9,6 +9,8 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client';
 import { settings } from '../db/schema';
+import type { OutboundTarget } from '../obs/catalog';
+import { outboundTargetFor } from '../obs/outbound';
 import { OFFICIAL_API_URLS, type safeFetch } from './safeFetch';
 import { decryptSecret, encryptSecret } from './secretBox';
 
@@ -33,9 +35,16 @@ const LINKEDIN_AUTHORIZE_URL = new URL('/oauth/v2/authorization', LINKEDIN_TOKEN
 export function providerFetchOptions(url: string): {
   allowHosts: string[];
   officialApiUrl?: string;
+  target?: OutboundTarget;
 } {
   const allowHosts = [new URL(url).hostname];
-  return OFFICIAL.includes(url) ? { allowHosts, officialApiUrl: url } : { allowHosts };
+  // Measured as target oauth (#343): safeFetch names Google's hosts `google` itself, and any
+  // other provider's host (GitHub's) would otherwise read as a public site.
+  const target =
+    outboundTargetFor({ url: new URL(url) }) === 'google' ? {} : { target: 'oauth' as const };
+  return OFFICIAL.includes(url)
+    ? { allowHosts, officialApiUrl: url, ...target }
+    : { allowHosts, ...target };
 }
 
 /** What a provider tells us about the person who consented. */

@@ -108,8 +108,12 @@ describe('GET /obs/metrics (FR-T6)', () => {
     expect(body.metrics.filter((m: { scope: string }) => m.scope === 'instance')).toEqual([]);
   });
 
-  it('says whether collection is on', async () => {
+  it('says whether collection is on, and that it is available (#364)', async () => {
     const { app, a, b } = await boot();
+    expect((await b.request({ method: 'GET', url: '/api/v1/obs/metrics' })).json()).toMatchObject({
+      collect: false,
+      collectAvailable: true,
+    });
     await writeCollect(app.db, true, { userId: a.userId });
     expect((await b.request({ method: 'GET', url: '/api/v1/obs/metrics' })).json().collect).toBe(
       true,
@@ -124,9 +128,11 @@ describe('GET /obs/metrics (FR-T6)', () => {
       .values({ key: OBS_COLLECT_KEY, userId: null, value: true, updatedAt: now })
       .onConflictDoUpdate({ target: settings.key, set: { value: true, updatedAt: now } })
       .run();
-    expect((await a.request({ method: 'GET', url: '/api/v1/obs/metrics' })).json().collect).toBe(
-      false,
-    );
+    expect((await a.request({ method: 'GET', url: '/api/v1/obs/metrics' })).json()).toMatchObject({
+      collect: false,
+      // Not available on the demo at all (#364).
+      collectAvailable: false,
+    });
   });
 
   it('needs a signed-in user', async () => {
@@ -371,6 +377,31 @@ describe('GET /obs/metrics/series (FR-T6)', () => {
   });
 });
 
+/**
+ * The database, with every query's `.all()` reporting how many rows it returned. Each call
+ * along a query builder's chain is passed through to the real builder, so the SQL is unchanged.
+ */
+function countingRows<T extends object>(target: T, counts: number[]): T {
+  return new Proxy(target, {
+    get(t, key) {
+      const value: unknown = Reflect.get(t, key, t);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        const result: unknown = (value as (...a: unknown[]) => unknown).apply(t, args);
+        if (key === 'all') {
+          return Promise.resolve(result).then((rows) => {
+            counts.push((rows as unknown[]).length);
+            return rows;
+          });
+        }
+        return typeof result === 'object' && result !== null
+          ? countingRows(result, counts)
+          : result;
+      };
+    },
+  });
+}
+
 describe('series edges (tl on #363)', () => {
   const HTTP_DEF = METRICS['http.server.request.duration'];
   const admin = (a: TestClient) => ({ userId: a.userId, isAdmin: true });
@@ -390,6 +421,27 @@ describe('series edges (tl on #363)', () => {
     });
     expect(out.truncated).toBe(true);
     expect(out.series[0]!.points.reduce((n, p) => n + (p.v ?? 0), 0)).toBe(5 + 7);
+  });
+
+  it('reads at most one row past the limit from the database (#365)', async () => {
+    // The limit is in the SQL, so a range with more points than a chart reads never loads them
+    // all into memory. The slice after the query would hide a missing limit from every other
+    // test, so this one counts the rows the query itself returns (sec's O1 on #363).
+    const { app, a } = await boot();
+    for (let i = 0; i < 5; i++) {
+      await insertPoint(app, { bucketStart: NOW - (50 - i * 10) * MINUTE_MS, count: 1 });
+    }
+    const counts: number[] = [];
+    const out = await readSeries(countingRows(app.db, counts), admin(a), HTTP, HTTP_DEF, {
+      stat: 'count',
+      from: NOW - HOUR_MS,
+      to: NOW,
+      filters: [],
+      now: NOW,
+      maxRows: 2,
+    });
+    expect(out.truncated).toBe(true);
+    expect(counts).toEqual([3]);
   });
 
   it('counts the whole first step, from its start, not from the range’s', async () => {
