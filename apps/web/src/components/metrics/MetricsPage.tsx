@@ -209,7 +209,8 @@ function MetricButton({
         <Badge variant="secondary">{m.scope === 'instance' ? 'Instance' : 'Yours'}</Badge>
       </span>
       <span className="text-muted-foreground">{m.description}</span>
-      <span className="text-xs text-muted-foreground">
+      {/* Running text, so it keeps to a readable measure: the Gen AI metrics' lists are long. */}
+      <span className="max-w-prose text-xs text-muted-foreground">
         In {unitWord(m.unit)}. Attributes: {m.attributes.join(', ')}.
       </span>
     </button>
