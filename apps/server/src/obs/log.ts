@@ -104,30 +104,110 @@ function parseFrame(
 }
 
 /**
- * The frame lines of a stack, paths made relative to the install root or dropped (14.8). A V8
- * stack begins with the error's name and message, which can quote data and can be shaped like a
- * frame (sec on #376): those lines are skipped by count, never parsed. Only the frames right after
- * them are taken, so a cause's text appended below them (`caused by: ...`) is not read either.
+ * What stands for each run of frames outside the install root: fixed text, never built from the
+ * frame (sec on #381), so it shows where a call left Opportun's code and carries nothing else.
+ */
+export const EXTERNAL_FRAME = 'at <external>';
+
+/**
+ * Whether a stack's first lines are the header written for this message: `<name>: <message>`, or
+ * for an empty one (and for a record with no message, such as gateHeldError's) the name alone,
+ * or the name and `: ` as a stack formatter other than V8's own writes it (vitest's). A stack is
+ * formatted on its first read, with the message of that moment, so code that reassigns the
+ * message afterwards leaves a header that no longer matches (#381).
+ */
+function headerMatches(header: string, message: string): boolean {
+  if (message !== '') return header.endsWith(`: ${message}`);
+  const name = header.endsWith(': ') ? header.slice(0, -2) : header;
+  return !name.includes(': ') && !name.includes('\n');
+}
+
+/**
+ * The messages a stack's header may have been written with, longest first. The first is the
+ * message as pino gives it. When the error has a cause, pino joins the cause's message onto the
+ * error's own (`outer: inner`, pino-std-serializers' messageWithCauses) and appends the cause's
+ * stack as a `caused by: <name>: <message>` line, while the stack's header holds the error's own
+ * message only (tl on #389). So a shorter prefix is tried only at a `: ` where the rest of the
+ * message begins with the first cause's message, as that line gives it, and never when the stack
+ * has no such line: an error with no cause and a `: ` in its message is not cut, or a message
+ * reassigned after its stack was read could match a prefix and have old lines read (sec on #389).
+ */
+function headerMessages(message: string, lines: readonly string[]): string[] {
+  const out = [message];
+  const causedBy = lines.find((l) => l.startsWith(CAUSED_BY));
+  if (causedBy === undefined) return out;
+  const cause = causedBy.slice(CAUSED_BY.length);
+  const named = cause.indexOf(': ');
+  const causeMessage = named < 0 ? '' : cause.slice(named + 2);
+  if (causeMessage === '') return out;
+  for (let at = message.lastIndexOf(': '); at > 0; at = message.lastIndexOf(': ', at - 1)) {
+    if (message.slice(at + 2).startsWith(causeMessage)) out.push(message.slice(0, at));
+  }
+  return out;
+}
+
+/** The line pino's error serializer puts before a cause's stack (stackWithCauses). */
+const CAUSED_BY = 'caused by: ';
+
+/** How many lines the stack's header has, for the first of headerMessages it matches. */
+function headerLength(lines: readonly string[], message: string): number | undefined {
+  for (const candidate of headerMessages(message, lines)) {
+    const length = candidate.split('\n').length;
+    if (headerMatches(lines.slice(0, length).join('\n'), candidate)) return length;
+  }
+  return undefined;
+}
+
+/**
+ * A V8 frame with no location to give: a builtin's (`at JSON.parse (<anonymous>)`, `(native)`),
+ * an `async Promise.all (index 0)`, or `at <anonymous>`. Never ours, so it stands as
+ * EXTERNAL_FRAME, and the frames after it are still read (tl on #389).
+ */
+function isLocationless(line: string): boolean {
+  if (line === 'at <anonymous>') return true;
+  if (!line.startsWith('at ')) return false;
+  if (line.endsWith(' (<anonymous>)') || line.endsWith(' (native)')) return true;
+  const at = line.lastIndexOf(' (index ');
+  if (at < 0 || !line.endsWith(')')) return false;
+  const digits = line.slice(at + ' (index '.length, -1);
+  return digits.length > 0 && [...digits].every((c) => c >= '0' && c <= '9');
+}
+
+/**
+ * The frame lines of a stack, paths made relative to the install root (14.8). A V8 stack begins
+ * with the error's name and message, which can quote data and can be shaped like a frame (sec on
+ * #376): those lines are skipped by count, never parsed, and only when they are the header of the
+ * current message; any other stack gives no frames at all, rather than a miscount that would read
+ * message lines as frames (#381). Only the frames right after the header are taken, so a cause's
+ * text appended below them (`caused by: ...`) is not read either.
+ *
+ * A frame inside the install root keeps its function name and relative path. A frame outside it
+ * keeps neither, not even its name: one message case the header check cannot see (a message cut
+ * to its own first lines after the stack was read) still leaves its old lines to parse as frames,
+ * and their paths are not ours. Each run of such frames is one EXTERNAL_FRAME, so a dependency's
+ * or Node's frames never fill the cap.
  */
 export function frameLines(stack: unknown, message?: unknown): string[] {
   if (typeof stack !== 'string') return [];
-  const header = typeof message === 'string' ? message.split('\n').length : 1;
+  const lines = stack.split('\n');
+  const header = headerLength(lines, typeof message === 'string' ? message : '');
+  if (header === undefined) return [];
   const out: string[] = [];
-  let started = false;
-  for (const raw of stack.split('\n').slice(header)) {
-    const frame = parseFrame(raw.trim());
-    if (frame === undefined) {
-      if (started) break;
+  for (const raw of lines.slice(header)) {
+    const line = raw.trim();
+    const frame = parseFrame(line);
+    if (frame === undefined && isLocationless(line)) {
+      if (out.at(-1) !== EXTERNAL_FRAME) out.push(EXTERNAL_FRAME);
       continue;
     }
-    started = true;
-    const name = frame.fn === undefined ? undefined : functionName(frame.fn);
-    const inside = frame.path.startsWith(INSTALL_ROOT + sep);
-    const where = inside
-      ? `${relative(INSTALL_ROOT, frame.path).split(sep).join('/')}:${frame.row}:${frame.col}`
-      : '';
-    if (name === undefined && where === '') continue;
-    out.push(`at ${[name, where === '' ? undefined : `(${where})`].filter(Boolean).join(' ')}`);
+    if (frame === undefined) break;
+    if (!frame.path.startsWith(INSTALL_ROOT + sep)) {
+      if (out.at(-1) !== EXTERNAL_FRAME) out.push(EXTERNAL_FRAME);
+    } else {
+      const name = frame.fn === undefined ? undefined : functionName(frame.fn);
+      const where = `${relative(INSTALL_ROOT, frame.path).split(sep).join('/')}:${frame.row}:${frame.col}`;
+      out.push(`at ${[name, `(${where})`].filter(Boolean).join(' ')}`);
+    }
     if (out.length >= MAX_FRAMES) break;
   }
   return out;
