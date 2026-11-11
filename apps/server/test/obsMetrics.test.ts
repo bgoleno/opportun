@@ -1,15 +1,24 @@
-// The metric dashboards' API (FR-T6; design.md 14.4, 14.7, 14.12;
-// https://github.com/bgoleno/opportun/issues/346). Every test inserts its own rows into
-// obs_metric_points: the dashboards read the table, not the instrumentation (14.12).
+// Metric aggregation and its flush (design.md 14.7, 14.11; https://github.com/bgoleno/opportun/issues/353).
+// A flush writes each series' 1-minute row and adds the same figures to its 1-hour row, so there
+// is no rollup job; rows already stored are added to, not replaced; at most 2,000 series wait
+// between flushes, and the value of a new series past that is dropped and counted; a flush
+// writes in transactions of at most 2,000 rows.
+import { and, eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { obsMetricPoints } from '../src/db/schema';
-import type { MetricDef } from '../src/obs/catalog';
-import { writeCollect } from '../src/obs/config';
-import { setCollecting } from '../src/obs';
-import { HOUR_MS, MINUTE_MS, seriesId } from '../src/obs/metrics';
-import { readSeries } from '../src/routes/obsMetrics';
+import { flushNow, obs, setCollecting } from '../src/obs';
+import {
+  flushPoints,
+  HOUR_MS,
+  MAX_LIVE_SERIES,
+  MAX_ROWS_PER_TRANSACTION,
+  MetricAggregator,
+  MINUTE_MS,
+  type PendingPoint,
+  seriesId,
+} from '../src/obs/metrics';
 import { useApi } from './api';
-import type { TestClient } from './isolation';
+import { countRows } from './db';
 
 const boot = useApi();
 type App = Awaited<ReturnType<typeof boot>>['app'];
@@ -18,393 +27,208 @@ afterEach(async () => {
   await setCollecting(false);
 });
 
-const HTTP = 'http.server.request.duration';
-/** A fixed "now", on an hour boundary, well inside every retention window. */
-const NOW = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
+/** An hour start, and minutes inside it. */
+const H = 1_780_000_000_000 - (1_780_000_000_000 % HOUR_MS);
+const DONE = { 'opportun.job.outcome': 'done' } as const;
 
-interface PointIn {
-  metric?: string;
-  attributes?: Record<string, unknown>;
-  userId?: string | null;
-  resolution?: number;
-  bucketStart: number;
-  count?: number;
-  sum?: number;
-  min?: number;
-  max?: number;
+async function rowsAt(app: App, resolution: number) {
+  return (
+    await app.db
+      .select()
+      .from(obsMetricPoints)
+      .where(
+        and(
+          eq(obsMetricPoints.metric, 'opportun.job.duration'),
+          eq(obsMetricPoints.resolution, resolution),
+        ),
+      )
+      .all()
+  ).sort((x, y) => x.bucketStart - y.bucketStart);
 }
 
-async function insertPoint(app: App, p: PointIn): Promise<void> {
-  const metric = p.metric ?? HTTP;
-  const attributes = p.attributes ?? { 'http.request.method': 'GET', 'http.route': '/api/v1/a' };
-  const userId = p.userId ?? null;
-  const count = p.count ?? 1;
-  const sum = p.sum ?? 0.1 * count;
-  await app.db
-    .insert(obsMetricPoints)
-    .values({
-      series: seriesId(metric, userId, attributes as never),
-      metric,
-      attributes,
-      userId,
-      resolution: p.resolution ?? MINUTE_MS,
-      bucketStart: p.bucketStart,
-      count,
-      sum,
-      min: p.min ?? sum / count,
-      max: p.max ?? sum / count,
-      bucketCounts: null,
-    })
-    .run();
-}
-
-interface SeriesBody {
-  metric: string;
-  stat: string;
-  from: number;
-  to: number;
-  step: number;
-  resolution: number;
-  series: { label: string | null; points: { t: number; v: number | null }[] }[];
-  values: Record<string, string[]>;
-  truncated: boolean;
-}
-
-async function series(c: TestClient, query: string): Promise<SeriesBody> {
-  const res = await c.request({ method: 'GET', url: `/api/v1/obs/metrics/series?${query}` });
-  expect(res.statusCode, res.body).toBe(200);
-  return res.json();
-}
-
-const total = (b: SeriesBody) =>
-  b.series.flatMap((s) => s.points).reduce((acc, p) => acc + (p.v ?? 0), 0);
-
-const lastHour = `from=${NOW - HOUR_MS}&to=${NOW}`;
-
-describe('GET /obs/metrics (FR-T6)', () => {
-  it('lists every metric the caller may see, from the catalog, with its statistics', async () => {
-    const { a } = await boot();
-    const res = await a.request({ method: 'GET', url: '/api/v1/obs/metrics' });
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.collect).toBe(false);
-    const http = body.metrics.find((m: { name: string }) => m.name === HTTP);
-    expect(http).toEqual({
-      name: HTTP,
-      instrument: 'histogram',
-      unit: 's',
-      description: 'Duration of HTTP server requests.',
-      scope: 'instance',
-      attributes: ['http.request.method', 'http.route', 'http.response.status_code', 'error.type'],
-      stats: ['count', 'errors', 'mean', 'max'],
+describe('seriesId (#353)', () => {
+  it('is the same for the same attributes in any order, and differs by owner and metric', () => {
+    const a = seriesId('opportun.job.duration', null, {
+      'opportun.job.outcome': 'done',
+      'error.type': 'X',
     });
-    const dropped = body.metrics.find((m: { name: string }) => m.name === 'opportun.obs.dropped');
-    expect(dropped).toMatchObject({ instrument: 'counter', stats: ['sum'] });
+    const b = seriesId('opportun.job.duration', null, {
+      'error.type': 'X',
+      'opportun.job.outcome': 'done',
+    });
+    expect(a).toBe(b);
+    expect(seriesId('opportun.job.duration', 'u1', DONE)).not.toBe(
+      seriesId('opportun.job.duration', null, DONE),
+    );
+    expect(seriesId('http.server.request.duration', null, DONE)).not.toBe(
+      seriesId('opportun.job.duration', null, DONE),
+    );
+  });
+});
+
+describe('a flush (#353)', () => {
+  it('writes a 1-minute row and a 1-hour row with the same figures and histogram counts', async () => {
+    const { app } = await boot();
+    const agg = new MetricAggregator();
+    // Job buckets (seconds): 0.01 falls in the first, 1.5 in the one bounded by 5, 1000 overflows.
+    agg.add('opportun.job.duration', 0.01, DONE, null, H + 5 * MINUTE_MS + 1);
+    agg.add('opportun.job.duration', 1.5, DONE, null, H + 5 * MINUTE_MS + 2);
+    agg.add('opportun.job.duration', 1000, DONE, null, H + 5 * MINUTE_MS + 3);
+    await flushPoints(app.db, agg.drain());
+
+    const [minute] = await rowsAt(app, MINUTE_MS);
+    const [hour] = await rowsAt(app, HOUR_MS);
+    const counts = new Array<number>(14).fill(0);
+    counts[0] = 1;
+    counts[5] = 1;
+    counts[13] = 1;
+    const figures = { count: 3, min: 0.01, max: 1000, bucketCounts: counts };
+    expect(minute?.sum).toBeCloseTo(1001.51, 9);
+    expect(hour?.sum).toBeCloseTo(1001.51, 9);
+    expect(minute).toMatchObject({
+      bucketStart: H + 5 * MINUTE_MS,
+      userId: null,
+      attributes: DONE,
+      ...figures,
+    });
+    expect(hour).toMatchObject({ bucketStart: H, ...figures });
+    expect(minute?.series).toBe(hour?.series);
+    expect(await countRows(app, obsMetricPoints)).toBe(2);
   });
 
-  it('shows a user no instance metric: those are the admin’s (14.7)', async () => {
-    const { b } = await boot();
-    const body = (await b.request({ method: 'GET', url: '/api/v1/obs/metrics' })).json();
-    expect(body.metrics.filter((m: { scope: string }) => m.scope === 'instance')).toEqual([]);
+  it('adds to rows already stored: a later flush in the same minute and hour merges, another hour stays apart', async () => {
+    const { app } = await boot();
+    const first = new MetricAggregator();
+    first.add('opportun.job.duration', 1, DONE, null, H + MINUTE_MS);
+    first.add('opportun.job.duration', 7, DONE, null, H - HOUR_MS + MINUTE_MS); // the hour before
+    await flushPoints(app.db, first.drain());
+
+    const second = new MetricAggregator();
+    second.add('opportun.job.duration', 3, DONE, null, H + MINUTE_MS + 30_000); // same minute
+    second.add('opportun.job.duration', 2, DONE, null, H + 2 * MINUTE_MS); // same hour
+    await flushPoints(app.db, second.drain());
+
+    const minutes = await rowsAt(app, MINUTE_MS);
+    expect(minutes.map((m) => [m.bucketStart, m.count, m.sum, m.min, m.max])).toEqual([
+      [H - HOUR_MS + MINUTE_MS, 1, 7, 7, 7],
+      [H + MINUTE_MS, 2, 4, 1, 3],
+      [H + 2 * MINUTE_MS, 1, 2, 2, 2],
+    ]);
+    const hours = await rowsAt(app, HOUR_MS);
+    expect(hours.map((h) => [h.bucketStart, h.count, h.sum, h.min, h.max])).toEqual([
+      [H - HOUR_MS, 1, 7, 7, 7],
+      [H, 3, 6, 1, 3],
+    ]);
+    // Each hour row's histogram is the sum of its minutes'.
+    expect(hours[1]?.bucketCounts?.reduce((s, n) => s + n, 0)).toBe(3);
   });
 
-  it('says whether collection is on', async () => {
-    const { app, a, b } = await boot();
-    await writeCollect(app.db, true, { userId: a.userId });
-    expect((await b.request({ method: 'GET', url: '/api/v1/obs/metrics' })).json().collect).toBe(
+  it('writes in transactions of at most 2,000 rows: a failure in one leaves the one before it', async () => {
+    const { app } = await boot();
+    expect(MAX_ROWS_PER_TRANSACTION).toBe(2_000);
+    const pointFor = (i: number, userId: string | null): PendingPoint => ({
+      metric: 'opportun.job.duration',
+      attributes: { 'opportun.job.outcome': 'done', 'error.type': `E${i}` },
+      userId,
+      bucketStart: H,
+      count: 1,
+      sum: 1,
+      min: 1,
+      max: 1,
+      bucketCounts: new Array<number>(14).fill(0),
+    });
+    // 1,000 points are 2,000 rows: the first transaction. The 1,001st names no user that
+    // exists, so its transaction fails on the foreign key.
+    const points = Array.from({ length: 1_000 }, (_, i) => pointFor(i, null));
+    points.push(pointFor(1_000, 'no-such-user'));
+    await expect(flushPoints(app.db, points)).rejects.toThrow();
+    expect(await countRows(app, obsMetricPoints)).toBe(2_000);
+  });
+});
+
+describe('the series cap (#353)', () => {
+  it('refuses a new series past the cap, keeps adding to known ones, and admits the drop counter', () => {
+    const agg = new MetricAggregator(2);
+    expect(agg.add('opportun.job.duration', 1, DONE, null, H)).toBe(true);
+    expect(agg.add('opportun.job.duration', 1, { 'opportun.job.outcome': 'dead' }, null, H)).toBe(
+      true,
+    );
+    expect(agg.add('opportun.job.duration', 1, { 'opportun.job.outcome': 'retry' }, null, H)).toBe(
+      false,
+    );
+    expect(agg.add('opportun.job.duration', 2, DONE, null, H)).toBe(true);
+    expect(
+      agg.add(
+        'opportun.obs.dropped',
+        1,
+        { 'opportun.obs.signal': 'metrics', 'opportun.obs.reason': 'series_cap' },
+        null,
+        H,
+        true,
+      ),
+    ).toBe(true);
+    expect(agg.size).toBe(3);
+    const drained = agg.drain();
+    expect(drained).toHaveLength(3);
+    expect(drained.find((p) => p.attributes['opportun.job.outcome'] === 'done')?.count).toBe(2);
+    // A drain starts the count again.
+    expect(agg.size).toBe(0);
+    expect(agg.add('opportun.job.duration', 1, { 'opportun.job.outcome': 'retry' }, null, H)).toBe(
       true,
     );
   });
 
-  it('needs a signed-in user', async () => {
+  it('through obs.record: the 2,001st series is dropped and counted as series_cap', async () => {
     const { app } = await boot();
-    expect((await app.inject({ method: 'GET', url: '/api/v1/obs/metrics' })).statusCode).toBe(401);
-  });
-});
-
-describe('GET /obs/metrics/series (FR-T6)', () => {
-  it('gives an admin the instance’s points, in steps over the range', async () => {
-    const { app, a } = await boot();
-    await insertPoint(app, { bucketStart: NOW - 50 * MINUTE_MS, count: 3 });
-    await insertPoint(app, { bucketStart: NOW - 10 * MINUTE_MS, count: 2 });
-    // Outside the range: not counted.
-    await insertPoint(app, { bucketStart: NOW - 2 * HOUR_MS, count: 100 });
-    const body = await series(a, `metric=${HTTP}&stat=count&${lastHour}`);
-    expect(body).toMatchObject({
-      metric: HTTP,
-      stat: 'count',
-      resolution: MINUTE_MS,
-      truncated: false,
-    });
-    expect(body.series).toHaveLength(1);
-    expect(body.series[0]!.label).toBeNull();
-    expect(total(body)).toBe(5);
-    // Steps are contiguous and cover the range, each starting on a step boundary.
-    const ts = body.series[0]!.points.map((p) => p.t);
-    expect(ts[0]).toBeLessThanOrEqual(NOW - HOUR_MS);
-    expect(ts.at(-1)).toBeLessThan(NOW);
-    expect(ts.slice(1).map((t, i) => t - (ts.at(i) ?? 0))).toEqual(
-      ts.slice(1).map(() => body.step),
-    );
-    expect(ts.every((t) => t % body.step === 0)).toBe(true);
-    // A step with nothing recorded counts zero calls.
-    expect(body.series[0]!.points.filter((p) => p.v === 0).length).toBeGreaterThan(0);
-  });
-
-  it('never shows a user’s point in the instance’s view, nor another user’s anywhere', async () => {
-    const { app, a, b } = await boot();
-    await insertPoint(app, { bucketStart: NOW - 5 * MINUTE_MS, count: 1 });
-    // Rows the span store would never write for an instance metric, kept out all the same.
-    await insertPoint(app, { bucketStart: NOW - 5 * MINUTE_MS, count: 40, userId: a.userId });
-    await insertPoint(app, { bucketStart: NOW - 5 * MINUTE_MS, count: 500, userId: b.userId });
-    expect(total(await series(a, `metric=${HTTP}&stat=count&${lastHour}`))).toBe(1);
-  });
-
-  it('refuses a user an instance metric', async () => {
-    const { app, b } = await boot();
-    await insertPoint(app, { bucketStart: NOW - 5 * MINUTE_MS });
-    const res = await b.request({
-      method: 'GET',
-      url: `/api/v1/obs/metrics/series?metric=${HTTP}&stat=count&${lastHour}`,
-    });
-    expect(res.statusCode).toBe(403);
-  });
-
-  it('derives errors, mean and max from a histogram’s points', async () => {
-    const { app, a } = await boot();
-    const at = NOW - 5 * MINUTE_MS;
-    await insertPoint(app, { bucketStart: at, count: 4, sum: 0.4, max: 0.2 });
-    await insertPoint(app, {
-      bucketStart: at,
-      count: 1,
-      sum: 1.6,
-      max: 1.6,
-      attributes: { 'http.request.method': 'GET', 'http.route': '/api/v1/a', 'error.type': '500' },
-    });
-    const value = async (stat: string) => {
-      const pts = (await series(a, `metric=${HTTP}&stat=${stat}&${lastHour}`)).series[0]!.points;
-      return pts.filter((p) => p.v !== null && p.v !== 0);
-    };
-    expect((await value('errors')).map((p) => p.v)).toEqual([1]);
-    expect((await value('count')).map((p) => p.v)).toEqual([5]);
-    expect((await value('mean')).map((p) => p.v)).toEqual([0.4]);
-    expect((await value('max')).map((p) => p.v)).toEqual([1.6]);
-    // A step with no calls has no mean and no max, rather than a zero.
-    const mean = (await series(a, `metric=${HTTP}&stat=mean&${lastHour}`)).series[0]!.points;
-    expect(mean.some((p) => p.v === null)).toBe(true);
-  });
-
-  it('sums a counter', async () => {
-    const { app, a } = await boot();
-    const metric = 'opportun.obs.dropped';
-    const attributes = { 'opportun.obs.signal': 'spans', 'opportun.obs.reason': 'buffer_full' };
-    await insertPoint(app, {
-      metric,
-      attributes,
-      bucketStart: NOW - 5 * MINUTE_MS,
-      count: 2,
-      sum: 7,
-    });
-    await insertPoint(app, {
-      metric,
-      attributes,
-      bucketStart: NOW - 4 * MINUTE_MS,
-      count: 1,
-      sum: 3,
-    });
-    expect(total(await series(a, `metric=${metric}&stat=sum&${lastHour}`))).toBe(10);
-  });
-
-  it('breaks a metric down by one catalogued attribute', async () => {
-    const { app, a } = await boot();
-    const at = NOW - 5 * MINUTE_MS;
-    await insertPoint(app, {
-      bucketStart: at,
-      count: 3,
-      attributes: { 'http.route': '/api/v1/a' },
-    });
-    await insertPoint(app, {
-      bucketStart: at,
-      count: 2,
-      attributes: { 'http.route': '/api/v1/b' },
-    });
-    await insertPoint(app, {
-      bucketStart: at,
-      count: 1,
-      attributes: { 'http.request.method': 'GET' },
-    });
-    const body = await series(a, `metric=${HTTP}&stat=count&by=http.route&${lastHour}`);
-    const sums = Object.fromEntries(
-      body.series.map((s) => [s.label ?? '(none)', s.points.reduce((n, p) => n + (p.v ?? 0), 0)]),
-    );
-    expect(sums).toEqual({ '/api/v1/a': 3, '/api/v1/b': 2, '(none)': 1 });
-    // The largest first.
-    expect(body.series[0]!.label).toBe('/api/v1/a');
-  });
-
-  it('keeps the eight largest groups of a breakdown and adds up the rest', async () => {
-    const { app, a } = await boot();
-    for (let i = 0; i < 11; i++) {
-      await insertPoint(app, {
-        bucketStart: NOW - 5 * MINUTE_MS,
-        count: 20 - i,
-        attributes: { 'http.response.status_code': 200 + i },
+    await setCollecting(true);
+    expect(MAX_LIVE_SERIES).toBe(2_000);
+    for (let i = 0; i <= MAX_LIVE_SERIES; i += 1) {
+      obs.record('http.server.request.duration', 0.01, {
+        'http.request.method': 'GET',
+        'http.route': `/api/v1/r${i}`,
+        'http.response.status_code': 200,
       });
     }
-    const body = await series(
-      a,
-      `metric=${HTTP}&stat=count&by=http.response.status_code&${lastHour}`,
+    await flushNow();
+    const server = await app.db
+      .select()
+      .from(obsMetricPoints)
+      .where(eq(obsMetricPoints.metric, 'http.server.request.duration'))
+      .all();
+    expect(server).toHaveLength(2 * MAX_LIVE_SERIES);
+    expect(server.some((p) => p.attributes['http.route'] === `/api/v1/r${MAX_LIVE_SERIES}`)).toBe(
+      false,
     );
-    expect(body.series.map((s) => s.label)).toEqual([
-      '200',
-      '201',
-      '202',
-      '203',
-      '204',
-      '205',
-      '206',
-      '207',
-      '_OTHER',
-    ]);
-    expect(total(body)).toBe([...Array(11).keys()].reduce((n, i) => n + 20 - i, 0));
-  });
-
-  it('filters by catalogued attributes, matching values exactly', async () => {
-    const { app, a } = await boot();
-    const at = NOW - 5 * MINUTE_MS;
-    await insertPoint(app, {
-      bucketStart: at,
-      count: 3,
-      attributes: { 'http.request.method': 'GET', 'http.route': '/x/:id' },
-    });
-    await insertPoint(app, {
-      bucketStart: at,
-      count: 2,
-      attributes: { 'http.request.method': 'POST', 'http.route': '/x/:id' },
-    });
-    await insertPoint(app, {
-      bucketStart: at,
-      count: 1,
-      attributes: { 'http.request.method': 'GET', 'http.route': '/y' },
-    });
-    const q = (f: string[]) =>
-      series(
-        a,
-        `metric=${HTTP}&stat=count&${lastHour}&${f.map((x) => `filter=${encodeURIComponent(x)}`).join('&')}`,
-      );
-    expect(total(await q(['http.request.method=GET']))).toBe(4);
-    expect(total(await q(['http.request.method=GET', 'http.route=/x/:id']))).toBe(3);
-    expect(total(await q(["http.route=/x/:id' OR '1'='1"]))).toBe(0);
-    // The values each attribute takes in the range, for the filter and breakdown choices.
-    const body = await q([]);
-    expect(body.values['http.request.method']).toEqual(['GET', 'POST']);
-    expect(body.values['http.route']).toEqual(['/x/:id', '/y']);
-  });
-
-  it('refuses a filter or breakdown on an attribute the metric does not carry', async () => {
-    const { a } = await boot();
-    for (const q of [
-      'filter=user.id%3Dx',
-      'filter=opportun.job.kind%3Dx',
-      'by=user.id',
-      'by=nonsense',
-      'filter=no-equals-sign',
-    ]) {
-      const res = await a.request({
-        method: 'GET',
-        url: `/api/v1/obs/metrics/series?metric=${HTTP}&stat=count&${lastHour}&${q}`,
-      });
-      expect(res.statusCode, q).toBe(400);
-    }
-  });
-
-  it('reads 1-minute points for a short range and 1-hour points for a long one', async () => {
-    const { app, a } = await boot();
-    // The same calls, told apart by count: 1 in the minute rows, 1000 in the hour rows.
-    await insertPoint(app, { bucketStart: NOW - 3 * HOUR_MS, count: 1 });
-    await insertPoint(app, { bucketStart: NOW - 3 * HOUR_MS, count: 1000, resolution: HOUR_MS });
-    const short = await series(a, `metric=${HTTP}&stat=count&from=${NOW - 4 * HOUR_MS}&to=${NOW}`);
-    expect(short.resolution).toBe(MINUTE_MS);
-    expect(total(short)).toBe(1);
-    const long = await series(
-      a,
-      `metric=${HTTP}&stat=count&from=${NOW - 7 * 24 * HOUR_MS}&to=${NOW}`,
+    const dropped = await app.db
+      .select()
+      .from(obsMetricPoints)
+      .where(eq(obsMetricPoints.metric, 'opportun.obs.dropped'))
+      .all();
+    expect(dropped.map((d) => [d.resolution, d.sum, d.attributes])).toEqual(
+      expect.arrayContaining([
+        [MINUTE_MS, 1, { 'opportun.obs.signal': 'metrics', 'opportun.obs.reason': 'series_cap' }],
+        [HOUR_MS, 1, { 'opportun.obs.signal': 'metrics', 'opportun.obs.reason': 'series_cap' }],
+      ]),
     );
-    expect(long.resolution).toBe(HOUR_MS);
-    expect(total(long)).toBe(1000);
-    // Older than the 48 hours minute points are kept: hour points, however short the range.
-    const old = await series(
-      a,
-      `metric=${HTTP}&stat=count&from=${NOW - 72 * HOUR_MS}&to=${NOW - 71 * HOUR_MS}`,
-    );
-    expect(old.resolution).toBe(HOUR_MS);
-    // At most a few hundred steps, whatever the range.
-    expect(long.series[0]!.points.length).toBeLessThanOrEqual(200);
+    expect(dropped).toHaveLength(2);
   });
 
-  it('refuses an unknown metric, a statistic the metric has not, and a bad range', async () => {
-    const { a } = await boot();
-    for (const q of [
-      `metric=nope&stat=count&${lastHour}`,
-      `metric=${HTTP}&stat=sum&${lastHour}`,
-      `metric=opportun.obs.dropped&stat=mean&${lastHour}`,
-      `metric=${HTTP}&stat=count&from=${NOW}&to=${NOW - 1}`,
-      `metric=${HTTP}&stat=count&from=${NOW - 40 * 24 * HOUR_MS}&to=${NOW}`,
-      `metric=${HTTP}&stat=count&from=yesterday&to=${NOW}`,
-    ]) {
-      const res = await a.request({ method: 'GET', url: `/api/v1/obs/metrics/series?${q}` });
-      expect(res.statusCode, q).toBe(400);
-    }
-  });
-});
-
-describe('readSeries for a user-scoped metric (14.7)', () => {
-  // No user-scoped metric is in the catalog until the Gen AI metrics land (FR-T4 part 2), so this
-  // reads one defined here, with the same rule the route applies to every metric.
-  const GENAI = 'gen_ai.client.inference.usage.input_tokens';
-  const def: MetricDef = {
-    instrument: 'counter',
-    unit: '{token}',
-    description: 'Input tokens.',
-    attributes: ['error.type'],
-    scope: 'user',
-  };
-
-  it('gives each user their own points only, an admin included', async () => {
-    const { app, a, b } = await boot();
-    const at = NOW - 5 * MINUTE_MS;
-    await insertPoint(app, {
-      metric: GENAI,
-      attributes: {},
-      userId: a.userId,
-      bucketStart: at,
-      sum: 100,
-    });
-    await insertPoint(app, {
-      metric: GENAI,
-      attributes: {},
-      userId: b.userId,
-      bucketStart: at,
-      sum: 7,
-    });
-    await insertPoint(app, {
-      metric: GENAI,
-      attributes: {},
-      userId: null,
-      bucketStart: at,
-      sum: 9000,
-    });
-    const read = async (viewer: { userId: string; isAdmin: boolean }) => {
-      const out = await readSeries(app.db, viewer, GENAI, def, {
-        stat: 'sum',
-        from: NOW - HOUR_MS,
-        to: NOW,
-        filters: [],
-        now: NOW,
-      });
-      return out.series.flatMap((s) => s.points).reduce((n, p) => n + (p.v ?? 0), 0);
-    };
-    expect(await read({ userId: a.userId, isAdmin: true })).toBe(100);
-    expect(await read({ userId: b.userId, isAdmin: false })).toBe(7);
+  it('a value that is not a finite number is dropped and counted as invalid_value', async () => {
+    const { app } = await boot();
+    await setCollecting(true);
+    obs.record('opportun.job.duration', Number.NaN, DONE);
+    await flushNow();
+    expect(await rowsAt(app, MINUTE_MS)).toEqual([]);
+    const dropped = await app.db
+      .select()
+      .from(obsMetricPoints)
+      .where(
+        and(
+          eq(obsMetricPoints.metric, 'opportun.obs.dropped'),
+          eq(obsMetricPoints.resolution, MINUTE_MS),
+        ),
+      )
+      .all();
+    expect(dropped.map((d) => d.attributes['opportun.obs.reason'])).toEqual(['invalid_value']);
   });
 });
