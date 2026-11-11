@@ -387,9 +387,9 @@ describe('isolation and secrecy', () => {
         await track(status(a));
       }
       await track(save(a, 'bad-id', SECRET));
-      // This test's own request is in the log, so the next lines cannot pass on an empty one
-      // (https://github.com/bgoleno/opportun/issues/258).
-      expect(logs.text()).toContain('/api/v1/integrations/google/client');
+      // The capture is live at info level (a catalogued boot line is in it), so the checks below
+      // cannot pass on an empty log (#240). No request url is ever logged (#345, design 14.9).
+      expect(logs.text()).toContain('serving the API only');
       expect(logs.text()).not.toContain(SECRET);
       expect(logs.text()).not.toContain('super-secret');
     } finally {

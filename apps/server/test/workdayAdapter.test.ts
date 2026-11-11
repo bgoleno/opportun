@@ -524,7 +524,7 @@ describe('discovery.run with the Workday adapter', () => {
     }
     expect(details()).toBe(WORKDAY_MAX_DETAILS_PER_RUN);
     expect(out).toHaveLength(WORKDAY_MAX_DETAILS_PER_RUN);
-    expect(infos).toEqual([expect.objectContaining({ deferred: 30 })]);
+    expect(infos).toEqual([expect.objectContaining({ 'opportun.count.deferred': 30 })]);
 
     // Through the engine: the second run describes only the 30 the first one left.
     app.jobs.services.sourceFetch = fetch;

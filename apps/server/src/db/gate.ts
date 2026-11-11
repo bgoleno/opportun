@@ -8,6 +8,23 @@
 // so statements issued by the transaction body (however deeply nested) pass straight through.
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+/**
+ * Writes one line through the gated process logger (obs/log.ts), loaded on first use. Imported
+ * eagerly, it would load the catalog, and @opportun/ai with it, wherever this module is: test
+ * setup imports it before any test file's vi.mock, so a mocked AI provider would be the real one.
+ * Only the default reporters, for a process with no app to configure them (a CLI), and the
+ * database's own idle errors use it.
+ */
+export function dbLog(level: 'warn' | 'error', obj: Record<string, unknown>, msg: string): void {
+  void import('../obs/log')
+    .then(({ processLogger }) => {
+      const logger = processLogger();
+      if (level === 'error') logger.error(obj, msg);
+      else logger.warn(obj, msg);
+    })
+    .catch(() => undefined);
+}
+
 export type Release = () => void;
 
 /** The transaction token of the current async context, shared by every gate. */
@@ -105,8 +122,15 @@ export interface SlowTransaction {
 }
 
 let slowReporter: (slow: SlowTransaction) => void = (slow) => {
-  console.warn(
-    `slow transaction: held the database write gate for ${slow.durationMs} ms${slow.awaitedOutside ? ' while awaiting something outside the database' : ''} (budget ${SLOW_TRANSACTION_MS} ms)\n${slow.stack}`,
+  // Through the gated logger (obs/log.ts): the stack as frame lines only, and fixed text.
+  dbLog(
+    'warn',
+    {
+      'opportun.db.gate_held_ms': Math.round(slow.durationMs),
+      'opportun.db.awaited_outside': slow.awaitedOutside,
+      err: { type: 'SlowTransaction', stack: slow.stack },
+    },
+    'slow transaction held the database write gate',
   );
 };
 
@@ -130,8 +154,16 @@ export interface GateHeld {
 
 let watchdogMs = GATE_WATCHDOG_MS;
 let watchdogReport: (held: GateHeld) => void = (held) => {
-  console.warn(
-    `database write gate held for ${held.heldMs} ms by ${held.label}: every other request is waiting`,
+  dbLog(
+    'warn',
+    {
+      // A label set in code is a code; the call site used in its place is a frame line, kept as
+      // the error's frame (the gate reduces it to its path in the install root), not as a code.
+      'opportun.db.gate_label': held.label,
+      'opportun.db.gate_held_ms': Math.round(held.heldMs),
+      err: { type: 'GateHeld', stack: held.label },
+    },
+    'database write gate held too long',
   );
 };
 

@@ -20,7 +20,7 @@ import {
   TASK_KEYS,
   WIRE_PROVIDERS,
 } from '@opportun/ai';
-import { ATS_REF_KINDS } from '@opportun/core';
+import { ATS_REF_KINDS, COMM_CHANNELS, DISCOVERY_SOURCE_KINDS } from '@opportun/core';
 import { getTableName } from 'drizzle-orm';
 import * as schema from '../db/schema';
 import { registeredJobKinds } from '../jobs/registry';
@@ -165,7 +165,14 @@ export const SIGNALS = ['metrics', 'spans', 'logs'] as const;
 export type Signal = (typeof SIGNALS)[number];
 
 /** Why the gate or a buffer dropped something (opportun.obs.dropped). */
-export const DROP_REASONS = ['unknown_key', 'invalid_value', 'series_cap', 'buffer_full'] as const;
+export const DROP_REASONS = [
+  'unknown_key',
+  'invalid_value',
+  'series_cap',
+  'buffer_full',
+  // A log record whose message the catalog does not list: written with a fixed marker (14.8).
+  'message_withheld',
+] as const;
 export type DropReason = (typeof DROP_REASONS)[number];
 
 const int = { kind: 'int' } as const;
@@ -215,6 +222,74 @@ export const ATTRIBUTES = {
   'user.id': { kind: 'id' },
   // The request's address, for the local access log only (FR-T5 writes it). Never exported.
   'client.address': { kind: 'ip' },
+
+  // The keys of Opportun's own log calls (FR-T5, 14.9): ids, closed lists, codes and counts only.
+  // A record names a company, a source or a posting by its row id, never by its name (14.8).
+  'opportun.process.signal': { kind: 'enum', values: ['SIGINT', 'SIGTERM'] },
+  'opportun.mocks.count': int,
+  'server.port': int,
+  'opportun.db.gate_label': {
+    kind: 'code',
+    source:
+      "a transaction's TransactionOptions.label, a fixed name in code (db/gate.ts); a stack " +
+      'frame used in its place does not fit the type and is dropped',
+  },
+  'opportun.db.gate_held_ms': int,
+  'opportun.db.filesystem': {
+    kind: 'code',
+    source:
+      "the database directory's filesystem type, from the OS mount table (sqliteFilesystem.ts)",
+  },
+  'opportun.count.described': int,
+  'opportun.count.deferred': int,
+  'opportun.count.skipped': int,
+  'opportun.count.truncated': int,
+  'opportun.count.read': int,
+  'opportun.count.set': int,
+  'opportun.count.changed': int,
+  'opportun.count.cleared': int,
+  'opportun.mail.channel': { kind: 'enum', values: COMM_CHANNELS },
+  'opportun.db.awaited_outside': { kind: 'bool' },
+  // A process warning's class and code (index.ts's handlers): never its text.
+  'opportun.warning.type': {
+    kind: 'code',
+    source: "a process warning's name (DeprecationWarning), as Node sets it; never its message",
+  },
+  'opportun.warning.code': {
+    kind: 'code',
+    source: "a process warning's code (FSTDEP023), as its emitter sets it; never its message",
+  },
+  // The job a runner line or job.finished is about (jobs/runner.ts, 14.9). Its row id is local.
+  'opportun.job.id': { kind: 'id' },
+  'opportun.job.attempt': int,
+  'opportun.job.max_attempts': int,
+  // The route's own id parameter (`:id`), a row id. Local only, like every user's row id (14.8).
+  'opportun.route.id': { kind: 'id' },
+  'opportun.setting': { kind: 'enum', values: () => SETTING_NAMES },
+  'opportun.discovery.run_outcome': { kind: 'enum', values: ['done', 'error'] },
+  'opportun.count.fetched': int,
+  'opportun.count.inserted': int,
+  'opportun.count.duplicates': int,
+  'opportun.count.invalid': int,
+  'opportun.count.suppressed': int,
+  'opportun.count.filtered': int,
+  'opportun.communication.id': { kind: 'id' },
+  'opportun.company.id': { kind: 'id' },
+  'opportun.source.id': { kind: 'id' },
+  'opportun.opportunity.id': { kind: 'id' },
+  'opportun.discovery_result.id': { kind: 'id' },
+  'opportun.dedupe_candidate.id': { kind: 'id' },
+  'opportun.resume.id': { kind: 'id' },
+  'opportun.discovery.source_kind': { kind: 'enum', values: DISCOVERY_SOURCE_KINDS },
+  'opportun.ats.kind': { kind: 'enum', values: ATS_REF_KINDS },
+  'opportun.fetch.blocked_reason': {
+    kind: 'code',
+    source: "FetchBlockedError.reason (lib/safeFetch.ts), a fixed code; never the error's detail",
+  },
+  // OAUTH_PROVIDERS (lib/oauthProviders.ts) and EXTENSION_TARGETS (routes/artifacts.ts), listed
+  // here rather than imported to keep the catalog free of route code; a test keeps them in step.
+  'opportun.oauth.provider': { kind: 'enum', values: ['google', 'github', 'linkedin'] },
+  'opportun.artifact.target': { kind: 'enum', values: ['chrome', 'firefox'] },
 
   // Gen AI (14.5), FR-T4 part 2. The names are @opportun/ai's.
   [ATTR.operationName]: { kind: 'enum', values: [OPERATION_CHAT, OPERATION_INVOKE_WORKFLOW] },
@@ -469,15 +544,270 @@ export interface EventDef {
   fields: readonly AttrKey[];
 }
 
-/** Every event obs.event() writes (14.9). FR-T5 completes the list. */
-export const EVENTS = {
+/**
+ * Every audit() action (lib/audit.ts), each also an event (14.9): audit() emits it itself, with its
+ * name and its user only, never its detail or address. A test scans the source for audit() calls,
+ * so a new action fails CI until it is listed here.
+ */
+export const AUDIT_EVENTS = [
+  'admin.oauth_provider_configured',
+  'admin.oauth_provider_removed',
+  'admin.password_reset',
+  'ai.discovery_budget.updated',
+  'ai.key.validated',
+  'ai.policy.updated',
+  'ai.prompt.activated',
+  'ai.prompt.created',
+  'ai.prompt.linked',
+  'ai.prompt.proposal_accepted',
+  'ai.prompt.proposal_discarded',
+  'attachments.swept',
+  'auth.2fa_challenge',
+  'auth.2fa_disabled',
+  'auth.2fa_enabled',
+  'auth.2fa_enroll_started',
+  'auth.2fa_failed',
+  'auth.2fa_recovery_used',
+  'auth.2fa_verified',
+  'auth.login',
+  'auth.login_failed',
+  'auth.login_throttled',
+  'auth.logout',
+  'auth.oauth_bad_state',
+  'auth.oauth_existing_account',
+  'auth.oauth_link_conflict',
+  'auth.oauth_linked',
+  'auth.oauth_setpw_mismatch',
+  'auth.oauth_unknown',
+  'auth.oauth_unlinked',
+  'auth.password_changed',
+  'auth.password_reset_cli',
+  'auth.password_set_initial',
+  'auth.password_set_reauth',
+  'auth.reauth_failed',
+  'auth.register',
+  'backup.requested',
+  'data.export',
+  'data.import_queued',
+  'data.linkedin_import_queued',
+  'demo.reset',
+  'device_token.created',
+  'device_token.renamed',
+  'device_token.revoked',
+  'gmail.lookback_set',
+  'google.bad_state',
+  'google.client_configured',
+  'google.connected',
+  'google.disconnected',
+  'integration.reactive_resume_removed',
+  'integration.reactive_resume_saved',
+  'job.retry',
+  'jobs.pruned',
+  'mail.purged',
+  'resume.edits_applied',
+  'secret.created',
+  'secret.deleted',
+  'secret.updated',
+  'submission.abandoned',
+  'submission.attested',
+  'submission.confirmable_read',
+  'submission.confirmation_page_relinked',
+  'submission.confirmation_refused',
+  'submission.confirmation_unlinked',
+  'submission.confirmed',
+  'submission.failed',
+  'submission.handed_off',
+  'submission.posting_changed',
+  'submission.prefill_read',
+  'submission.refused_by_ats',
+  'submission.review_cap_hit',
+  'submission.review_cap_set',
+  'submission.reviewed',
+  'submission.snapshot_downloaded',
+  'submission.unknown',
+  'telemetry.collect.updated',
+] as const;
+export type AuditEvent = (typeof AUDIT_EVENTS)[number];
+
+/**
+ * The settings `settings.updated` names (14.9): which setting, never its value. Each is a code
+ * constant (repos/userSettings.ts callers, and the theme); a test keeps the list in step.
+ */
+export const SETTING_NAMES = [
+  'theme',
+  'submissions.dailyReviewCap',
+  'consumer_domain_veto',
+  'alert_senders',
+  'reactive_resume_url',
+  'document_store',
+  'mail_label',
+  'gmail_address',
+  'discovery_default_cron',
+  'onboarding_tour',
+  'onboarding_checklist',
+] as const;
+
+/** The events that are not audit actions (14.9). */
+const SYSTEM_EVENTS = {
   error: {
     description: 'A thrown error in a route, a 5xx response or a failed job.',
     fields: ['error.type', 'http.route', 'opportun.job.kind'],
   },
+  'settings.updated': {
+    description: 'A setting was changed: which one, never its value.',
+    fields: ['opportun.setting'],
+  },
+  'job.finished': {
+    description: 'A background job ended: its kind, how it ended, and which attempt it was.',
+    fields: ['opportun.job.kind', 'opportun.job.outcome', 'opportun.job.attempt'],
+  },
+  'discovery.run.finished': {
+    description: "A discovery source's run ended: its kind, how it ended, and its counts.",
+    fields: [
+      'opportun.discovery.source_kind',
+      'opportun.discovery.run_outcome',
+      'opportun.count.fetched',
+      'opportun.count.inserted',
+      'opportun.count.duplicates',
+      'opportun.count.invalid',
+      'opportun.count.suppressed',
+      'opportun.count.filtered',
+    ],
+  },
 } as const satisfies Record<string, EventDef>;
 
-export type EventName = keyof typeof EVENTS;
+const AUDIT_EVENT_DEF: EventDef = {
+  description: 'An audit action (lib/audit.ts): its name and its user.',
+  fields: [],
+};
+
+export type EventName = keyof typeof SYSTEM_EVENTS | AuditEvent;
+
+/** Every event obs.event() writes (14.9). */
+export const EVENTS: Readonly<Record<EventName, EventDef>> = {
+  ...SYSTEM_EVENTS,
+  ...(Object.fromEntries(AUDIT_EVENTS.map((name) => [name, AUDIT_EVENT_DEF])) as Record<
+    AuditEvent,
+    EventDef
+  >),
+};
+
+/** Whether a name is a catalogued event (audit() is given a name at run time). */
+export function isEventName(name: string): name is EventName {
+  return EVENT_DEFS.has(name);
+}
+
+/**
+ * Every message Opportun's own log calls write, with the keys each may carry (14.8, 14.9). The log
+ * destination (obs/log.ts) keeps a message only when it is listed here or is an event's name, and
+ * then only these keys; a library's message is replaced by a fixed marker. A log call's message is
+ * a fixed string (a lint rule forbids interpolation), so it can be listed. An error passed as `err`
+ * is not a key: the destination reduces it to `error.type` and its frame lines.
+ */
+const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
+  // Process and boot (index.ts, app.ts)
+  'server failed to start': [],
+  'shutting down': ['opportun.process.signal'],
+  'error during shutdown': [],
+  'TEST MOCKS ENABLED: external provider calls are fake': ['opportun.mocks.count'],
+  'no web build found; serving the API only': [],
+  'server listening': ['server.port'],
+  'uncaught exception': [],
+  'unhandled rejection': [],
+  'process warning': ['opportun.warning.type', 'opportun.warning.code'],
+  'listening on localhost only: this instance cannot be reached from another device until OPPORTUN_HOST names a reachable address (docs/install.md, "Reaching it from another device")':
+    ['server.port'],
+  // Database
+  'postgres idle connection error': [],
+  'database collation does not match SQLite ordering: create the database with LOCALE_PROVIDER libc and C collation (docs/install.md)':
+    [],
+  'database directory is on a filesystem whose locking SQLite cannot depend on (docs/install.md)': [
+    'opportun.db.filesystem',
+  ],
+  'database write gate held too long': ['opportun.db.gate_label', 'opportun.db.gate_held_ms'],
+  'slow transaction held the database write gate': [
+    'opportun.db.gate_held_ms',
+    'opportun.db.awaited_outside',
+  ],
+  // Jobs, health, requests
+  'job runner': [],
+  'no handler registered for this job kind': ['opportun.job.id', 'opportun.job.kind'],
+  'invalid stored payload; job marked dead': ['opportun.job.id', 'opportun.job.kind'],
+  'job exhausted its retries; marked dead': [
+    'opportun.job.id',
+    'opportun.job.kind',
+    'opportun.job.attempt',
+    'opportun.job.max_attempts',
+  ],
+  'job failed; will retry': [
+    'opportun.job.id',
+    'opportun.job.kind',
+    'opportun.job.attempt',
+    'opportun.job.max_attempts',
+  ],
+  'healthz database check failed': [],
+  'healthz queue lag check failed': [],
+  'healthz integrity read failed': [],
+  'unhandled error': [],
+  // The access log (logRequest, obs/log.ts): local only, never exported (14.9).
+  'request completed': [
+    'http.request.method',
+    'http.route',
+    'http.response.status_code',
+    'client.address',
+    'opportun.route.id',
+  ],
+  'session lookup failed': [],
+  'rate limit onLimited hook failed': [],
+  'no route for this asset; if the web build was rebuilt while the server was running, restart the server':
+    [],
+  'refusing to build an oversized artifact': ['opportun.artifact.target'],
+  // Sources, discovery and postings
+  'workday detail failed': [],
+  'workday detail cap reached; the rest are described on later runs': [
+    'opportun.count.described',
+    'opportun.count.deferred',
+  ],
+  'MCP items skipped': ['opportun.count.skipped', 'opportun.count.truncated'],
+  'workday posting detail failed': [],
+  'message body unreadable': ['opportun.communication.id'],
+  'posting search board lookup failed': [],
+  'ats detection failed': ['opportun.company.id'],
+  'discovery run failed': ['opportun.source.id', 'opportun.discovery.source_kind'],
+  'ats probe failed': ['opportun.ats.kind'],
+  'careers page fetch blocked': ['opportun.company.id', 'opportun.fetch.blocked_reason'],
+  'lead resolution lookup failed': ['opportun.source.id'],
+  'workday capture retry failed': ['opportun.discovery_result.id'],
+  'posting reconciliation failed': ['opportun.opportunity.id'],
+  'ats job ref backfill': [
+    'opportun.count.read',
+    'opportun.count.set',
+    'opportun.count.changed',
+    'opportun.count.cleared',
+  ],
+  'ranking a waiting posting failed': ['opportun.discovery_result.id'],
+  'could not read the message again; classifying on the snippet': [
+    'opportun.communication.id',
+    'opportun.mail.channel',
+  ],
+  'classified from the snippet only; the full message text was not available': [
+    'opportun.communication.id',
+  ],
+  // AI
+  'opportunity dedupe AI unavailable': ['opportun.dedupe_candidate.id', 'error.type'],
+  'opportunity dedupe AI returned an unrecognized ref': ['opportun.dedupe_candidate.id'],
+  'failed to record a streamed AI call': [ATTR.aiTask],
+  'could not read the base resume': ['opportun.resume.id'],
+  // Accounts and integrations
+  'failed to persist a refreshed Google token': ['user.id'],
+  'google token exchange failed': [],
+  'google token revocation failed': [],
+  'oauth sign-in exchange failed': ['opportun.oauth.provider'],
+};
+
+export const LOG_MESSAGES: ReadonlyMap<string, readonly AttrKey[]> = new Map(
+  Object.entries(LOG_MESSAGE_ENTRIES),
+);
 
 /** The keys every log record has besides its event's fields (14.9). */
 export const LOG_RECORD_KEYS = ['event', 'user.id', 'trace_id'] as const;

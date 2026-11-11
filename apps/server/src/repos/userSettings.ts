@@ -4,6 +4,7 @@ import { and, eq } from 'drizzle-orm';
 import type { z } from 'zod';
 import { settings } from '../db/schema';
 import type { Exec, UserCtx } from './base';
+import { obs } from '../obs';
 
 export const userSettingKey = (name: string, userId: string): string => `${name}:${userId}`;
 
@@ -37,6 +38,9 @@ export async function writeUserSetting(
     .values({ key: userSettingKey(name, ctx.userId), userId: ctx.userId, value, updatedAt: now })
     .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: now } })
     .run();
+  // Which setting, never its value (design 14.9). A name not in SETTING_NAMES is dropped and
+  // counted by the gate, never written.
+  obs.event('settings.updated', { 'opportun.setting': name }, { userId: ctx.userId });
 }
 
 /**

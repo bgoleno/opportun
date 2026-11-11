@@ -34,6 +34,7 @@ import {
   withoutLocalOnly,
 } from './catalog';
 import { gateAttributes } from './gate';
+import { setLogDropCounter } from './log';
 import { flushPoints, MetricAggregator, seriesKey } from './metrics';
 
 /** The logger obs.event() writes to: today's (app.log, pino). FR-T5 moves it to obs/log.ts. */
@@ -205,6 +206,8 @@ export interface StartObsOptions {
 /** Binds observability to the server's database and logger, and applies the Collect switch. */
 export async function startObs(db: Db, opts: StartObsOptions): Promise<void> {
   await stopObs();
+  // What the log gate (obs/log.ts) drops is counted like any other drop (opportun.obs.dropped).
+  setLogDropCounter(countDrop);
   runtime = {
     db,
     log: opts.log,

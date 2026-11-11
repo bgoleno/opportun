@@ -70,7 +70,10 @@ export async function industryProfileRoutes(app: FastifyInstance): Promise<void>
               try {
                 return await storeFor(app, base.store).readText(ctx, base.docRef);
               } catch (err) {
-                req.log.warn({ err, resumeId: base.id }, 'could not read the base resume');
+                req.log.warn(
+                  { err, 'opportun.resume.id': base.id },
+                  'could not read the base resume',
+                );
                 throw new HttpError(409, 'resume_unreadable', undefined, {
                   reason: err instanceof HttpError ? err.code : 'read_failed',
                   title: base.title,

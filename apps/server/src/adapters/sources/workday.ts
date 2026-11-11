@@ -352,7 +352,8 @@ export const workdaySource: DiscoverySource = {
             // unless details keep failing, which is the board being unreachable after all.
             if (err instanceof WorkdayOutageError) throw err;
             failuresInARow += 1;
-            sctx.log.warn({ board: label(b), externalPath: path, err }, 'workday detail failed');
+            // The board names its company and the path its posting: neither is logged (14.8).
+            sctx.log.warn({ err }, 'workday detail failed');
             if (failuresInARow >= WORKDAY_DETAIL_FAILURES_IN_A_ROW) {
               throw new WorkdayUnavailableError(
                 unreachable(b, `${failuresInARow} posting details failed in a row`),
@@ -365,7 +366,7 @@ export const workdaySource: DiscoverySource = {
     }
     if (deferred > 0) {
       sctx.log.info(
-        { board: label(b), described: details, deferred },
+        { 'opportun.count.described': details, 'opportun.count.deferred': deferred },
         'workday detail cap reached; the rest are described on later runs',
       );
     }

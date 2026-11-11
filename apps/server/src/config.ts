@@ -149,7 +149,7 @@ const HOSTNAME = /^[A-Za-z0-9.-]{1,253}$/;
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
 const MASTER_KEY_HEX = /^[0-9a-fA-F]{64}$/;
 
-class ConfigError extends Error {
+export class ConfigError extends Error {
   override name = 'ConfigError';
 }
 
