@@ -7,7 +7,7 @@
 // Each slice appends its own entries (14.12). The base holds the instance metrics of 14.4 and
 // the `error` event. It has no Gen AI entries: FR-T4 part 2 adds them, importing the names
 // from @opportun/ai.
-import { ATS_REF_KINDS } from '@opportun/core';
+import { ATS_REF_KINDS, DISCOVERY_SOURCE_KINDS } from '@opportun/core';
 import { getTableName } from 'drizzle-orm';
 import * as schema from '../db/schema';
 import { registeredJobKinds } from '../jobs/registry';
@@ -125,7 +125,14 @@ export const SIGNALS = ['metrics', 'spans', 'logs'] as const;
 export type Signal = (typeof SIGNALS)[number];
 
 /** Why the gate or a buffer dropped something (opportun.obs.dropped). */
-export const DROP_REASONS = ['unknown_key', 'invalid_value', 'series_cap', 'buffer_full'] as const;
+export const DROP_REASONS = [
+  'unknown_key',
+  'invalid_value',
+  'series_cap',
+  'buffer_full',
+  // A log record whose message the catalog does not list: written with a fixed marker (14.8).
+  'message_withheld',
+] as const;
 export type DropReason = (typeof DROP_REASONS)[number];
 
 const int = { kind: 'int' } as const;
@@ -154,6 +161,45 @@ export const ATTRIBUTES = {
   'user.id': { kind: 'id' },
   // The request's address, for the local access log only (FR-T5 writes it). Never exported.
   'client.address': { kind: 'ip' },
+
+  // The keys of Opportun's own log calls (FR-T5, 14.9): ids, closed lists, codes and counts only.
+  // A record names a company, a source or a posting by its row id, never by its name (14.8).
+  'opportun.process.signal': { kind: 'enum', values: ['SIGINT', 'SIGTERM'] },
+  'opportun.mocks.count': int,
+  'server.port': int,
+  'opportun.db.gate_label': {
+    kind: 'code',
+    source:
+      "a transaction's TransactionOptions.label, a fixed name in code (db/gate.ts); a stack " +
+      'frame used in its place does not fit the type and is dropped',
+  },
+  'opportun.db.gate_held_ms': int,
+  'opportun.db.filesystem': {
+    kind: 'code',
+    source:
+      "the database directory's filesystem type, from the OS mount table (sqliteFilesystem.ts)",
+  },
+  'opportun.count.described': int,
+  'opportun.count.deferred': int,
+  'opportun.count.skipped': int,
+  'opportun.count.truncated': int,
+  'opportun.communication.id': { kind: 'id' },
+  'opportun.company.id': { kind: 'id' },
+  'opportun.source.id': { kind: 'id' },
+  'opportun.opportunity.id': { kind: 'id' },
+  'opportun.discovery_result.id': { kind: 'id' },
+  'opportun.dedupe_candidate.id': { kind: 'id' },
+  'opportun.resume.id': { kind: 'id' },
+  'opportun.discovery.source_kind': { kind: 'enum', values: DISCOVERY_SOURCE_KINDS },
+  'opportun.ats.kind': { kind: 'enum', values: ATS_REF_KINDS },
+  'opportun.fetch.blocked_reason': {
+    kind: 'code',
+    source: "FetchBlockedError.reason (lib/safeFetch.ts), a fixed code; never the error's detail",
+  },
+  // OAUTH_PROVIDERS (lib/oauthProviders.ts) and EXTENSION_TARGETS (routes/artifacts.ts), listed
+  // here rather than imported to keep the catalog free of route code; a test keeps them in step.
+  'opportun.oauth.provider': { kind: 'enum', values: ['google', 'github', 'linkedin'] },
+  'opportun.artifact.target': { kind: 'enum', values: ['chrome', 'firefox'] },
 } as const satisfies Record<string, AttrType>;
 
 export type AttrKey = keyof typeof ATTRIBUTES;
@@ -270,6 +316,74 @@ export const EVENTS = {
 } as const satisfies Record<string, EventDef>;
 
 export type EventName = keyof typeof EVENTS;
+
+/**
+ * Every message Opportun's own log calls write, with the keys each may carry (14.8, 14.9). The log
+ * destination (obs/log.ts) keeps a message only when it is listed here or is an event's name, and
+ * then only these keys; a library's message is replaced by a fixed marker. A log call's message is
+ * a fixed string (a lint rule forbids interpolation), so it can be listed. An error passed as `err`
+ * is not a key: the destination reduces it to `error.type` and its frame lines.
+ */
+const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
+  // Process and boot (index.ts, app.ts)
+  'server failed to start': [],
+  'shutting down': ['opportun.process.signal'],
+  'error during shutdown': [],
+  'TEST MOCKS ENABLED: external provider calls are fake': ['opportun.mocks.count'],
+  'no web build found; serving the API only': [],
+  'listening on localhost only: this instance cannot be reached from another device until OPPORTUN_HOST names a reachable address (docs/install.md, "Reaching it from another device")':
+    ['server.port'],
+  // Database
+  'postgres idle connection error': [],
+  'database collation does not match SQLite ordering: create the database with LOCALE_PROVIDER libc and C collation (docs/install.md)':
+    [],
+  'database directory is on a filesystem whose locking SQLite cannot depend on (docs/install.md)': [
+    'opportun.db.filesystem',
+  ],
+  'database write gate held too long': ['opportun.db.gate_label', 'opportun.db.gate_held_ms'],
+  // Jobs, health, requests
+  'job runner': [],
+  'healthz database check failed': [],
+  'healthz queue lag check failed': [],
+  'healthz integrity read failed': [],
+  'unhandled error': [],
+  'session lookup failed': [],
+  'rate limit onLimited hook failed': [],
+  'no route for this asset; if the web build was rebuilt while the server was running, restart the server':
+    [],
+  'refusing to build an oversized artifact': ['opportun.artifact.target'],
+  // Sources, discovery and postings
+  'workday detail failed': [],
+  'workday detail cap reached; the rest are described on later runs': [
+    'opportun.count.described',
+    'opportun.count.deferred',
+  ],
+  'MCP items skipped': ['opportun.count.skipped', 'opportun.count.truncated'],
+  'workday posting detail failed': [],
+  'message body unreadable': ['opportun.communication.id'],
+  'posting search board lookup failed': [],
+  'ats detection failed': ['opportun.company.id'],
+  'discovery run failed': ['opportun.source.id', 'opportun.discovery.source_kind'],
+  'ats probe failed': ['opportun.ats.kind'],
+  'careers page fetch blocked': ['opportun.company.id', 'opportun.fetch.blocked_reason'],
+  'lead resolution lookup failed': ['opportun.source.id'],
+  'workday capture retry failed': ['opportun.discovery_result.id'],
+  'posting reconciliation failed': ['opportun.opportunity.id'],
+  // AI
+  'opportunity dedupe AI unavailable': ['opportun.dedupe_candidate.id', 'error.type'],
+  'opportunity dedupe AI returned an unrecognized ref': ['opportun.dedupe_candidate.id'],
+  'failed to record a streamed AI call': [],
+  'could not read the base resume': ['opportun.resume.id'],
+  // Accounts and integrations
+  'failed to persist a refreshed Google token': ['user.id'],
+  'google token exchange failed': [],
+  'google token revocation failed': [],
+  'oauth sign-in exchange failed': ['opportun.oauth.provider'],
+};
+
+export const LOG_MESSAGES: ReadonlyMap<string, readonly AttrKey[]> = new Map(
+  Object.entries(LOG_MESSAGE_ENTRIES),
+);
 
 /** The keys every log record has besides its event's fields (14.9). */
 export const LOG_RECORD_KEYS = ['event', 'user.id', 'trace_id'] as const;

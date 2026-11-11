@@ -128,6 +128,9 @@ importers:
       pg:
         specifier: 8.23.1
         version: 8.23.1
+      pino:
+        specifier: 10.4.0
+        version: 10.4.0
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
