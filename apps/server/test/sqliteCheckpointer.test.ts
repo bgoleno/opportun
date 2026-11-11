@@ -50,6 +50,10 @@ describe('the background checkpointer flag (#383)', () => {
     expect(loadDbConfig({ OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT: '0' })).toEqual({
       dialect: 'sqlite',
     });
+    // Empty, as compose passes a variable the operator left unset (`${...:-}`): off.
+    expect(loadDbConfig({ OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT: '' })).toEqual({
+      dialect: 'sqlite',
+    });
     expect(loadDbConfig({ OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT: '1' })).toEqual({
       dialect: 'sqlite',
       backgroundCheckpoint: true,
