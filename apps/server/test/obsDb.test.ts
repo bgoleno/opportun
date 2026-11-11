@@ -101,6 +101,22 @@ describe('the database metric (#343)', () => {
     expect(exporter.getFinishedSpans().filter((s) => s.name.includes('companies'))).toEqual([]);
   });
 
+  it('a repeated statement is one series, counted each time, and a failure of it is its own', async () => {
+    const { app } = await boot();
+    await setCollecting(true);
+    for (let i = 0; i < 3; i += 1) await rawAll(app.db, sql`SELECT count(*) AS n FROM resumes`);
+    await expect(
+      rawAll(app.db, sql`SELECT count(*) AS n FROM resumes WHERE nope = 1`),
+    ).rejects.toThrow();
+    const points = (await dbPoints(app)).filter(
+      (p) => p.attributes['db.collection.name'] === 'resumes',
+    );
+    const ok = points.find((p) => !('error.type' in p.attributes));
+    const failed = points.find((p) => 'error.type' in p.attributes);
+    expect(ok?.count).toBe(3);
+    expect(failed?.count).toBe(1);
+  });
+
   it('records raw SQL too', async () => {
     const { app } = await boot();
     await setCollecting(true);

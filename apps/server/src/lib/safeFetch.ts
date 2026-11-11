@@ -491,7 +491,7 @@ export function createSafeFetch(deps: SafeFetchDeps) {
             target: outboundTargetFor({
               url: target.url,
               ...(opts.target === undefined ? {} : { target: opts.target }),
-              ...(opts.officialApiUrl === undefined ? {} : { officialApiUrl: opts.officialApiUrl }),
+              officialApi: opts.officialApiUrl !== undefined,
             }),
             method: opts.post === undefined ? 'GET' : (opts.post.method ?? 'POST'),
             url: target.url,

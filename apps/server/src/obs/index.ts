@@ -35,7 +35,7 @@ import {
   withoutLocalOnly,
 } from './catalog';
 import { gateAttributes } from './gate';
-import { flushPoints, MetricAggregator } from './metrics';
+import { flushPoints, MetricAggregator, seriesKey } from './metrics';
 
 /** The logger obs.event() writes to: today's (app.log, pino). FR-T5 moves it to obs/log.ts. */
 export interface ObsLogger {
@@ -275,6 +275,43 @@ function record(
     return;
   }
   sinks.metrics?.record(metric, value, withoutLocalOnly(gated));
+}
+
+/**
+ * An instance metric's attributes, gated once, with their series key: what a boundary that
+ * records the same attributes over and over keeps instead of gating them on every value (the
+ * database wrapper, per statement text; 14.11's "after the first sight of its text").
+ */
+export interface PreparedRecord {
+  metric: MetricName;
+  attributes: Attributes;
+  key: string;
+}
+
+/** Gates `attributes` once for an instance metric; drops are counted as for record(). */
+export function prepareRecord(
+  metric: MetricName,
+  attributes: Readonly<Record<string, unknown>>,
+): PreparedRecord {
+  const def = metricDef(metric);
+  if (def.scope !== 'instance') throw new Error(`obs: ${metric} is not an instance metric`);
+  const gated = gateAttributes('metrics', def.attributes, attributes, countDrop);
+  return { metric, attributes: gated, key: seriesKey(metric, null, gated) };
+}
+
+/** Records one value with attributes prepareRecord() already gated. */
+export function recordPrepared(prepared: PreparedRecord, value: number): void {
+  if (!collecting || aggregator === undefined || runtime === undefined) return;
+  if (!Number.isFinite(value)) {
+    countDrop('metrics', 'invalid_value');
+    return;
+  }
+  const { metric, attributes, key } = prepared;
+  if (!aggregator.add(metric, value, attributes, null, runtime.now(), false, key)) {
+    countDrop('metrics', 'series_cap');
+    return;
+  }
+  sinks.metrics?.record(metric, value, withoutLocalOnly(attributes));
 }
 
 /** A started span's handle: further attributes pass the same gate. */

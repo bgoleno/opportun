@@ -6,8 +6,10 @@
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { obsMetricPoints } from '../src/db/schema';
+import { createReactiveResumeStore } from '../src/adapters/reactiveResume';
 import { observedGoogleApi, type GoogleApi } from '../src/lib/google';
 import { guardedMcpFetch } from '../src/lib/mcpClient';
+import { providerFetchOptions } from '../src/lib/oauthProviders';
 import {
   createSafeFetch,
   OFFICIAL_API_URLS,
@@ -18,6 +20,7 @@ import { flushNow, setCollecting } from '../src/obs';
 import { MINUTE_MS } from '../src/obs/metrics';
 import { outboundTargetFor } from '../src/obs/outbound';
 import { useApi } from './api';
+import { fakeReactiveResume, RR_BASE_ID, RR_ORIGIN } from './fakeReactiveResume';
 
 const boot = useApi();
 type App = Awaited<ReturnType<typeof boot>>['app'];
@@ -94,7 +97,7 @@ describe('outboundTargetFor: a literal map, tested per host (#343)', () => {
     expect(
       outboundTargetFor({
         url: new URL(OFFICIAL_API_URLS.linkedinToken),
-        officialApiUrl: OFFICIAL_API_URLS.linkedinToken,
+        officialApi: true,
       }),
     ).toBe('oauth');
     // The caller's own target wins.
@@ -259,5 +262,38 @@ describe('the Google API seam (#343)', () => {
       ]),
     );
     expect(JSON.stringify(points)).not.toContain('jane');
+  });
+});
+
+describe('the two callers whose host cannot name the target (#343, tl)', () => {
+  it('OAuth provider calls are target oauth, except Google, which its host names', () => {
+    for (const url of [
+      'https://github.com/login/oauth/access_token',
+      'https://api.github.com/user',
+      OFFICIAL_API_URLS.linkedinToken,
+      OFFICIAL_API_URLS.linkedinUserinfo,
+    ]) {
+      expect(providerFetchOptions(url).target, url).toBe('oauth');
+    }
+    // Google's hosts derive `google` in safeFetch; no explicit target.
+    expect(providerFetchOptions('https://oauth2.googleapis.com/token').target).toBeUndefined();
+  });
+
+  it("every Reactive Resume call is target reactive_resume (the host is the user's)", async () => {
+    const rr = fakeReactiveResume();
+    rr.keys.set('rr-key-0123456789', 'alice');
+    rr.seed('alice', { id: RR_BASE_ID });
+    const targets: unknown[] = [];
+    const spy: typeof rr.fetch = (url, opts) => {
+      targets.push(opts.target);
+      return rr.fetch(url, opts);
+    };
+    const store = createReactiveResumeStore({
+      fetch: spy,
+      config: async () => ({ baseUrl: RR_ORIGIN, apiKey: 'rr-key-0123456789' }),
+    });
+    await store.readText({ userId: 'u1', isAdmin: false }, RR_BASE_ID);
+    expect(targets.length).toBeGreaterThan(0);
+    expect(new Set(targets)).toEqual(new Set(['reactive_resume']));
   });
 });

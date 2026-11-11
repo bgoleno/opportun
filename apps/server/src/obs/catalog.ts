@@ -128,7 +128,18 @@ export const DB_OPERATIONS = [
 ] as const;
 
 /** The schema's tables (db.collection.name), plus SQLite's full-text index and OTHER. */
+let tables: readonly string[] | undefined;
+
+/**
+ * Computed once, on first use (the schema does not change at runtime). Rebuilding it per check
+ * cost about 8 microseconds a database statement, four times the budget of 14.11 (#343).
+ */
 function tableNames(): readonly string[] {
+  tables ??= readTableNames();
+  return tables;
+}
+
+function readTableNames(): readonly string[] {
   const exported = new Set<string>(schema.TABLE_EXPORTS);
   const tables = Object.entries(schema)
     .filter(([name]) => exported.has(name))

@@ -9,7 +9,14 @@
 // writes run suppressed and are not measured (14.6).
 import { checkValue } from './gate';
 import { ATTRIBUTE_TYPES, DB_OPERATIONS, OTHER } from './catalog';
-import { isCollecting, isSuppressed, obs } from './index';
+import {
+  isCollecting,
+  isSuppressed,
+  obs,
+  type PreparedRecord,
+  prepareRecord,
+  recordPrepared,
+} from './index';
 import { errorType } from './outbound';
 
 export type DbSystem = 'sqlite' | 'postgresql';
@@ -50,14 +57,39 @@ export function statementShape(text: string): StatementShape {
   return shape;
 }
 
-function record(system: DbSystem, text: string, started: number, err?: unknown): void {
+function attributesOf(system: DbSystem, text: string): Record<string, unknown> {
   const { operation, table } = statementShape(text);
-  obs.record('db.client.operation.duration', (performance.now() - started) / 1000, {
+  return {
     'db.system.name': system,
     'db.operation.name': operation,
     ...(table === undefined ? {} : { 'db.collection.name': table }),
-    ...(err === undefined ? {} : { 'error.type': errorType(err) }),
-  });
+  };
+}
+
+/**
+ * A successful statement's record, prepared once per text and system: a repeated statement
+ * skips the gate and the series key (14.11: under 2 microseconds after the first sight of its
+ * text). Bounded like the shapes; past the bound, statements are recorded the ordinary way.
+ */
+const prepared = new Map<string, PreparedRecord>();
+
+function record(system: DbSystem, text: string, started: number, err?: unknown): void {
+  const seconds = (performance.now() - started) / 1000;
+  if (err !== undefined) {
+    // Rare, and its error.type varies: recorded the ordinary way.
+    obs.record('db.client.operation.duration', seconds, {
+      ...attributesOf(system, text),
+      'error.type': errorType(err),
+    });
+    return;
+  }
+  const cacheKey = `${system}\n${text}`;
+  let p = prepared.get(cacheKey);
+  if (p === undefined) {
+    p = prepareRecord('db.client.operation.duration', attributesOf(system, text));
+    if (prepared.size < SHAPES_MAX) prepared.set(cacheKey, p);
+  }
+  recordPrepared(p, seconds);
 }
 
 /** Runs a synchronous statement (SQLite) and records it. */

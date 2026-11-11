@@ -160,10 +160,11 @@ function statusOf(err: unknown): number | undefined {
 export function outboundTargetFor(req: {
   url: URL;
   target?: OutboundTarget;
-  officialApiUrl?: string;
+  /** The request is one of safeFetch's official API URLs (C-1): an OAuth call. */
+  officialApi?: boolean;
 }): OutboundTarget {
   if (req.target !== undefined) return req.target;
-  if (req.officialApiUrl !== undefined) return 'oauth';
+  if (req.officialApi === true) return 'oauth';
   const host = req.url.hostname.toLowerCase().replace(/\.$/, '');
   const known = TARGET_BY_HOST.get(host);
   if (known !== undefined) return known;
