@@ -7,7 +7,8 @@
 // table, whose rows belong to a user. A missing row, or one that does not parse, reads as off.
 //
 // The credential is cleared whenever the type, scheme, host or port changes (rule 5): a new scheme
-// could send it in clear, and a new port to another service. What it is sent as depends on the
+// could send it in clear, and a new port to another service. A new OTLP header name clears it too
+// (#382): the secret would otherwise go out in a header the admin did not choose for it. What it is sent as depends on the
 // type: OTLP, in the one header the admin names; Prometheus, as the Authorization header's value
 // (for a Prometheus behind an authenticating proxy, or with basic auth); InfluxDB, as its API
 // token. The Datadog Agent takes none: it holds the API key itself.
@@ -95,6 +96,9 @@ export type ExportChangeError =
 /** One line of printable characters: it goes in a header, so no CR, LF or NUL can reach one. */
 const CREDENTIAL = /^[\x20-\x7e]{1,4096}$/;
 
+/** An OTLP destination's header name, compared without case: header names ignore it. */
+const headerOf = (d: Destination): string => (d.headerName ?? '').toLowerCase();
+
 function sameEndpoint(a: Destination | null, b: Destination | null): boolean {
   return (
     a !== null &&
@@ -102,7 +106,10 @@ function sameEndpoint(a: Destination | null, b: Destination | null): boolean {
     a.type === b.type &&
     a.scheme === b.scheme &&
     a.host.toLowerCase() === b.host.toLowerCase() &&
-    a.port === b.port
+    a.port === b.port &&
+    // The credential is sent in this header, so a new one would carry the secret somewhere the
+    // admin did not choose for it (https://github.com/bgoleno/opportun/issues/382).
+    headerOf(a) === headerOf(b)
   );
 }
 

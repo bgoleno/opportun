@@ -28,7 +28,12 @@ import {
   type SpanExportSink,
 } from '../index';
 import { exportAttributes, exportSpanName } from './allowlist';
-import { checkDestination, endpointsFor, type Destination } from './destination';
+import {
+  checkDestination,
+  endpointsFor,
+  type Destination,
+  type DestinationRefusal,
+} from './destination';
 import type { Resource } from '@opentelemetry/resources';
 import type { MetricPipeline } from './otlp';
 import { send, type SendOutcome } from './sender';
@@ -67,7 +72,16 @@ export interface Exporters {
 /** What an admin sees (14.10): the last success, and the last failure as a class only. */
 export interface ExportStatus {
   lastSuccessAt: number | null;
-  lastFailure: { outcome: Exclude<SendOutcome, 'ok' | 'aborted'>; at: number } | null;
+  lastFailure: {
+    outcome: Exclude<SendOutcome, 'ok' | 'aborted'>;
+    at: number;
+    /**
+     * Why a send was blocked, as the destination check's closed reason: never the host or the
+     * address. A destination saved while OPPORTUN_TELEMETRY_ALLOW_PRIVATE=1 was set is blocked
+     * once the server runs without it, and the admin's card says so (#382).
+     */
+    reason?: DestinationRefusal;
+  } | null;
 }
 
 const status: ExportStatus = { lastSuccessAt: null, lastFailure: null };
@@ -76,10 +90,11 @@ export function exportStatus(): ExportStatus {
   return { lastSuccessAt: status.lastSuccessAt, lastFailure: status.lastFailure };
 }
 
-function note(outcome: SendOutcome): void {
+function note(outcome: SendOutcome, reason?: DestinationRefusal): void {
   if (outcome === 'aborted') return; // export stopped: not the destination's failure
   if (outcome === 'ok') status.lastSuccessAt = Date.now();
-  else status.lastFailure = { outcome, at: Date.now() };
+  else
+    status.lastFailure = { outcome, at: Date.now(), ...(reason === undefined ? {} : { reason }) };
 }
 
 /** A record the export side removed or could not hold, counted in opportun.obs.dropped. */
@@ -112,9 +127,14 @@ async function post(
       ...(opts.lookup === undefined ? {} : { lookup: opts.lookup }),
     });
     if (stop.aborted) return false;
-    const outcome = check.ok
-      ? await send({ url, address: check.address, body, contentType, headers }, { signal: stop })
-      : 'blocked';
+    if (!check.ok) {
+      note('blocked', check.reason);
+      return false;
+    }
+    const outcome = await send(
+      { url, address: check.address, body, contentType, headers },
+      { signal: stop },
+    );
     note(outcome);
     return outcome === 'ok';
   });
@@ -374,6 +394,12 @@ export async function flushExport(): Promise<void> {
   await current?.flush();
 }
 
+/** A test send's outcome class, and why when the destination check blocked it. */
+export interface TestOutcome {
+  outcome: SendOutcome | 'no_destination';
+  reason?: DestinationRefusal;
+}
+
 /**
  * "Send a test" (rule 7): one request to the stored destination's first endpoint, with an empty
  * batch, reporting its outcome class only.
@@ -382,32 +408,34 @@ export async function sendTest(
   db: Db,
   deployment: ExportDeployment,
   over: Partial<ExportOptions> = {},
-): Promise<SendOutcome | 'no_destination'> {
+): Promise<TestOutcome> {
   const stored = await readExport(db);
-  if (stored.destination === null) return 'no_destination';
+  if (stored.destination === null) return { outcome: 'no_destination' };
   const destination = stored.destination;
   const endpoints = endpointsFor(destination);
   const url = endpoints.metrics ?? endpoints.spans ?? endpoints.logs;
-  if (url === undefined) return 'no_destination';
+  if (url === undefined) return { outcome: 'no_destination' };
   let credential: string | undefined;
   try {
     credential = credentialOf(db, stored);
   } catch {
-    return 'auth';
+    return { outcome: 'auth' };
   }
-  return await runSuppressed(async () => {
+  return await runSuppressed(async (): Promise<TestOutcome> => {
     const check = await checkDestination(destination, {
       allowPrivate: deployment.telemetryAllowPrivate,
       ...(over.lookup === undefined ? {} : { lookup: over.lookup }),
     });
-    if (!check.ok) return 'blocked';
+    // Blocked says why, as a closed reason (#382): the admin asked, and is told what to fix.
+    if (!check.ok) return { outcome: 'blocked', reason: check.reason };
     // An empty OTLP request is a valid, empty message; an empty write is valid line protocol.
-    return await send({
+    const outcome = await send({
       url,
       address: check.address,
       body: new Uint8Array(),
       contentType: destination.type === 'influxdb' ? LINE_PROTOCOL : PROTOBUF,
       headers: credentialHeaders(destination, credential),
     });
+    return { outcome };
   });
 }

@@ -452,3 +452,38 @@ export function renderPrompt(template: string, vars: Record<string, string>): st
       : value;
   });
 }
+
+/**
+ * The rendered prompt in two parts: `prefix`, everything before the first `*_untrusted`
+ * variable, and `rest`, that variable and everything after it. `prefix + rest` is exactly
+ * renderPrompt's result. A provider caches only an unchanging prefix, and the untrusted parts
+ * are the per-call data (a posting, a list of companies), so the prefix is the part a cache
+ * can reuse (https://github.com/bgoleno/opportun/issues/356). Without an untrusted variable the
+ * prefix is empty: nothing in the template is known to stay the same from call to call.
+ */
+export function renderPromptParts(
+  template: string,
+  vars: Record<string, string>,
+): { prefix: string; rest: string } {
+  const full = renderPrompt(template, vars);
+  const first = [...template.matchAll(VAR_PATTERN)].find((m) =>
+    (m[1] as string).endsWith(UNTRUSTED_SUFFIX),
+  );
+  if (first === undefined) return { prefix: '', rest: full };
+  // The template's head holds no untrusted variable, and rendering is per placeholder, so the
+  // head renders to exactly the first part of the whole.
+  const prefix = renderPrompt(template.slice(0, first.index), vars);
+  return { prefix, rest: full.slice(prefix.length) };
+}
+
+/**
+ * The rendered system prompt, with where its unchanging part ends (renderPromptParts), as
+ * runStructured takes them: `system` is exactly renderPrompt's result.
+ */
+export function systemWithCacheBreak(
+  template: string,
+  vars: Record<string, string>,
+): { system: string; cacheBreak: number } {
+  const { prefix, rest } = renderPromptParts(template, vars);
+  return { system: prefix + rest, cacheBreak: prefix.length };
+}

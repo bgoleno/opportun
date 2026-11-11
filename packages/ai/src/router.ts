@@ -8,13 +8,14 @@ import {
   Output,
   RetryError,
   streamText,
+  type Instructions,
   type LanguageModel,
   type LanguageModelUsage,
   type ModelMessage,
   type ToolSet,
 } from 'ai';
 import type { z } from 'zod';
-import { estimateCost } from './pricing';
+import { cacheMinTokens, estimateCost } from './pricing';
 import { createLanguageModel } from './providers';
 import { InferenceSpan, SDK_TELEMETRY_OFF } from './telemetry';
 import {
@@ -39,7 +40,7 @@ const MAX_ERROR_DETAIL = 300;
 interface Tokens {
   input: number;
   output: number;
-  /** Part of `input` already; kept for the span only, the ledger has no column for them. */
+  /** Part of `input` already; priced at their own rates (#356) and given to the span. */
   cacheRead: number;
   cacheWrite: number;
 }
@@ -128,6 +129,7 @@ class Run {
       this.tokens.input,
       this.tokens.output,
       this.policy,
+      { readTokens: this.tokens.cacheRead, writeTokens: this.tokens.cacheWrite },
     );
     this.span.end({
       ...(failure === undefined ? {} : { errorType: failure.reason }),
@@ -216,6 +218,48 @@ function callSettings(policy: ModelPolicy): { maxOutputTokens: number; temperatu
 }
 
 /**
+ * Sizing a prefix against the model's cache minimum, from the token counts on
+ * https://github.com/bgoleno/opportun/pull/390 (count_tokens, 2026-11-11):
+ * - The system text ran at 3.0 to 3.25 characters a token for the rank prompt (claude-sonnet-5-5)
+ *   and 2.4 for the NAICS table (claude-haiku-5-5). 3 counts that prose up to 8% high and the
+ *   table low; with the allowance below it put every measured rank row on the right side of 512.
+ * - Structured output added exactly 344 tokens on both models, for two schemas of 442 and 461
+ *   characters: the system prompt the provider adds to explain the format, not the schema's
+ *   characters. It is inside the cached span: the tags prefix counted 6,469 tokens with it and
+ *   6,125 without, and a live call wrote 6,472 to the cache.
+ * Every structured call carries that allowance. A much larger schema would add more, which only
+ * makes the estimate low. Marking a prefix that turns out to be short costs nothing at the
+ * provider (it is simply not cached), so the estimate can sit this close to the counts.
+ */
+const CHARS_PER_TOKEN = 3;
+const STRUCTURED_OUTPUT_TOKENS = 344;
+
+/**
+ * The system prompt as the SDK takes it (https://github.com/bgoleno/opportun/issues/356). The
+ * prefix is marked for Anthropic's cache only when the model caches a prefix of its size: a
+ * marked prefix the model would not cache would earn nothing. Everywhere else the prompt goes
+ * whole: OpenAI caches on its own when the start of a prompt repeats, which the split's order
+ * already gives, and an OpenAI-compatible endpoint (a local model, a gateway) gets exactly what
+ * it got before.
+ */
+function systemFor(policy: ModelPolicy, system: string, cacheBreak?: number): Instructions {
+  if (cacheBreak === undefined || cacheBreak <= 0 || cacheBreak >= system.length) return system;
+  // Only Anthropic models have a minimum (cacheMinTokens), so only they are ever marked.
+  const min = cacheMinTokens(policy.provider, policy.model);
+  if (min === undefined) return system;
+  // What the provider caches at the break: the structured-output allowance and the prefix.
+  if (STRUCTURED_OUTPUT_TOKENS + cacheBreak / CHARS_PER_TOKEN < min) return system;
+  return [
+    {
+      role: 'system',
+      content: system.slice(0, cacheBreak),
+      providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+    },
+    { role: 'system', content: system.slice(cacheBreak) },
+  ];
+}
+
+/**
  * One structured call: the model output must validate against `schema`. Schema-invalid output
  * is retried once; a second failure throws AiUnavailableError('invalid_output').
  */
@@ -224,6 +268,11 @@ export async function runStructured<T>(
   task: TaskKey,
   opts: {
     system: string;
+    /**
+     * Where the part of `system` that stays the same from call to call ends, in characters
+     * (systemWithCacheBreak). The router may mark the part before it for the provider's cache.
+     */
+    cacheBreak?: number;
     prompt: string;
     schema: z.ZodType<T>;
     promptId?: string;
@@ -246,7 +295,7 @@ export async function runStructured<T>(
       const result = await run.span.run(() =>
         generateText({
           model,
-          system: opts.system,
+          system: systemFor(policy, opts.system, opts.cacheBreak),
           prompt: opts.prompt,
           output: Output.object({ schema: opts.schema }),
           maxRetries: SDK_MAX_RETRIES,

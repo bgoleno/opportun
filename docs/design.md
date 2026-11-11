@@ -289,9 +289,48 @@ discovered ──► interested ──► preparing ──► applied ──► 
      └─► dismissed ◄┴─────────────┴─────────────┴────────────┴───────────┴──► closed(rejected|withdrawn|ghosted)
 ```
 
-Transitions are validated in `packages/core`; every transition writes stage_history;
-dismissal from any stage requires no reason but accepts one (FR-O5). Reopening a
+Transitions are validated in `packages/core` (`stateMachine.ts`); every transition writes
+stage_history; dismissal from any stage requires no reason but accepts one (FR-O5). Reopening a
 dismissed/closed opportunity is allowed and recorded.
+
+The rule (#397):
+
+- **Any chain stage can move to any other chain stage in one move,** forward or back. The chain
+  is discovered, interested, preparing, applied, in_process, offer. A stage cannot move to
+  itself.
+- **Any stage can be dismissed or closed;** closing needs a reason.
+- **A dismissed or closed opportunity leaves only through Reopen** (the server refuses a move
+  out of one without `reopen`).
+
+Why any stage, not one step back or a fixed subset: a stage move writes only the stage, the
+card's place in its column and one history row, and nothing in the data depends on the order
+of stages. Forward moves of any length were always allowed, so a mis-click forward has to be
+as easy to correct.
+
+A move back is a recorded correction, not an undo. It changes nothing and deletes nothing
+tied to a later stage:
+
+- **Stage history and timeline:** one new entry (from, to, when), like any move. Earlier
+  entries stay.
+- **Assisted apply attempts** have their own states and do not follow the stage. A live
+  attempt (draft, reviewed, handed off) stays live and can be continued or cancelled. A
+  submitted attempt stays submitted, with its timeline entry and the resume's send record. The
+  attempts' own rules apply as they are: a new attempt starts only in Interested, Preparing or
+  Applied, and marking one submitted moves the stage to Applied only on the user's tick and only
+  from Interested or Preparing.
+- **Resume sends, linked messages, next steps and notes:** untouched.
+- **The card** goes to the end of the target column (#240).
+- **Counts of "ever reached a stage"** read from history still include the mistaken move.
+  Removing a history entry would be a separate feature.
+
+Mail proposals keep their own rule (`proposalFor`): a message proposes only a move forward or
+a close, so a backward move is always the user's own.
+
+A refused move says what is allowed instead. Out of closed or dismissed: "Use Reopen to move a
+closed opportunity back to Preparing." Any other refusal (a page showing a stale stage, or a
+rule added later), including a 422 `invalid_transition` from the server, whose `from` and `to`
+the web reads: "In process can move to New, Interested, Preparing, Applied, Offer, Dismissed or
+Closed.", from the same list the stage control offers.
 
 ## 5. AI subsystem
 
@@ -746,8 +785,10 @@ Accepted decisions will move into `docs/adr/` as individual records once reviewe
 
 Requirements: FR-T1 to FR-T7, NFR-PRV6, NFR-PRV7 and NFR-OPS7. The work is tracked on
 https://github.com/bgoleno/opportun/issues/340, and this section is the design every slice
-follows (https://github.com/bgoleno/opportun/issues/348). **Status: designed; only FR-T1 is
-built.** A name in `code` below that does not exist yet is the name its slice creates.
+follows (https://github.com/bgoleno/opportun/issues/348). **Status: built.** FR-T1 to FR-T7
+have shipped. This section was written before the code, so where it and the code differ, the
+code is right: 14.13 lists the differences found so far. 14.12 is the plan the work followed,
+not a list of what is left.
 
 | Slice | Requirement                          | Issue                                          |
 | ----- | ------------------------------------ | ---------------------------------------------- |
@@ -762,8 +803,8 @@ built.** A name in `code` below that does not exist yet is the name its slice cr
 
 ### 14.1 What it is
 
-Everything below except FR-T1 describes the design, in the present tense. It is not shipped
-behaviour until its slice merges.
+Everything below describes the design in the present tense. It has shipped; see the status
+line above for how to read a difference.
 
 Opportun measures itself with OpenTelemetry names and data shapes: metrics, traces and log
 records for HTTP routes, background jobs, database access, outbound requests and, most of
@@ -1138,9 +1179,19 @@ so a mistake in code fails CI instead of passing in silence.
   the user configured, a page they captured, and a tenant's own host such as a Workday board,
   whose name is the company's.
 - **Errors** carry `error.type`, never the message. The local log keeps a stack made of frame
-  lines only (`at ...`): a frame inside the install root keeps its path relative to it, a
-  frame outside loses its path, and every other line of a stack, where a message can quote
-  data, is dropped. The store and the export carry no stack.
+  lines only (`at ...`), and only when the stack's header is the one for the error's current
+  message: a message reassigned after its stack was formatted gives no frames, rather than a
+  miscount that would read message lines as frames
+  (https://github.com/bgoleno/opportun/issues/381). A frame inside the install root keeps its
+  function name and its path relative to the root. Each run of frames outside it is one fixed
+  `at <external>`, with no name and no path. Every other line of a stack, where a message can
+  quote data, is dropped. The store and the export carry no stack. The server's own crashes
+  and warnings take the same path: its process handlers log an uncaught exception or rejection
+  as one gated line, and a warning as its type and code only. **One known exception:** a
+  warning raised on tsx's loader thread (the image runs `node --import tsx`), seen on a start
+  with a cold cache, is printed by Node in full, because the handlers run on the main thread.
+  Only tsx's loader and code an operator adds with `--import` or `NODE_OPTIONS` run on that
+  thread, never the server's code or user data.
 - **Export identifies no user.** No row id that belongs to a user leaves the instance:
   `user.id`, `gen_ai.conversation.id`, `opportun.ai.prompt.id`, a company's id. Each would
   group the export by user. They stay in the local store and the local log, and the exporter
@@ -1253,8 +1304,10 @@ holds a credential.
    the timeout is 10 seconds, and the response body is discarded.
 5. The credential is sealed with the vault key and kept in the instance's settings row, as
    an OAuth provider's client secret is. It is never returned, and it is sent to the
-   configured destination only. It is cleared whenever the type, scheme, host or port changes:
-   a new scheme could send it in clear, and a new port to another service. The OTLP header's
+   configured destination only. It is cleared whenever the type, scheme, host, port or OTLP header name changes
+   (the name compared without case): a new scheme could send it in clear, a new port could send
+   it to another service, and a new header name would carry it where the admin did not choose.
+   The OTLP header's
    name is token characters only, and may not be `Host`, `Content-Length`,
    `Transfer-Encoding`, `Connection` or `Content-Type`.
 6. Export is unavailable when `OPPORTUN_DEMO=1`: the demo's admin account is public.
@@ -1282,14 +1335,17 @@ caps are tested by exceeding them.
 
 **Measured whole operations** (https://github.com/bgoleno/opportun/issues/374). A crossing
 measured alone leaves out what a whole operation adds around it: the HTTP plugin's hooks, the
-context switches around the handler, the statements, the garbage. So `test/obsBench.test.ts`
-(run with `OBS_BENCH=1`) also times whole operations: process CPU time per operation, in batches
-of 150 alternated with collection off and on in one process and one database, 30 pairs, the
-median of the pairs' differences. The figures below are qa's harness, also process CPU time, so
-the garbage collector's helper threads count in them (median of 20 pairs, three runs per tree,
-`main` and this change alternated in one sitting at load averages falling from 21 to 8, on the
-Mac mini the team shares); only alternation cancels a shared machine's load. The span flush runs
-between batches and is timed apart: it is off the request path, and bounded on its own (#375).
+context switches around the handler, the statements, the garbage. The budgets are stated, and
+checked, by qa's harness: process CPU time per whole operation, so the garbage collector's helper
+threads count in it (median of 20 pairs, three runs per tree, `main` and this change alternated in
+one sitting at load averages falling from 21 to 8, on the Mac mini the team shares); only
+alternation cancels a shared machine's load. The figures below are that harness.
+`test/obsBench.test.ts` (run with `OBS_BENCH=1`) is the comparison tool for `main` against a change
+in one sitting: it times whole operations the same way, in batches of 150 alternated with
+collection off and on in one process and one database, 30 pairs, the median of the pairs'
+differences, and it asserts nothing, because its readings move with the machine's load. The span
+flush runs between batches and is timed apart: it is off the request path, and bounded on its own
+(#375).
 
 - **A whole request** (`GET /api/v1/opportunities/:id`: one HTTP crossing and five statements):
   with collection off it costs 268 to 295 microseconds of CPU, and collection adds 13 to 23 (it
@@ -1299,8 +1355,9 @@ between batches and is timed apart: it is off the request path, and bounded on i
 - **An AI call** (`runStructured` with a stub model, through the router, the budget check and
   the `task_runs` ledger): with collection off it costs 162 to 198 microseconds of CPU, and
   collection adds 15 to 27 on the call's path (33 to 60 before the change below). Its kept span
-  is written later by the span flush, about 155 to 161 microseconds per span, timed apart
-  (#375). The budget is 60 microseconds per call, not the 20 of one crossing, because a model
+  is written later by the span flush, timed apart (#375): since the flush runs in chunks with
+  yields (#384), about 237 to 259 microseconds per span in qa's harness, in flushes of 40 spans,
+  and 102 to 131 in the repo bench, in flushes of 150. The budget is 60 microseconds per call, not the 20 of one crossing, because a model
   call takes hundreds of milliseconds or more: 60 microseconds is well under a tenth of a
   percent of it. The four Gen AI metrics are gated once per user, task, model and provider.
 
@@ -1365,6 +1422,11 @@ parts.
 - **Jobs use `opportun.job.*`**, not the messaging conventions, which are not stable and
   describe brokers.
 - **Company names are not used**, though the original request allowed them in logs (14.8).
+- **A blocked send says why.** Rule 7 has "Send a test" report only its outcome class. When the
+  destination check blocks the send, the card also shows the check's reason (for example that
+  a private address needs `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`), and an export that is on but
+  blocked shows a notice with it (https://github.com/bgoleno/opportun/issues/382). The reason is
+  the admin's to see and holds no host or credential.
 - **Out of scope:** a scrape endpoint, gRPC, more than one destination at a time, sampling
   (volume does not need it), an in-app log viewer, alerting, and storing or showing prompt or
   response content in traces.

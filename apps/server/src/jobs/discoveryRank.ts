@@ -6,7 +6,7 @@
 import {
   AiUnavailableError,
   RankOutputSchema as AiRankOutputSchema,
-  renderPrompt,
+  systemWithCacheBreak,
   runStructured,
 } from '@opportun/ai';
 import type { NormalizedPosting } from '@opportun/core';
@@ -142,7 +142,11 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
   const callBegan = Date.now();
   try {
     out = await runStructured(await buildAiDeps(db, ctx), 'discovery.rank', {
-      system: renderPrompt(resolved.prompt.body, {
+      // Split before the posting (https://github.com/bgoleno/opportun/issues/356). The router
+      // marks the part before it for the cache only when it is long enough to cache. The default
+      // puts its output instructions before the posting (0061) so that, with the structured-output
+      // prompt, it is (https://github.com/bgoleno/opportun/issues/388).
+      ...systemWithCacheBreak(resolved.prompt.body, {
         role_target: roleTarget,
         posting_untrusted: postingText(result.posting),
       }),

@@ -148,7 +148,9 @@ Priority: **P0** (MVP, milestone M1), **P1** (near-term, M2/M3), **P2** (later).
 - FR-O2 (P0): Track each opportunity through an explicit lifecycle:
   `discovered → triaged (interested | dismissed) → preparing → applied → in_process
 (screen, interview rounds) → offer → closed (accepted | rejected | withdrawn |
-ghosted)`. Stage history with timestamps is preserved.
+ghosted)`. Stage history with timestamps is preserved. An opportunity can move to any
+  earlier or later stage of the chain in one move, so a stage set by mistake is corrected
+  directly; a closed or dismissed one moves back through Reopen (design 4.7).
 - FR-O3 (P0): Record an **activity timeline** per opportunity: applications,
   meetings and interviews (with participants), emails and messages, notes, links to
   external notes and transcripts, and stage changes.
@@ -431,8 +433,8 @@ sits behind `OPPORTUN_SUBMISSIONS=1`, off by default and never on the demo.
 ### 5.12 Observability (FR-T)
 
 The design is in [design.md, section 14](./design.md#14-observability), and the work is
-tracked on https://github.com/bgoleno/opportun/issues/340. FR-T1 is built; the rest is
-designed. Collection and export are each behind an admin's switch, and both are off by
+tracked on https://github.com/bgoleno/opportun/issues/340. FR-T1 to FR-T7 are built.
+Collection and export are each behind an admin's switch, and both are off by
 default: an instance that does not turn the feature on pays nothing for it (NFR-OPS7), and
 FR-T1 works either way. Everything here obeys NFR-PRV6 and NFR-PRV7: telemetry holds no
 personal information and no prompt or response content, and nothing leaves the deployment
@@ -589,7 +591,7 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
   password confirmed again. The destination must be `https` at a public address, or, only
   where the operator has allowed it in the environment, a loopback or private-network address,
   never a link-local or metadata address; it never follows a redirect, its URL never holds a
-  credential, and its stored credential is cleared when the destination changes. Every user of the instance
+  credential, and its stored credential is cleared when the destination (its type, scheme, host, port or OTLP header name) changes. Every user of the instance
   can see that export is on and what kind of data it sends, because export covers every
   user's telemetry. Collection and export are unavailable on the demo deployment. The user guide states what
   is sent to each kind of destination. This is the opt-in telemetry NFR-PRV1 allows for:

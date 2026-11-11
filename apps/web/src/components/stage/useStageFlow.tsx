@@ -6,13 +6,12 @@ import type { OpportunityStage } from '@opportun/core';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useState, type ReactNode } from 'react';
 import { toast } from '@/components/ui/toast';
-import { errorMessage } from '@/lib/api';
 import {
   changeStage,
-  isTerminal,
   qk,
   reopenTargets,
-  stageLabel,
+  stageErrorMessage,
+  stageRefusal,
   stageTargets,
   type OpportunityView,
   type Page,
@@ -59,7 +58,11 @@ export function useStageFlow(): StageFlow {
       qc.setQueryData(qk.opportunity(updated.id), updated);
     },
     onError: (err) =>
-      toast({ title: 'Stage not changed', description: errorMessage(err), variant: 'destructive' }),
+      toast({
+        title: 'Stage not changed',
+        description: stageErrorMessage(err),
+        variant: 'destructive',
+      }),
     onSettled: async (_data, _err, { id }) => {
       setOverrides((o) => {
         const next = new Map(o);
@@ -83,10 +86,7 @@ export function useStageFlow(): StageFlow {
       if (!stageTargets(opp.stage).includes(to)) {
         toast({
           title: 'Stage not changed',
-          description:
-            isTerminal(opp.stage) && !isTerminal(to)
-              ? `Use Reopen to move a ${stageLabel(opp.stage).toLowerCase()} opportunity back to ${stageLabel(to)}.`
-              : `${stageLabel(opp.stage)} cannot move to ${stageLabel(to)}.`,
+          description: stageRefusal(opp.stage, to),
           variant: 'destructive',
         });
         return;
