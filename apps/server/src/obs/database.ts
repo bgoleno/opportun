@@ -35,6 +35,37 @@ const FIRST_WORD = /^\s*([A-Za-z]+)/;
 // One identifier after the keyword, optionally quoted: no nested quantifier.
 const FIRST_TABLE = /\b(?:FROM|INTO|UPDATE|TABLE)\s+["`]?([A-Za-z_][A-Za-z0-9_]*)/i;
 const SHAPES_MAX = 1_000; // design 14.4: a cache of 1,000 entries
+// SQL functions whose arguments use FROM without naming a table: `extract(epoch from col)` and
+// `substring(s from 2 for 3)`. FIRST_TABLE read that FROM as one (#371).
+const FROM_FUNCTION = /\b(?:extract|substring)\s*\(/gi;
+
+/**
+ * The text with each extract(...) and substring(...) call's arguments removed, up to its
+ * matching parenthesis (they can nest: `extract(epoch from now())`). A scan, not a pattern, so a
+ * nested call cannot make it backtrack; the texts are the code's own statements.
+ */
+function withoutFromFunctions(text: string): string {
+  let out = '';
+  let at = 0;
+  for (const m of text.matchAll(FROM_FUNCTION)) {
+    const open = m.index + m[0].length - 1;
+    if (open < at) continue; // inside a call already removed
+    let depth = 0;
+    let close = text.length;
+    for (let i = open; i < text.length; i += 1) {
+      const c = text.charCodeAt(i);
+      if (c === 40)
+        depth += 1; // (
+      else if (c === 41 && --depth === 0) {
+        close = i; // )
+        break;
+      }
+    }
+    out += `${text.slice(at, open)}()`;
+    at = close + 1;
+  }
+  return at === 0 ? text : out + text.slice(at);
+}
 const shapes = new Map<string, StatementShape>();
 
 /** A statement's verb and first table. Pure, and cached by text (bounded). */
@@ -43,7 +74,7 @@ export function statementShape(text: string): StatementShape {
   if (known !== undefined) return known;
   const verb = FIRST_WORD.exec(text)?.[1]?.toUpperCase() ?? '';
   const operation = (operations ??= new Set<string>(DB_OPERATIONS)).has(verb) ? verb : OTHER;
-  const name = FIRST_TABLE.exec(text)?.[1];
+  const name = FIRST_TABLE.exec(withoutFromFunctions(text))?.[1];
   const tableType = ATTRIBUTE_TYPES.get('db.collection.name');
   const table =
     name === undefined
@@ -69,9 +100,10 @@ function attributesOf(system: DbSystem, text: string): Record<string, unknown> {
 /**
  * A successful statement's record, prepared once per text and system: a repeated statement
  * skips the gate and the series key (14.11: under 2 microseconds after the first sight of its
- * text). Bounded like the shapes; past the bound, statements are recorded the ordinary way.
+ * text). Bounded like the shapes, per system; past the bound, statements are recorded the
+ * ordinary way.
  */
-const prepared = new Map<string, PreparedRecord>();
+const prepared = new Map<DbSystem, Map<string, PreparedRecord>>();
 
 function record(system: DbSystem, text: string, started: number, err?: unknown): void {
   const seconds = (performance.now() - started) / 1000;
@@ -83,11 +115,16 @@ function record(system: DbSystem, text: string, started: number, err?: unknown):
     });
     return;
   }
-  const cacheKey = `${system}\n${text}`;
-  let p = prepared.get(cacheKey);
+  // A map per system, keyed by the text itself: no key string to build per statement (#371).
+  let bySystem = prepared.get(system);
+  if (bySystem === undefined) {
+    bySystem = new Map();
+    prepared.set(system, bySystem);
+  }
+  let p = bySystem.get(text);
   if (p === undefined) {
     p = prepareRecord('db.client.operation.duration', attributesOf(system, text));
-    if (prepared.size < SHAPES_MAX) prepared.set(cacheKey, p);
+    if (bySystem.size < SHAPES_MAX) bySystem.set(text, p);
   }
   recordPrepared(p, seconds);
 }

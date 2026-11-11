@@ -266,6 +266,28 @@ the per-IP rate limits collapse to one bucket and, over HTTPS, cookies are not m
 
 ## 4. Configuration reference
 
+**On Compose, there are two ways to set an application setting.** Compose reads `deploy/.env`
+only to fill in `${...}` in `deploy/compose.yml`; it does not hand the file to the container. So
+`deploy/compose.yml` lists each optional setting below and passes it on, and a line in
+`deploy/.env` reaches the server. The settings it does not pass are `OPPORTUN_HOST`, `WEB_DIR`
+(the image sets both, and an empty value would not mean "unset" to the server),
+`ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` (the AI library refuses an empty value, so the server
+would not start), `OPPORTUN_DEMO`
+(the [demo overlay](#16-demo-deployment) passes it), an inline `OPPORTUN_MASTER_KEY` (Compose uses
+the key file), `SMTP_URL` (reserved), and an `OPPORTUN_PEPPER_V<N>` above 9. Set any of those, or
+any other variable the server reads, in `deploy/compose.override.yml`, which Compose merges with
+`compose.yml` automatically:
+
+```yaml
+services:
+  opportun:
+    environment:
+      ANTHROPIC_BASE_URL: http://litellm:4000
+```
+
+A test fails when a setting this section documents is neither passed by `compose.yml` nor listed
+in it as not passed, so the two stay in step.
+
 Application settings (read by the server process):
 
 | Variable                                           | Default                                        | Purpose                                                                                                                                                                                                                                                                                                                                  |
@@ -308,8 +330,9 @@ An error is written as its type and the code frames it passed through; a run of 
 Opportun's code (a library's or Node's) is written as one fixed `at <external>`. A message the server
 does not know, such as one a library builds, is written as `[message withheld]`. Two
 exceptions: a configuration error at startup, which names the variable that is wrong, and a
-warning from the TypeScript loader (tsx) on a start with a cold cache, which Node prints itself.
-That warning comes from the loader, never from the server's code or your data.
+warning raised on the TypeScript loader's thread (tsx) on a start with a cold cache, which Node
+prints itself. Only the loader, and code you add yourself with `--import` or `NODE_OPTIONS`,
+run on that thread, never the server's code or your data.
 
 **Password pepper.** `OPPORTUN_PEPPER` is an extra secret mixed into every password hash
 (Argon2id's keyed `secret` input), so a stolen database file alone cannot be used to

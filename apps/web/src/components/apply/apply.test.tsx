@@ -7,12 +7,12 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DetailsPanel } from '@/components/opportunity/DetailsPanel';
 import { OpportunityDetail } from '@/components/opportunity/OpportunityDetail';
-import { formatDateTime, type OpportunityView } from '@/lib/opportunities';
+import { formatDate, formatDateTime, type OpportunityView } from '@/lib/opportunities';
 import { parseApplySearch } from '@/routes/opportunities.$id_.apply';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { ApplyPage } from './ApplyPage';
 import { clockTime, type SubmissionView } from './api';
-import { ApplyPanel } from './ApplyPanel';
+import { ApplyPanel, appliedAttempt } from './ApplyPanel';
 
 const NOW = Date.now();
 const MIN = 60 * 1000;
@@ -340,6 +340,243 @@ describe('#395: a refused Apply button says why, and never swallows a click', ()
       expect(button.nextElementSibling).toBe(text);
     },
   );
+});
+
+// https://github.com/bgoleno/opportun/issues/404 (tl's decision 1): once the user has applied, the
+// panel leads with the outcome, and applying again is a quiet link under one line of why.
+describe('#404: after applying, the panel leads with the outcome', () => {
+  const DAY = 24 * 60 * MIN;
+  const sentOn = NOW - 3 * DAY;
+  const applied = (over: Partial<SubmissionView>) =>
+    submission({ status: 'submitted', submittedAt: sentOn, ...over });
+
+  function renderPanel(items: SubmissionView[], opp: Partial<OpportunityView> = {}) {
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items, total: items.length },
+    });
+    renderWithProviders(<ApplyPanel opp={{ ...OPP, ...opp } as OpportunityView} />);
+  }
+
+  it('Confirmed: the outcome and View application lead; no Apply button; Apply again is a link with why', async () => {
+    renderPanel([applied({ id: 'sub-9', status: 'confirmed', confirmedAt: NOW - DAY })]);
+    expect(
+      await screen.findByText(`You applied on ${formatDate(sentOn)} through Greenhouse.`, {
+        exact: false,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(`Greenhouse confirmed it on ${formatDate(NOW - DAY)}.`, { exact: false }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Apply on Greenhouse' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Apply on Greenhouse' })).toBeNull();
+    expect(screen.queryByText(/You will review everything/)).toBeNull();
+    const view = screen.getByRole('link', { name: 'View application' });
+    expect(view).toHaveAttribute('href', '/opportunities/opp-1/applications/sub-9');
+    expect(view.getAttribute('data-slot')).toBe('button');
+    expect(
+      screen.getByText(
+        'Apply again only if the first application did not go through, or the employer asked you to. You will be asked for the reason.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Apply again' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1/apply?step=resume',
+    );
+  });
+
+  it('Submitted: the follow-up questions still show', async () => {
+    renderPanel([applied({})]);
+    expect(await screen.findByRole('button', { name: /I saw a confirmation/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /The site refused it/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Apply on Greenhouse' })).toBeNull();
+  });
+
+  it('Rejected: the outcome leads, with no Apply button', async () => {
+    renderPanel([applied({ status: 'rejected' })]);
+    expect(await screen.findByText('ATS refused')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Apply on Greenhouse' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'View application' })).toBeInTheDocument();
+  });
+
+  it('applied, but a new attempt would be refused: no Apply again link', async () => {
+    renderPanel([applied({ status: 'confirmed', confirmedAt: NOW })], { stage: 'closed' });
+    expect(await screen.findByRole('link', { name: 'View application' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Apply again' })).toBeNull();
+    expect(screen.queryByText(/Apply again only if/)).toBeNull();
+  });
+
+  it('a cancelled attempt newer than a submitted one: the submitted one leads', async () => {
+    renderPanel([
+      submission({ id: 'sub-new', status: 'abandoned', createdAt: NOW }),
+      applied({ id: 'sub-old', createdAt: NOW - 5 * DAY }),
+    ]);
+    const view = await screen.findByRole('link', { name: 'View application' });
+    expect(view).toHaveAttribute('href', '/opportunities/opp-1/applications/sub-old');
+    expect(screen.queryByRole('link', { name: 'Apply on Greenhouse' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Apply again' })).toBeInTheDocument();
+  });
+
+  it('an application in progress over an earlier submitted one: unchanged', async () => {
+    renderPanel([
+      submission({ id: 'sub-live', status: 'draft', createdAt: NOW }),
+      applied({ id: 'sub-old', createdAt: NOW - 5 * DAY }),
+    ]);
+    expect(await screen.findByRole('link', { name: 'Continue' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Earlier application' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Apply again' })).toBeNull();
+  });
+
+  it('never applied: unchanged', async () => {
+    renderPanel([]);
+    expect(await screen.findByRole('link', { name: 'Apply on Greenhouse' })).toBeInTheDocument();
+    expect(screen.getByText(/You will review everything/)).toBeInTheDocument();
+  });
+});
+
+describe('#404: appliedAttempt', () => {
+  it('is the newest Submitted, Confirmed, No confirmation seen or Rejected attempt, or none', () => {
+    const a = submission({ id: 'a', status: 'abandoned' });
+    const b = submission({ id: 'b', status: 'confirmed' });
+    const c = submission({ id: 'c', status: 'submitted' });
+    expect(appliedAttempt([a, b, c])?.id).toBe('b');
+    expect(appliedAttempt([a])).toBeUndefined();
+    expect(appliedAttempt([submission({ id: 'u', status: 'unknown' })])?.id).toBe('u');
+    expect(appliedAttempt([submission({ id: 'r', status: 'rejected' })])?.id).toBe('r');
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/398 criterion 4: a Greenhouse job embedded on the
+// company's own careers page, with no proven board yet, says so and offers Find posting, which
+// also detects the company's board when it has none.
+describe('#398: an embedded Greenhouse job with no proven board', () => {
+  const careers = 'https://careers.acme.example/jobs?gh_jid=8136554';
+
+  it('says what it looks like and offers Find posting, which asks the server', async () => {
+    const api = mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'POST /opportunities/opp-1/find-posting': { outcome: 'none', candidates: [] },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+    );
+    const button = await screen.findByRole('button', { name: 'Apply on an ATS' });
+    expect(button).toHaveAccessibleDescription(
+      "This looks like a Greenhouse job on the company's own careers page. Find the posting on Greenhouse to apply with assisted apply.",
+    );
+    await user.click(screen.getByRole('button', { name: 'Find posting' }));
+    await waitFor(() =>
+      expect(calls(api.calls, 'POST', '/opportunities/opp-1/find-posting')).toHaveLength(1),
+    );
+  });
+
+  it.each([
+    ['identified', { outcome: 'identified' }, 'Recognised on Greenhouse.'],
+    [
+      'candidates',
+      { outcome: 'candidates', candidates: [{}, {}], board: [] },
+      'Several postings could be this job. Choose it on the Details tab.',
+    ],
+    [
+      'one candidate',
+      { outcome: 'candidates', candidates: [{}], board: [] },
+      "A posting on the company's board could be this job. Check it on the Details tab.",
+    ],
+    [
+      'none',
+      { outcome: 'none', candidates: [] },
+      "This job was not found on the company's board. Paste the posting on the Details tab.",
+    ],
+    [
+      'no_board',
+      { outcome: 'no_board', needsCareersUrl: true },
+      'No job board is known for this company yet. Add its careers page on the Details tab.',
+    ],
+  ] as const)(
+    'Find posting answering %s says what happened and where to go',
+    async (_n, answer, text) => {
+      mockApi({
+        'GET /resumes': { items: [RESUME], total: 1 },
+        'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+        'POST /opportunities/opp-1/find-posting': answer,
+      });
+      const user = userEvent.setup();
+      renderWithProviders(
+        <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+      );
+      await user.click(await screen.findByRole('button', { name: 'Find posting' }));
+      const said = await screen.findByText(text);
+      expect(said.closest('[role="status"]')).not.toBeNull();
+    },
+  );
+
+  it('Find posting failing shows the error', async () => {
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 502,
+        body: { error: { code: 'upstream_unavailable', message: 'The job board did not answer.' } },
+      }),
+    });
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+    );
+    await user.click(await screen.findByRole('button', { name: 'Find posting' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The job board did not answer.');
+  });
+
+  it('a description of your own and no known board holding the job: says so, and where to go', async () => {
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 409,
+        body: {
+          error: {
+            code: 'already_described',
+            message: 'This opportunity already has a description. Edit it instead.',
+          },
+        },
+      }),
+    });
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+    );
+    await user.click(await screen.findByRole('button', { name: 'Find posting' }));
+    const said = await screen.findByText(
+      'This job was not found on a Greenhouse board known for this company. Check the posting link on the Details tab.',
+    );
+    expect(said.closest('[role="status"]')).not.toBeNull();
+    expect(screen.queryByText(/already_described/)).toBeNull();
+  });
+
+  it('a link without a numeric gh_jid keeps the general reason, and no Find posting here', async () => {
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+    });
+    renderWithProviders(
+      <ApplyPanel
+        opp={
+          {
+            ...OPP,
+            atsJobRef: null,
+            postingUrl: 'https://careers.acme.example/jobs?gh_jid=abc',
+          } as OpportunityView
+        }
+      />,
+    );
+    const button = await screen.findByRole('button', { name: 'Apply on an ATS' });
+    expect(button).toHaveAccessibleDescription(
+      "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.",
+    );
+    expect(screen.queryByRole('button', { name: 'Find posting' })).toBeNull();
+  });
 });
 
 describe('S2: the resume step', () => {
@@ -1501,14 +1738,6 @@ describe('an earlier submission can still be reported on (#148, tl)', () => {
 
   it.each([
     ['while a re-application is in progress', submission({ id: 'sub-new', status: 'draft' })],
-    [
-      'after a newer attempt was cancelled',
-      submission({ id: 'sub-new', status: 'abandoned', failureReason: 'cancelled_by_user' }),
-    ],
-    [
-      'after a newer attempt’s review expired',
-      submission({ id: 'sub-new', status: 'abandoned', failureReason: 'review_expired' }),
-    ],
   ])('%s, named by when it was submitted', async (_n, newer) => {
     const { api, user } = panelWith([newer, earlier]);
     const block = await screen.findByRole('region', { name: 'Earlier application' });
@@ -1519,6 +1748,33 @@ describe('an earlier submission can still be reported on (#148, tl)', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Mark confirmed' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     // The report is about the earlier attempt, never the newer one.
+    expect(calls(api.calls, 'POST', '/submissions/sub-old/outcome')).toHaveLength(1);
+    expect(api.calls.filter((c) => c.path === '/submissions/sub-new/outcome')).toHaveLength(0);
+  });
+
+  // #404: a newer attempt that was cancelled or expired no longer puts the Apply button above
+  // the earlier submission: that submission leads the panel, and its report is still its own.
+  it.each([
+    [
+      'after a newer attempt was cancelled',
+      submission({ id: 'sub-new', status: 'abandoned', failureReason: 'cancelled_by_user' }),
+    ],
+    [
+      'after a newer attempt’s review expired',
+      submission({ id: 'sub-new', status: 'abandoned', failureReason: 'review_expired' }),
+    ],
+  ])('%s, the earlier submission leads and is the one reported on', async (_n, newer) => {
+    const { api, user } = panelWith([newer, earlier]);
+    expect(await screen.findByText('No confirmation seen')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Earlier application' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View application' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1/applications/sub-old',
+    );
+    await user.click(screen.getByRole('button', { name: 'I saw a confirmation' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Mark as confirmed?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Mark confirmed' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(calls(api.calls, 'POST', '/submissions/sub-old/outcome')).toHaveLength(1);
     expect(api.calls.filter((c) => c.path === '/submissions/sub-new/outcome')).toHaveLength(0);
   });
@@ -1926,5 +2182,354 @@ describe('#198: a 429 on the handoff says when to try again (tl on #194)', () =>
     expect(at.some((t) => alert.textContent?.includes(t))).toBe(true);
     expect(alert).not.toHaveTextContent(/in a minute/i);
     expect(screen.queryByText(/check your connection/i)).toBeNull();
+  });
+});
+
+// #401 (slice 2 of tl's note, issuecomment-6794002888): the details step opens filled with what
+// Opportun holds, says where each value came from, and saves a value to the profile only when
+// the user ticks it. Every name, address and company here is made up.
+describe('#401: the details step, filled from the profile, the account and the last application', () => {
+  const PROFILE = {
+    userId: 'u1',
+    fullName: 'Jane Doe',
+    headline: null,
+    email: null,
+    phone: null,
+    location: null,
+    workAuth: null,
+    links: [],
+    applicationDetails: {},
+    updatedAt: NOW,
+  };
+  const REVIEWED_AT = new Date(2026, 9, 3).getTime();
+  const PREFILL = {
+    values: [
+      { key: 'fullName', value: 'Jane Doe', source: { kind: 'profile' } },
+      { key: 'email', value: 'jane@example.com', source: { kind: 'account' } },
+      {
+        key: 'phone',
+        value: '+1 555 0100',
+        source: {
+          kind: 'application',
+          submissionId: '01a1caeb-0000-7000-8000-000000000001',
+          opportunityId: '01a1caeb-0000-7000-8000-000000000002',
+          companyName: 'Globex',
+          reviewedAt: REVIEWED_AT,
+        },
+      },
+    ],
+    leftOut: [],
+  };
+  const filled = submission({
+    fields: { fullName: 'Jane Doe', email: 'jane@example.com', phone: '+1 555 0100' },
+  });
+
+  function withDetails(sub: SubmissionView, extra: Record<string, unknown> = {}) {
+    return routes(sub, {
+      'GET /profile': PROFILE,
+      'GET /profile/application-details': PREFILL,
+      'PATCH /submissions/sub-1': (c: ApiCall) => ({
+        status: 200,
+        body: { ...sub, ...(c.body as object), status: 'draft' },
+      }),
+      ...extra,
+    });
+  }
+
+  const fieldBox = (label: string) => screen.getByLabelText(label).parentElement as HTMLElement;
+  const fieldBoxAsync = async (label: string) =>
+    (await screen.findByLabelText(label)).parentElement as HTMLElement;
+
+  it('says where each value came from, and which ones the profile does not hold', async () => {
+    const api = mockApi(withDetails(filled));
+    renderStep('details');
+    expect(await screen.findByText('From your profile')).toBeInTheDocument();
+    expect(within(fieldBox('Full name')).getByText('From your profile')).toBeInTheDocument();
+    expect(within(fieldBox('Email')).getByText('From your account')).toBeInTheDocument();
+    expect(
+      within(fieldBox('Phone')).getByText(
+        `From your application to Globex, ${formatDate(REVIEWED_AT)}`,
+      ),
+    ).toBeInTheDocument();
+    // The account's email and the application's phone are not in the profile: a tick each,
+    // off by default. The full name is the profile's own: no tick.
+    expect(within(fieldBox('Email')).getByText('Not in your profile')).toBeInTheDocument();
+    expect(
+      within(fieldBox('Email')).getByRole('checkbox', { name: 'Save to my profile' }),
+    ).not.toBeChecked();
+    expect(
+      within(fieldBox('Phone')).getByRole('checkbox', { name: 'Save to my profile' }),
+    ).not.toBeChecked();
+    expect(within(fieldBox('Full name')).queryByRole('checkbox')).toBeNull();
+    expect(screen.getByText(/unless you tick Save to my profile/)).toBeInTheDocument();
+    expect(calls(api.calls, 'GET', '/profile/application-details')[0]?.search).toBe(
+      '?excluding=sub-1',
+    );
+  });
+
+  it('an edit stays on this application: it differs from the profile, and saves nothing unticked', async () => {
+    const api = mockApi(withDetails(filled));
+    const { user, router } = renderStep('details');
+    const name = await screen.findByLabelText('Full name');
+    await screen.findByText('From your profile');
+    await user.clear(name);
+    await user.type(name, 'Jane Q. Doe');
+    expect(within(fieldBox('Full name')).queryByText('From your profile')).toBeNull();
+    expect(
+      within(fieldBox('Full name')).getByText('Differs from your profile'),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'review' }));
+    const [edit] = calls(api.calls, 'PATCH', '/submissions/sub-1');
+    expect(edit?.body).toMatchObject({ fields: { fullName: 'Jane Q. Doe' } });
+    expect(edit?.body).not.toHaveProperty('saveToProfile');
+  });
+
+  it('Next sends the draft and the ticked names in one request', async () => {
+    const api = mockApi(withDetails(filled));
+    const { user, router } = renderStep('details');
+    const name = await screen.findByLabelText('Full name');
+    await screen.findByText('From your profile');
+    await user.clear(name);
+    await user.type(name, 'Jane Q. Doe');
+    await user.click(
+      within(fieldBox('Full name')).getByRole('checkbox', { name: 'Save to my profile' }),
+    );
+    await user.click(
+      within(fieldBox('Phone')).getByRole('checkbox', { name: 'Save to my profile' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'review' }));
+    const edits = calls(api.calls, 'PATCH', '/submissions/sub-1');
+    expect(edits).toHaveLength(1);
+    expect(edits[0]?.body).toMatchObject({
+      fields: { fullName: 'Jane Q. Doe', email: 'jane@example.com', phone: '+1 555 0100' },
+      saveToProfile: ['fullName', 'phone'],
+    });
+  });
+
+  it('a tick alone is a change: an unedited reviewed attempt with a tick is sent', async () => {
+    const reviewed = submission({ ...filled, status: 'reviewed', reviewExpiresAt: NOW + 30 * MIN });
+    const api = mockApi(withDetails(reviewed));
+    const { user } = renderStep('details');
+    await user.click(
+      await within(await fieldBoxAsync('Email')).findByRole('checkbox', {
+        name: 'Save to my profile',
+      }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await waitFor(() => expect(calls(api.calls, 'PATCH', '/submissions/sub-1')).toHaveLength(1));
+    expect(calls(api.calls, 'PATCH', '/submissions/sub-1')[0]?.body).toMatchObject({
+      saveToProfile: ['email'],
+    });
+  });
+
+  it('an emptied field the profile holds offers to remove it, and sends it without the value', async () => {
+    const api = mockApi(withDetails(filled));
+    const { user, router } = renderStep('details');
+    const name = await screen.findByLabelText('Full name');
+    await screen.findByText('From your profile');
+    await user.clear(name);
+    await user.click(
+      within(fieldBox('Full name')).getByRole('checkbox', { name: 'Remove from my profile' }),
+    );
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'review' }));
+    const body = calls(api.calls, 'PATCH', '/submissions/sub-1')[0]?.body as {
+      fields: Record<string, string>;
+      saveToProfile: string[];
+    };
+    expect(body.saveToProfile).toEqual(['fullName']);
+    expect(body.fields).not.toHaveProperty('fullName');
+  });
+
+  // tl on #430: LinkedIn profile and Links can come from the profile's links with no detail saved.
+  // Such a value is the profile's: unchanged it needs no tick, changed it differs, and emptied
+  // there is nothing saved to remove.
+  describe('a value the profile gives from its links, with no detail saved', () => {
+    const LINK = 'https://www.linkedin.com/in/jane-example';
+    const fromLinks = submission({ fields: { linkedinUrl: LINK, links: LINK } });
+    const derived = () =>
+      withDetails(fromLinks, {
+        'GET /profile': { ...PROFILE, links: [{ label: 'LinkedIn', url: LINK }] },
+        'GET /profile/application-details': {
+          values: [
+            { key: 'linkedinUrl', value: LINK, source: { kind: 'profile' } },
+            { key: 'links', value: LINK, source: { kind: 'profile' } },
+          ],
+          leftOut: [],
+        },
+      });
+
+    it('unchanged: from your profile, with no marker and no tick', async () => {
+      mockApi(derived());
+      renderStep('details');
+      expect(
+        await within(await fieldBoxAsync('LinkedIn profile')).findByText('From your profile'),
+      ).toBeInTheDocument();
+      for (const label of ['LinkedIn profile', 'Links']) {
+        expect(within(fieldBox(label)).getByText('From your profile')).toBeInTheDocument();
+        expect(
+          within(fieldBox(label)).queryByText(/^(Not in|Differs from) your profile$/),
+        ).toBeNull();
+        expect(within(fieldBox(label)).queryByRole('checkbox')).toBeNull();
+      }
+    });
+
+    it('changed: differs from your profile, with Save to my profile', async () => {
+      const { user } = (mockApi(derived()), renderStep('details'));
+      const input = await screen.findByLabelText('LinkedIn profile');
+      await within(fieldBox('LinkedIn profile')).findByText('From your profile');
+      await user.clear(input);
+      await user.type(input, 'https://www.linkedin.com/in/jane-new');
+      expect(
+        within(fieldBox('LinkedIn profile')).getByText('Differs from your profile'),
+      ).toBeInTheDocument();
+      expect(
+        within(fieldBox('LinkedIn profile')).getByRole('checkbox', { name: 'Save to my profile' }),
+      ).toBeInTheDocument();
+    });
+
+    it('emptied: no marker and no tick, as nothing is saved to remove', async () => {
+      const { user } = (mockApi(derived()), renderStep('details'));
+      const input = await screen.findByLabelText('LinkedIn profile');
+      await within(fieldBox('LinkedIn profile')).findByText('From your profile');
+      await user.clear(input);
+      expect(within(fieldBox('LinkedIn profile')).queryByText(/your profile/)).toBeNull();
+      expect(within(fieldBox('LinkedIn profile')).queryByRole('checkbox')).toBeNull();
+    });
+  });
+
+  // tl's optional points on #430, folded into #435.
+  it('a tick left on a field changed back to the profile value is not sent', async () => {
+    const api = mockApi(withDetails(filled));
+    const { user, router } = renderStep('details');
+    const name = await screen.findByLabelText('Full name');
+    await screen.findByText('From your profile');
+    await user.clear(name);
+    await user.type(name, 'Jane Q. Doe');
+    await user.click(
+      within(fieldBox('Full name')).getByRole('checkbox', { name: 'Save to my profile' }),
+    );
+    // Back to what the profile holds: the tick goes with the marker, and nothing is saved.
+    await user.clear(name);
+    await user.type(name, 'Jane Doe');
+    expect(within(fieldBox('Full name')).queryByRole('checkbox')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'review' }));
+    for (const edit of calls(api.calls, 'PATCH', '/submissions/sub-1')) {
+      expect(edit.body).not.toHaveProperty('saveToProfile');
+    }
+  });
+
+  it('the not-filled notice skips a field since filled, and one the start-again notice names', async () => {
+    mockApi(
+      withDetails(submission({ fields: { fullName: 'Jane Doe' } }), {
+        'GET /profile/application-details': {
+          values: [PREFILL.values[0]],
+          leftOut: [
+            { key: 'phone', source: { kind: 'profile' } },
+            { key: 'linkedinUrl', source: { kind: 'profile' } },
+          ],
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ApplyPage opportunityId="opp-1" step="details" cleared={['linkedinUrl']} />,
+      { path: '/opportunities/opp-1/apply?step=details' },
+    );
+    const notice = await screen.findByRole('status', { name: /not filled in/i });
+    // LinkedIn is named by the start-again notice already: only Phone here.
+    expect(notice).toHaveTextContent('Phone (from your profile)');
+    expect(notice).not.toHaveTextContent('LinkedIn');
+    // Filled in now: the notice goes.
+    await user.type(screen.getByLabelText('Phone'), '+1 555 0100');
+    await waitFor(() =>
+      expect(screen.queryByRole('status', { name: /not filled in/i })).toBeNull(),
+    );
+  });
+
+  // #435 (slice 1 of #402): the new details, each with how to write it.
+  it('asks for country, city, school, degree and how you heard, each written as the list shows it', async () => {
+    mockApi(withDetails(filled));
+    renderStep('details');
+    const hints: [string, RegExp][] = [
+      ['Country', /as the form's list shows it, for example United States/],
+      ['Location (city)', /as the form's list shows it, for example Seattle, Washington/],
+      ['School', /as the form's list shows it, for example University of/],
+      ['Degree', /as the form's list shows it, for example Bachelor's Degree/],
+      ['How did you hear about this role?', /as the form's list shows it, for example LinkedIn/],
+    ];
+    for (const [label, hint] of hints) {
+      const input = await screen.findByLabelText(label);
+      expect(input).toHaveAccessibleDescription(hint);
+    }
+  });
+
+  it('an empty profile and nothing held: empty inputs, no source lines, no ticks', async () => {
+    mockApi(
+      withDetails(submission({ fields: {} }), {
+        'GET /profile': { ...PROFILE, fullName: null },
+        'GET /profile/application-details': { values: [], leftOut: [] },
+      }),
+    );
+    renderStep('details');
+    expect(await screen.findByLabelText('First name')).toHaveValue('');
+    expect(screen.getByLabelText('Email')).toHaveValue('');
+    await waitFor(() => expect(screen.queryByText(/^From your/)).toBeNull());
+    expect(screen.queryByRole('checkbox', { name: /my profile/ })).toBeNull();
+  });
+
+  it('names a value Opportun holds but did not fill in, because it fails the checks', async () => {
+    mockApi(
+      withDetails(submission({ fields: { fullName: 'Jane Doe' } }), {
+        'GET /profile/application-details': {
+          values: [PREFILL.values[0]],
+          leftOut: [{ key: 'phone', source: { kind: 'profile' } }],
+        },
+      }),
+    );
+    renderStep('details');
+    const notice = await screen.findByRole('status', { name: /not filled in/i });
+    expect(notice).toHaveTextContent(
+      'Not filled in, because the value Opportun holds does not pass the checks: Phone (from your profile). Enter them if you need them.',
+    );
+  });
+
+  it('start again keeps the expired attempt values and fills the rest from the server', async () => {
+    const expired = submission({
+      id: 'sub-old',
+      status: 'abandoned',
+      failureReason: 'review_expired',
+      fields: { email: 'old@example.com', fullName: 'Jane Doe', linkedinUrl: 'linkedin.com/x' },
+      answers: [],
+    });
+    // The server filled the new draft from the profile (#411): a phone and an email.
+    const fresh = submission({
+      id: 'sub-2',
+      fields: { phone: '+1 555 0100', email: 'jane@example.com' },
+      answers: [],
+    });
+    const api = mockApi({
+      ...routes(null),
+      'GET /opportunities/opp-1/submissions': { items: [expired], total: 1 },
+      'POST /opportunities/opp-1/submissions': () => ({ status: 201, body: fresh }),
+      'PATCH /submissions/sub-2': (c: ApiCall) => ({
+        status: 200,
+        body: { ...fresh, ...(c.body as object) },
+      }),
+    });
+    const { user, router } = renderStep('resume');
+    await user.click(await screen.findByRole('button', { name: 'Next: Details' }));
+    await waitFor(() =>
+      expect(router.state.location.search).toEqual({ step: 'details', cleared: ['linkedinUrl'] }),
+    );
+    const [copy] = calls(api.calls, 'PATCH', '/submissions/sub-2');
+    expect((copy?.body as { fields: unknown }).fields).toEqual({
+      phone: '+1 555 0100',
+      email: 'old@example.com',
+      fullName: 'Jane Doe',
+    });
   });
 });

@@ -74,11 +74,12 @@ const ListQuery = z.object({
   view: z.enum(INBOX_VIEWS).default('all'),
   opportunityId: z.string().min(1).max(64).optional(),
   // Triage controls (#inbox-sort-filter-bulk): source, sender, keyword, and date order. All
-  // optional; absent means the previous behaviour (every source, newest first).
+  // optional; absent means the previous behaviour (every source, newest first; an opportunity's
+  // thread oldest first).
   channel: z.enum(COMM_CHANNELS).optional(),
   sender: z.string().min(1).max(200).optional(),
   q: z.string().min(1).max(200).optional(),
-  order: z.enum(['newest', 'oldest']).default('newest'),
+  order: z.enum(['newest', 'oldest']).optional(),
   limit: z.coerce.number().int().min(1).max(MAX_LIMIT).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });

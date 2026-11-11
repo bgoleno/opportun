@@ -3,6 +3,9 @@
 // any other message becomes a fixed marker with no keys, an error keeps its type and frame lines,
 // and pino's pid and hostname are never written. Driven through a real pino logger, so what the
 // gate sees is what pino writes: a child's bindings, the error serializer's output, the message.
+import { join } from 'node:path';
+import pino from 'pino';
+import { z } from 'zod';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { withTransaction } from '../src/db/client';
 import {
@@ -22,7 +25,37 @@ const PHONE = '+1 (206) 555-0142';
 const COMPANY = 'Acme Robotics';
 const PERSONAL = [NAME, EMAIL, PHONE, '206', COMPANY];
 
-afterEach(() => setUnknownKeyMode('throw'));
+afterEach(() => {
+  setUnknownKeyMode('throw');
+  vi.useRealTimers();
+});
+
+/**
+ * A record as text without what the runtime writes on its own: the time, and each frame's line
+ * and column. A personal value can only come from the code's input, and a value of digits (the
+ * phone's area code) must not match an epoch or a line number by chance (#419: a time holding
+ * "206" failed CI). The rest of the record, frame paths included, is checked as written.
+ */
+/** A frame line without its `:line:column` ("at (a/b.ts:99:31)" becomes "at (a/b.ts)"). */
+function withoutPosition(frame: string): string {
+  const close = frame.endsWith(')') ? ')' : '';
+  const parts = (close === '' ? frame : frame.slice(0, -1)).split(':');
+  while (parts.length > 1 && /^\d+$/.test(parts.at(-1) ?? '')) parts.pop();
+  return `${parts.join(':')}${close}`;
+}
+
+function writtenText(records: Record<string, unknown>[]): string {
+  return records
+    .map((record) => {
+      const kept = Object.fromEntries(Object.entries(record).filter(([k]) => k !== 'time'));
+      const stack = kept.stack;
+      if (Array.isArray(stack)) {
+        kept.stack = stack.map((f) => withoutPosition(String(f)));
+      }
+      return JSON.stringify(kept);
+    })
+    .join('\n');
+}
 
 function capture() {
   const lines: string[] = [];
@@ -92,6 +125,9 @@ describe('the log gate (#345)', () => {
   });
 
   it('reduces an error to its type and frame lines: never its message or its properties', () => {
+    // At the time CI's run had (#419): an epoch whose digits hold the phone's area code.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_794_402_063_862);
     const c = capture();
     const err = Object.assign(new TypeError(`cannot reach ${EMAIL} for ${NAME}`), {
       code: PHONE,
@@ -102,7 +138,10 @@ describe('the log gate (#345)', () => {
     expect(r).toMatchObject({ msg: 'unhandled error', 'error.type': 'TypeError' });
     expect(Object.keys(r!).sort()).toEqual(['error.type', 'level', 'msg', 'stack', 'time']);
     for (const frame of r!.stack as string[]) expect(frame).toMatch(/^at /);
-    for (const p of PERSONAL) expect(c.text()).not.toContain(p);
+    // Frame paths are still checked: only their line and column numbers are left out.
+    expect(writtenText(c.records())).toContain('obsLog.test.ts');
+    for (const p of PERSONAL) expect(writtenText(c.records())).not.toContain(p);
+    expect(r!.time).toBe(1_794_402_063_862);
   });
 
   it('a child logger’s bindings do not pass either', () => {
@@ -379,6 +418,199 @@ describe('a stack whose header no longer matches its message (#381, sec)', () =>
       'x',
     );
     expect(lines).toEqual(['at <external>', 'at ours (apps/server/src/a.ts:1:2)']);
+  });
+});
+
+describe("a dependency's frames under the install root are not the app's (#399)", () => {
+  const root = join(process.cwd(), '..', '..');
+  const dep = (i: number) =>
+    `    at Dep${i}.call (${root}/node_modules/.pnpm/fastify@5.0.0/node_modules/fastify/lib/x.js:${i + 1}:1)`;
+
+  it('25 dependency frames before an app frame: one placeholder, then the app frame', () => {
+    const stack = [
+      'Error: x',
+      ...Array.from({ length: 25 }, (_, i) => dep(i)),
+      `    at ours (${process.cwd()}/src/a.ts:1:2)`,
+    ].join('\n');
+    expect(frameLines(stack, 'x')).toEqual(['at <external>', 'at ours (apps/server/src/a.ts:1:2)']);
+  });
+
+  it("a dependency inside the app's own folder too, and the app's frames are unchanged", () => {
+    const stack = [
+      'Error: x',
+      `    at first (${process.cwd()}/src/a.ts:1:2)`,
+      `    at Lib.run (${process.cwd()}/node_modules/dep/index.js:3:4)`,
+      dep(1),
+      `    at second (${process.cwd()}/src/b.ts:5:6)`,
+    ].join('\n');
+    expect(frameLines(stack, 'x')).toEqual([
+      'at first (apps/server/src/a.ts:1:2)',
+      'at <external>',
+      'at second (apps/server/src/b.ts:5:6)',
+    ]);
+  });
+});
+
+describe('the header search (#399)', () => {
+  const serialize = (err: Error) =>
+    pino.stdSerializers.err(err) as { message: string; stack: string };
+  const app = (name: string, file: string) => `    at ${name} (${process.cwd()}/src/${file}:1:1)`;
+
+  it('stops at the first cut whose header matches', () => {
+    // The cut that matches first is the error's own message; its cause's line does not fit, so
+    // there are no frames, and no shorter cut is tried.
+    const cause = new Error('c');
+    void cause.stack;
+    cause.message = 'd';
+    const err = new Error(`z: z\n${app('Early', 'early.ts')}\ncaused by: Error: z`, { cause });
+    const { message, stack } = serialize(err);
+    expect(frameLines(stack, message)).toEqual([]);
+  });
+
+  it('ends for a message that starts with ": " and fits no cut', () => {
+    const stack = ['Error: x', app('ours', 'a.ts')].join('\n');
+    expect(frameLines(stack, ': a: b')).toEqual([]);
+  });
+
+  it('reads the cause from the line that ends the run of frames, and from no later line', () => {
+    const stack = [
+      'Error: outer',
+      app('ours', 'a.ts'),
+      '    something a library appended',
+      'caused by: Error: inner',
+      app('theirs', 'b.ts'),
+    ].join('\n');
+    expect(frameLines(stack, 'outer: inner')).toEqual([]);
+  });
+
+  it('tries no cut past 4,096 characters of the message', () => {
+    const own = 'x'.repeat(5_000);
+    const stack = [
+      `Error: ${own}`,
+      app('ours', 'a.ts'),
+      'caused by: Error: q',
+      app('t', 'b.ts'),
+    ].join('\n');
+    expect(frameLines(stack, `${own}: q`)).toEqual([]);
+  });
+
+  describe('a message longer than the search bound gets the whole-message reading only', () => {
+    // The error's own message holds a line shaped like a frame and a `caused by:` line after a
+    // `: `. Only a cut at that early `: ` would fit them, and the bound does not reach the cut
+    // pino made, so the search ends with no frames.
+    const own = (rest: string) => `p: p\n${app('Early', 'early.ts')}\ncaused by: Error: p\n${rest}`;
+
+    it('past 4,096 characters', () => {
+      const { message, stack } = serialize(
+        new Error(own('q'.repeat(5_000)), { cause: new Error('inner') }),
+      );
+      expect(frameLines(stack, message)).toEqual([]);
+    });
+
+    it('past 50 lines', () => {
+      const short = Array.from({ length: 60 }, (_, i) => `l${i}`).join('\n');
+      const { message, stack } = serialize(new Error(own(short), { cause: new Error('inner') }));
+      expect(message.length).toBeLessThan(4_096);
+      expect(frameLines(stack, message)).toEqual([]);
+    });
+  });
+
+  /** The timing bound: generous for a slow runner, and the uncapped search takes over a second. */
+  const BOUND_MS = 100;
+
+  /** The fastest of five runs, so a busy machine's one slow run does not count. */
+  const fastest = (fn: () => unknown) => {
+    fn();
+    let best = Infinity;
+    for (let i = 0; i < 5; i++) {
+      const t = performance.now();
+      fn();
+      best = Math.min(best, performance.now() - t);
+    }
+    return best;
+  };
+
+  it('costs at most 100 ms for a long message: 8,000 lines of key: value', () => {
+    const lines = Array.from({ length: 8_000 }, (_, i) => `k${i}: v${i}`).join('\n');
+    const { message, stack } = serialize(new Error('outer', { cause: new Error(lines) }));
+    expect(fastest(() => frameLines(stack, message))).toBeLessThan(BOUND_MS);
+  });
+
+  it('costs at most 100 ms for a long message: a validation error with 2,000 issues', () => {
+    const shape = Object.fromEntries(
+      Array.from({ length: 2_000 }, (_, i) => [`field${i}`, z.string()]),
+    );
+    const parsed = z.object(shape).safeParse({});
+    expect(parsed.success).toBe(false);
+    const { message, stack } = serialize(new Error('invalid input', { cause: parsed.error }));
+    expect(message.length).toBeGreaterThan(100_000);
+    expect(fastest(() => frameLines(stack, message))).toBeLessThan(BOUND_MS);
+  });
+
+  it('costs at most 100 ms for a long line among the first lines: 1,300 cuts', () => {
+    // Every cut's header is the stack's first four lines, the last of them a million characters
+    // long: that text is built once, not once per cut.
+    const text = `s1\ns2\ns3\n${'a: '.repeat(1_300)}${'b'.repeat(1_000_000)}`;
+    const withCause = serialize(new Error(text, { cause: new Error('inner') }));
+    expect(fastest(() => frameLines(withCause.stack, withCause.message))).toBeLessThan(BOUND_MS);
+    // No cause, and the message changed after its stack was read: no reading fits, and every
+    // cut up to the bound is tried.
+    const changed = new Error(text);
+    void changed.stack;
+    changed.message = `t1${text.slice(2)}`;
+    const noCause = serialize(changed);
+    expect(noCause.message.lastIndexOf(': ')).toBeLessThan(4_096);
+    expect(fastest(() => frameLines(noCause.stack, noCause.message))).toBeLessThan(BOUND_MS);
+  });
+
+  it('counts a node_modules folder as a dependency, and no other folder whose name contains it', () => {
+    const stack = [
+      'Error: x',
+      `    at kept (${process.cwd()}/node_modules_old/x.js:1:1)`,
+      `    at dep (${process.cwd()}/node_modules/y/z.js:1:1)`,
+    ].join('\n');
+    expect(frameLines(stack, 'x')).toEqual([
+      'at kept (apps/server/node_modules_old/x.js:1:1)',
+      'at <external>',
+    ]);
+  });
+});
+
+describe('a cause, taken from where pino puts it (#399, sec on #389)', () => {
+  const logged = (err: Error) => {
+    const c = capture();
+    c.log.error({ err }, 'unhandled error');
+    return c.records()[0]!;
+  };
+  const ours = (r: Record<string, unknown>) =>
+    (r.stack as string[] | undefined)?.some((f) => f.includes('obsLog.test.ts')) === true;
+
+  it('a cause with no message: pino writes "outer: " and "caused by: Error", frames kept', () => {
+    expect(ours(logged(new Error('outer', { cause: new Error('') })))).toBe(true);
+  });
+
+  it('an error with no message of its own and a cause: frames kept', () => {
+    expect(ours(logged(new Error('', { cause: new Error('inner') })))).toBe(true);
+  });
+
+  it('a cause with no message fits only the cut at the very end of the message', () => {
+    // pino would give `x: ` for this error; `x: y` is a message reassigned after the stack was
+    // read, and the empty cause cannot account for its `y`.
+    const stack = [
+      'Error: x',
+      `    at Jane (${process.cwd()}/src/a.ts:1:2)`,
+      'caused by: Error',
+      `    at inner (${process.cwd()}/src/b.ts:3:4)`,
+    ].join('\n');
+    expect(frameLines(stack, 'x: y')).toEqual([]);
+    expect(frameLines(stack, 'x: ')).toEqual(['at Jane (apps/server/src/a.ts:1:2)']);
+  });
+
+  it("a caused-by line in the error's own message is not taken for the cause's", () => {
+    // Its own message has a line shaped like pino's; the real cause's line comes after the
+    // frames, and it is that one the cut is tied to.
+    const err = new Error('x\ncaused by: Error: z', { cause: new Error('y') });
+    expect(ours(logged(err))).toBe(true);
   });
 });
 

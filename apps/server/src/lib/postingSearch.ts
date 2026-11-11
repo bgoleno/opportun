@@ -13,7 +13,7 @@
 // A Workday board (FR-D10) is read from its listing only, since its descriptions cost one detail
 // request per posting; the posting the flow settles on is then described from its detail
 // endpoint (describeWorkdayPosting), as is a Workday candidate the user picks later.
-import { NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
+import { greenhouseJidOf, NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import {
   ATS_SOURCE_KINDS,
@@ -85,9 +85,25 @@ const MAX_SHOWN = 50;
  */
 export const MAX_WORKDAY_LOOKUP_PAGES = 10;
 
+/**
+ * The board a posting was read from just now (#398): its kind and slug. A posting out of a
+ * Greenhouse board read is proven to be on that board, which is what an embedded job's identity
+ * needs (lib/atsJobRef boardReadAtsJobRef). Absent when the posting came from no board read.
+ */
+export interface ReadFrom {
+  kind: SourceKind;
+  org: string;
+}
+
 export type FindOutcome = (
-  | { status: 'exact'; candidate: PostingCandidate; via: 'email_link' }
-  | { status: 'single'; candidate: PostingCandidate; via: 'board' }
+  | {
+      status: 'exact';
+      candidate: PostingCandidate;
+      /** 'posting_link': the opportunity's own careers link named it (#398). */
+      via: 'email_link' | 'posting_link';
+      readFrom?: ReadFrom;
+    }
+  | { status: 'single'; candidate: PostingCandidate; via: 'board'; readFrom?: ReadFrom }
   | {
       status: 'candidates';
       candidates: PostingCandidate[];
@@ -364,7 +380,10 @@ async function readBoards(
  * about last wins. A reference with no board of its own (a bare `gh_jid` link on a company
  * page) matches any board of its provider.
  */
-function referenceHit(reads: BoardRead[], refs: AtsJobRef[]): NormalizedPosting | null {
+function referenceHit(
+  reads: BoardRead[],
+  refs: AtsJobRef[],
+): { posting: NormalizedPosting; board: Board } | null {
   for (const ref of refs) {
     const wanted = ref.externalId.toLowerCase();
     for (const read of reads) {
@@ -373,10 +392,33 @@ function referenceHit(reads: BoardRead[], refs: AtsJobRef[]): NormalizedPosting 
       const hit = read.postings.find(
         (p) => p.externalId != null && p.externalId.toLowerCase() === wanted,
       );
-      if (hit !== undefined) return hit;
+      if (hit !== undefined) return { posting: hit, board: read.board };
     }
   }
   return null;
+}
+
+/**
+ * The Greenhouse job an opportunity's own posting link names, when it is a careers page carrying
+ * a numeric `gh_jid` and the opportunity has no identity yet (#398). Its board is unknown (org
+ * null), so only the company's own boards can match it. Nothing is asked of Greenhouse for this
+ * when an opportunity is created or its mail is read: Find posting, or a new link, is when the
+ * server looks (tl on #414).
+ */
+export function ownGreenhouseRef(opp: {
+  postingUrl?: string | null;
+  atsJobRef?: AtsJobRef | null;
+}): AtsJobRef | null {
+  const link = opp.postingUrl;
+  if (link == null || opp.atsJobRef != null || boardFromUrl(link) !== null) return null;
+  const jid = greenhouseJidOf(link);
+  return jid === null ? null : { kind: 'ats_greenhouse', org: null, externalId: jid, url: link };
+}
+
+/** The board a posting of `reads` came from, by identity: ranking keeps the posting objects. */
+function readFromOf(reads: BoardRead[], posting: NormalizedPosting): ReadFrom | undefined {
+  const read = reads.find((r) => r.postings.includes(posting));
+  return read === undefined ? undefined : { kind: read.board.kind, org: read.board.org };
 }
 
 /**
@@ -488,18 +530,40 @@ export async function findPosting(
       : {
           note: `Large Workday board: showing the first ${cut.shown} of ${cut.total} postings. Paste the posting link or text if yours is not among them.`,
         };
+  // The opportunity's own careers link names its Greenhouse job (#398, tl on #414): that job on
+  // the company's own board is the posting, ahead of any message's link and any title match,
+  // and the read is the proof of its board. Only the company's own boards are searched for it.
+  const ownRef = ownGreenhouseRef(opp);
+  const own = ownRef === null ? null : referenceHit(reads, [ownRef]);
+  if (own !== null) {
+    const candidate = exactly(own.posting);
+    const readFrom = { kind: own.board.kind, org: own.board.org };
+    return hasDescription(candidate.posting)
+      ? { status: 'exact', candidate, via: 'posting_link', readFrom }
+      : unattachable(candidate);
+  }
+
+  // The own link names a job the company's boards were read without (qa and tl on #414): any
+  // other posting found below is for the user to choose, never attached or confirmed by itself,
+  // or a title match would swap the link for another job's. Boards that could not be read at
+  // all change nothing.
+  const ownMissed = ownRef !== null && reads.length > 0;
+
   const hit = referenceHit(reads, refs);
   if (hit !== null) {
-    const candidate = exactly(await describeWorkdayPosting(sctx, hit));
+    const candidate = exactly(await describeWorkdayPosting(sctx, hit.posting));
+    const readFrom = { kind: hit.board.kind, org: hit.board.org };
+    if (ownMissed) return unattachable(candidate);
     return hasDescription(candidate.posting)
-      ? { status: 'exact', candidate, via: 'email_link' }
+      ? { status: 'exact', candidate, via: 'email_link', readFrom }
       : unattachable(candidate);
   }
 
   if (foreign.length > 0) {
     const elsewhere =
       (await directWorkdayHit(sctx, refs, foreign)) ??
-      referenceHit(await readBoards(sctx, lookup, foreign), refs);
+      referenceHit(await readBoards(sctx, lookup, foreign), refs)?.posting ??
+      null;
     if (elsewhere !== null) {
       const candidate = exactly(await describeWorkdayPosting(sctx, elsewhere));
       return {
@@ -528,13 +592,20 @@ export async function findPosting(
   // ratio, this `=== 1` stops being safe and needs an epsilon (or a different signal) again.
   const perfect = confident.filter((c) => c.score === 1);
   const [best] = confident;
-  if (best !== undefined && (perfect.length === 1 || confident.length === 1)) {
+  if (best !== undefined && !ownMissed && (perfect.length === 1 || confident.length === 1)) {
+    const readFrom = readFromOf(reads, best.posting);
     const candidate = { ...best, posting: await describeWorkdayPosting(sctx, best.posting) };
     return hasDescription(candidate.posting)
-      ? { status: 'single', candidate, via: 'board', ...note }
+      ? {
+          status: 'single',
+          candidate,
+          via: 'board',
+          ...(readFrom === undefined ? {} : { readFrom }),
+          ...note,
+        }
       : { ...unattachable(candidate), ...note };
   }
-  if (confident.length > 1) {
+  if (confident.length > 1 || (ownMissed && confident.length > 0)) {
     return {
       status: 'candidates',
       candidates: confident.slice(0, MAX_SHOWN),

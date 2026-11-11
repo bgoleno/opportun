@@ -1182,9 +1182,15 @@ so a mistake in code fails CI instead of passing in silence.
   lines only (`at ...`), and only when the stack's header is the one for the error's current
   message: a message reassigned after its stack was formatted gives no frames, rather than a
   miscount that would read message lines as frames
-  (https://github.com/bgoleno/opportun/issues/381). A frame inside the install root keeps its
-  function name and its path relative to the root. Each run of frames outside it is one fixed
-  `at <external>`, with no name and no path. Every other line of a stack, where a message can
+  (https://github.com/bgoleno/opportun/issues/381). A frame in the app's own code, which
+  is a file under the install root and not under any `node_modules` folder there, keeps its
+  function name and its path relative to the root. Any other frame (Node's own, a builtin's, a
+  dependency's, wherever it is installed) is not the app's: each run of them is one fixed
+  `at <external>`, with no name and no path, so they cannot fill the 20-frame cap before the
+  app's own frames (https://github.com/bgoleno/opportun/issues/399). An error whose message has
+  a `: ` past 4,096 characters, such as a validation error with many issues as its cause, gets
+  the whole-message reading only and logs no frames (a cost cap on the header search). Every
+  other line of a stack, where a message can
   quote data, is dropped. The store and the export carry no stack. The server's own crashes
   and warnings take the same path: its process handlers log an uncaught exception or rejection
   as one gated line, and a warning as its type and code only. **One known exception:** a
@@ -1320,10 +1326,10 @@ holds a credential.
 | State                        | Budget                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Collection off (the default) | One boolean check per boundary: under 1 microsecond. No recording spans, no timers, no writes, SDK not loaded.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Collection on, export off    | Under 20 microseconds of CPU per boundary crossing on average, under 2 microseconds per database statement after the first sight of its text, no IO on the request path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Collection on, export off    | Under 20 microseconds of CPU per boundary crossing on average, under 2 microseconds per database statement after the first sight of its text, no IO on the request path. A whole request: under 30 microseconds for one HTTP crossing and five statements. An AI call: under 60 microseconds (measured below).                                                                                                                                                                                                                                                                                                                                                        |
 | Flushes                      | Metrics: every 60 seconds, in transactions of at most 2,000 rows (each live series writes a 1-minute row and adds to a 1-hour row). Spans: a flush every 5 seconds or 200 spans, written in transactions of 25 spans with a yield to the event loop between them, so a flush does under 10 ms of event-loop work at a stretch. That bound was measured on SQLite with `wal_autocheckpoint = 100`, as the server sets it, on an Apple M4 with a USB SSD (https://github.com/bgoleno/opportun/issues/375); wall time can exceed it when the disk or the CPU is busy. At SQLite's default of 1,000 pages, a checkpoint inside a commit stalled the loop for up to 45 ms. |
 | Memory                       | At most 2,000 live series and 2,000 buffered spans. Beyond that the newest are dropped and counted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| Storage                      | At most 250,000 metric point rows and 100,000 span rows, enforced hourly: about 100 MB together at the caps, and an estimated 40 MB or less on a single-user instance. These sizes are estimates until the base slice measures a row. A trace stops at 2,000 spans and is marked truncated.                                                                                                                                                                                                                                                                                                                                                                           |
+| Storage                      | At most 250,000 metric point rows and 100,000 span rows, enforced hourly. Measured per row, indexes included: 373 bytes per point, 535 per span, 341 per trace. At the caps that is about 93 MB of points and 54 MB of spans. `obs_traces` has no cap of its own, but a trace has at least one span, so there are at most 100,000: about 34 MB. So about 181 MB in the worst case, and about 154 MB at the measured 4.6 spans per trace. An estimated 40 MB or less on a single-user instance (not measured). A trace stops at 2,000 spans and is marked truncated.                                                                                                   |
 | Export on                    | One request per signal per interval, a queue of at most 2,048 spans and 2,048 log records, a 10-second timeout. A failure is counted and shown, never retried into a backlog, and never delays a request or a job.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | AI cost                      | None. Observability makes no model call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
@@ -1332,6 +1338,34 @@ that no row reaches any `obs_` table, that no span is recording, and that the SD
 loaded; a guard benchmark runs 100,000 disabled `obs` calls under a bound with a wide margin.
 With collection on, a benchmark of the same loop is reported in the pull request, and the
 caps are tested by exceeding them.
+
+**Measured whole operations** (https://github.com/bgoleno/opportun/issues/374). A crossing
+measured alone leaves out what a whole operation adds around it: the HTTP plugin's hooks, the
+context switches around the handler, the statements, the garbage. The budgets are stated, and
+checked, by qa's harness: process CPU time per whole operation, so the garbage collector's helper
+threads count in it (median of 20 pairs, three runs per tree, `main` and this change alternated in
+one sitting at load averages falling from 21 to 8, on the Mac mini the team shares); only
+alternation cancels a shared machine's load. The figures below are that harness.
+`test/obsBench.test.ts` (run with `OBS_BENCH=1`) is the comparison tool for `main` against a change
+in one sitting: it times whole operations the same way, in batches of 150 alternated with
+collection off and on in one process and one database, 30 pairs, the median of the pairs'
+differences, and it asserts nothing, because its readings move with the machine's load. The span
+flush runs between batches and is timed apart: it is off the request path, and bounded on its own
+(#375).
+
+- **A whole request** (`GET /api/v1/opportunities/:id`: one HTTP crossing and five statements):
+  with collection off it costs 268 to 295 microseconds of CPU, and collection adds 13 to 23 (it
+  added 18 to 28 before the change below), within the 30-microsecond budget of one crossing and
+  five statements, which stands. The plugin gates a route's attributes once per method, route
+  and status and reuses them, as the database wrapper does per statement text.
+- **An AI call** (`runStructured` with a stub model, through the router, the budget check and
+  the `task_runs` ledger): with collection off it costs 162 to 198 microseconds of CPU, and
+  collection adds 15 to 27 on the call's path (33 to 60 before the change below). Its kept span
+  is written later by the span flush, timed apart (#375): since the flush runs in chunks with
+  yields (#384), about 237 to 259 microseconds per span in qa's harness, in flushes of 40 spans,
+  and 102 to 131 in the repo bench, in flushes of 150. The budget is 60 microseconds per call, not the 20 of one crossing, because a model
+  call takes hundreds of milliseconds or more: 60 microseconds is well under a tenth of a
+  percent of it. The four Gen AI metrics are gated once per user, task, model and provider.
 
 ### 14.12 Build plan: two engineers, by file
 
