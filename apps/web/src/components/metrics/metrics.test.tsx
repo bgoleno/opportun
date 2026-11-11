@@ -102,6 +102,15 @@ describe('MetricsPage', () => {
     expect(list).toHaveTextContent('opportun.obs.dropped');
   });
 
+  it('links to the AI traces page, for each call one by one (FR-T7)', async () => {
+    mockApi({ 'GET /obs/metrics': CATALOG });
+    renderWithProviders(<Harness />);
+    expect(await screen.findByRole('link', { name: 'AI traces' })).toHaveAttribute(
+      'href',
+      '/settings/traces',
+    );
+  });
+
   it('picking a metric charts it over the last 24 hours, with its first statistic', async () => {
     const { calls } = mockApi({
       'GET /obs/metrics': CATALOG,

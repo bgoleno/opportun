@@ -6,6 +6,7 @@
 //
 // The list's filters and the chosen metric live in the URL (the route owns them), so a view can
 // be linked to. The chart's own controls start fresh for each metric.
+import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { Badge } from '@/components/ui/badge';
@@ -85,7 +86,16 @@ export function MetricsPage({ isAdmin, search, onSearchChange }: MetricsPageProp
               ? 'Your own AI usage, and how this instance is running: requests, jobs, the database and outbound calls.'
               : 'Your own AI usage.'}{' '}
             Read from this instance's own store, so nothing needs to be exported. Points are kept 30
-            days, minute by minute for the last 48 hours.
+            days, minute by minute for the last 48 hours. Each AI call on its own, with the steps it
+            took, is on{' '}
+            {/* FR-T7's one link from this page (design.md 14.12; moved to #346 by the EM). */}
+            <Link
+              to="/settings/traces"
+              className="font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              AI traces
+            </Link>
+            .
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">

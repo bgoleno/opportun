@@ -115,7 +115,7 @@ accept or discard.
 
 ## AI traces
 
-**AI traces** (`/settings/traces`) lists the AI work Opportun did for you, newest first: each
+**AI traces** (`/settings/traces`, linked from **Settings > Metrics**) lists the AI work Opportun did for you, newest first: each
 model call, each turn of a tailoring chat, and each workflow that made several calls, such as
 a capture that went on to rank the posting. Each row shows when it started, its tasks, the
 models, how long it took, the input and output tokens, the estimated cost, and whether it
