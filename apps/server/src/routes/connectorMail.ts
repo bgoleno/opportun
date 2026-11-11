@@ -13,6 +13,7 @@ import { deviceRoute, requireDevice, requireDeviceToken } from '../lib/deviceTok
 import { HttpError } from '../lib/errors';
 import { rateLimit } from '../lib/rateLimit';
 import { putSyncState } from '../repos/communications';
+import { workflow } from '../obs/workflow';
 
 const MB = 1024 * 1024;
 /** Messages per batch; the connector splits larger syncs. */
@@ -122,45 +123,56 @@ export async function connectorMailRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req) => {
       const ctx = requireDevice(req);
-      const { messages } = req.body;
-      if (messages.length > MAX_BATCH_MESSAGES) throw new HttpError(422, 'too_many_messages');
-      let total = 0;
-      // A bogus far-future date would pin a message to the top of every list: clamp it.
-      const latest = Date.now() + MAX_SENT_AHEAD_MS;
-      const capped = messages.map((m) => {
-        const bytes = Buffer.byteLength(m.bodyText, 'utf8');
-        if (bytes > MAX_SENT_BODY_BYTES) throw new HttpError(413, 'message_too_large');
-        total += bytes;
-        return {
-          ...m,
-          externalId: normalizeConnectorId(m.externalId),
-          bodyText: capBody(m.bodyText, bytes),
-          sentAt: Math.min(m.sentAt, latest),
-        };
-      });
-      if (total > MAX_BATCH_BODY_BYTES) throw new HttpError(413, 'batch_too_large');
+      // The mail_sync workflow (design 14.5), from the connector: classify and enrich continue it.
+      return workflow('mail_sync', { userId: ctx.userId }, async () => {
+        const { messages } = req.body;
+        if (messages.length > MAX_BATCH_MESSAGES) throw new HttpError(422, 'too_many_messages');
+        let total = 0;
+        // A bogus far-future date would pin a message to the top of every list: clamp it.
+        const latest = Date.now() + MAX_SENT_AHEAD_MS;
+        const capped = messages.map((m) => {
+          const bytes = Buffer.byteLength(m.bodyText, 'utf8');
+          if (bytes > MAX_SENT_BODY_BYTES) throw new HttpError(413, 'message_too_large');
+          total += bytes;
+          return {
+            ...m,
+            externalId: normalizeConnectorId(m.externalId),
+            bodyText: capBody(m.bodyText, bytes),
+            sentAt: Math.min(m.sentAt, latest),
+          };
+        });
+        if (total > MAX_BATCH_BODY_BYTES) throw new HttpError(413, 'batch_too_large');
 
-      let stored = 0;
-      let inserted = 0;
-      try {
-        for (const message of capped) {
-          const res = await ingestInbound(db, ctx, app.storage, 'apple_mail', message, undefined, {
-            submissions: submissionsEnabled(app.config),
-          });
-          stored += 1;
-          if (res.inserted) inserted += 1;
+        let stored = 0;
+        let inserted = 0;
+        try {
+          for (const message of capped) {
+            const res = await ingestInbound(
+              db,
+              ctx,
+              app.storage,
+              'apple_mail',
+              message,
+              undefined,
+              {
+                submissions: submissionsEnabled(app.config),
+              },
+            );
+            stored += 1;
+            if (res.inserted) inserted += 1;
+          }
+        } catch (err) {
+          // Whatever was stored stays; a re-push of the batch upserts it.
+          await putSyncState(db, ctx, APPLE_MAIL_INTEGRATION, { status: 'error' });
+          throw err;
         }
-      } catch (err) {
-        // Whatever was stored stays; a re-push of the batch upserts it.
-        await putSyncState(db, ctx, APPLE_MAIL_INTEGRATION, { status: 'error' });
-        throw err;
-      }
-      // The connector keeps its own cursor; the server only records that a batch landed.
-      await putSyncState(db, ctx, APPLE_MAIL_INTEGRATION, {
-        lastSyncAt: Date.now(),
-        status: 'ok',
+        // The connector keeps its own cursor; the server only records that a batch landed.
+        await putSyncState(db, ctx, APPLE_MAIL_INTEGRATION, {
+          lastSyncAt: Date.now(),
+          status: 'ok',
+        });
+        return { stored, inserted };
       });
-      return { stored, inserted };
     },
   );
 }

@@ -5,7 +5,12 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import type { ModelPolicy, ProviderFetchOptions, SafeBaseUrlOptions } from './types';
+import {
+  OFFICIAL_BASE_URLS,
+  type ModelPolicy,
+  type ProviderFetchOptions,
+  type SafeBaseUrlOptions,
+} from './types';
 
 /**
  * Hostnames trusted as loopback by literal match, never by resolving them (issue #334): an
@@ -69,9 +74,10 @@ export function isSafeBaseUrl(raw: string | undefined, opts: SafeBaseUrlOptions)
  *
  * opts.fetch is required, not defaulted to the SDK's own global fetch (issue #334): a silent
  * fallback here is exactly how the SSRF/LinkedIn bypass this fixes went unnoticed -- every
- * caller must say explicitly what fetch an openai_compatible client uses, even one (anthropic,
- * openai) that never reads it, so there is no path left that quietly reaches the real network
- * unvalidated.
+ * caller must say explicitly what fetch a client uses, so there is no path left that quietly
+ * reaches the real network unvalidated. Since issue #344 it goes to all three providers, not only
+ * openai_compatible: one fetch that every AI request leaves through is the one place to observe
+ * them (design 14.2, the outbound boundary) and to check them.
  */
 export function createLanguageModel(
   policy: ModelPolicy,
@@ -79,10 +85,20 @@ export function createLanguageModel(
   opts: ProviderFetchOptions,
 ): LanguageModel {
   switch (policy.provider) {
+    // Always an explicit baseURL: unset, the SDKs read ANTHROPIC_BASE_URL and OPENAI_BASE_URL
+    // from the environment themselves, behind the back of the fetch that checks them (#344).
     case 'anthropic':
-      return createAnthropic({ apiKey })(policy.model);
+      return createAnthropic({
+        apiKey,
+        fetch: opts.officialFetch ?? opts.fetch,
+        baseURL: opts.baseUrls?.anthropic ?? OFFICIAL_BASE_URLS.anthropic,
+      })(policy.model);
     case 'openai':
-      return createOpenAI({ apiKey })(policy.model);
+      return createOpenAI({
+        apiKey,
+        fetch: opts.officialFetch ?? opts.fetch,
+        baseURL: opts.baseUrls?.openai ?? OFFICIAL_BASE_URLS.openai,
+      })(policy.model);
     case 'openai_compatible':
       return createOpenAICompatible({
         name: 'openai_compatible',

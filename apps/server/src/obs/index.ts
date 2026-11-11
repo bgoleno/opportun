@@ -105,6 +105,17 @@ let aggregator: MetricAggregator | undefined;
 let timer: NodeJS.Timeout | undefined;
 let flushing: Promise<void> = Promise.resolve();
 const sinks: Sinks = {};
+/** Whether obs/tracing.ts (and with it the SDK) was loaded: only once collection was first on. */
+let tracingLoaded = false;
+
+/**
+ * The tracer provider and the span store (FR-T4 part 2, https://github.com/bgoleno/opportun/issues/344),
+ * loaded the first time collection turns on, so with it off the SDK is never loaded (14.3).
+ */
+const tracing = async () => {
+  tracingLoaded = true;
+  return import('./tracing');
+};
 
 export const FLUSH_INTERVAL_MS = 60_000;
 
@@ -176,12 +187,14 @@ export async function setCollecting(on: boolean): Promise<void> {
       void flushNow().catch(() => undefined);
     }, runtime.flushIntervalMs);
     timer.unref();
+    await (await tracing()).startTracing(runtime.db, runtime.now);
     return;
   }
   collecting = false;
   if (timer !== undefined) clearInterval(timer);
   timer = undefined;
   aggregator = undefined;
+  if (tracingLoaded) (await tracing()).stopTracing();
   await shutdownSinks();
 }
 
@@ -212,6 +225,7 @@ export async function startObs(db: Db, opts: StartObsOptions): Promise<void> {
 export async function stopObs(db?: Db): Promise<void> {
   if (db !== undefined && runtime?.db !== db) return;
   if (collecting) await flushNow().catch(() => undefined);
+  if (collecting && tracingLoaded) await (await tracing()).flushSpans().catch(() => undefined);
   await setCollecting(false);
   runtime = undefined;
 }
@@ -234,6 +248,11 @@ export async function detachExporter(signal: Signal): Promise<void> {
   else if (signal === 'spans') sinks.spans = undefined;
   else sinks.logs = undefined;
   await sink?.shutdown();
+}
+
+/** The span slot's exporter, which obs/tracing.ts hands each rebuilt span to (FR-T4 part 2). */
+export function spanExportSink(): SpanExportSink | undefined {
+  return sinks.spans;
 }
 
 /** Which signals have an exporter attached. */

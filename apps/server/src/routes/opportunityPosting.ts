@@ -32,6 +32,7 @@ import { getOpportunity, type OpportunityView as OpportunityRowView } from '../r
 import { CAPTURE_MAX_TEXT, extract, fetchPageText, PASTE_TEXT_HINT } from './capture';
 import { HttpsUrl, IdParams } from './common';
 import { OpportunityView } from './opportunities';
+import { workflow } from '../obs/workflow';
 
 const CandidateView = z.object({
   posting: NormalizedPostingSchema,
@@ -157,44 +158,47 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
     { schema: { params: IdParams, body: AttachBody, response: { 200: OpportunityView } } },
     async (req) => {
       const ctx = app.requireUser(req);
-      const { id } = req.params;
-      const opp = await getOpportunity(db, ctx, id);
-      const { posting, text, url } = req.body;
-      if (posting !== undefined) {
-        // A Workday board row is listed without its description: fetch it now (FR-D10).
-        const described = await describeWorkdayPosting(
-          { fetch: app.jobs.services.sourceFetch, log: req.log },
-          posting,
-        );
-        return attachPosting(db, ctx, id, described, 'board');
-      }
-      if (text !== undefined) {
+      // The capture workflow (design 14.5), for a posting pasted onto an opportunity.
+      return workflow('capture', { userId: ctx.userId }, async () => {
+        const { id } = req.params;
+        const opp = await getOpportunity(db, ctx, id);
+        const { posting, text, url } = req.body;
+        if (posting !== undefined) {
+          // A Workday board row is listed without its description: fetch it now (FR-D10).
+          const described = await describeWorkdayPosting(
+            { fetch: app.jobs.services.sourceFetch, log: req.log },
+            posting,
+          );
+          return attachPosting(db, ctx, id, described, 'board');
+        }
+        if (text !== undefined) {
+          return attachPosting(
+            db,
+            ctx,
+            id,
+            { company: opp.companyName, title: opp.title, descriptionMd: text },
+            'paste',
+          );
+        }
+        const page = await fetchPageText(app.jobs.services.sourceFetch, url as string);
+        const out = await extract(db, ctx, url, page);
         return attachPosting(
           db,
           ctx,
           id,
-          { company: opp.companyName, title: opp.title, descriptionMd: text },
+          {
+            company: out.companyName?.trim() ?? opp.companyName,
+            title: out.title?.trim() ?? opp.title,
+            // Without an extracted description the page text itself is the description.
+            descriptionMd: out.descriptionMd ?? page.slice(0, CAPTURE_MAX_TEXT),
+            postingUrl: url ?? out.postingUrl,
+            location: out.location,
+            remote: out.remote === null ? null : out.remote === 'remote',
+            compNote: out.compNote,
+          },
           'paste',
         );
-      }
-      const page = await fetchPageText(app.jobs.services.sourceFetch, url as string);
-      const out = await extract(db, ctx, url, page);
-      return attachPosting(
-        db,
-        ctx,
-        id,
-        {
-          company: out.companyName?.trim() ?? opp.companyName,
-          title: out.title?.trim() ?? opp.title,
-          // Without an extracted description the page text itself is the description.
-          descriptionMd: out.descriptionMd ?? page.slice(0, CAPTURE_MAX_TEXT),
-          postingUrl: url ?? out.postingUrl,
-          location: out.location,
-          remote: out.remote === null ? null : out.remote === 'remote',
-          compNote: out.compNote,
-        },
-        'paste',
-      );
+      });
     },
   );
 

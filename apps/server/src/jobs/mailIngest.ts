@@ -32,6 +32,7 @@ import { upsertInbound } from '../repos/communications';
 import { enqueue } from './runner';
 import { encryptSecret } from '../lib/secretBox';
 import type { Exec } from '../db/client';
+import { continuesTrace } from '../obs/workflow';
 
 export const CLASSIFY_JOB_KIND = 'comms.classify';
 /** The sync_state row the Apple Mail connector's batches update (lastSyncAt, status). */
@@ -98,7 +99,12 @@ export async function enqueueClassify(
     body === undefined || body.length === 0
       ? { communicationId }
       : { communicationId, bodySealed: encryptSecret(db, body) },
-    { dedupeKey: classifyDedupeKey(communicationId), userId: ctx.userId },
+    // Continues the mail_sync trace when queued from inside it (14.6), not otherwise.
+    {
+      dedupeKey: classifyDedupeKey(communicationId),
+      userId: ctx.userId,
+      continueTrace: continuesTrace(),
+    },
   );
 }
 
