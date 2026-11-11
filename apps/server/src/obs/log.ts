@@ -123,22 +123,35 @@ function headerMatches(header: string, message: string): boolean {
 }
 
 /**
- * The messages a stack's header may have been written with, longest first: the message as pino
- * gives it, then each shorter prefix ending where pino joined a cause's message to it
- * (`outer: inner`, pino-std-serializers' messageWithCauses), as a stack's header holds the
- * error's own message only (tl on #389). The error's own message is always one of them.
+ * The messages a stack's header may have been written with, longest first. The first is the
+ * message as pino gives it. When the error has a cause, pino joins the cause's message onto the
+ * error's own (`outer: inner`, pino-std-serializers' messageWithCauses) and appends the cause's
+ * stack as a `caused by: <name>: <message>` line, while the stack's header holds the error's own
+ * message only (tl on #389). So a shorter prefix is tried only at a `: ` where the rest of the
+ * message begins with the first cause's message, as that line gives it, and never when the stack
+ * has no such line: an error with no cause and a `: ` in its message is not cut, or a message
+ * reassigned after its stack was read could match a prefix and have old lines read (sec on #389).
  */
-function headerMessages(message: string): string[] {
+function headerMessages(message: string, lines: readonly string[]): string[] {
   const out = [message];
+  const causedBy = lines.find((l) => l.startsWith(CAUSED_BY));
+  if (causedBy === undefined) return out;
+  const cause = causedBy.slice(CAUSED_BY.length);
+  const named = cause.indexOf(': ');
+  const causeMessage = named < 0 ? '' : cause.slice(named + 2);
+  if (causeMessage === '') return out;
   for (let at = message.lastIndexOf(': '); at > 0; at = message.lastIndexOf(': ', at - 1)) {
-    out.push(message.slice(0, at));
+    if (message.slice(at + 2).startsWith(causeMessage)) out.push(message.slice(0, at));
   }
   return out;
 }
 
+/** The line pino's error serializer puts before a cause's stack (stackWithCauses). */
+const CAUSED_BY = 'caused by: ';
+
 /** How many lines the stack's header has, for the first of headerMessages it matches. */
 function headerLength(lines: readonly string[], message: string): number | undefined {
-  for (const candidate of headerMessages(message)) {
+  for (const candidate of headerMessages(message, lines)) {
     const length = candidate.split('\n').length;
     if (headerMatches(lines.slice(0, length).join('\n'), candidate)) return length;
   }

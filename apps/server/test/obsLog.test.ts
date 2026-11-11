@@ -401,6 +401,28 @@ describe('errors that kept their frames on main keep them (tl on #389)', () => {
     expect(ours(r)).toBe(true);
   });
 
+  it('with no cause, a message cut to a prefix of its own after the read still gives no frames (sec on #389)', () => {
+    // No `caused by:` line, so the message's `: ` is its own: the shorter prefix is not tried.
+    const err = new Error(`x\n    at ${NAME.replace(' ', '')} (${process.cwd()}/src/fake.ts:1:1)`);
+    void err.stack;
+    err.message = 'x: something else';
+    const r = logged(err);
+    expect(r['error.type']).toBe('Error');
+    expect(r).not.toHaveProperty('stack');
+  });
+
+  it("with a cause, a prefix is tried only where the rest is the cause's message", () => {
+    const err = new Error(`x\n    at ${NAME.replace(' ', '')} (${process.cwd()}/src/fake.ts:1:1)`, {
+      cause: new Error('z'),
+    });
+    void err.stack;
+    // pino gives `x: y: z`: cut where `z` follows, the header would be `x: y`, which it is not;
+    // cut at the first `: `, what follows is `y: z`, not the cause's message.
+    err.message = 'x: y';
+    const r = logged(err);
+    expect(r).not.toHaveProperty('stack');
+  });
+
   it('an error thrown inside a builtin: its location-less frame is a placeholder, ours follow', () => {
     let thrown: Error | undefined;
     try {
