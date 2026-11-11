@@ -194,6 +194,33 @@ export interface CheckOptions {
   allowPrivate: boolean;
   /** Every address the name resolves to. Tests replace it. */
   lookup?: (host: string) => Promise<string[]>;
+  /** How long to wait for the lookup; LOOKUP_TIMEOUT_MS unless a test says otherwise. */
+  lookupTimeoutMs?: number;
+}
+
+/**
+ * How long a lookup may take before the name counts as unresolvable (tl on #377). The send's own
+ * 10-second timeout starts after the check, so without this an unresponsive resolver would hold
+ * a batch, and the worker thread getaddrinfo runs on, for as long as the system resolver waits.
+ * The thread itself is released only when getaddrinfo returns; this bounds how long export waits.
+ */
+export const LOOKUP_TIMEOUT_MS = 5_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('lookup timed out')), ms);
+    timer.unref();
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error('lookup failed'));
+      },
+    );
+  });
 }
 
 async function resolveAll(host: string): Promise<string[]> {
@@ -216,7 +243,10 @@ export async function checkDestination(
   } else {
     if (isProhibitedHost(bare)) return { ok: false, reason: 'prohibited_host' };
     try {
-      addresses = await (opts.lookup ?? resolveAll)(bare);
+      addresses = await withTimeout(
+        (opts.lookup ?? resolveAll)(bare),
+        opts.lookupTimeoutMs ?? LOOKUP_TIMEOUT_MS,
+      );
     } catch {
       return { ok: false, reason: 'unresolvable' };
     }

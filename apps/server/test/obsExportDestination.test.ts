@@ -12,6 +12,7 @@ import {
   classifyAddress,
   endpointsFor,
   isAllowedHeaderName,
+  LOOKUP_TIMEOUT_MS,
   parseDestination,
   type Destination,
 } from '../src/obs/export/destination';
@@ -178,6 +179,16 @@ describe('checkDestination (14.10 rules 2 and 3)', () => {
       ok: false,
       reason: 'unresolvable',
     });
+  });
+
+  it('a lookup that never answers is abandoned as unresolvable, at the timeout (tl on #377)', async () => {
+    const never = () => new Promise<string[]>(() => undefined);
+    const started = Date.now();
+    expect(
+      await checkDestination(dest(), { allowPrivate: false, lookup: never, lookupTimeoutMs: 50 }),
+    ).toEqual({ ok: false, reason: 'unresolvable' });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(LOOKUP_TIMEOUT_MS).toBeLessThan(10_000);
   });
 
   it('a prohibited host is refused before any lookup', async () => {

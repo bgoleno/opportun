@@ -10,7 +10,10 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { obsMetricPoints } from '../src/db/schema';
 import { encryptSecret } from '../src/lib/secretBox';
+import { MINUTE_MS } from '../src/obs/metrics';
 import {
   attachedExporters,
   flushNow,
@@ -23,6 +26,7 @@ import type { Destination } from '../src/obs/export/destination';
 import {
   applyExport,
   buildExporters,
+  EXPORT_BUFFER_MAX,
   exportStatus,
   flushExport,
   stopExport,
@@ -411,5 +415,50 @@ describe('the Gen AI token and cost metrics are exported (criterion 3; FR-T4 par
     expect(body).not.toContain('my-private-finetune');
     expect(body).not.toContain(a.userId);
     expect(body).not.toContain('user.id');
+  });
+});
+
+describe('the batches (14.10, 14.11)', () => {
+  it('queues at most 2,048 spans; the next is dropped and counted as buffer_full', async () => {
+    const { app } = await boot();
+    const { port } = await receiver();
+    await setCollecting(true);
+    expect(EXPORT_BUFFER_MAX).toBe(2_048);
+    const ex = await buildExporters(otlp(port), undefined, opts);
+    // A span with catalogued keys only, so the one drop counted is the buffer's.
+    const clean: GatedSpan = { ...span, attributes: { 'http.request.method': 'GET' } };
+    for (let i = 0; i <= EXPORT_BUFFER_MAX; i += 1) ex.sinks.spans?.export(clean);
+    await flushNow();
+    const drops = await app.db
+      .select()
+      .from(obsMetricPoints)
+      .where(eq(obsMetricPoints.metric, 'opportun.obs.dropped'))
+      .all();
+    expect(
+      drops
+        .filter((d) => d.resolution === MINUTE_MS)
+        .map((d) => ({ ...d.attributes, count: d.count })),
+    ).toEqual([{ 'opportun.obs.signal': 'spans', 'opportun.obs.reason': 'buffer_full', count: 1 }]);
+    await ex.shutdown();
+  });
+
+  it('checks the name again for every batch: re-pointed to a refused address, the next batch is not sent', async () => {
+    await boot();
+    const { port, got } = await receiver();
+    let answer = '127.0.0.1';
+    const ex = await buildExporters({ ...otlp(port), host: 'collector.test' }, undefined, {
+      ...opts,
+      lookup: async () => [answer],
+    });
+    ex.sinks.spans?.export(span);
+    await ex.flush();
+    expect(got.map((g) => g.url)).toEqual(['/v1/traces']);
+    expect(got[0]?.headers.host).toBe(`collector.test:${port}`);
+    answer = '169.254.169.254';
+    ex.sinks.spans?.export(span);
+    await ex.flush();
+    await ex.shutdown();
+    expect(got).toHaveLength(1);
+    expect(exportStatus().lastFailure?.outcome).toBe('blocked');
   });
 });

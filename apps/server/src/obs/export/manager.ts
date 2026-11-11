@@ -36,8 +36,11 @@ import { credentialHeaders, credentialOf, readExport } from './settings';
 
 /** Spans and log records leave in batches this often (14.10). */
 export const BATCH_INTERVAL_MS = 5_000;
-/** At most this many spans, or log records, wait for the next batch; more are dropped, counted. */
-export const EXPORT_BUFFER_MAX = 2_000;
+/**
+ * At most this many spans, or log records, wait for the next batch; more are dropped and counted
+ * (design 14.11's table: a queue of at most 2,048 of each).
+ */
+export const EXPORT_BUFFER_MAX = 2_048;
 
 const PROTOBUF = 'application/x-protobuf';
 const LINE_PROTOCOL = 'text/plain; charset=utf-8';

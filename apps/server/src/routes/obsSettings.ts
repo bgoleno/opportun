@@ -172,6 +172,15 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
         await assertDestination(next.value);
       }
       await writeExport(db, next.value);
+      try {
+        await applyExport(db, app.config);
+      } catch (err) {
+        // The exporters could not be built: put the previous settings back, so the stored switch
+        // never says export is on while nothing is sent (tl on #377), and report the failure.
+        await writeExport(db, prev);
+        await applyExport(db, app.config).catch(() => undefined);
+        throw err;
+      }
       const type = next.value.destination?.type ?? null;
       // The type and the signals, never the host or the credential (rule 1).
       await audit(db, 'telemetry.export.updated', {
@@ -183,7 +192,6 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
           signals: type === null ? [] : signalsOf(type),
         },
       });
-      await applyExport(db, app.config);
       return await exportView(true);
     },
   );

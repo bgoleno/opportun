@@ -91,9 +91,10 @@ export async function startObsFromSettings(
   deployment: Pick<ExportDeployment, 'demo'> & Partial<ExportDeployment>,
 ): Promise<void> {
   await startObs(db, { log, collect: await collectInEffect(db, deployment) });
-  // Without the operator's flag, private destinations stay refused.
+  // Without the operator's flag, private destinations stay refused. An export that cannot be
+  // built must not stop the app from starting: it stays off until an admin saves it again.
   await applyExport(db, {
     demo: deployment.demo,
     telemetryAllowPrivate: deployment.telemetryAllowPrivate ?? false,
-  });
+  }).catch(() => undefined);
 }
