@@ -297,6 +297,27 @@ describe('an own link whose job the board does not list never attaches another j
     expect((await getOpportunity(app.db, ctxOf(a), id)).postingUrl).toBe(MISSING);
   });
 
+  it("a message's link to another job on the company's own board is offered, never attached", async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Staff Platform Engineer' });
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: MISSING });
+    // The message names a job that IS on the company's own board, but not the link's job.
+    await linkedMail(app, a, id, 'The role: https://job-boards.greenhouse.io/examplecorp/jobs/1');
+    embeddedBoardServes([
+      embedded('Designer', '1', 'https://careers.examplecorp.example/jobs?gh_jid=1'),
+    ]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().outcome).toBe('candidates');
+    const after = await getOpportunity(app.db, ctxOf(a), id);
+    expect(after.postingUrl).toBe(MISSING);
+    expect(after.atsJobRef ?? null).toBeNull();
+    expect(after.descriptionMd ?? null).toBeNull();
+  });
+
   it('reconcile flags it for review instead of confirming', async () => {
     const { app, a } = await boot();
     const id = await seed(app, a, { title: 'Staff Platform Engineer' });
