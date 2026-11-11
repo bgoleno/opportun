@@ -81,13 +81,24 @@ describe('collection off: the budget of 14.11 (#343)', () => {
       }
     };
     await walk(root);
-    const offenders: string[] = [];
+    // FR-T4 part 2's obs/tracing.ts is the one file that imports the SDK (design 14.3: the
+    // provider). It is loaded when collection is first turned on, by a dynamic import(), so
+    // the SDK stays unloaded until then: no file may import tracing.ts statically.
+    const TRACING = '/obs/tracing.ts';
+    const sdkImports: string[] = [];
+    const staticTracingImports: string[] = [];
     for (const f of files) {
+      const rel = f.slice(root.length);
       const text = await readFile(f, 'utf8');
-      // FR-T4 part 2's obs/tracing.ts loads the SDK when collection is first turned on; it
-      // must do so by a dynamic import() there, which this static check leaves alone.
-      if (/from '@opentelemetry\/(?!api')[^']+'/.test(text)) offenders.push(f.slice(root.length));
+      // `import type` is erased by TypeScript and loads nothing (fs2's span store uses the SDK's
+      // types), so only value imports count.
+      const values = text.replace(/import type [^;]*;/g, '');
+      if (rel !== TRACING && /from '@opentelemetry\/(?!api')[^']+'/.test(values)) {
+        sdkImports.push(rel);
+      }
+      if (/from '(?:\.{1,2}\/)+(?:obs\/)?tracing'/.test(text)) staticTracingImports.push(rel);
     }
-    expect(offenders).toEqual([]);
+    expect(sdkImports).toEqual([]);
+    expect(staticTracingImports).toEqual([]);
   });
 });
