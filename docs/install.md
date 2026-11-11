@@ -277,6 +277,7 @@ Application settings (read by the server process):
 | `OPPORTUN_TRUSTED_PROXIES`                         | (empty: trust no proxy)                        | Reverse proxies whose `X-Forwarded-For`/`-Proto` are trusted (comma-separated IPs, CIDRs, or loopback/linklocal/uniquelocal); compose sets it to the Caddy subnet (issue #333)                                                                                                                                                           |
 | `DATA_DIR`                                         | `./data` (`/data` in the image)                | Attachments, backups, exports, `master.key`                                                                                                                                                                                                                                                                                              |
 | `SQLITE_DIR`                                       | `DATA_DIR` (`/sqlite` in the image)            | `opportun.db` alone, on SQLite; see [section 6](#6-upgrades-and-backups) for why it is separate and how moving to it is handled                                                                                                                                                                                                          |
+| `OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT`            | (unset)                                        | `1` moves SQLite's WAL checkpoints into a background thread, for `opportun.db` on a slow disk; see **SQLite on a slow disk** below                                                                                                                                                                                                       |
 | `LOG_LEVEL`                                        | `info`                                         | pino log level                                                                                                                                                                                                                                                                                                                           |
 | `WEB_DIR`                                          | `apps/web/dist` (`/app/web/dist` in the image) | Built web app to serve; the API runs alone when it is missing                                                                                                                                                                                                                                                                            |
 | `SMTP_URL`                                         | (unset)                                        | Reserved for email password reset, which is not implemented yet                                                                                                                                                                                                                                                                          |
@@ -289,6 +290,21 @@ Application settings (read by the server process):
 | `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`           | (unset: the official API)                      | Send every Anthropic or OpenAI call to a proxy or gateway you run instead; see **AI provider requests** below                                                                                                                                                                                                                            |
 | `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP`                  | (unset)                                        | `1` lets an OpenAI-compatible endpoint use plain http on `localhost`, `127.0.0.1` or `[::1]` (a local Ollama or LM Studio)                                                                                                                                                                                                               |
 | `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`                 | (unset)                                        | `1` lets telemetry export send to loopback, a private network or `100.64.0.0/10` (a Prometheus or a Datadog Agent next to Opportun), over http or https. Unset, export goes only to a public https destination. Link-local and cloud metadata addresses are refused either way; see [Telemetry](guide/settings.md#where-export-may-send) |
+
+**SQLite on a slow disk.** SQLite writes new data to a write-ahead log first, and copies it
+into `opportun.db` from time to time: a checkpoint. By default the server checkpoints every 100
+pages, inside whichever write takes the log past that size, and while a checkpoint waits for
+the disk nothing else in the server runs. On an SSD that takes about 2 ms. On a slow disk, such
+as an SD card in a small board computer or a network volume, it can take tens of milliseconds,
+and every request in flight waits for it. If `opportun.db` is on such a disk, set
+`OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT=1`: a background thread then checkpoints once a second,
+on a connection of its own, and writes no longer wait for the disk's sync. What it costs:
+between checkpoints the log grows by whatever was written in that second, a second connection
+to the database stays open, and a long read (a backup or an export) still keeps a checkpoint
+from finishing until it ends, as it does without the setting. If the background thread ever
+stops, the server logs `background checkpointer stopped: automatic checkpoints are back on` and
+goes back to checkpointing as it does by default. Leave it unset on an SSD, where the default
+already costs little. It has no effect on Postgres.
 
 **AI provider requests.** Every AI call, to Anthropic, OpenAI or an OpenAI-compatible
 endpoint, is checked before it is sent: https only, and every address the host's name resolves
