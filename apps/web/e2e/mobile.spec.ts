@@ -169,6 +169,70 @@ async function stubScoredResume(page: Page): Promise<void> {
   });
 }
 
+const STUB_TRACE = '0af7651916cd43dd8448eb211c80319c';
+
+/**
+ * One AI trace with long names and deep nesting, served by stubs (FR-T7,
+ * https://github.com/bgoleno/opportun/issues/347): the trace tables fill only from real AI calls,
+ * which an e2e run cannot make. The list and the trace view are stubbed; the page around them
+ * comes from the real server.
+ */
+async function stubTraces(page: Page): Promise<void> {
+  const t0 = Date.UTC(2026, 10, 1, 12, 0);
+  const model = 'us.anthropic.claude-opus-5-5-20261101-v1:0-with-a-very-long-deployment-suffix';
+  const trace = {
+    traceId: STUB_TRACE,
+    startedAt: t0,
+    durationMs: 61_234,
+    origin: 'POST /api/v1/connector/capture/with/a/very/long/route/template/:id',
+    workflow: 'capture',
+    feature: 'capture',
+    conversationId: null,
+    tasks: ['capture.extract', 'capture.job', 'posting.merge', 'discovery.rank'],
+    models: [model],
+    providers: ['openai_compatible'],
+    inputTokens: 123_456_789,
+    outputTokens: 98_765_432,
+    estCostUsd: 1234.5678,
+    spanCount: 12,
+    errorCount: 1,
+    status: 'error',
+    truncated: true,
+  };
+  // Twelve spans, each the child of the one before: deeper than the indent cap.
+  const spans = Array.from({ length: 12 }, (_, i) => ({
+    spanId: (i + 1).toString(16).padStart(16, '0'),
+    parentSpanId: i === 0 ? null : i.toString(16).padStart(16, '0'),
+    name: i % 2 === 0 ? `invoke_workflow capture_with_a_long_name_${i}` : `chat ${model}`,
+    kind: i % 2 === 0 ? 'internal' : 'client',
+    startedAt: t0 + i * 1000,
+    durationMs: 61_234 - i * 2000,
+    status: i === 11 ? 'error' : 'ok',
+    errorType: i === 11 ? 'provider_error' : null,
+    task: i % 2 === 0 ? null : 'capture.extract',
+    model: i % 2 === 0 ? null : model,
+    provider: i % 2 === 0 ? null : 'openai_compatible',
+    attributes: {
+      'gen_ai.response.finish_reasons': ['stop', 'length', 'content_filter'],
+      'gen_ai.request.model': model,
+      'error.type': 'ProviderErrorWithAVeryLongClassNameThatDoesNotBreak',
+    },
+    prompt: i % 2 === 0 ? null : { name: 'capture.extract', version: 12 },
+  }));
+  await page.route(/\/api\/v1\/obs\/traces/, async (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/^\/api\/v1/, '');
+    if (path === '/obs/traces') {
+      return await route.fulfill({ json: { collect: false, items: [trace], next: null } });
+    }
+    if (path === '/obs/traces/filters') {
+      return await route.fulfill({
+        json: { tasks: trace.tasks, models: [model], providers: ['openai_compatible'] },
+      });
+    }
+    return await route.fulfill({ json: { trace, spans, conversation: null } });
+  });
+}
+
 for (const width of WIDTHS) {
   test.describe(`${width}px wide`, () => {
     test.use({ viewport: { width, height: 844 } });
@@ -247,6 +311,30 @@ for (const width of WIDTHS) {
       await expect(link).toHaveAttribute('target', '_blank');
       await expect(link).toHaveAttribute('rel', /noopener/);
       await expect(link).toHaveAttribute('rel', /noreferrer/);
+    });
+
+    test('the AI trace list and a deep trace with long names fit, and work by keyboard', async ({
+      page,
+    }) => {
+      await registerUser(page);
+      await stubTraces(page);
+      await page.goto('/settings/traces');
+      await expect(page.getByRole('list', { name: 'Traces' })).toBeVisible();
+      await expectFits(page, 'the trace list');
+      await page.getByRole('list', { name: 'Traces' }).getByRole('link').first().click();
+      const tree = page.getByRole('tree', { name: 'Spans' });
+      await expect(tree).toBeVisible();
+      await expectFits(page, 'the trace view');
+      // One tab stop in the waterfall; the arrow keys move the selection and the details follow.
+      await tree.getByRole('treeitem').first().focus();
+      await page.keyboard.press('End');
+      const last = tree.getByRole('treeitem').last();
+      await expect(last).toBeFocused();
+      await expect(last).toHaveAttribute('aria-selected', 'true');
+      await expect(page.getByRole('region', { name: /Span details/ })).toContainText(
+        'provider_error',
+      );
+      await expectFits(page, 'the trace view with the last span selected');
     });
 
     test('inbox rows with long senders, subjects and links fit on every tab', async ({ page }) => {

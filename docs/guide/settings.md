@@ -113,6 +113,42 @@ When the weekly refinement job has a proposed classification prompt (see
 [Inbox](inbox.md#acting-on-a-message)), it shows at the top of **Settings > AI** for you to
 accept or discard.
 
+## AI traces
+
+**AI traces** (`/settings/traces`) lists the AI work Opportun did for you, newest first: each
+model call, each turn of a tailoring chat, and each workflow that made several calls, such as
+a capture that went on to rank the posting. Each row shows when it started, its tasks, the
+models, how long it took, the input and output tokens, the estimated cost, and whether it
+failed. You see only your own traces. An administrator sees only their own too.
+
+Filter the list by task, model, provider, status (OK or Error) and time range. A tailoring
+chat's turns are grouped under **Tailoring chat** with the number of turns, and **Show only
+this conversation** lists that chat's turns on their own.
+
+Open a trace to see its waterfall: every step on one time axis, each nested under the step that
+started it, with when it started and how long it ran. Select a step with the mouse, or move
+through the steps with the arrow keys (Home and End jump to the first and last), and its
+details appear below: its kind, status, task, model and provider, the prompt it used (by task
+and version, with a link to **Settings > AI**), and the attributes recorded for it. A step that
+failed shows its error type in red.
+
+![A capture trace's waterfall: the capture workflow, its extraction call with the provider request under it, then the ranking job it continued into, with the selected call's details below](images/settings-ai-traces.png)
+
+What a trace does not hold:
+
+- **No prompts and no responses.** Opportun never stores what was sent to the model or what
+  came back, so a trace cannot show it. A chat trace links to its tailoring session (**Open the
+  tailoring session**), where the conversation itself is.
+- **No company names, email addresses or other text.** Only the fixed kinds of value Opportun's
+  telemetry catalog allows are recorded.
+
+Traces are kept 30 days. One trace keeps at most 2,000 steps; a longer one says it was
+truncated.
+
+**Collection is off by default.** An administrator turns it on for the whole instance. While it
+is off, the page says so and nothing new is recorded; traces recorded earlier are still shown
+until they age out.
+
 ## Security
 
 ### Password

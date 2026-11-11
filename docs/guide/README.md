@@ -25,8 +25,8 @@ so a few AI-written lines read "Mock answer." where your own model would write a
 7. [Browser extension](browser-extension.md): capturing a profile or posting from the page
    you are looking at, and why it works the way it does.
 8. [Network](network.md): contacts, the LinkedIn export, and referrals.
-9. [Settings](settings.md): AI keys and models, prompts, security, users, device tokens,
-   import and export, and backups.
+9. [Settings](settings.md): AI keys and models, prompts, AI traces, security, users, device
+   tokens, import and export, and backups.
 
 ## A word on AI
 
