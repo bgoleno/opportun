@@ -2087,6 +2087,63 @@ describe('#401: the details step, filled from the profile, the account and the l
     expect(body.fields).not.toHaveProperty('fullName');
   });
 
+  // tl on #430: LinkedIn profile and Links can come from the profile's links with no detail saved.
+  // Such a value is the profile's: unchanged it needs no tick, changed it differs, and emptied
+  // there is nothing saved to remove.
+  describe('a value the profile gives from its links, with no detail saved', () => {
+    const LINK = 'https://www.linkedin.com/in/jane-example';
+    const fromLinks = submission({ fields: { linkedinUrl: LINK, links: LINK } });
+    const derived = () =>
+      withDetails(fromLinks, {
+        'GET /profile': { ...PROFILE, links: [{ label: 'LinkedIn', url: LINK }] },
+        'GET /profile/application-details': {
+          values: [
+            { key: 'linkedinUrl', value: LINK, source: { kind: 'profile' } },
+            { key: 'links', value: LINK, source: { kind: 'profile' } },
+          ],
+          leftOut: [],
+        },
+      });
+
+    it('unchanged: from your profile, with no marker and no tick', async () => {
+      mockApi(derived());
+      renderStep('details');
+      expect(
+        await within(await fieldBoxAsync('LinkedIn profile')).findByText('From your profile'),
+      ).toBeInTheDocument();
+      for (const label of ['LinkedIn profile', 'Links']) {
+        expect(within(fieldBox(label)).getByText('From your profile')).toBeInTheDocument();
+        expect(
+          within(fieldBox(label)).queryByText(/^(Not in|Differs from) your profile$/),
+        ).toBeNull();
+        expect(within(fieldBox(label)).queryByRole('checkbox')).toBeNull();
+      }
+    });
+
+    it('changed: differs from your profile, with Save to my profile', async () => {
+      const { user } = (mockApi(derived()), renderStep('details'));
+      const input = await screen.findByLabelText('LinkedIn profile');
+      await within(fieldBox('LinkedIn profile')).findByText('From your profile');
+      await user.clear(input);
+      await user.type(input, 'https://www.linkedin.com/in/jane-new');
+      expect(
+        within(fieldBox('LinkedIn profile')).getByText('Differs from your profile'),
+      ).toBeInTheDocument();
+      expect(
+        within(fieldBox('LinkedIn profile')).getByRole('checkbox', { name: 'Save to my profile' }),
+      ).toBeInTheDocument();
+    });
+
+    it('emptied: no marker and no tick, as nothing is saved to remove', async () => {
+      const { user } = (mockApi(derived()), renderStep('details'));
+      const input = await screen.findByLabelText('LinkedIn profile');
+      await within(fieldBox('LinkedIn profile')).findByText('From your profile');
+      await user.clear(input);
+      expect(within(fieldBox('LinkedIn profile')).queryByText(/your profile/)).toBeNull();
+      expect(within(fieldBox('LinkedIn profile')).queryByRole('checkbox')).toBeNull();
+    });
+  });
+
   it('an empty profile and nothing held: empty inputs, no source lines, no ticks', async () => {
     mockApi(
       withDetails(submission({ fields: {} }), {

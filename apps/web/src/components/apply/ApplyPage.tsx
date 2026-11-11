@@ -469,6 +469,16 @@ function DetailsStep({
     if (profile === null) return null;
     const held = profileDetail(profile, key).trim();
     const value = (valueOf(key) ?? '').trim();
+    // A value the server gives from the profile with no detail saved (LinkedIn profile, or Links,
+    // from the profile's links) is the profile's too (tl on #430): unchanged it needs no tick,
+    // changed it differs, and emptied there is nothing saved to remove.
+    const given =
+      held === ''
+        ? prefill?.values.find((v) => v.key === key && v.source.kind === 'profile')
+        : undefined;
+    if (given !== undefined) {
+      return value === '' || value === given.value.trim() ? null : 'differs';
+    }
     if (value === held) return null;
     if (held === '') return 'missing';
     return value === '' ? 'removing' : 'differs';
