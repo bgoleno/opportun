@@ -153,46 +153,69 @@ export function Kanban(props: {
     const resolved = stage ?? (id === undefined ? undefined : props.stageOf(byId.get(String(id))!));
     return resolved ? `the ${stageLabel(resolved)} column` : 'no column';
   };
+  /** What dropping the active card on `overId` does: one answer for the drop and its words. */
+  type Drop =
+    | { kind: 'none' }
+    | { kind: 'stage'; opp: OpportunityView; from: OpportunityStage; to: OpportunityStage }
+    | { kind: 'reorder'; opp: OpportunityView; over: OpportunityView; stage: OpportunityStage };
+  const dropOf = (activeId: string | number, overId: string | number | undefined): Drop => {
+    const opp = byId.get(String(activeId));
+    if (opp === undefined || overId === undefined) return { kind: 'none' };
+    const from = props.stageOf(opp);
+    // Dropped on the column itself (an empty column, or outside any card): a stage move.
+    const column = OPPORTUNITY_STAGES.find((s) => s === String(overId));
+    if (column !== undefined) {
+      return column === from ? { kind: 'none' } : { kind: 'stage', opp, from, to: column };
+    }
+    const over = byId.get(String(overId));
+    if (over === undefined) return { kind: 'none' };
+    const to = props.stageOf(over);
+    // Dropped on a card in a different column: still a stage move, not a rank within it --
+    // the destination appends it at the bottom server-side regardless of drop position.
+    if (to !== from) return { kind: 'stage', opp, from, to };
+    return { kind: 'reorder', opp, over, stage: from };
+  };
+  const REORDER_OFF = 'Clear the search to drag cards within a column.';
+  /**
+   * Why this drop changes nothing, in the words its message uses, or null when it goes ahead.
+   * A drop the board refuses is announced as not moved, never as "dropped on" (#413): the
+   * screen reader hears the same reason the toast shows.
+   */
+  const refusedDrop = (drop: Drop): string | null => {
+    if (drop.kind === 'stage')
+      return props.flow.refusal({ ...drop.opp, stage: drop.from }, drop.to);
+    if (drop.kind === 'reorder' && props.reorderDisabled) return REORDER_OFF;
+    return null;
+  };
   const announcements: Announcements = {
     onDragStart: ({ active: a }) => `Picked up ${nameOf(a.id)}.`,
     onDragOver: ({ active: a, over }) => `${nameOf(a.id)} is over ${columnOf(over?.id)}.`,
-    onDragEnd: ({ active: a, over }) => `${nameOf(a.id)} was dropped on ${columnOf(over?.id)}.`,
+    onDragEnd: ({ active: a, over }) => {
+      const refused = refusedDrop(dropOf(a.id, over?.id));
+      return refused === null
+        ? `${nameOf(a.id)} was dropped on ${columnOf(over?.id)}.`
+        : `${nameOf(a.id)} was not moved. ${refused}`;
+    },
     onDragCancel: ({ active: a }) => `Moving ${nameOf(a.id)} was cancelled.`,
   };
 
   function onDragEnd(e: DragEndEvent) {
     setActiveId(null);
-    const opp = byId.get(String(e.active.id));
-    if (opp === undefined || e.over === null) return;
-    const overId = String(e.over.id);
-    const fromStage = props.stageOf(opp);
-    const targetStage = OPPORTUNITY_STAGES.find((s) => s === overId);
-    if (targetStage !== undefined) {
-      // Dropped on the column itself (an empty column, or outside any card): cross-stage move.
-      if (targetStage !== fromStage) props.flow.request({ ...opp, stage: fromStage }, targetStage);
+    const drop = dropOf(e.active.id, e.over?.id);
+    if (drop.kind === 'stage') {
+      props.flow.request({ ...drop.opp, stage: drop.from }, drop.to);
       return;
     }
-    const overOpp = byId.get(overId);
-    if (overOpp === undefined) return;
-    const toStage = props.stageOf(overOpp);
-    if (toStage !== fromStage) {
-      // Dropped on a card in a different column: still a stage move, not a rank within it --
-      // the destination appends it at the bottom server-side regardless of drop position.
-      props.flow.request({ ...opp, stage: fromStage }, toStage);
-      return;
-    }
+    if (drop.kind !== 'reorder') return;
     if (props.reorderDisabled) {
-      toast({
-        title: 'Reordering is off while filtering',
-        description: 'Clear the search to drag cards within a column.',
-      });
+      toast({ title: 'Reordering is off while filtering', description: REORDER_OFF });
       return;
     }
-    const column = props.columns.find((c) => c.stage === fromStage);
+    const column = props.columns.find((c) => c.stage === drop.stage);
     if (column === undefined) return;
     const ids = column.items.map((o) => o.id);
-    const fromIndex = ids.indexOf(opp.id);
-    const toIndex = ids.indexOf(overOpp.id);
+    const fromIndex = ids.indexOf(drop.opp.id);
+    const toIndex = ids.indexOf(drop.over.id);
     if (fromIndex === -1 || toIndex === -1) return;
     const currentSortOrder = new Map(column.items.map((o) => [o.id, o.sortOrder] as const));
     const changes = reorderColumn(ids, fromIndex, toIndex, currentSortOrder);

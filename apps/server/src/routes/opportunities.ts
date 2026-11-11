@@ -20,6 +20,7 @@ import {
   transitionOpportunity,
   updateOpportunity,
 } from '../repos/opportunities';
+import { resolvePostingAtsJobRef } from '../lib/greenhouseEmbed';
 import { search, SEARCH_KINDS } from '../repos/search';
 import { HttpUrl, IdParams, listQuery, optionalText, pageOf } from './common';
 
@@ -156,7 +157,22 @@ export async function opportunityRoutes(app: FastifyInstance): Promise<void> {
   api.patch(
     '/opportunities/:id',
     { schema: { params: IdParams, body: PatchBody, response: { 200: OpportunityView } } },
-    async (req) => updateOpportunity(db, app.requireUser(req), req.params.id, req.body),
+    async (req) => {
+      const ctx = app.requireUser(req);
+      const { id } = req.params;
+      // A new posting link on a company's own page (`?gh_jid=`) is checked on Greenhouse's API
+      // before the write, outside its transaction (#398): one request per known board, and none
+      // for any other link or one whose job already has a verified identity.
+      const url = req.body.postingUrl;
+      if (url === undefined) return updateOpportunity(db, ctx, id, req.body);
+      const current = await getOpportunity(db, ctx, id);
+      if (url === current.postingUrl) return updateOpportunity(db, ctx, id, req.body);
+      const atsJobRef = await resolvePostingAtsJobRef(db, ctx, current, url, {
+        fetch: app.jobs.services.sourceFetch,
+        log: req.log,
+      });
+      return updateOpportunity(db, ctx, id, req.body, { atsJobRef });
+    },
   );
 
   // A whole column's manual-order renumbering (issue #240 follow-up), in one transaction

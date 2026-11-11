@@ -4,9 +4,11 @@
 //
 // With the flag off, or on the demo, the submission routes answer 404 and this renders nothing
 // at all: no card, no teaser (#117 criterion 5).
+import { greenhouseJidOf } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { useFindPosting, type FindPostingResult } from '@/components/opportunity/api';
 import { statusLabel, useResumes, type Resume } from '@/components/resume/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -18,7 +20,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { formatDateTime, stageLabel, type OpportunityView } from '@/lib/opportunities';
+import { ApiError, errorMessage } from '@/lib/api';
+import { formatDate, formatDateTime, stageLabel, type OpportunityView } from '@/lib/opportunities';
 import {
   atsLabel,
   clockTime,
@@ -43,6 +46,41 @@ export function usableResumes(resumes: Resume[], opportunityId: string): Resume[
   );
 }
 
+/** What the panel says after Find posting, by its answer (#398). */
+const FIND_SAID = new Map<FindPostingResult['outcome'], string>([
+  ['attached', 'Posting attached.'],
+  ['identified', 'Recognised on Greenhouse.'],
+  ['candidates', 'Several postings could be this job. Choose it on the Details tab.'],
+  ['none', "This job was not found on the company's board. Paste the posting on the Details tab."],
+  [
+    'no_board',
+    'No job board is known for this company yet. Add its careers page on the Details tab.',
+  ],
+]);
+
+/** Find posting offering exactly one posting to choose (tl on #414). */
+const ONE_CANDIDATE =
+  "A posting on the company's board could be this job. Check it on the Details tab.";
+
+const NOT_ON_A_KNOWN_BOARD =
+  'This job was not found on a Greenhouse board known for this company. Check the posting link on the Details tab.';
+
+/** Find posting's 409 for a description the user wrote (the server found no board for the link). */
+function isAlreadyDescribed(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'already_described';
+}
+
+const EMBEDDED_GREENHOUSE =
+  "This looks like a Greenhouse job on the company's own careers page. Find the posting on Greenhouse to apply with assisted apply.";
+
+/** A posting link with a numeric `gh_jid` and no ATS identity yet (#398). */
+function embeddedGreenhouse(opp: OpportunityView): boolean {
+  return (
+    (opp.atsJobRef === null || opp.atsJobRef === undefined) &&
+    greenhouseJidOf(opp.postingUrl) !== null
+  );
+}
+
 /** Why an attempt cannot start, in the user's words, or null when it can. */
 function notEligible(opp: OpportunityView, resumes: Resume[]): string | null {
   if (opp.stage === 'closed' || opp.stage === 'dismissed') {
@@ -53,6 +91,10 @@ function notEligible(opp: OpportunityView, resumes: Resume[]): string | null {
     return `This opportunity is ${stageLabel(opp.stage)}. Applying is available at Interested, Preparing or Applied. Change its stage to apply.`;
   }
   if (opp.atsJobRef === null || opp.atsJobRef === undefined) {
+    // A Greenhouse job on the company's own page (`?gh_jid=`) whose board is not proven yet
+    // (#398): Find posting looks for it on the company's board, detecting the board first when
+    // there is none, and the identity follows from that read.
+    if (embeddedGreenhouse(opp)) return EMBEDDED_GREENHOUSE;
     return "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.";
   }
   if (opp.postingState !== 'confirmed') {
@@ -72,10 +114,24 @@ function notEligible(opp: OpportunityView, resumes: Resume[]): string | null {
   return null;
 }
 
+/** The statuses that mean the user has applied (#404): Submitted, Confirmed, No confirmation seen
+ *  or Rejected. */
+const APPLIED: readonly string[] = ['submitted', 'confirmed', 'unknown', 'rejected'];
+
+/**
+ * The application the panel leads with once the user has applied (#404, tl's decision 1): the
+ * newest attempt that is Submitted, Confirmed, No confirmation seen or Rejected, whatever newer
+ * attempt was cancelled or expired after it. `items` are newest first, as the server lists them.
+ */
+export function appliedAttempt(items: readonly SubmissionView[]): SubmissionView | undefined {
+  return items.find((s) => APPLIED.includes(s.status));
+}
+
 export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const submissions = useOpportunitySubmissions(opp.id);
   const resumes = useResumes();
   const reasonId = useId();
+  const find = useFindPosting(opp.id);
   const [howOpen, setHowOpen] = useState(false);
   // A click on the refused button (#395): it says so, rather than doing nothing. Kept as the
   // reason that was clicked, so a different reason later reads plainly until it is clicked too.
@@ -95,9 +151,21 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const reportable = items.find((s) => REPORTABLE.includes(s.status));
   const reportableIsLast = live === undefined && reportable !== undefined && reportable === latest;
 
+  // Once the user has applied and nothing is in progress, the outcome leads (#404).
+  const outcome = live === undefined ? appliedAttempt(items) : undefined;
+
   let body: React.ReactNode;
   if (live !== undefined) {
     body = <InProgress live={live} opp={opp} ats={ats} onStop={() => setStopping(true)} />;
+  } else if (outcome !== undefined) {
+    body = (
+      <Applied
+        attempt={outcome}
+        opp={opp}
+        // Offered only when the server would accept a new attempt, so it never leads to a refusal.
+        canApplyAgain={notEligible(opp, resumes.data?.items ?? []) === null}
+      />
+    );
   } else {
     const reason = notEligible(opp, resumes.data?.items ?? []);
     const refusedLabel = opp.atsJobRef ? `Apply on ${ats}` : 'Apply on an ATS';
@@ -152,6 +220,37 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                 ? `${refusedLabel} is not available yet. ${reason}`
                 : reason}
             </p>
+            {reason === EMBEDDED_GREENHOUSE ? (
+              <>
+                <Button
+                  variant="outline"
+                  className="w-fit"
+                  disabled={find.isPending}
+                  onClick={() => find.mutate()}
+                >
+                  {find.isPending ? 'Searching...' : 'Find posting'}
+                </Button>
+                {/* What Find posting found, and where to go next: never a silent button
+                    (#395, tl on #414). */}
+                {find.isError && isAlreadyDescribed(find.error) ? (
+                  // A description of the user's own, and no known board holds the job (#398):
+                  // an answer, not a failure.
+                  <p role="status" className="text-sm text-muted-foreground">
+                    {NOT_ON_A_KNOWN_BOARD}
+                  </p>
+                ) : find.isError ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {errorMessage(find.error)}
+                  </p>
+                ) : find.data !== undefined ? (
+                  <p role="status" className="text-sm text-muted-foreground">
+                    {find.data.outcome === 'candidates' && find.data.candidates?.length === 1
+                      ? ONE_CANDIDATE
+                      : (FIND_SAID.get(find.data.outcome) ?? '')}
+                  </p>
+                ) : null}
+              </>
+            ) : null}
           </>
         )}
       </div>
@@ -159,7 +258,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   }
 
   const earlierReport =
-    reportable !== undefined && !reportableIsLast ? (
+    reportable !== undefined && !reportableIsLast && reportable !== outcome ? (
       <EarlierAttempt attempt={reportable} companyName={opp.companyName} />
     ) : null;
 
@@ -253,6 +352,64 @@ function InProgress({
       >
         Cancel this application
       </button>
+    </div>
+  );
+}
+
+/**
+ * The panel once the user has applied (#404, tl's decision 1): the outcome, the application
+ * itself as the filled button, the follow-up questions, and applying again as a quiet link under
+ * one line of why. The apply flow it opens asks for the reason (owner decision 6).
+ */
+function Applied({
+  attempt,
+  opp,
+  canApplyAgain,
+}: {
+  attempt: SubmissionView;
+  opp: OpportunityView;
+  canApplyAgain: boolean;
+}) {
+  const ats = atsLabel(attempt.atsKind);
+  const when =
+    attempt.submittedAt === null
+      ? `You applied through ${ats}.`
+      : `You applied on ${formatDate(attempt.submittedAt)} through ${ats}.`;
+  const confirmed =
+    attempt.status === 'confirmed' && attempt.confirmedAt !== null
+      ? ` ${ats} confirmed it on ${formatDate(attempt.confirmedAt)}.`
+      : '';
+  return (
+    <div className="grid gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <SubmissionStatusChip status={attempt.status} />
+      </div>
+      <p className="text-sm">{`${when}${confirmed}`}</p>
+      <Button asChild className="w-full">
+        <Link
+          to="/opportunities/$id/applications/$submissionId"
+          params={{ id: attempt.opportunityId, submissionId: attempt.id }}
+        >
+          View application
+        </Link>
+      </Button>
+      <OutcomeActions attempt={attempt} companyName={opp.companyName} />
+      {canApplyAgain ? (
+        <div className="grid gap-1">
+          <p className="text-sm text-muted-foreground">
+            Apply again only if the first application did not go through, or the employer asked you
+            to. You will be asked for the reason.
+          </p>
+          <Link
+            to="/opportunities/$id/apply"
+            params={{ id: opp.id }}
+            search={{ step: 'resume' }}
+            className="w-fit text-sm text-primary underline-offset-4 hover:underline"
+          >
+            Apply again
+          </Link>
+        </div>
+      ) : null}
     </div>
   );
 }

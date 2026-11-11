@@ -8,6 +8,17 @@ rules are covered in [Getting started](getting-started.md#first-run-setup) and
 [Resumes](resumes.md#the-tailoring-chat); Google and Gmail in [Resumes](resumes.md#connect-google)
 and [Inbox](inbox.md#connect-gmail).
 
+## Application details
+
+**Settings > Profile** has an **Application details** card below your profile: first name, last
+name, country, school, degree, how you heard about the role, LinkedIn profile, website and links.
+Write country, school, degree and how you heard as an employer's form lists them (for example
+"United States"); the profile's **Location (city)** is written the same way. With your profile's own fields, these are what a new
+application starts with (see [Your details when you apply](pipeline.md#your-details-when-you-apply)).
+Change them here, or tick **Save to my profile** on an application's Details step. **Save
+application details** checks each value first: a web address must be the whole address, starting
+with https:// (or http://), and a name one line of plain text.
+
 ## AI provider keys
 
 Opportun has no AI of its own: it calls Anthropic, OpenAI or any OpenAI-compatible endpoint
@@ -72,7 +83,8 @@ _Editing one task's model. Set prices for a model without a list price, such as 
   caching, when postings for one role target are ranked within five minutes of each other (about
   $0.008 without it, measured on 2026-11-10), and tagging 20 companies about $0.0014 without it.
   So $1.00 ranks about 150 postings a day, or about 135 while a company waits for a tag (about 125
-  and 114 without caching). These are list-price estimates from one test, not a provider bill, and
+  and 114 without caching). These are list-price estimates from two measured runs (one with prompt caching, one
+  without), not a provider bill, and
   they change with the model, its prices and the length of your role targets and postings. The
   [measured figures and how they change](discovery.md#the-review-queue) are on the Discovery page,
   and **Discovery ranking cost** on **Settings > AI** shows your own.
