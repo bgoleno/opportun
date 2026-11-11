@@ -604,6 +604,7 @@ export const AUDIT_EVENTS = [
   'job.retry',
   'jobs.pruned',
   'mail.purged',
+  'profile.updated',
   'resume.edits_applied',
   'secret.created',
   'secret.deleted',

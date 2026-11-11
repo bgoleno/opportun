@@ -12,7 +12,12 @@
 //   route answers 404 feature_unavailable from its own first hook. The app-wide session and
 //   CSRF hooks run before it, as for every route; nothing of a submission is read before it.
 // - A body with an unknown key, or a value of the wrong shape (an id array included), is 422.
-import { SubmissionAnswersSchema, SubmissionFieldsSchema, SubmissionSchema } from '@opportun/core';
+import {
+  APPLICATION_DETAIL_KEYS,
+  SubmissionAnswersSchema,
+  SubmissionFieldsSchema,
+  SubmissionSchema,
+} from '@opportun/core';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -56,11 +61,16 @@ const PatchBody = z
     resumeId: z.string().min(1).max(64),
     fields: SubmissionFieldsSchema,
     answers: SubmissionAnswersSchema,
+    /**
+     * Detail fields to save to the profile as well (#411): names from the shared list only, so
+     * an unknown name refuses the request. Their values are the draft's after this request.
+     */
+    saveToProfile: z.array(z.enum(APPLICATION_DETAIL_KEYS)).max(APPLICATION_DETAIL_KEYS.length),
   })
   .partial()
   .strict()
   .refine((p) => Object.keys(p).length > 0, {
-    message: 'send at least one of resumeId, fields, answers',
+    message: 'send at least one of resumeId, fields, answers, saveToProfile',
   });
 
 /**
