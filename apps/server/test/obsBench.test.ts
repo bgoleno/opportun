@@ -81,9 +81,10 @@ describe.runIf(RUN)('collection on: cost per call (#343, reported in the PR)', (
 // #375's to bound, so it runs between batches and is not counted.
 
 const PAIRS = 30;
-// Under SPAN_FLUSH_AT (200, obs/spanStore.ts): a request or an AI call makes one span, and a
-// batch of 200 or more would trigger a span flush inside the timed region, which is how a flush's
-// cost was first read as a per-call cost (#374). Flushes run between batches and are timed apart.
+// Under SPAN_FLUSH_AT (200, obs/spanStore.ts): an AI call keeps one span (a request's span is not
+// kept, 14.7), so a batch of 200 AI calls would trigger a span flush inside the timed region and
+// count the flush as part of each call. This benchmark's first version did, at exactly 200 (#374).
+// Flushes run between batches and are timed apart.
 const BATCH = 150;
 const cpuMicros = (): number => {
   const u = process.cpuUsage();

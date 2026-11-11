@@ -1264,21 +1264,45 @@ holds a credential.
 
 ### 14.11 Cost and overhead budget (NFR-OPS7)
 
-| State                        | Budget                                                                                                                                                                                                                                                                                      |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Collection off (the default) | One boolean check per boundary: under 1 microsecond. No recording spans, no timers, no writes, SDK not loaded.                                                                                                                                                                              |
-| Collection on, export off    | Under 20 microseconds of CPU per boundary crossing on average, under 2 microseconds per database statement after the first sight of its text, no IO on the request path.                                                                                                                    |
-| Flushes                      | Metrics: every 60 seconds, in transactions of at most 2,000 rows (each live series writes a 1-minute row and adds to a 1-hour row). Spans: one transaction every 5 seconds or 200 spans.                                                                                                    |
-| Memory                       | At most 2,000 live series and 2,000 buffered spans. Beyond that the newest are dropped and counted.                                                                                                                                                                                         |
-| Storage                      | At most 250,000 metric point rows and 100,000 span rows, enforced hourly: about 100 MB together at the caps, and an estimated 40 MB or less on a single-user instance. These sizes are estimates until the base slice measures a row. A trace stops at 2,000 spans and is marked truncated. |
-| Export on                    | One request per signal per interval, a queue of at most 2,048 spans and 2,048 log records, a 10-second timeout. A failure is counted and shown, never retried into a backlog, and never delays a request or a job.                                                                          |
-| AI cost                      | None. Observability makes no model call.                                                                                                                                                                                                                                                    |
+| State                        | Budget                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Collection off (the default) | One boolean check per boundary: under 1 microsecond. No recording spans, no timers, no writes, SDK not loaded.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Collection on, export off    | Under 20 microseconds of CPU per boundary crossing on average, under 2 microseconds per database statement after the first sight of its text, no IO on the request path. A whole request: under 30 microseconds for one HTTP crossing and five statements. An AI call: under 60 microseconds (measured below).                                                                                                                                                                                                                                                      |
+| Flushes                      | Metrics: every 60 seconds, in transactions of at most 2,000 rows (each live series writes a 1-minute row and adds to a 1-hour row). Spans: one transaction every 5 seconds or 200 spans.                                                                                                                                                                                                                                                                                                                                                                            |
+| Memory                       | At most 2,000 live series and 2,000 buffered spans. Beyond that the newest are dropped and counted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Storage                      | At most 250,000 metric point rows and 100,000 span rows, enforced hourly. Measured per row, indexes included: 373 bytes per point, 535 per span, 341 per trace. At the caps that is about 93 MB of points and 54 MB of spans. `obs_traces` has no cap of its own, but a trace has at least one span, so there are at most 100,000: about 34 MB. So about 181 MB in the worst case, and about 154 MB at the measured 4.6 spans per trace. An estimated 40 MB or less on a single-user instance (not measured). A trace stops at 2,000 spans and is marked truncated. |
+| Export on                    | One request per signal per interval, a queue of at most 2,048 spans and 2,048 log records, a 10-second timeout. A failure is counted and shown, never retried into a backlog, and never delays a request or a job.                                                                                                                                                                                                                                                                                                                                                  |
+| AI cost                      | None. Observability makes no model call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 How it is shown: with collection off, a test drives requests, jobs and an AI call and asserts
 that no row reaches any `obs_` table, that no span is recording, and that the SDK was not
 loaded; a guard benchmark runs 100,000 disabled `obs` calls under a bound with a wide margin.
 With collection on, a benchmark of the same loop is reported in the pull request, and the
 caps are tested by exceeding them.
+
+**Measured whole operations** (https://github.com/bgoleno/opportun/issues/374). A crossing
+measured alone leaves out what a whole operation adds around it: the HTTP plugin's hooks, the
+context switches around the handler, the statements, the garbage. So `test/obsBench.test.ts`
+(run with `OBS_BENCH=1`) also times whole operations: process CPU time per operation, in batches
+of 150 alternated with collection off and on in one process and one database, 30 pairs, the
+median of the pairs' differences. The figures below are qa's harness (median of 20 pairs, three
+runs per tree, `main` and this change alternated in one sitting at load averages falling from 21
+to 8, on the Mac mini the team shares); only alternation cancels a shared machine's load. The
+span flush runs between batches and is timed apart: it is off the request path, and bounded on
+its own (#375).
+
+- **A whole request** (`GET /api/v1/opportunities/:id`: one HTTP crossing and five statements):
+  with collection off it costs 268 to 295 microseconds of CPU, and collection adds 13 to 23 (it
+  added 18 to 28 before the change below), within the 30-microsecond budget of one crossing and
+  five statements, which stands. The plugin gates a route's attributes once per method, route
+  and status and reuses them, as the database wrapper does per statement text.
+- **An AI call** (`runStructured` with a stub model, through the router, the budget check and
+  the `task_runs` ledger): with collection off it costs 162 to 198 microseconds of CPU, and
+  collection adds 15 to 27 on the call's path (33 to 60 before the change below). Its kept span
+  is written later by the span flush, about 155 to 161 microseconds per span, timed apart
+  (#375). The budget is 60 microseconds per call, not the 20 of one crossing, because a model
+  call takes hundreds of milliseconds or more: 60 microseconds is well under a tenth of a
+  percent of it. The four Gen AI metrics are gated once per user, task, model and provider.
 
 ### 14.12 Build plan: two engineers, by file
 
