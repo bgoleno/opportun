@@ -7,7 +7,7 @@
 import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { useResumes, type Resume } from '@/components/resume/api';
+import { statusLabel, useResumes, type Resume } from '@/components/resume/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -49,7 +49,8 @@ function notEligible(opp: OpportunityView, resumes: Resume[]): string | null {
     return `This opportunity is ${stageLabel(opp.stage)}. Reopen it to apply.`;
   }
   if (!ELIGIBLE_STAGES.includes(opp.stage)) {
-    return 'Applying is available at Interested, Preparing or Applied.';
+    // Name the stage it is at, so the reason says what to change (#395).
+    return `This opportunity is ${stageLabel(opp.stage)}. Applying is available at Interested, Preparing or Applied. Change its stage to apply.`;
   }
   if (opp.atsJobRef === null || opp.atsJobRef === undefined) {
     return "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.";
@@ -57,7 +58,17 @@ function notEligible(opp: OpportunityView, resumes: Resume[]): string | null {
   if (opp.postingState !== 'confirmed') {
     return "This opportunity's posting needs review. Confirm it on the Details tab first.";
   }
-  if (usableResumes(resumes, opp.id).length === 0) return 'Attach a final resume first.';
+  if (usableResumes(resumes, opp.id).length === 0) {
+    // A resume made for this opportunity that is not Final yet: "attach one" would mislead, so
+    // say which one it is and what to change (#395).
+    const attached = resumes.find(
+      (r) => r.kind === 'tailored' && r.opportunityId === opp.id && r.archivedAt === null,
+    );
+    if (attached !== undefined) {
+      return `The resume attached here ("${attached.title}") is ${statusLabel(attached.status)}. Open it from the Resume tab and set its Status to Final.`;
+    }
+    return 'Attach a final resume first.';
+  }
   return null;
 }
 
@@ -66,6 +77,9 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const resumes = useResumes();
   const reasonId = useId();
   const [howOpen, setHowOpen] = useState(false);
+  // A click on the refused button (#395): it says so, rather than doing nothing. Kept as the
+  // reason that was clicked, so a different reason later reads plainly until it is clicked too.
+  const [clickedReason, setClickedReason] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const cancel = useCancelSubmission(opp.id);
 
@@ -86,38 +100,60 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
     body = <InProgress live={live} opp={opp} ats={ats} onStop={() => setStopping(true)} />;
   } else {
     const reason = notEligible(opp, resumes.data?.items ?? []);
+    const refusedLabel = opp.atsJobRef ? `Apply on ${ats}` : 'Apply on an ATS';
     body = (
       <div className="grid gap-3">
         {latest !== undefined ? (
           <LastAttempt latest={latest} companyName={opp.companyName} />
         ) : null}
-        <p className="text-sm text-muted-foreground">
-          {reason ??
-            'You will review everything, then fill in and submit the form on the ATS yourself.'}
-        </p>
         {reason === null ? (
-          <Button asChild className="w-full">
-            <Link to="/opportunities/$id/apply" params={{ id: opp.id }} search={{ step: 'resume' }}>
-              Apply on {ats}
-            </Link>
-          </Button>
+          <>
+            <p className="text-sm text-muted-foreground">
+              You will review everything, then fill in and submit the form on the ATS yourself.
+            </p>
+            <Button asChild className="w-full">
+              <Link
+                to="/opportunities/$id/apply"
+                params={{ id: opp.id }}
+                search={{ step: 'resume' }}
+              >
+                Apply on {ats}
+              </Link>
+            </Button>
+          </>
         ) : (
-          // aria-disabled, not disabled: still reachable by keyboard, with the reason announced
-          // (design (g)).
-          <Button
-            className="w-full"
-            aria-disabled="true"
-            aria-describedby={reasonId}
-            onClick={(e) => e.preventDefault()}
-          >
-            {opp.atsJobRef ? `Apply on ${ats}` : 'Apply on an ATS'}
-          </Button>
+          <>
+            {/* aria-disabled, not disabled: still reachable by keyboard, with the reason announced
+                (design (g)). The Button's own disabled: styles match only the disabled attribute,
+                so it is dimmed here, or it looks like it would work (#395). */}
+            <Button
+              className="w-full aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-primary"
+              aria-disabled="true"
+              aria-describedby={reasonId}
+              onClick={(e) => {
+                e.preventDefault();
+                setClickedReason(reason);
+              }}
+            >
+              {refusedLabel}
+            </Button>
+            {/* The reason, visible and right after the button. A click says it again, so the
+                click is answered and a screen reader hears it (polite live region). */}
+            <p
+              id={reasonId}
+              aria-live="polite"
+              className={
+                clickedReason === reason
+                  ? 'text-sm text-foreground'
+                  : 'text-sm text-muted-foreground'
+              }
+            >
+              {clickedReason === reason
+                ? `${refusedLabel} is not available yet. ${reason}`
+                : reason}
+            </p>
+          </>
         )}
-        {reason !== null ? (
-          <span id={reasonId} className="sr-only">
-            {reason}
-          </span>
-        ) : null}
       </div>
     );
   }

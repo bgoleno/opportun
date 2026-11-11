@@ -54,7 +54,8 @@ export interface ExportView {
     hasCredential: boolean;
     allowPrivate: boolean;
     lastSuccessAt: number | null;
-    lastFailure: { outcome: string; at: number } | null;
+    /** `reason` is the destination check's, when a send was blocked (#382). */
+    lastFailure: { outcome: string; at: number; reason?: string } | null;
     dropped: { signal: string; reason: string; count: number }[];
   };
 }
@@ -349,13 +350,13 @@ function ExportAdmin(props: {
 
   async function test(password: string): Promise<string | null> {
     try {
-      const res = await api<{ outcome: string }>('/obs/export/test', {
+      const res = await api<{ outcome: string; reason?: string }>('/obs/export/test', {
         method: 'POST',
         body: { password },
       });
       setAsking(null);
       setError(null);
-      setTestResult(OUTCOME_TEXT[res.outcome] ?? res.outcome);
+      setTestResult(outcomeText(res.outcome, res.reason));
       return null;
     } catch (err) {
       if (err instanceof ApiError && err.code === 'invalid_password') return saveError(err);
@@ -518,7 +519,7 @@ function ExportAdmin(props: {
         </p>
       )}
       <p className="text-sm text-muted-foreground">
-        Changing the type, scheme, host or port clears a stored credential.
+        Changing the type, scheme, host, port or header name clears a stored credential.
       </p>
       <div className="flex flex-wrap gap-3">
         <Button type="button" onClick={() => setAsking('save')}>
@@ -533,7 +534,7 @@ function ExportAdmin(props: {
           {testResult}
         </p>
       )}
-      <ExportStatusView admin={admin} />
+      <ExportStatusView admin={admin} enabled={props.view.enabled} />
       <PasswordDialog
         open={asking !== null}
         onOpenChange={(open) => {
@@ -552,14 +553,50 @@ function ExportAdmin(props: {
   );
 }
 
-function ExportStatusView({ admin }: { admin: NonNullable<ExportView['admin']> }) {
+/** An outcome in words; a blocked one says why, when the server said (#382). */
+function outcomeText(outcome: string, reason: string | undefined): string {
+  const why = reason === undefined ? undefined : new Map(Object.entries(REASON_TEXT)).get(reason);
+  if (outcome === 'blocked' && why !== undefined) return `This destination is not allowed. ${why}`;
+  return new Map(Object.entries(OUTCOME_TEXT)).get(outcome) ?? outcome;
+}
+
+function ExportStatusView({
+  admin,
+  enabled,
+}: {
+  admin: NonNullable<ExportView['admin']>;
+  /** Whether export is on: off, nothing is being sent, so nothing is blocked (qa on #385). */
+  enabled: boolean;
+}) {
+  // Blocked now only if no send has succeeded since: the status keeps the last failure after a
+  // success, so a destination fixed at runtime must not still read as blocked (tl on #385).
+  const blockedNow =
+    enabled &&
+    admin.lastFailure !== null &&
+    admin.lastFailure.outcome === 'blocked' &&
+    admin.lastFailure.at > (admin.lastSuccessAt ?? 0);
   return (
     <div className="grid gap-2 text-sm">
       <p>
         Last success:{' '}
         {admin.lastSuccessAt === null ? 'none yet' : relativeTime(admin.lastSuccessAt)}
       </p>
-      {admin.lastFailure === null ? null : (
+      {admin.lastFailure === null ? null : blockedNow ? (
+        // Blocked is not the destination's failure: export cannot send there at all until the
+        // destination or the server changes, so it says so and why (#382). A destination saved
+        // while OPPORTUN_TELEMETRY_ALLOW_PRIVATE=1 was set is blocked once the server runs
+        // without it, though export still shows as on.
+        <div
+          role="status"
+          aria-label="Export is blocked"
+          className="rounded-md border border-destructive/40 bg-destructive/10 p-3"
+        >
+          <p className="font-medium">
+            Export is blocked: nothing is sent. Last tried {relativeTime(admin.lastFailure.at)}.
+          </p>
+          <p>{outcomeText('blocked', admin.lastFailure.reason)}</p>
+        </div>
+      ) : (
         <p>
           Last failure {relativeTime(admin.lastFailure.at)}:{' '}
           {OUTCOME_TEXT[admin.lastFailure.outcome] ?? admin.lastFailure.outcome}
