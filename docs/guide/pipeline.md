@@ -148,10 +148,34 @@ send is listed here, marked **Base resume**, and the resume itself does not chan
 same base can be recorded for other opportunities and still tailored from. Each send has its
 own remove control, which removes only that record. See [Resumes](resumes.md).
 
+### Your details when you apply
+
+Where assisted apply is on, an opportunity whose posting is confirmed has **Apply**. Its
+**Details** step opens already filled with what Opportun holds for you, field by field:
+
+1. your profile: **Settings > Profile**, and its **Application details** card for first and
+   last name, LinkedIn profile, website and links;
+2. your account, for Email (your sign-in email) and Full name (your display name) only;
+3. the same field of the application you reviewed most recently, to any company.
+
+The first of these that holds a field fills it. LinkedIn profile also comes from your profile's
+links when exactly one of them is on linkedin.com, and Links from your profile's links. A full
+name is never split into first and last name, and Website is never guessed. A value that does
+not pass today's checks is not filled in, and the step names it.
+
+Under each value the step says where it came from: "From your profile", "From your account" or
+"From your application to _Company_, _date_". A field whose value is not what your profile holds
+says **Not in your profile** or **Differs from your profile**, with a **Save to my profile** tick,
+off by default. Changes you make on the step apply to this application only. To keep one for
+next time, tick **Save to my profile** before **Next: Review**: the application and your profile
+are saved together. On a field you emptied, the tick reads **Remove from my profile**.
+
 ### Communications
 
 Every message linked to this opportunity, with the same actions as the inbox (open, change
-link, reclassify, accept a suggested stage). See [Inbox](inbox.md).
+link, reclassify, accept a suggested stage). See [Inbox](inbox.md). The newest message is at the
+top; **Newest** at the top right switches to oldest first and back. Each time you open the
+opportunity it starts newest first again.
 
 ### Referrals
 

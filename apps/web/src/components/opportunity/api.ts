@@ -201,8 +201,9 @@ export interface PostingCandidateView {
 
 /** What POST /opportunities/:id/find-posting answers; see routes/opportunityPosting.ts. */
 export interface FindPostingResult {
-  outcome: 'attached' | 'candidates' | 'none' | 'no_board';
-  /** Present when the outcome is 'attached'. */
+  /** 'identified' (#398): the opportunity's own careers link got its Greenhouse identity. */
+  outcome: 'attached' | 'identified' | 'candidates' | 'none' | 'no_board';
+  /** Present when the outcome is 'attached' or 'identified'. */
   opportunity?: OpportunityView;
   candidate?: PostingCandidateView;
   /** Confident candidates ('candidates'), or the ranked board ('none'). */

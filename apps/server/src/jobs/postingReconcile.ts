@@ -27,12 +27,17 @@ import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
 import { buildAiDeps } from '../lib/ai';
 import { HttpError } from '../lib/errors';
-import { postingAtsJobRef } from '../lib/atsJobRef';
+import { boardReadAtsJobRef, postingAtsJobRefKeeping } from '../lib/atsJobRef';
 import { boardFromUrl } from './atsDetect';
 import { CAPTURE_MAX_TEXT } from '../routes/capture';
 import { descriptionFingerprint, isSystemWritten } from '../lib/postingFingerprint';
 import { mergePostingText } from '../lib/postingMerge';
-import { findPosting, type BoardLookup, type BodyReader } from '../lib/postingSearch';
+import {
+  findPosting,
+  type BoardLookup,
+  type BodyReader,
+  type ReadFrom,
+} from '../lib/postingSearch';
 import { sanitizePosting } from '../lib/postingSanitize';
 import { siteLabel, siteOfLabel, siteOfUrl } from '../lib/captureSites';
 import { sourceLabel } from '../lib/sourceLabels';
@@ -207,6 +212,8 @@ export async function confirm(
   ctx: UserCtx,
   opp: OpportunityView,
   found: NormalizedPosting,
+  /** The board `found` was just read from (#398), when it came out of a board read. */
+  readFrom?: ReadFrom,
 ): Promise<ReconcileOutcome> {
   const posting = sanitizePosting(found);
   const atsText = posting.descriptionMd ?? '';
@@ -278,11 +285,17 @@ export async function confirm(
     extraNote;
 
   // The req identity of the URL now stored (D25: often there is none), by the one rule every
-  // posting writer shares (lib/atsJobRef postingAtsJobRef, issue #137): a board host only.
+  // posting writer shares (lib/atsJobRef, issue #137): a board host's own. A posting out of the
+  // board read just made also proves an embedded Greenhouse job's board (#398), with no further
+  // request; otherwise a verified one is only kept.
+  const storedUrl = posting.postingUrl ?? opp.postingUrl;
   await setPostingState(db, ctx, opp.id, {
     postingState: 'confirmed',
     postingStateDetail: null,
-    atsJobRef: postingAtsJobRef(posting.postingUrl ?? opp.postingUrl),
+    atsJobRef:
+      readFrom !== undefined && posting.postingUrl != null
+        ? boardReadAtsJobRef(posting, readFrom, Date.now())
+        : postingAtsJobRefKeeping(storedUrl, opp.atsJobRef),
   });
   await writeReconcileNote(db, ctx, opp.id, 'confirmed', body);
   return { status: 'confirmed', detail: null };
@@ -360,7 +373,7 @@ async function reconcile(
   switch (outcome.status) {
     case 'exact':
     case 'single':
-      return await confirm(db, ctx, opp, outcome.candidate.posting);
+      return await confirm(db, ctx, opp, outcome.candidate.posting, outcome.readFrom);
     case 'candidates':
       return await flag(
         db,
