@@ -75,6 +75,24 @@ const transactionBan = {
 // its own eslint-disable-next-line, not a file-level exemption. An exemption that outlives
 // its reason is how a guard quietly stops guarding: a file-level ignore here would also wave
 // through any *other*, unrelated process.env mutation someone adds to either file later.
+// A log message is a fixed string (design.md 14.9, https://github.com/bgoleno/opportun/issues/345):
+// the log gate (obs/log.ts) keeps a message only when the catalog lists it, so one built from data
+// would be withheld anyway, and data belongs in catalogued keys. Matched on the logger's method
+// names with a template literal that interpolates, or a concatenation, as an argument.
+const LOG_METHODS = '/^(trace|debug|info|warn|error|fatal)$/';
+const logMessageBan = [
+  {
+    selector: `CallExpression[callee.property.name=${LOG_METHODS}] > TemplateLiteral[expressions.length>0]`,
+    message:
+      'A log message is a fixed string the catalog lists (design 14.9, #345): put data in catalogued keys, never in the message.',
+  },
+  {
+    selector: `CallExpression[callee.property.name=${LOG_METHODS}] > BinaryExpression[operator='+']`,
+    message:
+      'A log message is a fixed string the catalog lists (design 14.9, #345): write it as one literal, with data in catalogued keys.',
+  },
+];
+
 const envMutationBan = [
   {
     selector:
@@ -254,7 +272,7 @@ export default defineConfig(
     files: ['apps/server/src/**/*.ts'],
     ignores: ['apps/server/src/db/client.ts', '**/*.test.ts'],
     rules: {
-      'no-restricted-syntax': ['error', ...rawSqlBan, transactionBan],
+      'no-restricted-syntax': ['error', ...rawSqlBan, transactionBan, ...logMessageBan],
     },
   },
   {
@@ -264,7 +282,17 @@ export default defineConfig(
     // not an exemption for the rest of the file to bypass them.
     files: ['apps/server/src/db/client.ts'],
     rules: {
-      'no-restricted-syntax': ['error', ...rawSqlBan],
+      'no-restricted-syntax': ['error', ...rawSqlBan, ...logMessageBan],
+    },
+  },
+  {
+    // No console.* in the server or the AI package (design.md 14.9, #345): every line goes through
+    // the one logger and its gate (obs/log.ts). Its own rule, so it overlaps no
+    // no-restricted-syntax block (#305).
+    files: ['apps/server/src/**/*.ts', 'packages/ai/src/**/*.ts'],
+    ignores: ['**/*.test.ts'],
+    rules: {
+      'no-console': 'error',
     },
   },
   {

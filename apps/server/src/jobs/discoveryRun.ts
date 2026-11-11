@@ -59,6 +59,7 @@ import {
 } from './discoveryKinds';
 import { requireService, type JobHandler } from './registry';
 import { enqueue } from './runner';
+import { obs } from '../obs';
 
 export { DISCOVERY_RUN_KIND, MULTI_POSTED_PREFIX, MULTI_POSTED_SCORE_CAP, sourceScheduleName };
 
@@ -610,6 +611,7 @@ export async function runDiscoverySource(
       { 'opportun.source.id': source.id, 'opportun.discovery.source_kind': source.kind, err },
       'discovery run failed',
     );
+    runFinished(ctx, source.kind, 'error', stats);
     if (err instanceof SourceConfigError) {
       return { status: 'config_error', runId: run.id, stats, error: detail };
     }
@@ -633,7 +635,26 @@ export async function runDiscoverySource(
   // After the run is recorded: a stop in between leaves postings below the cut for the user to
   // send, where the other order would let a retry send a second 25.
   if (sendFirstCut) await rankBelowCut(db, ctx, source.id, FIRST_RUN_RANK_CAP);
+  runFinished(ctx, source.kind, 'done', stats);
   return { status: 'done', runId: run.id, stats, inserted };
+}
+
+/** The discovery.run.finished event (design 14.9): the source's kind, how it ended, its counts. */
+function runFinished(ctx: UserCtx, kind: string, outcome: 'done' | 'error', stats: RunStats): void {
+  obs.event(
+    'discovery.run.finished',
+    {
+      'opportun.discovery.source_kind': kind,
+      'opportun.discovery.run_outcome': outcome,
+      'opportun.count.fetched': stats.fetched,
+      'opportun.count.inserted': stats.inserted,
+      'opportun.count.duplicates': stats.duplicates,
+      'opportun.count.invalid': stats.invalid,
+      'opportun.count.suppressed': stats.suppressed,
+      'opportun.count.filtered': stats.filtered,
+    },
+    { userId: ctx.userId },
+  );
 }
 
 const PayloadSchema = z.object({ sourceId: z.string().min(1).max(64) });

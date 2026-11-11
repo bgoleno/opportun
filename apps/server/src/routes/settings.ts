@@ -14,6 +14,7 @@ import { settings } from '../db/schema';
 import { CronSchema, discoveryDefaultCron, setDiscoveryDefaultCron } from '../jobs/atsDetect';
 import type { UserCtx } from '../repos/base';
 import { deleteUserSetting, userSettingExists, writeUserSetting } from '../repos/userSettings';
+import { obs } from '../obs';
 
 export const THEME_PREFS = ['light', 'dark', 'auto'] as const;
 const ThemeBody = z.object({ pref: z.enum(THEME_PREFS) });
@@ -67,6 +68,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
         .values({ key: themeKey(ctx.userId), userId: ctx.userId, value: pref, updatedAt: now })
         .onConflictDoUpdate({ target: settings.key, set: { value: pref, updatedAt: now } })
         .run();
+      obs.event('settings.updated', { 'opportun.setting': 'theme' }, { userId: ctx.userId });
       return { pref };
     },
   );

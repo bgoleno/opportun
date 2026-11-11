@@ -190,9 +190,9 @@ export async function drainWaitingResults(
       } catch (err) {
         // One posting must not hold back the ones behind it; the next sweep tries it again.
         opts.log?.error(
-        { err, 'opportun.discovery_result.id': id },
-        'ranking a waiting posting failed',
-      );
+          { err, 'opportun.discovery_result.id': id },
+          'ranking a waiting posting failed',
+        );
         outcome.failed += 1;
         continue;
       }

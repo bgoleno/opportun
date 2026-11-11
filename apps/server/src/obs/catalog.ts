@@ -189,6 +189,14 @@ export const ATTRIBUTES = {
   'opportun.count.cleared': int,
   'opportun.mail.channel': { kind: 'enum', values: COMM_CHANNELS },
   'opportun.db.awaited_outside': { kind: 'bool' },
+  'opportun.setting': { kind: 'enum', values: () => SETTING_NAMES },
+  'opportun.discovery.run_outcome': { kind: 'enum', values: ['done', 'error'] },
+  'opportun.count.fetched': int,
+  'opportun.count.inserted': int,
+  'opportun.count.duplicates': int,
+  'opportun.count.invalid': int,
+  'opportun.count.suppressed': int,
+  'opportun.count.filtered': int,
   'opportun.communication.id': { kind: 'id' },
   'opportun.company.id': { kind: 'id' },
   'opportun.source.id': { kind: 'id' },
@@ -313,15 +321,154 @@ export interface EventDef {
   fields: readonly AttrKey[];
 }
 
-/** Every event obs.event() writes (14.9). FR-T5 completes the list. */
-export const EVENTS = {
+/**
+ * Every audit() action (lib/audit.ts), each also an event (14.9): audit() emits it itself, with its
+ * name and its user only, never its detail or address. A test scans the source for audit() calls,
+ * so a new action fails CI until it is listed here.
+ */
+export const AUDIT_EVENTS = [
+  'admin.oauth_provider_configured',
+  'admin.oauth_provider_removed',
+  'admin.password_reset',
+  'ai.discovery_budget.updated',
+  'ai.key.validated',
+  'ai.policy.updated',
+  'ai.prompt.activated',
+  'ai.prompt.created',
+  'ai.prompt.linked',
+  'ai.prompt.proposal_accepted',
+  'ai.prompt.proposal_discarded',
+  'attachments.swept',
+  'auth.2fa_challenge',
+  'auth.2fa_disabled',
+  'auth.2fa_enabled',
+  'auth.2fa_enroll_started',
+  'auth.2fa_failed',
+  'auth.2fa_recovery_used',
+  'auth.2fa_verified',
+  'auth.login',
+  'auth.login_failed',
+  'auth.login_throttled',
+  'auth.logout',
+  'auth.oauth_bad_state',
+  'auth.oauth_existing_account',
+  'auth.oauth_link_conflict',
+  'auth.oauth_linked',
+  'auth.oauth_setpw_mismatch',
+  'auth.oauth_unknown',
+  'auth.oauth_unlinked',
+  'auth.password_changed',
+  'auth.password_reset_cli',
+  'auth.password_set_initial',
+  'auth.password_set_reauth',
+  'auth.reauth_failed',
+  'auth.register',
+  'backup.requested',
+  'data.export',
+  'data.import_queued',
+  'data.linkedin_import_queued',
+  'demo.reset',
+  'device_token.created',
+  'device_token.renamed',
+  'device_token.revoked',
+  'gmail.lookback_set',
+  'google.bad_state',
+  'google.client_configured',
+  'google.connected',
+  'google.disconnected',
+  'integration.reactive_resume_removed',
+  'integration.reactive_resume_saved',
+  'job.retry',
+  'jobs.pruned',
+  'mail.purged',
+  'resume.edits_applied',
+  'secret.created',
+  'secret.deleted',
+  'secret.updated',
+  'submission.abandoned',
+  'submission.attested',
+  'submission.confirmable_read',
+  'submission.confirmation_page_relinked',
+  'submission.confirmation_refused',
+  'submission.confirmation_unlinked',
+  'submission.confirmed',
+  'submission.failed',
+  'submission.handed_off',
+  'submission.posting_changed',
+  'submission.prefill_read',
+  'submission.refused_by_ats',
+  'submission.review_cap_hit',
+  'submission.review_cap_set',
+  'submission.reviewed',
+  'submission.snapshot_downloaded',
+  'submission.unknown',
+  'telemetry.collect.updated',
+] as const;
+export type AuditEvent = (typeof AUDIT_EVENTS)[number];
+
+/**
+ * The settings `settings.updated` names (14.9): which setting, never its value. Each is a code
+ * constant (repos/userSettings.ts callers, and the theme); a test keeps the list in step.
+ */
+export const SETTING_NAMES = [
+  'theme',
+  'submissions.dailyReviewCap',
+  'consumer_domain_veto',
+  'alert_senders',
+  'reactive_resume_url',
+  'document_store',
+  'mail_label',
+  'gmail_address',
+  'discovery_default_cron',
+  'onboarding_tour',
+  'onboarding_checklist',
+] as const;
+
+/** The events that are not audit actions (14.9). */
+const SYSTEM_EVENTS = {
   error: {
     description: 'A thrown error in a route, a 5xx response or a failed job.',
     fields: ['error.type', 'http.route', 'opportun.job.kind'],
   },
+  'settings.updated': {
+    description: 'A setting was changed: which one, never its value.',
+    fields: ['opportun.setting'],
+  },
+  'discovery.run.finished': {
+    description: "A discovery source's run ended: its kind, how it ended, and its counts.",
+    fields: [
+      'opportun.discovery.source_kind',
+      'opportun.discovery.run_outcome',
+      'opportun.count.fetched',
+      'opportun.count.inserted',
+      'opportun.count.duplicates',
+      'opportun.count.invalid',
+      'opportun.count.suppressed',
+      'opportun.count.filtered',
+    ],
+  },
 } as const satisfies Record<string, EventDef>;
 
-export type EventName = keyof typeof EVENTS;
+const AUDIT_EVENT_DEF: EventDef = {
+  description: 'An audit action (lib/audit.ts): its name and its user.',
+  fields: [],
+};
+
+export type EventName = keyof typeof SYSTEM_EVENTS | AuditEvent;
+
+/** Every event obs.event() writes (14.9). */
+export const EVENTS: Readonly<Record<EventName, EventDef>> = {
+  ...SYSTEM_EVENTS,
+  ...(Object.fromEntries(AUDIT_EVENTS.map((name) => [name, AUDIT_EVENT_DEF])) as Record<
+    AuditEvent,
+    EventDef
+  >),
+};
+
+/** Whether a name is a catalogued event (audit() is given a name at run time). */
+export function isEventName(name: string): name is EventName {
+  return EVENT_DEFS.has(name);
+}
 
 /**
  * Every message Opportun's own log calls write, with the keys each may carry (14.8, 14.9). The log
