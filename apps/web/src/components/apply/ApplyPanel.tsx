@@ -95,35 +95,44 @@ interface Refusal {
   resume?: true;
 }
 
+/**
+ * Why assisted apply cannot start for this opportunity, for a reason other than the resume, or
+ * null. Exported for the Resume tab's flow (#440), so its states E and F say what this panel says.
+ */
+export function applyBlockedReason(opp: OpportunityView): string | null {
+  if (opp.stage === 'closed' || opp.stage === 'dismissed') {
+    return `This opportunity is ${stageLabel(opp.stage)}. Reopen it to apply.`;
+  }
+  if (!ELIGIBLE_STAGES.includes(opp.stage)) {
+    // Name the stage it is at, so the reason says what to change (#395).
+    return `This opportunity is ${stageLabel(opp.stage)}. Applying is available at Interested, Preparing or Applied. Change its stage to apply.`;
+  }
+  if (opp.atsJobRef === null || opp.atsJobRef === undefined) {
+    // A Greenhouse job on the company's own page (`?gh_jid=`) whose board is not proven yet
+    // (#398): Find posting looks for it on the company's board, detecting the board first when
+    // there is none, and the identity follows from that read.
+    if (embeddedGreenhouse(opp)) return EMBEDDED_GREENHOUSE;
+    return "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.";
+  }
+  if (opp.postingState !== 'confirmed') {
+    return "This opportunity's posting needs review. Confirm it on the Details tab first.";
+  }
+  return null;
+}
+
+/** Whether a reason is the embedded Greenhouse one, whose next step is Find posting (#398). */
+export function isEmbeddedGreenhouseReason(reason: string): boolean {
+  return reason === EMBEDDED_GREENHOUSE;
+}
+
 function notEligible(
   opp: OpportunityView,
   resumes: Resume[],
   attempts: readonly SubmissionView[],
   sends: readonly ResumeSend[],
 ): Refusal | null {
-  if (opp.stage === 'closed' || opp.stage === 'dismissed') {
-    return { text: `This opportunity is ${stageLabel(opp.stage)}. Reopen it to apply.` };
-  }
-  if (!ELIGIBLE_STAGES.includes(opp.stage)) {
-    // Name the stage it is at, so the reason says what to change (#395).
-    return {
-      text: `This opportunity is ${stageLabel(opp.stage)}. Applying is available at Interested, Preparing or Applied. Change its stage to apply.`,
-    };
-  }
-  if (opp.atsJobRef === null || opp.atsJobRef === undefined) {
-    // A Greenhouse job on the company's own page (`?gh_jid=`) whose board is not proven yet
-    // (#398): Find posting looks for it on the company's board, detecting the board first when
-    // there is none, and the identity follows from that read.
-    if (embeddedGreenhouse(opp)) return { text: EMBEDDED_GREENHOUSE };
-    return {
-      text: "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.",
-    };
-  }
-  if (opp.postingState !== 'confirmed') {
-    return {
-      text: "This opportunity's posting needs review. Confirm it on the Details tab first.",
-    };
-  }
+  const blocked = applyBlockedReason(opp);
+  if (blocked !== null) return { text: blocked };
   if (usableResumes(resumes, opp.id).length === 0) {
     // The resume flow's state says what to do, in its words (#428), so this panel and the Resume
     // tab can never disagree about it.
@@ -327,6 +336,31 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   );
 }
 
+/**
+ * Where an attempt in progress is: the apply step to continue at, the sentence that says so, and
+ * this panel's button for it. Exported for the Resume tab's flow (#440, state G).
+ */
+export function attemptPlace(
+  live: SubmissionView,
+  ats: string,
+): { step: 'details' | 'review' | 'open'; text: string; action: string } {
+  if (live.status === 'draft') {
+    return { step: 'details', text: 'Your application is saved as a draft.', action: 'Continue' };
+  }
+  if (live.status === 'reviewed') {
+    return {
+      step: 'review',
+      text: 'Your review is saved. Nothing has been sent anywhere.',
+      action: `Continue to open ${ats}`,
+    };
+  }
+  return {
+    step: 'open',
+    text: `Finish the form on ${ats} and press its own Submit button.`,
+    action: 'Instructions',
+  };
+}
+
 function InProgress({
   live,
   opp,
@@ -339,19 +373,7 @@ function InProgress({
   onStop: () => void;
 }) {
   const opportunityId = opp.id;
-  const step = live.status === 'draft' ? 'details' : live.status === 'reviewed' ? 'review' : 'open';
-  const text =
-    live.status === 'draft'
-      ? 'Your application is saved as a draft.'
-      : live.status === 'reviewed'
-        ? 'Your review is saved. Nothing has been sent anywhere.'
-        : `Finish the form on ${ats} and press its own Submit button.`;
-  const action =
-    live.status === 'draft'
-      ? 'Continue'
-      : live.status === 'reviewed'
-        ? `Continue to open ${ats}`
-        : 'Instructions';
+  const { step, text, action } = attemptPlace(live, ats);
   return (
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center gap-2">
