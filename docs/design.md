@@ -1187,7 +1187,10 @@ so a mistake in code fails CI instead of passing in silence.
   function name and its path relative to the root. Any other frame (Node's own, a builtin's, a
   dependency's, wherever it is installed) is not the app's: each run of them is one fixed
   `at <external>`, with no name and no path, so they cannot fill the 20-frame cap before the
-  app's own frames (https://github.com/bgoleno/opportun/issues/399). Every other line of a stack, where a message can
+  app's own frames (https://github.com/bgoleno/opportun/issues/399). An error whose message has
+  a `: ` past 4,096 characters, such as a validation error with many issues as its cause, gets
+  the whole-message reading only and logs no frames (a cost cap on the header search). Every
+  other line of a stack, where a message can
   quote data, is dropped. The store and the export carry no stack. The server's own crashes
   and warnings take the same path: its process handlers log an uncaught exception or rejection
   as one gated line, and a warning as its type and code only. **One known exception:** a
