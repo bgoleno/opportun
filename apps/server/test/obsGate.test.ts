@@ -13,6 +13,7 @@ import {
   METRICS,
   OTHER,
   SPANS,
+  withoutLocalOnly,
 } from '../src/obs/catalog';
 import {
   checkValue,
@@ -180,6 +181,35 @@ describe('checkValue (#353)', () => {
     expect(checkValue(model, 42)).toBeUndefined();
   });
 
+  it('the shape is not what keeps a name out: the source is (14.8)', () => {
+    // These fit their types. What keeps a person's name out of error.type, a model id or a
+    // route is that the code setting each key takes it from one source only (the catalog's
+    // `source`, and for http.route the HTTP plugin's template), not this shape check.
+    expect(checkValue({ kind: 'code', source: 'test' }, 'Jane_Doe')).toBe('Jane_Doe');
+    expect(checkValue({ kind: 'model', source: 'test' }, 'jane.doe')).toBe('jane.doe');
+    expect(checkValue({ kind: 'route' }, '/users/jane.doe')).toBe('/users/jane.doe');
+  });
+
+  it('a route refuses a segment shaped like a row id: a UUID, 16 or more hex digits, or all digits', () => {
+    const route = { kind: 'route' } as const;
+    for (const bad of [
+      '/api/v1/opportunities/0193f3c2-7b1a-7c3e-9a2b-1c2d3e4f5a6b',
+      '/api/v1/traces/0af7651916cd43dd8448eb211c80319c',
+      '/api/v1/spans/b7ad6b7169203331',
+      '/api/v1/jobs/12345',
+    ]) {
+      expect(checkValue(route, bad), bad).toBeUndefined();
+    }
+    for (const ok of [
+      '/api/v1/opportunities/:id',
+      '/api/v1/oauth2/callback',
+      '/healthz',
+      '/api/v1/a1b2',
+    ]) {
+      expect(checkValue(route, ok), ok).toBe(ok);
+    }
+  });
+
   it('a route is a template shape, never free text', () => {
     const route = { kind: 'route' } as const;
     expect(checkValue(route, '/api/v1/opportunities/:id')).toBe('/api/v1/opportunities/:id');
@@ -188,7 +218,7 @@ describe('checkValue (#353)', () => {
     expect(checkValue(route, 'GET /x')).toBeUndefined();
   });
 
-  it('no personal datum fits any type but model, where it becomes OTHER', () => {
+  it('known personal data in these shapes fits no type, except as OTHER under model', () => {
     for (const [key, type] of Object.entries(ATTRIBUTES)) {
       if (key === IP_KEY) continue;
       for (const p of PERSONAL) {
@@ -285,5 +315,19 @@ describe('client.address is log only (#353, sec O9 on #352)', () => {
       },
     );
     expect(bad).toEqual({});
+  });
+});
+
+describe('withoutLocalOnly (#353, sec O1 on #359)', () => {
+  it('drops user.id and client.address, keeps every key that may be exported', () => {
+    const out = withoutLocalOnly({
+      'user.id': '0193f3c2-7b1a-7c3e-9a2b-1c2d3e4f5a6b',
+      [IP_KEY]: '203.0.113.7',
+      'http.route': '/api/v1/x',
+      'http.response.status_code': 200,
+    });
+    expect(out).toEqual({ 'http.route': '/api/v1/x', 'http.response.status_code': 200 });
+    // No id key in the base catalog is marked exportable yet (trace and span ids come with
+    // FR-T4 part 2), so "a marked id stays" is pinned through isLocalOnly's own test above.
   });
 });

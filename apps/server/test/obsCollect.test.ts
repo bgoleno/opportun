@@ -204,3 +204,29 @@ describe('turning Collect on and off (#353)', () => {
     expect(isCollecting()).toBe(true);
   });
 });
+
+describe('Collect on the demo deployment (#353, sec O2 on #359)', () => {
+  it('cannot be changed by anyone, either way: 403 unavailable_on_demo, no row, no audit; GET answers', async () => {
+    // The demo's admin account is public, so any visitor could otherwise turn collection on.
+    const { app, a, b } = await boot({ demo: true });
+    for (const client of [a, b]) {
+      for (const collect of [true, false]) {
+        const res = await client.request({
+          method: 'PUT',
+          url: '/api/v1/obs/settings',
+          payload: { collect },
+        });
+        expect(res.statusCode, `collect ${collect}`).toBe(403);
+        expect(res.json()).toMatchObject({ error: { code: 'unavailable_on_demo' } });
+      }
+    }
+    expect(isCollecting()).toBe(false);
+    const keys = (await app.db.select().from(settings).all()).map((r) => r.key);
+    expect(keys).not.toContain(OBS_COLLECT_KEY);
+    const audits = await app.db.select().from(auditLog).all();
+    expect(audits.filter((r) => r.event === 'telemetry.collect.updated')).toEqual([]);
+    const get = await a.request({ method: 'GET', url: '/api/v1/obs/settings' });
+    expect(get.statusCode).toBe(200);
+    expect(get.json()).toEqual({ collect: false });
+  });
+});
