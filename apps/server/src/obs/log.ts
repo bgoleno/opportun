@@ -104,30 +104,55 @@ function parseFrame(
 }
 
 /**
- * The frame lines of a stack, paths made relative to the install root or dropped (14.8). A V8
- * stack begins with the error's name and message, which can quote data and can be shaped like a
- * frame (sec on #376): those lines are skipped by count, never parsed. Only the frames right after
- * them are taken, so a cause's text appended below them (`caused by: ...`) is not read either.
+ * What stands for each run of frames outside the install root: fixed text, never built from the
+ * frame (sec on #381), so it shows where a call left Opportun's code and carries nothing else.
+ */
+export const EXTERNAL_FRAME = 'at <external>';
+
+/**
+ * Whether a stack's first lines are the header written for this message: `<name>: <message>`, or
+ * for an empty one (and for a record with no message, such as gateHeldError's) the name alone,
+ * or the name and `: ` as a stack formatter other than V8's own writes it (vitest's). A stack is
+ * formatted on its first read, with the message of that moment, so code that reassigns the
+ * message afterwards leaves a header that no longer matches (#381).
+ */
+function headerMatches(header: string, message: string): boolean {
+  if (message !== '') return header.endsWith(`: ${message}`);
+  const name = header.endsWith(': ') ? header.slice(0, -2) : header;
+  return !name.includes(': ') && !name.includes('\n');
+}
+
+/**
+ * The frame lines of a stack, paths made relative to the install root (14.8). A V8 stack begins
+ * with the error's name and message, which can quote data and can be shaped like a frame (sec on
+ * #376): those lines are skipped by count, never parsed, and only when they are the header of the
+ * current message; any other stack gives no frames at all, rather than a miscount that would read
+ * message lines as frames (#381). Only the frames right after the header are taken, so a cause's
+ * text appended below them (`caused by: ...`) is not read either.
+ *
+ * A frame inside the install root keeps its function name and relative path. A frame outside it
+ * keeps neither, not even its name: one message case the header check cannot see (a message cut
+ * to its own first lines after the stack was read) still leaves its old lines to parse as frames,
+ * and their paths are not ours. Each run of such frames is one EXTERNAL_FRAME, so a dependency's
+ * or Node's frames never fill the cap.
  */
 export function frameLines(stack: unknown, message?: unknown): string[] {
   if (typeof stack !== 'string') return [];
-  const header = typeof message === 'string' ? message.split('\n').length : 1;
+  const text = typeof message === 'string' ? message : '';
+  const lines = stack.split('\n');
+  const header = text.split('\n').length;
+  if (!headerMatches(lines.slice(0, header).join('\n'), text)) return [];
   const out: string[] = [];
-  let started = false;
-  for (const raw of stack.split('\n').slice(header)) {
+  for (const raw of lines.slice(header)) {
     const frame = parseFrame(raw.trim());
-    if (frame === undefined) {
-      if (started) break;
-      continue;
+    if (frame === undefined) break;
+    if (!frame.path.startsWith(INSTALL_ROOT + sep)) {
+      if (out.at(-1) !== EXTERNAL_FRAME) out.push(EXTERNAL_FRAME);
+    } else {
+      const name = frame.fn === undefined ? undefined : functionName(frame.fn);
+      const where = `${relative(INSTALL_ROOT, frame.path).split(sep).join('/')}:${frame.row}:${frame.col}`;
+      out.push(`at ${[name, `(${where})`].filter(Boolean).join(' ')}`);
     }
-    started = true;
-    const name = frame.fn === undefined ? undefined : functionName(frame.fn);
-    const inside = frame.path.startsWith(INSTALL_ROOT + sep);
-    const where = inside
-      ? `${relative(INSTALL_ROOT, frame.path).split(sep).join('/')}:${frame.row}:${frame.col}`
-      : '';
-    if (name === undefined && where === '') continue;
-    out.push(`at ${[name, where === '' ? undefined : `(${where})`].filter(Boolean).join(' ')}`);
     if (out.length >= MAX_FRAMES) break;
   }
   return out;

@@ -116,9 +116,9 @@ describe('the log gate (#345)', () => {
 });
 
 describe('frame lines (#345, 14.8)', () => {
-  it('keep a frame inside the install root with its relative path, and drop the path of one outside', () => {
+  it('keep a frame inside the install root with its relative path, and only a placeholder for one outside', () => {
     const inside = new Error('x').stack!;
-    const frames = frameLines(inside);
+    const frames = frameLines(inside, 'x');
     expect(frames.length).toBeGreaterThan(0);
     expect(frames.some((f) => f.includes('apps/server/test/obsLog.test.ts'))).toBe(true);
     for (const f of frames) expect(f).not.toContain('/Volumes/');
@@ -131,8 +131,10 @@ describe('frame lines (#345, 14.8)', () => {
           '    at node:internal/process/task_queues:95:5',
           `    { person: '${NAME}' }`,
         ].join('\n'),
+        `mail for ${EMAIL}`,
       ),
-    ).toEqual(['at handler']);
+      // Outside the install root a frame keeps no name either (#381): one placeholder for the run.
+    ).toEqual(['at <external>']);
   });
 });
 
@@ -281,5 +283,88 @@ describe('a held gate keeps its call site as a frame (#381)', () => {
       configureGateWatchdog({});
       await app.close();
     }
+  });
+});
+
+describe('a stack whose header no longer matches its message (#381, sec)', () => {
+  // A V8 stack is formatted on its first read, with the message of that moment. Code that
+  // reassigns the message afterwards leaves a header the current message no longer counts.
+  const FAKE = `    at ${NAME.replace(' ', '')} (/srv/elsewhere/data.js:1:1)`;
+  const logged = (err: Error) => {
+    const c = capture();
+    c.log.error({ err }, 'unhandled error');
+    return { record: c.records()[0]!, text: c.text() };
+  };
+
+  it('a message lengthened after the stack was read: no frames, rather than a miscount', () => {
+    const err = new Error('one');
+    void err.stack;
+    err.message = 'two\nthree';
+    const { record } = logged(err);
+    expect(record['error.type']).toBe('Error');
+    expect(record).not.toHaveProperty('stack');
+  });
+
+  it('a message shortened after the stack was read: its old lines are never taken by name', () => {
+    const err = new Error(`x\n${FAKE}`);
+    void err.stack;
+    err.message = 'x';
+    const { record, text } = logged(err);
+    expect(text).not.toContain(NAME.replace(' ', ''));
+    // The old line still parses as a frame, but one outside the install root: the fixed
+    // placeholder, then this file's own frame.
+    expect(record.stack).toEqual(
+      expect.arrayContaining(['at <external>', expect.stringContaining('obsLog.test.ts')]),
+    );
+  });
+
+  it('a message shortened to nothing after the stack was read: no frames', () => {
+    const err = new Error(`x\n${FAKE}`);
+    void err.stack;
+    err.message = '';
+    const { record, text } = logged(err);
+    expect(text).not.toContain(NAME.replace(' ', ''));
+    expect(record).not.toHaveProperty('stack');
+  });
+
+  it('a message shortened before the stack was read: the stack follows it, frames kept', () => {
+    const err = new Error(`x\n${FAKE}`);
+    err.message = 'x';
+    const { record, text } = logged(err);
+    expect(text).not.toContain(NAME.replace(' ', ''));
+    expect((record.stack as string[])[0]).toContain('obsLog.test.ts');
+  });
+
+  it('an empty message: the header is the name alone, frames kept', () => {
+    const { record } = logged(new Error(''));
+    expect((record.stack as string[])[0]).toContain('obsLog.test.ts');
+  });
+
+  it('a frame outside the install root keeps its place with no name, runs of them as one', () => {
+    const lines = frameLines(
+      [
+        'Error: x',
+        `    at ours (${process.cwd()}/src/a.ts:1:2)`,
+        '    at Lib.call (/srv/lib/node_modules/dep/index.js:3:4)',
+        `${FAKE}`,
+        '    at node:internal/process/task_queues:95:5',
+        `    at again (${process.cwd()}/src/b.ts:5:6)`,
+      ].join('\n'),
+      'x',
+    );
+    expect(lines).toEqual([
+      'at ours (apps/server/src/a.ts:1:2)',
+      'at <external>',
+      'at again (apps/server/src/b.ts:5:6)',
+    ]);
+  });
+
+  it('frames outside the install root never fill the cap', () => {
+    const outside = Array.from({ length: 40 }, (_, i) => `    at dep${i} (/srv/dep.js:${i + 1}:1)`);
+    const lines = frameLines(
+      ['Error: x', ...outside, `    at ours (${process.cwd()}/src/a.ts:1:2)`].join('\n'),
+      'x',
+    );
+    expect(lines).toEqual(['at <external>', 'at ours (apps/server/src/a.ts:1:2)']);
   });
 });
