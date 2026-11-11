@@ -4,9 +4,11 @@
 //
 // With the flag off, or on the demo, the submission routes answer 404 and this renders nothing
 // at all: no card, no teaser (#117 criterion 5).
+import { greenhouseJidOf } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { useFindPosting, type FindPostingResult } from '@/components/opportunity/api';
 import { statusLabel, useResumes, type Resume } from '@/components/resume/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -18,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { ApiError, errorMessage } from '@/lib/api';
 import { formatDateTime, stageLabel, type OpportunityView } from '@/lib/opportunities';
 import {
   atsLabel,
@@ -43,6 +46,41 @@ export function usableResumes(resumes: Resume[], opportunityId: string): Resume[
   );
 }
 
+/** What the panel says after Find posting, by its answer (#398). */
+const FIND_SAID = new Map<FindPostingResult['outcome'], string>([
+  ['attached', 'Posting attached.'],
+  ['identified', 'Recognised on Greenhouse.'],
+  ['candidates', 'Several postings could be this job. Choose it on the Details tab.'],
+  ['none', "This job was not found on the company's board. Paste the posting on the Details tab."],
+  [
+    'no_board',
+    'No job board is known for this company yet. Add its careers page on the Details tab.',
+  ],
+]);
+
+/** Find posting offering exactly one posting to choose (tl on #414). */
+const ONE_CANDIDATE =
+  "A posting on the company's board could be this job. Check it on the Details tab.";
+
+const NOT_ON_A_KNOWN_BOARD =
+  'This job was not found on a Greenhouse board known for this company. Check the posting link on the Details tab.';
+
+/** Find posting's 409 for a description the user wrote (the server found no board for the link). */
+function isAlreadyDescribed(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'already_described';
+}
+
+const EMBEDDED_GREENHOUSE =
+  "This looks like a Greenhouse job on the company's own careers page. Find the posting on Greenhouse to apply with assisted apply.";
+
+/** A posting link with a numeric `gh_jid` and no ATS identity yet (#398). */
+function embeddedGreenhouse(opp: OpportunityView): boolean {
+  return (
+    (opp.atsJobRef === null || opp.atsJobRef === undefined) &&
+    greenhouseJidOf(opp.postingUrl) !== null
+  );
+}
+
 /** Why an attempt cannot start, in the user's words, or null when it can. */
 function notEligible(opp: OpportunityView, resumes: Resume[]): string | null {
   if (opp.stage === 'closed' || opp.stage === 'dismissed') {
@@ -53,6 +91,10 @@ function notEligible(opp: OpportunityView, resumes: Resume[]): string | null {
     return `This opportunity is ${stageLabel(opp.stage)}. Applying is available at Interested, Preparing or Applied. Change its stage to apply.`;
   }
   if (opp.atsJobRef === null || opp.atsJobRef === undefined) {
+    // A Greenhouse job on the company's own page (`?gh_jid=`) whose board is not proven yet
+    // (#398): Find posting looks for it on the company's board, detecting the board first when
+    // there is none, and the identity follows from that read.
+    if (embeddedGreenhouse(opp)) return EMBEDDED_GREENHOUSE;
     return "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.";
   }
   if (opp.postingState !== 'confirmed') {
@@ -76,6 +118,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const submissions = useOpportunitySubmissions(opp.id);
   const resumes = useResumes();
   const reasonId = useId();
+  const find = useFindPosting(opp.id);
   const [howOpen, setHowOpen] = useState(false);
   // A click on the refused button (#395): it says so, rather than doing nothing. Kept as the
   // reason that was clicked, so a different reason later reads plainly until it is clicked too.
@@ -152,6 +195,37 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                 ? `${refusedLabel} is not available yet. ${reason}`
                 : reason}
             </p>
+            {reason === EMBEDDED_GREENHOUSE ? (
+              <>
+                <Button
+                  variant="outline"
+                  className="w-fit"
+                  disabled={find.isPending}
+                  onClick={() => find.mutate()}
+                >
+                  {find.isPending ? 'Searching...' : 'Find posting'}
+                </Button>
+                {/* What Find posting found, and where to go next: never a silent button
+                    (#395, tl on #414). */}
+                {find.isError && isAlreadyDescribed(find.error) ? (
+                  // A description of the user's own, and no known board holds the job (#398):
+                  // an answer, not a failure.
+                  <p role="status" className="text-sm text-muted-foreground">
+                    {NOT_ON_A_KNOWN_BOARD}
+                  </p>
+                ) : find.isError ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    {errorMessage(find.error)}
+                  </p>
+                ) : find.data !== undefined ? (
+                  <p role="status" className="text-sm text-muted-foreground">
+                    {find.data.outcome === 'candidates' && find.data.candidates?.length === 1
+                      ? ONE_CANDIDATE
+                      : (FIND_SAID.get(find.data.outcome) ?? '')}
+                  </p>
+                ) : null}
+              </>
+            ) : null}
           </>
         )}
       </div>

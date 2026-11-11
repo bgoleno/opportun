@@ -765,6 +765,28 @@ describe('export', () => {
     expect(acme).toContain('Recruiter screen went well.');
   });
 
+  // #411: the profile's Application details travel with it.
+  it("carries the profile's application details", async () => {
+    const { a } = await boot();
+    const details = { firstName: 'Jane', linkedinUrl: 'https://www.linkedin.com/in/jane-example' };
+    const put = await a.request({
+      method: 'PUT',
+      url: '/api/v1/profile',
+      payload: { fullName: 'Jane Doe', applicationDetails: details },
+    });
+    expect(put.statusCode, put.body).toBe(200);
+    const data = JSON.parse((await exportZip(a))['export.json']!) as {
+      tables: Record<string, Record<string, unknown>[]>;
+    };
+    expect(data.tables.profiles).toEqual([
+      expect.objectContaining({
+        userId: a.userId,
+        fullName: 'Jane Doe',
+        applicationDetails: details,
+      }),
+    ]);
+  });
+
   it('sanitizes summary filenames so zip entries cannot traverse', async () => {
     const { a } = await boot();
     await createOpp(a, '../../etc', 'pass/wd\\x:y', null);

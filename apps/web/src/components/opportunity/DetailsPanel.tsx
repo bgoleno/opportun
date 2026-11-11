@@ -283,6 +283,11 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
         });
         return;
       }
+      if (result.outcome === 'identified') {
+        // #398: the posting link's own Greenhouse job was recognised; nothing was attached.
+        toast({ title: 'Recognised on Greenhouse', variant: 'success' });
+        return;
+      }
       setFound(result);
     } catch (err) {
       setFindError(errorMessage(err));

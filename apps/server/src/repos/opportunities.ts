@@ -1,7 +1,19 @@
 // Opportunities and their lifecycle (FR-O1, O2, O5). Stage changes go through
 // applyTransition from @opportun/core and write opportunities + stage_history in one
 // transaction, so a rejected transition writes nothing.
-import { and, count, eq, getTableColumns, inArray, max, ne, or, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  count,
+  eq,
+  getTableColumns,
+  inArray,
+  isNull,
+  max,
+  ne,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import {
   ACTIVE_PIPELINE_STAGES,
   applyTransition,
@@ -33,7 +45,7 @@ import {
   stageHistory,
   resumeSends,
 } from '../db/schema';
-import { postingAtsJobRef } from '../lib/atsJobRef';
+import { postingAtsJobRefKeeping } from '../lib/atsJobRef';
 import { racePoint } from '../lib/racePoints';
 import { lockAttemptsOf, lockLiveAttempt, markPostingChanged } from './submissions';
 import { duplicate, HttpError, notFound } from '../lib/errors';
@@ -473,6 +485,12 @@ export async function updateOpportunity(
   ctx: UserCtx,
   id: string,
   patch: UpdateOpportunityInput,
+  /**
+   * The identity the new posting URL was given by a check made before this write (#398: a
+   * `gh_jid` link proven on Greenhouse's API, lib/greenhouseEmbed). Without it a new URL keeps
+   * or drops the identity by postingAtsJobRefKeeping, which asks nobody.
+   */
+  opts: { atsJobRef?: AtsJobRef | null } = {},
 ): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
     const current = await getViewSync(tx, ctx, id);
@@ -497,13 +515,18 @@ export async function updateOpportunity(
     const now = Date.now();
     // A new posting URL brings its own ATS identity, or none (issue #137): a ref kept from the
     // old URL would name another requisition while the posting still reads confirmed (a URL
-    // edit through PATCH leaves postingState as it is).
+    // edit through PATCH leaves postingState as it is). A verified `gh_jid` identity survives
+    // only while the new link names its job (#398).
     const urlChanged = fields.postingUrl !== undefined && fields.postingUrl !== current.postingUrl;
+    const newRef =
+      opts.atsJobRef !== undefined
+        ? opts.atsJobRef
+        : postingAtsJobRefKeeping(fields.postingUrl, current.atsJobRef);
     await tx
       .update(opportunities)
       .set({
         ...fields,
-        ...(urlChanged ? { atsJobRef: postingAtsJobRef(fields.postingUrl) } : {}),
+        ...(urlChanged ? { atsJobRef: newRef } : {}),
         companyId,
         dedupeKey: key,
         updatedAt: now,
@@ -574,6 +597,34 @@ function sameRequisition(
     (a.org ?? '').toLowerCase() === (b.org ?? '').toLowerCase() &&
     a.externalId === b.externalId
   );
+}
+
+/**
+ * Records the ATS identity proven for the posting link the opportunity has now (#398: an
+ * embedded Greenhouse job checked on Greenhouse's API), and nothing else: the description, the
+ * posting state and the link stay as they are. Written only while the link is still `postingUrl`
+ * and no identity is set, so a link changed meanwhile, or an identity a writer set meanwhile,
+ * wins. Returns the opportunity, or null when it was not written.
+ */
+export async function recordAtsJobRef(
+  db: Db,
+  ctx: UserCtx,
+  id: string,
+  postingUrl: string,
+  ref: AtsJobRef,
+): Promise<OpportunityView | null> {
+  const written = await db
+    .update(opportunities)
+    .set({ atsJobRef: ref, updatedAt: Date.now() })
+    .where(
+      and(
+        owned(ctx, id),
+        eq(opportunities.postingUrl, postingUrl),
+        isNull(opportunities.atsJobRef),
+      ),
+    )
+    .returning({ id: opportunities.id });
+  return written.length === 0 ? null : await getOpportunity(db, ctx, id);
 }
 
 /**

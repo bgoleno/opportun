@@ -48,18 +48,39 @@ const observed = new WeakMap<FastifyRequest, Observed>();
 /** Spans for the API only (14.2); the SPA's files and /healthz get the metric alone. */
 const SPAN_PREFIX = '/api/v1';
 
-function onRequest(req: FastifyRequest, _reply: FastifyReply, done: () => void): void {
+/**
+ * The one label of the SPA's built assets (#371). routes/spa.ts registers each file as a route of
+ * its own (wildcard: false), and under /assets/ their names are content hashes, new with every
+ * deploy: as their own templates, each deploy would add a series per file.
+ */
+export const SPA_ASSET_ROUTE = '/assets/*';
+
+/** The route's template, the SPA's assets under one label, or _OTHER when no route matched. */
+function routeLabel(url: string | undefined): string {
+  if (url === undefined) return OTHER;
+  return url.startsWith('/assets/') ? SPA_ASSET_ROUTE : url;
+}
+
+function onRequest(req: FastifyRequest, reply: FastifyReply, done: () => void): void {
   if (!isCollecting()) {
     done();
     return;
   }
-  const route = req.routeOptions.url ?? OTHER;
+  const route = routeLabel(req.routeOptions.url);
   const method = httpMethod(req.method);
   const span =
     route.startsWith(SPAN_PREFIX) || req.url.startsWith(SPAN_PREFIX)
       ? obs.startSpan('http.server', { 'http.request.method': method, 'http.route': route })
       : undefined;
   observed.set(req, { started: performance.now(), method, route, span, errorType: undefined });
+  // The one place an abort shows for every method: the response closes before it finished. A
+  // request whose body was read has already ended its own stream normally, so Fastify's
+  // onRequestAbort never fires for it, and a slow POST (an AI call) is the likeliest to be
+  // abandoned (tl on #391). A completed request closes after onResponse, finished, and its entry
+  // is gone by then.
+  reply.raw.once('close', () => {
+    if (!reply.raw.writableFinished) recordAbort(req);
+  });
   if (span === undefined) {
     done();
     return;
@@ -82,6 +103,30 @@ function preValidation(req: FastifyRequest, _reply: FastifyReply, done: () => vo
   if (userId !== undefined) req.obsContext = req.obsContext.setValue(USER_CONTEXT_KEY, userId);
   context.with(req.obsContext, done);
 }
+
+/**
+ * A request the client closed before it was answered (#371): no onResponse comes, so without this
+ * it recorded no metric and its span never ended. Recorded with no status code, none having been
+ * sent, and error.type `aborted`, with the span failed: an unanswered request is not a success. A
+ * proxy giving up on a slow request looks exactly like this to the server, and it is not like a
+ * 4xx, which the server answered; design 14.4 counts a request's errors as its points with
+ * error.type. No `error` event: the server did not fail. The entry is removed, so nothing records
+ * it twice.
+ */
+function recordAbort(req: FastifyRequest): void {
+  const o = observed.get(req);
+  if (o === undefined) return;
+  observed.delete(req);
+  obs.record('http.server.request.duration', (performance.now() - o.started) / 1000, {
+    'http.request.method': o.method,
+    'http.route': o.route,
+    'error.type': ABORTED,
+  });
+  o.span?.fail(ABORTED);
+  o.span?.end();
+}
+
+const ABORTED = 'aborted';
 
 function onError(req: FastifyRequest, _reply: FastifyReply, err: Error, done: () => void): void {
   const o = observed.get(req);

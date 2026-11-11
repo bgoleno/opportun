@@ -1,0 +1,1 @@
+ALTER TABLE `profiles` ADD `application_details` text DEFAULT '{}' NOT NULL;
