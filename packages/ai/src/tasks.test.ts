@@ -2,7 +2,7 @@
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_POLICIES } from './policies';
-import { promptVariables, renderPrompt, TASK_PROMPT_VARS, TASKS } from './tasks';
+import { promptVariables, renderPrompt, renderPromptParts, TASK_PROMPT_VARS, TASKS } from './tasks';
 import { TASK_KEYS } from './types';
 
 describe('renderPrompt', () => {
@@ -379,5 +379,40 @@ describe('posting.merge', () => {
     expect(schema.safeParse({ passages: ['Remote, Full-time'] }).success).toBe(true);
     expect(schema.safeParse({ passages: [] }).success).toBe(true);
     expect(schema.safeParse({ passages: 'Remote' }).success).toBe(false);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/356: a provider caches only the part of a prompt that
+// comes before the first per-call text, so the rendered prompt is split there.
+describe('renderPromptParts', () => {
+  const template =
+    'Intro.\n\n## Industries\n{{naics_table}}\n\n## Companies\n{{companies_untrusted}}\n\nAfter: {{naics_table}}';
+  const vars = { naics_table: '5132 Software', companies_untrusted: 'Acme {{x}}' };
+
+  it('splits at the first untrusted variable, and the parts join to renderPrompt exactly', () => {
+    const { prefix, rest } = renderPromptParts(template, vars);
+    expect(prefix + rest).toBe(renderPrompt(template, vars));
+    expect(prefix).toBe('Intro.\n\n## Industries\n5132 Software\n\n## Companies\n');
+    expect(rest.startsWith('<untrusted>\n')).toBe(true);
+    expect(rest).toContain('After: 5132 Software');
+  });
+
+  it('has an empty prefix when the template has no untrusted variable: nothing is per-call-safe to cache', () => {
+    const { prefix, rest } = renderPromptParts('Only {{naics_table}}.', vars);
+    expect(prefix).toBe('');
+    expect(rest).toBe('Only 5132 Software.');
+  });
+
+  it('has an empty prefix when the untrusted variable comes first', () => {
+    const { prefix, rest } = renderPromptParts(
+      '{{companies_untrusted}} then {{naics_table}}',
+      vars,
+    );
+    expect(prefix).toBe('');
+    expect(prefix + rest).toBe(renderPrompt('{{companies_untrusted}} then {{naics_table}}', vars));
+  });
+
+  it('throws on a missing variable, as renderPrompt does', () => {
+    expect(() => renderPromptParts(template, { naics_table: 'x' })).toThrow(/companies_untrusted/);
   });
 });

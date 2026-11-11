@@ -14,7 +14,7 @@
 import {
   AiUnavailableError,
   CompanyTagsOutputSchema,
-  renderPrompt,
+  systemWithCacheBreak,
   runStructured,
 } from '@opportun/ai';
 import { isNaicsCode, NAICS_2022_INDUSTRY_GROUPS } from '@opportun/core';
@@ -298,7 +298,9 @@ export async function tagCompanies(
     run.calls += 1;
     try {
       const answer = await runStructured(await buildAiDeps(db, ctx), COMPANY_TAGS_KIND, {
-        system: renderPrompt(prompt.body, {
+        // Split before the companies, so the provider can cache the table that comes first
+        // (https://github.com/bgoleno/opportun/issues/356): a night's batches run back to back.
+        ...systemWithCacheBreak(prompt.body, {
           companies_untrusted: await batchText(db, ctx, batch),
           naics_table: NAICS_TABLE_TEXT,
         }),
