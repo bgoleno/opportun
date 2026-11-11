@@ -517,3 +517,25 @@ describe("stopping export stops what is in flight (sec's Blocking 2 on #377)", (
     expect(got).toEqual([]);
   });
 });
+
+describe('log records reach the export slot through the log gate (#376 merged; tl on #377)', () => {
+  it('obs.event is gated, then exported as a log record with no user', async () => {
+    const { app, a } = await boot();
+    const { port, got } = await receiver();
+    await writeExport(app.db, { enabled: true, destination: otlp(port), sealedCredential: null });
+    await setCollecting(true);
+    await applyExport(app.db, { demo: false, telemetryAllowPrivate: true }, opts);
+    obs.event(
+      'error',
+      { 'error.type': 'TypeError', 'http.route': '/api/v1/opportunities/:id' },
+      { userId: a.userId },
+    );
+    await flushExport();
+    const logs = got.find((g) => g.url === '/v1/logs')?.body.toString('latin1') ?? '';
+    expect(logs).toContain('error.type');
+    expect(logs).toContain('TypeError');
+    expect(logs).toContain('/api/v1/opportunities/:id');
+    expect(logs).not.toContain(a.userId);
+    expect(logs).not.toContain('user.id');
+  });
+});

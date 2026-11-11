@@ -626,6 +626,7 @@ export const AUDIT_EVENTS = [
   'submission.snapshot_downloaded',
   'submission.unknown',
   'telemetry.collect.updated',
+  'telemetry.export.updated',
 ] as const;
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];
 

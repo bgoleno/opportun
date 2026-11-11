@@ -432,6 +432,48 @@ the name; the others stay in the instance.
 | `opportun.obs.reason`                   | one of a fixed list      | yes      |
 | `user.id`                               | row id                   | no       |
 | `client.address`                        | IP address               | no       |
+| `opportun.process.signal`               | one of a fixed list      | yes      |
+| `opportun.mocks.count`                  | whole number             | yes      |
+| `server.port`                           | whole number             | yes      |
+| `opportun.db.gate_label`                | class or code            | yes      |
+| `opportun.db.gate_held_ms`              | whole number             | yes      |
+| `opportun.db.filesystem`                | class or code            | yes      |
+| `opportun.count.described`              | whole number             | yes      |
+| `opportun.count.deferred`               | whole number             | yes      |
+| `opportun.count.skipped`                | whole number             | yes      |
+| `opportun.count.truncated`              | whole number             | yes      |
+| `opportun.count.read`                   | whole number             | yes      |
+| `opportun.count.set`                    | whole number             | yes      |
+| `opportun.count.changed`                | whole number             | yes      |
+| `opportun.count.cleared`                | whole number             | yes      |
+| `opportun.mail.channel`                 | one of a fixed list      | yes      |
+| `opportun.db.awaited_outside`           | true or false            | yes      |
+| `opportun.warning.type`                 | class or code            | yes      |
+| `opportun.warning.code`                 | class or code            | yes      |
+| `opportun.job.id`                       | row id                   | no       |
+| `opportun.job.attempt`                  | whole number             | yes      |
+| `opportun.job.max_attempts`             | whole number             | yes      |
+| `opportun.route.id`                     | row id                   | no       |
+| `opportun.setting`                      | one of a fixed list      | yes      |
+| `opportun.discovery.run_outcome`        | one of a fixed list      | yes      |
+| `opportun.count.fetched`                | whole number             | yes      |
+| `opportun.count.inserted`               | whole number             | yes      |
+| `opportun.count.duplicates`             | whole number             | yes      |
+| `opportun.count.invalid`                | whole number             | yes      |
+| `opportun.count.suppressed`             | whole number             | yes      |
+| `opportun.count.filtered`               | whole number             | yes      |
+| `opportun.communication.id`             | row id                   | no       |
+| `opportun.company.id`                   | row id                   | no       |
+| `opportun.source.id`                    | row id                   | no       |
+| `opportun.opportunity.id`               | row id                   | no       |
+| `opportun.discovery_result.id`          | row id                   | no       |
+| `opportun.dedupe_candidate.id`          | row id                   | no       |
+| `opportun.resume.id`                    | row id                   | no       |
+| `opportun.discovery.source_kind`        | one of a fixed list      | yes      |
+| `opportun.ats.kind`                     | one of a fixed list      | yes      |
+| `opportun.fetch.blocked_reason`         | class or code            | yes      |
+| `opportun.oauth.provider`               | one of a fixed list      | yes      |
+| `opportun.artifact.target`              | one of a fixed list      | yes      |
 | `gen_ai.operation.name`                 | one of a fixed list      | yes      |
 | `gen_ai.provider.name`                  | one of a fixed list      | yes      |
 | `opportun.ai.provider`                  | one of a fixed list      | yes      |
