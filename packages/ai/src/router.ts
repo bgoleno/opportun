@@ -3,6 +3,7 @@
 // TaskRunRecord, whether the call succeeded or failed.
 import {
   APICallError,
+  asSchema,
   generateText,
   NoObjectGeneratedError,
   Output,
@@ -221,6 +222,18 @@ function callSettings(policy: ModelPolicy): { maxOutputTokens: number; temperatu
 const CHARS_PER_TOKEN = 4;
 
 /**
+ * How many characters of the call the provider would cache at the break: the structured-output
+ * schema, which it renders ahead of the system prompt (tools, then system, then messages), and the
+ * system text before the break (https://github.com/bgoleno/opportun/issues/388). The schema is
+ * measured as the SDK converts it for the request.
+ */
+async function cachedChars(schema: z.ZodType, cacheBreak: number | undefined): Promise<number> {
+  if (cacheBreak === undefined) return 0;
+  const json = await asSchema(schema).jsonSchema;
+  return JSON.stringify(json).length + cacheBreak;
+}
+
+/**
  * The system prompt as the SDK takes it (https://github.com/bgoleno/opportun/issues/356). The
  * prefix is marked for Anthropic's cache only when the model caches a prefix of its size: a
  * marked prefix the model would not cache would earn nothing. Everywhere else the prompt goes
@@ -228,11 +241,16 @@ const CHARS_PER_TOKEN = 4;
  * already gives, and an OpenAI-compatible endpoint (a local model, a gateway) gets exactly what
  * it got before.
  */
-function systemFor(policy: ModelPolicy, system: string, cacheBreak?: number): Instructions {
+function systemFor(
+  policy: ModelPolicy,
+  system: string,
+  cacheBreak: number | undefined,
+  cachedLength: number,
+): Instructions {
   if (cacheBreak === undefined || cacheBreak <= 0 || cacheBreak >= system.length) return system;
   // Only Anthropic models have a minimum (cacheMinTokens), so only they are ever marked.
   const min = cacheMinTokens(policy.provider, policy.model);
-  if (min === undefined || cacheBreak / CHARS_PER_TOKEN < min) return system;
+  if (min === undefined || cachedLength / CHARS_PER_TOKEN < min) return system;
   return [
     {
       role: 'system',
@@ -264,6 +282,8 @@ export async function runStructured<T>(
     promptVersion?: number;
   },
 ): Promise<T> {
+  // Before the run starts, so nothing here can leave its span open.
+  const cached = await cachedChars(opts.schema, opts.cacheBreak);
   const { run, model, policy, apiKey } = await prepare(deps, task, {
     stream: false,
     outputType: 'json',
@@ -271,6 +291,7 @@ export async function runStructured<T>(
     promptVersion: opts.promptVersion,
   });
 
+  const system = systemFor(policy, opts.system, opts.cacheBreak, cached);
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     let output: T;
     try {
@@ -279,7 +300,7 @@ export async function runStructured<T>(
       const result = await run.span.run(() =>
         generateText({
           model,
-          system: systemFor(policy, opts.system, opts.cacheBreak),
+          system,
           prompt: opts.prompt,
           output: Output.object({ schema: opts.schema }),
           maxRetries: SDK_MAX_RETRIES,

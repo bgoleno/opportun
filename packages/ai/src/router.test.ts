@@ -457,6 +457,41 @@ describe('prompt caching (#356)', () => {
     expect(sys[1]?.providerOptions?.anthropic).toBeUndefined();
   });
 
+  // https://github.com/bgoleno/opportun/issues/388: the provider renders the structured-output
+  // schema ahead of the system prompt, so it is cached with the prefix and counts toward it.
+  it('counts the output schema toward the minimum, as the provider caches it with the prefix', async () => {
+    // 1,600 characters: 400 tokens at 4 characters a token, under 512 alone.
+    const prefix = 'Fixed instructions and a table. '.repeat(50);
+    // Over 600 characters of JSON schema: the two together are over 512 tokens.
+    const schema = z.object({
+      score: z.number().describe('A description of the score. '.repeat(25)),
+    });
+    const h = harness();
+    await runStructured(h.deps, 'discovery.company_tags', {
+      ...call,
+      schema,
+      system: prefix + rest,
+      cacheBreak: prefix.length,
+    });
+    const sys = systemMessages(h.model);
+    expect(sys).toHaveLength(2);
+    expect(sys[0]).toMatchObject({
+      content: prefix,
+      providerOptions: { anthropic: { cacheControl: { type: 'ephemeral' } } },
+    });
+  });
+
+  it('leaves that prefix unmarked with a small schema', async () => {
+    const prefix = 'Fixed instructions and a table. '.repeat(50);
+    const h = harness();
+    await runStructured(h.deps, 'discovery.company_tags', {
+      ...call,
+      system: prefix + rest,
+      cacheBreak: prefix.length,
+    });
+    expect(systemMessages(h.model)).toHaveLength(1);
+  });
+
   it('sends the prompt whole and unmarked when the prefix is below the minimum', async () => {
     const h = harness();
     await runStructured(h.deps, 'discovery.company_tags', {
