@@ -2,6 +2,7 @@
 // from the local store, the values they can be filtered by, and one trace with its spans. The
 // server scopes all of it to the signed-in user; nothing here carries prompt or response text.
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { api } from '@/lib/api';
 
 export type TraceStatus = 'ok' | 'error';
@@ -101,11 +102,26 @@ export function traceQuery(f: TraceFilters, now: number, cursor?: string): strin
 
 export const tracesKey = ['obs', 'traces'] as const;
 
+/**
+ * The caller's traces, a page at a time. A time range is read against one "now", taken when the
+ * filters are set: every page of one list shares that window. Taking "now" again for Load more
+ * would move the window forward and skip the traces between its two starts (tl on
+ * https://github.com/bgoleno/opportun/pull/361). Changing the filters reads a fresh
+ * window.
+ */
 export function useTraces(filters: TraceFilters) {
+  const key = JSON.stringify(filters);
+  const [readAt, setReadAt] = useState(() => ({ key, now: Date.now() }));
+  let now = readAt.now;
+  if (readAt.key !== key) {
+    // New filters: a new window, stored during render (React's pattern for state derived from
+    // props), so this render's query already uses it.
+    now = Date.now();
+    setReadAt({ key, now });
+  }
   return useInfiniteQuery({
-    queryKey: [...tracesKey, 'list', filters],
-    queryFn: ({ pageParam }) =>
-      api<TraceList>(`/obs/traces${traceQuery(filters, Date.now(), pageParam)}`),
+    queryKey: [...tracesKey, 'list', filters, now],
+    queryFn: ({ pageParam }) => api<TraceList>(`/obs/traces${traceQuery(filters, now, pageParam)}`),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.next ?? undefined,
   });

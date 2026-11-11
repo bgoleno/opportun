@@ -275,8 +275,9 @@ describe('GET /obs/traces (FR-T7)', () => {
   it('pages with a cursor, never repeating or skipping a trace', async () => {
     const { app, b } = await boot();
     const made: string[] = [];
-    // Two share a start time, so the cursor must break the tie by id.
-    for (const at of [T0, T0 + 1, T0 + 1, T0 + 2, T0 + 3])
+    // Three share a start time, and with pages of two the first page ends inside that tie: the
+    // cursor must break it by id, or the rest of the tie is skipped (tl on #361).
+    for (const at of [T0, T0 + 1, T0 + 1, T0 + 1, T0 + 2])
       made.push(await insertTrace(app, b.userId, { startedAt: at }));
     const seen: string[] = [];
     let next: string | null = null;
@@ -291,6 +292,8 @@ describe('GET /obs/traces (FR-T7)', () => {
     } while (next !== null);
     expect(seen).toHaveLength(5);
     expect(new Set(seen)).toEqual(new Set(made));
+    // In the same order as one unpaged list.
+    expect(seen).toEqual(ids(await list(b)));
   });
 
   it('refuses a malformed cursor, time or status', async () => {

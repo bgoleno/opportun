@@ -1,16 +1,20 @@
 // The AI trace dashboard (FR-T7, https://github.com/bgoleno/opportun/issues/347): the list, its
 // filters and conversation groups, the empty state while collection is off, and one trace's
 // waterfall with its span details and links.
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mockApi, renderWithProviders } from '@/test/render';
 import type { SpanView, TraceFilters, TraceView } from './api';
 import { TraceDetailPage } from './TraceDetail';
 import { TracesPage } from './TracesPage';
 
 const T0 = Date.UTC(2026, 10, 1, 12, 0, 0);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const trace = (over: Partial<TraceView> = {}): TraceView => ({
   traceId: '0af7651916cd43dd8448eb211c80319c',
@@ -156,6 +160,30 @@ describe('TracesPage', () => {
     expect(within(list).getAllByRole('listitem')).toHaveLength(2);
     expect(calls.some((c) => c.search.includes('cursor=c1'))).toBe(true);
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+  });
+
+  it('reads a time range once: Load more pages through the same window', async () => {
+    // A range becomes a start time when the list is first read. If Load more took "now" again,
+    // the window would move forward and the traces between the two starts would be skipped
+    // (tl on https://github.com/bgoleno/opportun/pull/361).
+    let clock = Date.UTC(2026, 10, 2, 9, 0, 0);
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const { calls } = mockApi({
+      'GET /obs/traces': (call: { search: string }) =>
+        new URLSearchParams(call.search).get('cursor') === 'c1'
+          ? { collect: true, items: [trace({ traceId: 'd'.repeat(32) })], next: null }
+          : { collect: true, items: [trace()], next: 'c1' },
+      'GET /obs/traces/filters': FILTER_VALUES,
+    });
+    renderWithProviders(<Harness initial={{ range: '24h' }} />);
+    const more = await screen.findByRole('button', { name: 'Load more' });
+    clock += 3_600_000;
+    await userEvent.setup().click(more);
+    await waitFor(() => expect(calls.filter((c) => c.path === '/obs/traces')).toHaveLength(2));
+    const [first, second] = calls
+      .filter((c) => c.path === '/obs/traces')
+      .map((c) => new URLSearchParams(c.search).get('from'));
+    expect(second).toBe(first);
   });
 
   it('while collection is off, tells an admin where it is turned on, without a link yet', async () => {
