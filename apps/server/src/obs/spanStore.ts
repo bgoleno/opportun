@@ -215,6 +215,16 @@ export async function flushBatch(
   opts: { chunkSize?: number; stillBound?: () => boolean } = {},
 ): Promise<void> {
   const size = opts.chunkSize ?? SPAN_FLUSH_CHUNK;
+  // Each trace's roots in the batch, by position. A root ends last, so it often comes in a later
+  // chunk than the spans it holds; an earlier chunk keeps its room under the cap, as one
+  // transaction over the whole batch did, or a capped trace would hold its cap plus its root.
+  const roots = new Map<string, { at: number; p: Pending }[]>();
+  batch.forEach((p, at) => {
+    if (!p.root) return;
+    const list = roots.get(p.span.traceId) ?? [];
+    list.push({ at, p });
+    roots.set(p.span.traceId, list);
+  });
   let failure: unknown;
   for (let i = 0; i < batch.length; i += size) {
     if (i > 0) {
@@ -222,8 +232,13 @@ export async function flushBatch(
       if (opts.stillBound?.() === false) break;
     }
     const chunk = batch.slice(i, i + size);
+    const end = i + size;
+    const rootsLater = (traceId: string): Pending[] =>
+      (roots.get(traceId) ?? []).filter((r) => r.at >= end).map((r) => r.p);
     try {
-      await runSuppressed(() => withTransaction(db, (tx) => writeBatch(tx, chunk, now)));
+      await runSuppressed(() =>
+        withTransaction(db, (tx) => writeBatch(tx, chunk, now, rootsLater)),
+      );
     } catch (err) {
       for (let j = 0; j < chunk.length; j++) countSpanDrop('buffer_full');
       failure ??= err;
@@ -263,7 +278,16 @@ function addSpan(row: TraceRow, p: Pending): void {
   if (row.origin === OTHER && p.origin !== undefined) row.origin = p.origin;
 }
 
-export async function writeBatch(tx: Exec, batch: Pending[], now: number): Promise<void> {
+/**
+ * Writes one chunk of kept spans. `rootsLater` gives a trace's roots that come in a later chunk of
+ * the same flush, whose room under the cap this chunk keeps.
+ */
+export async function writeBatch(
+  tx: Exec,
+  batch: Pending[],
+  now: number,
+  rootsLater: (traceId: string) => Pending[] = () => [],
+): Promise<void> {
   // A user deleted since their span started takes its spans along (the rows cascade with it).
   const userIds = [...new Set(batch.flatMap((p) => [p.userId, p.traceUserId]))];
   const known = new Set(
@@ -327,7 +351,10 @@ export async function writeBatch(tx: Exec, batch: Pending[], now: number): Promi
     // room the cap leaves, in the order they ended.
     const roots = own.filter((p) => p.root);
     const rest = own.filter((p) => !p.root);
-    const room = Math.max(0, TRACE_SPAN_CAP - (row.spanCount ?? 0) - roots.length);
+    const later = rootsLater(traceId).filter(
+      (p) => p.userId === row.userId && p.traceUserId === row.userId,
+    ).length;
+    const room = Math.max(0, TRACE_SPAN_CAP - (row.spanCount ?? 0) - roots.length - later);
     const taken = [...roots, ...rest.slice(0, room)];
     if (taken.length < own.length) {
       row.truncated = true;

@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { obsSpans, obsTraces } from '../src/db/schema';
-import { flushBatch, type Pending } from '../src/obs/spanStore';
+import { flushBatch, type Pending, TRACE_SPAN_CAP } from '../src/obs/spanStore';
 import { useApi } from './api';
 
 const boot = useApi();
@@ -219,6 +219,8 @@ export async function rows(app: App, a: string, b: string) {
   return { traces, spans };
 }
 
+const childId = (i: number) => `3${i.toString(16).padStart(15, '0')}`;
+
 describe('the span flush writes the same rows (#375)', () => {
   it.each([1, 2, 3, 5, 25])('in chunks of %i, as main 5dd98ff wrote them', async (chunkSize) => {
     const { app, a, b } = await boot();
@@ -227,4 +229,49 @@ describe('the span flush writes the same rows (#375)', () => {
     await flushBatch(app.db, second!, T + 10_000, { chunkSize });
     expect(rounded(await rows(app, a.userId, b.userId))).toEqual(rounded(EXPECTED));
   });
+
+  // A trace over its cap, its root ending last (the buffer holds it past its cap): written in one
+  // transaction, the root is kept and the other spans fill the rest of the cap. In chunks, the root
+  // comes in the last one, after the cap has filled, so the earlier chunks keep its room.
+  it.each([25, TRACE_SPAN_CAP + 1])(
+    'keeps a capped trace at its cap in chunks of %i',
+    async (chunkSize) => {
+      const { app, a, b } = await boot();
+      const root = '2000000000000000';
+      const capped: Pending[] = [];
+      for (let i = 0; i < TRACE_SPAN_CAP; i++) {
+        capped.push({
+          span: span(TRACE_C, childId(i), root, 'GET', 'client', i, 1, {
+            'http.request.method': 'GET',
+          }),
+          userId: a.userId,
+          traceUserId: a.userId,
+          root: false,
+        });
+      }
+      capped.push({
+        span: span(TRACE_C, root, null, 'invoke_workflow discovery_run', 'internal', 0, 9_000, {
+          'gen_ai.operation.name': 'invoke_workflow',
+          'gen_ai.agent.name': 'discovery_run',
+        }),
+        userId: a.userId,
+        traceUserId: a.userId,
+        origin: 'job discovery.run',
+        root: true,
+      });
+      await flushBatch(app.db, capped, T + 20_000, { chunkSize });
+      const { traces, spans } = await rows(app, a.userId, b.userId);
+      expect(spans).toHaveLength(TRACE_SPAN_CAP);
+      expect(spans.some((s) => s.spanId === root)).toBe(true);
+      // The spans kept are the root and the first to end, as in one transaction.
+      expect(spans.some((s) => s.spanId === childId(TRACE_SPAN_CAP - 1))).toBe(false);
+      expect(traces).toEqual([
+        expect.objectContaining({
+          spanCount: TRACE_SPAN_CAP,
+          truncated: true,
+          workflow: 'discovery_run',
+        }),
+      ]);
+    },
+  );
 });

@@ -411,23 +411,16 @@ describe('the span store (#344)', () => {
       }
     });
     await flushSpans();
-    // The other spans stop at the cap, counting the root when it is in the same flush; the root
-    // ends last and is kept whatever the cap (#366), so a trace that filled before it ended holds
-    // the cap plus its root. Which of the two depends on when the flushes ran.
-    const stored = await spans(app);
-    expect(stored.length).toBeGreaterThanOrEqual(TRACE_SPAN_CAP);
-    expect(stored.length).toBeLessThanOrEqual(TRACE_SPAN_CAP + 1);
-    expect(stored.filter((s) => s.parentSpanId !== null).length).toBeLessThanOrEqual(
-      TRACE_SPAN_CAP,
-    );
+    expect(await countRows(app, obsSpans)).toBe(TRACE_SPAN_CAP);
     expect(await traces(app)).toEqual([
       expect.objectContaining({
-        spanCount: stored.length,
+        spanCount: TRACE_SPAN_CAP,
         truncated: true,
-        // The trace keeps its name and its root.
+        // The root ends last, and is kept anyway: the trace keeps its name and its root.
         workflow: 'discovery_run',
       }),
     ]);
+    const stored = await spans(app);
     const root = stored.find((s) => s.name === 'invoke_workflow discovery_run');
     expect(root).toMatchObject({ parentSpanId: null });
     for (const s of stored) if (s !== root) expect(s.parentSpanId).toBe(root!.spanId);
