@@ -1182,9 +1182,15 @@ so a mistake in code fails CI instead of passing in silence.
   lines only (`at ...`), and only when the stack's header is the one for the error's current
   message: a message reassigned after its stack was formatted gives no frames, rather than a
   miscount that would read message lines as frames
-  (https://github.com/bgoleno/opportun/issues/381). A frame inside the install root keeps its
-  function name and its path relative to the root. Each run of frames outside it is one fixed
-  `at <external>`, with no name and no path. Every other line of a stack, where a message can
+  (https://github.com/bgoleno/opportun/issues/381). A frame in the app's own code, which
+  is a file under the install root and not under any `node_modules` folder there, keeps its
+  function name and its path relative to the root. Any other frame (Node's own, a builtin's, a
+  dependency's, wherever it is installed) is not the app's: each run of them is one fixed
+  `at <external>`, with no name and no path, so they cannot fill the 20-frame cap before the
+  app's own frames (https://github.com/bgoleno/opportun/issues/399). An error whose message has
+  a `: ` past 4,096 characters, such as a validation error with many issues as its cause, gets
+  the whole-message reading only and logs no frames (a cost cap on the header search). Every
+  other line of a stack, where a message can
   quote data, is dropped. The store and the export carry no stack. The server's own crashes
   and warnings take the same path: its process handlers log an uncaught exception or rejection
   as one gated line, and a warning as its type and code only. **One known exception:** a
