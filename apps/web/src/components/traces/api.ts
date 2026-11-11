@@ -51,6 +51,8 @@ export interface SpanView {
 export interface TraceList {
   /** Whether collection is on now. Traces collected earlier are listed either way. */
   collect: boolean;
+  /** Whether collection can be turned on here at all: false on the demo (#364). */
+  collectAvailable: boolean;
   items: TraceView[];
   next: string | null;
 }

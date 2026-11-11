@@ -77,7 +77,13 @@ export function TracesPage({ isAdmin, filters, onFiltersChange }: TracesPageProp
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4">
-          {collect === false ? <CollectOff isAdmin={isAdmin} hasTraces={items.length > 0} /> : null}
+          {collect === false ? (
+            <CollectOff
+              isAdmin={isAdmin}
+              hasTraces={items.length > 0}
+              available={pages[0]?.collectAvailable !== false}
+            />
+          ) : null}
           <Filters filters={filters} onChange={onFiltersChange} />
           {filters.conversation !== undefined ? (
             <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -143,7 +149,26 @@ export function TracesPage({ isAdmin, filters, onFiltersChange }: TracesPageProp
  * card until FR-T2 (https://github.com/bgoleno/opportun/issues/342), so an admin gets the words
  * and no link: whichever of FR-T2 and FR-T7 merges second adds the link (tl on #347).
  */
-function CollectOff({ isAdmin, hasTraces }: { isAdmin: boolean; hasTraces: boolean }) {
+function CollectOff({
+  isAdmin,
+  hasTraces,
+  available,
+}: {
+  isAdmin: boolean;
+  hasTraces: boolean;
+  available: boolean;
+}) {
+  // On the demo no admin can turn collection on (#360), so "off" would be untrue there and an
+  // admin's switch would not exist (https://github.com/bgoleno/opportun/issues/364).
+  if (!available) {
+    return (
+      <div role="status" className="rounded-md border bg-muted/50 p-3 text-sm">
+        <p className="font-medium">
+          Collection is not available on this deployment, so no traces are recorded here.
+        </p>
+      </div>
+    );
+  }
   return (
     <div role="status" className="rounded-md border bg-muted/50 p-3 text-sm">
       <p className="font-medium">Collection is off, so no new traces are being recorded.</p>
