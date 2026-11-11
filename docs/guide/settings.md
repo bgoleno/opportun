@@ -147,7 +147,8 @@ truncated.
 
 **Collection is off by default.** An administrator turns it on for the whole instance. While it
 is off, the page says so and nothing new is recorded; traces recorded earlier are still shown
-until they age out.
+until they age out. On the demo deployment collection is not available at all, and the page
+says that instead.
 
 ## Security
 
@@ -289,7 +290,8 @@ the cursor). The same numbers are in the table under the chart, one row per step
 
 **Collection is off by default.** An administrator turns it on for the whole instance. While it
 is off the page says so and nothing new is recorded; points recorded earlier are still shown
-until they age out.
+until they age out. On the demo deployment collection is not available at all, and the page
+says that instead.
 
 <!-- nav:bottom -->
 
