@@ -579,11 +579,23 @@ function migrateSqliteDir(
 const AUTOCHECKPOINT_PAGES = 100;
 
 /**
+ * The main connection's automatic checkpoint while the background checkpointer runs: a
+ * backstop, not off. The worker checkpoints at CHECKPOINT_PAGES; under a write rate it cannot
+ * keep up with, SQLite restarts the WAL only when a writer finds all of it copied, and with the
+ * main connection's checkpoint off the WAL grew 5 MB a second. At 2,000 pages it held at 8 MB,
+ * and while the worker keeps up it never fires (tl on #393).
+ */
+const BACKSTOP_PAGES = 2_000;
+
+/** How long closeDatabase waits for the worker to stop before closing the main connection. */
+const CHECKPOINTER_CLOSE_WAIT_MS = 2_000;
+
+/**
  * Starts the background checkpointer for the main connection `sqlite` (#383), after its
- * migrations, and turns the main connection's automatic checkpoint off while it runs. The
- * worker's connection gets the main one's sync settings. When the worker stops, at close or by
- * failing, automatic checkpoints come back on at once, so the WAL never grows without bound;
- * only a failure is logged.
+ * migrations, and moves the main connection's automatic checkpoint to the backstop while it
+ * runs. The worker's connection gets the main one's sync settings and page size. When the
+ * worker stops, at close or by failing, the main connection's checkpoint goes back to its
+ * default at once; only a failure is logged.
  */
 function backgroundCheckpointer(
   sqlite: Sqlite,
@@ -593,10 +605,11 @@ function backgroundCheckpointer(
   const pragmas = (['synchronous', 'fullfsync', 'checkpoint_fullfsync'] as const).map(
     (name) => `${name} = ${String(sqlite.pragma(name, { simple: true }))}`,
   );
-  sqlite.pragma('wal_autocheckpoint = 0');
+  sqlite.pragma(`wal_autocheckpoint = ${BACKSTOP_PAGES}`);
   return startBackgroundCheckpointer(file, {
     pragmas,
-    ...(opts.checkpointIntervalMs === undefined ? {} : { intervalMs: opts.checkpointIntervalMs }),
+    pageSize: Number(sqlite.pragma('page_size', { simple: true })),
+    ...opts.checkpointerTuning,
     onStopped: ({ unexpected, err }) => {
       if (sqlite.open) sqlite.pragma(`wal_autocheckpoint = ${AUTOCHECKPOINT_PAGES}`);
       if (unexpected) {
@@ -825,10 +838,20 @@ export interface ConnectOptions {
   /**
    * SQLite only: run the background WAL checkpointer (db/checkpointer.ts, #383). The server
    * takes it from OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT (the SQLite DbConfig); a test may set
-   * it here, with a shorter interval.
+   * it here.
    */
   backgroundCheckpoint?: boolean;
-  checkpointIntervalMs?: number;
+  /**
+   * Tests only: the checkpointer's thresholds and poll, smaller, and a page size other than the
+   * database's (the worker then cannot read the WAL's size and stops, as on a format it does
+   * not know).
+   */
+  checkpointerTuning?: {
+    maxPages?: number;
+    maxWaitMs?: number;
+    pollMs?: number;
+    pageSize?: number;
+  };
 }
 
 async function openPostgres(cfg: PostgresConfig, opts: ConnectOptions): Promise<PgHandle> {
@@ -1413,8 +1436,16 @@ export async function pingDatabase(handle: DbHandle): Promise<boolean> {
 /** Closes the connection (SQLite) or ends the pool (Postgres); the handle is unusable after. */
 export async function closeDatabase(handle: DbHandle): Promise<void> {
   if (handle.dialect === 'sqlite') {
-    // The worker's connection closes first, so the main one is the last to touch the WAL.
-    await handle.checkpointer?.stop();
+    // The worker's connection closes first, so the main one is the last to touch the WAL. A
+    // worker inside a native call cannot stop until it returns (a disk that does not answer),
+    // so the wait is bounded and the main connection closes anyway; that worker still holds the
+    // process's exit until its call returns, as the main connection would on the same disk.
+    if (handle.checkpointer !== undefined) {
+      await Promise.race([
+        handle.checkpointer.stop(),
+        new Promise((resolve) => setTimeout(resolve, CHECKPOINTER_CLOSE_WAIT_MS).unref()),
+      ]);
+    }
     handle.sqlite.close();
   } else await handle.pool.end();
 }

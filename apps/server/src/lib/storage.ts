@@ -12,12 +12,15 @@
    produced by resolveInsideRoot, or is DATA_DIR / an operator key file from config. */
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  closeSync,
   constants,
   copyFileSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   realpathSync,
   rmSync,
 } from 'node:fs';
@@ -531,6 +534,30 @@ export function readOperatorBytes(absPath: string): Uint8Array | undefined {
     return new Uint8Array(readFileSync(absPath));
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * `length` bytes of an operator file from `position` (fewer when the file is shorter), or
+ * undefined when it is not a regular file or cannot be read. The background WAL checkpointer
+ * reads SQLite's -shm index header this way every 100 ms (db/checkpointWorker.ts, #383), so a
+ * slice is read without the whole file.
+ */
+export function readOperatorBytesAt(
+  absPath: string,
+  position: number,
+  length: number,
+): Buffer | undefined {
+  if (!isOperatorFile(absPath)) return undefined;
+  let fd: number | undefined;
+  try {
+    fd = openSync(absPath, 'r');
+    const bytes = Buffer.alloc(length);
+    return bytes.subarray(0, readSync(fd, bytes, 0, length, position));
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
   }
 }
 
