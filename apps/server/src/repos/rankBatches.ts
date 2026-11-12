@@ -29,12 +29,15 @@ export const RANK_BATCH_MAX = 500;
 export const SUBMITTING_STALE_MS = 15 * 60_000;
 
 /**
- * How long a batch's estimate is held against the budget, from sending (tl's blocking 1 on #444):
- * a provider ends a batch within a day, and after that the money is spent or it is not. Held for as
+ * How long a batch's estimate is held against the budget while it is in flight, from sending (tl's
+ * blocking 1 and, at 1d49105, blocking 2 on #444). A provider ends a batch 24 hours from taking it,
+ * and a collect after the first hour comes only every 30 minutes, so a hold of 24 hours would end
+ * before a batch that ran its whole day is collected, and its charged results would count
+ * nowhere until then. 48 hours leaves a day for collecting after the provider's end. Held for as
  * long as the row is in flight, a batch nobody can collect would keep live ranking and tagging out
  * of budget they have. The real cost is still recorded on the day the batch is collected.
  */
-export const HOLD_MS = 24 * 3_600_000;
+export const HOLD_MS = 48 * 3_600_000;
 
 /** The task whose calls are batched, and whose history sizes a batch's estimate. */
 const RANK_TASK = 'discovery.rank';

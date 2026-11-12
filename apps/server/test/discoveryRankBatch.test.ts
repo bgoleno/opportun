@@ -795,16 +795,73 @@ describe('a batch that cannot be collected (tl, blocking 1)', () => {
     expect(await submit(app, a)).toMatchObject({ status: 'submitted', requests: 2 });
   });
 
-  it('the estimate is held for 24 hours from sending, not for as long as the batch is out', async () => {
+  it('the estimate is held for 48 hours from sending, past the provider’s own 24, not for as long as the batch is out', async () => {
     const { app, a } = await boot();
     await batching(app, a);
     await discover(app, a, 1);
     await submit(app, a);
     const [batch] = await batchRows(app, a);
-    vi.setSystemTime(Date.now() + 23 * 3_600_000);
+    // A batch that ran its whole day and is not collected yet is still held (tl at 1d49105).
+    vi.setSystemTime(Date.now() + 25 * 3_600_000);
     expect(await discoverySpentTodayUsd(app.db, ctxOf(a))).toBeCloseTo(batch!.estCostUsd, 12);
-    vi.setSystemTime(Date.now() + 2 * 3_600_000);
+    vi.setSystemTime(Date.now() + 24 * 3_600_000);
     expect(await discoverySpentTodayUsd(app.db, ctxOf(a))).toBe(0);
+  });
+
+  it('a result the provider did not charge (an error) records no cost when its applying fails', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    await submit(app, a);
+    fake!.end(1, (r): BatchResultItem => ({
+      customId: r.customId,
+      kind: 'errored',
+      invalidRequest: false,
+      detail: 'made up',
+    }));
+    setRaceHook((p) => {
+      if (p === 'rankBatch.applying') throw new Error('database busy');
+    });
+    const out = await collectRankBatch(app.db, (await batchRows(app, a))[0]!.id, {
+      ...app.jobs.services,
+      log: { error: vi.fn(), warn: vi.fn() } as unknown as NonNullable<
+        typeof app.jobs.services.log
+      >,
+    });
+    setRaceHook(undefined);
+    expect(out).toMatchObject({ status: 'collected', errors: 1 });
+    expect(await rankRows(app, a)).toEqual([]);
+  });
+
+  it('a charged result whose applying fails after its cost row keeps its cost; it waits again, and the others are applied', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 3);
+    await submit(app, a);
+    fake!.end(1, succeeded(52));
+    let n = 0;
+    setRaceHook((p) => {
+      // The second result's transaction throws once, after its cost row was written.
+      if (p === 'rankBatch.cost_recorded' && ++n === 2) throw new Error('database busy');
+    });
+    const out = await collectRankBatch(app.db, (await batchRows(app, a))[0]!.id, {
+      ...app.jobs.services,
+      log: { error: vi.fn(), warn: vi.fn() } as unknown as NonNullable<
+        typeof app.jobs.services.log
+      >,
+    });
+    setRaceHook(undefined);
+    expect(out).toMatchObject({ status: 'collected', ranked: 2, errors: 1, returned: 1 });
+    // One cost row for each result the provider charged: the failed one's on its own, as an error.
+    const rows = await rankRows(app, a);
+    expect(rows).toHaveLength(3);
+    expect(rows.filter((r) => r.status === 'error')).toMatchObject([{ error: 'apply_failed' }]);
+    const { batchRunRecord } = await import('@opportun/ai');
+    const each = batchRunRecord(DISCOVERY_RANK_KIND, POLICY, USAGE).estCostUsd;
+    expect(await discoverySpentTodayUsd(app.db, ctxOf(a))).toBeCloseTo(3 * each, 12);
+    const left = (await results(app, a)).filter((r) => r.aiScore === null);
+    expect(left).toHaveLength(1);
+    expect(left[0]).toMatchObject({ rankSkipReason: 'batch_waiting', rankBatchId: null });
   });
 
   it('a result that cannot be applied does not stop the others: it is logged, counted, and waits again', async () => {
@@ -829,7 +886,10 @@ describe('a batch that cannot be collected (tl, blocking 1)', () => {
     const left = (await results(app, a)).filter((r) => r.aiScore === null);
     expect(left).toHaveLength(1);
     expect(left[0]).toMatchObject({ rankSkipReason: 'batch_waiting', rankBatchId: null });
-    expect(await rankRows(app, a)).toHaveLength(2);
+    // The provider charged for all three: the one that failed has its cost row too, as an error.
+    const rows = await rankRows(app, a);
+    expect(rows).toHaveLength(3);
+    expect(rows.filter((r) => r.status === 'error')).toHaveLength(1);
   });
 });
 
@@ -893,6 +953,35 @@ describe("the rest of tl's blocking points", () => {
     await writeSetting(app.db, ctxOf(a), budgetKey(a.userId), { perTaskDailyUsd: 0 });
     await app.db.delete(rankBatches).run();
     expect(await submit(app, a)).toMatchObject({ status: 'no_room' });
+  });
+
+  it('today’s live ranking spend counts against the per-task limit too (tl at 1d49105)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await writeDiscoveryBudget(app.db, ctxOf(a), 100);
+    await discover(app, a, 3);
+    expect(await submit(app, a)).toMatchObject({ requests: 3 });
+    const one = (await batchRows(app, a))[0]!.estCostUsd / 3;
+    await app.db.delete(rankBatches).run();
+    // A limit of three estimates, with one and a half spent on live ranking today: one is left.
+    await writeSetting(app.db, ctxOf(a), budgetKey(a.userId), { perTaskDailyUsd: one * 3 });
+    await app.db
+      .insert(taskRuns)
+      .values({
+        id: newId(),
+        userId: a.userId,
+        taskKey: DISCOVERY_RANK_KIND,
+        provider: 'anthropic',
+        model: POLICY.model,
+        inputTokens: 1,
+        outputTokens: 1,
+        estCost: one * 1.5,
+        durationMs: 1,
+        status: 'ok',
+        createdAt: Date.now(),
+      })
+      .run();
+    expect(await submit(app, a)).toMatchObject({ status: 'submitted', requests: 1 });
   });
 
   it('a posting deleted while its batch runs: the result is counted and logged, its cost not recorded (blocking 5)', async () => {
@@ -1103,7 +1192,8 @@ describe("tl's smaller points", () => {
         await markBatchSubmitted(app.db, batch!.id, fake!.sent[0]!.batchId);
       }
     });
-    await sweepRankBatches(app.db, undefined);
+    // It left that batch alone, so it counts none as failed (tl's optional point at 1d49105).
+    expect(await sweepRankBatches(app.db, undefined)).toMatchObject({ failed: 0 });
     setRaceHook(undefined);
     expect((await batchRows(app, a))[0]).toMatchObject({ state: 'submitted' });
     expect((await results(app, a))[0]!.rankBatchId).toBe(batch!.id);
@@ -1120,6 +1210,23 @@ describe("tl's smaller points", () => {
       await collectRankBatch(app.db, batch!.id, app.jobs.services, { userId: b.userId }),
     ).toEqual({ status: 'not_in_flight' });
     expect((await results(app, a))[0]!.aiScore).toBeNull();
+  });
+
+  it("the collect job passes its own user: run as another user's, it collects nothing (tl at 1d49105)", async () => {
+    const { app, a, b } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    await submit(app, a);
+    fake!.end(1, succeeded(60));
+    const [batch] = await batchRows(app, a);
+    await enqueue(app.db, RANK_BATCH_COLLECT_KIND, { batchId: batch!.id }, { userId: b.userId });
+    await app.jobs.drain();
+    expect((await results(app, a))[0]!.aiScore).toBeNull();
+    expect((await batchRows(app, a))[0]).toMatchObject({ state: 'submitted' });
+    // The same job as the batch's own user collects it.
+    await enqueue(app.db, RANK_BATCH_COLLECT_KIND, { batchId: batch!.id }, { userId: a.userId });
+    await app.jobs.drain();
+    expect((await results(app, a))[0]!.aiScore).toBe(60);
   });
 });
 

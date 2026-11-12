@@ -146,6 +146,7 @@ export async function failStaleSubmitting(
 ): Promise<number> {
   const stale = await listStaleSubmitting(db, now);
   await racePoint('rankBatch.stale_listed');
+  let failed = 0;
   for (const batch of stale) {
     const ctx: UserCtx = { userId: batch.userId, isAdmin: false };
     const batching = await readRankBatching(db, ctx);
@@ -159,13 +160,15 @@ export async function failStaleSubmitting(
       { scope: lockFor(ctx) },
     );
     if (returned === null) continue;
+    failed += 1;
     log?.warn(
       { 'opportun.rank_batch.id': batch.id, 'opportun.count.returned': returned },
       'a ranking batch was never confirmed as sent: its postings wait again, and may be sent twice',
     );
     await takeWaiting(db, ctx, batching);
   }
-  return stale.length;
+  // Only those it failed: a batch whose id was saved since it was listed is left, and not counted.
+  return failed;
 }
 
 export type SubmitOutcome =
@@ -205,7 +208,9 @@ export async function submitRankBatch(
   const ids = await listBatchWaitingIds(db, ctx);
   if (ids.length === 0) return { status: 'nothing_waiting' };
   // The room is the discovery budget's, bounded by what is left of the router's per-task daily
-  // limit for ranking, holds counted (tl's blocking 4 on #444): a live call stops there too.
+  // limit for ranking, holds counted (tl's blocking 4 on #444): a live call stops there too. The
+  // hold is 0 here today (a send goes on only with no batch in flight, and only those are held),
+  // but it keeps this bound right if that check ever moves: keep it (tl at 1d49105).
   const taskLeft =
     client.perTaskDailyUsd -
     ((await spentTodayUsd(db, ctx, RANK_TASK)) + (await batchHoldUsd(db, ctx)));
@@ -348,6 +353,7 @@ async function applyBatchResult(
         ...(parsed.ok ? {} : { status: 'error' as const, error: parsed.reason }),
       }),
     );
+    await racePoint('rankBatch.cost_recorded');
     if (!parsed.ok) {
       await endBatchWait(tx, ctx, item.customId, 'invalid_output');
       return 'invalid_output';
@@ -455,6 +461,22 @@ export async function collectRankBatch(
         'applying a ranking batch result failed',
       );
       applied = 'errors';
+      // The rollback took a succeeded result's cost row with it, but the provider charged for it
+      // (tl's blocking 1 at 1d49105 on #444): it is recorded on its own, with an error status and
+      // no change to the posting, so the money counts against the budget. The posting waits
+      // again, and the batch that sends it next records its own charge, as any other call's.
+      if (item.kind === 'succeeded') {
+        await withTransaction(db, async (tx) => {
+          await recordTaskRun(
+            tx,
+            ctx,
+            batchRunRecord('discovery.rank', policy, item.usage, {
+              status: 'error',
+              error: 'apply_failed',
+            }),
+          );
+        });
+      }
     }
     tally.set(applied, (tally.get(applied) ?? 0) + 1);
     await racePoint('rankBatch.result_applied');
