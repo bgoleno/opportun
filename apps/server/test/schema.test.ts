@@ -33,6 +33,7 @@ const EXPECTED_TABLES = [
   'opportunity_dedupe_candidates',
   'profiles',
   'prompts',
+  'rank_batches',
   'resume_match_reports',
   'resume_rules',
   'resume_sends',

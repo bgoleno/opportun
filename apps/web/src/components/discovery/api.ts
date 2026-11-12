@@ -44,6 +44,8 @@ export interface DiscoveryResult {
    * used its turn; null when it is not waiting.
    */
   rankDeferredAt: number | null;
+  /** When the batch its ranking is in was sent (#441); null when it is in none. */
+  rankBatchSentAt: number | null;
   resolution: Resolution;
   resolvedSourceRef: string | null;
   disposition: Disposition;
