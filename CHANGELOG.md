@@ -11,8 +11,7 @@ milestone's work was merged.
 
 - **Three shipped prompts were reordered so Anthropic can cache them.** An automatic upgrade step rewrites the system default
   of each of these tasks in place, and only while it is still exactly the text the previous
-  release shipped: `discovery.company_tags` (step 0060), `discovery.rank` (0061) and
-  `comms.classify` (0063). The wording is the same but for a few words (the ranking prompt
+  release shipped: `discovery.company_tags` (step 0060; Postgres 0042), `discovery.rank` (0061; Postgres 0043) and `comms.classify` (0063; Postgres 0045). The wording is the same but for a few words (the ranking prompt
   and the classify prompt each gain one closing line after the posting or message, and
   `comms.classify` rewords two references to "above"); the order changed, so the part that is
   the same for every call comes first. A prompt version you made yourself is a separate row
@@ -35,8 +34,8 @@ milestone's work was merged.
   still works, without the new context.
 - **A new AI call can happen the first night after upgrading, and it costs money.** With an AI
   key and budget room, the nightly sweeps make one call per active role target that has no list
-  of title variants (about $0.01 each, at 05:30), and tag candidate companies with an industry
-  in batches of 20 (at 05:45). Both skip a user with no AI key. To avoid the
+  of title variants (about $0.01 each, at 05:30 server time), and tag candidate companies with an industry
+  in batches of 20 (at 05:45 server time). Both skip a user with no AI key. To avoid the
   first: write a title variants list yourself under **Settings > Role targets**. To limit both:
   lower the discovery budget under **Settings > AI**.
 
@@ -58,14 +57,14 @@ milestone's work was merged.
   [#218](https://github.com/bgoleno/opportun/issues/218)).
 - **The discovery budget now makes a posting wait, not skip.** Over the day's budget (default
   $1.00, set under **Settings > AI**), a posting reads **Waiting for budget** and is ranked on a
-  later UTC day, oldest first, instead of ending as skipped. On upgrade, a posting that was
+  later UTC day, best title match first and oldest among equals, instead of ending as skipped. On upgrade, a posting that was
   refused for budget and has no score joins the wait, so after the upgrade the day's budget can
   go on that backlog. Postings that arrived with no AI key were the same: they are ranked once a
   key works, best title match first. While companies wait for an industry tag, ranking stops at
   90% of the budget and leaves the rest for tagging (never less than half the budget, and at
   least five ranking calls' worth for tagging); with none waiting it can use all of it. If the
   provider rejects your key (a 401), the hourly calls stop and the cards say so until you add a
-  working key or press **Validate**. **Undo** on a dismissed posting that was never ranked now
+  working key or press **Validate** and it succeeds. **Undo** on a dismissed posting that was never ranked now
   joins the wait. Raise or lower the budget to taste
   ([#214](https://github.com/bgoleno/opportun/issues/214),
   [#261](https://github.com/bgoleno/opportun/issues/261),
@@ -192,8 +191,7 @@ milestone's work was merged.
   Messages already ingested stay where they are. There is no switch; restore one from the
   Blocked tab ([#392](https://github.com/bgoleno/opportun/issues/392)).
 - **An opportunity can move from any chain stage to any other in one move.** In process can go
-  straight back to Preparing; nothing tied to a later stage is lost. A refused move names where it
-  can go, and Closed and Dismissed still leave only through **Reopen**. On the board, a keyboard
+  straight back to Preparing; nothing tied to a later stage is lost. Closed and Dismissed still leave only through **Reopen**, and a move out of one of them says so. On the board, a keyboard
   drop that is refused is announced as not moved, with the reason, not as dropped on the column
   ([#397](https://github.com/bgoleno/opportun/issues/397),
   [#413](https://github.com/bgoleno/opportun/issues/413)).
@@ -202,8 +200,7 @@ milestone's work was merged.
 - **Assisted apply, only where it is on.** A refused **Apply** button looks dimmed and says why;
   a new draft starts filled from your profile, account and last application, with where each
   value came from and a **Save to my profile** tick (off by default); **Settings > Profile** has
-  an **Application details** card (first and last name, country, city, school, degree, how you
-  heard, LinkedIn, website, links); the extension fills the city and how-you-heard text questions
+  an **Application details** card (first and last name, country, school, degree, how you heard, LinkedIn, website, links; the city is your profile's Location); the extension fills the city and how-you-heard text questions
   and tells you where to click next; after you apply the panel leads with the outcome; the Resume
   tab shows each resume once with its sends; and a Greenhouse job on a company's own careers page
   is recognised once Greenhouse's API shows one of the company's boards holds it, and then opens
