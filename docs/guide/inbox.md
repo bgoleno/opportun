@@ -65,7 +65,7 @@ Classification uses prompt caching (the same mechanism as discovery's
 [prompt caching](discovery.md#the-review-queue)). Opportun puts the part of the prompt that is the same
 for every message of a sync first: the instructions, your role targets, the rules for what to
 decide and your open opportunities (the 200 most recently updated, listed by when each was
-created, so one being updated does not change the list). The message itself comes last. The first
+created, so one being updated does not change the list). The message comes after it. The first
 call writes that part to Anthropic's cache and the following calls read it at a tenth of the input
 price. Only Anthropic models are marked, and only when that part is large enough for the model's
 minimum. A new opportunity changes the list, so the next call writes the cache again. A prompt you
