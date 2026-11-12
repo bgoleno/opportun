@@ -125,6 +125,13 @@ milestone's work was merged.
   ([#272](https://github.com/bgoleno/opportun/issues/272),
   [#309](https://github.com/bgoleno/opportun/issues/309),
   [#324](https://github.com/bgoleno/opportun/issues/324)).
+- **Batch ranking is built but off, and hidden.** The server can rank postings in provider
+  batches behind a setting that is off by default and is not in Settings; no provider has a batch
+  client yet, so ranking is still made live whatever the setting. The upgrade adds a table
+  `rank_batches` and three columns on `discovery_results` (step 0064; Postgres 0046) and
+  nothing else changes, so there is nothing to do
+  ([#441](https://github.com/bgoleno/opportun/issues/441),
+  [#358](https://github.com/bgoleno/opportun/issues/358)).
 - **Role targets show an error on a list field that is too long.** An entry over 200 characters
   in Industries, Keywords, Locations or Title variants now says so; before, Save did nothing and
   said nothing ([#243](https://github.com/bgoleno/opportun/issues/243)).
