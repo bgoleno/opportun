@@ -40,16 +40,19 @@ RUN pnpm --filter @opportun/server --prod deploy /out/server \
 # (https://www.postgresql.org/download/linux/debian/). The build fails unless the file holds
 # exactly one primary key with that fingerprint. A stage of its own, so gnupg never ships.
 # Replacing the key (if PGDG ever rotates it) means committing the new file and its
-# fingerprint together, checked against postgresql.org's page.
+# fingerprint together, checked against postgresql.org's page. The fingerprint is written into
+# the RUN line itself, not an ARG, so a --build-arg cannot change what is accepted
+# (https://github.com/bgoleno/opportun/issues/442);
+# apps/server/test/dockerfilePgdg.test.ts holds the file to that, and to fetching nothing from
+# postgresql.org but the apt packages.
 FROM node:${NODE_VERSION}-slim AS pgdg-key
-ARG PGDG_FINGERPRINT=B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8
 COPY deploy/pgdg-ACCC4CF8.asc /pgdg.asc
 RUN apt-get update \
  && apt-get install -y --no-install-recommends gnupg \
  && keys="$(gpg --show-keys --with-colons /pgdg.asc | grep -c '^pub:')" \
  && fpr="$(gpg --show-keys --with-colons /pgdg.asc | awk -F: '$1 == "fpr" { print $10; exit }')" \
- && if [ "$keys" != 1 ] || [ "$fpr" != "$PGDG_FINGERPRINT" ]; then \
-      echo "PGDG key check failed: $keys key(s), fingerprint $fpr, expected $PGDG_FINGERPRINT" >&2; \
+ && if [ "$keys" != 1 ] || [ "$fpr" != "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8" ]; then \
+      echo "PGDG key check failed: $keys key(s), fingerprint $fpr, expected B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8" >&2; \
       exit 1; \
     fi
 
