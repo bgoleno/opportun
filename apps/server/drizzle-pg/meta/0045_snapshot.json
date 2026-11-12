@@ -1,5 +1,5 @@
 {
-  "id": "deb2c884-5d85-47e6-a25e-e79a44957abc",
+  "id": "c1db57ae-15ff-4645-9532-c5fd7a4fd303",
   "prevId": "ff9fe0fc-f309-47f7-8940-970fcafd3931",
   "version": "7",
   "dialect": "postgresql",
@@ -1548,24 +1548,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "rank_batch_id": {
-          "name": "rank_batch_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "rank_batch_basis": {
-          "name": "rank_batch_basis",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "rank_batch_prompt_id": {
-          "name": "rank_batch_prompt_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "resolution": {
           "name": "resolution",
           "type": "text",
@@ -1682,21 +1664,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "discovery_results_rank_batch_idx": {
-          "name": "discovery_results_rank_batch_idx",
-          "columns": [
-            {
-              "expression": "rank_batch_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -1724,19 +1691,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "discovery_results_rank_batch_id_rank_batches_id_fk": {
-          "name": "discovery_results_rank_batch_id_rank_batches_id_fk",
-          "tableFrom": "discovery_results",
-          "tableTo": "rank_batches",
-          "columnsFrom": [
-            "rank_batch_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         },
         "discovery_results_opportunity_id_opportunities_id_fk": {
@@ -4349,133 +4303,6 @@
             "id"
           ],
           "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.rank_batches": {
-      "name": "rank_batches",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "provider": {
-          "name": "provider",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "policy": {
-          "name": "policy",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "provider_batch_id": {
-          "name": "provider_batch_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "request_count": {
-          "name": "request_count",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "est_cost_usd": {
-          "name": "est_cost_usd",
-          "type": "double precision",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "submitted_at": {
-          "name": "submitted_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_checked_at": {
-          "name": "last_checked_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "collected_at": {
-          "name": "collected_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "rank_batches_user_state_idx": {
-          "name": "rank_batches_user_state_idx",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "state",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "rank_batches_user_id_users_id_fk": {
-          "name": "rank_batches_user_id_users_id_fk",
-          "tableFrom": "rank_batches",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },

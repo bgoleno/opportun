@@ -6,18 +6,21 @@
 // A wrong link is worse than no link (the issue's own framing), so a domain is only ever written
 // once verified: the candidate must be fetched and must actually name the company on its own
 // homepage. That is the same bar opportunityEnrich.ts already holds a candidate careers-page
-// domain to, and this reuses its candidateDomains/senderDomain/pageNamesCompany/getPage directly
-// rather than a second implementation that could quietly disagree about what counts as "the
-// company's site". No AI or search lookup is used: a guess that fails verification is discarded,
-// and the company stays unlinked rather than linked wrong.
-import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
+// domain to, and this reuses its candidateDomains/pageNamesCompany/getPage directly rather than a
+// second implementation that could quietly disagree about what counts as "the company's site".
+// The candidates are the domains the company's name gives, in their order: a message's sender
+// decides its own domain, so it is not the company's (as in opportunityEnrich.ts, where a page
+// reached through it is used for that one opportunity only). No AI or search lookup is used: a
+// guess that fails verification is discarded, and the company stays unlinked rather than linked
+// wrong.
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { ACTIVE_PIPELINE_STAGES } from '@opportun/core';
 import type { Db } from '../db/client';
-import { communications, companies, opportunities, settings, users } from '../db/schema';
+import { companies, opportunities, settings, users } from '../db/schema';
 import type { safeFetch } from '../lib/safeFetch';
 import type { UserCtx } from '../repos/base';
-import { candidateDomains, getPage, pageNamesCompany, senderDomain } from './opportunityEnrich';
+import { candidateDomains, getPage, pageNamesCompany } from './opportunityEnrich';
 import { requireService, type JobContext, type JobHandler } from './registry';
 import { enqueue } from './runner';
 
@@ -36,28 +39,6 @@ export async function enqueueCompanyDomainResolve(
     COMPANY_DOMAIN_RESOLVE_KIND,
     { companyId },
     { dedupeKey: companyDomainResolveDedupeKey(companyId), userId },
-  );
-}
-
-/**
- * The earliest outreach mail's From header among any opportunity of this company's (not one
- * particular opportunity's, since a company-level job may be triggered by any of several, or by
- * the backfill with none in particular). The same "oldest first" choice opportunityEnrich.ts's
- * own sourceFrom makes, for the same reason: the first recruiter contact is the one least likely
- * to be a later, unrelated thread.
- */
-async function senderForCompany(db: Db, ctx: UserCtx, companyId: string): Promise<string | null> {
-  return (
-    (
-      await db
-        .select({ from: communications.from })
-        .from(communications)
-        .innerJoin(opportunities, eq(opportunities.id, communications.opportunityId))
-        .where(and(eq(communications.userId, ctx.userId), eq(opportunities.companyId, companyId)))
-        .orderBy(asc(communications.sentAt))
-        .limit(1)
-        .get()
-    )?.from ?? null
   );
 }
 
@@ -81,8 +62,8 @@ export async function resolveCompanyDomain(
     .get();
   if (company === undefined) return { outcome: 'not_found' };
   if (company.domain !== null) return { outcome: 'already_resolved' };
-  const sender = await senderForCompany(db, ctx, companyId);
-  for (const domain of candidateDomains(company.name, senderDomain(sender ?? ''))) {
+  // The name-derived domains only, in their own order, as when there is no message.
+  for (const domain of candidateDomains(company.name, null)) {
     const home = await getPage(fetch, `https://${domain}/`);
     if (home === null || !pageNamesCompany(home.html, company.name)) continue;
     await db

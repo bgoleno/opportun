@@ -1,9 +1,10 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import type { OpportunityView, TimelineItem } from '@/lib/opportunities';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
-import { OpportunityDetail } from './OpportunityDetail';
+import { OpportunityDetail, type OpportunityTab } from './OpportunityDetail';
 
 const NOW = Date.now();
 const DAY = 24 * 60 * 60 * 1000;
@@ -117,9 +118,28 @@ const BASE_RESUME = {
   updatedAt: NOW,
 };
 
+/** The page with its tab held by a parent, as the route holds the URL's `?tab=` (#428). */
+function TabFromParent({ first }: { first: OpportunityTab }) {
+  const [tab, setTab] = useState<OpportunityTab>(first);
+  return (
+    <>
+      <button type="button" onClick={() => setTab('resume')}>
+        Change tab to Resume
+      </button>
+      <OpportunityDetail id="opp-1" tab={tab} />
+    </>
+  );
+}
+
 function setup(
   oppOverride: Partial<OpportunityView> = {},
   extraRoutes: Record<string, unknown> = {},
+  opts: {
+    tab?: OpportunityTab;
+    onTabChange?: (tab: OpportunityTab) => void;
+    /** Render under a parent whose "Change tab to Resume" button changes only the tab prop. */
+    parentChangesTab?: true;
+  } = {},
 ) {
   const opp = { ...OPP, ...oppOverride };
   const api = mockApi({
@@ -168,7 +188,18 @@ function setup(
     ...extraRoutes,
   });
   const user = userEvent.setup();
-  renderWithProviders(<OpportunityDetail id="opp-1" />, { path: '/opportunities/opp-1' });
+  renderWithProviders(
+    opts.parentChangesTab ? (
+      <TabFromParent first={opts.tab ?? 'timeline'} />
+    ) : (
+      <OpportunityDetail
+        id="opp-1"
+        {...(opts.tab === undefined ? {} : { tab: opts.tab })}
+        {...(opts.onTabChange === undefined ? {} : { onTabChange: opts.onTabChange })}
+      />
+    ),
+    { path: '/opportunities/opp-1' },
+  );
   return { api, user };
 }
 
@@ -245,6 +276,27 @@ describe('OpportunityDetail', () => {
     const resume = await screen.findByRole('tabpanel', { name: 'Resume' });
     await within(resume).findByText('No resume for this opportunity yet.');
     expect(resume.querySelector('[data-slot="main-with-rail"]')).not.toBeNull();
+  });
+
+  // https://github.com/bgoleno/opportun/issues/428: the page opens the tab named in the URL, and a
+  // tab change is reported so the URL can follow.
+  it('opens the tab it is given, and reports a tab change', async () => {
+    const changes: OpportunityTab[] = [];
+    const { user } = setup({}, {}, { tab: 'resume', onTabChange: (t) => changes.push(t) });
+    expect(await screen.findByRole('tabpanel', { name: 'Resume' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Resume' })).toHaveAttribute('aria-selected', 'true');
+    await user.click(screen.getByRole('tab', { name: 'Details' }));
+    expect(changes).toEqual(['details']);
+    expect(await screen.findByRole('tabpanel', { name: 'Details' })).toBeInTheDocument();
+  });
+
+  // tl on #431: the path the Assisted apply panel's own link takes, on a page already open.
+  it('follows the tab when it changes on a page already open', async () => {
+    const { user } = setup({}, {}, { tab: 'timeline', parentChangesTab: true });
+    expect(await screen.findByRole('tabpanel', { name: 'Timeline' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Change tab to Resume' }));
+    expect(await screen.findByRole('tabpanel', { name: 'Resume' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Resume' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('adds a meeting from the composer', async () => {
