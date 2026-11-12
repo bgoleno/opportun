@@ -12,7 +12,7 @@ import {
 import type { NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { withTransaction, type Db } from '../db/client';
+import { withTransaction, type Db, type Exec } from '../db/client';
 import { roleTargets } from '../db/schema';
 import { buildAiDeps } from '../lib/ai';
 import { HttpError } from '../lib/errors';
@@ -33,6 +33,7 @@ import {
 } from '../repos/discovery';
 import { keyChangeScope, readKeyChangedAt } from '../repos/discoveryBudget';
 import { resolveDiscoveryPrompt } from '../repos/profile';
+import { setBatchWaiting } from '../repos/rankBatches';
 import { roleTargetLine, roleTargetsText } from './classify';
 import {
   DISCOVERY_RANK_KIND,
@@ -40,6 +41,7 @@ import {
   MULTI_POSTED_SCORE_CAP,
   RANK_WAITING_KIND,
 } from './discoveryKinds';
+import { enqueueRankBatchSubmit, ranksInBatch, SUBMIT_GATHER_MS } from './rankBatchClient';
 import { rankBudgetHasRoom } from './rankBudget';
 import type { JobHandler } from './registry';
 import { enqueue } from './runner';
@@ -88,6 +90,77 @@ function storedRationale(out: RankOutput, multiPosted: boolean): string {
   return (multiPosted ? `${MULTI_POSTED_PREFIX} ${text}` : text).slice(0, MAX_RATIONALE_CHARS);
 }
 
+/** What a ranking call sends: built once, for a live call and a batch request alike (#441). */
+export interface RankCall {
+  opts: { system: string; cacheBreak: number; prompt: string; schema: typeof RankOutputSchema };
+  promptId: string;
+}
+
+/**
+ * The ranking call for a result: its role target's prompt (or the user's active one), the role
+ * target line, and the posting fenced. Undefined when there is no prompt to rank with.
+ */
+export async function buildRankCall(
+  db: Db,
+  ctx: UserCtx,
+  result: DiscoveryResultView,
+): Promise<RankCall | undefined> {
+  const target =
+    result.roleTargetId === null
+      ? undefined
+      : await db
+          .select()
+          .from(roleTargets)
+          .where(and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.id, result.roleTargetId)))
+          .get();
+  const resolved = await resolveDiscoveryPrompt(db, ctx, target ?? null);
+  if (resolved === undefined) return undefined;
+  const roleTarget =
+    target === undefined
+      ? `No single role target is set for this source. Judge fit against all of the user's role targets:\n${await roleTargetsText(db, ctx)}`
+      : roleTargetLine(target);
+  return {
+    opts: {
+      // Split before the posting (https://github.com/bgoleno/opportun/issues/356). The router
+      // marks the part before it for the cache only when it is long enough to cache. The default
+      // puts its output instructions before the posting (0061) so that, with the structured-output
+      // prompt, it is (https://github.com/bgoleno/opportun/issues/388).
+      ...systemWithCacheBreak(resolved.prompt.body, {
+        role_target: roleTarget,
+        posting_untrusted: postingText(result.posting),
+      }),
+      prompt: 'Score the posting and return the result.',
+      schema: RankOutputSchema,
+    },
+    promptId: resolved.prompt.id,
+  };
+}
+
+/**
+ * Stores a ranking's answer, from a live call or a batch result alike (#441): the multi-posted cap
+ * and the rationale's limit, and only if the posting still has the text that was ranked
+ * (setRankingIfPostingIs). Returns whether it was stored.
+ */
+export async function storeRankOutput(
+  exec: Exec,
+  ctx: UserCtx,
+  resultId: string,
+  out: RankOutput,
+  basis: string,
+  priorRationale: string | null,
+): Promise<{ stored: boolean; score: number }> {
+  const multiPosted = priorRationale?.startsWith(MULTI_POSTED_PREFIX) === true;
+  const score = multiPosted ? Math.min(out.score, MULTI_POSTED_SCORE_CAP) : out.score;
+  const stored = await setRankingIfPostingIs(
+    exec,
+    ctx,
+    resultId,
+    { aiScore: score, aiRationale: storedRationale(out, multiPosted) },
+    basis,
+  );
+  return { stored, score };
+}
+
 export type RankRun =
   | { status: 'ranked'; score: number }
   | { status: 'skipped'; reason: 'missing' | 'not_pending' | 'no_prompt' | string };
@@ -122,37 +195,16 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
   }
   await racePoint('discoveryRank.budget_checked');
 
-  const target =
-    result.roleTargetId === null
-      ? undefined
-      : await db
-          .select()
-          .from(roleTargets)
-          .where(and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.id, result.roleTargetId)))
-          .get();
-  const resolved = await resolveDiscoveryPrompt(db, ctx, target ?? null);
-  if (resolved === undefined) return { status: 'skipped', reason: 'no_prompt' };
-  const roleTarget =
-    target === undefined
-      ? `No single role target is set for this source. Judge fit against all of the user's role targets:\n${await roleTargetsText(db, ctx)}`
-      : roleTargetLine(target);
+  const call = await buildRankCall(db, ctx, result);
+  if (call === undefined) return { status: 'skipped', reason: 'no_prompt' };
 
   let out: RankOutput;
   // Before the key is read for this call.
   const callBegan = Date.now();
   try {
     out = await runStructured(await buildAiDeps(db, ctx), 'discovery.rank', {
-      // Split before the posting (https://github.com/bgoleno/opportun/issues/356). The router
-      // marks the part before it for the cache only when it is long enough to cache. The default
-      // puts its output instructions before the posting (0061) so that, with the structured-output
-      // prompt, it is (https://github.com/bgoleno/opportun/issues/388).
-      ...systemWithCacheBreak(resolved.prompt.body, {
-        role_target: roleTarget,
-        posting_untrusted: postingText(result.posting),
-      }),
-      prompt: 'Score the posting and return the result.',
-      schema: RankOutputSchema,
-      promptId: resolved.prompt.id,
+      ...call.opts,
+      promptId: call.promptId,
     });
   } catch (err) {
     // The per-task hard stop behind the budget: this waits too, since nothing is ever skipped
@@ -187,14 +239,13 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
     }
     throw err;
   }
-  const multiPosted = result.aiRationale?.startsWith(MULTI_POSTED_PREFIX) === true;
-  const score = multiPosted ? Math.min(out.score, MULTI_POSTED_SCORE_CAP) : out.score;
-  const stored = await setRankingIfPostingIs(
+  const { stored, score } = await storeRankOutput(
     db,
     ctx,
     resultId,
-    { aiScore: score, aiRationale: storedRationale(out, multiPosted) },
+    out,
     basis,
+    result.aiRationale,
   );
   // However the key came back: adding one clears this too, but a policy change to a provider that
   // has one does not pass through there.
@@ -209,7 +260,14 @@ export async function rankResult(db: Db, ctx: UserCtx, resultId: string): Promis
   return { status: 'ranked', score };
 }
 
-const PayloadSchema = z.object({ resultId: z.string().min(1).max(64) });
+const PayloadSchema = z.object({
+  resultId: z.string().min(1).max(64),
+  /**
+   * The user clicked for this ranking (Rank anyway): it is ranked now, never in a batch, because
+   * someone is waiting (tl's design on #358, point 1). Absent: as any posting reaching ranking.
+   */
+  live: z.boolean().optional(),
+});
 
 export const discoveryRankJob: JobHandler<z.infer<typeof PayloadSchema>> = {
   kind: DISCOVERY_RANK_KIND,
@@ -218,6 +276,15 @@ export const discoveryRankJob: JobHandler<z.infer<typeof PayloadSchema>> = {
   async run(db, payload, ctx) {
     if (ctx.userId === null) throw new Error(`${DISCOVERY_RANK_KIND} needs a user`);
     const user: UserCtx = { userId: ctx.userId, isAdmin: false };
+    // With batching on and a provider that has batches (#441), the posting waits for the next
+    // batch instead, behind nothing: a batch takes the waiting ones in the drain's order. A submit is
+    // queued for a few minutes on, so the rest of its run goes in the same batch.
+    if (payload.live !== true && (await ranksInBatch(db, user, ctx.services))) {
+      const joined = await setBatchWaiting(db, user, payload.resultId);
+      if (joined) await enqueueRankBatchSubmit(db, user, Date.now() + SUBMIT_GATHER_MS);
+      await ctx.setResult({ status: 'skipped', reason: joined ? 'batch_waiting' : 'not_pending' });
+      return;
+    }
     // While older postings wait for budget, a new one goes behind them (criterion 3 on #214, tl on
     // #230). Otherwise a source that runs just after the UTC day starts can spend the day's budget
     // before the sweep, every day, and the older ones wait for ever. This lives in the job and not

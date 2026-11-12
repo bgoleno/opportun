@@ -39,6 +39,16 @@ stage. **Table** switches to a sortable table of the same opportunities.
 - The `x` on a card dismisses it.
 - Keyboard: `j`/`k` select a card, `i` marks it Interested, `x` dismisses it, `Enter` opens
   it. Cards in collapsed columns are skipped.
+- Move a card from the keyboard: focus it, press `Space` to pick it up, move with the arrow
+  keys, and press `Space` (or `Enter`) to drop it. `Esc` cancels. A screen reader hears each
+  step: "Picked up ...", "... is over the Offer column.", and then either "... was dropped on
+  the Offer column." or, when the move is refused, "... was not moved." followed by the reason,
+  the same one a mouse drop shows in its message. A move between New, Interested, Preparing,
+  Applied, In process and Offer is never refused, so the refusal you can hear is a Dismissed or
+  Closed card dropped on one of those columns: "Use Reopen to move a closed opportunity back to
+  Interested." A drop within a column while the search box filters it is also announced as not
+  moved, because cards cannot be reordered while a search is active. Cancelling is announced as
+  "Moving ... was cancelled."
 - A card Opportun thinks is a duplicate of one you already track carries a **Possible
   duplicate** badge. Open either card to resolve it.
 
