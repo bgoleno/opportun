@@ -49,6 +49,7 @@ function plan(over: Partial<FillPlan> = {}): FillPlan {
       { labels: ['Website link'], name: 'Website link', value: 'never matched' },
     ],
     resume: { filename: 'Jane-Doe-Example-Resume.pdf', base64: PDF_BASE64 },
+    lists: [],
     withheld: [],
     ...over,
   };
