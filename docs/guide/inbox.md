@@ -61,6 +61,20 @@ daily budget stops calls once it is spent, until the next UTC day (see
 [Settings](settings.md#models-and-budgets)). Messages synced before you added an AI key stay
 unclassified and are queued automatically when you add one.
 
+Classification uses prompt caching (the same mechanism as discovery's
+[prompt caching](discovery.md#the-review-queue)). Opportun puts the part of the prompt that is the same
+for every message of a sync first: the instructions, your role targets, the rules for what to
+decide and your open opportunities (the 200 most recently updated, listed by when each was
+created, so one being updated does not change the list). The message itself comes last. The first
+call writes that part to Anthropic's cache and the following calls read it at a tenth of the input
+price. Only Anthropic models are marked, and only when that part is large enough for the model's
+minimum. A new opportunity changes the list, so the next call writes the cache again. A prompt you
+edited yourself keeps its own order and text, and what is cached is whatever comes before the
+message in it. qa measured one batch of 36 messages with 10 open opportunities on
+`claude-haiku-5-5`: the cost per classify call fell about 43%, from $0.00047 to $0.00026
+([the measurement](https://github.com/bgoleno/opportun/pull/433#issuecomment-6807923311)). That is
+one batch, not a promise for yours.
+
 ## The five tabs
 
 | Tab          | What it holds                                                                                                                                                                  |
