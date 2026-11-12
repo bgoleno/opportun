@@ -236,6 +236,26 @@ describe('CommunicationsTab over the cap (#422)', () => {
     await waitFor(() => expect(shown()).toHaveLength(COUNT));
     expect(screen.getByRole('listitem', { name: 'Message 4' })).toHaveFocus();
   });
+
+  it('leaves focus where the user moved it while the last page was on its way', async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    mockApi({
+      'GET /communications': async (call: ApiCall) => {
+        if (new URLSearchParams(call.search).has('offset')) await held;
+        return serve(call);
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<CommunicationsTab opportunityId="opp-1" />);
+    (await screen.findByRole('button', { name: 'Show 5 more' })).focus();
+    await user.keyboard('{Enter}');
+    const toggle = screen.getByRole('button', { name: 'Sorted newest first' });
+    toggle.focus();
+    release();
+    await waitFor(() => expect(shown()).toHaveLength(COUNT));
+    expect(toggle).toHaveFocus();
+  });
 });
 
 // A thread that changes while it is open (a mail sync links or unlinks a message between two
@@ -308,6 +328,37 @@ describe('CommunicationsTab when the thread changes between pages (#422)', () =>
     expect(new Set(names()).size).toBe(204);
     expect(screen.queryByText(/Showing the/)).toBeNull();
     expect(screen.queryByRole('button', { name: /Show \d+ more/ })).toBeNull();
+  });
+
+  // A thread that keeps changing must not make the tab ask again and again: one refetch for
+  // each set of totals it sees (tl on #446).
+  it('a thread whose pages keep disagreeing is fetched again once, not again and again', async () => {
+    const thread = Array.from({ length: 205 }, (_, i) => nth(i));
+    const serve = serveFrom(() => thread);
+    const api = mockApi({
+      // Page 2 always answers a total one higher than page 1's, as if a message were linked
+      // between every pair of requests. Each answer takes a moment, as a real server's does, so
+      // the tab sees each refetch start and finish.
+      'GET /communications': async (call: ApiCall) => {
+        await new Promise((r) => setTimeout(r, 10));
+        const page = serve(call);
+        return new URLSearchParams(call.search).has('offset')
+          ? { ...page, total: page.total + 1 }
+          : page;
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<CommunicationsTab opportunityId="opp-1" />);
+    await screen.findByText('Showing the newest 200 of 205 messages.');
+    await user.click(screen.getByRole('button', { name: 'Show 5 more' }));
+    const offsets = () =>
+      api.calls
+        .filter((c) => c.path === '/communications')
+        .map((c) => new URLSearchParams(c.search).get('offset') ?? '0');
+    await waitFor(() => expect(offsets()).toEqual(['0', '200', '0', '200']));
+    // Settled: no fifth request follows.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(offsets()).toEqual(['0', '200', '0', '200']);
   });
 
   it('while a missing message is on its way, the line says one is missing', async () => {
