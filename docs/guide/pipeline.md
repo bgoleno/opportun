@@ -194,7 +194,8 @@ opportunity it starts newest first again.
 
 A thread of more than 200 messages shows 200 at a time, in the order you chose, with a line
 such as "Showing the newest 200 of 205 messages." **Show 5 more** (or up to 200 more) adds the
-next ones below.
+next ones below. If the number of linked messages changes while you read, the tab notices when
+it adds the next ones and loads them all again. A message is never shown twice.
 
 ### Referrals
 
