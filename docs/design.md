@@ -1349,8 +1349,11 @@ alternation cancels a shared machine's load. The figures below are that harness.
 `test/obsBench.test.ts` (run with `OBS_BENCH=1`) is the comparison tool for `main` against a change
 in one sitting: it times whole operations the same way, in batches of 150 alternated with
 collection off and on in one process and one database, 30 pairs, the median of the pairs'
-differences, and it asserts nothing, because its readings move with the machine's load. The span
-flush runs between batches and is timed apart: it is off the request path, and bounded on its own
+differences, and it asserts nothing, for two reasons. Its readings read higher than the harness's
+for the same request even on an idle machine (qa measured 36.6 microseconds once with nothing else
+running, against 6.6 to 20.9 from the harness in the same sitting), so part of the difference
+comes from the bench itself and not from load; and its readings also move with the machine's load.
+The harness stays the measure against the budget. The span flush runs between batches and is timed apart: it is off the request path, and bounded on its own
 (#375).
 
 - **A whole request** (`GET /api/v1/opportunities/:id`: one HTTP crossing and five statements):

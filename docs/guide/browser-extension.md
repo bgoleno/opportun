@@ -96,6 +96,30 @@ and is then turned away. The popup says "Opportun is still saving another captur
 to try again in a few seconds. Nothing is wrong: this attempt saved nothing, so wait a moment
 and click **Capture this page** again.
 
+## Filling an application (assisted apply)
+
+Where assisted apply is on, the extension can fill a Greenhouse application form with what you
+reviewed in Opportun. It needs a token with the **Assisted apply** permission: create one, or
+set the extension up, under **Settings > Integrations > Extensions and Connectors**.
+
+1. In Opportun, review the application and press **Confirm review and open**. The form opens
+   in a new tab.
+2. On that tab, click the Opportun icon in your browser's toolbar. If it is not there, open
+   your browser's Extensions menu and pin Opportun.
+3. Press **Fill in this application**. The extension fills in what you reviewed, and lists
+   what it filled and what it left for you.
+4. Check every field, fill in anything it left, and press the site's own Submit button. The
+   extension never submits.
+
+It fills only a Greenhouse form on Greenhouse's own pages (`boards.greenhouse.io` or
+`job-boards.greenhouse.io`), and only the application you reviewed and opened from Opportun.
+Opportun's last step says which applies: where the extension cannot fill the form, or you have
+no such token, it tells you to copy your details instead. A Greenhouse job shown on the
+company's own careers page is not filled while Opportun has only the careers link. Press **Find
+posting** on the opportunity: once Greenhouse's API shows the job is on one of the company's
+boards, the review opens its Greenhouse page, and the extension can fill that. If no such board
+holds the job, you apply on the careers page and copy your details yourself.
+
 ## Why it works this way
 
 LinkedIn's User Agreement prohibits automated retrieval of its pages, and Opportun takes that
