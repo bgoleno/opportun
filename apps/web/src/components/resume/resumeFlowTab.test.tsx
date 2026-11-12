@@ -113,8 +113,10 @@ function setup({ resumes = [], sends = [], attempts = [], opp = {}, extra = {} }
     ...extra,
   });
   const user = userEvent.setup();
-  renderWithProviders(<OpportunityResumeTab opp={{ ...OPP, ...opp } as OpportunityView} />);
-  return { api, user };
+  const { router } = renderWithProviders(
+    <OpportunityResumeTab opp={{ ...OPP, ...opp } as OpportunityView} />,
+  );
+  return { api, user, router };
 }
 
 const flow = () => screen.findByRole('region', { name: 'Resume for this application' });
@@ -165,6 +167,42 @@ describe('the Resume tab flow: one test per row of the table (#440)', () => {
         opportunityId: 'opp-1',
       }),
     );
+  });
+
+  // The e2e path on #443: after the copy is made, its arrival refreshes every resume list.
+  // Against a real server they come back one at a time, so the flow moves on to C, and B's
+  // button is gone, before the last one lands and the create call's own success callback would
+  // run, which the query library then skips. Here the server holds the copy once it is made,
+  // and one list answers a moment after the others.
+  it('B: "Create tailored copy" opens the new copy\'s page, though the flow moves on to C first', async () => {
+    const resumes = [BASE];
+    let made = false;
+    const { user, router } = setup({
+      resumes,
+      extra: {
+        'POST /resumes': () => {
+          resumes.push(copy());
+          made = true;
+          return { status: 201, body: copy() };
+        },
+        // Once the copy is made, the opportunity's own list (the one under the flow) is slow:
+        // the list of every resume, which the flow reads, arrives first.
+        'GET /resumes': async (call: ApiCall) => {
+          const mine = call.search.includes('opportunityId');
+          if (made && mine) await new Promise((r) => setTimeout(r, 50));
+          const items = mine
+            ? resumes.filter((r) => r.opportunityId === 'opp-1')
+            : call.search.includes('kind=base')
+              ? resumes.filter((r) => r.kind === 'base')
+              : resumes;
+          return { items, total: items.length };
+        },
+      },
+    });
+    const region = await flow();
+    await waitFor(() => expect(primary(region)).toHaveAccessibleName('Create tailored copy'));
+    await user.click(primary(region));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/resumes/copy'));
   });
 
   it('C: a Draft copy: step 2 Tailor, "Open and tailor" to its page', async () => {
@@ -360,6 +398,36 @@ describe('the Resume tab flow: actions, focus and the live region (#440)', () =>
     expect(api.calls.find((c) => c.method === 'PATCH')?.body).toEqual({ status: 'final' });
     expect(said(region)).toHaveFocus();
     expect(within(region).getByRole('status')).toHaveTextContent('Marked final. Next: apply.');
+  });
+
+  // As for "Create tailored copy" (#443's e2e): the flow moves on to E, and the button is gone,
+  // before the last refreshed list lands, so a callback given to the call itself never ran.
+  it('Mark as final: its toast still shows when one list answers after the others', async () => {
+    let status: Resume['status'] = 'in_review';
+    const { user } = setup({
+      resumes: [],
+      extra: {
+        'GET /resumes': async (call: ApiCall) => {
+          const mine = call.search.includes('opportunityId');
+          if (status === 'final' && mine) await new Promise((r) => setTimeout(r, 50));
+          const items = call.search.includes('kind=base')
+            ? [BASE]
+            : mine
+              ? [copy({ status })]
+              : [BASE, copy({ status })];
+          return { items, total: items.length };
+        },
+        'PATCH /resumes/copy': (call: ApiCall) => {
+          status = (call.body as { status: Resume['status'] }).status;
+          return { status: 200, body: copy({ status }) };
+        },
+      },
+    });
+    const region = await flow();
+    await waitFor(() => expect(primary(region)).toHaveAccessibleName('Mark as final'));
+    await user.click(primary(region));
+    await waitFor(() => expect(said(region)).toHaveTextContent('Ready to apply.'));
+    expect(await screen.findByText('Marked final')).toBeInTheDocument();
   });
 
   it('a refused status change says why in the flow', async () => {

@@ -519,10 +519,14 @@ function CreateCopyButton({
   const navigate = useNavigate();
   function createCopy() {
     if (baseId === '') return;
-    create.mutate(
-      { baseResumeId: baseId, opportunityId },
-      { onSuccess: (r) => void navigate({ to: '/resumes/$id', params: { id: r.id } }) },
-    );
+    // The promise, not a callback given to mutate: the copy's arrival refreshes the resume
+    // lists, and the flow moves on to C, unmounting this button, before the last list lands.
+    // The query library skips an unmounted caller's own callbacks, so the page never opened
+    // (#443's e2e). A failure shows through `create.error` while the button is still here.
+    create
+      .mutateAsync({ baseResumeId: baseId, opportunityId })
+      .then((r) => navigate({ to: '/resumes/$id', params: { id: r.id } }))
+      .catch(() => {});
   }
   return (
     <>
@@ -576,14 +580,14 @@ function MarkFinal({
   const update = useUpdateResume(resume.id);
   function mark() {
     onStart('Marked final.');
-    update.mutate(
-      { status: 'final' },
-      {
-        onSuccess: () =>
-          toast({ title: 'Marked final', description: resume.title, variant: 'success' }),
-        onError: onFail,
-      },
-    );
+    // The promise, as in CreateCopyButton: the flow moves on to E, and this button is gone,
+    // before the last refreshed list lands, so a callback given to mutate would be skipped.
+    update
+      .mutateAsync({ status: 'final' })
+      .then(
+        () => toast({ title: 'Marked final', description: resume.title, variant: 'success' }),
+        onFail,
+      );
   }
   return (
     <>
