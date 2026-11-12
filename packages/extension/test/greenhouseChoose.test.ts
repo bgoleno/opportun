@@ -155,7 +155,7 @@ describe('rule 3: one exact option is chosen, and listed with its text', () => {
     expect(p.observing()).toBe(0);
   });
 
-  it('every event is a plain bubbling Event or MouseEvent; the option gets one click and nothing else', async () => {
+  it('every event is a plain bubbling Event, one MouseEvent, and the option’s own click', async () => {
     const p = page();
     standInList(p, 'degree--0', { options: filtered(["Bachelor's Degree"]) });
     await settle(p, plan({ lists: [LISTS[3]!] }));
@@ -166,7 +166,8 @@ describe('rule 3: one exact option is chosen, and listed with its text', () => {
       ['input', 'Event', true],
       ['change', 'Event', true],
       ['mouseup', 'MouseEvent', true],
-      ['click', 'MouseEvent', true],
+      // The element's own click(): a PointerEvent in happy-dom, as in Chrome, made by script.
+      ['click', 'PointerEvent', true],
     ]);
     expect(mine.at(-1)!.target).toBe('react-select-degree--0-option-0');
   });
@@ -309,7 +310,8 @@ describe('rule 3.4 and step 2.6: three ways to end without a choice', () => {
 describe("rule 3.6: the phone's country code", () => {
   it('compared without the trailing code: two countries sharing +1 are told apart by name', async () => {
     const p = page();
-    standInList(p, 'country', country);
+    // Every option at once: the stand-in's filter would not match the doubled space.
+    standInList(p, 'country', { ...country, options: () => COUNTRIES });
     const report = await settle(
       p,
       plan({ lists: [{ id: 'country', name: 'Phone country code', value: 'united  states' }] }),
@@ -445,7 +447,10 @@ describe('rule 3.1 and 3.7: what is never touched', () => {
       plan({ withheld: [{ id: 'country', labels: [], name: 'Phone country code' }] }),
     );
     expect(on(p, 'country')).toEqual([]);
-    expect(report.notFilled).toContainEqual({ label: 'Phone country code', reason: 'withheld' });
+    // Once, as withheld, under the control it is: never also as a list to choose on the form.
+    expect(report.notFilled.filter((n) => n.label === 'Phone country code')).toEqual([
+      { label: 'Phone country code', reason: 'withheld' },
+    ]);
   });
 
   it('a list detail the form does not have is not reported (tl on #437)', async () => {

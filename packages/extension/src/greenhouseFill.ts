@@ -235,7 +235,7 @@ export async function fillGreenhouseForm(
     );
   };
   // One mouseup on a list's search box, to open its list (only while aria-expanded is "false")
-  // or to close one this fill opened (only while it is "true"). A plain bubbling MouseEvent with
+  // or to close one this fill opened (only while it is "true"). A plain bubbling mouse event with
   // nothing else set; it refuses any other element.
   const press = (box: Element, open: boolean): boolean => {
     if (!isBox(box) || box.getAttribute('aria-expanded') !== (open ? 'false' : 'true')) {
@@ -411,11 +411,15 @@ export async function fillGreenhouseForm(
         // block, a reviewed answer by its label.
         const listable =
           isBox(f.el) && (named || f.el.closest('div.education--container') === null);
+        // Read by index only when there is one: at(-1) would be the last entry, another field's.
+        const only = answered.length === 1 ? answered[0] : undefined;
         const value = named
-          ? plan.lists.at(listAt)?.value
-          : answered.length === 1
-            ? plan.questions.at(answered[0] ?? -1)?.value
-            : undefined;
+          ? listAt >= 0
+            ? plan.lists.at(listAt)?.value
+            : undefined
+          : only === undefined
+            ? undefined
+            : plan.questions.at(only)?.value;
         const box = f.el as HTMLInputElement;
         if (listable && !named && (answered.length > 1 || (sameLabel.get(f.key) ?? 0) > 1)) {
           notFilled.push({ label: text, reason: 'ambiguous' });

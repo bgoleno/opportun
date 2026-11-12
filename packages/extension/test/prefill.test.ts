@@ -15,11 +15,14 @@ import {
 import {
   buildPlan,
   MAX_RESUME_BYTES,
+  reportLines,
   RESUME_CHECKS,
   type GetLike,
   type PrefillAttempt,
 } from '../src/prefill';
 import {
+  FILL_UNSEEN,
+  FILLING,
   mountPopup,
   RESUME_CHECKING,
   RESUME_UNCONFIRMED,
@@ -242,7 +245,7 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
     ]);
     expect(listed(s, 'Not filled in')).toEqual(
       expect.arrayContaining([
-        'Country: choose it on the form',
+        'Phone country code: choose it on the form',
         'Gender: choose it on the form',
         'Website URL: not in what you reviewed: answer it on the form',
       ]),
@@ -788,6 +791,7 @@ describe('#191: a popup that closes before the resume check ends', () => {
       board: BOARD,
       jobId: JOB_ID,
       at: expect.any(Number),
+      stage: 'resume',
     });
     expect(store.data['resumeCheckPending:7']).toBeNull();
   });
@@ -857,5 +861,91 @@ describe('#191: a popup that closes before the resume check ends', () => {
     const s = setup({ checkStore: null });
     await clickFill(s);
     expect(listed(s, 'Filled in')).toContain('Resume');
+  });
+});
+
+describe('#402 slice 2: the fill waits for lists, and the report lists every choice first', () => {
+  it('says it is filling while it runs, with a note for this tab, and clears the note after', async () => {
+    const store = memoryStore();
+    const s = setup({ checkStore: store, snapshot: json(404, {}) });
+    let finish: (() => void) | undefined;
+    const run = s.deps.runFill;
+    s.deps.runFill = vi.fn(async (tabId: number, plan: FillPlan) => {
+      await new Promise<void>((r) => {
+        finish = r;
+      });
+      return run(tabId, plan);
+    });
+    await mountPopup(s.doc, s.deps);
+    s.$('prefill').click();
+    await vi.waitFor(() => expect(s.$('status').textContent).toBe(FILLING));
+    expect(store.data['resumeCheckPending:7']).toEqual({
+      tabId: 7,
+      board: BOARD,
+      jobId: JOB_ID,
+      at: expect.any(Number),
+      stage: 'fill',
+    });
+    finish!();
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+    expect(store.data['resumeCheckPending:7']).toBeNull();
+  });
+
+  it('a popup closed before the report arrives: the next one on that tab says the result was not seen, once', async () => {
+    const store = memoryStore();
+    const first = setup({ checkStore: store });
+    first.deps.runFill = vi.fn(() => new Promise<null>(() => undefined));
+    await mountPopup(first.doc, first.deps);
+    first.$('prefill').click();
+    await vi.waitFor(() => expect(first.$('status').textContent).toBe(FILLING));
+
+    const next = setup({ checkStore: store });
+    await mountPopup(next.doc, next.deps);
+    await vi.waitFor(() => expect(next.$('status').textContent).toBe(FILL_UNSEEN));
+    expect(store.data['resumeCheckPending:7']).toBeNull();
+    expect(next.deps.runFill).not.toHaveBeenCalled();
+  });
+
+  it('every option chosen is listed first, as "field: the text chosen"', async () => {
+    const s = setup({ snapshot: json(404, {}) });
+    s.deps.runFill = vi.fn(async () => ({
+      ok: true as const,
+      chosen: [{ label: 'Phone country code', text: 'United States +1' }],
+      filled: ['First Name'],
+      notFilled: [
+        { label: 'School', reason: 'no_option' as const, detail: 'University of Example' },
+      ],
+      resume: null,
+    }));
+    await clickFill(s);
+    const headings = Array.from(s.$('prefill-report').querySelectorAll('h3')).map(
+      (h) => h.textContent,
+    );
+    expect(headings[0]).toBe('Chosen from a list: check each before you submit');
+    expect(listed(s, 'Chosen from a list: check each before you submit')).toEqual([
+      'Phone country code: United States +1',
+    ]);
+    expect(listed(s, 'Not filled in')).toContain(
+      'School: no option on the form\'s list is exactly "University of Example": choose it on the form',
+    );
+  });
+
+  it('the list reasons in words, each with its value', () => {
+    const lines = reportLines({
+      ok: true,
+      chosen: [],
+      filled: [],
+      notFilled: [
+        { label: 'Degree', reason: 'several_options', detail: 'BA' },
+        { label: 'School', reason: 'list_not_shown', detail: 'University of Example' },
+        { label: 'Degree', reason: 'not_confirmed', detail: "Bachelor's Degree" },
+      ],
+      resume: null,
+    });
+    expect(lines.notFilled).toEqual([
+      'Degree: more than one option is exactly "BA": choose it on the form',
+      "School: the form's list did not appear in time: choose it on the form",
+      'Degree: the form did not show the choice "Bachelor\'s Degree": check this field',
+    ]);
   });
 });

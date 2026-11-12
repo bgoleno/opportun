@@ -106,7 +106,24 @@ On the click, and only then:
    the reason: correct it in Opportun, or fill it in yourself
    ([#196](https://github.com/bgoleno/opportun/issues/196)).
 
-6. **It attaches the resume** to the form's file input through `DataTransfer`. The page side
+6. **It chooses in the form's lists** (Greenhouse's dropdowns,
+   [#402](https://github.com/bgoleno/opportun/issues/402)): the phone's country code, Location
+   (City), the first School and Degree, and a list question whose label is exactly a reviewed
+   answer's, such as "How did you hear about this role?". For each, one at a time:
+   - it writes the value into the list's search box, as for a text field;
+   - if the list is closed, it sends that search box one plain `mouseup`, the one event that
+     opens it;
+   - it waits up to 3 seconds for an option whose text is exactly the value (case and spacing
+     aside; for the phone's country code, without the "+1" after the country's name);
+   - if exactly one option matches, it calls that option's own `click()` once, then checks that
+     the form shows the choice.
+
+   If no option matches, more than one does, or the list never appears, it chooses nothing,
+   empties the search box, and closes the list if it opened it, with one more `mouseup`. Lists
+   in the self-identification sections, multi-choice lists, Discipline, the dates, a second
+   education entry, and a list you already opened are left alone.
+
+7. **It attaches the resume** to the form's file input through `DataTransfer`. The page side
    keeps no timer, so the popup then looks, read-only and for about 1.5 seconds, for the form
    to show the file's name where you can see it: a copy inside hidden content does not count.
    If it never does, the popup takes the file back out (only if it is still exactly the one it
@@ -118,13 +135,17 @@ On the click, and only then:
    is kept in the extension's session storage only while the check runs; nothing else runs in
    the page, and there is no background worker.
 
-7. **The popup lists** what was filled in and what was not, with the reason.
+8. **The popup lists** every option it chose first, to check before you submit, then what was
+   filled in and what was not, with the reason. While the lists are being chosen, the popup
+   says it is filling: keep it open. If it closes first, the next time you open it on that tab
+   it says the fill's result was not seen, so check the form yourself.
 
-It never chooses an option in a dropdown, checkbox or radio button, and never sets a hidden
-field other than the resume input. It also never does any of the following:
+It never chooses a checkbox or radio button, or an option anywhere but the lists above, and
+never sets a hidden field other than the resume input. It also never does any of the following:
 
 - presses a button or submits the form;
-- sends a key, mouse, pointer or focus event;
+- sends a key, pointer, touch or focus event, or any mouse event but the one `mouseup` to open
+  a list and one to close a list it opened;
 - reaches into another frame or the captcha;
 - makes a network request from the page.
 

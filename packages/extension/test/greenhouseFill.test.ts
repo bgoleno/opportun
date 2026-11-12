@@ -117,7 +117,8 @@ describe('acceptance 1: what it fills, and only from the plan', () => {
   it('react-selects, the country and the self-identification block are left alone and reported', async () => {
     const { doc, report, events } = await fill(MANY_QUESTIONS);
     const choices = [
-      ['country', 'Country'],
+      // The phone's country code, named so (sec's ruling 2.3 on #402).
+      ['country', 'Phone country code'],
       ['question_9000103', 'Which placeholder team would you most like to join first?'],
       ['question_9000106', 'Do you need sponsorship?'],
       ['question_9000108', 'How did you hear about us?'],
@@ -941,26 +942,51 @@ describe('the source scan of the injected functions (acceptance 2, sec 1 to 6)',
   // write, the check only reads.
   const source = [fillGreenhouseForm, resumeShown, clearResume].map((f) => f.toString()).join('\n');
 
-  it('never submits, activates, focuses, types or simulates a pointer', () => {
+  it('never submits, focuses, types, or simulates a pointer, a key or a drag', () => {
     for (const banned of [
-      /\.click\s*\(/,
       /\.submit\s*\(/,
       /requestSubmit/,
       /\.focus\s*\(/,
       /\.blur\s*\(/,
       /\.select\s*\(/,
-      /(Keyboard|Mouse|Pointer|Drag|Focus|Input|Touch|Wheel|Composition|Clipboard|Submit)Event/,
-      /setTimeout|setInterval|requestAnimationFrame|requestIdleCallback/,
+      /(Keyboard|Pointer|Drag|Focus|Input|Touch|Wheel|Composition|Clipboard|Submit)Event/,
+      /mousedown|mousemove|mouseover|pointerdown|pointerup|touchstart|touchend|keydown|keyup|keypress/,
+      /setInterval|requestAnimationFrame|requestIdleCallback/,
       /execCommand/,
     ]) {
       expect(source).not.toMatch(banned);
     }
   });
 
-  it('dispatches only plain Event input and change, through one helper in each writer', () => {
-    // One helper in the filler, one in the clear.
-    expect(source.match(/dispatchEvent\s*\(/g)).toHaveLength(2);
-    expect(source.match(/new\s+[\w.]*Event\s*\(/g)).toEqual(['new view.Event(', 'new view.Event(']);
+  // sec on #402 (issuecomment-6808114453, point 1.6, and 6808390283): each act slice 2 allows is
+  // made in one place, and a second use of any of them fails here.
+  it('one click, one mouseup, one timer and one observer, each in its own helper (#402)', () => {
+    const fill = fillGreenhouseForm.toString();
+    expect(source.match(/\.click\s*\(/g)).toHaveLength(1);
+    expect(fill).toMatch(/const pick = [\s\S]*?option\.click\(\);/);
+    expect(source.match(/MouseEvent/g)).toHaveLength(1);
+    expect(fill).toMatch(
+      /new view\.MouseEvent\(\s*['"]mouseup['"],\s*\{\s*bubbles:\s*true\s*\}\s*\)/,
+    );
+    expect(fill).toMatch(/const press = [\s\S]*?new view\.MouseEvent\(/);
+    // press is called twice: once to open a list, once to close one this fill opened.
+    expect(fill.match(/press\(/g)).toHaveLength(2);
+    expect(source.match(/setTimeout\s*\(/g)).toHaveLength(1);
+    expect(fill).toMatch(
+      /view\.setTimeout\([\s\S]*?,\s*3e3\s*\)|view\.setTimeout\([\s\S]*?,\s*3000\s*\)/,
+    );
+    expect(source.match(/MutationObserver\s*\(/g)).toHaveLength(1);
+    expect(fill).toMatch(/const waitFor = [\s\S]*?new view\.MutationObserver\(/);
+  });
+
+  it('dispatches only plain Event input and change and the one mouseup, through one helper each', () => {
+    // One helper in the filler and one in the clear for input and change; press for the mouseup.
+    expect(source.match(/dispatchEvent\s*\(/g)).toHaveLength(3);
+    expect([...(source.match(/new\s+[\w.]*Event\s*\(/g) ?? [])].sort()).toEqual([
+      'new view.Event(',
+      'new view.Event(',
+      'new view.MouseEvent(',
+    ]);
     // Quotes either way: the source as serialized is the transpiled function.
     const fired = [...source.matchAll(/fire\(\s*\w+\s*,\s*['"](\w+)['"]\s*\)/g)].map((m) => m[1]);
     expect(new Set(fired)).toEqual(new Set(['input', 'change']));
