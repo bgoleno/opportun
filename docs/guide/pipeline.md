@@ -171,17 +171,18 @@ Where assisted apply is on, the opportunity has an **Assisted apply** panel besi
 Before you apply, it offers **Apply on _ATS_** when the posting is confirmed and is on a
 recognised application system (Greenhouse, Lever or Ashby; Workday as a handoff only), its stage
 is Interested, Preparing or Applied, and you have a resume marked Final. When one of these is
-missing, the panel says which.
+missing, the panel says which. **Apply** takes you through the resume, your details and your
+answers, then one review of everything. **Confirm review and open** opens the real application
+form in a new tab. Opportun never submits anything: you press the site's own Submit button.
 
 A Greenhouse job can sit on the company's own careers page, with a link that ends in
 `?gh_jid=` and a number. Opportun does not take that link as Greenhouse on sight. The panel says
 "This looks like a Greenhouse job on the company's own careers page. Find the posting on
 Greenhouse to apply with assisted apply." and has a **Find posting** button under it (see
 [Find a posting](#find-a-posting)). Once Greenhouse's own API shows that the job is on one of
-the company's boards, the opportunity is recognised as Greenhouse, **Apply** appears, and the
-review opens that board's page for the job, never the careers page. **Apply** takes you through the resume, your details and your
-answers, then one review of everything. **Confirm review and open** opens the real application
-form in a new tab. Opportun never submits anything: you press the site's own Submit button.
+the company's boards, the opportunity is recognised as Greenhouse. **Apply** is then offered
+under the same conditions as for any other job (the posting confirmed, the stage, a Final resume),
+and the review opens that board's page for the job, never the careers page.
 
 #### Your details when you apply
 
@@ -259,9 +260,12 @@ this kind with **Edit link** runs the same check. Opportun asks nothing of Green
 opportunity is created or its mail is read.
 
 From the Apply panel, the **Find posting** button answers in a line under it: "Posting attached.",
-"Recognised on Greenhouse.", "Several postings could be this job. Choose it on the Details tab.", "This
-job was not found on the company's board. Paste the posting on the Details tab.", or "No job board is
-known for this company yet. Add its careers page on the Details tab."
+"Recognised on Greenhouse.", "Several postings could be this job. Choose it on the Details tab.", "A
+posting on the company's board could be this job. Check it on the Details tab." (when exactly one is
+offered), "This job was not found on the company's board. Paste the posting on the Details tab.", "No
+job board is known for this company yet. Add its careers page on the Details tab.", or, when you wrote
+the description yourself and no known board holds the job, "This job was not found on a Greenhouse
+board known for this company. Check the posting link on the Details tab."
 
 One confident match is attached straight away. Several are listed for you to pick from, with
 a search box over the whole board. If no board is reachable, paste the posting link or the
