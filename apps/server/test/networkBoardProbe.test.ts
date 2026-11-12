@@ -254,23 +254,16 @@ describe('the nightly network probe (#296)', () => {
 
     it('reaches only the three board hosts: never a careers page, never a Workday site', async () => {
       const { app, a } = await boot();
-      const ids = [
-        await inNetwork(a, 'Initech'),
-        await inNetwork(a, 'Workday Co'),
-        await inNetwork(a, 'Private Co'),
+      const withCareers: [string, string][] = [
+        [await inNetwork(a, 'Initech'), 'https://careers.initech.example/jobs'],
+        [await inNetwork(a, 'Workday Co'), 'https://initech.wd5.myworkdayjobs.com/External'],
+        [await inNetwork(a, 'Private Co'), 'https://10.0.0.5/careers'],
       ];
-      const careers = [
-        'https://careers.initech.example/jobs',
-        'https://initech.wd5.myworkdayjobs.com/External',
-        'https://10.0.0.5/careers',
-      ];
-      for (const [i, id] of ids.entries()) {
-        await app.db
-          .update(companies)
-          .set({ careersUrl: careers[i] })
-          .where(eq(companies.id, id))
-          .run();
+      for (const [id, careersUrl] of withCareers) {
+        await app.db.update(companies).set({ careersUrl }).where(eq(companies.id, id)).run();
       }
+      const ids = withCareers.map(([id]) => id);
+      const careers = withCareers.map(([, url]) => url);
       await turnOn(app, a);
       const n = net();
       await night(app, at0520(12), n.fetch);

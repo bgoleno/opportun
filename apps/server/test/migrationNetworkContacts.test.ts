@@ -68,6 +68,10 @@ const LATER_COLUMNS_DEFAULT_ON = new Set([
   // On for every source, so a board acts on the pre-filter once it holds (#218).
   'discovery_sources.prefilter_enabled',
 ]);
+const LATER_COLUMNS_DEFAULT_ZERO = new Set([
+  // No failed nights yet for the nightly network probe (#296).
+  'companies.board_probe_failed_nights',
+]);
 
 function onlyEarlierColumns(
   after: Record<string, unknown[]>,
@@ -88,6 +92,8 @@ function onlyEarlierColumns(
             const name = `${table}.${column}`;
             // A boolean reads as 1 on SQLite and true on Postgres.
             if (LATER_COLUMNS_DEFAULT_ON.has(name)) expect(Boolean(value), name).toBe(true);
+            // A bigint can read as a string on Postgres.
+            else if (LATER_COLUMNS_DEFAULT_ZERO.has(name)) expect(Number(value), name).toBe(0);
             else expect(value, name).toBeNull();
           }
           return Object.fromEntries(entries.filter(([column]) => keep.has(column)));
