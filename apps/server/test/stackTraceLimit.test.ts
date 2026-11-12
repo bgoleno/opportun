@@ -87,6 +87,33 @@ describe('the stack frame limit (#436)', () => {
     expect(loggedStack()).toEqual(['at <external>']);
   });
 
+  it('an error 40 of the app’s own frames deep writes exactly the gate’s 20 (sec on #445)', () => {
+    // Before the raise a stack held 10 frames, so the gate's cap of 20 was never reached.
+    raiseStackTraceLimit();
+    let caught: unknown;
+    function appFrame(n: number): void {
+      if (n === 0) throw new Error('thrown 40 frames down');
+      appFrame(n - 1);
+    }
+    try {
+      appFrame(39);
+    } catch (err) {
+      caught = err;
+    }
+    const lines: string[] = [];
+    createLogger({ level: 'error', stream: { write: (l) => lines.push(l) } }).error(
+      { err: caught },
+      'unhandled error',
+    );
+    const stack = (JSON.parse(lines[0]!) as { stack: string[] }).stack;
+    expect(stack).toHaveLength(20);
+    for (const frame of stack) {
+      expect(frame).toMatch(
+        /^at appFrame \(apps\/server\/test\/stackTraceLimit\.test\.ts:\d+:\d+\)$/,
+      );
+    }
+  });
+
   it('db/client.ts’s short stack for a transaction’s holder restores the raised limit', async () => {
     raiseStackTraceLimit();
     const opened = await openTestDb();
