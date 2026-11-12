@@ -126,6 +126,7 @@ export const TABLE_EXPORTS = [
   'resumeMatchReports',
   'discoverySources',
   'discoveryRuns',
+  'rankBatches',
   'discoveryResults',
   'dismissalFeedback',
   'industryProfile',
@@ -143,3 +144,10 @@ export const TABLE_EXPORTS = [
   'obsSpans',
 ] as const;
 export type TableExport = (typeof TABLE_EXPORTS)[number];
+
+/**
+ * A ranking batch (#441): being sent (no provider id yet), sent, its results applied, or given up
+ * on (sent but its id never saved, or the provider no longer has it). See repos/rankBatches.ts.
+ */
+export const RANK_BATCH_STATES = ['submitting', 'submitted', 'collected', 'failed'] as const;
+export type RankBatchState = (typeof RANK_BATCH_STATES)[number];

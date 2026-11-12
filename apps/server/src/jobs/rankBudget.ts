@@ -58,6 +58,22 @@ async function rankCallUsdToday(db: Db, ctx: UserCtx, now: number): Promise<numb
 }
 
 /**
+ * The line ranking stays under while a company waits for a tag. It is 90%, or lower when a few of
+ * today's calls are worth more than a tenth: min, so the 90% line is the same number as before
+ * wherever the floor is not the larger. Never under half.
+ */
+async function rankLineUsd(db: Db, ctx: UserCtx, budget: number, now: number): Promise<number> {
+  const call = await rankCallUsdToday(db, ctx, now);
+  return Math.max(
+    budget * RANK_BUDGET_MIN_SHARE,
+    Math.min(
+      budget * RANK_BUDGET_SHARE,
+      call === null ? budget : budget - RESERVE_FLOOR_CALLS * call,
+    ),
+  );
+}
+
+/**
  * Whether a ranking call may start: today's spend is under the budget, or under its 90% while a
  * company waits for a tag (or under the budget less RESERVE_FLOOR_CALLS of today's calls, if lower). Every path that checks for room before a rank call, or before queueing
  * the drain of postings waiting for the budget, asks this and not discoveryBudgetHasRoom.
@@ -72,16 +88,23 @@ export async function rankBudgetHasRoom(
   const budget = await readDiscoveryBudget(db, ctx);
   const spent = await discoverySpentTodayUsd(db, ctx, now);
   if (spent >= budget) return false;
-  // The line is 90%, or lower when a few of today's calls are worth more than a tenth: min, so the
-  // 90% line is the same number as before wherever the floor is not the larger. Never under half.
-  const call = await rankCallUsdToday(db, ctx, now);
-  const line = Math.max(
-    budget * RANK_BUDGET_MIN_SHARE,
-    Math.min(
-      budget * RANK_BUDGET_SHARE,
-      call === null ? budget : budget - RESERVE_FLOOR_CALLS * call,
-    ),
-  );
-  if (spent < line) return true;
+  if (spent < (await rankLineUsd(db, ctx, budget, now))) return true;
   return !(await hasUntaggedCandidates(db, ctx.userId));
+}
+
+/**
+ * How many dollars a ranking batch may hold today (#441): up to the line rankBudgetHasRoom uses,
+ * the whole budget with no company waiting for a tag, never below 0. rankBudgetHasRoom is left as
+ * it is, so the live path asks exactly what it asked before.
+ */
+export async function rankBudgetRoomUsd(
+  db: Db,
+  ctx: UserCtx,
+  now: number = Date.now(),
+): Promise<number> {
+  const budget = await readDiscoveryBudget(db, ctx);
+  const spent = await discoverySpentTodayUsd(db, ctx, now);
+  if (spent >= budget) return 0;
+  if (!(await hasUntaggedCandidates(db, ctx.userId))) return budget - spent;
+  return Math.max(0, (await rankLineUsd(db, ctx, budget, now)) - spent);
 }

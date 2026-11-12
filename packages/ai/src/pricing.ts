@@ -155,6 +155,18 @@ function overridePrice(value: number | undefined): number | undefined {
  * of it and priced at the model's cache rates. Where the table has none, or a policy sets its own
  * input price, they are priced as plain input: the estimate may run high, never low.
  */
+/**
+ * A provider's batch price, as a share of its live price, applied to input, output and both cache
+ * rates alike (tl's design on #358, point 11): one multiplier for each provider that has batches,
+ * not a second rate for each model. Anthropic's Message Batches cost half. A provider with no
+ * entry has no batches here.
+ */
+const BATCH_MULTIPLIER = new Map<string, number>([['anthropic', 0.5]]);
+
+export function batchMultiplier(provider: string): number | undefined {
+  return BATCH_MULTIPLIER.get(provider);
+}
+
 export function estimateCost(
   provider: string,
   model: string,
@@ -162,6 +174,8 @@ export function estimateCost(
   outputTokens: number,
   override?: PriceOverride,
   cache?: CacheTokens,
+  /** Priced as a batch request: the provider's multiplier on every rate, overrides included. */
+  opts: { batch?: boolean } = {},
 ): CostEstimate {
   const listed = priceFor(provider, model);
   const inputOverride = overridePrice(override?.inputUsdPerMTok);
@@ -184,7 +198,8 @@ export function estimateCost(
     1_000_000;
   const fallback =
     listed === undefined && (inputOverride === undefined || outputOverride === undefined);
-  return { usd: Number.isFinite(cost) ? cost : 0, fallback };
+  const priced = opts.batch === true ? cost * (batchMultiplier(provider) ?? 1) : cost;
+  return { usd: Number.isFinite(priced) ? priced : 0, fallback };
 }
 
 /** Estimated USD cost of one call (fallback-priced for unlisted models). */
