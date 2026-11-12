@@ -17,7 +17,7 @@ describe('NetworkBoardCheckCard', () => {
     await waitFor(() => expect(box).toBeEnabled());
     expect(box).toBeChecked();
     expect(box).toHaveAccessibleDescription(
-      'Each night, Opportun looks up to 20 of these companies up on Greenhouse, Lever and Ashby by name. Those services see the names it tries, which come from where your contacts work, and your server’s address. No contact’s name or details are sent.',
+      'Each night, Opportun looks up as many as 20 of these companies on Greenhouse, Lever and Ashby by name. Those services see the names it tries, which come from where your contacts work, and your server’s address. No contact’s name or details are sent.',
     );
   });
 

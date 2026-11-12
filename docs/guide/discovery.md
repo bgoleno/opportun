@@ -182,10 +182,10 @@ nightly industry tags use for a company with no postings stored yet, and a check
 after the model could not place a company has it asked again.
 
 **Network job boards.** On by default, for every account, including one that existed before this
-was added. Each night, Opportun looks up to 20 of these companies up on Greenhouse, Lever and Ashby
-by name. Those services see the names it tries, which come from where your contacts work, and your
-server's address. No contact's name or details are sent. To turn it off, clear "Check job boards for
-companies in my network" in **Settings > AI**; it stays off until you turn it on again.
+was added. Each night, Opportun looks up as many as 20 of these companies on Greenhouse, Lever and
+Ashby by name. Those services see the names it tries, which come from where your contacts work, and
+your server's address. No contact's name or details are sent. To turn it off, clear "Check job
+boards for companies in my network" in **Settings > AI**; it stays off until you turn it on again.
 
 - **Which companies:** ones where you know someone, that you have not followed, denied or checked.
   The ones where you know the most people go first, then by name. The rest wait for later nights.

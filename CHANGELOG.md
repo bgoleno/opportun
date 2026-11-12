@@ -12,11 +12,11 @@ milestone's work was merged.
 - **Network job boards, on by default.** A nightly check of companies where you know someone, and
   that you have not followed, denied or checked, so their rows in Recommended companies show the
   board, its open jobs and an estimate without a click. It is on for every account after
-  upgrading, including existing ones. Each night, Opportun looks up to 20 of these companies up on
-  Greenhouse, Lever and Ashby by name. Those services see the names it tries, which come from where
-  your contacts work, and your server's address. No contact's name or details are sent. No AI call
-  is made, and no company is followed. To turn it off, clear "Check job boards for companies in my
-  network" in **Settings > AI**
+  upgrading, including existing ones. Each night, Opportun looks up as many as 20 of these
+  companies on Greenhouse, Lever and Ashby by name. Those services see the names it tries, which
+  come from where your contacts work, and your server's address. No contact's name or details are
+  sent. No AI call is made, and no company is followed. To turn it off, clear "Check job boards for
+  companies in my network" in **Settings > AI**
   ([#296](https://github.com/bgoleno/opportun/issues/296)).
 - **Three shipped prompts were reordered so Anthropic can cache them.** An automatic upgrade step rewrites the system default
   of each of these tasks in place, and only while it is still exactly the text the previous

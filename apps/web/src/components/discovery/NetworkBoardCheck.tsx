@@ -19,7 +19,7 @@ interface NetworkBoardCheck {
 export const networkBoardCheckKey = ['settings', 'network-board-check'] as const;
 
 export const NETWORK_BOARD_CHECK_TEXT =
-  'Each night, Opportun looks up to 20 of these companies up on Greenhouse, Lever and Ashby by name. Those services see the names it tries, which come from where your contacts work, and your server’s address. No contact’s name or details are sent.';
+  'Each night, Opportun looks up as many as 20 of these companies on Greenhouse, Lever and Ashby by name. Those services see the names it tries, which come from where your contacts work, and your server’s address. No contact’s name or details are sent.';
 
 export function NetworkBoardCheckCard() {
   const qc = useQueryClient();
@@ -65,7 +65,7 @@ export function NetworkBoardCheckCard() {
           />
           <Label htmlFor={id}>Check job boards for companies in my network</Label>
         </div>
-        <p id={`${id}-text`} className="text-sm text-muted-foreground">
+        <p id={`${id}-text`} className="max-w-prose text-sm text-muted-foreground">
           {NETWORK_BOARD_CHECK_TEXT}
         </p>
         <FormError message={error} />

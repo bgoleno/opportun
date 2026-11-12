@@ -358,13 +358,29 @@ describe('the nightly network probe (#296)', () => {
       const first = await inNetwork(a, 'Initech', 2);
       const second = await inNetwork(a, 'Hooli');
       await turnOn(app, a);
-      const n = net({ [greenhouse('initech')]: () => respond(429) });
+      // The two probes are queued in the same millisecond (the clock is frozen), so their run_at and
+      // created_at tie, and the claim's ORDER BY leaves the tie to the database: SQLite runs them in
+      // insertion order, Postgres in no fixed order. Whichever runs first is told to slow down, so
+      // the test names the jobs by company, not by order.
+      const n = net({
+        [greenhouse('initech')]: () => respond(429),
+        [greenhouse('hooli')]: () => respond(429),
+      });
       expect(await night(app, at0520(12), n.fetch)).toBe(2);
       // The 429 was the first request, and nothing followed it.
-      expect(n.called).toEqual([greenhouse('initech')]);
+      expect(n.called).toHaveLength(1);
+      expect([greenhouse('initech'), greenhouse('hooli')]).toContain(n.called[0]);
       expect(await rowOf(app, first)).toMatchObject({ atsKind: null, boardProbedAt: null });
       expect(await rowOf(app, second)).toMatchObject({ atsKind: null, boardProbedAt: null });
-      const [, cancelled] = (await probeJobs(app, a)).sort((x, y) => x.createdAt - y.createdAt);
+      const ranFor = n.called[0] === greenhouse('initech') ? first : second;
+      const jobsTonight = await probeJobs(app, a);
+      expect(jobsTonight).toHaveLength(2);
+      const ran = jobsTonight.find((j) => (j.payload as { companyId: string }).companyId === ranFor);
+      const cancelled = jobsTonight.find((j) => j !== ran);
+      expect(ran).toMatchObject({
+        status: 'done',
+        result: { status: 'failed', reason: 'slow_down' },
+      });
       expect(cancelled).toMatchObject({ status: 'dead', lastError: NETWORK_PROBE_STOPPED });
       // The rest wait for the next night.
       expect(await night(app, at0520(12) + 60 * 60_000, n.fetch)).toBe(0);
@@ -419,9 +435,14 @@ describe('the nightly network probe (#296)', () => {
       await inNetwork(a, 'Initech', 2);
       await inNetwork(a, 'Hooli');
       await turnOn(app, a);
-      const n = net({ [greenhouse('initech')]: () => respond(502) });
+      // Either probe can run first (see the 429 test above), so both are told 502.
+      const n = net({
+        [greenhouse('initech')]: () => respond(502),
+        [greenhouse('hooli')]: () => respond(502),
+      });
       await night(app, at0520(12), n.fetch);
-      expect(n.called).toEqual([greenhouse('initech')]);
+      expect(n.called).toHaveLength(1);
+      expect([greenhouse('initech'), greenhouse('hooli')]).toContain(n.called[0]);
     });
   });
 

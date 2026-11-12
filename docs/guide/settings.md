@@ -95,10 +95,10 @@ _Editing one task's model. Set prices for a model without a list price, such as 
   name, its domain and up to 10 job titles from its board. See
   [Discovery](discovery.md#follow-companies) for exactly what each call sends.
 - **Network job boards**: on by default; clear the box to turn it off. "Check job boards for
-  companies in my network": each night, Opportun looks up to 20 of these companies up on Greenhouse, Lever and Ashby
-  by name. Those services see the names it tries, which come from where your contacts work, and your
-  server's address. No contact's name or details are sent. It makes no AI call, and it never reads a
-  company's own careers page or a Workday site. See
+  companies in my network": each night, Opportun looks up as many as 20 of these companies on
+  Greenhouse, Lever and Ashby by name. Those services see the names it tries, which come from where
+  your contacts work, and your server's address. No contact's name or details are sent. It makes no
+  AI call, and it never reads a company's own careers page or a Workday site. See
   **Network job boards** under [Follow companies](discovery.md#follow-companies) for which
   companies, what is kept and when it stops.
 - **Unpriced models** (local or gateway models) count at the highest listed price unless you
