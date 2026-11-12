@@ -253,7 +253,11 @@ export async function resolveLead(
   return { status: 'resolved_ats', ref, via };
 }
 
-const PayloadSchema = z.object({ resultId: z.string().min(1).max(64) });
+const PayloadSchema = z.object({
+  resultId: z.string().min(1).max(64),
+  /** Its ranking is to be made live (Rank anyway, #441): passed on to the rank job. */
+  live: z.boolean().optional(),
+});
 
 export const leadResolveJob: JobHandler<z.infer<typeof PayloadSchema>> = {
   kind: LEAD_RESOLVE_KIND,
@@ -272,7 +276,7 @@ export const leadResolveJob: JobHandler<z.infer<typeof PayloadSchema>> = {
       await enqueue(
         db,
         DISCOVERY_RANK_KIND,
-        { resultId: payload.resultId },
+        { resultId: payload.resultId, ...(payload.live === true ? { live: true } : {}) },
         {
           dedupeKey: `${DISCOVERY_RANK_KIND}:${payload.resultId}`,
           userId: user.userId,

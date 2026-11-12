@@ -6,7 +6,7 @@ import type { TaskKey, TaskRunRecord } from '@opportun/ai';
 import { and, eq, gte, sql } from 'drizzle-orm';
 import { countAll, maxBoolAsInt, utcDay } from '../db/dialect';
 import { taskRuns } from '../db/schema';
-import type { Db, UserCtx } from './base';
+import type { Db, Exec, UserCtx } from './base';
 
 const DAY_MS = 86_400_000;
 
@@ -15,7 +15,7 @@ export function startOfUtcDay(at: number): number {
 }
 
 /** Appends one run and returns its id (tailoring sessions keep references to their runs). */
-export async function recordTaskRun(db: Db, ctx: UserCtx, run: TaskRunRecord): Promise<string> {
+export async function recordTaskRun(db: Exec, ctx: UserCtx, run: TaskRunRecord): Promise<string> {
   const id = newId();
   await db
     .insert(taskRuns)

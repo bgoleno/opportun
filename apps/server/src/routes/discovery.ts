@@ -72,6 +72,8 @@ const ResultSchema = z.object({
    * last used its turn; null when it is not waiting.
    */
   rankDeferredAt: z.number().int().nullable(),
+  /** When the batch its ranking is in was sent (#441); null when it is in none. */
+  rankBatchSentAt: z.number().int().nullable(),
   resolution: z.enum(RESOLUTIONS),
   resolvedSourceRef: z.string().nullable(),
   disposition: z.enum(DISPOSITIONS),

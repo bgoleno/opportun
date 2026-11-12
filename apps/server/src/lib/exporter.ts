@@ -38,6 +38,9 @@ export const EXPORT_EXCLUDED_TABLES: readonly string[] = [
   'obs_metric_points',
   'obs_traces',
   'obs_spans',
+  // Ranking batches in flight with the AI provider (#441): queue state like jobs, meaningless in
+  // another instance, which could never collect them. A posting's rank_batch_id stays, as an id.
+  'rank_batches',
 ];
 
 type UserTable = DbTable & { userId: DbColumn };

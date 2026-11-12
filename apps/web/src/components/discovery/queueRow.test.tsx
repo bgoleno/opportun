@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { formatDate } from '@/lib/opportunities';
+import { formatDate, formatDateTime } from '@/lib/opportunities';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { fetchAllPendingResultIds, type DiscoveryResult } from './api';
 import { groupResults } from './groupResults';
@@ -28,6 +28,7 @@ function result(over: Partial<DiscoveryResult> & { id: string }): DiscoveryResul
     aiRationale: 'Strong match on platform work.',
     rankSkipReason: null,
     rankDeferredAt: null,
+    rankBatchSentAt: null,
     prefilterOutcome: null,
     prefilterRule: null,
     resolution: 'full',
@@ -345,6 +346,36 @@ describe('QueueRow: why a result was not ranked (#210)', () => {
       expect(screen.queryByText('Waiting for budget')).toBeNull();
     });
 
+    it('a posting waiting for a ranking batch says so, and once sent, when it was sent (#441)', () => {
+      const waiting = row({ aiScore: null, rankSkipReason: 'batch_waiting', rankDeferredAt: NOW });
+      expect(screen.getByText('Waiting for the next batch')).toBeInTheDocument();
+      expect(waiting.container).not.toHaveTextContent(/budget|Not ranked/i);
+      waiting.unmount();
+      const sentAt = NOW - 3_600_000;
+      const sent = row({
+        aiScore: null,
+        rankSkipReason: 'batch_waiting',
+        rankDeferredAt: NOW,
+        rankBatchSentAt: sentAt,
+      });
+      expect(
+        screen.getByText(`Ranking in a batch, sent ${formatDateTime(sentAt)}`),
+      ).toBeInTheDocument();
+      expect(sent.container).not.toHaveTextContent(/budget|Not ranked/i);
+    });
+
+    it('a scored result whose new ranking waits for a batch says the score may change (#441)', () => {
+      const { container } = row({
+        aiScore: 70,
+        rankSkipReason: 'batch_waiting',
+        rankDeferredAt: NOW,
+      });
+      expect(
+        screen.getByText('Score may change: a new ranking is waiting for the next batch'),
+      ).toBeInTheDocument();
+      expect(container).not.toHaveTextContent(/budget|Not ranked/i);
+    });
+
     it('a stored budget reason from before the wait existed still never says "today\'s"', () => {
       const { container } = row({ aiScore: null, rankSkipReason: 'budget_exceeded' });
       expect(screen.getByText('Waiting for budget')).toBeInTheDocument();
@@ -463,6 +494,21 @@ describe('QueueGroupRow: a member waiting for budget (tl on #230)', () => {
       result({ id: 'g2', dedupeKey: 'acme|role|b', aiScore: 70 }),
     ]);
     expect(container).not.toHaveTextContent(/waiting/i);
+  });
+
+  it('does not count a member waiting for a ranking batch as waiting for budget (#441)', () => {
+    renderGroup([
+      result({ id: 'g1', dedupeKey: 'acme|role|a', aiScore: 80 }),
+      result({ id: 'g2', dedupeKey: 'acme|role|b', aiScore: null, rankDeferredAt: NOW }),
+      result({
+        id: 'g3',
+        dedupeKey: 'acme|role|c',
+        aiScore: null,
+        rankSkipReason: 'batch_waiting',
+        rankDeferredAt: NOW,
+      }),
+    ]);
+    expect(screen.getByText('1 of 3 locations is waiting for budget')).toBeInTheDocument();
   });
 });
 

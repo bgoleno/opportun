@@ -477,6 +477,8 @@ the name; the others stay in the instance.
 | `opportun.count.skipped`                | whole number             | yes      |
 | `opportun.count.truncated`              | whole number             | yes      |
 | `opportun.count.read`                   | whole number             | yes      |
+| `opportun.count.returned`               | whole number             | yes      |
+| `opportun.count.unmatched`              | whole number             | yes      |
 | `opportun.count.set`                    | whole number             | yes      |
 | `opportun.count.changed`                | whole number             | yes      |
 | `opportun.count.cleared`                | whole number             | yes      |
@@ -503,6 +505,7 @@ the name; the others stay in the instance.
 | `opportun.discovery_result.id`          | row id                   | no       |
 | `opportun.dedupe_candidate.id`          | row id                   | no       |
 | `opportun.resume.id`                    | row id                   | no       |
+| `opportun.rank_batch.id`                | row id                   | no       |
 | `opportun.discovery.source_kind`        | one of a fixed list      | yes      |
 | `opportun.ats.kind`                     | one of a fixed list      | yes      |
 | `opportun.fetch.blocked_reason`         | class or code            | yes      |
