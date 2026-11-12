@@ -731,6 +731,8 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.db.filesystem',
   ],
   'database write gate held too long': ['opportun.db.gate_label', 'opportun.db.gate_held_ms'],
+  // The background WAL checkpointer's worker failed (db/client.ts, #383).
+  'background checkpointer stopped: automatic checkpoints are back on': [],
   'slow transaction held the database write gate': [
     'opportun.db.gate_held_ms',
     'opportun.db.awaited_outside',
