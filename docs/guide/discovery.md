@@ -306,7 +306,7 @@ times the prices in Opportun's price table on that date.
 
 - **Prompt caching.** Opportun marks the part of a call that stays the same for Anthropic's
   prompt cache: for ranking, the instructions and your role target, which come before the posting;
-  for tagging, the industry table. The first call writes that part to the cache, at 1.25 times the
+  for tagging, the industry table (and for classifying mail, see [Inbox](inbox.md#how-classification-works)). The first call writes that part to the cache, at 1.25 times the
   input price, and each call in the next five minutes reads it at a tenth of the input price or
   less. Measured on 2026-11-11 the same way as the table, on 76 postings against one role target:
   the first ranking call wrote 721 tokens and each of the other 75 read them, and the mean cost of
