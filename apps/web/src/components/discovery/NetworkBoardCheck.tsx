@@ -1,6 +1,8 @@
 // Settings > AI: the switch for the nightly network probe (https://github.com/bgoleno/opportun/issues/296).
-// Off unless the user turns it on: nobody clicks for these requests, and the names it tries come
-// from where the user's contacts work. The sentence under it is sec's, word for word.
+// On unless the user turns it off (the owner's rule: a feature is on by default, with an option to
+// disable it). The server decides what it reads as on; the box shows only what the server says, so
+// it shows what the job will do. The sentence under it is sec's, word for word: nobody clicks for
+// these requests, and the names it tries come from where the user's contacts work.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { FormError } from '@/components/FormError';

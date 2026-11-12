@@ -168,9 +168,9 @@ only reads public job board pages, and it does not follow the company: the board
 until you follow it.
 
 **Check board.** A company in Recommended companies that has not been checked, from your network or
-a suggestion, has a **Check board** button. Unless you turn on **Network job boards** (below),
-nothing checks a company you have not asked about: only your click does, and only for that company,
-once. It does what the weekly check does: it looks
+a suggestion, has a **Check board** button. Apart from **Network job boards** (below), which is on
+unless you turn it off, nothing checks a company you have not asked about: only your click does, and
+only for that company, once. It does what the weekly check does: it looks
 for the company's public job board (the company's name, as board-name guesses, goes to the Greenhouse,
 Lever, Ashby and Workday public pages, as following does), reads the list of its open jobs once, and
 keeps how many there are, how many the pre-filter passes, and up to 10 of the job titles. No AI call
@@ -181,10 +181,11 @@ it so that you can add the careers page under Followed companies. The job titles
 nightly industry tags use for a company with no postings stored yet, and a check that reads titles
 after the model could not place a company has it asked again.
 
-**Network job boards.** Off unless you turn it on, in **Settings > AI**: "Check job boards for
-companies in my network". Each night, Opportun looks up to 20 of these companies up on Greenhouse,
-Lever and Ashby by name. Those services see the names it tries, which come from where your contacts
-work, and your server's address. No contact's name or details are sent.
+**Network job boards.** On by default, for every account, including one that existed before this
+was added. Each night, Opportun looks up to 20 of these companies up on Greenhouse, Lever and Ashby
+by name. Those services see the names it tries, which come from where your contacts work, and your
+server's address. No contact's name or details are sent. To turn it off, clear "Check job boards for
+companies in my network" in **Settings > AI**; it stays off until you turn it on again.
 
 - **Which companies:** ones where you know someone, that you have not followed, denied or checked.
   The ones where you know the most people go first, then by name. The rest wait for later nights.
@@ -196,7 +197,10 @@ work, and your server's address. No contact's name or details are sent.
   The nightly industry tags then use those titles for a company not yet tagged; a tag already made
   is not changed.
 - **When a service says to slow down,** the night ends for you, and the rest wait for the next
-  night. A company whose service fails on three nights is recorded as having no board.
+  night. That service is also left alone for every other account on the server until the next
+  night; the other two are still asked. A company that could not be looked up on that service is
+  not recorded as having no board: it waits for a later night. A company whose service fails on
+  three nights is recorded as having no board.
 - **Whose board it is:** a board found by trying a company's name can belong to another company of
   the same name. The row shows the board's address (for example `boards.greenhouse.io/acme`), which
   opens the board in a new tab, so you can see whose it is before following.

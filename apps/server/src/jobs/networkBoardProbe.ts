@@ -3,24 +3,27 @@
 // gets one board probe on a later night, so the tagging has its job titles and its row shows the
 // board and the estimate without a click.
 //
-// Off unless the user turns it on (NETWORK_BOARD_CHECK_SETTING): nobody clicks for these requests.
-// What leaves the server: board names guessed from the company's name and domain, sent to the
+// On unless the user turns it off (NETWORK_BOARD_CHECK_SETTING), as the owner decided: a feature is
+// on by default with an option to disable it. Nobody clicks for these requests, so what follows
+// is not loosened for it. What leaves the server: board names guessed from the company's name and domain, sent to the
 // public board APIs of Greenhouse, Lever and Ashby only (detection's `boardApisOnly`), never the
 // company's own careers page and never a Workday site. At most NETWORK_PROBES_PER_NIGHT companies
 // a night for each user, through the vendor queue, one of this kind at a time on the instance.
 //
 // A vendor that says slow down (a 429 or a 5xx) ends that user's night: the probe makes no request
-// after it, and the user's pending probes are cancelled. The rest wait for the next night.
+// after it, and the user's pending probes are cancelled. The rest wait for the next night. It also
+// stops this job's requests to that vendor for every user until the next night's sweep; the other
+// two vendors go on.
 import { CronExpressionParser } from 'cron-parser';
 import { and, asc, count, desc, eq, gte, inArray, isNull, lt, or } from 'drizzle-orm';
 import { z } from 'zod';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
 import { jsonText } from '../db/dialect';
-import { companies, jobs, networkContacts, users } from '../db/schema';
+import { companies, jobs, networkContacts, settings, users } from '../db/schema';
 import type { UserCtx } from '../repos/base';
-import { readUserSetting } from '../repos/userSettings';
-import { recordNone } from './atsDetect';
+import { userSettingKey } from '../repos/userSettings';
+import { ATS_PROBES, recordNone, type AtsKind } from './atsDetect';
 import { probeCompanyBoard, recordProbe } from './companyBoardProbe';
 import { requireService, type JobHandler } from './registry';
 import { cancelJob } from './runner';
@@ -41,9 +44,68 @@ export const NETWORK_PROBE_STOPPED =
 export const networkProbeDedupeKey = (companyId: string): string =>
   `${NETWORK_PROBE_KIND}:${companyId}`;
 
-/** Whether the user has turned the nightly network probe on. Off by default. */
+/**
+ * Whether the nightly network probe runs for the user: on when nothing is stored (a user who never
+ * changed it, existing users included), or when the stored value is on; off for any other stored
+ * value. Not readUserSetting: it gives its fallback, here on, for a stored value that fails its
+ * schema too, so a damaged off would read as on (sec, criterion 15 on #296). The job and the
+ * Settings page both read this, so the page shows what the job will do.
+ */
 export async function readNetworkBoardCheck(db: Db, ctx: UserCtx): Promise<boolean> {
-  return await readUserSetting(db, ctx, NETWORK_BOARD_CHECK_SETTING, z.boolean(), false);
+  const row = await db
+    .select({ value: settings.value })
+    .from(settings)
+    .where(
+      and(
+        eq(settings.key, userSettingKey(NETWORK_BOARD_CHECK_SETTING, ctx.userId)),
+        eq(settings.userId, ctx.userId),
+      ),
+    )
+    .get();
+  return row === undefined || row.value === true;
+}
+
+/** The instance-wide row that says a vendor asked this job to slow down, and when. */
+export const vendorStopKey = (kind: AtsKind): string => `network_probe_vendor_stop.${kind}`;
+
+/**
+ * Whether a vendor said slow down to this job tonight, for any user: its stop row was written
+ * since tonight's sweep began (sec, criterion 16 on #296). The row belongs to the instance
+ * (user_id null, as obs_collect's), so no user's export carries it, and it is in the database, so
+ * a restart the same night does not start the requests again.
+ */
+async function vendorStopped(db: Db, kind: AtsKind, now: number): Promise<boolean> {
+  const row = await db
+    .select({ at: settings.updatedAt })
+    .from(settings)
+    .where(and(eq(settings.key, vendorStopKey(kind)), isNull(settings.userId)))
+    .get();
+  return row !== undefined && row.at >= nightStart(now);
+}
+
+/**
+ * Stops this job's requests to a vendor for every user until the next night's sweep. An upsert
+ * that sets the time, never a read and a rewrite, so two probes told at once cannot lose it.
+ */
+async function stopVendor(db: Db, kind: AtsKind, now: number): Promise<void> {
+  await db
+    .insert(settings)
+    .values({ key: vendorStopKey(kind), userId: null, value: now, updatedAt: now })
+    .onConflictDoUpdate({ target: settings.key, set: { value: now, updatedAt: now } })
+    .run();
+}
+
+/** The vendor a board API request goes to, by its fixed host. */
+const VENDOR_OF_HOST: ReadonlyMap<string, AtsKind> = new Map(
+  ATS_PROBES.map((p) => [p.host, p.kind]),
+);
+
+function vendorOf(url: string): AtsKind | undefined {
+  try {
+    return VENDOR_OF_HOST.get(new URL(url).hostname);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -183,24 +245,47 @@ async function stopTheNight(db: Db, ctx: UserCtx): Promise<number> {
 }
 
 /**
- * The probe's fetch for this job: it refuses every request after a vendor answered 429 or 5xx, so
- * detection's remaining guesses go nowhere. (Detection counts a refused request as a failed
- * guess and ends by throwing its transient error, which the job turns into the night's end.)
+ * The probe's fetch for this job.
+ * - Before each request it reads whether that request's vendor is stopped tonight for the
+ *   instance, so a probe already running for another user stops asking it from its next request on.
+ * - After this probe is told 429 or 5xx it stops that vendor for the instance, and refuses every
+ *   further request of its own, so detection's remaining guesses go nowhere.
+ * Detection counts a refused request as a failed guess and ends by throwing its transient error,
+ * so a refusal never records "no board"; the job then tells the two cases apart.
  */
-function slowDownGuard(sctx: SourceContext): { sctx: SourceContext; slowedDown: () => boolean } {
+function slowDownGuard(
+  db: Db,
+  sctx: SourceContext,
+): { sctx: SourceContext; slowedDown: () => boolean; skippedStopped: () => boolean } {
   let slowedDown = false;
+  let skippedStopped = false;
   const fetch: SourceContext['fetch'] = async (url, opts) => {
     if (slowedDown) throw new Error('the board provider asked to slow down');
+    const vendor = vendorOf(url);
+    if (vendor !== undefined && (await vendorStopped(db, vendor, Date.now()))) {
+      skippedStopped = true;
+      throw new Error('this board provider asked to slow down tonight');
+    }
     const res = await sctx.fetch(url, opts);
-    if (res.status === 429 || res.status >= 500) slowedDown = true;
+    if (res.status === 429 || res.status >= 500) {
+      slowedDown = true;
+      if (vendor !== undefined) await stopVendor(db, vendor, Date.now());
+    }
     return res;
   };
-  return { sctx: { ...sctx, fetch }, slowedDown: () => slowedDown };
+  return {
+    sctx: { ...sctx, fetch },
+    slowedDown: () => slowedDown,
+    skippedStopped: () => skippedStopped,
+  };
 }
 
 export type NetworkProbeOutcome =
   | { status: 'probed'; board: boolean }
-  | { status: 'skipped'; reason: 'off' | 'stopped' | 'missing' | 'followed' | 'denied' | 'probed' }
+  | {
+      status: 'skipped';
+      reason: 'off' | 'stopped' | 'vendor_stopped' | 'missing' | 'followed' | 'denied' | 'probed';
+    }
   | { status: 'failed'; reason: 'slow_down' | 'error'; givenUp: boolean };
 
 /** One company's probe: everything is checked again first, since the pick was made hours ago. */
@@ -228,13 +313,18 @@ export async function runNetworkProbe(
   if (company.status === 'denied') return { status: 'skipped', reason: 'denied' };
   if (company.status === 'followed') return { status: 'skipped', reason: 'followed' };
   if (company.boardProbedAt !== null) return { status: 'skipped', reason: 'probed' };
-  const guard = slowDownGuard(sctx);
+  const guard = slowDownGuard(db, sctx);
   try {
     const outcome = await probeCompanyBoard(db, ctx, companyId, guard.sctx, {
       boardApisOnly: true,
     });
     return { status: 'probed', board: outcome.status === 'probed' && outcome.kind !== null };
   } catch (err) {
+    // A vendor stopped tonight was not asked, and its board may be the one: nothing is recorded,
+    // not "no board" and not a failed night, and the company waits for a later night (criterion 16).
+    if (guard.skippedStopped() && !guard.slowedDown()) {
+      return { status: 'skipped', reason: 'vendor_stopped' };
+    }
     // A vendor error records nothing about the board: the company is picked again on a later night,
     // unless this was its last allowed failure.
     sctx.log.warn(

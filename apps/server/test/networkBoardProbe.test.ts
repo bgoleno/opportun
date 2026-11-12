@@ -1,5 +1,5 @@
-// The nightly network probe (https://github.com/bgoleno/opportun/issues/296): tl's criteria 1 to 14
-// on the issue, sec's conditions folded in. Every request goes through the real safeFetch over a
+// The nightly network probe (https://github.com/bgoleno/opportun/issues/296): tl's criteria 1 to 17
+// on the issue, on by default as the owner decided, sec's conditions folded in. Every request goes through the real safeFetch over a
 // scripted DNS table and transport, as in atsDetect.test.ts, and every call the probe makes is
 // counted before safeFetch sees it, so a refused request to a private address counts too.
 import { runStructured } from '@opportun/ai';
@@ -16,11 +16,12 @@ import {
   NETWORK_PROBE_STOPPED,
   NETWORK_PROBES_PER_NIGHT,
   nightStart,
+  queueNightForUser,
   sweepNetworkProbes,
 } from '../src/jobs/networkBoardProbe';
 import { createSafeFetch, type RawResponse } from '../src/lib/safeFetch';
 import { listSources } from '../src/repos/discovery';
-import { writeUserSetting } from '../src/repos/userSettings';
+import { userSettingExists, writeUserSetting } from '../src/repos/userSettings';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 
@@ -95,6 +96,7 @@ function net(routes: Record<string, () => RawResponse> = {}) {
 }
 
 const greenhouse = (slug: string) => `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs`;
+const lever = (slug: string) => `https://api.lever.co/v0/postings/${slug}?mode=json&limit=1`;
 const jobList = (slug: string, ...titles: string[]) =>
   JSON.stringify({
     jobs: titles.map((title, i) => ({
@@ -149,36 +151,63 @@ async function night(app: FastifyInstance, now: number, fetch: SourceContext['fe
 
 describe('the nightly network probe (#296)', () => {
   describe('the setting', () => {
-    it('is off by default, and then the job makes no request at all', async () => {
+    it('is on by default, existing users included: nothing stored reads on, and the job probes', async () => {
+      const { app, a } = await boot();
+      const id = await inNetwork(a, 'Initech');
+      // No migration writes a value: a user who never changed it has no row at all.
+      expect(await userSettingExists(app.db, ctxOf(a), NETWORK_BOARD_CHECK_SETTING)).toBe(false);
+      const res = await a.request({ method: 'GET', url: '/api/v1/settings/network-board-check' });
+      expect(res.json()).toEqual({ enabled: true });
+      const n = net(boardFor('initech', 'Platform Engineer'));
+      expect(await night(app, at0520(12), n.fetch)).toBe(1);
+      expect(await rowOf(app, id)).toMatchObject({ atsKind: 'ats_greenhouse' });
+    });
+
+    it('turned off, the job makes no request at all for that user', async () => {
       const { app, a } = await boot();
       await inNetwork(a, 'Initech');
-      const res = await a.request({ method: 'GET', url: '/api/v1/settings/network-board-check' });
-      expect(res.json()).toEqual({ enabled: false });
+      await turnOn(app, a, false);
       const n = net(boardFor('initech', 'Platform Engineer'));
       expect(await night(app, at0520(12), n.fetch)).toBe(0);
       expect(n.called).toEqual([]);
       expect(await probeJobs(app, a)).toEqual([]);
     });
 
-    it('is turned on and off through its route, for that user only', async () => {
-      const { a, b } = await boot();
-      const put = await a.request({
-        method: 'PUT',
-        url: '/api/v1/settings/network-board-check',
-        payload: { enabled: true },
-      });
-      expect(put.statusCode, put.body).toBe(200);
-      const get = (c: TestClient) =>
-        c.request({ method: 'GET', url: '/api/v1/settings/network-board-check' });
-      expect((await get(a)).json()).toEqual({ enabled: true });
-      expect((await get(b)).json()).toEqual({ enabled: false });
+    it('a stored value that is neither on nor off reads as off: no request, and the page shows off', async () => {
+      const { app, a } = await boot();
+      await inNetwork(a, 'Initech');
+      // A damaged row: the generic reader would give its fallback, which is now on.
+      await writeUserSetting(app.db, ctxOf(a), NETWORK_BOARD_CHECK_SETTING, 'yes');
+      const res = await a.request({ method: 'GET', url: '/api/v1/settings/network-board-check' });
+      expect(res.json()).toEqual({ enabled: false });
+      const n = net(boardFor('initech', 'Platform Engineer'));
+      expect(await night(app, at0520(12), n.fetch)).toBe(0);
+      expect(n.called).toEqual([]);
     });
 
-    it('with two users and the setting on for one, the other user’s network gets no request', async () => {
+    it('is turned off and on through its route, for that user only', async () => {
+      const { a, b } = await boot();
+      const put = (enabled: boolean) =>
+        a.request({
+          method: 'PUT',
+          url: '/api/v1/settings/network-board-check',
+          payload: { enabled },
+        });
+      const get = (c: TestClient) =>
+        c.request({ method: 'GET', url: '/api/v1/settings/network-board-check' });
+      const off = await put(false);
+      expect(off.statusCode, off.body).toBe(200);
+      expect((await get(a)).json()).toEqual({ enabled: false });
+      expect((await get(b)).json()).toEqual({ enabled: true });
+      expect((await put(true)).statusCode).toBe(200);
+      expect((await get(a)).json()).toEqual({ enabled: true });
+    });
+
+    it('with two users and the setting off for one, that user’s network gets no request', async () => {
       const { app, a, b } = await boot();
       await inNetwork(a, 'Initech');
       await inNetwork(b, 'Hooli');
-      await turnOn(app, a);
+      await turnOn(app, b, false);
       const n = net({ ...boardFor('initech', 'Platform Engineer'), ...boardFor('hooli', 'Sales') });
       await night(app, at0520(12), n.fetch);
       expect(n.called.some((u) => u.includes('hooli'))).toBe(false);
@@ -350,6 +379,47 @@ describe('the nightly network probe (#296)', () => {
       expect(await night(app, at0520(13), next.fetch)).toBe(2);
       expect(await rowOf(app, second)).toMatchObject({ atsKind: 'ats_greenhouse' });
     });
+
+    for (const status of [429, 503]) {
+      it(`a ${status} from one vendor stops that vendor for every user tonight, and the other two go on`, async () => {
+        const { app, a, b } = await boot();
+        await inNetwork(a, 'Initech');
+        const hooli = await inNetwork(b, 'Hooli');
+        const globex = await inNetwork(b, 'Globex');
+        await turnOn(app, a);
+        await turnOn(app, b);
+        // The first user's probe: Greenhouse has no such board, then Lever says slow down.
+        const first = net({ [lever('initech')]: () => respond(status) });
+        vi.setSystemTime(at0520(12));
+        app.jobs.services.sourceFetch = first.fetch;
+        expect(await queueNightForUser(app.db, ctxOf(a), at0520(12))).toBe(1);
+        await app.jobs.drain();
+        expect(first.called).toEqual([greenhouse('initech'), lever('initech')]);
+        // The second user's run, later the same night. Globex's board is on Greenhouse; Hooli's
+        // only match would be on Lever.
+        const later = at0520(12) + 30 * 60_000;
+        const second = net(boardFor('globex', 'Platform Engineer'));
+        vi.setSystemTime(later);
+        app.jobs.services.sourceFetch = second.fetch;
+        expect(await queueNightForUser(app.db, ctxOf(b), later)).toBe(2);
+        await app.jobs.drain();
+        expect(second.hosts()).not.toContain('api.lever.co');
+        expect(second.hosts()).toContain('boards-api.greenhouse.io');
+        expect(second.hosts()).toContain('api.ashbyhq.com');
+        expect(await rowOf(app, globex)).toMatchObject({ atsKind: 'ats_greenhouse' });
+        // Not "no board", and not a failed night: it waits for a later night.
+        expect(await rowOf(app, hooli)).toMatchObject({
+          atsKind: null,
+          boardProbedAt: null,
+          boardProbeFailedNights: 0,
+        });
+        // The next night, Lever is asked again.
+        const next = net();
+        await night(app, at0520(13), next.fetch);
+        expect(next.called).toContain(lever('hooli'));
+        expect(await rowOf(app, hooli)).toMatchObject({ atsKind: 'none' });
+      });
+    }
 
     it('a 5xx ends the night as a 429 does', async () => {
       const { app, a } = await boot();
