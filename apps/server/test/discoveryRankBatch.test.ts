@@ -47,6 +47,7 @@ import {
   writeDiscoveryBudget,
 } from '../src/repos/discoveryBudget';
 import {
+  createSubmittingBatch,
   endBatchWait,
   hasResult,
   listBatchWaitingIds,
@@ -1176,6 +1177,14 @@ describe('two users batching (sec)', () => {
     expect(await listBatchWaitingIds(app.db, asA)).toEqual(
       (await results(app, a)).map((r) => r.id),
     );
+    // a's send, handed b's waiting posting (sec): nothing is linked, and b's row is unchanged.
+    const waitingB = await getResult(app.db, ctxOf(b), rb!.id);
+    const stray = await createSubmittingBatch(app.db, asA, {
+      policy: POLICY,
+      items: [{ resultId: rb!.id, fingerprint: 'f', promptId: 'p', estUsd: 0.01 }],
+    });
+    expect(stray.linked).toEqual([]);
+    expect(await getResult(app.db, ctxOf(b), rb!.id)).toEqual(waitingB);
     await submit(app, b);
     const [batchB] = await batchRows(app, b);
     const before = await getResult(app.db, ctxOf(b), rb!.id);
