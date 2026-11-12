@@ -45,7 +45,11 @@ export class PostgresConfig {
 }
 
 /** DB_DIALECT and, for Postgres, how to reach it (ADR-4). */
-export type DbConfig = { dialect: 'sqlite' } | PostgresConfig;
+/**
+ * The database engine's settings. SQLite's one option: OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT=1
+ * runs the background WAL checkpointer (db/checkpointer.ts, #383), off by default.
+ */
+export type DbConfig = { dialect: 'sqlite'; backgroundCheckpoint?: true } | PostgresConfig;
 
 export interface Config {
   port: number;
@@ -456,7 +460,10 @@ export function loadDbConfig(env: NodeJS.ProcessEnv = process.env): DbConfig {
   } catch (err) {
     throw new ConfigError((err as Error).message);
   }
-  return dialect === 'sqlite' ? { dialect } : loadPostgres(env);
+  if (dialect !== 'sqlite') return loadPostgres(env);
+  return env.OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT === '1'
+    ? { dialect, backgroundCheckpoint: true }
+    : { dialect };
 }
 
 /**
