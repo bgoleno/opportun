@@ -560,6 +560,30 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
     }
   });
 
+  it("the server's own worker waits 5 s for a header it cannot read before it stops (qa on #393)", async () => {
+    // What the server starts, with no limit given: only the poll is faster, and a page size the
+    // header does not have keeps every look unreadable. 5,000 is written here, not imported, so a
+    // change to the server's limit fails this test.
+    const startedAt = Date.now();
+    const opened = await openTestDb({
+      backgroundCheckpoint: true,
+      checkpointerTuning: { pageSize: 512, pollMs: 20 },
+    });
+    try {
+      const h = opened.handle as SqliteHandle;
+      const stop = await h.checkpointer!.stopped;
+      const elapsed = Date.now() - startedAt;
+      expect(stop).toMatchObject({ unexpected: true });
+      expect(elapsed).toBeGreaterThanOrEqual(5_000);
+      // About one poll after the limit; the margin is for a loaded machine.
+      expect(elapsed).toBeLessThan(8_000);
+      const ms = /has not been readable for (\d+) ms$/.exec((stop.err as Error).message);
+      expect(Number(ms?.[1])).toBeGreaterThan(5_000);
+    } finally {
+      await opened.close();
+    }
+  }, 20_000);
+
   it('a header unreadable for a while and then readable again: the worker goes on, and checkpoints', async () => {
     const checkpoints: CheckpointRecord[] = [];
     let stopped = false;
@@ -611,18 +635,24 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       h.sqlite.pragma('wal_autocheckpoint = 10000');
       const pageSize = Number(h.sqlite.pragma('page_size', { simple: true }));
       const shm = shmOf(opened.dataDir);
-      await write(h, 1);
+      // More than maxPages waiting, so a worker that checkpointed on a guess would checkpoint here
+      // (tl on #393).
+      await write(h, 100);
       const cp = startBackgroundCheckpointer(join(opened.dataDir, 'opportun.db'), {
         pragmas: [],
         pageSize,
         maxPages: 50,
-        pollMs: 20,
+        // The first look comes a poll after ready, so the tear below lands before it.
+        pollMs: 200,
         unreadableMs: 300,
         onStopped: () => undefined,
         onCheckpoint: (c) => checkpoints.push(c),
       });
+      // Torn only once the worker is ready: opening its connection rebuilds a torn header (seen
+      // when the header was torn before the worker started).
       await cp.ready;
       const restore = tearHeader(shm);
+      expect(readWalIndex(shm, pageSize)).toBeUndefined();
       const tornAt = Date.now();
       try {
         const stop = await cp.stopped;
