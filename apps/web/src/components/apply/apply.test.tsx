@@ -1004,6 +1004,157 @@ describe('S5: open the form', () => {
   });
 });
 
+describe('#416: the next step names the extension only where it can fill this form', () => {
+  const REVIEW_LINE =
+    "When the form opens, click the Opportun icon in your browser's toolbar, then press Fill in this application. It fills in what you reviewed here.";
+  const token = (over: Record<string, unknown> = {}) => ({
+    id: 'tok-1',
+    name: 'Laptop',
+    scopes: ['apply:assist'],
+    lastUsedAt: null,
+    revokedAt: null,
+    createdAt: NOW,
+    ...over,
+  });
+  const LEVER = 'https://jobs.lever.co/examplecorp/abcd-1234/apply';
+  const cases: [
+    string,
+    Record<string, unknown>,
+    Partial<SubmissionView>,
+    boolean,
+    Partial<OpportunityView>?,
+  ][] = [
+    ['a usable token on a Greenhouse form', { items: [token()] }, {}, true],
+    ['no token', { items: [] }, {}, false],
+    ['a revoked token', { items: [token({ revokedAt: NOW - MIN })] }, {}, false],
+    [
+      'a token without the Assisted apply scope',
+      { items: [token({ scopes: ['capture:push'] })] },
+      {},
+      false,
+    ],
+    // Greenhouse, but on the company's own site: the extension fills only Greenhouse's hosts.
+    [
+      "a Greenhouse posting on the company's own site",
+      { items: [token()] },
+      { destinationUrl: 'https://careers.example.com/jobs?gh_jid=1000001' },
+      false,
+    ],
+    // Each check on its own: another system's form, recorded at a Greenhouse address.
+    [
+      'another application system at a Greenhouse address',
+      { items: [token()] },
+      { atsKind: 'ats_lever' },
+      false,
+    ],
+    [
+      'an application system the extension does not fill',
+      { items: [token()] },
+      { atsKind: 'ats_lever', destinationUrl: LEVER },
+      false,
+    ],
+    // A Greenhouse job embedded on the company's own careers page (#398, tl on #425): its board
+    // is proven and the destination is Greenhouse's own page, but the user applies where the job
+    // is embedded, so the extension is not named.
+    [
+      'an embedded Greenhouse job whose board was proven from its gh_jid link',
+      { items: [token()] },
+      {},
+      false,
+      {
+        atsJobRef: {
+          kind: 'ats_greenhouse',
+          org: 'examplecorp',
+          externalId: '1000001',
+          url: DEST,
+          verifiedVia: 'gh_jid',
+          verifiedAt: NOW - MIN,
+        },
+      },
+    ],
+  ];
+
+  /** Renders a step once its token list has been read, so a missing line is a decision. */
+  async function renderAfterTokens(
+    step: 'review' | 'open',
+    tokens: unknown,
+    sub: SubmissionView,
+    opp: Partial<OpportunityView> = {},
+  ) {
+    const api = mockApi({
+      ...routes(sub, { 'GET /opportunities/opp-1': { ...OPP, ...opp } }),
+      'GET /device-tokens': tokens,
+    });
+    const out = renderStep(step);
+    await waitFor(() => expect(calls(api.calls, 'GET', '/device-tokens')).toHaveLength(1));
+    await screen.findByRole('heading', { level: 1 });
+    return out;
+  }
+
+  it.each(cases)('the review step, with %s', async (_name, tokens, over, canFill, opp) => {
+    await renderAfterTokens('review', tokens, submission(over), opp);
+    if (canFill) expect(await screen.findByText(REVIEW_LINE)).toBeVisible();
+    else {
+      await screen.findByText(/Ready to open the form\?/);
+      expect(screen.queryByText(REVIEW_LINE)).toBeNull();
+    }
+  });
+
+  it.each(cases)('the Open step, with %s', async (_name, tokens, over, canFill, opp) => {
+    await renderAfterTokens(
+      'open',
+      tokens,
+      submission({ status: 'handed_off', handedOffAt: NOW, ...over }),
+      opp,
+    );
+    const card = (await screen.findByText('On the application site')).closest(
+      '[data-slot="card"]',
+    ) as HTMLElement;
+    const steps = await within(card).findAllByRole('listitem');
+    const text = steps.map((li) => (li.textContent ?? '').replace(/\s+/g, ' ').trim());
+    if (canFill) {
+      await waitFor(() => expect(within(card).getByText(/Go to the/)).toBeVisible());
+      expect(text).toHaveLength(4);
+      expect(text[0]).toMatch(/^Go to the boards\.greenhouse\.io tab\./);
+      expect(text[1]).toContain(
+        'Click the Opportun icon in the toolbar, then press Fill in this application.',
+      );
+      expect(text[1]).toContain("Not there? Open your browser's Extensions menu and pin Opportun.");
+      // The icon itself is shown beside the words.
+      expect(card.querySelector('img[src="/favicon.svg"]')).not.toBeNull();
+      expect(text[2]).toContain(
+        'Check every field. The extension lists what it filled and what it left for you.',
+      );
+      expect(text[3]).toContain("Press the site's own Submit button. Only you can do this.");
+      expect(screen.queryByText(/can fill this form for you/)).toBeNull();
+    } else {
+      // Today's copying steps, and one line about the extension, promising nothing more.
+      expect(text[0]).toBe('Fill in the form, copying from your details below.');
+      expect(text).toContain("Press the site's own Submit button. Only you can do this.");
+      expect(within(card).queryByText(/Click the Opportun icon/)).toBeNull();
+      const line = within(card).getByText(
+        /The Opportun browser extension can fill this form for you/,
+      );
+      expect(within(line).getByRole('link', { name: /Extensions and Connectors/ })).toHaveAttribute(
+        'href',
+        '/settings/integrations',
+      );
+    }
+    // The details to copy stay below either way.
+    expect(screen.getByText('Your details to copy')).toBeVisible();
+  });
+
+  it('a token list the server will not give (an older server) promises nothing', async () => {
+    const api = mockApi(routes(submission({ status: 'handed_off', handedOffAt: NOW })));
+    renderStep('open');
+    await waitFor(() => expect(calls(api.calls, 'GET', '/device-tokens')).toHaveLength(1));
+    expect(
+      await screen.findByText('Fill in the form, copying from your details below.'),
+    ).toBeVisible();
+    expect(screen.queryByText(/Click the Opportun icon/)).toBeNull();
+  });
+});
+
 describe('#144: a posting change under the attempt is shown, and nothing is cancelled', () => {
   const NEW = 'https://boards.greenhouse.io/examplecorp/jobs/2000002';
   const moved = {
@@ -2535,6 +2686,73 @@ describe('#401: the details step, filled from the profile, the account and the l
       expect(within(fieldBox('LinkedIn profile')).queryByText(/your profile/)).toBeNull();
       expect(within(fieldBox('LinkedIn profile')).queryByRole('checkbox')).toBeNull();
     });
+  });
+
+  // tl's optional points on #430, folded into #435.
+  it('a tick left on a field changed back to the profile value is not sent', async () => {
+    const api = mockApi(withDetails(filled));
+    const { user, router } = renderStep('details');
+    const name = await screen.findByLabelText('Full name');
+    await screen.findByText('From your profile');
+    await user.clear(name);
+    await user.type(name, 'Jane Q. Doe');
+    await user.click(
+      within(fieldBox('Full name')).getByRole('checkbox', { name: 'Save to my profile' }),
+    );
+    // Back to what the profile holds: the tick goes with the marker, and nothing is saved.
+    await user.clear(name);
+    await user.type(name, 'Jane Doe');
+    expect(within(fieldBox('Full name')).queryByRole('checkbox')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Next: Review' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'review' }));
+    for (const edit of calls(api.calls, 'PATCH', '/submissions/sub-1')) {
+      expect(edit.body).not.toHaveProperty('saveToProfile');
+    }
+  });
+
+  it('the not-filled notice skips a field since filled, and one the start-again notice names', async () => {
+    mockApi(
+      withDetails(submission({ fields: { fullName: 'Jane Doe' } }), {
+        'GET /profile/application-details': {
+          values: [PREFILL.values[0]],
+          leftOut: [
+            { key: 'phone', source: { kind: 'profile' } },
+            { key: 'linkedinUrl', source: { kind: 'profile' } },
+          ],
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithProviders(
+      <ApplyPage opportunityId="opp-1" step="details" cleared={['linkedinUrl']} />,
+      { path: '/opportunities/opp-1/apply?step=details' },
+    );
+    const notice = await screen.findByRole('status', { name: /not filled in/i });
+    // LinkedIn is named by the start-again notice already: only Phone here.
+    expect(notice).toHaveTextContent('Phone (from your profile)');
+    expect(notice).not.toHaveTextContent('LinkedIn');
+    // Filled in now: the notice goes.
+    await user.type(screen.getByLabelText('Phone'), '+1 555 0100');
+    await waitFor(() =>
+      expect(screen.queryByRole('status', { name: /not filled in/i })).toBeNull(),
+    );
+  });
+
+  // #435 (slice 1 of #402): the new details, each with how to write it.
+  it('asks for country, city, school, degree and how you heard, each written as the list shows it', async () => {
+    mockApi(withDetails(filled));
+    renderStep('details');
+    const hints: [string, RegExp][] = [
+      ['Country', /as the form's list shows it, for example United States/],
+      ['Location (city)', /as the form's list shows it, for example Seattle, Washington/],
+      ['School', /as the form's list shows it, for example University of/],
+      ['Degree', /as the form's list shows it, for example Bachelor's Degree/],
+      ['How did you hear about this role?', /as the form's list shows it, for example LinkedIn/],
+    ];
+    for (const [label, hint] of hints) {
+      const input = await screen.findByLabelText(label);
+      expect(input).toHaveAccessibleDescription(hint);
+    }
   });
 
   it('an empty profile and nothing held: empty inputs, no source lines, no ticks', async () => {

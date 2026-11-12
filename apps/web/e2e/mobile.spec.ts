@@ -422,6 +422,7 @@ function stubResult(i: number, over: Record<string, unknown> = {}): Record<strin
     aiRationale: LONG_WHY,
     rankSkipReason: null,
     rankDeferredAt: null,
+    rankBatchSentAt: null,
     prefilterOutcome: null,
     prefilterRule: null,
     // needs capture and stale (discovered ten days ago): the badge row at its fullest.

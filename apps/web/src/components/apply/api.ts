@@ -19,7 +19,7 @@ import {
 } from '@opportun/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, errorMessage } from '@/lib/api';
-import { formatDate, qk, type Page } from '@/lib/opportunities';
+import { formatDate, qk, type OpportunityView, type Page } from '@/lib/opportunities';
 import { keys as settingsKeys } from '@/routes/settings/-api';
 import { rk } from '@/components/resume/api';
 
@@ -47,22 +47,40 @@ export type SubmissionView = Submission & {
  * themselves (key, label, where each lives in the profile) are core's APPLICATION_DETAIL_FIELDS
  * (#411), one list for the server, the details step and Settings > Profile.
  */
+/** How to write a value meant for one of the form's lists (#435): the list's own wording. */
+const asListed = (example: string): string =>
+  `Write it as the form's list shows it, for example ${example}.`;
+
 const DETAIL_INPUTS = new Map<
   ApplicationDetailKey,
-  { type: 'text' | 'email' | 'tel' | 'url'; autoComplete: string }
+  { type: 'text' | 'email' | 'tel' | 'url'; autoComplete: string; hint?: string }
 >([
   ['firstName', { type: 'text', autoComplete: 'given-name' }],
   ['lastName', { type: 'text', autoComplete: 'family-name' }],
   ['fullName', { type: 'text', autoComplete: 'name' }],
   ['email', { type: 'email', autoComplete: 'email' }],
   ['phone', { type: 'tel', autoComplete: 'tel' }],
-  ['location', { type: 'text', autoComplete: 'address-level2' }],
+  ['country', { type: 'text', autoComplete: 'country-name', hint: asListed('United States') }],
+  [
+    'location',
+    {
+      type: 'text',
+      autoComplete: 'address-level2',
+      hint: asListed('Seattle, Washington, United States'),
+    },
+  ],
   ['workAuthorization', { type: 'text', autoComplete: 'off' }],
+  ['school', { type: 'text', autoComplete: 'off', hint: asListed('University of Washington') }],
+  ['degree', { type: 'text', autoComplete: 'off', hint: asListed("Bachelor's Degree") }],
   // 'off', not 'url': the browser's one "url" value is a home page, which belongs in Website.
   ['linkedinUrl', { type: 'url', autoComplete: 'off' }],
   ['websiteUrl', { type: 'url', autoComplete: 'url' }],
   ['links', { type: 'text', autoComplete: 'url' }],
+  ['heardFrom', { type: 'text', autoComplete: 'off', hint: asListed('LinkedIn') }],
 ]);
+
+/** The hint under the city, also on the profile card's own Location field (#435). */
+export const LOCATION_HINT = asListed('Seattle, Washington, United States');
 
 /**
  * The profile values a form usually asks for, in the order the details step shows them.
@@ -73,6 +91,7 @@ export const DETAIL_FIELDS = APPLICATION_DETAIL_FIELDS.map((f) => ({
   key: f.key,
   label: f.label,
   home: f.home,
+  hint: undefined as string | undefined,
   ...(DETAIL_INPUTS.get(f.key) ?? { type: 'text' as const, autoComplete: 'off' }),
 }));
 
@@ -541,6 +560,52 @@ export interface ReviewUsage {
  * The caller's daily review usage, or `null` where the feature does not exist (404, the flag off
  * or the demo): then neither the usage line nor the Settings control shows (#130 criterion 4).
  */
+/**
+ * The posting hosts the browser extension fills (its prefill.ts, greenhouseJobOf): only a form
+ * on one of these can be filled from the review, whatever the application system says.
+ */
+const EXTENSION_FILLS_HOSTS = new Set(['boards.greenhouse.io', 'job-boards.greenhouse.io']);
+
+/** A device token as the token list gives it (Settings > Integrations > Extensions and Connectors). */
+interface DeviceTokenView {
+  scopes: string[];
+  revokedAt: number | null;
+}
+
+/**
+ * Whether the browser extension can fill this application's form, so the review and Open steps
+ * may tell the user to click it (#416, tl's note on #403): the application system is one the
+ * extension fills (Greenhouse, on its own hosts), and the user has a token, not revoked, with
+ * the Assisted apply scope. It reads the token list Settings reads, under the same key. Anything
+ * else, a token list the server will not give included, is false: nothing is promised that the
+ * user's setup cannot do. A Greenhouse job embedded on the company's own careers page (its board
+ * proven from a `gh_jid` link, #398) is false too: its destination is Greenhouse's page for the
+ * job, but the user may apply on the company's page, where the extension does not fill (tl on
+ * #425).
+ */
+export function useExtensionCanFill(
+  live: SubmissionView,
+  opp: Pick<OpportunityView, 'atsJobRef'>,
+): boolean {
+  const tokens = useQuery({
+    queryKey: ['device-tokens'] as const,
+    queryFn: () => api<{ items: DeviceTokenView[] }>('/device-tokens'),
+    retry: false,
+  });
+  if (live.atsKind !== 'ats_greenhouse') return false;
+  if (opp.atsJobRef?.verifiedVia === 'gh_jid') return false;
+  let host: string;
+  try {
+    host = new URL(live.destinationUrl).hostname;
+  } catch {
+    return false;
+  }
+  if (!EXTENSION_FILLS_HOSTS.has(host)) return false;
+  return (tokens.data?.items ?? []).some(
+    (t) => t.revokedAt === null && t.scopes.includes('apply:assist'),
+  );
+}
+
 export function useReviewUsage() {
   return useQuery({
     queryKey: ak.reviewUsage,

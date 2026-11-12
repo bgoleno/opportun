@@ -11,7 +11,9 @@ and [Inbox](inbox.md#connect-gmail).
 ## Application details
 
 **Settings > Profile** has an **Application details** card below your profile: first name, last
-name, LinkedIn profile, website and links. With your profile's own fields, these are what a new
+name, country, school, degree, how you heard about the role, LinkedIn profile, website and links.
+Write country, school, degree and how you heard as an employer's form lists them (for example
+"United States"); the profile's **Location (city)** is written the same way. With your profile's own fields, these are what a new
 application starts with (see [Your details when you apply](pipeline.md#your-details-when-you-apply)).
 Change them here, or tick **Save to my profile** on an application's Details step. **Save
 application details** checks each value first: a web address must be the whole address, starting
@@ -80,7 +82,7 @@ _Editing one task's model. Set prices for a model without a list price, such as 
   To size it: on 2026-11-11 a ranking call on the default model cost about $0.0065 with prompt
   caching, when postings for one role target are ranked within five minutes of each other (about
   $0.008 without it, measured on 2026-11-10), and tagging 20 companies about $0.0014 without it.
-  So $1.00 ranks about 150 postings a day, or about 135 while a company waits for a tag (about 125
+  So $1.00 ranks about 150 postings a day, or about 138 while a company waits for a tag (about 125
   and 114 without caching). These are list-price estimates from two measured runs (one with prompt caching, one
   without), not a provider bill, and
   they change with the model, its prices and the length of your role targets and postings. The
@@ -475,6 +477,8 @@ the name; the others stay in the instance.
 | `opportun.count.skipped`                | whole number             | yes      |
 | `opportun.count.truncated`              | whole number             | yes      |
 | `opportun.count.read`                   | whole number             | yes      |
+| `opportun.count.returned`               | whole number             | yes      |
+| `opportun.count.unmatched`              | whole number             | yes      |
 | `opportun.count.set`                    | whole number             | yes      |
 | `opportun.count.changed`                | whole number             | yes      |
 | `opportun.count.cleared`                | whole number             | yes      |
@@ -501,6 +505,7 @@ the name; the others stay in the instance.
 | `opportun.discovery_result.id`          | row id                   | no       |
 | `opportun.dedupe_candidate.id`          | row id                   | no       |
 | `opportun.resume.id`                    | row id                   | no       |
+| `opportun.rank_batch.id`                | row id                   | no       |
 | `opportun.discovery.source_kind`        | one of a fixed list      | yes      |
 | `opportun.ats.kind`                     | one of a fixed list      | yes      |
 | `opportun.fetch.blocked_reason`         | class or code            | yes      |
