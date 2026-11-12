@@ -12,6 +12,7 @@ import { parseApplySearch } from '@/routes/opportunities.$id_.apply';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { ApplyPage } from './ApplyPage';
 import { clockTime, type SubmissionView } from './api';
+import { flowSentence, resumeFlowState } from '@/components/resume/resumeFlow';
 import { ApplyPanel, appliedAttempt } from './ApplyPanel';
 
 const NOW = Date.now();
@@ -197,7 +198,7 @@ describe('S1: the panel', () => {
     const button = await screen.findByRole('button', { name: 'Apply on Greenhouse' });
     expect(button).not.toBeDisabled();
     expect(button).toHaveAttribute('aria-disabled', 'true');
-    expect(button).toHaveAccessibleDescription('Attach a final resume first.');
+    expect(button).toHaveAccessibleDescription('Add a base resume to start.');
   });
 
   it('shows an attempt in progress with its status in words', async () => {
@@ -300,21 +301,21 @@ describe('#395: a refused Apply button says why, and never swallows a click', ()
       'Apply on Greenhouse',
       "This opportunity's posting needs review. Confirm it on the Details tab first.",
     ],
-    ['no final resume', {}, [], 'Apply on Greenhouse', 'Attach a final resume first.'],
+    ['no resume at all', {}, [], 'Apply on Greenhouse', 'Add a base resume to start.'],
     // Brian's third case on #395: a resume is attached, but not Final. Say so, and how to fix it.
     [
       'an attached resume In review',
       { stage: 'interested' },
       [TAILORED_IN_REVIEW],
       'Apply on Greenhouse',
-      'The resume attached here ("Acme tailored") is In review. Open it from the Resume tab and set its Status to Final.',
+      '"Acme tailored" is still In review. Mark it as final to apply.',
     ],
     [
       'an attached resume in Draft',
       { stage: 'interested' },
       [{ ...TAILORED_IN_REVIEW, status: 'draft' }],
       'Apply on Greenhouse',
-      'The resume attached here ("Acme tailored") is Draft. Open it from the Resume tab and set its Status to Final.',
+      '"Acme tailored" is still a Draft. Tailor it, then mark it as final to apply.',
     ],
     // Brian's second case on #395: Interested, nothing attached.
     [
@@ -322,7 +323,15 @@ describe('#395: a refused Apply button says why, and never swallows a click', ()
       { stage: 'interested' },
       [],
       'Apply on Greenhouse',
-      'Attach a final resume first.',
+      'Add a base resume to start.',
+    ],
+    // #428: a base that is not Final yet, and nothing for this opportunity: state B.
+    [
+      'a base resume not yet Final',
+      { stage: 'interested' },
+      [{ ...RESUME, status: 'in_review' }],
+      'Apply on Greenhouse',
+      'Choose the resume to start from.',
     ],
   ] as const)(
     'refused for %s: the reason is visible next to the button and describes it',
@@ -340,6 +349,134 @@ describe('#395: a refused Apply button says why, and never swallows a click', ()
       expect(button.nextElementSibling).toBe(text);
     },
   );
+});
+
+// https://github.com/bgoleno/opportun/issues/428: the panel's resume reason is the resume flow's
+// own state, with a link to the Resume tab (?tab=resume).
+describe('#428: the resume reason comes from the resume flow', () => {
+  function renderWith(resumes: unknown[], opp: Partial<OpportunityView> = {}) {
+    mockApi({
+      'GET /resumes': { items: resumes, total: resumes.length },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+    });
+    renderWithProviders(<ApplyPanel opp={{ ...OPP, ...opp } as OpportunityView} />);
+  }
+
+  it('a resume reason links to the Resume tab', async () => {
+    renderWith([
+      {
+        ...RESUME,
+        id: 'r-2',
+        kind: 'tailored',
+        opportunityId: 'opp-1',
+        title: 'Acme tailored',
+        status: 'in_review',
+      },
+    ]);
+    const link = await screen.findByRole('link', { name: 'Open the Resume tab' });
+    expect(link).toHaveAttribute('href', '/opportunities/opp-1?tab=resume');
+  });
+
+  it('a base recorded as sent as it is, nothing tailored: the panel says so, as the Resume tab will', async () => {
+    mockApi({
+      'GET /resumes': { items: [{ ...RESUME, status: 'in_review' }], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'GET /opportunities/opp-1/resume-sends': {
+        items: [
+          {
+            id: 'send-1',
+            opportunityId: 'opp-1',
+            opportunityTitle: 'Staff PM',
+            companyName: 'Acme',
+            resumeId: 'res-1',
+            resumeTitle: 'Jane Final',
+            resumeKind: 'base',
+            sentAt: NOW,
+            sentVia: 'Indeed',
+            submissionId: null,
+            createdAt: NOW,
+          },
+        ],
+      },
+    });
+    renderWithProviders(<ApplyPanel opp={{ ...OPP, stage: 'interested' } as OpportunityView} />);
+    const button = await screen.findByRole('button', { name: 'Apply on Greenhouse' });
+    await waitFor(() =>
+      expect(button).toHaveAccessibleDescription(
+        'A resume is already recorded as sent for this opportunity. To apply here too, mark a resume as final.',
+      ),
+    );
+    expect(screen.getByRole('link', { name: 'Open the Resume tab' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1?tab=resume',
+    );
+  });
+
+  // tl on #431 (optional): no sentence chosen before the sends are in, or a base sent as it is
+  // reads as B for a moment before H.
+  it('says nothing about the resume until the sends have loaded', async () => {
+    let release: (v: unknown) => void = () => {};
+    const sendsIn = new Promise((r) => (release = r));
+    mockApi({
+      'GET /resumes': { items: [{ ...RESUME, status: 'in_review' }], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'GET /opportunities/opp-1/resume-sends': () => sendsIn,
+    });
+    renderWithProviders(<ApplyPanel opp={{ ...OPP, stage: 'interested' } as OpportunityView} />);
+    // Long enough for the resumes and the submissions to have answered.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText('Choose the resume to start from.')).toBeNull();
+    release({
+      items: [
+        {
+          id: 'send-1',
+          opportunityId: 'opp-1',
+          opportunityTitle: 'Staff PM',
+          companyName: 'Acme',
+          resumeId: 'res-1',
+          resumeTitle: 'Jane Final',
+          resumeKind: 'base',
+          sentAt: NOW,
+          sentVia: 'Indeed',
+          submissionId: null,
+          createdAt: NOW,
+        },
+      ],
+    });
+    const button = await screen.findByRole('button', { name: 'Apply on Greenhouse' });
+    expect(button).toHaveAccessibleDescription(
+      'A resume is already recorded as sent for this opportunity. To apply here too, mark a resume as final.',
+    );
+  });
+
+  it('a reason that is not about the resume has no such link', async () => {
+    renderWith([RESUME], { stage: 'in_process' });
+    await screen.findByRole('button', { name: 'Apply on Greenhouse' });
+    expect(screen.queryByRole('link', { name: 'Open the Resume tab' })).toBeNull();
+  });
+
+  it('says the same as resumeFlowState for the same data', async () => {
+    const draft = {
+      ...RESUME,
+      id: 'r-2',
+      kind: 'tailored',
+      opportunityId: 'opp-1',
+      title: 'Acme tailored',
+      status: 'draft',
+    };
+    const expected = flowSentence(
+      resumeFlowState({
+        opportunityId: 'opp-1',
+        resumes: [draft as never],
+        sends: [],
+        attempts: [],
+        applyBlocked: null,
+      }),
+    );
+    renderWith([draft]);
+    const button = await screen.findByRole('button', { name: 'Apply on Greenhouse' });
+    expect(button).toHaveAccessibleDescription(expected ?? '');
+  });
 });
 
 // https://github.com/bgoleno/opportun/issues/404 (tl's decision 1): once the user has applied, the
@@ -864,6 +1001,157 @@ describe('S5: open the form', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/your browser blocked the new tab/i);
     expect(within(alert).getByRole('link')).toHaveAttribute('href', DEST);
+  });
+});
+
+describe('#416: the next step names the extension only where it can fill this form', () => {
+  const REVIEW_LINE =
+    "When the form opens, click the Opportun icon in your browser's toolbar, then press Fill in this application. It fills in what you reviewed here.";
+  const token = (over: Record<string, unknown> = {}) => ({
+    id: 'tok-1',
+    name: 'Laptop',
+    scopes: ['apply:assist'],
+    lastUsedAt: null,
+    revokedAt: null,
+    createdAt: NOW,
+    ...over,
+  });
+  const LEVER = 'https://jobs.lever.co/examplecorp/abcd-1234/apply';
+  const cases: [
+    string,
+    Record<string, unknown>,
+    Partial<SubmissionView>,
+    boolean,
+    Partial<OpportunityView>?,
+  ][] = [
+    ['a usable token on a Greenhouse form', { items: [token()] }, {}, true],
+    ['no token', { items: [] }, {}, false],
+    ['a revoked token', { items: [token({ revokedAt: NOW - MIN })] }, {}, false],
+    [
+      'a token without the Assisted apply scope',
+      { items: [token({ scopes: ['capture:push'] })] },
+      {},
+      false,
+    ],
+    // Greenhouse, but on the company's own site: the extension fills only Greenhouse's hosts.
+    [
+      "a Greenhouse posting on the company's own site",
+      { items: [token()] },
+      { destinationUrl: 'https://careers.example.com/jobs?gh_jid=1000001' },
+      false,
+    ],
+    // Each check on its own: another system's form, recorded at a Greenhouse address.
+    [
+      'another application system at a Greenhouse address',
+      { items: [token()] },
+      { atsKind: 'ats_lever' },
+      false,
+    ],
+    [
+      'an application system the extension does not fill',
+      { items: [token()] },
+      { atsKind: 'ats_lever', destinationUrl: LEVER },
+      false,
+    ],
+    // A Greenhouse job embedded on the company's own careers page (#398, tl on #425): its board
+    // is proven and the destination is Greenhouse's own page, but the user applies where the job
+    // is embedded, so the extension is not named.
+    [
+      'an embedded Greenhouse job whose board was proven from its gh_jid link',
+      { items: [token()] },
+      {},
+      false,
+      {
+        atsJobRef: {
+          kind: 'ats_greenhouse',
+          org: 'examplecorp',
+          externalId: '1000001',
+          url: DEST,
+          verifiedVia: 'gh_jid',
+          verifiedAt: NOW - MIN,
+        },
+      },
+    ],
+  ];
+
+  /** Renders a step once its token list has been read, so a missing line is a decision. */
+  async function renderAfterTokens(
+    step: 'review' | 'open',
+    tokens: unknown,
+    sub: SubmissionView,
+    opp: Partial<OpportunityView> = {},
+  ) {
+    const api = mockApi({
+      ...routes(sub, { 'GET /opportunities/opp-1': { ...OPP, ...opp } }),
+      'GET /device-tokens': tokens,
+    });
+    const out = renderStep(step);
+    await waitFor(() => expect(calls(api.calls, 'GET', '/device-tokens')).toHaveLength(1));
+    await screen.findByRole('heading', { level: 1 });
+    return out;
+  }
+
+  it.each(cases)('the review step, with %s', async (_name, tokens, over, canFill, opp) => {
+    await renderAfterTokens('review', tokens, submission(over), opp);
+    if (canFill) expect(await screen.findByText(REVIEW_LINE)).toBeVisible();
+    else {
+      await screen.findByText(/Ready to open the form\?/);
+      expect(screen.queryByText(REVIEW_LINE)).toBeNull();
+    }
+  });
+
+  it.each(cases)('the Open step, with %s', async (_name, tokens, over, canFill, opp) => {
+    await renderAfterTokens(
+      'open',
+      tokens,
+      submission({ status: 'handed_off', handedOffAt: NOW, ...over }),
+      opp,
+    );
+    const card = (await screen.findByText('On the application site')).closest(
+      '[data-slot="card"]',
+    ) as HTMLElement;
+    const steps = await within(card).findAllByRole('listitem');
+    const text = steps.map((li) => (li.textContent ?? '').replace(/\s+/g, ' ').trim());
+    if (canFill) {
+      await waitFor(() => expect(within(card).getByText(/Go to the/)).toBeVisible());
+      expect(text).toHaveLength(4);
+      expect(text[0]).toMatch(/^Go to the boards\.greenhouse\.io tab\./);
+      expect(text[1]).toContain(
+        'Click the Opportun icon in the toolbar, then press Fill in this application.',
+      );
+      expect(text[1]).toContain("Not there? Open your browser's Extensions menu and pin Opportun.");
+      // The icon itself is shown beside the words.
+      expect(card.querySelector('img[src="/favicon.svg"]')).not.toBeNull();
+      expect(text[2]).toContain(
+        'Check every field. The extension lists what it filled and what it left for you.',
+      );
+      expect(text[3]).toContain("Press the site's own Submit button. Only you can do this.");
+      expect(screen.queryByText(/can fill this form for you/)).toBeNull();
+    } else {
+      // Today's copying steps, and one line about the extension, promising nothing more.
+      expect(text[0]).toBe('Fill in the form, copying from your details below.');
+      expect(text).toContain("Press the site's own Submit button. Only you can do this.");
+      expect(within(card).queryByText(/Click the Opportun icon/)).toBeNull();
+      const line = within(card).getByText(
+        /The Opportun browser extension can fill this form for you/,
+      );
+      expect(within(line).getByRole('link', { name: /Extensions and Connectors/ })).toHaveAttribute(
+        'href',
+        '/settings/integrations',
+      );
+    }
+    // The details to copy stay below either way.
+    expect(screen.getByText('Your details to copy')).toBeVisible();
+  });
+
+  it('a token list the server will not give (an older server) promises nothing', async () => {
+    const api = mockApi(routes(submission({ status: 'handed_off', handedOffAt: NOW })));
+    renderStep('open');
+    await waitFor(() => expect(calls(api.calls, 'GET', '/device-tokens')).toHaveLength(1));
+    expect(
+      await screen.findByText('Fill in the form, copying from your details below.'),
+    ).toBeVisible();
+    expect(screen.queryByText(/Click the Opportun icon/)).toBeNull();
   });
 });
 

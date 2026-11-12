@@ -280,12 +280,14 @@ export async function enqueueFollowUps(
   db: Db,
   ctx: UserCtx,
   result: Pick<DiscoveryResultView, 'id' | 'resolution'>,
+  opts: { live?: boolean } = {},
 ): Promise<void> {
   const kind = result.resolution === 'needs_capture' ? LEAD_RESOLVE_KIND : DISCOVERY_RANK_KIND;
   await enqueue(
     db,
     kind,
-    { resultId: result.id },
+    // A ranking the user clicked for is made live, never in a batch (#441); a lead carries it on.
+    { resultId: result.id, ...(opts.live === true ? { live: true } : {}) },
     // Continues the discovery_run trace when queued from inside it (14.6), not otherwise.
     { dedupeKey: `${kind}:${result.id}`, userId: ctx.userId, continueTrace: continuesTrace() },
   );
@@ -313,13 +315,14 @@ export async function rankBelowCut(
 
 /**
  * Rank anyway (#218): a posting the pre-filter held goes the way any new posting goes, so the budget
- * and its wait apply. Queued before the reason goes, as rankBelowCut. Returns how many it sent: none
- * if it is not held any more, so a second press does nothing and needs no error.
+ * and its wait apply, but live, never in a batch: someone clicked for it (#441). Queued before the
+ * reason goes, as rankBelowCut. Returns how many it sent: none if it is not held any more, so a
+ * second press does nothing and needs no error.
  */
 export async function rankAnyway(db: Db, ctx: UserCtx, id: string): Promise<number> {
   const result = await getResult(db, ctx, id);
   if (result.disposition !== 'pending' || result.rankSkipReason !== 'filtered') return 0;
-  await enqueueFollowUps(db, ctx, result);
+  await enqueueFollowUps(db, ctx, result, { live: true });
   await clearFiltered(db, ctx, id);
   return 1;
 }

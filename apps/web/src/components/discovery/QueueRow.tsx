@@ -9,7 +9,7 @@ import { FormError } from '@/components/FormError';
 import { Button } from '@/components/ui/button';
 import { errorMessage } from '@/lib/api';
 import { Checkbox } from '@/components/ui/checkbox';
-import { formatDate, safeHttpUrl } from '@/lib/opportunities';
+import { formatDate, formatDateTime, safeHttpUrl } from '@/lib/opportunities';
 import { cn } from '@/lib/utils';
 import { resolutionLabel, sourceKindLabel, useRankAnyway, type DiscoveryResult } from './api';
 import { rowKey, type ResultGroup } from './groupResults';
@@ -49,8 +49,20 @@ const SKIP_WORDS = new Map<RankSkipReason, string>([
  * waiting, it says the score may change.
  */
 export function rankLine(
-  r: Pick<DiscoveryResult, 'aiScore' | 'rankSkipReason' | 'rankDeferredAt' | 'prefilterRule'>,
+  r: Pick<
+    DiscoveryResult,
+    'aiScore' | 'rankSkipReason' | 'rankDeferredAt' | 'prefilterRule' | 'rankBatchSentAt'
+  >,
 ): string | null {
+  // Ranked in batches (#441): waiting for the next one, or sent in one, with when it was sent.
+  if (r.rankSkipReason === 'batch_waiting') {
+    if (r.rankBatchSentAt !== null) {
+      return `Ranking in a batch, sent ${formatDateTime(r.rankBatchSentAt)}`;
+    }
+    return r.aiScore === null
+      ? 'Waiting for the next batch'
+      : 'Score may change: a new ranking is waiting for the next batch';
+  }
   if (r.aiScore !== null) {
     return r.rankDeferredAt === null
       ? null
@@ -280,7 +292,10 @@ export function QueueGroupRow(props: {
   const label = resultLabel(primary);
   const n = group.members.length;
   // The card speaks for its first member, the best scored, and one waiting may be further down.
-  const waiting = group.members.filter((m) => m.rankDeferredAt !== null).length;
+  // One waiting for a ranking batch (#441) is not waiting for budget.
+  const waiting = group.members.filter(
+    (m) => m.rankDeferredAt !== null && m.rankSkipReason !== 'batch_waiting',
+  ).length;
   return (
     <li
       data-result-id={rowKey(group)}

@@ -2,7 +2,15 @@
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_POLICIES } from './policies';
-import { promptVariables, renderPrompt, renderPromptParts, TASK_PROMPT_VARS, TASKS } from './tasks';
+import {
+  cacheBreakVariable,
+  promptVariables,
+  renderPrompt,
+  renderPromptParts,
+  systemWithCacheBreak,
+  TASK_PROMPT_VARS,
+  TASKS,
+} from './tasks';
 import { TASK_KEYS } from './types';
 
 describe('renderPrompt', () => {
@@ -414,5 +422,44 @@ describe('renderPromptParts', () => {
 
   it('throws on a missing variable, as renderPrompt does', () => {
     expect(() => renderPromptParts(template, { naics_table: 'x' })).toThrow(/companies_untrusted/);
+  });
+});
+
+describe('a per-task split point (https://github.com/bgoleno/opportun/issues/380)', () => {
+  // comms.classify's order: the role targets, the open opportunities (untrusted, but the same for
+  // every message of a sync batch), then the message. Split at the first untrusted variable, the
+  // cache would hold the instructions alone.
+  const template =
+    'Classify.\n\n## Targets\n{{role_targets}}\n\n## Open\n{{open_opportunities_untrusted}}\n\n## Message\n{{message_untrusted}}\n\nReturn JSON.';
+  const vars = {
+    role_targets: 'Staff engineer, remote',
+    open_opportunities_untrusted: '- Acme | Staff Engineer | applied',
+    message_untrusted: 'Hi, a role for you',
+  };
+
+  it('breaks before the named variable: the open opportunities are in the prefix, the message is not', () => {
+    const { prefix, rest } = renderPromptParts(template, vars, 'message_untrusted');
+    expect(prefix + rest).toBe(renderPrompt(template, vars));
+    expect(prefix).toContain('- Acme | Staff Engineer | applied');
+    expect(prefix).not.toContain('a role for you');
+    expect(prefix.endsWith('## Message\n')).toBe(true);
+    expect(rest.startsWith('<untrusted>\nHi, a role for you')).toBe(true);
+  });
+
+  it('a template without the named variable falls back to the first untrusted one', () => {
+    const edited = 'Classify {{message_x_untrusted}}.';
+    expect(renderPromptParts(edited, { message_x_untrusted: 'm' }, 'message_untrusted')).toEqual(
+      renderPromptParts(edited, { message_x_untrusted: 'm' }),
+    );
+  });
+
+  it('comms.classify breaks before its message; a task without a split of its own keeps the default', () => {
+    expect(cacheBreakVariable('comms.classify')).toBe('message_untrusted');
+    expect(cacheBreakVariable('discovery.company_tags')).toBeUndefined();
+    const classify = systemWithCacheBreak(template, vars, 'comms.classify');
+    expect(classify.system).toBe(renderPrompt(template, vars));
+    expect(classify.system.slice(0, classify.cacheBreak)).toContain('Acme');
+    const generic = systemWithCacheBreak(template, vars);
+    expect(generic.system.slice(0, generic.cacheBreak)).not.toContain('Acme');
   });
 });

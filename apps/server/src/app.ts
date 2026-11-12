@@ -33,9 +33,11 @@ import { createStorage, type Storage } from './lib/storage';
 import { checkSqliteFilesystem, type FilesystemHazard } from './lib/sqliteFilesystem';
 import './adapters/sources/index';
 import './jobs/index';
+import { batchProviderFor } from '@opportun/ai';
 import type { JobServices } from './jobs/registry';
 import { ATS_REVERIFY_CRON, ATS_REVERIFY_KIND } from './jobs/atsDetect';
 import { RANK_WAITING_SWEEP_CRON, RANK_WAITING_SWEEP_KIND } from './jobs/discoveryRankWaiting';
+import { RANK_BATCH_SWEEP_CRON, RANK_BATCH_SWEEP_KIND } from './jobs/rankBatch';
 import { ATTACHMENT_SWEEP_CRON, ATTACHMENT_SWEEP_JOB_KIND } from './jobs/attachmentSweep';
 import { SUBMISSION_EXPIRE_CRON, SUBMISSION_EXPIRE_JOB_KIND } from './jobs/submissionExpire';
 import { SUBMISSION_FOLLOWUP_CRON, SUBMISSION_FOLLOWUP_JOB_KIND } from './jobs/submissionFollowup';
@@ -206,6 +208,8 @@ export interface BuildOptions {
   ai?: AiOverride;
   /** Replaces the discovery fetch (the end-to-end source mock; see src/testSupport). */
   sourceFetch?: typeof safeFetch;
+  /** Finds a provider's ranking batch client (#441); a fake in tests. */
+  rankBatchProvider?: JobServices['rankBatchProvider'];
   /** Replaces the fetch behind the Google OAuth client probe (tests: no network). */
   googleFetch?: typeof safeFetch;
   /** Replaces the fetch to Reactive Resume instances (tests: the recorded fake). */
@@ -440,6 +444,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   await seedSchedule(db, DISCOVERY_REFINE_KIND, DISCOVERY_REFINE_CRON);
   await seedSchedule(db, ATS_REVERIFY_KIND, ATS_REVERIFY_CRON);
   await seedSchedule(db, RANK_WAITING_SWEEP_KIND, RANK_WAITING_SWEEP_CRON);
+  // Ranking batches (#441): fails one stuck being sent, and collects the sent ones as they are due.
+  await seedSchedule(db, RANK_BATCH_SWEEP_KIND, RANK_BATCH_SWEEP_CRON);
   await seedSchedule(db, COMPANY_SUGGEST_KIND, COMPANY_SUGGEST_CRON);
   await seedSchedule(db, TITLE_VARIANTS_SWEEP_KIND, TITLE_VARIANTS_SWEEP_CRON);
   await seedSchedule(db, COMPANY_TAGS_SWEEP_KIND, COMPANY_TAGS_SWEEP_CRON);
@@ -482,6 +488,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     log: app.log,
     env: opts.env ?? process.env,
     submissions: submissionsEnabled(cfg),
+    rankBatchProvider: opts.rankBatchProvider ?? batchProviderFor,
   };
   app.decorate('jobs', {
     services,

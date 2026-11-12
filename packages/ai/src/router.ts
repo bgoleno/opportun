@@ -231,8 +231,8 @@ function callSettings(policy: ModelPolicy): { maxOutputTokens: number; temperatu
  * makes the estimate low. Marking a prefix that turns out to be short costs nothing at the
  * provider (it is simply not cached), so the estimate can sit this close to the counts.
  */
-const CHARS_PER_TOKEN = 3;
-const STRUCTURED_OUTPUT_TOKENS = 344;
+export const CHARS_PER_TOKEN = 3;
+export const STRUCTURED_OUTPUT_TOKENS = 344;
 
 /**
  * The system prompt as the SDK takes it (https://github.com/bgoleno/opportun/issues/356). The
@@ -257,6 +257,33 @@ function systemFor(policy: ModelPolicy, system: string, cacheBreak?: number): In
     },
     { role: 'system', content: system.slice(cacheBreak) },
   ];
+}
+
+/** What a structured call asks of the model, live or in a batch (#441). */
+export interface StructuredRequest<T> {
+  system: Instructions;
+  prompt: string;
+  schema: z.ZodType<T>;
+  maxOutputTokens: number;
+  temperature?: number;
+}
+
+/**
+ * The one builder of a structured call's request, from the policy and the caller's options: the
+ * system with its cache split (systemFor), the prompt, the schema and the policy's output limit and
+ * temperature. runStructured sends exactly this, and a batch request is built by it too, so a
+ * batch asks the model what a live call would (tl's design on #358, point 4).
+ */
+export function structuredRequest<T>(
+  policy: ModelPolicy,
+  opts: { system: string; cacheBreak?: number; prompt: string; schema: z.ZodType<T> },
+): StructuredRequest<T> {
+  return {
+    system: systemFor(policy, opts.system, opts.cacheBreak),
+    prompt: opts.prompt,
+    schema: opts.schema,
+    ...callSettings(policy),
+  };
 }
 
 /**
@@ -286,6 +313,7 @@ export async function runStructured<T>(
     promptId: opts.promptId,
     promptVersion: opts.promptVersion,
   });
+  const request = structuredRequest(policy, opts);
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     let output: T;
@@ -295,12 +323,13 @@ export async function runStructured<T>(
       const result = await run.span.run(() =>
         generateText({
           model,
-          system: systemFor(policy, opts.system, opts.cacheBreak),
-          prompt: opts.prompt,
-          output: Output.object({ schema: opts.schema }),
+          system: request.system,
+          prompt: request.prompt,
+          output: Output.object({ schema: request.schema }),
           maxRetries: SDK_MAX_RETRIES,
           telemetry: SDK_TELEMETRY_OFF,
-          ...callSettings(policy),
+          maxOutputTokens: request.maxOutputTokens,
+          ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
         }),
       );
       addUsage(run.tokens, result.totalUsage);

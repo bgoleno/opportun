@@ -1,5 +1,5 @@
 {
-  "id": "709cd6a8-6d15-4a5d-81bc-9da13405c1a3",
+  "id": "c1db57ae-15ff-4645-9532-c5fd7a4fd303",
   "prevId": "ff9fe0fc-f309-47f7-8940-970fcafd3931",
   "version": "7",
   "dialect": "postgresql",
@@ -1273,13 +1273,6 @@
           "type": "jsonb",
           "primaryKey": false,
           "notNull": false
-        },
-        "board_probe_failed_nights": {
-          "name": "board_probe_failed_nights",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
         },
         "created_at": {
           "name": "created_at",

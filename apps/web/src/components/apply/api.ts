@@ -19,7 +19,7 @@ import {
 } from '@opportun/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, errorMessage } from '@/lib/api';
-import { formatDate, qk, type Page } from '@/lib/opportunities';
+import { formatDate, qk, type OpportunityView, type Page } from '@/lib/opportunities';
 import { keys as settingsKeys } from '@/routes/settings/-api';
 import { rk } from '@/components/resume/api';
 
@@ -253,6 +253,19 @@ export const ak = {
 /** The statuses of an attempt that is still in progress: at most one per opportunity. */
 const LIVE: readonly string[] = ['draft', 'reviewed', 'handed_off'];
 export const isLive = (s: Pick<Submission, 'status'>): boolean => LIVE.includes(s.status);
+
+/** The statuses that mean the user has applied (#404): Submitted, Confirmed, No confirmation seen
+ *  or Rejected. */
+const APPLIED: readonly string[] = ['submitted', 'confirmed', 'unknown', 'rejected'];
+
+/**
+ * The application the panel leads with once the user has applied (#404, tl's decision 1): the
+ * newest attempt that is Submitted, Confirmed, No confirmation seen or Rejected, whatever newer
+ * attempt was cancelled or expired after it. `items` are newest first, as the server lists them.
+ */
+export function appliedAttempt(items: readonly SubmissionView[]): SubmissionView | undefined {
+  return items.find((s) => APPLIED.includes(s.status));
+}
 
 /**
  * The opportunity's attempts, or `null` when the feature does not exist here: with the flag off,
@@ -547,6 +560,52 @@ export interface ReviewUsage {
  * The caller's daily review usage, or `null` where the feature does not exist (404, the flag off
  * or the demo): then neither the usage line nor the Settings control shows (#130 criterion 4).
  */
+/**
+ * The posting hosts the browser extension fills (its prefill.ts, greenhouseJobOf): only a form
+ * on one of these can be filled from the review, whatever the application system says.
+ */
+const EXTENSION_FILLS_HOSTS = new Set(['boards.greenhouse.io', 'job-boards.greenhouse.io']);
+
+/** A device token as the token list gives it (Settings > Integrations > Extensions and Connectors). */
+interface DeviceTokenView {
+  scopes: string[];
+  revokedAt: number | null;
+}
+
+/**
+ * Whether the browser extension can fill this application's form, so the review and Open steps
+ * may tell the user to click it (#416, tl's note on #403): the application system is one the
+ * extension fills (Greenhouse, on its own hosts), and the user has a token, not revoked, with
+ * the Assisted apply scope. It reads the token list Settings reads, under the same key. Anything
+ * else, a token list the server will not give included, is false: nothing is promised that the
+ * user's setup cannot do. A Greenhouse job embedded on the company's own careers page (its board
+ * proven from a `gh_jid` link, #398) is false too: its destination is Greenhouse's page for the
+ * job, but the user may apply on the company's page, where the extension does not fill (tl on
+ * #425).
+ */
+export function useExtensionCanFill(
+  live: SubmissionView,
+  opp: Pick<OpportunityView, 'atsJobRef'>,
+): boolean {
+  const tokens = useQuery({
+    queryKey: ['device-tokens'] as const,
+    queryFn: () => api<{ items: DeviceTokenView[] }>('/device-tokens'),
+    retry: false,
+  });
+  if (live.atsKind !== 'ats_greenhouse') return false;
+  if (opp.atsJobRef?.verifiedVia === 'gh_jid') return false;
+  let host: string;
+  try {
+    host = new URL(live.destinationUrl).hostname;
+  } catch {
+    return false;
+  }
+  if (!EXTENSION_FILLS_HOSTS.has(host)) return false;
+  return (tokens.data?.items ?? []).some(
+    (t) => t.revokedAt === null && t.scopes.includes('apply:assist'),
+  );
+}
+
 export function useReviewUsage() {
   return useQuery({
     queryKey: ak.reviewUsage,

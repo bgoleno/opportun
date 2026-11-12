@@ -70,10 +70,10 @@ const rankJobs = (app: FastifyInstance) =>
 
 describe('a skipped ranking keeps why (#210)', () => {
   // below_cut (#215) and filtered (#218) are not the router's; key_rejected is its provider_error
-  // with a flag (#261).
-  it('the codes are exactly the router’s own reasons, and those three', () => {
+  // with a flag (#261); batch_waiting is the batch's wait (#441).
+  it('the codes are exactly the router’s own reasons, and those four', () => {
     expectTypeOf<
-      Exclude<RankSkipReason, 'below_cut' | 'filtered' | 'key_rejected'>
+      Exclude<RankSkipReason, 'below_cut' | 'filtered' | 'key_rejected' | 'batch_waiting'>
     >().toEqualTypeOf<AiUnavailableReason>();
     expect(RANK_SKIP_REASONS).toContain('key_rejected');
   });
@@ -86,8 +86,13 @@ describe('a skipped ranking keeps why (#210)', () => {
       r,
     ): r is Exclude<
       RankSkipReason,
-      'budget_exceeded' | 'below_cut' | 'filtered' | 'key_rejected'
-    > => r !== 'budget_exceeded' && r !== 'below_cut' && r !== 'filtered' && r !== 'key_rejected',
+      'budget_exceeded' | 'below_cut' | 'filtered' | 'key_rejected' | 'batch_waiting'
+    > =>
+      r !== 'budget_exceeded' &&
+      r !== 'below_cut' &&
+      r !== 'filtered' &&
+      r !== 'key_rejected' &&
+      r !== 'batch_waiting',
   );
   for (const reason of routerReasons) {
     it(`records ${reason}, and the result stays unranked and pending`, async () => {

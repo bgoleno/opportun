@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "d5b457a2-6218-4b79-9e3a-d3c16a5d1d33",
+  "id": "01aaecbc-8b98-40f4-8fe4-1319309fef59",
   "prevId": "efd10519-c05f-466a-a7b6-07ca4aefd328",
   "tables": {
     "activities": {
@@ -1200,14 +1200,6 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
-        },
-        "board_probe_failed_nights": {
-          "name": "board_probe_failed_nights",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
         },
         "created_at": {
           "name": "created_at",

@@ -94,6 +94,7 @@ import {
   type MatchReport,
   OBS_SPAN_KINDS,
   OBS_SPAN_STATUSES,
+  RANK_BATCH_STATES,
   type ProfileLinkRow,
   REJECTION_REASONS,
   SECRET_KINDS,
@@ -703,6 +704,36 @@ export const discoveryRuns = pgTable(
   ],
 );
 
+/**
+ * A batch of ranking requests sent to the provider together (#441, tl's design on
+ * https://github.com/bgoleno/opportun/issues/358). One in flight for each user at most. The
+ * estimate is held against the discovery budget, for each posting still linked, until that
+ * posting's result is applied (repos/rankBatches.ts).
+ */
+export const rankBatches = pgTable(
+  'rank_batches',
+  {
+    id: id(),
+    userId: userRef(),
+    /** The provider and the policy the requests were built with: their cost is priced from it. */
+    provider: text('provider').notNull(),
+    policy: json<Record<string, unknown>>('policy').notNull(),
+    /** The provider's id for the batch; null while it is being sent (state submitting). */
+    providerBatchId: text('provider_batch_id'),
+    state: text('state', { enum: RANK_BATCH_STATES }).notNull(),
+    requestCount: int('request_count').notNull(),
+    /** What the batch is estimated to cost, in dollars, all its requests together. */
+    estCostUsd: doublePrecision('est_cost_usd').notNull(),
+    submittedAt: int('submitted_at'),
+    /** When collecting last asked the provider about it (every 10 minutes, then 30). */
+    lastCheckedAt: int('last_checked_at'),
+    collectedAt: int('collected_at'),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index('rank_batches_user_state_idx').on(t.userId, t.state)],
+);
+
 export const discoveryResults = pgTable(
   'discovery_results',
   {
@@ -726,6 +757,13 @@ export const discoveryResults = pgTable(
      * used its turn (setRankTurnUsed); null when it is not waiting.
      */
     rankDeferredAt: int('rank_deferred_at'),
+    /**
+     * The batch this posting's ranking was sent in (#441), until its result is applied; with the
+     * fingerprint of the text that was sent, and the prompt version it was sent with.
+     */
+    rankBatchId: text('rank_batch_id').references(() => rankBatches.id, { onDelete: 'set null' }),
+    rankBatchBasis: text('rank_batch_basis'),
+    rankBatchPromptId: text('rank_batch_prompt_id'),
     resolution: text('resolution', { enum: RESOLUTIONS }).notNull(),
     resolvedSourceRef: text('resolved_source_ref'),
     disposition: text('disposition', { enum: DISPOSITIONS }).notNull().default('pending'),
@@ -747,6 +785,7 @@ export const discoveryResults = pgTable(
     index('discovery_results_run_idx').on(t.runId),
     index('discovery_results_user_dedupe_idx').on(t.userId, t.dedupeKey),
     index('discovery_results_user_deferred_idx').on(t.userId, t.rankDeferredAt),
+    index('discovery_results_rank_batch_idx').on(t.rankBatchId),
   ],
 );
 
