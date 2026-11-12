@@ -7,6 +7,236 @@ milestone's work was merged.
 
 ## Unreleased
 
+### Upgrading: prompts, defaults and costs
+
+- **Three shipped prompts were reordered so Anthropic can cache them.** An automatic upgrade step rewrites the system default
+  of each of these tasks in place, and only while it is still exactly the text the previous
+  release shipped: `discovery.company_tags` (step 0060; Postgres 0042), `discovery.rank` (0061; Postgres 0043) and `comms.classify` (0063; Postgres 0045). The wording is the same but for a few words (the ranking prompt
+  and the classify prompt each gain one closing line after the posting or message, and
+  `comms.classify` rewords two references to "above"); the order changed, so the part that is
+  the same for every call comes first. A prompt version you made yourself is a separate row
+  and is left as it is, in its own order and with its own text: it works, but only the part
+  before the message or posting in it is cached. To get the cached order, open
+  **Settings > AI > Advanced: prompts**, choose the task and press **Reset to default**. Cache
+  reads and writes are now priced at their own rates in the usage figures, and only Anthropic
+  models are marked ([#356](https://github.com/bgoleno/opportun/issues/356),
+  [#388](https://github.com/bgoleno/opportun/issues/388),
+  [#380](https://github.com/bgoleno/opportun/issues/380); PRs
+  [#378](https://github.com/bgoleno/opportun/pull/378),
+  [#390](https://github.com/bgoleno/opportun/pull/390),
+  [#433](https://github.com/bgoleno/opportun/pull/433)). Measured: ranking cost per posting fell
+  about 18% and tagging about 31% in the PRs' own runs, and qa measured about 43% less per
+  classify call on one batch of 36 messages.
+- **New AI tasks get a system default prompt on upgrade.** Steps 0048 (`discovery.title_variants`),
+  0051 (`discovery.industry_profile`) and 0054 (`discovery.company_tags`) add a prompt only if
+  none exists. Step 0057 rewrites the `company.suggest` system default in place for the new
+  version of the weekly company suggestion (below); your own version of it keeps its wording and
+  still works, without the new context.
+- **A new AI call can happen the first night after upgrading, and it costs money.** With an AI
+  key and budget room, the nightly sweeps make one call per active role target that has no list
+  of title variants (about $0.01 each, at 05:30 server time), and tag candidate companies with an industry
+  in batches of 20 (at 05:45 server time). Both skip a user with no AI key. To avoid the
+  first: write a title variants list yourself under **Settings > Role targets**. To limit both:
+  lower the discovery budget under **Settings > AI**.
+
+### Discovery
+
+- **A title pre-filter skips ranking postings that clearly do not fit, once it has been
+  right on your own decisions.** Every new job board posting now gets a verdict from your role
+  target's name, title family and a list of equivalent titles (up to 40, made by one AI call and
+  editable in **Settings > Role targets**, one per line), plus its remote and location rules. In
+  **shadow mode** it only measures: the Decided tab says how many of the postings you accepted it
+  would have kept. It starts acting for board sources when, over at least 20 postings you
+  accepted, it would have kept at least 95% of them, and goes back to shadow mode if that falls.
+  A filtered posting is not ranked and shows **Filtered: title** (or remote, or location) with
+  **Rank anyway**. Job alert emails, captures and postings you added by hand are never
+  filtered. The switch is a box per board on the Sources tab, on by default (the upgrade turns it
+  on for every existing board); **Settings > AI** shows whether it is acting, why not, and the
+  share it would filter. Postings already ranked stay as they are
+  ([#217](https://github.com/bgoleno/opportun/issues/217),
+  [#218](https://github.com/bgoleno/opportun/issues/218)).
+- **The discovery budget now makes a posting wait, not skip.** Over the day's budget (default
+  $1.00, set under **Settings > AI**), a posting reads **Waiting for budget** and is ranked on a
+  later UTC day, best title match first and oldest among equals, instead of ending as skipped. On upgrade, a posting that was
+  refused for budget and has no score joins the wait, so after the upgrade the day's budget can
+  go on that backlog. Postings that arrived with no AI key were the same: they are ranked once a
+  key works, best title match first. While companies wait for an industry tag, ranking stops at
+  90% of the budget and leaves the rest for tagging (never less than half the budget, and at
+  least five ranking calls' worth for tagging); with none waiting it can use all of it. If the
+  provider rejects your key (a 401), the hourly calls stop and the cards say so until you add a
+  working key or press **Validate** and it succeeds. **Undo** on a dismissed posting that was never ranked now
+  joins the wait. Raise or lower the budget to taste
+  ([#214](https://github.com/bgoleno/opportun/issues/214),
+  [#261](https://github.com/bgoleno/opportun/issues/261),
+  [#262](https://github.com/bgoleno/opportun/issues/262),
+  [#274](https://github.com/bgoleno/opportun/issues/274),
+  [#299](https://github.com/bgoleno/opportun/issues/299),
+  [#317](https://github.com/bgoleno/opportun/issues/317)).
+- **A board's first run ranks only its 25 newest postings.** The rest read **Not ranked: below
+  the cut**, and the source row offers **Rank these**, with the estimated cost in a dialog. Boards
+  that have already had a successful run are not capped
+  ([#215](https://github.com/bgoleno/opportun/issues/215)).
+- **Where to look: industries, recommended companies and company tags.** The Companies tab has a
+  collapsed **Where to look** panel; **Suggest industries** sends your newest base resume's text
+  and your role target fields to the model once, when you press it, and shows NAICS industries
+  to confirm, remove or add (it counts against the discovery budget, and says in plain words
+  when it fails). Candidate companies get an industry tag from the model, once, which you can
+  correct and your correction stands; the weekly company suggestion now also sends your
+  confirmed industries and up to 500 names of companies where you know someone (names only) and
+  drops suggestions outside your profile. The tab shows one **Recommended companies** list with
+  filters, two sorts, **Follow** and **Deny**, a **Check board** button (public board pages, no
+  AI call, 30 checks per user per hour) and an estimate of new postings and cost a day for each;
+  following several at once asks first when their first runs would cost over $1.00, or bring over
+  20 new postings a day, or more than today's budget allows. Nothing here is a switch: do not
+  press the buttons, remove the key, or lower the budget to stop the calls
+  ([#219](https://github.com/bgoleno/opportun/issues/219),
+  [#220](https://github.com/bgoleno/opportun/issues/220),
+  [#221](https://github.com/bgoleno/opportun/issues/221),
+  [#222](https://github.com/bgoleno/opportun/issues/222),
+  [#277](https://github.com/bgoleno/opportun/issues/277),
+  [#291](https://github.com/bgoleno/opportun/issues/291),
+  [#300](https://github.com/bgoleno/opportun/issues/300),
+  [#301](https://github.com/bgoleno/opportun/issues/301),
+  [#302](https://github.com/bgoleno/opportun/issues/302)).
+- **Runs and jobs behave better under load.** One run of a source at a time (**Run now** during a
+  run, or on a paused source, says so instead of queueing nothing), a run cut short by a server
+  stop reads **Interrupted** in Run history instead of **Running** for good (existing unfinished
+  rows change once, at the first start), a job queued during a long one starts as soon as a
+  worker is free (up to `OPPORTUN_JOB_WORKERS`, default 4), at most two waiting-posting drains
+  run at once, and one user's company checks cannot hold up another's. On Postgres, overlapping
+  runs of one source store each posting once; duplicates already stored are not removed. A
+  capture and a board run on the same posting give one row, and a ranking from older posting
+  text is not stored over a newer one
+  ([#263](https://github.com/bgoleno/opportun/issues/263),
+  [#267](https://github.com/bgoleno/opportun/issues/267),
+  [#268](https://github.com/bgoleno/opportun/issues/268),
+  [#269](https://github.com/bgoleno/opportun/issues/269),
+  [#297](https://github.com/bgoleno/opportun/issues/297),
+  [#310](https://github.com/bgoleno/opportun/issues/310),
+  [#321](https://github.com/bgoleno/opportun/issues/321),
+  [#323](https://github.com/bgoleno/opportun/issues/323),
+  [#331](https://github.com/bgoleno/opportun/issues/331)).
+- **Captures share one budget per user.** The web capture dialog and every extension token now
+  share 60 captures per 15 minutes per user (the dialog had no limit; 30 per token still holds),
+  and the limit says which one was reached and when to retry. A user's captures are saved one
+  at a time: a second one waits up to 5 seconds, then is refused as busy with a message to
+  capture again in a few seconds. The limiter is in memory, so a restart resets it
+  ([#272](https://github.com/bgoleno/opportun/issues/272),
+  [#309](https://github.com/bgoleno/opportun/issues/309),
+  [#324](https://github.com/bgoleno/opportun/issues/324)).
+- **Batch ranking is built but off, and hidden.** The server can rank postings in provider
+  batches behind a setting that is off by default and is not in Settings; no provider has a batch
+  client yet, so ranking is still made live whatever the setting. The upgrade adds a table
+  `rank_batches` and three columns on `discovery_results` (step 0064; Postgres 0046) and
+  nothing else changes, so there is nothing to do
+  ([#441](https://github.com/bgoleno/opportun/issues/441),
+  [#358](https://github.com/bgoleno/opportun/issues/358)).
+- **Role targets show an error on a list field that is too long.** An entry over 200 characters
+  in Industries, Keywords, Locations or Title variants now says so; before, Save did nothing and
+  said nothing ([#243](https://github.com/bgoleno/opportun/issues/243)).
+
+### Telemetry, usage and logs
+
+- **Telemetry is built in, and off until an administrator turns it on.** Two switches under
+  **Settings > Telemetry**, both off by default: **Collection** keeps metrics, traces and event
+  records in your own database, and **Export** sends them to one destination you choose
+  (Prometheus, a Datadog Agent, InfluxDB or OTLP) and can be on only while collection is. Nothing
+  leaves your server unless an administrator turns export on, and the demo never collects. New
+  pages: **Settings > Metrics** (charts and a table) and **Settings > AI traces**. Event
+  records carry no personal information, by a catalogue and a gate. The upgrade adds tables
+  (`obs_metric_points`, `obs_traces`, `obs_spans`) and a column `jobs.trace_context`, and an
+  hourly `obs.prune` job runs even with collection off, keeping minute points 48 hours and
+  hourly points and traces 30 days, within row caps. The data is in your database and so in
+  your backups, but not in the user's own export. Export to loopback or a private network needs
+  `OPPORTUN_TELEMETRY_ALLOW_PRIVATE=1`; a blocked destination says why; changing the OTLP
+  header name clears the stored credential. SQLite now checkpoints its WAL every 100 pages
+  instead of 1,000, from the next start. See the [install guide](docs/install.md) and
+  **Settings > Telemetry** in the guide
+  ([#340](https://github.com/bgoleno/opportun/issues/340),
+  [#342](https://github.com/bgoleno/opportun/issues/342),
+  [#343](https://github.com/bgoleno/opportun/issues/343),
+  [#344](https://github.com/bgoleno/opportun/issues/344),
+  [#346](https://github.com/bgoleno/opportun/issues/346),
+  [#347](https://github.com/bgoleno/opportun/issues/347),
+  [#353](https://github.com/bgoleno/opportun/issues/353),
+  [#375](https://github.com/bgoleno/opportun/issues/375),
+  [#382](https://github.com/bgoleno/opportun/issues/382)).
+- **Server log lines changed, so a script that reads them needs checking.** Every line passes a
+  filter that keeps a fixed message and typed values (ids, counts, codes) and nothing else: no
+  names, addresses, request URLs, error messages or host name. A message the server does not
+  know reads `[message withheld]`, an error is its type and frames (a run of frames outside
+  Opportun's code is one `at <external>`), and Fastify's own request logging is replaced by one
+  access line per request (method, route template, status, address). There is no switch
+  ([#345](https://github.com/bgoleno/opportun/issues/345)).
+- **Every AI call is now sent through the checked fetch.** To Anthropic, OpenAI or an
+  OpenAI-compatible endpoint: https only, every resolved address public, no redirects, so each
+  call makes one DNS lookup first. A host that reaches the internet only through NAT64 can no
+  longer reach either provider. If that is you, or you use a proxy, set `ANTHROPIC_BASE_URL` or
+  `OPENAI_BASE_URL` to it: a request to that address is sent as it is
+  ([#344](https://github.com/bgoleno/opportun/issues/344), install guide section 4,
+  "AI provider requests").
+- **AI usage is shown by feature, task and model.** **Settings > AI > Usage** now lists nine
+  features (Resume tailoring, Matching, Discovery, Capture, Mail, Companies, Referrals,
+  Duplicates, Integrations) that expand to their tasks, with calls, tokens and estimated cost
+  per model, including features with no calls, and a model reached through two providers shows as
+  two rows. The figures come from the cost recorded at call time, so earlier rows keep their price
+  ([#341](https://github.com/bgoleno/opportun/issues/341),
+  [#350](https://github.com/bgoleno/opportun/issues/350)).
+
+### Mail, pipeline and assisted apply
+
+- **An unsubscribe request your own mail app sent is filtered.** A message from your own address
+  to an unsubscribe address, or whose body is only Gmail's "automatically generated" line, now
+  lands on the Blocked tab as "an unsubscribe request your mail app sent" instead of the Inbox.
+  Messages already ingested stay where they are. There is no switch; restore one from the
+  Blocked tab ([#392](https://github.com/bgoleno/opportun/issues/392)).
+- **An opportunity can move from any chain stage to any other in one move.** In process can go
+  straight back to Preparing; nothing tied to a later stage is lost. Closed and Dismissed still leave only through **Reopen**, and a move out of one of them says so. On the board, a keyboard
+  drop that is refused is announced as not moved, with the reason, not as dropped on the column
+  ([#397](https://github.com/bgoleno/opportun/issues/397),
+  [#413](https://github.com/bgoleno/opportun/issues/413)).
+- **An opportunity's Communications tab opens newest first,** with a control for oldest first.
+  The inbox order is unchanged ([#394](https://github.com/bgoleno/opportun/issues/394)).
+- **Assisted apply, only where it is on.** A refused **Apply** button looks dimmed and says why;
+  a new draft starts filled from your profile, account and last application, with where each
+  value came from and a **Save to my profile** tick (off by default); **Settings > Profile** has
+  an **Application details** card (first and last name, country, school, degree, how you heard, LinkedIn, website, links; the city is your profile's Location); the extension fills the city and how-you-heard text questions
+  and tells you where to click next; after you apply the panel leads with the outcome; the Resume
+  tab shows each resume once with its sends; and a Greenhouse job on a company's own careers page
+  is recognised once Greenhouse's API shows one of the company's boards holds it, and then opens
+  that board's page. The upgrade adds a column `profiles.application_details` (empty for existing
+  profiles); nothing is saved to a profile unless you tick it
+  ([#395](https://github.com/bgoleno/opportun/issues/395),
+  [#398](https://github.com/bgoleno/opportun/issues/398),
+  [#400](https://github.com/bgoleno/opportun/issues/400),
+  [#401](https://github.com/bgoleno/opportun/issues/401),
+  [#402](https://github.com/bgoleno/opportun/issues/402),
+  [#403](https://github.com/bgoleno/opportun/issues/403),
+  [#404](https://github.com/bgoleno/opportun/issues/404),
+  [#411](https://github.com/bgoleno/opportun/issues/411),
+  [#416](https://github.com/bgoleno/opportun/issues/416),
+  [#428](https://github.com/bgoleno/opportun/issues/428),
+  [#435](https://github.com/bgoleno/opportun/issues/435)).
+- **A company's careers page and domain come from the domains its name gives.** The result is the
+  same with or without a message; a careers page found through a sender is used for that
+  opportunity only and is not saved on the company. Values already saved are not changed
+  ([#451](https://github.com/bgoleno/opportun/pull/451)).
+
+### Install
+
+- **The optional settings in `deploy/.env` now reach the server on Compose.** `compose.yml` passes
+  `OPPORTUN_SUBMISSIONS`, `OPPORTUN_DAILY_REVIEW_CAP`, `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP`,
+  `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`, `DB_POOL_MAX` and `OPPORTUN_PEPPER_VERSION` and
+  `OPPORTUN_PEPPER_V1` to `V9`. **On upgrade:** a line for one of these that was sitting in an
+  existing `deploy/.env` took no effect before and now does, at the next `docker compose up -d`;
+  check for stray lines. An empty value is the same as unset. `ANTHROPIC_BASE_URL` and
+  `OPENAI_BASE_URL` still need a `compose.override.yml`
+  ([#417](https://github.com/bgoleno/opportun/issues/417)).
+- The connector's messages name **Settings > Integrations > Extensions and Connectors** as the
+  app shows it ([#235](https://github.com/bgoleno/opportun/issues/235)).
+
+### Earlier in Unreleased
+
 - **A message's full text is encrypted while it waits to be classified.** The text of a new
   message reaches the classifier through its job, which is cleared when the job finishes; it
   is now sealed with the server's secrets key the whole time, so the database files never hold

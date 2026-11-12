@@ -34,6 +34,7 @@ import {
   dismissalFeedback,
   jobs,
   opportunities,
+  rankBatches,
   roleTargets,
 } from '../db/schema';
 import { descNullsLast, jsonText, likePrefix } from '../db/dialect';
@@ -64,6 +65,8 @@ export type DiscoveryResultView = Omit<DiscoveryResultRow, 'posting'> & {
   /** Why a dismissed result was dismissed (issue #199); null unless disposition is dismissed. */
   dismissReason: string | null;
   dismissNote: string | null;
+  /** When the batch this posting's ranking is in was sent (#441); null when in none or unsent. */
+  rankBatchSentAt: number | null;
 };
 
 /** The schedule row name (`schedule:<name>`) that runs one source on its cron. */
@@ -460,6 +463,8 @@ const resultColumns = {
   // is never ambiguous about which feedback row it means.
   dismissReason: dismissalFeedback.reason,
   dismissNote: dismissalFeedback.note,
+  // When the batch this posting's ranking is in was sent (#441); null when it is in none.
+  rankBatchSentAt: rankBatches.submittedAt,
 };
 
 function selectResults(exec: Exec) {
@@ -475,7 +480,8 @@ function selectResults(exec: Exec) {
         eq(dismissalFeedback.resultId, discoveryResults.id),
         eq(dismissalFeedback.kind, 'dismissal'),
       ),
-    );
+    )
+    .leftJoin(rankBatches, eq(rankBatches.id, discoveryResults.rankBatchId));
 }
 
 function ownedResult(ctx: UserCtx, id: string): SQL | undefined {
@@ -673,7 +679,7 @@ export async function unsuppressResult(
 }
 
 /** The column as it is stored, on either engine: JSON text on SQLite, jsonb on Postgres. */
-const postingAsText = sql<string>`cast(${discoveryResults.posting} as text)`;
+export const postingAsText = sql<string>`cast(${discoveryResults.posting} as text)`;
 
 /**
  * Stores the ranking (score null: not ranked, e.g. no AI available). For setting up a test: the
@@ -875,11 +881,18 @@ export async function clearRankDeferred(exec: Exec, ctx: UserCtx, id: string): P
  * A posting the pre-filter passed, then one it never judged, then one it filtered: it must not go
  * ahead of a job alert, which the owner's decision 5 on #190 says is never filtered.
  */
-const verdictOrder = sql`case ${discoveryResults.prefilterOutcome} when 'pass' then 0 when 'filtered' then 2 else 1 end`;
+export const verdictOrder = sql`case ${discoveryResults.prefilterOutcome} when 'pass' then 0 when 'filtered' then 2 else 1 end`;
 
+/**
+ * Waiting for the live drain: for the budget, or behind a key. A posting waiting for a ranking
+ * batch, or in one (#441, reason batch_waiting), is not: the batch jobs take it
+ * (jobs/rankBatch.ts), and turning batching off hands it back (releaseBatchWaiting). With batching
+ * off no posting has that reason, so this is the wait as it was.
+ */
 const waitingForBudget = and(
   isNotNull(discoveryResults.rankDeferredAt),
   eq(discoveryResults.disposition, 'pending'),
+  or(isNull(discoveryResults.rankSkipReason), ne(discoveryResults.rankSkipReason, 'batch_waiting')),
 );
 
 /**

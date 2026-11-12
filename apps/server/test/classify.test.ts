@@ -159,6 +159,41 @@ describe('comms.classify job', () => {
     });
   });
 
+  it('marks where the cacheable prefix ends: before the message, after the targets and open opportunities (#380)', async () => {
+    const { app, a } = await boot();
+    await a.request({
+      method: 'POST',
+      url: '/api/v1/role-targets',
+      payload: {
+        titleVariants: ['Platform Engineer'],
+        name: 'Staff platform',
+        titleFamily: 'Platform Engineer',
+      },
+    });
+    await createOpportunity(app.db, ctxOf(a), {
+      companyName: 'Globex',
+      title: 'Staff Engineer',
+      sourceKind: 'manual',
+    });
+    const id = await insertMessage(app, a.userId, { body: 'MARKER-MESSAGE-BODY a role for you' });
+    classifierReturns({ classification: 'networking' });
+    await classify(app, a.userId, id);
+    const opts = vi.mocked(runStructured).mock.calls[0]?.[2] as {
+      system: string;
+      cacheBreak?: number;
+    };
+    expect(opts.cacheBreak).toBeGreaterThan(0);
+    const prefix = opts.system.slice(0, opts.cacheBreak);
+    const rest = opts.system.slice(opts.cacheBreak);
+    // The part a sync batch repeats: the instructions, the role targets and the opportunities.
+    expect(prefix).toContain('Platform Engineer');
+    expect(prefix).toContain('- Globex | Staff Engineer | discovered');
+    // The message is the per-call part, and starts the rest, inside its fence.
+    expect(prefix).not.toContain('MARKER-MESSAGE-BODY');
+    expect(rest.startsWith('<untrusted>\n')).toBe(true);
+    expect(rest).toContain('MARKER-MESSAGE-BODY');
+  });
+
   it('targeted solicitation creates exactly one opportunity, and re-running creates none', async () => {
     const { app, a } = await boot();
     const id = await insertMessage(app, a.userId, {

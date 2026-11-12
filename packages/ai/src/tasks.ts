@@ -454,36 +454,58 @@ export function renderPrompt(template: string, vars: Record<string, string>): st
 }
 
 /**
+ * Where a task's cacheable prefix ends, when it is not before the first `*_untrusted` variable
+ * (https://github.com/bgoleno/opportun/issues/380). comms.classify's first untrusted variable is
+ * the open opportunities, which stay the same for every message of a sync batch, and the message
+ * comes after them: breaking before the message caches the instructions, the role targets and
+ * the opportunities. A Map, so a lookup by task is a plain get.
+ */
+const CACHE_BREAK_BEFORE: ReadonlyMap<TaskKey, string> = new Map([
+  ['comms.classify', 'message_untrusted'],
+]);
+
+/** The variable a task's cacheable prefix ends before, when it has one of its own. */
+export function cacheBreakVariable(task: TaskKey): string | undefined {
+  return CACHE_BREAK_BEFORE.get(task);
+}
+
+/**
  * The rendered prompt in two parts: `prefix`, everything before the first `*_untrusted`
- * variable, and `rest`, that variable and everything after it. `prefix + rest` is exactly
- * renderPrompt's result. A provider caches only an unchanging prefix, and the untrusted parts
- * are the per-call data (a posting, a list of companies), so the prefix is the part a cache
- * can reuse (https://github.com/bgoleno/opportun/issues/356). Without an untrusted variable the
- * prefix is empty: nothing in the template is known to stay the same from call to call.
+ * variable (or before `breakBefore`, when the template has that variable), and `rest`, that
+ * variable and everything after it. `prefix + rest` is exactly renderPrompt's result. A provider
+ * caches only an unchanging prefix, and the untrusted parts are the per-call data (a posting, a
+ * list of companies), so the prefix is the part a cache can reuse
+ * (https://github.com/bgoleno/opportun/issues/356). A template without `breakBefore` (a user's
+ * edited copy, say) gets the default. Without an untrusted variable the prefix is empty: nothing
+ * in the template is known to stay the same from call to call.
  */
 export function renderPromptParts(
   template: string,
   vars: Record<string, string>,
+  breakBefore?: string,
 ): { prefix: string; rest: string } {
   const full = renderPrompt(template, vars);
-  const first = [...template.matchAll(VAR_PATTERN)].find((m) =>
-    (m[1] as string).endsWith(UNTRUSTED_SUFFIX),
-  );
+  const all = [...template.matchAll(VAR_PATTERN)];
+  const named =
+    breakBefore === undefined ? undefined : all.find((m) => (m[1] as string) === breakBefore);
+  const first = named ?? all.find((m) => (m[1] as string).endsWith(UNTRUSTED_SUFFIX));
   if (first === undefined) return { prefix: '', rest: full };
-  // The template's head holds no untrusted variable, and rendering is per placeholder, so the
-  // head renders to exactly the first part of the whole.
+  // Rendering is per placeholder, so the head renders to exactly the first part of the whole.
   const prefix = renderPrompt(template.slice(0, first.index), vars);
   return { prefix, rest: full.slice(prefix.length) };
 }
 
 /**
  * The rendered system prompt, with where its unchanging part ends (renderPromptParts), as
- * runStructured takes them: `system` is exactly renderPrompt's result.
+ * runStructured takes them: `system` is exactly renderPrompt's result. Given the task, its own
+ * split point applies (cacheBreakVariable).
  */
 export function systemWithCacheBreak(
   template: string,
   vars: Record<string, string>,
+  task?: TaskKey,
 ): { system: string; cacheBreak: number } {
-  const { prefix, rest } = renderPromptParts(template, vars);
+  const breakBefore = task === undefined ? undefined : cacheBreakVariable(task);
+  const { prefix, rest } = renderPromptParts(template, vars, breakBefore);
   return { system: prefix + rest, cacheBreak: prefix.length };
 }

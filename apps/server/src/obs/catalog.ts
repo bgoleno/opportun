@@ -248,6 +248,8 @@ export const ATTRIBUTES = {
   'opportun.count.set': int,
   'opportun.count.changed': int,
   'opportun.count.cleared': int,
+  'opportun.count.returned': int,
+  'opportun.count.unmatched': int,
   'opportun.mail.channel': { kind: 'enum', values: COMM_CHANNELS },
   'opportun.db.awaited_outside': { kind: 'bool' },
   // A process warning's class and code (index.ts's handlers): never its text.
@@ -278,6 +280,7 @@ export const ATTRIBUTES = {
   'opportun.source.id': { kind: 'id' },
   'opportun.opportunity.id': { kind: 'id' },
   'opportun.discovery_result.id': { kind: 'id' },
+  'opportun.rank_batch.id': { kind: 'id' },
   'opportun.dedupe_candidate.id': { kind: 'id' },
   'opportun.resume.id': { kind: 'id' },
   'opportun.discovery.source_kind': { kind: 'enum', values: DISCOVERY_SOURCE_KINDS },
@@ -727,6 +730,8 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.db.filesystem',
   ],
   'database write gate held too long': ['opportun.db.gate_label', 'opportun.db.gate_held_ms'],
+  // The background WAL checkpointer's worker failed (db/client.ts, #383).
+  'background checkpointer stopped: automatic checkpoints are back on': [],
   'slow transaction held the database write gate': [
     'opportun.db.gate_held_ms',
     'opportun.db.awaited_outside',
@@ -789,6 +794,20 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.count.cleared',
   ],
   'ranking a waiting posting failed': ['opportun.discovery_result.id'],
+  // Ranking batches (#441)
+  'a ranking batch was never confirmed as sent: its postings wait again, and may be sent twice': [
+    'opportun.rank_batch.id',
+    'opportun.count.returned',
+  ],
+  'sending a ranking batch failed': ['opportun.rank_batch.id'],
+  'applying a ranking batch result failed': [
+    'opportun.rank_batch.id',
+    'opportun.discovery_result.id',
+  ],
+  'ranking batch results for postings no longer there: their cost is not recorded': [
+    'opportun.rank_batch.id',
+    'opportun.count.unmatched',
+  ],
   'could not read the message again; classifying on the snippet': [
     'opportun.communication.id',
     'opportun.mail.channel',

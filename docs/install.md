@@ -146,13 +146,13 @@ The container runs as a non-root user with a read-only root filesystem, no Linux
 capabilities and `no-new-privileges`; only `/data` and a `/tmp` tmpfs are writable. Its
 health is reported by `GET /healthz`
 (`{"status":"ok","db":"ok","queueLagMs":0,"databaseIntegrity":null}`), which the image's
-`HEALTHCHECK` and `docker compose ps` use — but only the HTTP status code: both only see
+`HEALTHCHECK` and `docker compose ps` use, but only the HTTP status code: both only see
 "healthy" or not, never the body. `status` is `"degraded"` (HTTP 503) when the database
 itself cannot be reached, the one case restarting the container could plausibly help.
 `databaseIntegrity` carries the most recent scheduled integrity check (SQLite; see
 [section 6](#6-upgrades-and-backups) and section 15's engine comparison below for why
 Postgres has none), `null` before the first one has run. A known-corrupt database reports
-`status: "corrupted"` here — deliberately still HTTP 200, since restarting does not repair
+`status: "corrupted"` here, deliberately still HTTP 200, since restarting does not repair
 a corrupt file on disk and the server keeps answering most requests correctly regardless
 (only the specific damaged rows are affected). `docker compose ps` and the image's own
 `HEALTHCHECK` will show this instance as healthy throughout: checking for `"corrupted"`
@@ -299,6 +299,7 @@ Application settings (read by the server process):
 | `OPPORTUN_TRUSTED_PROXIES`                         | (empty: trust no proxy)                        | Reverse proxies whose `X-Forwarded-For`/`-Proto` are trusted (comma-separated IPs, CIDRs, or loopback/linklocal/uniquelocal); compose sets it to the Caddy subnet (issue #333)                                                                                                                                                           |
 | `DATA_DIR`                                         | `./data` (`/data` in the image)                | Attachments, backups, exports, `master.key`                                                                                                                                                                                                                                                                                              |
 | `SQLITE_DIR`                                       | `DATA_DIR` (`/sqlite` in the image)            | `opportun.db` alone, on SQLite; see [section 6](#6-upgrades-and-backups) for why it is separate and how moving to it is handled                                                                                                                                                                                                          |
+| `OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT`            | (unset)                                        | `1` moves SQLite's WAL checkpoints into a background thread, for `opportun.db` on a slow disk; see **SQLite on a slow disk** below                                                                                                                                                                                                       |
 | `LOG_LEVEL`                                        | `info`                                         | pino log level                                                                                                                                                                                                                                                                                                                           |
 | `WEB_DIR`                                          | `apps/web/dist` (`/app/web/dist` in the image) | Built web app to serve; the API runs alone when it is missing                                                                                                                                                                                                                                                                            |
 | `SMTP_URL`                                         | (unset)                                        | Reserved for email password reset, which is not implemented yet                                                                                                                                                                                                                                                                          |
@@ -311,6 +312,50 @@ Application settings (read by the server process):
 | `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`           | (unset: the official API)                      | Send every Anthropic or OpenAI call to a proxy or gateway you run instead; see **AI provider requests** below                                                                                                                                                                                                                            |
 | `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP`                  | (unset)                                        | `1` lets an OpenAI-compatible endpoint use plain http on `localhost`, `127.0.0.1` or `[::1]` (a local Ollama or LM Studio)                                                                                                                                                                                                               |
 | `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`                 | (unset)                                        | `1` lets telemetry export send to loopback, a private network or `100.64.0.0/10` (a Prometheus or a Datadog Agent next to Opportun), over http or https. Unset, export goes only to a public https destination. Link-local and cloud metadata addresses are refused either way; see [Telemetry](guide/settings.md#where-export-may-send) |
+
+**SQLite on a slow disk.** SQLite writes new data to a write-ahead log first, and copies it
+into `opportun.db` from time to time: a checkpoint. A checkpoint is also when the log is synced
+to the disk, so a power cut can roll back what was written since the last one (the server runs
+SQLite with `synchronous=NORMAL`). By default the server checkpoints every 100 pages, inside
+whichever write takes the log past that size, and while a checkpoint waits for the disk nothing
+else in the server runs. On an SSD that takes about 2 ms. On a slow disk, such as an SD card in
+a small board computer, it can take tens of milliseconds, and every request in flight waits for
+it. If `opportun.db` is on such a disk, set `OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT=1`.
+
+- **What it does:** a background thread checkpoints on a connection of its own once 1,000 pages
+  (about 4 MB) wait to be copied, or once anything has waited a minute. Writes no longer wait
+  for the checkpoint's copy and sync.
+- **What still runs in a write:**
+  - after a checkpoint has copied everything, the next write starts the log again from its
+    beginning and syncs the log's new header. With the setting on, that happens about once per
+    1,000 pages written instead of once per 100;
+  - a burst of writes with no pause, past 10,000 pages (about 40 MB), still checkpoints inside
+    a write about once per 10,000 pages, because the log cannot start again while writes keep
+    landing. Each such pause copies what the thread has not yet copied, so it is longer than a
+    default checkpoint's: tens of milliseconds on an ordinary disk, a few hundred on a slow one
+    (up to 335 ms measured in a 50,000-write burst);
+  - a write can also wait behind the thread's own sync, which shares the same disk.
+
+  So the setting makes writes faster in total, and most of them much faster, but in a long burst
+  its single slowest write can be slower than the slowest without it.
+
+- **Durability:** writes are synced within about a minute, or sooner under load. Without the
+  setting they are synced every 100 pages, which on a quiet server can be hours apart.
+- **What it costs:**
+  - the log holds about 4 MB between checkpoints, instead of about 400 KB. During a long burst
+    it can reach about 40 MB, where the server's own checkpoint takes over as a backstop, and
+    the file keeps that size on disk afterwards (SQLite reuses it);
+  - a second connection to the database stays open;
+  - a long read (a backup or an export) still keeps a checkpoint from finishing until it ends,
+    as it does without the setting.
+- **If the thread stops:** the server logs `background checkpointer stopped: automatic
+checkpoints are back on` and goes back to checkpointing as it does by default.
+- **A disk that stops answering:** if it does so in the middle of a checkpoint, shutdown waits up
+  to 2 s for the thread and closes the database anyway. The process itself cannot exit until
+  the disk answers, as it could not with the setting off.
+
+Leave it unset on an SSD: there the default already costs a few milliseconds at most, and the
+setting buys little. It has no effect on Postgres.
 
 **AI provider requests.** Every AI call, to Anthropic, OpenAI or an OpenAI-compatible
 endpoint, is checked before it is sent: https only, and every address the host's name resolves
@@ -326,7 +371,8 @@ chose it. Do not put a user name or password in the URL: such a URL is refused.
 filter before it is written: it keeps a fixed message and a few typed values (row ids, counts,
 codes), and nothing else. So a log line never holds a name, an email address, a phone number, a
 company's name, a request's URL or query string, an error's message, or the server's host name.
-An error is written as its type and the code frames it passed through. A message the server
+An error is written as its type and the code frames it passed through; a run of frames outside
+Opportun's code (a library's or Node's) is written as one fixed `at <external>`. A message the server
 does not know, such as one a library builds, is written as `[message withheld]`. Two
 exceptions: a configuration error at startup, which names the variable that is wrong, and a
 warning raised on the TypeScript loader's thread (tsx) on a start with a cold cache, which Node
@@ -517,7 +563,10 @@ marked **on Postgres** instead.
   Opportun also sets `wal_autocheckpoint = 100`. SQLite folds the WAL back into
   `opportun.db` whenever it passes 100 pages, rather than at its default of 1,000, so
   `opportun.db-wal` stays small and no single write waits long for a checkpoint. There is
-  nothing to configure.
+  nothing to configure. With `OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT=1`, a worker thread
+  checkpoints the WAL instead, once 1,000 pages wait or after a minute, and the main
+  connection's own automatic checkpoint moves to 10,000 pages as a backstop (see **SQLite on
+  a slow disk** in [section 4](#4-configuration-reference)).
 
 - **Restore**: pick which snapshot first. Settings → Import/Export lists every snapshot
   with its own **Verified** badge; use that, not just the newest file on disk, since an
