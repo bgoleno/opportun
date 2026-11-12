@@ -114,8 +114,11 @@ set the extension up, under **Settings > Integrations > Extensions and Connector
 It fills only a Greenhouse form on Greenhouse's own pages (`boards.greenhouse.io` or
 `job-boards.greenhouse.io`), and only the application you reviewed and opened from Opportun.
 Opportun's last step says which applies: where the extension cannot fill the form, or you have
-no such token, it tells you to copy your details instead. That includes a Greenhouse job shown
-on the company's own careers page, where you may apply on that page rather than Greenhouse's.
+no such token, it tells you to copy your details instead. A Greenhouse job shown on the
+company's own careers page is not filled while Opportun has only the careers link. Press **Find
+posting** on the opportunity: once Greenhouse's API shows the job is on one of the company's
+boards, the review opens its Greenhouse page, and the extension can fill that. If no such board
+holds the job, you apply on the careers page and copy your details yourself.
 
 ## Why it works this way
 

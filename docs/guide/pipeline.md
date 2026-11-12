@@ -184,6 +184,15 @@ missing, the panel says which. **Apply** takes you through the resume, your deta
 answers, then one review of everything. **Confirm review and open** opens the real application
 form in a new tab. Opportun never submits anything: you press the site's own Submit button.
 
+A Greenhouse job can sit on the company's own careers page, with a link that ends in
+`?gh_jid=` and a number. Opportun does not take that link as Greenhouse on sight. The panel says
+"This looks like a Greenhouse job on the company's own careers page. Find the posting on
+Greenhouse to apply with assisted apply." and has a **Find posting** button under it (see
+[Find a posting](#find-a-posting)). Once Greenhouse's own API shows that the job is on one of
+the company's boards, the opportunity is recognised as Greenhouse. **Apply** is then offered
+under the same conditions as for any other job (the posting confirmed, the stage, a Final resume),
+and the review opens that board's page for the job, never the careers page.
+
 #### Your details when you apply
 
 The **Details** step opens already filled with what Opportun holds for you, field by field:
@@ -217,8 +226,9 @@ the form".
 The last step, **Finish on the application site**, says what to do on that tab:
 
 - **Where the browser extension can fill the form** (a Greenhouse form on Greenhouse's own
-  pages, not a job shown on the company's own careers page, and an extension token with the
-  **Assisted apply** permission): go to the form's tab, click the Opportun icon in the toolbar,
+  pages, which includes a job from a careers page once Find posting has recognised it and the
+  review opened its Greenhouse page, and an extension token with the **Assisted apply**
+  permission): go to the form's tab, click the Opportun icon in the toolbar,
   then press **Fill in this application**. The review step says this too, under the button that
   opens the form. Check every field (the extension lists what it filled and what it left for
   you), then press the site's own Submit. See
@@ -243,8 +253,28 @@ asks for the reason.
 An opportunity created from an email or an import often has no description. On the Details
 tab, **Find posting** looks for one:
 
-1. First, a job board link in a message already linked to the opportunity.
-2. Then, the company's job board (detected first if Opportun does not know it yet).
+1. First, if the opportunity's own posting link is a careers page link with a numeric
+   `?gh_jid=` and the opportunity is not yet recognised as Greenhouse, that job on the company's
+   own Greenhouse boards. Finding it there is what recognises the opportunity as Greenhouse, and
+   it comes ahead of any message link or title match.
+2. Then, a job board link in a message already linked to the opportunity.
+3. Then, the company's job board (detected first if Opportun does not know it yet).
+
+When the careers link names a job that the company's boards do not hold, Find posting never
+attaches another posting by itself: anything it finds is offered to choose from. If you wrote the
+description yourself, Find posting leaves it as it is and only recognises the job, with Greenhouse's
+API checking the company's known boards (at most three); it says "Recognised on Greenhouse", or
+that the job was not found on a Greenhouse board known for this company. Saving a new posting link of
+this kind with **Edit link** runs the same check. Opportun asks nothing of Greenhouse when an
+opportunity is created or its mail is read.
+
+From the Apply panel, the **Find posting** button answers in a line under it: "Posting attached.",
+"Recognised on Greenhouse.", "Several postings could be this job. Choose it on the Details tab.", "A
+posting on the company's board could be this job. Check it on the Details tab." (when exactly one is
+offered), "This job was not found on the company's board. Paste the posting on the Details tab.", "No
+job board is known for this company yet. Add its careers page on the Details tab.", or, when you wrote
+the description yourself and no known board holds the job, "This job was not found on a Greenhouse
+board known for this company. Check the posting link on the Details tab."
 
 One confident match is attached straight away. Several are listed for you to pick from, with
 a search box over the whole board. If no board is reachable, paste the posting link or the
