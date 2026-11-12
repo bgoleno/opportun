@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   clearResume,
   fillGreenhouseForm,
+  greenhouseListHelpers,
   resumeShown,
   type FillPlan,
   type FillReport,
@@ -972,11 +973,23 @@ describe('the source scan of the injected functions (acceptance 2, sec 1 to 6)',
     // press is called twice: once to open a list, once to close one this fill opened.
     expect(fill.match(/press\(/g)).toHaveLength(2);
     expect(source.match(/setTimeout\s*\(/g)).toHaveLength(1);
-    expect(fill).toMatch(
-      /view\.setTimeout\([\s\S]*?,\s*3e3\s*\)|view\.setTimeout\([\s\S]*?,\s*3000\s*\)/,
-    );
     expect(source.match(/MutationObserver\s*\(/g)).toHaveLength(1);
-    expect(fill).toMatch(/const waitFor = [\s\S]*?new view\.MutationObserver\(/);
+    expect(fill).toMatch(
+      /const watchFor = [\s\S]*?new view\.MutationObserver\([\s\S]*?view\.setTimeout\(/,
+    );
+    // Two waits through it: the options, bounded at 3 seconds, and the read-back, at 1.
+    expect(fill.match(/await watchFor\(/g)).toHaveLength(2);
+    expect(fill).toMatch(/,\s*(3e3|3000)\s*\);/);
+    expect(fill).toMatch(/,\s*(1e3|1000)\s*\);/);
+  });
+
+  it('the list helpers the tests call are the same code as the filler’s own (tl at 8084132)', () => {
+    const between = (f: { toString(): string }) => {
+      const m = /\/\/ list helpers: start[\s\S]*?\/\/ list helpers: end/.exec(f.toString());
+      expect(m).not.toBeNull();
+      return m![0].replace(/\s+/g, ' ');
+    };
+    expect(between(greenhouseListHelpers)).toBe(between(fillGreenhouseForm));
   });
 
   it('dispatches only plain Event input and change and the one mouseup, through one helper each', () => {

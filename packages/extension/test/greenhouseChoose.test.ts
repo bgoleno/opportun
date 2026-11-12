@@ -4,7 +4,12 @@
 // 6808390283). Against the stand-in lists in fixtures/greenhousePages.ts. Every value here is a
 // placeholder.
 import { describe, expect, it } from 'vitest';
-import { fillGreenhouseForm, type FillPlan, type FillReport } from '../src/greenhouseFill';
+import {
+  fillGreenhouseForm,
+  greenhouseListHelpers,
+  type FillPlan,
+  type FillReport,
+} from '../src/greenhouseFill';
 import {
   BOARD,
   EDUCATION,
@@ -16,6 +21,7 @@ import {
   loadForm,
   select,
   standInList,
+  text,
   valueOf,
   type ListBehaviour,
   type LoadedForm,
@@ -46,7 +52,13 @@ const ok = (r: FillReport) => {
  * real time (the stand-ins answer within 20 ms) is fired, as its 3 seconds would end it.
  */
 async function settle(page: LoadedForm, p: FillPlan): Promise<Extract<FillReport, { ok: true }>> {
-  const run = fillGreenhouseForm(JSON.parse(JSON.stringify(p)) as FillPlan, page.doc);
+  return settleRun(page, fillGreenhouseForm(JSON.parse(JSON.stringify(p)) as FillPlan, page.doc));
+}
+
+async function settleRun(
+  page: LoadedForm,
+  run: Promise<FillReport>,
+): Promise<Extract<FillReport, { ok: true }>> {
   let done = false;
   void run.then(() => {
     done = true;
@@ -346,10 +358,10 @@ describe("rule 3.6: the phone's country code", () => {
       plan({ lists: [{ id: 'country', name: 'Phone country code', value: 'United States' }] }),
     );
     expect(report.chosen).toEqual([]);
+    // sec 2.2: a mismatch is "choose it on the form" (tl's blocking 4 at 8084132).
     expect(report.notFilled).toContainEqual({
       label: 'Phone country code',
-      reason: 'not_confirmed',
-      detail: 'United States +1',
+      reason: 'choose_on_form',
     });
   });
 
@@ -521,5 +533,285 @@ describe('the mouseup and click helpers refuse anything but the control’s own 
       reason: 'list_not_shown',
       detail: "Bachelor's Degree",
     });
+  });
+});
+
+describe("tl's blocking 1 at 8084132: a list's state is read again just before it is acted on", () => {
+  it.each(['opens', 'types in'] as const)(
+    'a list the user %s while another list is still waiting is left as it is',
+    async (act) => {
+      const p = page();
+      standInList(p, 'country', { options: () => [], arrive: 'never' });
+      const school = standInList(p, 'school--0', { options: () => ['University of Example'] });
+      const run = fillGreenhouseForm(plan({ lists: [LISTS[0]!, LISTS[2]!] }), p.doc);
+      await new Promise((r) => setTimeout(r, 50));
+      // The country list is still waiting for its options.
+      expect(p.timers.pending()).toBe(1);
+      const box = p.doc.getElementById('school--0') as HTMLInputElement;
+      if (act === 'opens') {
+        box.dispatchEvent(
+          new p.window.MouseEvent('mouseup', { bubbles: true }) as unknown as Event,
+        );
+      } else {
+        const native = Object.getOwnPropertyDescriptor(
+          p.window.HTMLInputElement.prototype,
+          'value',
+        )!;
+        native.set!.call(box, 'Univ');
+        box.dispatchEvent(new p.window.Event('input', { bubbles: true }) as unknown as Event);
+      }
+      const before = p.events.length;
+      const report = await settleRun(p, run);
+      const after = p.events.slice(before);
+      expect(after.filter((e) => e.target === 'school--0')).toEqual([]);
+      expect(after.filter((e) => e.type === 'click')).toEqual([]);
+      expect(report.chosen).toEqual([]);
+      if (act === 'opens') {
+        expect(school.isOpen()).toBe(true);
+        expect(report.notFilled).toContainEqual({ label: 'School', reason: 'choose_on_form' });
+      } else {
+        expect(valueOf(p.doc, 'school--0')).toBe('Univ');
+        expect(report.notFilled).toContainEqual({ label: 'School', reason: 'has_value' });
+      }
+    },
+  );
+});
+
+describe("tl's blocking 2 at 8084132: the choice is read back once the form has shown it", () => {
+  it.each(['microtask', 'macrotask'] as const)(
+    'a form that shows the choice after a %s is confirmed',
+    async (renders) => {
+      const p = page();
+      standInList(p, 'degree--0', { options: () => ["Bachelor's Degree"], renders });
+      const report = await settle(p, plan({ lists: [LISTS[3]!] }));
+      expect(report.chosen).toEqual([{ label: 'Degree', text: "Bachelor's Degree" }]);
+      expect(p.timers.pending()).toBe(0);
+      expect(p.observing()).toBe(0);
+    },
+  );
+});
+
+describe("tl's blocking 3 at 8084132: nothing inside a self-identification block is written to", () => {
+  it('a text question in each block, with a reviewed answer for its label, is left empty', async () => {
+    const html = form(`${STANDARD}
+      <div class="eeoc__container">${text('question_9000301', 'Placeholder block text')}</div>
+      <div id="demographic-section" class="demographic--container">
+        ${text('4000009', 'Placeholder numeric text')}
+      </div>`);
+    const p = page(html);
+    const answers = ['Placeholder block text', 'Placeholder numeric text'].map((l) => ({
+      labels: [l],
+      name: l,
+      value: 'Placeholder answer',
+    }));
+    const report = await settle(p, plan({ questions: answers }));
+    for (const [id, label] of [
+      ['question_9000301', 'Placeholder block text'],
+      ['4000009', 'Placeholder numeric text'],
+    ] as const) {
+      expect(valueOf(p.doc, id)).toBe('');
+      expect(on(p, id)).toEqual([]);
+      expect(report.filled).not.toContain(label);
+      expect(report.notFilled).toContainEqual({ label, reason: 'choose_on_form' });
+    }
+  });
+});
+
+describe('tl at 8084132: option text is compared with case and spaces only', () => {
+  it('an option "Other *" is not "Other"', async () => {
+    const p = page();
+    standInList(p, 'question_9000201', { options: () => ['Other *'] });
+    const report = await settle(p, plan({ questions: [{ ...HEARD, value: 'Other' }] }));
+    expect(report.chosen).toEqual([]);
+    expect(report.notFilled).toContainEqual(expect.objectContaining({ reason: 'no_option' }));
+  });
+});
+
+// sec on #402 (issuecomment-6808114453, point 1.1) and tl's blocking 5 at 8084132: each refusal
+// is fed to the helper itself, through the test copy the scan pins equal to the filler's own.
+describe('the helpers themselves refuse anything but the control’s own box and list', () => {
+  const EXTRA = `<a id="placeholder-link" href="#">Placeholder link</a>`;
+  const helpers = (
+    html = LIST_QUESTIONS.replace(
+      '<div class="eeoc__container">',
+      `${EXTRA}<div class="eeoc__container">`,
+    ),
+  ) => {
+    const p = page(html);
+    const formEl = p.doc.getElementById('application-form')!;
+    return {
+      p,
+      h: greenhouseListHelpers(p.doc, formEl),
+      byId: (id: string) => p.doc.getElementById(id)!,
+    };
+  };
+  const ups = (p: LoadedForm) => p.events.filter((e) => e.type === 'mouseup');
+
+  it('press sends one plain bubbling mouseup to a closed list box, and closes only an open one', () => {
+    const { p, h, byId } = helpers();
+    standInList(p, 'school--0', { options: () => [] });
+    expect(h.press(byId('school--0'), false)).toBe(false);
+    expect(h.press(byId('school--0'), true)).toBe(true);
+    expect(ups(p)).toEqual([
+      { type: 'mouseup', target: 'school--0', ctor: 'MouseEvent', bubbles: true },
+    ]);
+    // Open now: a second opening press is refused, a closing one goes.
+    expect(h.press(byId('school--0'), true)).toBe(false);
+    expect(h.press(byId('school--0'), false)).toBe(true);
+    expect(ups(p)).toHaveLength(2);
+  });
+
+  it.each([
+    ['Locate me', 'locate-me'],
+    ['Add another', 'add-education'],
+    ['a link', 'placeholder-link'],
+    ['a label', 'school--0-label'],
+    ['a text input', 'first_name'],
+    ['the phone input', 'phone'],
+    ['the file input', 'resume'],
+    ['a number input', 'start-year--0'],
+    ['a box in the fixed self-identification block', 'gender'],
+    ["a box in a board's own self-identification block", '4000001'],
+    ['a multi-select box', 'question_9000202'],
+  ])('press refuses %s', (_, id) => {
+    const { p, h, byId } = helpers();
+    expect(h.press(byId(id), true)).toBe(false);
+    expect(h.press(byId(id), false)).toBe(false);
+    expect(ups(p)).toEqual([]);
+  });
+
+  it('press refuses the submit button, the hidden required input, and a list box outside the form', () => {
+    const { p, h } = helpers();
+    const submit = p.doc.querySelector('button[type="submit"]')!;
+    const required = p.doc.querySelector(
+      '[class="degree--0-requiredInput"], [class="question_9000201-requiredInput"]',
+    )!;
+    const outside = p.doc.createElement('div');
+    outside.innerHTML = select('outside', 'Placeholder outside');
+    p.doc.body.append(outside);
+    for (const el of [submit, required, p.doc.getElementById('outside')!]) {
+      expect(h.press(el, true)).toBe(false);
+    }
+    expect(ups(p)).toEqual([]);
+  });
+
+  it('press refuses an element that is not an input, even with the box’s class and role in a list (sec K1)', () => {
+    const { p, h, byId } = helpers();
+    const holder = byId('school--0').closest('.select__value-container')!;
+    for (const tag of ['div', 'button', 'span']) {
+      const el = p.doc.createElement(tag);
+      el.className = 'select__input';
+      el.setAttribute('role', 'combobox');
+      el.setAttribute('aria-expanded', 'false');
+      el.id = `not-input-${tag}`;
+      holder.append(el);
+      expect(h.isBox(el)).toBe(false);
+      expect(h.press(el, true)).toBe(false);
+    }
+    expect(ups(p)).toEqual([]);
+  });
+
+  it('press refuses a box whose aria-expanded is neither "false" nor "true"', () => {
+    const { p, h, byId } = helpers();
+    const box = byId('school--0');
+    for (const v of [null, '', 'open']) {
+      if (v === null) box.removeAttribute('aria-expanded');
+      else box.setAttribute('aria-expanded', v);
+      expect(h.press(box, true)).toBe(false);
+      expect(h.press(box, false)).toBe(false);
+    }
+    expect(ups(p)).toEqual([]);
+  });
+
+  it('optionsOf reads only a listbox the box names, inside its own shell, and only its own options', () => {
+    const { p, h, byId } = helpers();
+    const box = byId('degree--0');
+    // Closed: no list named.
+    expect(h.optionsOf(box)).toBeNull();
+    standInList(p, 'degree--0', { options: () => ["Bachelor's Degree"] });
+    h.press(box, true);
+    const list = p.doc.getElementById('react-select-degree--0-listbox')!;
+    // A nested listbox's option, and options that are links, buttons, inputs or labels, are not
+    // this list's options.
+    const nested = p.doc.createElement('div');
+    nested.setAttribute('role', 'listbox');
+    nested.innerHTML = '<div role="option" id="nested-option">Nested</div>';
+    list.append(nested);
+    for (const tag of ['a', 'button', 'input', 'label']) {
+      const el = p.doc.createElement(tag);
+      el.setAttribute('role', 'option');
+      el.id = `as-${tag}`;
+      el.textContent = "Bachelor's Degree";
+      list.append(el);
+    }
+    expect(h.optionsOf(box)!.map((o) => o.id)).toEqual(['react-select-degree--0-option-0']);
+    // Named but not a listbox: none.
+    list.removeAttribute('role');
+    expect(h.optionsOf(box)).toBeNull();
+    list.setAttribute('role', 'listbox');
+    // A listbox outside the box's own shell: none.
+    const elsewhere = p.doc.createElement('div');
+    elsewhere.id = 'elsewhere';
+    elsewhere.setAttribute('role', 'listbox');
+    p.doc.getElementById('application-form')!.append(elsewhere);
+    box.setAttribute('aria-controls', 'elsewhere');
+    expect(h.optionsOf(box)).toBeNull();
+  });
+
+  it("pick clicks only an option of this box's own list, once", () => {
+    const { p, h, byId } = helpers();
+    standInList(p, 'degree--0', { options: () => ["Bachelor's Degree"] });
+    standInList(p, 'school--0', { options: () => ['University of Example'] });
+    const degree = byId('degree--0');
+    h.press(degree, true);
+    h.press(byId('school--0'), true);
+    const stray = p.doc.createElement('div');
+    stray.setAttribute('role', 'option');
+    stray.id = 'stray-option';
+    p.doc.getElementById('application-form')!.append(stray);
+    const list = p.doc.getElementById('react-select-degree--0-listbox')!;
+    const asLink = p.doc.createElement('a');
+    asLink.setAttribute('role', 'option');
+    asLink.id = 'link-option';
+    list.append(asLink);
+    for (const id of [
+      'react-select-school--0-option-0',
+      'stray-option',
+      'link-option',
+      'locate-me',
+    ]) {
+      expect(h.pick(degree, byId(id))).toBe(false);
+    }
+    expect(p.events.filter((e) => e.type === 'click')).toEqual([]);
+    expect(h.pick(degree, byId('react-select-degree--0-option-0'))).toBe(true);
+    expect(p.events.filter((e) => e.type === 'click').map((e) => e.target)).toEqual([
+      'react-select-degree--0-option-0',
+    ]);
+  });
+
+  it('watchFor answers from look, or from late when its timer ends, and leaves nothing behind', async () => {
+    const { p, h, byId } = helpers();
+    const box = byId('degree--0');
+    let ready = false;
+    const early = h.watchFor(
+      box,
+      () => (ready ? 'seen' : null),
+      () => 'late',
+      3000,
+    );
+    ready = true;
+    box.setAttribute('data-placeholder', 'changed');
+    expect(await early).toBe('seen');
+    const late = h.watchFor(
+      box,
+      () => null,
+      () => 'late',
+      3000,
+    );
+    expect(p.timers.pending()).toBe(1);
+    p.timers.fire();
+    expect(await late).toBe('late');
+    expect(p.timers.pending()).toBe(0);
+    expect(p.observing()).toBe(0);
   });
 });

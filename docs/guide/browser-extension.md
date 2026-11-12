@@ -107,7 +107,8 @@ set the extension up, under **Settings > Integrations > Extensions and Connector
 2. On that tab, click the Opportun icon in your browser's toolbar. If it is not there, open
    your browser's Extensions menu and pin Opportun.
 3. Press **Fill in this application**. The extension fills in what you reviewed. Where the
-   form asks with a list (the phone's country code, Location (City), School, Degree, or a
+   form asks with a list (the phone's country code, Location (City), the first School and
+   Degree, or a
    question such as "How did you hear about this role?"), it chooses the one option that reads
    exactly as your value, waiting a few seconds for each list. Keep the popup open until it
    shows its report.

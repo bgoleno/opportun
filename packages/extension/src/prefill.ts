@@ -487,9 +487,10 @@ export function reportLines(report: Extract<FillReport, { ok: true }>): {
     filled: report.filled.map((l) => l.slice(0, 200)),
     notFilled: report.notFilled.map(
       (n) =>
-        `${n.label.slice(0, 200)}: ${(
-          NOT_FILLED_WORDS.get(n.reason) ?? 'fill it in yourself'
-        ).replace('{value}', (n.detail ?? '').slice(0, 200))}`,
+        `${n.label.slice(0, 200)}: ${(NOT_FILLED_WORDS.get(n.reason) ?? 'fill it in yourself')
+          // A function, so `$&` and the like in page text are not read as replacement
+          // patterns (sec at 8084132).
+          .replace('{value}', () => (n.detail ?? '').slice(0, 200))}`,
     ),
     reminder: SUBMIT_REMINDER,
   };

@@ -215,6 +215,12 @@ export async function fillGreenhouseForm(
   // label is a reviewed answer's. Nothing inside a self-identification block, whatever its id or
   // label, and nothing else in the education block (Discipline, the dates, a second entry).
   const LIST_IDS = ['country', 'candidate-location', 'school--0', 'degree--0'];
+  // Erased in the serialized source, with any comment just before it: kept above the helpers.
+  type Found =
+    { kind: 'one'; option: Element } | { kind: 'several' } | { kind: 'none' } | { kind: 'no_list' };
+
+  // list helpers: start. greenhouseListHelpers below holds the same code, for tests to call; a
+  // test pins the two copies equal.
   const inBlock = (el: Element): boolean =>
     el.closest('div.eeoc__container, div#demographic-section') !== null;
   // A single-choice list's own search box, in this form and outside both blocks: the only
@@ -264,33 +270,24 @@ export async function fillGreenhouseForm(
     (option as HTMLElement).click();
     return true;
   };
-  type Found =
-    { kind: 'one'; option: Element } | { kind: 'several' } | { kind: 'none' } | { kind: 'no_list' };
-  // Waits for an option equal to the value, with one observer on the control and one timer of 3
-  // seconds. Options arrive more than once, so "none" is decided only when the timer ends; when
-  // an equal option is seen, the equal ones in the list then are counted. The observer is
-  // disconnected and the timer cleared on every way out.
-  const waitFor = (box: Element, equal: (text: string) => boolean): Promise<Found> =>
+  // Waits until `look` has an answer, with one observer on the control and one timer of `ms`;
+  // when the timer ends, `late` gives the answer. The observer is disconnected and the timer
+  // cleared on every way out.
+  const watchFor = <T>(box: Element, look: () => T | null, late: () => T, ms: number): Promise<T> =>
     new Promise((resolve) => {
       const shell = box.closest('div.select-shell') ?? box;
       let over = false;
       let timer = 0;
-      const look = (): Found | null => {
-        const same = (optionsOf(box) ?? []).filter((o) => equal(o.textContent ?? ''));
-        const first = same[0];
-        if (first === undefined) return null;
-        return same.length === 1 ? { kind: 'one', option: first } : { kind: 'several' };
-      };
-      const end = (found: Found): void => {
+      const end = (answer: T): void => {
         if (over) return;
         over = true;
         watch.disconnect();
         view.clearTimeout(timer);
-        resolve(found);
+        resolve(answer);
       };
       const watch = new view.MutationObserver(() => {
-        const found = look();
-        if (found !== null) end(found);
+        const answer = look();
+        if (answer !== null) end(answer);
       });
       watch.observe(shell, {
         childList: true,
@@ -298,13 +295,11 @@ export async function fillGreenhouseForm(
         attributes: true,
         characterData: true,
       });
-      timer = view.setTimeout(() => {
-        end(optionsOf(box) === null ? { kind: 'no_list' } : { kind: 'none' });
-      }, 3000);
+      timer = view.setTimeout(() => end(late()), ms);
       const now = look();
       if (now !== null) end(now);
     });
-
+  // list helpers: end
   const STANDARD_IDS = ['first_name', 'last_name', 'email', 'phone'];
   const TEXT_TYPES = ['', 'text', 'tel', 'email', 'url'];
   const chosen: { label: string; text: string }[] = [];
@@ -326,7 +321,10 @@ export async function fillGreenhouseForm(
       ((el.tagName === 'INPUT' && TEXT_TYPES.includes(type)) || el.tagName === 'TEXTAREA') &&
       !isChoice(el);
     const raw = label.textContent ?? '';
-    fields.push({ el, id, label: raw, key: norm(raw), text });
+    // Nothing inside a self-identification block is written to, whatever its id or label
+    // (sec on #402, tl's blocking 3 at 8084132): such a field is never text here, so it is only
+    // ever reported for the user to answer on the form.
+    fields.push({ el, id, label: raw, key: norm(raw), text: text && !inBlock(el) });
   }
   // How many questions on the form carry each label: a label on two is ambiguous. A choice
   // control the form shows counts too (a select, a dropdown widget, a radio or checkbox, or the
@@ -399,7 +397,11 @@ export async function fillGreenhouseForm(
       // Another file input (a cover letter): never set, but say so in the words that fit.
       if (f.el.tagName === 'INPUT' && (f.el.getAttribute('type') ?? '').toLowerCase() === 'file') {
         notFilled.push({ label: text, reason: 'attach_file_yourself' });
-      } else if (f.el.tagName === 'INPUT' || f.el.tagName === 'SELECT') {
+      } else if (
+        f.el.tagName === 'INPUT' ||
+        f.el.tagName === 'SELECT' ||
+        (f.el.tagName === 'TEXTAREA' && inBlock(f.el))
+      ) {
         // A reviewed answer for this choice is accounted for here: it is never also reported as
         // having no question (#204).
         const answered = plan.questions.flatMap((q, i) =>
@@ -542,68 +544,123 @@ export async function fillGreenhouseForm(
     attached = { filename: name, size: pdf.size, before };
   }
 
+  // Options are compared with case and spaces normalised only: `norm` also drops a trailing `*`
+  // (a required field's mark), which would make "Other *" equal "Other" (tl at 8084132).
+  const same = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase();
   // Whether the control shows the option chosen: its text, or for the phone's country code the
   // option's "+digits" and, where the control exposes the flag's country, that country.
-  const showsChoice = (box: Element, option: string, phoneCode: boolean): boolean => {
+  // 'flag' is a flag that names another country (sec 2.2: choose it on the form).
+  const showsChoice = (box: Element, option: string, phoneCode: boolean): 'yes' | 'no' | 'flag' => {
     const holder = box.closest('div.select__value-container');
-    if (holder === null) return false;
-    const seen = norm(holder.textContent ?? '');
-    if (!phoneCode) return seen === norm(option);
-    const code = / (\+\d{1,4})$/.exec(clean(option))?.[1];
-    if (code === undefined || !seen.split(' ').includes(code)) return false;
+    if (holder === null) return 'no';
+    const seen = same(holder.textContent ?? '');
+    if (!phoneCode) return seen === same(option) ? 'yes' : 'no';
+    const code = / (\+\d{1,4})$/.exec(same(option))?.[1];
+    if (code === undefined || !seen.split(' ').includes(code)) return 'no';
     const flag = Array.from(holder.querySelectorAll('[alt], [title], [aria-label]')).find(
       (n) => n !== box,
     );
-    if (flag === undefined) return true;
+    if (flag === undefined) return 'yes';
     const says =
       flag.getAttribute('alt') ?? flag.getAttribute('title') ?? flag.getAttribute('aria-label');
-    return norm(says ?? '') === norm(clean(option).replace(/ \+\d{1,4}$/, ''));
+    return same(says ?? '') === same(option).replace(/ \+\d{1,4}$/, '') ? 'yes' : 'flag';
   };
+  // Whether the control shows a choice already, or its box holds text.
+  const inUse = (box: HTMLInputElement): boolean =>
+    box.value !== '' ||
+    box.closest('div.select__value-container')?.querySelector('.select__single-value') != null;
 
   // The lists, one at a time: write the value, open the list, wait, choose the one equal option.
   for (const job of lists) {
     const { box, label, value } = job;
     const setter = inputValue?.set;
-    if (setter === undefined) {
+    // Checked again just before acting (tl's blocking 1 at 8084132): seconds may have passed
+    // since the fields were read, and the user may have opened this list or typed in it. Then
+    // it is theirs, and it is left as it is.
+    if (setter === undefined || box.getAttribute('aria-expanded') !== 'false') {
       notFilled.push({ label, reason: 'choose_on_form' });
       continue;
     }
-    const want = norm(value);
+    if (inUse(box)) {
+      notFilled.push({ label, reason: 'has_value' });
+      continue;
+    }
+    const want = same(value);
     // The phone's country code: each option's text without one trailing " +digits" (sec 2.1).
     const equal = job.country
-      ? (t: string): boolean => norm(clean(t).replace(/ \+\d{1,4}$/, '')) === want
-      : (t: string): boolean => norm(t) === want;
+      ? (t: string): boolean => same(t).replace(/ \+\d{1,4}$/, '') === want
+      : (t: string): boolean => same(t) === want;
+    // Emptied only while it still holds what this fill wrote, never over the user's own text.
+    const empty = (): void => {
+      if (box.value !== value) return;
+      setter.call(box, '');
+      fire(box, 'input');
+      fire(box, 'change');
+    };
     // Written before the list opens: the education lists ask their service, when they open, for
     // the text the box holds then.
     setter.call(box, value);
     fire(box, 'input');
     fire(box, 'change');
-    const opened = press(box, true);
-    const found = await waitFor(box, equal);
-    if (found.kind === 'one' && pick(box, found.option)) {
-      const text = found.option.textContent ?? '';
-      if (showsChoice(box, text, job.country)) chosen.push({ label, text: shown(text) });
-      else notFilled.push({ label, reason: 'not_confirmed', detail: shown(text) });
+    if (!press(box, true)) {
+      // It opened meanwhile, or is no longer a list box: nothing is waited for or clicked.
+      empty();
+      notFilled.push({ label, reason: 'choose_on_form' });
       continue;
     }
-    // Nothing chosen: the box is emptied the same way first, then a list this fill opened is
-    // closed with one more mouseup (step 2.6). A list it did not open gets none.
-    if (box.value !== '') {
-      setter.call(box, '');
-      fire(box, 'input');
-      fire(box, 'change');
+    // One 3 second wait for the options: "none" only when the timer ends, since they arrive more
+    // than once; when an equal option is seen, the equal ones in the list then are counted.
+    const found = await watchFor<Found>(
+      box,
+      () => {
+        const equals = (optionsOf(box) ?? []).filter((o) => equal(o.textContent ?? ''));
+        const first = equals[0];
+        if (first === undefined) return null;
+        return equals.length === 1 ? { kind: 'one', option: first } : { kind: 'several' };
+      },
+      () => (optionsOf(box) === null ? { kind: 'no_list' } : { kind: 'none' }),
+      3000,
+    );
+    // Found, then replaced before the click: there was one, so the field is "choose it on the
+    // form", not "no option" (tl's optional point at 8084132). It leaves by the same way out.
+    let replaced = false;
+    if (found.kind === 'one') {
+      const text = found.option.textContent ?? '';
+      if (pick(box, found.option)) {
+        // The form shows the choice in its own time: React applies a click's update after the
+        // click returns (tl's blocking 2 at 8084132). Waited for within a second, the same way.
+        const verdict = await watchFor<'yes' | 'no' | 'flag'>(
+          box,
+          () => (showsChoice(box, text, job.country) === 'yes' ? 'yes' : null),
+          () => showsChoice(box, text, job.country),
+          1000,
+        );
+        if (verdict === 'yes') chosen.push({ label, text: shown(text) });
+        // A flag naming another country: choose it on the form (sec 2.2).
+        else if (verdict === 'flag') notFilled.push({ label, reason: 'choose_on_form' });
+        else notFilled.push({ label, reason: 'not_confirmed', detail: shown(text) });
+        continue;
+      }
+      replaced = true;
     }
-    if (opened) press(box, false);
-    notFilled.push({
-      label,
-      reason:
-        found.kind === 'several'
-          ? 'several_options'
-          : found.kind === 'no_list'
-            ? 'list_not_shown'
-            : 'no_option',
-      detail: shown(value),
-    });
+    // Nothing chosen: the box is emptied the same way first, then the list this fill opened is
+    // closed with one more mouseup (step 2.6).
+    empty();
+    press(box, false);
+    notFilled.push(
+      replaced
+        ? { label, reason: 'choose_on_form' }
+        : {
+            label,
+            reason:
+              found.kind === 'several'
+                ? 'several_options'
+                : found.kind === 'no_list'
+                  ? 'list_not_shown'
+                  : 'no_option',
+            detail: shown(value),
+          },
+    );
   }
 
   return { ok: true, chosen, filled, notFilled, resume: attached };
@@ -757,4 +814,96 @@ export function clearResume(
   fire(fileInput, 'input');
   fire(fileInput, 'change');
   return 'cleared';
+}
+
+/**
+ * The list helpers the filler uses, built on their own for tests (sec on #402, point 1.1: each
+ * refusal is fed to the helper itself). The filler cannot call this: it is serialized alone, so
+ * it carries its own copy, and test/greenhouseFill.test.ts pins the two copies equal. Nothing in
+ * the extension calls this function.
+ */
+export function greenhouseListHelpers(doc: Document, form: Element) {
+  const view = doc.defaultView as Window & typeof globalThis;
+  // list helpers: start. greenhouseListHelpers below holds the same code, for tests to call; a
+  // test pins the two copies equal.
+  const inBlock = (el: Element): boolean =>
+    el.closest('div.eeoc__container, div#demographic-section') !== null;
+  // A single-choice list's own search box, in this form and outside both blocks: the only
+  // element `press` sends anything to.
+  const isBox = (el: Element): boolean => {
+    const shell = el.closest('div.select-shell');
+    const holder = el.closest('div.select__value-container');
+    return (
+      el.tagName === 'INPUT' &&
+      el.classList.contains('select__input') &&
+      el.getAttribute('role') === 'combobox' &&
+      form.contains(el) &&
+      !inBlock(el) &&
+      shell !== null &&
+      holder !== null &&
+      shell.contains(holder) &&
+      !holder.classList.contains('select__value-container--is-multi')
+    );
+  };
+  // One mouseup on a list's search box, to open its list (only while aria-expanded is "false")
+  // or to close one this fill opened (only while it is "true"). A plain bubbling mouse event with
+  // nothing else set; it refuses any other element.
+  const press = (box: Element, open: boolean): boolean => {
+    if (!isBox(box) || box.getAttribute('aria-expanded') !== (open ? 'false' : 'true')) {
+      return false;
+    }
+    box.dispatchEvent(new view.MouseEvent('mouseup', { bubbles: true }));
+    return true;
+  };
+  // The options of the list the box names in aria-controls while it is open, when that list is
+  // a listbox inside the box's own select-shell; null when there is no such list.
+  const optionsOf = (box: Element): Element[] | null => {
+    const shell = box.closest('div.select-shell');
+    const listId = box.getAttribute('aria-controls') ?? '';
+    const list = listId === '' ? null : doc.getElementById(listId);
+    if (shell === null || list === null) return null;
+    if (list.getAttribute('role') !== 'listbox' || !shell.contains(list)) return null;
+    return Array.from(list.querySelectorAll('[role="option"]')).filter(
+      (o) =>
+        o.closest('[role="listbox"]') === list &&
+        !['A', 'BUTTON', 'INPUT', 'LABEL'].includes(o.tagName),
+    );
+  };
+  // The one click: only on an option of the list this box names, inside its own select-shell.
+  const pick = (box: Element, option: Element): boolean => {
+    if (!(optionsOf(box) ?? []).includes(option)) return false;
+    (option as HTMLElement).click();
+    return true;
+  };
+  // Waits until `look` has an answer, with one observer on the control and one timer of `ms`;
+  // when the timer ends, `late` gives the answer. The observer is disconnected and the timer
+  // cleared on every way out.
+  const watchFor = <T>(box: Element, look: () => T | null, late: () => T, ms: number): Promise<T> =>
+    new Promise((resolve) => {
+      const shell = box.closest('div.select-shell') ?? box;
+      let over = false;
+      let timer = 0;
+      const end = (answer: T): void => {
+        if (over) return;
+        over = true;
+        watch.disconnect();
+        view.clearTimeout(timer);
+        resolve(answer);
+      };
+      const watch = new view.MutationObserver(() => {
+        const answer = look();
+        if (answer !== null) end(answer);
+      });
+      watch.observe(shell, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        characterData: true,
+      });
+      timer = view.setTimeout(() => end(late()), ms);
+      const now = look();
+      if (now !== null) end(now);
+    });
+  // list helpers: end
+  return { inBlock, isBox, press, optionsOf, pick, watchFor };
 }

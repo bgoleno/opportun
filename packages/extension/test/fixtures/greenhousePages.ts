@@ -11,7 +11,7 @@ export const BOARD = 'examplecorp';
 export const JOB_ID = '1000001';
 export const POSTING_URL = `https://job-boards.greenhouse.io/${BOARD}/jobs/${JOB_ID}`;
 
-const text = (id: string, label: string, required = false, type = 'text', extra = '') => `
+export const text = (id: string, label: string, required = false, type = 'text', extra = '') => `
     <div class="field-wrapper">
       <div class="input-wrapper">
         <div class="text-input-wrapper">
@@ -342,6 +342,11 @@ export interface ListBehaviour {
   optionMarkup?: 'option' | 'link' | 'button' | 'no-role';
   /** The form shows nothing after a choice. */
   ignoresChoice?: boolean;
+  /**
+   * When the choice is shown after the click: at once, after a microtask (as React 18 applies a
+   * click's update on a concurrent root), or after a macrotask.
+   */
+  renders?: 'sync' | 'microtask' | 'macrotask';
 }
 
 /**
@@ -362,6 +367,12 @@ export function standInList(page: LoadedForm, id: string, b: ListBehaviour) {
   const asked: string[] = [];
   let menu: Element | null = null;
   const pick = (option: string): void => {
+    const when = b.renders ?? 'sync';
+    if (when === 'microtask') queueMicrotask(() => show(option));
+    else if (when === 'macrotask') setTimeout(() => show(option), 0);
+    else show(option);
+  };
+  const show = (option: string): void => {
     if (b.ignoresChoice !== true) {
       holder.querySelector('.select__placeholder')?.remove();
       const shown = doc.createElement('div');

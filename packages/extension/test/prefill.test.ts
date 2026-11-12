@@ -930,6 +930,19 @@ describe('#402 slice 2: the fill waits for lists, and the report lists every cho
     );
   });
 
+  it('a value with replacement patterns is shown as it is (sec at 8084132)', () => {
+    const lines = reportLines({
+      ok: true,
+      chosen: [],
+      filled: [],
+      notFilled: [{ label: 'School', reason: 'no_option', detail: "$& $' $` $$" }],
+      resume: null,
+    });
+    expect(lines.notFilled).toEqual([
+      'School: no option on the form\'s list is exactly "$& $\' $` $$": choose it on the form',
+    ]);
+  });
+
   it('the list reasons in words, each with its value', () => {
     const lines = reportLines({
       ok: true,
