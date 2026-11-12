@@ -47,6 +47,7 @@ export const tailoringSessions = t.tailoringSessions;
 export const resumeMatchReports = t.resumeMatchReports;
 export const discoverySources = t.discoverySources;
 export const discoveryRuns = t.discoveryRuns;
+export const rankBatches = t.rankBatches;
 export const discoveryResults = t.discoveryResults;
 export const dismissalFeedback = t.dismissalFeedback;
 export const industryProfile = t.industryProfile;

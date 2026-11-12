@@ -1,5 +1,6 @@
 // Job handlers by kind (design section 8). Handlers register once at module load; the
 // runner looks them up when it claims a job.
+import type { BatchProvider, batchProviderFor } from '@opportun/ai';
 import type { FastifyBaseLogger } from 'fastify';
 import type { z } from 'zod';
 import type { DocumentStore } from '../adapters/documentStore';
@@ -30,6 +31,9 @@ export interface JobServices {
   /** Assisted apply is on (config submissionsEnabled); mail ingest matches confirmations only
    *  then (#119). Absent counts as off. */
   submissions: boolean;
+  /** Finds a provider's ranking batch client (#441): batchProviderFor, which has none yet, or a
+   *  fake in tests. Absent means batchProviderFor. */
+  rankBatchProvider: (target: Parameters<typeof batchProviderFor>[0]) => BatchProvider | null;
 }
 
 /** Per-run context, passed as the third argument to run(). */
