@@ -84,6 +84,20 @@ export interface CheckpointWorkerData {
   maxWaitMs: number;
   pollMs: number;
   retryMs: number;
+  unreadableMs: number;
+}
+
+/**
+ * Whether the header has stayed unreadable long enough that the worker ends, given when its looks
+ * started finding it unreadable. One unreadable look is not an error: SQLite writes the header's
+ * second copy and then its first in every commit, and sets the copied count to zero after
+ * restarting the WAL, with no lock a plain read respects, so a writer descheduled in between
+ * leaves a state readWalIndex refuses for as long as it is off the processor. tl measured 215 such
+ * reads in 7.8 million under steady commits on a loaded machine (#393). A layout the worker does
+ * not recognise stays unreadable, and only that lasts past `limitMs`.
+ */
+export function unreadableTooLong(unreadableSince: number, now: number, limitMs: number): boolean {
+  return now - unreadableSince > limitMs;
 }
 
 /**
@@ -131,6 +145,8 @@ function run(data: CheckpointWorkerData, port: NonNullable<typeof parentPort>): 
   // read goes through lib/storage.ts).
   const shm = `${data.file}-shm`;
   let waitingSince: number | undefined;
+  // When the looks started finding the header unreadable, or undefined while it reads.
+  let unreadableSince: number | undefined;
   let lastAttempt = -Infinity;
   // Whether the last checkpoint left frames behind (a reader held them): only then is the next
   // attempt delayed. A checkpoint that copied everything is followed at once by the next one the
@@ -140,11 +156,23 @@ function run(data: CheckpointWorkerData, port: NonNullable<typeof parentPort>): 
   let timer: NodeJS.Timeout | undefined;
   const tick = (): void => {
     const index = readWalIndex(shm, data.pageSize);
-    // Cannot tell: the worker ends, an unexpected stop, and the main connection goes back to its
-    // own automatic checkpoints (db/client.ts).
-    if (index === undefined) throw new Error('the wal-index header cannot be read');
-    const waiting = index.mxFrame - index.nBackfill;
     const now = Date.now();
+    if (index === undefined) {
+      // Cannot tell: this look does nothing else, no checkpoint from a guess, and the next comes
+      // at the usual interval. Still unreadable past the limit, the worker ends, an unexpected
+      // stop, and the main connection goes back to its own automatic checkpoints (db/client.ts).
+      // Waiting reads nothing new: the next look reads the same -shm as before (NFR-SEC11).
+      unreadableSince ??= now;
+      if (unreadableTooLong(unreadableSince, now, data.unreadableMs)) {
+        throw new Error(
+          `the wal-index header has not been readable for ${now - unreadableSince} ms`,
+        );
+      }
+      timer = setTimeout(tick, data.pollMs);
+      return;
+    }
+    unreadableSince = undefined;
+    const waiting = index.mxFrame - index.nBackfill;
     if (waiting === 0) waitingSince = undefined;
     else waitingSince ??= now;
     const reason =

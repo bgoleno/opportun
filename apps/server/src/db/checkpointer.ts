@@ -32,6 +32,13 @@ export const CHECKPOINT_MAX_WAIT_MS = 60_000;
 const POLL_MS = 100;
 /** How soon a checkpoint a reader held back is tried again. */
 const RETRY_MS = 1_000;
+/**
+ * How long the wal-index header may stay unreadable before the worker ends. A commit leaves it
+ * unreadable for as long as the writer is off the processor between its two copies (tl on #393),
+ * which on a loaded machine is milliseconds, rarely more; a layout the worker does not know never
+ * reads, and then the server is back on its own checkpoints within this.
+ */
+const UNREADABLE_MS = 5_000;
 /** How long stop() lets the worker finish its checkpoint before ending it. */
 const STOP_GRACE_MS = 5_000;
 
@@ -85,6 +92,7 @@ export function startBackgroundCheckpointer(
     maxPages?: number;
     maxWaitMs?: number;
     pollMs?: number;
+    unreadableMs?: number;
   },
 ): BackgroundCheckpointer {
   const data: CheckpointWorkerData = {
@@ -96,6 +104,7 @@ export function startBackgroundCheckpointer(
     maxWaitMs: opts.maxWaitMs ?? CHECKPOINT_MAX_WAIT_MS,
     pollMs: opts.pollMs ?? POLL_MS,
     retryMs: RETRY_MS,
+    unreadableMs: opts.unreadableMs ?? UNREADABLE_MS,
   };
   const worker = new Worker(WORKER_FILE, { workerData: data, execArgv: ['--import', 'tsx'] });
   // Not what keeps the process alive while it runs: the server's close stops it, and a CLI's

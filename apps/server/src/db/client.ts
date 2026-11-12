@@ -859,6 +859,7 @@ export interface ConnectOptions {
     maxWaitMs?: number;
     pollMs?: number;
     pageSize?: number;
+    unreadableMs?: number;
   };
 }
 

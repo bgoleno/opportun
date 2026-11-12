@@ -4,7 +4,18 @@
 // main connection's own automatic checkpoint moves to a backstop. When the worker stops, for any
 // reason, the main connection goes back to its default.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { endianness, tmpdir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +25,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadDbConfig } from '../src/config';
 import { rawRun, type SqliteHandle } from '../src/db/client';
 import { startBackgroundCheckpointer, type CheckpointRecord } from '../src/db/checkpointer';
-import { heldBackByReader, readWalIndex } from '../src/db/checkpointWorker';
+import { heldBackByReader, readWalIndex, unreadableTooLong } from '../src/db/checkpointWorker';
 import { readOperatorBytesAt } from '../src/lib/storage';
 import { sqliteOnly } from './db';
 import { openTestDb } from './helpers';
@@ -39,6 +50,32 @@ async function write(h: SqliteHandle, rows: number): Promise<void> {
 }
 
 const shmOf = (dataDir: string) => join(dataDir, 'opportun.db-shm');
+
+/**
+ * Leaves the wal-index header's two copies unequal, as SQLite does for a moment in every commit
+ * (it writes the second copy, then the first), by changing one byte of the second copy's change
+ * counter. Returns what puts that byte back. Only while the test's own connection is idle: a
+ * statement on it would find the copies unequal and rebuild the header itself.
+ */
+function tearHeader(shm: string): () => void {
+  const at = 48 + 8;
+  const original = Buffer.alloc(1);
+  const fd = openSync(shm, 'r+');
+  try {
+    readSync(fd, original, 0, 1, at);
+    writeSync(fd, Buffer.from([original[0]! ^ 0xff]), 0, 1, at);
+  } finally {
+    closeSync(fd);
+  }
+  return () => {
+    const again = openSync(shm, 'r+');
+    try {
+      writeSync(again, original, 0, 1, at);
+    } finally {
+      closeSync(again);
+    }
+  };
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -78,6 +115,25 @@ describe('which checkpoint a reader held back (#383, tl on #393)', () => {
   it('not one on a WAL that started again after the read, when it copied all of the new one', () => {
     expect(heldBackByReader(123, 10, 10)).toBe(false);
     expect(heldBackByReader(123, 10, 8)).toBe(true);
+  });
+});
+
+describe('when a header that cannot be read ends the worker (#383, tl on #393)', () => {
+  // Arguments: when the worker's looks started finding the header unreadable, the time of this
+  // look, and the limit. SQLite writes the header's two copies one after the other with no lock a
+  // plain read respects, so a writer descheduled in between leaves them unequal for a while.
+  it('not the first unreadable look', () => {
+    expect(unreadableTooLong(10_000, 10_000, 5_000)).toBe(false);
+  });
+
+  it('not while it has been unreadable for up to the limit', () => {
+    expect(unreadableTooLong(10_000, 14_999, 5_000)).toBe(false);
+    expect(unreadableTooLong(10_000, 15_000, 5_000)).toBe(false);
+  });
+
+  it('once it has stayed unreadable past the limit, as a layout the worker does not know does', () => {
+    expect(unreadableTooLong(10_000, 15_001, 5_000)).toBe(true);
+    expect(unreadableTooLong(10_000, 60_000, 5_000)).toBe(true);
   });
 });
 
@@ -480,20 +536,107 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       lines.push(String(chunk));
       return true;
     });
-    // A page size the header does not have: the worker cannot tell the WAL's size.
+    // A page size the header does not have: the worker cannot tell the WAL's size, on any look.
     const opened = await openTestDb({
       backgroundCheckpoint: true,
-      checkpointerTuning: { pageSize: 512, pollMs: 20 },
+      checkpointerTuning: { pageSize: 512, pollMs: 20, unreadableMs: 200 },
     });
     try {
       const h = opened.handle as SqliteHandle;
-      await expect(h.checkpointer!.stopped).resolves.toMatchObject({ unexpected: true });
+      await expect(h.checkpointer!.stopped).resolves.toMatchObject({
+        unexpected: true,
+        err: expect.objectContaining({
+          message: expect.stringMatching(/^the wal-index header has not been readable for \d+ ms$/),
+        }),
+      });
       expect(autocheckpoint(h)).toBe(100);
       await until(() =>
         lines.some((l) =>
           l.includes('background checkpointer stopped: automatic checkpoints are back on'),
         ),
       );
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('a header unreadable for a while and then readable again: the worker goes on, and checkpoints', async () => {
+    const checkpoints: CheckpointRecord[] = [];
+    let stopped = false;
+    const opened = await openTestDb();
+    const h = opened.handle as SqliteHandle;
+    try {
+      h.sqlite.pragma('wal_autocheckpoint = 10000');
+      const pageSize = Number(h.sqlite.pragma('page_size', { simple: true }));
+      const shm = shmOf(opened.dataDir);
+      await write(h, 1);
+      const cp = startBackgroundCheckpointer(join(opened.dataDir, 'opportun.db'), {
+        pragmas: [],
+        pageSize,
+        maxPages: 50,
+        pollMs: 20,
+        unreadableMs: 1_000,
+        onStopped: () => (stopped = true),
+        onCheckpoint: (c) => checkpoints.push(c),
+      });
+      try {
+        await cp.ready;
+        // Twice, each time for about 30 looks at a header it cannot read, with a few readable
+        // looks between: together longer than the limit, so a readable look must start it again.
+        for (let i = 0; i < 2; i++) {
+          const restore = tearHeader(shm);
+          expect(readWalIndex(shm, pageSize)).toBeUndefined();
+          await new Promise((r) => setTimeout(r, 600));
+          restore();
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        expect(stopped).toBe(false);
+        await write(h, 100);
+        await until(() => checkpoints.length > 0 || stopped);
+        expect(stopped).toBe(false);
+        expect(checkpoints[0]).toMatchObject({ reason: 'size' });
+      } finally {
+        await cp.stop();
+      }
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it('a header that stays unreadable past the limit: the worker stops, as unexpected, and says why', async () => {
+    const checkpoints: CheckpointRecord[] = [];
+    const opened = await openTestDb();
+    const h = opened.handle as SqliteHandle;
+    try {
+      h.sqlite.pragma('wal_autocheckpoint = 10000');
+      const pageSize = Number(h.sqlite.pragma('page_size', { simple: true }));
+      const shm = shmOf(opened.dataDir);
+      await write(h, 1);
+      const cp = startBackgroundCheckpointer(join(opened.dataDir, 'opportun.db'), {
+        pragmas: [],
+        pageSize,
+        maxPages: 50,
+        pollMs: 20,
+        unreadableMs: 300,
+        onStopped: () => undefined,
+        onCheckpoint: (c) => checkpoints.push(c),
+      });
+      await cp.ready;
+      const restore = tearHeader(shm);
+      const tornAt = Date.now();
+      try {
+        const stop = await cp.stopped;
+        expect(Date.now() - tornAt).toBeGreaterThanOrEqual(300);
+        expect(stop).toMatchObject({ unexpected: true });
+        const message = (stop.err as Error).message;
+        const ms = /^the wal-index header has not been readable for (\d+) ms$/.exec(message);
+        expect(ms, message).not.toBeNull();
+        expect(Number(ms![1])).toBeGreaterThan(300);
+        // While it could not read, it did nothing else: no checkpoint from a guess.
+        expect(checkpoints).toEqual([]);
+      } finally {
+        restore();
+      }
     } finally {
       await opened.close();
     }
