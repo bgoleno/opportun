@@ -294,7 +294,7 @@ times the prices in Opportun's price table on that date.
   without the cache.
 - **The default budget.** $1.00 a day ranks about 150 postings with prompt caching (about 125
   without it, or about 106 if every call cost as much as the 90th percentile). While a company
-  waits for an industry tag, ranking stops at 90% of the budget, which is about 135 postings
+  waits for an industry tag, ranking stops at 90% of the budget, which is about 138 postings
   (about 114 without caching).
 - **A new board's first run** ranks 25 postings, about $0.16 ($0.20 without caching).
 - **Tagging** costs about $0.05 per 1,000 companies with caching ($0.07 without), once for each
