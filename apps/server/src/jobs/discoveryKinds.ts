@@ -8,6 +8,13 @@ export const DISCOVERY_RUN_KIND = 'discovery.run';
 export const DISCOVERY_RANK_KIND = 'discovery.rank';
 /** Ranks one user's postings waiting for the discovery budget; no payload. */
 export const RANK_WAITING_KIND = 'discovery.rank_waiting';
+/**
+ * Sends one user's postings waiting for a ranking batch, as one batch (#441); no payload. "send",
+ * not "submit": here that word names sending an application (submissionRouteShape.test.ts).
+ */
+export const RANK_BATCH_SEND_KIND = 'discovery.rank_batch_send';
+/** Collects one ranking batch's results (#441); payload {batchId}. */
+export const RANK_BATCH_COLLECT_KIND = 'discovery.rank_batch_collect';
 /** Resolves one partial lead against ATS sources; payload {resultId}. */
 export const LEAD_RESOLVE_KIND = 'discovery.lead_resolve';
 /**

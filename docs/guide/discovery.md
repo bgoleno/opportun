@@ -281,7 +281,7 @@ times the prices in Opportun's price table on that date.
 
 - **Prompt caching.** Opportun marks the part of a call that stays the same for Anthropic's
   prompt cache: for ranking, the instructions and your role target, which come before the posting;
-  for tagging, the industry table. The first call writes that part to the cache, at 1.25 times the
+  for tagging, the industry table (and for classifying mail, see [Inbox](inbox.md#how-classification-works)). The first call writes that part to the cache, at 1.25 times the
   input price, and each call in the next five minutes reads it at a tenth of the input price or
   less. Measured on 2026-11-11 the same way as the table, on 76 postings against one role target:
   the first ranking call wrote 721 tokens and each of the other 75 read them, and the mean cost of
@@ -294,7 +294,7 @@ times the prices in Opportun's price table on that date.
   without the cache.
 - **The default budget.** $1.00 a day ranks about 150 postings with prompt caching (about 125
   without it, or about 106 if every call cost as much as the 90th percentile). While a company
-  waits for an industry tag, ranking stops at 90% of the budget, which is about 135 postings
+  waits for an industry tag, ranking stops at 90% of the budget, which is about 138 postings
   (about 114 without caching).
 - **A new board's first run** ranks 25 postings, about $0.16 ($0.20 without caching).
 - **Tagging** costs about $0.05 per 1,000 companies with caching ($0.07 without), once for each

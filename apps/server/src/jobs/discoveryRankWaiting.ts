@@ -30,6 +30,7 @@ import {
   type DiscoveryResultView,
 } from '../repos/discovery';
 import { keyChangeScope, writeKeyChangedAt } from '../repos/discoveryBudget';
+import { usersWithBatchWaiting } from '../repos/rankBatches';
 import {
   DISCOVERY_RANK_KIND,
   enqueueRankWaiting,
@@ -38,6 +39,7 @@ import {
 } from './discoveryRank';
 import { enqueueFollowUps } from './discoveryRun';
 import { LEAD_RESOLVE_KIND, RANK_WAITING_KIND } from './discoveryKinds';
+import { enqueueRankBatchSubmit } from './rankBatchClient';
 import { rankBudgetHasRoom } from './rankBudget';
 import { requireService, type JobHandler } from './registry';
 import { workflow } from '../obs/workflow';
@@ -64,6 +66,12 @@ export async function sweepWaitingResults(db: Db): Promise<{ queued: number }> {
       await enqueueRankWaiting(db, ctx);
       queued += 1;
     }
+  }
+  // Postings waiting for a ranking batch (#441) are sent hourly too, besides after the rank job
+  // that made them wait. Not counted: `queued` is the live drains. The submit job decides the rest
+  // (batching off or no batch client: it hands them to the live drain).
+  for (const userId of await usersWithBatchWaiting(db)) {
+    await enqueueRankBatchSubmit(db, { userId, isAdmin: false });
   }
   return { queued };
 }
