@@ -2743,7 +2743,10 @@ describe('#401: the details step, filled from the profile, the account and the l
     mockApi(withDetails(filled));
     renderStep('details');
     const hints: [string, RegExp][] = [
-      ['Country', /as the form's list shows it, for example United States/],
+      [
+        'Phone country code',
+        /The country your phone number belongs to, as the form's list shows it, for example United States/,
+      ],
       ['Location (city)', /as the form's list shows it, for example Seattle, Washington/],
       ['School', /as the form's list shows it, for example University of/],
       ['Degree', /as the form's list shows it, for example Bachelor's Degree/],

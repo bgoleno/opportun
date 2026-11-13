@@ -57,7 +57,10 @@ describe('Settings > Profile > Application details (#401)', () => {
     setup();
     const c = await card();
     for (const [label, hint] of [
-      ['Country', /as the form's list shows it, for example United States/],
+      [
+        'Phone country code',
+        /The country your phone number belongs to, as the form's list shows it, for example United States/,
+      ],
       ['School', /as the form's list shows it, for example University of/],
       ['Degree', /as the form's list shows it, for example Bachelor's Degree/],
       ['How did you hear about this role?', /as the form's list shows it, for example LinkedIn/],
