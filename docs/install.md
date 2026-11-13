@@ -273,9 +273,7 @@ the per-IP rate limits collapse to one bucket and, over HTTPS, cookies are not m
 only to fill in `${...}` in `deploy/compose.yml`; it does not hand the file to the container. So
 `deploy/compose.yml` lists each optional setting below and passes it on, and a line in
 `deploy/.env` reaches the server. The settings it does not pass are `OPPORTUN_HOST`, `WEB_DIR`
-(the image sets both, and an empty value would not mean "unset" to the server),
-`ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` (the AI library refuses an empty value, so the server
-would not start), `OPPORTUN_DEMO`
+(the image sets both, and an empty value would not mean "unset" to the server), `OPPORTUN_DEMO`
 (the [demo overlay](#16-demo-deployment) passes it), an inline `OPPORTUN_MASTER_KEY` (Compose uses
 the key file), `SMTP_URL` (reserved), and an `OPPORTUN_PEPPER_V<N>` above 9. Set any of those, or
 any other variable the server reads, in `deploy/compose.override.yml`, which Compose merges with
@@ -285,7 +283,7 @@ any other variable the server reads, in `deploy/compose.override.yml`, which Com
 services:
   opportun:
     environment:
-      ANTHROPIC_BASE_URL: http://litellm:4000
+      OPPORTUN_PEPPER_V10: ${OPPORTUN_PEPPER_V10:-}
 ```
 
 A test fails when a setting this section documents is neither passed by `compose.yml` nor listed
@@ -517,10 +515,15 @@ marked **on Postgres** instead.
 
   ```bash
   gh workflow run publish-image.yml --ref main
-  # optionally, to tag a version as well: -f version=0.1.0
+  # optionally, to publish a release as well: -f version=0.3.2
   ```
 
-  Run from `main`, it moves `latest` to that build; it always adds a `sha-...` tag. So
+  Run from `main`, it moves `latest` to that build; it always adds a `sha-...` tag, once per
+  commit: a second publish of the same commit is refused. Given a version, it also tags the
+  image with it and creates the git tag `v<version>` and a GitHub Release on that commit; a
+  version needs its `## <version> (YYYY-MM-DD)` section in `CHANGELOG.md` first, and is
+  published only from `main`
+  ([demo deployment](demo-deployment.md#publishing-a-new-build-from-a-workflow) has the rules). So
   `docker compose pull` on `latest` brings in only what has been published, which can be behind
   `main`. The [package page](https://github.com/users/bgoleno/packages/container/package/opportun)
   shows which tags exist.

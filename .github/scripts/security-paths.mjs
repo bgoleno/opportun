@@ -81,6 +81,9 @@ export const SECURITY_SENSITIVE_GLOBS = [
   '.github/workflows/**',
   '.github/scripts/check-security-paths.mjs',
   '.github/scripts/security-paths.mjs',
+  // decides what the Publish image jobs holding packages: write and contents: write publish:
+  // which image tags, git tag and Release, and which refusals stop them (#478)
+  '.github/scripts/publish.mjs',
 ];
 
 /** The changed paths, in order, that match a security-sensitive glob. */

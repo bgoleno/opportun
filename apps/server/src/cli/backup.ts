@@ -10,6 +10,8 @@
 //
 // Exit codes: 0 written (prints the file name, its size and where it landed), 1 the backup
 // itself failed (pg_dump's error, or a database error from VACUUM INTO).
+// First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
+import '../unsetEmptyAiBaseUrls';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadDbConfig, loadSqliteDir } from '../config';
