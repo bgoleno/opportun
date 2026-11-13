@@ -454,4 +454,70 @@ describe('an automatic unsubscribe request from the account itself (#392)', () =
     });
     expect(v.matchedRule).toBe('no_signal');
   });
+  // https://github.com/bgoleno/opportun/issues/406 (tl's ruling, issuecomment-6807366725): Cc is
+  // read too. The recipient signal counts To and Cc together; Gmail's body counts only with no Cc
+  // recipient other than an unsubscribe address, since Gmail's button never adds one.
+  describe('with Cc read (#406)', () => {
+    it('an unsubscribe address alone, no Cc, is still dropped', () => {
+      const v = message({
+        address: 'me@mine.example',
+        recipients: ['unsubscribe@news.example'],
+        cc: [],
+        subject: TOKEN,
+        body: 'Please remove me.',
+      });
+      expect(v.matchedRule).toBe('auto_unsubscribe');
+    });
+
+    it('an unsubscribe address with a person in Cc passes, as the own address', () => {
+      const v = message({
+        address: 'me@mine.example',
+        recipients: ['unsubscribe@news.example'],
+        cc: ['Jane Recruiter <jane.recruiter@acme.example>'],
+        subject: 'Taking myself off, and a note for Jane',
+        body: 'Please remove me. Jane, see you Tuesday.',
+      });
+      expect(v).toMatchObject({ decision: 'pass', matchedRule: 'own_address' });
+    });
+
+    it("Gmail's body with a person in Cc passes", () => {
+      const v = message({
+        address: 'me@mine.example',
+        recipients: ['unsubscribe@news.example'],
+        cc: ['jane.recruiter@acme.example'],
+        body: GMAIL_BODY,
+      });
+      expect(v).toMatchObject({ decision: 'pass', matchedRule: 'own_address' });
+    });
+
+    it("Gmail's body to an address that is not an unsubscribe address, no Cc, is still dropped", () => {
+      const v = message({
+        address: 'me@mine.example',
+        recipients: ['leave-u123-abc@lists.example'],
+        cc: [],
+        body: GMAIL_BODY,
+      });
+      expect(v.matchedRule).toBe('auto_unsubscribe');
+    });
+
+    it('every To and Cc recipient an unsubscribe address is dropped', () => {
+      const v = message({
+        address: 'me@mine.example',
+        recipients: ['unsubscribe@news.example'],
+        cc: ['list+unsubscribe@lists.example'],
+        body: 'Please remove me from both.',
+      });
+      expect(v.matchedRule).toBe('auto_unsubscribe');
+    });
+
+    it('a Cc with no single address counts as a person, so it passes', () => {
+      const v = message({
+        address: 'me@mine.example',
+        recipients: ['unsubscribe@news.example'],
+        cc: ['Jane Recruiter'],
+        body: GMAIL_BODY,
+      });
+      expect(v.matchedRule).toBe('own_address');
+    });
+  });
 });

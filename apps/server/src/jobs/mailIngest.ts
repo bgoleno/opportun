@@ -244,8 +244,9 @@ export async function ingestInbound(
     selfAddress,
     threadLinked: await threadLinked(db, ctx, message.threadKey),
     digestSender,
-    // For the automatic-unsubscribe check (#392): every recipient a list's unsubscribe address.
+    // For the automatic-unsubscribe check (#392, #406): every recipient a list's unsubscribe address.
     recipients: message.to,
+    cc: message.cc ?? [],
     // A single match, or an ambiguous one (kept for the user, linked to nothing).
     submissionSender:
       matched.kind === 'match' || (matched.kind === 'none' && matched.reason === 'ambiguous'),
