@@ -566,8 +566,13 @@ function CreateCopyButton({
 }) {
   const create = useCreateResume();
   const navigate = useNavigate();
+  // Set in the click itself (#484): `disabled` follows isPending, which is not yet true when a
+  // second click lands in the same tick, so two clicks with no gap made two copies. Released
+  // when the request settles, so a click after a failure still sends.
+  const sending = useRef(false);
   function createCopy() {
-    if (baseId === '') return;
+    if (baseId === '' || sending.current) return;
+    sending.current = true;
     // The promise, not a callback given to mutate: the copy's arrival refreshes the resume
     // lists, and the flow moves on to C, unmounting this button, before the last list lands.
     // The query library skips an unmounted caller's own callbacks, so the page never opened
@@ -575,7 +580,10 @@ function CreateCopyButton({
     create
       .mutateAsync({ baseResumeId: baseId, opportunityId })
       .then((r) => navigate({ to: '/resumes/$id', params: { id: r.id } }))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        sending.current = false;
+      });
   }
   return (
     <>

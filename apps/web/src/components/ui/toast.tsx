@@ -78,10 +78,14 @@ export function Toaster() {
             variantClass[t.variant ?? 'default'],
           )}
         >
-          <div className="grid flex-1 gap-1">
-            <ToastPrimitive.Title className="text-sm font-semibold">{t.title}</ToastPrimitive.Title>
+          {/* min-w-0 and overflow-wrap anywhere (#491): a toast that names a user's title can
+              hold one long unbroken token, which otherwise runs past the toast's edge. */}
+          <div className="grid min-w-0 flex-1 gap-1">
+            <ToastPrimitive.Title className="text-sm font-semibold [overflow-wrap:anywhere]">
+              {t.title}
+            </ToastPrimitive.Title>
             {t.description ? (
-              <ToastPrimitive.Description className="text-sm opacity-90">
+              <ToastPrimitive.Description className="text-sm opacity-90 [overflow-wrap:anywhere]">
                 {t.description}
               </ToastPrimitive.Description>
             ) : null}
