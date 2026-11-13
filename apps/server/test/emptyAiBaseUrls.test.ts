@@ -137,12 +137,16 @@ describe('an empty AI base URL is unset (issue 423)', () => {
     ['ANTHROPIC_BASE_URL blank', { ANTHROPIC_BASE_URL: '  ' }],
   ];
 
-  it.each(CASES)('the server starts and answers /healthz: %s', async (_name, vars) => {
-    const result = await startAndProbe(vars);
-    expect(result, JSON.stringify(result)).toMatchObject({
-      healthz: { status: 'ok', db: 'ok' },
-    });
-  }, 60_000);
+  it.each(CASES)(
+    'the server starts and answers /healthz: %s',
+    async (_name, vars) => {
+      const result = await startAndProbe(vars);
+      expect(result, JSON.stringify(result)).toMatchObject({
+        healthz: { status: 'ok', db: 'ok' },
+      });
+    },
+    60_000,
+  );
 
   it('a CLI run through `docker compose run opportun` loads too: copyToPostgres reaches its usage check', async () => {
     // Every CLI loads the AI SDK through its imports, and compose hands a `run` the same
