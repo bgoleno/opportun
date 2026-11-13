@@ -1,10 +1,11 @@
 # Changelog
 
-Opportun's first tagged release is [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1)
-(2026-11-13, made by hand, at the commit of PR [#474](https://github.com/bgoleno/opportun/pull/474)). See
-[SECURITY.md](SECURITY.md) for which versions are supported. Entries are grouped by milestone (requirements
-section 7, [docs/requirements.md](docs/requirements.md)), newest first, dated by when the
-milestone's work was merged.
+Opportun's first tagged release is [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1).
+A release is cut by running the Publish image workflow with a version: it needs a `## <version>
+(YYYY-MM-DD)` section in this file, made by renaming `## Unreleased` and starting a new one. See
+[SECURITY.md](SECURITY.md) for which versions are supported. Entries are grouped by milestone
+(requirements section 7, [docs/requirements.md](docs/requirements.md)), newest first, dated by
+when the milestone's work was merged.
 
 ## Unreleased
 
@@ -348,11 +349,22 @@ milestone's work was merged.
   it, `GET /api/v1/settings/build`, answers any signed-in user and makes no call to GitHub or
   GHCR ([#480](https://github.com/bgoleno/opportun/issues/480); PR
   [#487](https://github.com/bgoleno/opportun/pull/487)).
-- **Releases now have git tags,** starting with
-  [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1), made by hand on
-  2026-11-13 at the commit of PR [#474](https://github.com/bgoleno/opportun/pull/474). A
-  release tag is separate from the image tags: the Publish image workflow's optional version
-  input tags an image, and does not create a git tag.
+- **A version publish is now a release: a git tag and a GitHub Release.** Running the Publish
+  image workflow with a version (for example `-f version=0.3.2`) creates the git tag
+  `v<version>` and a GitHub Release on the commit it built, as well as tagging the image. It
+  works only from `main`, and only when `CHANGELOG.md` has a non-empty `## <version>
+(YYYY-MM-DD)` section for that version: the release notes are that section, followed by the
+  image and a link to the commit. It refuses a version whose image tag, git tag or Release
+  already exists, so a version names one build. A publish without a version builds an image
+  only. The first tag, [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1), was
+  made by hand on 2026-11-13 at the commit of PR
+  [#474](https://github.com/bgoleno/opportun/pull/474). Separately, a `sha-...` image tag is
+  now one per commit and never moves (a second publish of the same commit is refused), and
+  every published image carries the labels `org.opencontainers.image.revision` (the commit) and
+  `org.opencontainers.image.version`. The install guide's section 6 and the
+  [demo deployment](docs/demo-deployment.md#publishing-a-new-build-from-a-workflow) page have
+  the rules ([#478](https://github.com/bgoleno/opportun/issues/478); PR
+  [#489](https://github.com/bgoleno/opportun/pull/489)).
 - The connector's messages name **Settings > Integrations > Extensions and Connectors** as the
   app shows it ([#235](https://github.com/bgoleno/opportun/issues/235)).
 
