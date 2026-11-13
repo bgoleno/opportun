@@ -186,7 +186,11 @@ Contacts who could refer you, ranked by the AI, and the asks you have made. See
 
 ### Assisted apply
 
-Where assisted apply is on, the opportunity has an **Assisted apply** panel beside the tabs.
+Assisted apply is on unless the person running your server turned it off (`OPPORTUN_SUBMISSIONS=0`,
+in the [install guide](../install.md#4-configuration-reference)), and it is never on the demo.
+Where it is on, the opportunity has an **Assisted apply** panel beside the tabs. You can confirm
+only so many reviews in 24 hours; see
+[Applications and the review limit](settings.md#applications-and-the-review-limit).
 Before you apply, it offers **Apply on _ATS_** when the posting is confirmed and is on a
 recognised application system (Greenhouse, Lever or Ashby; Workday as a handoff only), its stage
 is Interested, Preparing or Applied, and you have a resume marked Final. When one of these is
