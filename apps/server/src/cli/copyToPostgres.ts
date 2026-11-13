@@ -12,6 +12,8 @@
 // Exit codes: 0 copied and verified (or a clean dry run), 1 verification failed or an error
 // (the copy was rolled back unless the report says otherwise), 2 refused or bad usage
 // (nothing was written).
+// First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
+import '../unsetEmptyAiBaseUrls';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadDbConfig, loadMasterKey, loadSqliteDir } from '../config';

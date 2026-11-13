@@ -24,8 +24,8 @@ the only supported version (see [SECURITY.md](SECURITY.md)).
 `main` is protected, and these are enforced by GitHub rather than being conventions you
 have to remember:
 
-- **Every check must pass before a merge.** Thirteen checks are required: `check` and `e2e`
-  on sqlite and postgres, `docker` on sqlite, postgres and sqlite-to-postgres, plus
+- **Every check must pass before a merge.** Fourteen checks are required: `check` and `e2e`
+  on sqlite and postgres, `docker` on sqlite, postgres, sqlite-to-postgres and minimal, plus
   `Repository visibility`, `OSV vulnerability scan`, both CodeQL legs, `Dependency review`
   and `guard` (the identifier guard, `.github/workflows/identifier-guard.yml`). There are no
   bypass actors, so administrators are included.

@@ -12,6 +12,8 @@
 // itself be a connection that requirement 1's "is anything using this" check would then see and
 // refuse against. Instead it works directly against the configured DATA_DIR, SQLITE_DIR and,
 // for Postgres, DATABASE_URL, exactly as lib/restore.ts itself does.
+// First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
+import '../unsetEmptyAiBaseUrls';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadDbConfig, loadSqliteDir, type DbConfig } from '../config';
