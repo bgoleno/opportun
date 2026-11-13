@@ -275,6 +275,56 @@ describe('the resume page strip: one test per state (#447)', () => {
   });
 });
 
+// tl's review of #490 at fe9b1f4, blocking 1: after a send, "Tailor again" makes a new copy. The
+// flow stays H with that copy as `again`, and its own page is where its next step happens.
+describe('the resume page strip: the copy "Tailor again" made (#447)', () => {
+  const sent = copy({ status: 'final' });
+  const again = (status: Resume['status']) =>
+    copy({ id: 'again', title: 'Acme second try', status, createdAt: 9 });
+
+  it('a Draft copy made after a send: its own step and "Mark as final", not the old send', async () => {
+    const page = again('draft');
+    setup({ page, resumes: [BASE, sent, page], sends: [SEND] });
+    const region = await strip();
+    await waitFor(() =>
+      expect(said(region)).toHaveTextContent('Tailor "Acme second try" for this role.'),
+    );
+    expect(currentStep(region)).toMatch(/^2 Tailor/);
+    expect(primary(region)).toHaveAccessibleName('Mark as final');
+    expect(within(region).getByRole('button', { name: 'Score again' })).toBeInTheDocument();
+    expect(region).not.toHaveTextContent(/^Sent:/);
+  });
+
+  it('In review: step 3 and "Mark as final"', async () => {
+    const page = again('in_review');
+    setup({ page, resumes: [BASE, sent, page], sends: [SEND] });
+    const region = await strip();
+    await waitFor(() => expect(said(region)).toHaveTextContent('Finished tailoring?'));
+    expect(currentStep(region)).toMatch(/^3 Finish/);
+    expect(primary(region)).toHaveAccessibleName('Mark as final');
+  });
+
+  it('a Final copy made after a send: "Back to the opportunity" is filled, where its send is recorded', async () => {
+    const page = again('final');
+    setup({ page, resumes: [BASE, sent, page], sends: [SEND] });
+    const region = await strip();
+    await waitFor(() => expect(said(region)).toHaveTextContent('Ready to send.'));
+    expect(currentStep(region)).toMatch(/^4 Apply/);
+    expect(primary(region)).toHaveAccessibleName('Back to the opportunity');
+    expect(primary(region)).toHaveAttribute('href', '/opportunities/opp-1?tab=resume');
+  });
+
+  it("the sent copy's own page is no longer the one the flow follows", async () => {
+    const page = again('draft');
+    setup({ page: sent, resumes: [BASE, sent, page], sends: [SEND] });
+    const region = await strip();
+    expect(await within(region).findByRole('link', { name: 'Acme second try' })).toHaveAttribute(
+      'href',
+      '/resumes/again',
+    );
+  });
+});
+
 describe('the resume page strip: actions (#447)', () => {
   it('Mark as final: focus moves to the new sentence, it is announced, and the toast shows though a list answers late', async () => {
     let status: Resume['status'] = 'in_review';

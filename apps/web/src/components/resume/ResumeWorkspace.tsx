@@ -8,6 +8,7 @@ import { errorMessage } from '@/lib/api';
 import { useMatchReport, useResume, type Resume } from './api';
 import { ChatPanel } from './ChatPanel';
 import { MatchPanel, MatchScoreHeader } from './MatchPanel';
+import { quietClass } from './ResumeFlowCard';
 import { ResumeFlowStrip } from './ResumeFlowStrip';
 import { ResumeSentFor } from './ResumeSends';
 import { ResumeTextViewer } from './ResumeTextViewer';
@@ -153,7 +154,7 @@ function ChangeStatus({ resume }: { resume: Resume }) {
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="w-fit text-left text-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={quietClass}
       >
         Change status
       </button>

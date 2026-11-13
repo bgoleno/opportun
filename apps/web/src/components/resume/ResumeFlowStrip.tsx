@@ -162,8 +162,39 @@ function StripLoaded({ resume, opp }: { resume: Resume; opp: OpportunityView }) 
           next: NEXT.G,
           action: back(true),
         };
-      // H: nothing is owed once an application is out, so no filled button.
+      // H, on the page of the copy "Tailor again" made (`again`, tl on #490): that copy's own
+      // next step, as C, D or F would give it. The old send is not this page's business.
       case 'H':
+        if (state.again?.id === resume.id) {
+          const again = state.again;
+          if (again.status === 'draft') {
+            return {
+              key: `H-C-${again.id}`,
+              step: 2,
+              sentence: `Tailor "${again.title}" for this role.`,
+              next: NEXT.C,
+              action: markFinal,
+            };
+          }
+          if (again.status === 'in_review') {
+            return {
+              key: `H-D-${again.id}`,
+              step: 3,
+              sentence: 'Finished tailoring?',
+              next: NEXT.D,
+              action: markFinal,
+            };
+          }
+          // Final: recording that send happens on the tab.
+          return {
+            key: `H-F-${again.id}`,
+            step: 4,
+            sentence: 'Ready to send.',
+            next: NEXT.F,
+            action: back(true),
+          };
+        }
+        // Nothing is owed once an application is out, so no filled button.
         return {
           key: 'H',
           step: 'done',
