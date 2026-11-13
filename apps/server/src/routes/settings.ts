@@ -11,6 +11,7 @@ import {
   SendersSchema,
 } from '../adapters/sources/alertEmail';
 import { settings } from '../db/schema';
+import { readBuildInfo } from '../lib/buildInfo';
 import { CronSchema, discoveryDefaultCron, setDiscoveryDefaultCron } from '../jobs/atsDetect';
 import type { UserCtx } from '../repos/base';
 import { deleteUserSetting, userSettingExists, writeUserSetting } from '../repos/userSettings';
@@ -23,6 +24,9 @@ const themeKey = (userId: string): string => `theme:${userId}`;
 
 /** The cron new and followed company sources poll on (FR-D5). */
 const DiscoveryBody = z.object({ cron: CronSchema });
+
+/** The version and commit this server was built from (#480); both public, null when unknown. */
+const BuildBody = z.object({ version: z.string().nullable(), commit: z.string().nullable() });
 
 /**
  * `senders: null` resets to the defaults by removing the override, rather than writing a copy of
@@ -44,6 +48,12 @@ const AlertSendersResponse = z.object({
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
   const db = app.db;
+
+  // Any signed-in user: Settings shows it. Read from the build's environment, never fetched.
+  api.get('/settings/build', { schema: { response: { 200: BuildBody } } }, async (req) => {
+    app.requireUser(req);
+    return readBuildInfo(process.env);
+  });
 
   api.get('/settings/theme', { schema: { response: { 200: ThemeBody } } }, async (req) => {
     const ctx = app.requireUser(req);
