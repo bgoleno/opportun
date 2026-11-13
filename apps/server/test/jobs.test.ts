@@ -1,5 +1,6 @@
 // Durable job runner (NFR-OPS4, design section 8): claim, retry with backoff, dead letters,
 // dedupe, graceful stop, the scheduler, and the /jobs API.
+import { newId } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -359,6 +360,74 @@ describe('job queue', () => {
     await enqueue(db, 'test.echo', {}, { runAt: now - 4_000 });
     await enqueue(db, 'test.echo', {}, { runAt: now - 9_000 });
     expect(await queueLagMs(db, now)).toBe(9_000);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/465 (tl's note): jobs that tie on run_at and created_at
+// (queued in one millisecond) are claimed in id order. A job id is a UUIDv7, monotonic within a
+// process, so that is enqueue order, and the same on SQLite and Postgres.
+describe('claim order for jobs that tie on run_at and created_at (#465)', () => {
+  function recordOrder(): string[] {
+    const seen: string[] = [];
+    registerJob({
+      kind: 'test.echo',
+      payloadSchema: z.object({ tag: z.string() }),
+      maxAttempts: 1,
+      run: async (_db, payload) => {
+        seen.push(payload.tag);
+      },
+    });
+    return seen;
+  }
+
+  it('claims in id order, though the rows were inserted out of that order', async () => {
+    const { db } = await freshDb();
+    const seen = recordOrder();
+    const [a, b, c] = [newId(), newId(), newId()];
+    expect([a, b, c]).toEqual([a, b, c].slice().sort());
+    const at = Date.now() - 1000;
+    // Inserted c, a, b, all with one run_at and created_at: insertion order is not id order.
+    for (const [id, tag] of [
+      [c, 'c'],
+      [a, 'a'],
+      [b, 'b'],
+    ] as const) {
+      await db
+        .insert(jobs)
+        .values({
+          id,
+          kind: 'test.echo',
+          payload: { tag },
+          runAt: at,
+          attempts: 0,
+          maxAttempts: 1,
+          status: 'pending',
+          dedupeKey: null,
+          userId: null,
+          traceContext: null,
+          createdAt: at,
+          updatedAt: at,
+        })
+        .run();
+    }
+    expect(await runDueJobs(db)).toBe(3);
+    expect(seen).toEqual(['a', 'b', 'c']);
+  });
+
+  it('claims jobs enqueued in one frozen millisecond in enqueue order', async () => {
+    const { db } = await freshDb();
+    const seen = recordOrder();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-13T05:20:00.000Z'));
+      for (const tag of ['1', '2', '3', '4', '5']) await enqueue(db, 'test.echo', { tag });
+    } finally {
+      vi.useRealTimers();
+    }
+    const rows = await db.select().from(jobs).all();
+    expect(new Set(rows.map((r) => `${r.runAt}:${r.createdAt}`)).size).toBe(1);
+    expect(await runDueJobs(db)).toBe(5);
+    expect(seen).toEqual(['1', '2', '3', '4', '5']);
   });
 });
 
