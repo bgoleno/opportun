@@ -103,10 +103,15 @@ docker compose up -d
 ```
 
 The image is public, so no login is needed: `docker pull ghcr.io/bgoleno/opportun:latest`.
-It is built for `linux/amd64` only. On Apple Silicon it runs under emulation; building from
-source with the commands above is faster there. Pin a specific tag (`sha-…`, listed on the
-[package page](https://github.com/users/bgoleno/packages/container/package/opportun)) rather than
-`latest` if you want upgrades to happen only when you choose.
+`latest` is the build most recently published from `main`. A build is published only when a
+maintainer runs the Publish image workflow by hand, not on every merge, so `latest` can be
+behind `main`; the
+[package page](https://github.com/users/bgoleno/packages/container/package/opportun) lists the
+tags that exist. To upgrade, back up, run `docker compose pull` and then `docker compose up -d`
+(see [Upgrade in the install guide](docs/install.md#6-upgrades-and-backups)). The image is
+built for `linux/amd64` only. On Apple Silicon it runs under emulation; building from source
+with the commands above is faster there. Pin a specific tag (`sha-…`) rather than `latest` if
+you want upgrades to happen only when you choose.
 
 Open `http://localhost:8080` and create the first account (it becomes the
 administrator). Keep `data/master.key` safe: it encrypts your stored AI keys and OAuth
