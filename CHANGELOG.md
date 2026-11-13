@@ -232,6 +232,20 @@ milestone's work was merged.
   check for stray lines. An empty value is the same as unset. `ANTHROPIC_BASE_URL` and
   `OPENAI_BASE_URL` still need a `compose.override.yml`
   ([#417](https://github.com/bgoleno/opportun/issues/417)).
+- **SQLite can checkpoint its write-ahead log in a background thread, for a slow disk. It is
+  off by default.** Set `OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT=1` (only `1` turns it on; on
+  Compose, put it in `deploy/.env`) and restart. A thread on its own connection then
+  checkpoints once 1,000 pages (about 4 MB) wait to be copied or anything has waited a
+  minute, so a write no longer waits for the checkpoint's copy and sync, and the server's own
+  automatic checkpoint moves from 100 pages to 10,000 as a backstop. Unset, nothing changes.
+  It has no effect on Postgres. The costs: the log grows to about 4 MB between checkpoints
+  (about 40 MB in a long burst), a second connection stays open, and writes are synced about
+  once a minute instead of every 100 pages. The slowest single write in a long burst can be
+  slower than without it. If the thread stops, the server logs it and goes back to automatic
+  checkpoints. On an SSD, leave it unset. See **SQLite on a slow disk** in the
+  [install guide](docs/install.md#4-configuration-reference)
+  ([#383](https://github.com/bgoleno/opportun/issues/383); PR
+  [#393](https://github.com/bgoleno/opportun/pull/393)).
 - The connector's messages name **Settings > Integrations > Extensions and Connectors** as the
   app shows it ([#235](https://github.com/bgoleno/opportun/issues/235)).
 
