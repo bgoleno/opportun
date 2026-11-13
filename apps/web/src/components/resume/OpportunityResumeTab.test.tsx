@@ -385,3 +385,60 @@ describe('OpportunityResumeTab: one entry per resume, sends inside it (#404)', (
     ).toBe(true);
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/469: detaching drops the row from this opportunity's
+// list, and its button with it, before the PATCH answers. The toasts sat in that button's own
+// mutate() callbacks, which the query library skips once their component has unmounted. As in
+// #172's tests above: the PATCH is held, the row leaves the list, then it answers.
+describe('OpportunityResumeTab: detaching, though the row leaves first (#469)', () => {
+  async function detachWhileTheRowLeaves(answer: { status: number; body?: unknown }) {
+    const user = userEvent.setup();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let detached = false;
+    const api = mockApi({
+      ...resumeRoutes({}),
+      'GET /resumes': (call: ApiCall) => {
+        const items = call.search.includes('opportunityId') && !detached ? [unattachedResume] : [];
+        return { items, total: items.length };
+      },
+      'PATCH /resumes/r-free': async () => {
+        detached = true; // gone from the opportunity on the server (or, for a failure, elsewhere)
+        await held;
+        return answer;
+      },
+    });
+    const { queryClient } = renderWithProviders(<OpportunityResumeTab opp={OPP} />);
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Remove Unattached Tailored Resume from this opportunity',
+      }),
+    );
+    await waitFor(() => expect(api.calls.some((c) => c.method === 'PATCH')).toBe(true));
+    await queryClient.invalidateQueries({ queryKey: rk.resumes });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', {
+          name: 'Remove Unattached Tailored Resume from this opportunity',
+        }),
+      ).not.toBeInTheDocument(),
+    );
+    release();
+  }
+
+  it('says the resume was removed', async () => {
+    await detachWhileTheRowLeaves({
+      status: 200,
+      body: { ...unattachedResume, opportunityId: null },
+    });
+    expect(await screen.findByText('Resume removed from this opportunity')).toBeInTheDocument();
+  });
+
+  it('says a removal failed, and why', async () => {
+    await detachWhileTheRowLeaves({
+      status: 409,
+      body: { error: { code: 'conflict', message: 'Something changed' } },
+    });
+    expect(await screen.findByText('Could not remove the resume')).toBeInTheDocument();
+  });
+});

@@ -113,19 +113,18 @@ function DetachButton({ resume }: { resume: Resume }) {
       variant="ghost"
       label={`Remove ${resume.title} from this opportunity`}
       disabled={attach.isPending}
+      // The promise, not callbacks given to mutate (#469, as #443's 7b6972c): detaching drops this
+      // row from the opportunity's list, and this button with it, often before the PATCH answers,
+      // and the query library skips an unmounted caller's own callbacks.
       onClick={() =>
-        attach.mutate(
-          { id: resume.id, opportunityId: null },
-          {
-            onSuccess: () =>
-              toast({ title: 'Resume removed from this opportunity', variant: 'success' }),
-            onError: (err) =>
-              toast({
-                title: 'Could not remove the resume',
-                description: resumeErrorMessage(err) ?? errorMessage(err),
-                variant: 'destructive',
-              }),
-          },
+        attach.mutateAsync({ id: resume.id, opportunityId: null }).then(
+          () => toast({ title: 'Resume removed from this opportunity', variant: 'success' }),
+          (err: unknown) =>
+            toast({
+              title: 'Could not remove the resume',
+              description: resumeErrorMessage(err) ?? errorMessage(err),
+              variant: 'destructive',
+            }),
         )
       }
     >

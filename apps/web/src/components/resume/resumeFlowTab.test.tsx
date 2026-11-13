@@ -2,7 +2,7 @@
 // #400): one test per row of tl's table, A to H, that the right step is current and the primary
 // action is the table's; then the base-as-is branch, focus and the live region, the disclosure,
 // and tl's rulings on #440 (https://github.com/bgoleno/opportun/issues/440#issuecomment-6805280758).
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { SubmissionView } from '@/components/apply/api';
@@ -739,5 +739,82 @@ describe('the Resume tab flow: tl on #443', () => {
     expect(within(region).getByRole('status')).toHaveTextContent(
       'Back to choosing a resume. Next: create a tailored copy.',
     );
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/484 (qa on #443): `disabled` comes from the
+// mutation's isPending, which is not yet true when a second click lands in the same tick, so two
+// clicks with no gap made two copies. The clicks here are dispatched back to back, in one act.
+describe('the Resume tab flow: one copy per click burst (#484)', () => {
+  const posts = (calls: ApiCall[]) =>
+    calls.filter((c) => c.method === 'POST' && c.path === '/resumes');
+
+  it('"Create tailored copy": two clicks in the same tick send one request', async () => {
+    let answer: () => void = () => undefined;
+    const { api } = setup({
+      resumes: [BASE],
+      extra: {
+        'POST /resumes': () =>
+          new Promise((resolve) => {
+            answer = () => resolve({ status: 201, body: copy() });
+          }),
+      },
+    });
+    const region = await flow();
+    await waitFor(() => expect(primary(region)).toHaveAccessibleName('Create tailored copy'));
+    const button = primary(region);
+    await act(async () => {
+      button.click();
+      button.click();
+    });
+    await waitFor(() => expect(posts(api.calls)).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(posts(api.calls)).toHaveLength(1);
+    await act(async () => answer());
+  });
+
+  it('"Tailor again": two clicks in the same tick send one request', async () => {
+    let answer: () => void = () => undefined;
+    const { api } = setup({
+      resumes: [BASE],
+      sends: [SEND],
+      extra: {
+        'POST /resumes': () =>
+          new Promise((resolve) => {
+            answer = () => resolve({ status: 201, body: copy() });
+          }),
+      },
+    });
+    const region = await flow();
+    const button = await within(region).findByRole('button', {
+      name: 'Tailor again for this opportunity',
+    });
+    await act(async () => {
+      button.click();
+      button.click();
+    });
+    await waitFor(() => expect(posts(api.calls)).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(posts(api.calls)).toHaveLength(1);
+    await act(async () => answer());
+  });
+
+  it('the guard is released once the request settles: a click after a failure sends again', async () => {
+    const { api, user } = setup({
+      resumes: [BASE],
+      extra: {
+        'POST /resumes': () => ({
+          status: 500,
+          body: { error: { code: 'internal', message: 'Server down' } },
+        }),
+      },
+    });
+    const region = await flow();
+    await waitFor(() => expect(primary(region)).toHaveAccessibleName('Create tailored copy'));
+    await user.click(primary(region));
+    expect(await within(region).findByRole('alert')).toBeInTheDocument();
+    await waitFor(() => expect(primary(region)).toBeEnabled());
+    await user.click(primary(region));
+    await waitFor(() => expect(posts(api.calls)).toHaveLength(2));
   });
 });
