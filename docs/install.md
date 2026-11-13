@@ -520,9 +520,10 @@ marked **on Postgres** instead.
   ```
 
   Run from `main`, it moves `latest` to that build; it always adds a `sha-...` tag, once per
-  commit. Given a version, it also tags the image with it and creates the git tag `v<version>`
-  and a GitHub Release on that commit; a version needs its `## <version> (YYYY-MM-DD)` section
-  in `CHANGELOG.md` first, and is published only from `main`
+  commit: a second publish of the same commit is refused. Given a version, it also tags the
+  image with it and creates the git tag `v<version>` and a GitHub Release on that commit; a
+  version needs its `## <version> (YYYY-MM-DD)` section in `CHANGELOG.md` first, and is
+  published only from `main`
   ([demo deployment](demo-deployment.md#publishing-a-new-build-from-a-workflow) has the rules). So
   `docker compose pull` on `latest` brings in only what has been published, which can be behind
   `main`. The [package page](https://github.com/users/bgoleno/packages/container/package/opportun)
