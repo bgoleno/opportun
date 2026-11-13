@@ -111,8 +111,11 @@ export function FlowSteps({ current }: { current: Step }) {
 }
 
 export const primaryClass = 'w-full sm:w-fit';
+// overflow-wrap anywhere, not break-words, wherever a copy's title can appear (#486): a title is
+// often one long token (Name-Company-role_slug), and break-words does not lower a grid item's
+// min-content width, so at 375 px it widened the whole tab.
 export const quietClass =
-  'w-fit text-left text-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+  'w-fit text-left text-sm text-primary [overflow-wrap:anywhere] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
 /** A quiet second action: a text button under the primary one. Disabled while its request is
  *  out, as the filled one is (tl on #443, blocking 3). */
@@ -510,7 +513,7 @@ export function ResumeFlowCard({
             <h3
               ref={sentenceRef}
               tabIndex={-1}
-              className="text-base font-medium break-words outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="text-base font-medium [overflow-wrap:anywhere] outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {view.sentence}
             </h3>
@@ -661,7 +664,7 @@ function ResumeLine({ resume, opportunityId }: { resume: Resume; opportunityId: 
   const m = match.data;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
-      <span className="font-medium break-words">{resume.title}</span>
+      <span className="font-medium [overflow-wrap:anywhere]">{resume.title}</span>
       <StatusBadge status={resume.status} />
       {m === null || m === undefined ? null : (
         <span className="text-muted-foreground">
