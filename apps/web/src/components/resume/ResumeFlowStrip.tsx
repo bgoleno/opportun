@@ -181,9 +181,11 @@ function StripLoaded({ resume, opp }: { resume: Resume; opp: OpportunityView }) 
   return (
     <section
       aria-label={LABEL}
-      className="grid gap-3 rounded-xl border bg-card p-4 text-card-foreground shadow-sm"
+      // A copy's title is often one long token (Name-Company-role_slug): break-words does not
+      // lower a grid item's min-content width, so it widened the page at 375 px; anywhere does.
+      className="grid min-w-0 gap-3 rounded-xl border bg-card p-4 text-card-foreground shadow-sm"
     >
-      <p className="text-sm text-muted-foreground">
+      <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">
         For {opp.title} at {opp.companyName}
       </p>
       {flow.error !== null ? (
@@ -196,7 +198,7 @@ function StripLoaded({ resume, opp }: { resume: Resume; opp: OpportunityView }) 
           <h2
             ref={sentenceRef}
             tabIndex={-1}
-            className="text-base font-medium break-words outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="text-base font-medium [overflow-wrap:anywhere] outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {view.sentence}
           </h2>
@@ -224,7 +226,7 @@ function NotFollowed({
 }) {
   if (followed === undefined) {
     return (
-      <p className="text-sm">
+      <p className="text-sm [overflow-wrap:anywhere]">
         This copy is not the one this opportunity's flow follows. See{' '}
         <Link
           to="/opportunities/$id"
@@ -239,7 +241,7 @@ function NotFollowed({
     );
   }
   return (
-    <p className="text-sm break-words">
+    <p className="text-sm [overflow-wrap:anywhere]">
       <Link
         to="/resumes/$id"
         params={{ id: followed.id }}
