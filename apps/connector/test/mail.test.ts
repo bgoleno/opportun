@@ -26,6 +26,13 @@ describe('the JXA script', () => {
     }
   });
 
+  it('reads To and Cc apart, and emits Cc as its own field (#406)', () => {
+    expect(JXA_SCRIPT).toContain('m.toRecipients().forEach');
+    expect(JXA_SCRIPT).toContain('m.ccRecipients().forEach');
+    expect(JXA_SCRIPT).not.toContain('.concat(m.ccRecipients())');
+    expect(JXA_SCRIPT).toContain('cc: cc,');
+  });
+
   it('truncates bodies and pages by date in the script', () => {
     expect(JXA_SCRIPT).toContain('.slice(0, p.maxBodyChars)');
     // A message it fails to read is reported with its date, so the cursor stops before it.

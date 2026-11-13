@@ -62,8 +62,12 @@ export const JXA_SCRIPT = String.raw`function run(argv) {
     try {
       var m = c.box.messages.byId(c.id);
       var recipients = [];
-      m.toRecipients().concat(m.ccRecipients()).forEach(function (r) {
+      var cc = [];
+      m.toRecipients().forEach(function (r) {
         recipients.push({ name: r.name() || '', address: r.address() || '' });
+      });
+      m.ccRecipients().forEach(function (r) {
+        cc.push({ name: r.name() || '', address: r.address() || '' });
       });
       var sent = m.dateSent();
       lines.push(JSON.stringify({
@@ -71,6 +75,7 @@ export const JXA_SCRIPT = String.raw`function run(argv) {
         subject: m.subject() || '',
         sender: m.sender() || '',
         recipients: recipients,
+        cc: cc,
         dateReceived: new Date(c.t).toISOString(),
         dateSent: sent ? sent.toISOString() : '',
         body: (m.content() || '').slice(0, p.maxBodyChars)

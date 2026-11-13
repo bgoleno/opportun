@@ -8,6 +8,11 @@ export interface InboundMessage {
   threadKey: string;
   from: string;
   to: string[];
+  /**
+   * The Cc recipients (#406), read only by the automatic-unsubscribe check, never stored. Absent
+   * from an older Apple Mail connector, which put them inside `to`: then `to` holds both.
+   */
+  cc?: string[];
   subject: string;
   snippet: string;
   bodyText: string;
