@@ -87,11 +87,14 @@ export interface Config {
    *  check are), so this flag being set by mistake does not arm anything destructive. */
   demo: boolean;
   /**
-   * OPPORTUN_SUBMISSIONS=1 (assisted apply, https://github.com/bgoleno/opportun/issues/79): turns
-   * on the application submission routes. Off by default, and absent counts as off. The demo
-   * never has them, whatever this says (submissionsEnabled). They stay off for users until the
-   * outcome milestone (M2a) is accepted: before it, a submission marked "submitted" would never
-   * be followed up, which the timeline must not claim.
+   * OPPORTUN_SUBMISSIONS (assisted apply, https://github.com/bgoleno/opportun/issues/79): the
+   * application submission routes. On by default since the owner's decision on
+   * https://github.com/bgoleno/opportun/issues/455: unset, empty or 1 is on, 0 is off, and any other
+   * value refuses to start (loadSubmissions). The demo never has them, whatever this says
+   * (submissionsEnabled). They were off by default until then, first until the outcome milestone
+   * (M2a, #118, closed with its follow-up job) so that no submission marked "submitted" went
+   * without a follow-up. loadConfig always sets this; a Config built without it (as tests do) is
+   * off.
    */
   submissions?: boolean;
   /**
@@ -235,6 +238,22 @@ function loadDailyReviewCap(env: NodeJS.ProcessEnv): number {
     );
   }
   return cap;
+}
+
+/**
+ * OPPORTUN_SUBMISSIONS (https://github.com/bgoleno/opportun/issues/455): unset, empty or 1 is on,
+ * 0 is off. Anything else refuses to start: until #455 every value but 1 was off, so an operator
+ * who wrote false, off or no meant off, and reading it as on after the upgrade would turn the
+ * feature on against their intent. Empty is unset because deploy/compose.yml passes
+ * ${OPPORTUN_SUBMISSIONS:-}.
+ */
+function loadSubmissions(env: NodeJS.ProcessEnv): boolean {
+  const raw = env.OPPORTUN_SUBMISSIONS;
+  if (raw === undefined || raw === '' || raw === '1') return true;
+  if (raw === '0') return false;
+  throw new ConfigError(
+    `OPPORTUN_SUBMISSIONS must be 0 (assisted apply off) or 1 (on), or unset for on, got: ${JSON.stringify(raw)}`,
+  );
 }
 
 function loadHost(env: NodeJS.ProcessEnv): string {
@@ -467,8 +486,9 @@ export function loadDbConfig(env: NodeJS.ProcessEnv = process.env): DbConfig {
 }
 
 /**
- * Whether the application submission routes exist on this deployment: OPPORTUN_SUBMISSIONS=1,
- * and never on the demo, which holds shared fixture accounts (design Part A section 7.8).
+ * Whether the application submission routes exist on this deployment: OPPORTUN_SUBMISSIONS is
+ * not 0 (loadSubmissions), and never on the demo, which holds shared fixture accounts (design
+ * Part A section 7.8).
  */
 export function submissionsEnabled(cfg: Pick<Config, 'submissions' | 'demo'>): boolean {
   return cfg.submissions === true && !cfg.demo;
@@ -492,7 +512,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: loadLogLevel(env),
     db: loadDbConfig(env),
     demo: env.OPPORTUN_DEMO === '1',
-    submissions: env.OPPORTUN_SUBMISSIONS === '1',
+    submissions: loadSubmissions(env),
     dailyReviewCap: loadDailyReviewCap(env),
     aiAllowLoopbackHttp: env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1',
     telemetryAllowPrivate: env.OPPORTUN_TELEMETRY_ALLOW_PRIVATE === '1',

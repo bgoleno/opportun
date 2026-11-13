@@ -28,8 +28,8 @@ export interface JobServices {
   /** The demo reset job's credentials source (issue #280); real process.env in production,
    *  a literal object in tests (#292). */
   env: NodeJS.ProcessEnv;
-  /** Assisted apply is on (config submissionsEnabled); mail ingest matches confirmations only
-   *  then (#119). Absent counts as off. */
+  /** Assisted apply is on (config submissionsEnabled: on unless OPPORTUN_SUBMISSIONS=0, never on
+   *  the demo, #455); mail ingest matches confirmations only then (#119). */
   submissions: boolean;
   /** Finds a provider's ranking batch client (#441): batchProviderFor, which has none yet, or a
    *  fake in tests. Absent means batchProviderFor. */

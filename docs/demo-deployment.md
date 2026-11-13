@@ -236,6 +236,26 @@ It authenticates with the automatically-provided `GITHUB_TOKEN` and `packages: w
 route involves no personal access token at all. It builds on a GitHub runner, which is native
 amd64, which is the architecture the host needs.
 
+**One build per commit.** The workflow refuses to publish a commit whose `sha-<7>` tag already
+exists, so the tag the host pins never moves to a different image. To rebuild (for example for a
+newer base image), make a new commit.
+
+**A version is a release.** Given a version at dispatch (for example `0.3.2`, no leading `v`),
+the workflow also tags the image with it, and then creates the git tag `v0.3.2` and a GitHub
+Release "Opportun 0.3.2" on the exact commit it built. A version is refused unless:
+
+- the run is on `main`;
+- `CHANGELOG.md` has a `## 0.3.2 (YYYY-MM-DD)` section, which becomes the Release's notes. A release
+  is the commit that renames `## Unreleased` to that heading and starts a new, empty
+  `## Unreleased`;
+- none of the image tag, the git tag and the Release exists yet.
+
+A prerelease version such as `0.3.2-rc.1` is marked as a prerelease. If the release job fails
+after the image is pushed, re-run the failed job from the run's page: a new dispatch would be
+refused, since the image tags exist by then. Each image also carries the
+`org.opencontainers.image.revision` and `org.opencontainers.image.version` labels, and Settings
+shows its version and commit.
+
 ### Or from a checkout, on `main`
 
 ```sh
@@ -268,12 +288,13 @@ route and this one is the fallback.
 Either way, set `OPPORTUN_DEMO_IMAGE_TAG="$TAG"` in the demo host's `.env` and run `up -d`
 there.
 
-A `latest` tag is not pushed. It would be a convenience — one less value to update per
-build — but it is exactly the mutable reference `deploy/compose.demo.yml`'s own comment and the
-section above explain why to avoid: paired with that file's `pull_policy: always`, it removes
-the ability to say which build is running or to go back to the one before it. Every build gets
-its own tag instead, and `OPPORTUN_DEMO_IMAGE_TAG` is how the host is told to move to a new one
-or back to an old one.
+The demo host never uses `latest`. The workflow moves `latest` when it is dispatched from
+`main`, for adopters who want whatever main last published; the checkout route above pushes only
+the sha tag. But `latest` is exactly the mutable reference `deploy/compose.demo.yml`'s own comment
+and the section above explain why to avoid on the host: paired with that file's
+`pull_policy: always`, it removes the ability to say which build is running or to go back to the
+one before it. Every build gets its own tag instead, and `OPPORTUN_DEMO_IMAGE_TAG` is how the host
+is told to move to a new one or back to an old one.
 
 On the checkout route, `docker login ghcr.io -u bgoleno` comes first and prompts for a
 password; use a GitHub personal access token with the `write:packages` scope, never the account

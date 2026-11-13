@@ -410,7 +410,8 @@ ghosted)`. Stage history with timestamps is preserved. An opportunity can move t
 
 The design and the owner's decisions are in [docs/assisted-apply/](assisted-apply/README.md), and
 the live state and the milestones are on https://github.com/bgoleno/opportun/issues/79. The feature
-sits behind `OPPORTUN_SUBMISSIONS=1`, off by default and never on the demo.
+is on by default, an operator turns it off with `OPPORTUN_SUBMISSIONS=0`, and it is never on the
+demo (https://github.com/bgoleno/opportun/issues/455).
 
 - FR-X1 (P1): An opportunity whose posting is on an ATS board Opportun recognises can
   record an application attempt (a _submission_), carrying the exact resume as

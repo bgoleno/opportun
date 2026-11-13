@@ -145,7 +145,8 @@ test('resume: register a base, tailor a copy with the AI chat, score it, mark su
   await expect(page.getByLabel('Match score')).toHaveAttribute('value', '82');
   await expect(page.getByText('Terraform', { exact: true })).toBeVisible();
 
-  // Mark submitted.
+  // Mark submitted: on a tailored copy the full status choice is behind "Change status" (#447).
+  await page.getByRole('button', { name: 'Change status' }).click();
   await choose(page, 'Status', 'Submitted');
   await page.getByLabel('Submitted to').fill('Northwind careers portal');
   await page.getByRole('button', { name: 'Mark submitted' }).click();

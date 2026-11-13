@@ -17,7 +17,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { errorMessage } from '@/lib/api';
 import { formatDateTime } from '@/lib/opportunities';
-import { resumeErrorMessage, useMatchReport, useScoreMatch, type MatchReportView } from './api';
+import {
+  resumeErrorMessage,
+  useMatchReport,
+  useScoreMatch,
+  useScoringMatch,
+  type MatchReportView,
+} from './api';
 import type { Resume } from './api';
 
 function band(score: number): string {
@@ -217,12 +223,14 @@ export function MatchPanel({ resume }: { resume: Resume }) {
   const opportunityId = resume.opportunityId;
   const query = useMatchReport(resume.id, opportunityId);
   const score = useScoreMatch(resume.id);
+  // Any scoring of this resume, the strip's Score again included (#447).
+  const scoring = useScoringMatch(resume.id);
 
   return (
     <MatchPanelView
       opportunityId={opportunityId}
       view={query.isPending ? undefined : (query.data ?? null)}
-      scoring={score.isPending}
+      scoring={scoring}
       error={score.error}
       onScore={() => {
         if (opportunityId !== null) score.mutate(opportunityId);

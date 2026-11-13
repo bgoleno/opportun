@@ -37,6 +37,10 @@ const InboundMessageSchema = z.object({
   threadKey: z.string().max(1024),
   from: z.string().max(4096),
   to: z.array(z.string().max(4096)).max(500),
+  // Optional (#406): an older connector sends none, and put its Cc recipients inside `to`. A key
+  // this object does not list is dropped, not refused, which is how a server from before this
+  // change takes a newer connector's `cc`.
+  cc: z.array(z.string().max(4096)).max(500).optional(),
   subject: z.string().max(16_384),
   snippet: z.string().max(16_384),
   bodyText: z.string(),

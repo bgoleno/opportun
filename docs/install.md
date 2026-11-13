@@ -310,6 +310,7 @@ Application settings (read by the server process):
 | `DB_POOL_MAX`                                      | `10`                                           | Postgres connection pool size                                                                                                                                                                                                                                                                                                            |
 | `DB_SSL`                                           | `disable` for localhost, else `require`        | Postgres TLS: `disable`, `require` (encrypted, certificate not verified) or `verify-full` (certificate and host checked); `sslmode` in the URL is honored when unset                                                                                                                                                                     |
 | `OPPORTUN_DEMO`                                    | (unset)                                        | `1` declares this deployment the invitation-only demo instance; see **Demo mode** below                                                                                                                                                                                                                                                  |
+| `OPPORTUN_SUBMISSIONS`                             | (unset: on)                                    | Assisted apply. Unset, empty or `1` is on; `0` turns it off. Any other value stops the server from starting. Never on the demo                                                                                                                                                                                                           |
 | `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`           | (unset: the official API)                      | Send every Anthropic or OpenAI call to a proxy or gateway you run instead; see **AI provider requests** below                                                                                                                                                                                                                            |
 | `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP`                  | (unset)                                        | `1` lets an OpenAI-compatible endpoint use plain http on `localhost`, `127.0.0.1` or `[::1]` (a local Ollama or LM Studio)                                                                                                                                                                                                               |
 | `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`                 | (unset)                                        | `1` lets telemetry export send to loopback, a private network or `100.64.0.0/10` (a Prometheus or a Datadog Agent next to Opportun), over http or https. Unset, export goes only to a public https destination. Link-local and cloud metadata addresses are refused either way; see [Telemetry](guide/settings.md#where-export-may-send) |
@@ -514,10 +515,15 @@ marked **on Postgres** instead.
 
   ```bash
   gh workflow run publish-image.yml --ref main
-  # optionally, to tag a version as well: -f version=0.1.0
+  # optionally, to publish a release as well: -f version=0.3.2
   ```
 
-  Run from `main`, it moves `latest` to that build; it always adds a `sha-...` tag. So
+  Run from `main`, it moves `latest` to that build; it always adds a `sha-...` tag, once per
+  commit: a second publish of the same commit is refused. Given a version, it also tags the
+  image with it and creates the git tag `v<version>` and a GitHub Release on that commit; a
+  version needs its `## <version> (YYYY-MM-DD)` section in `CHANGELOG.md` first, and is
+  published only from `main`
+  ([demo deployment](demo-deployment.md#publishing-a-new-build-from-a-workflow) has the rules). So
   `docker compose pull` on `latest` brings in only what has been published, which can be behind
   `main`. The [package page](https://github.com/users/bgoleno/packages/container/package/opportun)
   shows which tags exist.

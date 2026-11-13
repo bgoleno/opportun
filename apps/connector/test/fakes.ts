@@ -85,6 +85,7 @@ export interface RawFixture {
   subject?: string;
   sender?: string;
   recipients?: unknown;
+  cc?: unknown;
   dateReceived: string;
   dateSent?: string;
   body?: string;

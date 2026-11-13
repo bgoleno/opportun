@@ -76,7 +76,7 @@ describe('the build passes them in (issue 480)', () => {
       workflow.indexOf('- name: Build'),
       workflow.indexOf('- name: Push'),
     );
-    expect(build).toContain('VERSION: ${{ steps.extra.outputs.version }}');
+    expect(build).toContain('VERSION: ${{ steps.check.outputs.version }}');
     expect(build).toContain('--build-arg "OPPORTUN_VERSION=$VERSION"');
     expect(build).toContain('--build-arg "OPPORTUN_COMMIT=$GITHUB_SHA"');
   });
