@@ -55,6 +55,9 @@ export const DEFAULT_KIND_LIMITS: Readonly<Record<string, number>> = {
   // The board probe after a company suggestion (#221) runs that same detection and then lists the
   // board, and a weekly run queues up to 15 of them at once: the same cap, for the same reason.
   'company.board_probe': 2,
+  // The nightly network probe (#296): one at a time on the instance, so one user's probes run one
+  // after another and a vendor's 429 cancels the rest before any of them starts.
+  'company.network_probe': 1,
   [RANK_WAITING_KIND]: 2,
 };
 

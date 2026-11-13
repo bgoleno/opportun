@@ -68,6 +68,10 @@ const NOT_FILLED_REASONS: readonly unknown[] = [
   'attach_file_yourself',
   'resume_unchecked',
   'withheld',
+  'no_option',
+  'several_options',
+  'list_not_shown',
+  'not_confirmed',
 ];
 
 /** What readConfirmationPage may return; anything else from the tab is treated as a failure. */
@@ -81,7 +85,13 @@ const isReadPage = (v: unknown): v is ReadPage =>
 /** What fillGreenhouseForm may return; anything else from the tab is treated as a failure. */
 const isFillReport = (v: unknown): v is FillReport => {
   if (typeof v !== 'object' || v === null) return false;
-  const r = v as { ok?: unknown; reason?: unknown; filled?: unknown; notFilled?: unknown };
+  const r = v as {
+    ok?: unknown;
+    reason?: unknown;
+    chosen?: unknown;
+    filled?: unknown;
+    notFilled?: unknown;
+  };
   if (r.ok === false) return r.reason === 'wrong_page' || r.reason === 'no_form';
   const resume = (v as { resume?: unknown }).resume;
   const resumeOk =
@@ -94,6 +104,14 @@ const isFillReport = (v: unknown): v is FillReport => {
   return (
     r.ok === true &&
     resumeOk &&
+    Array.isArray(r.chosen) &&
+    r.chosen.every(
+      (c: unknown) =>
+        typeof c === 'object' &&
+        c !== null &&
+        typeof (c as { label?: unknown }).label === 'string' &&
+        typeof (c as { text?: unknown }).text === 'string',
+    ) &&
     Array.isArray(r.filled) &&
     r.filled.every((l) => typeof l === 'string') &&
     Array.isArray(r.notFilled) &&
@@ -102,7 +120,8 @@ const isFillReport = (v: unknown): v is FillReport => {
         typeof n === 'object' &&
         n !== null &&
         typeof (n as { label?: unknown }).label === 'string' &&
-        NOT_FILLED_REASONS.includes((n as { reason?: unknown }).reason),
+        NOT_FILLED_REASONS.includes((n as { reason?: unknown }).reason) &&
+        ['string', 'undefined'].includes(typeof (n as { detail?: unknown }).detail),
     )
   );
 };

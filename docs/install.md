@@ -36,10 +36,13 @@ By default the image is built locally from the repository. A prebuilt image is a
 at `ghcr.io/bgoleno/opportun` (public, no login, `linux/amd64` only): to use it instead, add
 `OPPORTUN_IMAGE=ghcr.io/bgoleno/opportun:latest` to `.env` and replace the last command below
 with `docker compose up -d`, without `--build`, which would force a local build regardless.
-Compose then pulls the image and builds nothing. `latest` follows `main`; pin a `sha-...` tag
-from the [package page](https://github.com/users/bgoleno/packages/container/package/opportun)
-to upgrade only when you choose. On Apple Silicon the published image runs under emulation, so
-building locally is faster there.
+Compose then pulls the image and builds nothing. `latest` is the build most recently published
+from `main`, and a build is published only when a maintainer runs the Publish image workflow by
+hand, not on every merge, so `latest` can be behind `main`. The
+[package page](https://github.com/users/bgoleno/packages/container/package/opportun) lists the
+tags that exist. Pin a `sha-...` tag from it to upgrade only when you choose; section 6 has the
+upgrade steps. On Apple Silicon the published image runs under emulation, so building locally
+is faster there.
 
 ```bash
 git clone https://github.com/bgoleno/opportun.git
@@ -270,9 +273,7 @@ the per-IP rate limits collapse to one bucket and, over HTTPS, cookies are not m
 only to fill in `${...}` in `deploy/compose.yml`; it does not hand the file to the container. So
 `deploy/compose.yml` lists each optional setting below and passes it on, and a line in
 `deploy/.env` reaches the server. The settings it does not pass are `OPPORTUN_HOST`, `WEB_DIR`
-(the image sets both, and an empty value would not mean "unset" to the server),
-`ANTHROPIC_BASE_URL` and `OPENAI_BASE_URL` (the AI library refuses an empty value, so the server
-would not start), `OPPORTUN_DEMO`
+(the image sets both, and an empty value would not mean "unset" to the server), `OPPORTUN_DEMO`
 (the [demo overlay](#16-demo-deployment) passes it), an inline `OPPORTUN_MASTER_KEY` (Compose uses
 the key file), `SMTP_URL` (reserved), and an `OPPORTUN_PEPPER_V<N>` above 9. Set any of those, or
 any other variable the server reads, in `deploy/compose.override.yml`, which Compose merges with
@@ -282,7 +283,7 @@ any other variable the server reads, in `deploy/compose.override.yml`, which Com
 services:
   opportun:
     environment:
-      ANTHROPIC_BASE_URL: http://litellm:4000
+      OPPORTUN_PEPPER_V10: ${OPPORTUN_PEPPER_V10:-}
 ```
 
 A test fails when a setting this section documents is neither passed by `compose.yml` nor listed
@@ -497,10 +498,30 @@ marked **on Postgres** instead.
   wrote, and exits nonzero if the backup itself failed, so a pre-upgrade script can check
   rather than assume it worked. **Do not substitute a plain file copy of a live database
   for this**: see "Backup," below, for exactly why that fails silently.
-- **Upgrade**: `git pull && docker compose up -d --build` (in `deploy/`). Database
-  migrations run automatically on boot under a database-wide lock, so an overlapping
-  old and new container cannot both apply them; the app refuses to start against a
-  database migrated by a newer release than itself.
+- **Upgrade, building from source**: `git pull && docker compose up -d --build` (in
+  `deploy/`). Database migrations run automatically on boot under a database-wide lock, so an
+  overlapping old and new container cannot both apply them; the app refuses to start against
+  a database migrated by a newer release than itself.
+- **Upgrade, running the published image** (`OPPORTUN_IMAGE` in `.env`, section 2): back up
+  first (above), then in `deploy/` run `docker compose pull` and `docker compose up -d`.
+  Leave off `--build`, which would build locally instead of using the image. If
+  `OPPORTUN_IMAGE` names a pinned `sha-...` tag, change it in `.env` to the tag you want
+  first, or the pull finds nothing new. Migrations run on boot as above. The image is
+  `linux/amd64` only and runs under emulation on Apple Silicon.
+
+  A new image appears only after a maintainer runs the **Publish image** workflow
+  (`.github/workflows/publish-image.yml`), which is started by hand:
+
+  ```bash
+  gh workflow run publish-image.yml --ref main
+  # optionally, to tag a version as well: -f version=0.1.0
+  ```
+
+  Run from `main`, it moves `latest` to that build; it always adds a `sha-...` tag. So
+  `docker compose pull` on `latest` brings in only what has been published, which can be behind
+  `main`. The [package page](https://github.com/users/bgoleno/packages/container/package/opportun)
+  shows which tags exist.
+
 - **Upgrade without Docker** (bare Node.js, section 5): `git pull`, `pnpm install`,
   `pnpm --filter @opportun/web build`, and then **restart the server**. The restart is
   part of the upgrade, not a precaution. The server routes the files it finds in the web

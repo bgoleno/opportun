@@ -148,6 +148,9 @@ export const ATS_PROBES: readonly Probe[] = [
   },
 ];
 
+/** The providers addressed by a slug on a fixed host: the only ones `boardApisOnly` reaches. */
+const SLUG_ADDRESSED: ReadonlySet<string> = new Set(ATS_PROBES.map((p) => p.kind));
+
 // ---------------------------------------------------------------------------
 // Slug candidates and careers-page links (pure)
 
@@ -530,7 +533,8 @@ export async function setDiscoveryDefaultCron(db: Db, ctx: UserCtx, cron: string
   return onDefault.length;
 }
 
-async function recordNone(db: Db, ctx: UserCtx, companyId: string): Promise<void> {
+/** Records that the company has no board detection could find. */
+export async function recordNone(db: Db, ctx: UserCtx, companyId: string): Promise<void> {
   const now = Date.now();
   await db
     .update(companies)
@@ -539,12 +543,24 @@ async function recordNone(db: Db, ctx: UserCtx, companyId: string): Promise<void
     .run();
 }
 
+/** How detection runs. */
+export interface DetectOptions {
+  /**
+   * Only the board APIs of the fixed slug-addressed providers (Greenhouse, Lever, Ashby): no
+   * request to the company's own careers page, and none to a Workday site, even when one is on
+   * record. For a probe nobody asked for (the nightly network probe, #296): the careers page is
+   * the one step that reaches a host not fixed in code, an address the user or the AI supplied.
+   */
+  boardApisOnly?: boolean;
+}
+
 /** Runs detection for one of the user's companies. */
 export async function detectAts(
   db: Db,
   ctx: UserCtx,
   companyId: string,
   sctx: SourceContext,
+  opts: DetectOptions = {},
 ): Promise<DetectOutcome> {
   let company: Company;
   try {
@@ -572,7 +588,11 @@ export async function detectAts(
     }) as const;
 
   // 1. The board the company was last verified on (re-verification).
-  const current = await recordedBoard(db, ctx, company);
+  const recorded = await recordedBoard(db, ctx, company);
+  const current =
+    recorded !== null && opts.boardApisOnly === true && !SLUG_ADDRESSED.has(recorded.kind)
+      ? null
+      : recorded;
   if (current !== null && (await tryBoard(current))) return await found(current, 'current');
   // 2. Slug candidates from the name and domain, each against every slug-addressed provider
   //    (never Workday: ATS_PROBES has no Workday entry, there is no slug to guess).
@@ -582,19 +602,20 @@ export async function detectAts(
       if (await tryBoard(board)) return await found(board, 'slug');
     }
   }
-  // 3. Board links on the company's own careers page.
+  // 3. Board links on the company's own careers page (never with boardApisOnly).
   let careersPage: CareersPageOutcome = 'absent';
   let detail: string | undefined;
-  const ownBoard = company.careersUrl === null ? null : boardFromUrl(company.careersUrl);
+  const careersUrl = opts.boardApisOnly === true ? null : company.careersUrl;
+  const ownBoard = careersUrl === null ? null : boardFromUrl(careersUrl);
   if (ownBoard?.kind === 'ats_workday') {
     // A Workday site is a JavaScript shell with no links to scan, and during the service window
     // the page fetch would follow the outage redirect to a page that has none either: probe the
     // site's own board instead.
     careersPage = 'links_unverified';
     if (await tryBoard(ownBoard)) return await found(ownBoard, 'careers_page');
-  } else if (company.careersUrl !== null) {
+  } else if (careersUrl !== null) {
     try {
-      const res = await sctx.fetch(company.careersUrl, {
+      const res = await sctx.fetch(careersUrl, {
         allowHosts: [],
         allowPublic: true,
         maxBytes: CAREERS_MAX_BYTES,

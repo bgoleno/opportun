@@ -23,6 +23,10 @@ import {
   tagCompanies,
 } from '../src/jobs/companyTags';
 import { putSecret } from '../src/lib/secretBox';
+import { createSafeFetch, type RawResponse } from '../src/lib/safeFetch';
+import type { SourceContext } from '../src/adapters/discoverySource';
+import { NETWORK_BOARD_CHECK_SETTING, runNetworkProbe } from '../src/jobs/networkBoardProbe';
+import { writeUserSetting } from '../src/repos/userSettings';
 import type { UserCtx } from '../src/repos/base';
 import { createCompany } from '../src/repos/companies';
 import { createRun, createSource } from '../src/repos/discovery';
@@ -1412,5 +1416,91 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
     let polls = 0;
     const run = await tagCompanies(app.db, ctxOf(a), { stopping: () => (polls += 1) > 1 });
     expect(run).toEqual({ tagged: 20, calls: 1, failed: 0, stopped: 'shutdown' });
+  });
+});
+
+describe('#296: the titles the nightly network probe stored', () => {
+  /** A Greenhouse board for `slug` serving `titles`, through the real safeFetch. */
+  function boardOf(slug: string, ...titles: string[]): SourceContext {
+    const list = JSON.stringify({
+      jobs: titles.map((title, i) => ({
+        id: i + 1,
+        title,
+        location: { name: 'Remote' },
+        absolute_url: `https://boards.greenhouse.io/${slug}/jobs/${i + 1}`,
+      })),
+    });
+    const ok = (): RawResponse => ({
+      status: 200,
+      headers: {},
+      body: (async function* () {
+        yield Buffer.from(list);
+      })(),
+    });
+    const missing = (): RawResponse => ({
+      status: 404,
+      headers: {},
+      body: (async function* () {
+        yield Buffer.from('{}');
+      })(),
+    });
+    const base = `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs`;
+    const fetch = createSafeFetch({
+      now: () => 0,
+      sleep: async () => undefined,
+      resolve: async () => ['93.184.216.34'],
+      request: async (target) =>
+        target.url.href === base || target.url.href === `${base}?content=true` ? ok() : missing(),
+    });
+    const log = { warn: () => undefined, info: () => undefined, error: () => undefined };
+    return { fetch, log: log as unknown as SourceContext['log'] };
+  }
+
+  async function probedNetworkCompany(app: FastifyInstance, c: TestClient, name: string) {
+    await inNetwork(c, name);
+    await writeUserSetting(app.db, ctxOf(c), NETWORK_BOARD_CHECK_SETTING, true);
+    return (await rowOf(app, c, name)).id;
+  }
+
+  it('a network company not yet tagged is asked with the titles the probe stored', async () => {
+    const { app, a } = await boot();
+    const id = await probedNetworkCompany(app, a, 'Initech');
+    await runNetworkProbe(app.db, ctxOf(a), id, boardOf('initech', 'Platform Engineer', 'SRE'));
+    tagsEverything();
+    expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({ tagged: 1 });
+    expect(systemOf()).toContain('job titles: Platform Engineer; SRE');
+  });
+
+  it('one the model could not place is asked once more after its titles arrive', async () => {
+    const { app, a } = await boot();
+    const id = await probedNetworkCompany(app, a, 'Initech');
+    await app.db
+      .update(companies)
+      .set({ industryAt: 500, naicsCode: null, industrySource: null })
+      .where(eq(companies.id, id))
+      .run();
+    tagsEverything();
+    // Before the probe: tried once, nothing new, not asked.
+    expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({ tagged: 0, calls: 0 });
+    await runNetworkProbe(app.db, ctxOf(a), id, boardOf('initech', 'Platform Engineer'));
+    expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({ tagged: 1, calls: 1 });
+    expect(systemOf()).toContain('job titles: Platform Engineer');
+  });
+
+  it('an existing tag is never changed by it', async () => {
+    const { app, a } = await boot();
+    const id = await probedNetworkCompany(app, a, 'Initech');
+    await app.db
+      .update(companies)
+      .set({ industryAt: 500, naicsCode: '5112', industrySource: 'ai' })
+      .where(eq(companies.id, id))
+      .run();
+    await runNetworkProbe(app.db, ctxOf(a), id, boardOf('initech', 'Platform Engineer'));
+    tagsEverything('9999');
+    expect(await tagCompanies(app.db, ctxOf(a))).toMatchObject({ tagged: 0, calls: 0 });
+    expect(await rowOf(app, a, 'Initech')).toMatchObject({
+      naicsCode: '5112',
+      industrySource: 'ai',
+    });
   });
 });

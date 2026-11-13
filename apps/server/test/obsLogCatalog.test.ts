@@ -12,6 +12,7 @@ import { DISCOVERY_DEFAULT_CRON_SETTING } from '../src/jobs/atsDetect';
 import { CONSUMER_VETO_SETTING } from '../src/repos/mailFilters';
 import { DAILY_REVIEW_CAP_SETTING } from '../src/repos/submissionReview';
 import { CHECKLIST_SETTING, TOUR_SETTING } from '../src/routes/onboarding';
+import { NETWORK_BOARD_CHECK_SETTING } from '../src/jobs/networkBoardProbe';
 import { AUDIT_EVENTS, ATTRIBUTES, LOG_MESSAGES, SETTING_NAMES } from '../src/obs/catalog';
 import { OAUTH_PROVIDERS } from '../src/lib/oauthProviders';
 import { EXTENSION_TARGETS } from '../src/routes/artifacts';
@@ -93,6 +94,7 @@ describe('the lists the catalog keeps by hand (#345)', () => {
         DISCOVERY_DEFAULT_CRON_SETTING,
         TOUR_SETTING,
         CHECKLIST_SETTING,
+        NETWORK_BOARD_CHECK_SETTING,
       ].sort(),
     );
     const callers = FILES.flatMap(({ text }) =>
@@ -108,6 +110,7 @@ describe('the lists the catalog keeps by hand (#345)', () => {
         'DISCOVERY_DEFAULT_CRON_SETTING',
         'ALERT_SENDERS_SETTING',
         'MAIL_LABEL_SETTING',
+        'NETWORK_BOARD_CHECK_SETTING',
         'TOUR_SETTING',
         'CHECKLIST_SETTING',
       ]),

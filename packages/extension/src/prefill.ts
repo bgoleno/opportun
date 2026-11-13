@@ -265,6 +265,8 @@ const PREFILL_FIELDS: readonly {
   id: string | null;
   labels: readonly string[];
   name: string;
+  /** The form's list control this detail is chosen in, by its id (#402 slice 2). */
+  list?: string;
 }[] = [
   { key: 'firstName', id: 'first_name', labels: [], name: 'First name' },
   { key: 'lastName', id: 'last_name', labels: [], name: 'Last name' },
@@ -278,10 +280,19 @@ const PREFILL_FIELDS: readonly {
   },
   { key: 'websiteUrl', id: null, labels: ['Website'], name: 'Website' },
   // #435 (slice 1 of #402; tl's ruling on #437): the city and how you heard fill a text question
-  // with exactly one of these labels, compared whole like every other. Country, School and Degree
-  // are not planned yet: on Greenhouse they are lists, which the filler leaves alone and reports
-  // as choose it on the form whatever the plan holds, and slice 2 adds them when it can choose.
-  { key: 'location', id: null, labels: ['Location (City)'], name: 'Location (city)' },
+  // with exactly one of these labels, compared whole like every other. Slice 2 (tl's rule 3):
+  // the city, the phone's country code, School and Degree are also chosen in the form's list
+  // control with that id; how you heard is chosen in a list question with one of its labels.
+  {
+    key: 'location',
+    id: null,
+    labels: ['Location (City)'],
+    name: 'Location (city)',
+    list: 'candidate-location',
+  },
+  { key: 'country', id: null, labels: [], name: 'Phone country code', list: 'country' },
+  { key: 'school', id: null, labels: [], name: 'School', list: 'school--0' },
+  { key: 'degree', id: null, labels: [], name: 'Degree', list: 'degree--0' },
   {
     key: 'heardFrom',
     id: null,
@@ -314,16 +325,22 @@ export function buildPlan(
   ).filter((x) => x.value !== '');
   const questions = [
     ...PREFILL_FIELDS.flatMap((f) =>
-      f.id !== null ? [] : [{ labels: [...f.labels], name: f.name, value: value(f.key) }],
+      f.id !== null || f.labels.length === 0
+        ? []
+        : [{ labels: [...f.labels], name: f.name, value: value(f.key) }],
     ),
     ...attempt.answers.map((a) => ({ labels: [a.label], name: a.label, value: a.value })),
   ].filter((q) => q.value !== '');
+  const lists = PREFILL_FIELDS.flatMap((f) =>
+    f.list === undefined ? [] : [{ id: f.list, name: f.name, value: value(f.key) }],
+  ).filter((l) => l.value !== '');
   const filename = attempt.resume.filename;
   return {
     board: posting.board,
     jobId: posting.jobId,
     standard,
     questions,
+    lists,
     resume: resumeBase64 === null || filename === null ? null : { filename, base64: resumeBase64 },
     // Which field each withheld key is, so the filler reports it once (#196, tl on #201): its
     // standard id or question labels and its name, never a value.
@@ -336,7 +353,7 @@ function withheldField(key: string): { id: string | null; labels: string[]; name
   const f = PREFILL_FIELDS.find((x) => x.key === key);
   return f === undefined
     ? { id: null, labels: [], name: withheldLabel(key) }
-    : { id: f.id, labels: [...f.labels], name: f.name };
+    : { id: f.id ?? f.list ?? null, labels: [...f.labels], name: f.name };
 }
 
 /** Why a field was not filled, in words (the popup's list). */
@@ -360,6 +377,11 @@ export const NOT_FILLED_WORDS = new Map<NotFilledReason, string>([
     'resume_unchecked',
     'it could not be checked: look at the resume on the form, and attach it yourself if it is missing or wrong',
   ],
+  // The list reasons (tl's rule 4 on #402): reportLines puts the value in place of {value}.
+  ['no_option', 'no option on the form\'s list is exactly "{value}": choose it on the form'],
+  ['several_options', 'more than one option is exactly "{value}": choose it on the form'],
+  ['list_not_shown', "the form's list did not appear in time: choose it on the form"],
+  ['not_confirmed', 'the form did not show the choice "{value}": check this field'],
 ]);
 
 /** Always said after a fill: Opportun never submits. */
@@ -454,14 +476,21 @@ export function renderPrefillStop(
 
 /** The report the popup lists: what was filled, what was not and why, then the reminder. */
 export function reportLines(report: Extract<FillReport, { ok: true }>): {
+  chosen: string[];
   filled: string[];
   notFilled: string[];
   reminder: string;
 } {
   return {
+    // Every option chosen from a list, first, as "field: the text chosen" (tl's rule 4).
+    chosen: (report.chosen ?? []).map((c) => `${c.label.slice(0, 200)}: ${c.text.slice(0, 200)}`),
     filled: report.filled.map((l) => l.slice(0, 200)),
     notFilled: report.notFilled.map(
-      (n) => `${n.label.slice(0, 200)}: ${NOT_FILLED_WORDS.get(n.reason) ?? 'fill it in yourself'}`,
+      (n) =>
+        `${n.label.slice(0, 200)}: ${(NOT_FILLED_WORDS.get(n.reason) ?? 'fill it in yourself')
+          // A function, so `$&` and the like in page text are not read as replacement
+          // patterns (sec at 8084132).
+          .replace('{value}', () => (n.detail ?? '').slice(0, 200))}`,
     ),
     reminder: SUBMIT_REMINDER,
   };

@@ -1,5 +1,6 @@
 import { createFileRoute, Link, Outlet } from '@tanstack/react-router';
 import { PageHeader } from '@/components/PageHeader';
+import { BuildVersion } from './-buildVersion';
 
 const SECTIONS = [
   { to: '/settings/account', label: 'Account' },
@@ -61,6 +62,7 @@ function SettingsLayout() {
               </li>
             ))}
           </ul>
+          <BuildVersion />
         </nav>
         <div className="min-w-0 flex-1">
           <Outlet />

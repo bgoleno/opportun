@@ -22,7 +22,9 @@ export const APPLICATION_DETAIL_FIELDS = [
   { key: 'phone', label: 'Phone', home: 'phone' },
   // #435 (slice 1 of #402): country, school and degree are lists on most forms, and "how did you
   // hear" a list or a text question. They are text here, written as the form's list shows them.
-  { key: 'country', label: 'Country', home: 'details' },
+  // `country` fills only the phone's country code on Greenhouse, so it is named that, never read
+  // as where the user lives (sec on #402, issuecomment-6808114453 point 2.3); the key is kept.
+  { key: 'country', label: 'Phone country code', home: 'details' },
   { key: 'location', label: 'Location (city)', home: 'location' },
   { key: 'workAuthorization', label: 'Work authorisation', home: 'workAuth' },
   { key: 'school', label: 'School', home: 'details' },

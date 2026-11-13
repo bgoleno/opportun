@@ -106,16 +106,23 @@ jobs:
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/opportun
           TAG: ${{ steps.tag.outputs.tag }}
+          # Already checked against the version pattern above, or empty.
+          VERSION: ${{ steps.extra.outputs.version }}
         # --platform is redundant on an amd64 runner and stated anyway: it is the one property
         # of this artifact that the demo host cannot tolerate being wrong, so it belongs in the
         # command rather than in an assumption about the runner.
         #
         # --pull refuses a cached node:22-slim. A release build should resolve its base image
         # now, not reuse whatever a previous job happened to leave on this runner.
+        #
+        # The version (empty when none was given) and the commit go into the image, where Settings
+        # shows them (#480). The server shows only a value that is a version or a commit.
         run: |
           docker build \
             --platform linux/amd64 \
             --pull \
+            --build-arg "OPPORTUN_VERSION=$VERSION" \
+            --build-arg "OPPORTUN_COMMIT=$GITHUB_SHA" \
             -f deploy/Dockerfile \
             -t "$IMAGE:$TAG" \
             .

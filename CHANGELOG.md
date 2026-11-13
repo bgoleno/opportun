@@ -9,6 +9,15 @@ milestone's work was merged.
 
 ### Upgrading: prompts, defaults and costs
 
+- **Network job boards, on by default.** A nightly check of companies where you know someone, and
+  that you have not followed, denied or checked, so their rows in Recommended companies show the
+  board, its open jobs and an estimate without a click. It is on for every account after
+  upgrading, including existing ones. Each night, Opportun looks up as many as 20 of these
+  companies on Greenhouse, Lever and Ashby by name. Those services see the names it tries, which
+  come from where your contacts work, and your server's address. No contact's name or details are
+  sent. No AI call is made, and no company is followed. To turn it off, clear "Check job boards for
+  companies in my network" in **Settings > AI**
+  ([#296](https://github.com/bgoleno/opportun/issues/296)).
 - **Three shipped prompts were reordered so Anthropic can cache them.** An automatic upgrade step rewrites the system default
   of each of these tasks in place, and only while it is still exactly the text the previous
   release shipped: `discovery.company_tags` (step 0060; Postgres 0042), `discovery.rank` (0061; Postgres 0043) and `comms.classify` (0063; Postgres 0045). The wording is the same but for a few words (the ranking prompt
@@ -232,6 +241,20 @@ milestone's work was merged.
   check for stray lines. An empty value is the same as unset. `ANTHROPIC_BASE_URL` and
   `OPENAI_BASE_URL` still need a `compose.override.yml`
   ([#417](https://github.com/bgoleno/opportun/issues/417)).
+- **SQLite can checkpoint its write-ahead log in a background thread, for a slow disk. It is
+  off by default.** Set `OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT=1` (only `1` turns it on; on
+  Compose, put it in `deploy/.env`) and restart. A thread on its own connection then
+  checkpoints once 1,000 pages (about 4 MB) wait to be copied or anything has waited a
+  minute, so a write no longer waits for the checkpoint's copy and sync, and the server's own
+  automatic checkpoint moves from 100 pages to 10,000 as a backstop. Unset, nothing changes.
+  It has no effect on Postgres. Writes are synced within about a minute, or sooner under
+  load, instead of every 100 pages. The costs: the log grows to about 4 MB between
+  checkpoints (about 40 MB in a long burst), a second connection stays open, and the slowest
+  single write in a long burst can be slower than without it. If the thread stops, the server logs it and goes back to automatic
+  checkpoints. On an SSD, leave it unset. See **SQLite on a slow disk** in the
+  [install guide](docs/install.md#4-configuration-reference)
+  ([#383](https://github.com/bgoleno/opportun/issues/383); PR
+  [#393](https://github.com/bgoleno/opportun/pull/393)).
 - The connector's messages name **Settings > Integrations > Extensions and Connectors** as the
   app shows it ([#235](https://github.com/bgoleno/opportun/issues/235)).
 
