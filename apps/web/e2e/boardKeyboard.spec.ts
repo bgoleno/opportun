@@ -7,6 +7,8 @@ import { card, choose, createOpportunity, registerUser, toasts } from './helpers
 
 /** dnd-kit's live region: what a screen reader hears during a drag (assertive). */
 const liveRegion = (page: Page) => page.locator('[id^="DndLiveRegion-"]');
+/** The board's own polite region (#432): how the reason dialog ended for a dragged card. */
+const boardRegion = (page: Page) => page.getByTestId('board-announcement');
 const column = (page: Page, name: string) => page.getByRole('region', { name: `${name} column` });
 
 async function moveWithMenu(page: Page, opp: { company: string; title: string }, stage: string) {
@@ -27,10 +29,16 @@ async function dismissed(page: Page, opp: { company: string; title: string }) {
 }
 
 /**
- * Picks `moved` up with Space, then presses ArrowLeft one at a time, each time letting the live
- * region announce the new place, until it is over `target`'s column; then drops.
+ * Picks `moved` up with Space, then presses the arrow key one at a time (ArrowLeft unless told),
+ * each time letting the live region announce the new place, until it is over `target`'s column;
+ * then drops.
  */
-async function keyboardDrop(page: Page, moved: Locator, target: string) {
+async function keyboardDrop(
+  page: Page,
+  moved: Locator,
+  target: string,
+  arrow: 'ArrowLeft' | 'ArrowRight' = 'ArrowLeft',
+) {
   await moved.focus();
   await page.keyboard.press('Space');
   await expect(liveRegion(page)).toContainText('is over');
@@ -38,7 +46,7 @@ async function keyboardDrop(page: Page, moved: Locator, target: string) {
   for (let i = 0; i < 12; i++) {
     const before = (await liveRegion(page).textContent()) ?? '';
     if (before.includes(wanted)) break;
-    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press(arrow);
     // The first step may only go from the card to its own column, which is announced the same
     // way, so the text need not change: wait for a change, briefly, and go on either way.
     await expect(liveRegion(page))
@@ -112,5 +120,66 @@ test.describe('the board refuses a keyboard move as it refuses a pointer move (#
       column(page, 'New').getByRole('article', { name: `${opp.company}: ${opp.title}` }),
     ).toBeVisible();
     await expect(toasts(page).getByText('Stage not changed')).toHaveCount(0);
+  });
+});
+
+// #432: Closed and Dismissed ask for a reason first, so the drop says the card is waiting for one,
+// and the board says afterwards whether it moved.
+test.describe('a keyboard drop that waits for a reason says so, then says what happened (#432)', () => {
+  test.use({ viewport: { width: 2200, height: 1100 } });
+
+  /** An opportunity in Offer, the column next to Dismissed and Closed. */
+  async function inOffer(page: Page, opp: { company: string; title: string }) {
+    await createOpportunity(page, opp);
+    await moveWithMenu(page, opp, 'Offer');
+    await expect(
+      column(page, 'Offer').getByRole('article', { name: `${opp.company}: ${opp.title}` }),
+    ).toBeVisible();
+  }
+
+  test('onto Closed, confirmed: waiting, then moved, and the card is in Closed', async ({
+    page,
+  }) => {
+    await registerUser(page);
+    const opp = { company: 'Initrode', title: 'Staff Keyboard Engineer' };
+    await inOffer(page, opp);
+    const name = `${opp.company}: ${opp.title}`;
+
+    await keyboardDrop(page, card(page, opp.company, opp.title), 'Closed', 'ArrowRight');
+
+    await expect(liveRegion(page)).toHaveText(
+      `${name} is waiting for a reason to move to the Closed column. Choose one in the dialog, or cancel to leave it where it is.`,
+    );
+    await expect(liveRegion(page)).not.toContainText('was dropped on');
+    const dialog = page.getByRole('dialog', { name: 'Close opportunity' });
+    await choose(dialog, 'Reason', 'Rejected');
+    await dialog.getByRole('button', { name: 'Close opportunity' }).click();
+    await expect(dialog).toBeHidden();
+
+    await expect(boardRegion(page)).toHaveText(`${name} moved to the Closed column.`);
+    await page.getByRole('button', { name: /^Expand Closed/ }).click();
+    await expect(column(page, 'Closed').getByRole('article', { name })).toBeVisible();
+  });
+
+  test('onto Dismissed, cancelled with Escape: waiting, then not moved, and the card stays', async ({
+    page,
+  }) => {
+    await registerUser(page);
+    const opp = { company: 'Initrode', title: 'Staff Keyboard Engineer' };
+    await inOffer(page, opp);
+    const name = `${opp.company}: ${opp.title}`;
+
+    await keyboardDrop(page, card(page, opp.company, opp.title), 'Dismissed', 'ArrowRight');
+
+    await expect(liveRegion(page)).toHaveText(
+      `${name} is waiting for a reason to move to the Dismissed column. Choose one in the dialog, or cancel to leave it where it is.`,
+    );
+    const dialog = page.getByRole('dialog', { name: 'Dismiss opportunity' });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+
+    await expect(boardRegion(page)).toHaveText(`${name} was not moved.`);
+    await expect(column(page, 'Offer').getByRole('article', { name })).toBeVisible();
   });
 });
