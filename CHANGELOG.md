@@ -289,6 +289,15 @@ when the milestone's work was merged.
   [#484](https://github.com/bgoleno/opportun/issues/484),
   [#491](https://github.com/bgoleno/opportun/issues/491); PR
   [#494](https://github.com/bgoleno/opportun/pull/494)).
+- **The guide describes the resume flow.** The pipeline guide's **Resume** section now describes
+  the tab as it is: the **Resume for this application** card with its four steps, what it shows
+  from "add a base resume" to "sent", sending a base resume as it is, **Tailor again**,
+  **Other ways to add a resume** and the phone line. The resumes guide describes finishing a
+  tailored copy on its own page, with the **Next step for this resume** strip and **Change
+  status**. Two screenshots show the card and the strip
+  ([#495](https://github.com/bgoleno/opportun/issues/495),
+  [#400](https://github.com/bgoleno/opportun/issues/400); PR
+  [#502](https://github.com/bgoleno/opportun/pull/502)).
 - **A keyboard drop of a board card on Closed or Dismissed says it is waiting for a reason,
   then whether it moved.** The drop announces "... is waiting for a reason to move to the
   Closed column. Choose one in the dialog, or cancel to leave it where it is." Confirming the
