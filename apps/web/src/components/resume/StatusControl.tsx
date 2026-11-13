@@ -17,6 +17,18 @@ import {
   type ResumeStatus,
 } from './api';
 
+/** "Sent to <where> on <date>", or nothing: shown whatever the status (#158). Also shown on a
+ *  tailored copy's page while "Change status" is closed (#447), so it is never lost. */
+export function SentToLine({ resume }: { resume: Resume }) {
+  if (!resume.submittedTo) return null;
+  return (
+    <p className="text-xs text-muted-foreground">
+      Sent to {resume.submittedTo}
+      {resume.submittedAt ? ` on ${formatDate(resume.submittedAt)}` : ''}
+    </p>
+  );
+}
+
 export function StatusControl({ resume }: { resume: Resume }) {
   const update = useUpdateResume(resume.id);
   const [askingSubmit, setAskingSubmit] = useState(false);
@@ -72,12 +84,7 @@ export function StatusControl({ resume }: { resume: Resume }) {
       </div>
       {/* Shown whatever the status: a resume sent and then tailored again reads In review, and
           its latest send still says where it went (#158). */}
-      {!askingSubmit && resume.submittedTo ? (
-        <p className="text-xs text-muted-foreground">
-          Sent to {resume.submittedTo}
-          {resume.submittedAt ? ` on ${formatDate(resume.submittedAt)}` : ''}
-        </p>
-      ) : null}
+      {!askingSubmit ? <SentToLine resume={resume} /> : null}
       {askingSubmit ? (
         <form onSubmit={submit} className="grid gap-2 rounded-md border p-3">
           <Label htmlFor={`submitted-to-${resume.id}`}>Submitted to</Label>
