@@ -208,6 +208,17 @@ when the milestone's work was merged.
   lands on the Blocked tab as "an unsubscribe request your mail app sent" instead of the Inbox.
   Messages already ingested stay where they are. There is no switch; restore one from the
   Blocked tab ([#392](https://github.com/bgoleno/opportun/issues/392)).
+- **A message you sent to an unsubscribe address with a person in Cc is no longer filtered.**
+  The automatic unsubscribe filter now reads Cc as well as To: a message is filtered only when
+  every To and Cc recipient is an unsubscribe address, and Gmail's "automatically generated"
+  body counts only when no Cc recipient is anything else, since Gmail's button never adds a Cc.
+  A message with a person in Cc lands in the Inbox as your own mail. Gmail ingest and the Apple
+  Mail connector both send Cc now. **If you run the connector:** its rows no longer hold Cc
+  addresses in `to` (Cc is its own field), so the "To:" line the classifier sees is To only.
+  Either the server or the connector can be upgraded first: an older connector's rows are read
+  as before, and an older server ignores the new field
+  ([#406](https://github.com/bgoleno/opportun/issues/406); PR
+  [#472](https://github.com/bgoleno/opportun/pull/472)).
 - **An opportunity can move from any chain stage to any other in one move.** In process can go
   straight back to Preparing; nothing tied to a later stage is lost. Closed and Dismissed still leave only through **Reopen**, and a move out of one of them says so. On the board, a keyboard
   drop that is refused is announced as not moved, with the reason, not as dropped on the column
