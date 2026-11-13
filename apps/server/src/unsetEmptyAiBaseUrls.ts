@@ -15,14 +15,10 @@
 // module imported after any of them runs too late. test/emptyAiBaseUrls.test.ts checks the order.
 // It imports nothing itself, for the same reason.
 
-/** The variables the AI SDK reads from the environment when it loads. */
-export const SDK_BASE_URL_VARIABLES = ['ANTHROPIC_BASE_URL', 'OPENAI_BASE_URL'] as const;
-
-/** Deletes each of the two that is set to an empty or blank string. */
+/** Deletes ANTHROPIC_BASE_URL and OPENAI_BASE_URL when either is empty or blank. */
 export function unsetEmptyAiBaseUrls(env: NodeJS.ProcessEnv): void {
-  for (const name of SDK_BASE_URL_VARIABLES) {
-    if (env[name]?.trim() === '') delete env[name];
-  }
+  if (env.ANTHROPIC_BASE_URL?.trim() === '') delete env.ANTHROPIC_BASE_URL;
+  if (env.OPENAI_BASE_URL?.trim() === '') delete env.OPENAI_BASE_URL;
 }
 
 unsetEmptyAiBaseUrls(process.env);
