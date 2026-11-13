@@ -1,0 +1,1 @@
+ALTER TABLE "companies" ADD COLUMN "board_probe_failed_nights" bigint DEFAULT 0 NOT NULL;

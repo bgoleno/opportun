@@ -330,6 +330,13 @@
       "when": 1796100000000,
       "tag": "0046_rank_batches",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1796200000000,
+      "tag": "0047_company_board_probe_failures",
+      "breakpoints": true
     }
   ]
 }

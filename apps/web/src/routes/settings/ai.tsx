@@ -7,6 +7,7 @@ import { ProposedRefinement } from '@/components/ai/ProposedRefinement';
 import { PromptEditor } from '@/components/ai/promptEditor';
 import { ProviderKeysCard } from '@/components/ai/ProviderKeysCard';
 import { DiscoveryBudgetCard, DiscoveryBudgetLine } from '@/components/ai/DiscoveryBudget';
+import { NetworkBoardCheckCard } from '@/components/discovery/NetworkBoardCheck';
 import { PrefilterCard } from '@/components/discovery/PrefilterRecall';
 import { RankCostCard } from '@/components/ai/RankCostCard';
 import { RankSkipsLine } from '@/components/ai/RankSkips';
@@ -36,6 +37,7 @@ function AiSettings() {
         </CardContent>
       </Card>
       <DiscoveryBudgetCard />
+      <NetworkBoardCheckCard />
       <PrefilterCard />
       <Card>
         <CardHeader>
