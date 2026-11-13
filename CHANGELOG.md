@@ -1,9 +1,11 @@
 # Changelog
 
-Opportun has no tagged releases yet; while it is in beta, `main` is the only supported
-version (see [SECURITY.md](SECURITY.md)). Entries are grouped by milestone (requirements
-section 7, [docs/requirements.md](docs/requirements.md)), newest first, dated by when the
-milestone's work was merged.
+Opportun's first tagged release is [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1).
+A release is cut by running the Publish image workflow with a version: it needs a `## <version>
+(YYYY-MM-DD)` section in this file, made by renaming `## Unreleased` and starting a new one. See
+[SECURITY.md](SECURITY.md) for which versions are supported. Entries are grouped by milestone
+(requirements section 7, [docs/requirements.md](docs/requirements.md)), newest first, dated by
+when the milestone's work was merged.
 
 ## Unreleased
 
@@ -205,6 +207,13 @@ milestone's work was merged.
   two rows. The figures come from the cost recorded at call time, so earlier rows keep their price
   ([#341](https://github.com/bgoleno/opportun/issues/341),
   [#350](https://github.com/bgoleno/opportun/issues/350)).
+- **An error a dependency throws deep in its own code keeps the Opportun frame that called
+  it in the log.** Node keeps 10 stack frames by default, so such an error reached the log
+  without the Opportun line that led to it. The server now keeps 50 from startup. The log still
+  writes at most 20 frames per error, and an error made 66 frames deep costs about 2 µs more to
+  create, measured in the PR
+  ([#436](https://github.com/bgoleno/opportun/issues/436); PR
+  [#445](https://github.com/bgoleno/opportun/pull/445)).
 
 ### Mail, pipeline and assisted apply
 
@@ -213,6 +222,17 @@ milestone's work was merged.
   lands on the Blocked tab as "an unsubscribe request your mail app sent" instead of the Inbox.
   Messages already ingested stay where they are. There is no switch; restore one from the
   Blocked tab ([#392](https://github.com/bgoleno/opportun/issues/392)).
+- **A message you sent to an unsubscribe address with a person in Cc is no longer filtered.**
+  The automatic unsubscribe filter now reads Cc as well as To: a message is filtered only when
+  every To and Cc recipient is an unsubscribe address, and Gmail's "automatically generated"
+  body counts only when no Cc recipient is anything else, since Gmail's button never adds a Cc.
+  A message with a person in Cc lands in the Inbox as your own mail. Gmail ingest and the Apple
+  Mail connector both send Cc now. **If you run the connector:** its rows no longer hold Cc
+  addresses in `to` (Cc is its own field), so the "To:" line the classifier sees is To only.
+  Either the server or the connector can be upgraded first: an older connector's rows are read
+  as before, and an older server ignores the new field
+  ([#406](https://github.com/bgoleno/opportun/issues/406); PR
+  [#472](https://github.com/bgoleno/opportun/pull/472)).
 - **An opportunity can move from any chain stage to any other in one move.** In process can go
   straight back to Preparing; nothing tied to a later stage is lost. Closed and Dismissed still leave only through **Reopen**, and a move out of one of them says so. On the board, a keyboard
   drop that is refused is announced as not moved, with the reason, not as dropped on the column
@@ -220,6 +240,64 @@ milestone's work was merged.
   [#413](https://github.com/bgoleno/opportun/issues/413)).
 - **An opportunity's Communications tab opens newest first,** with a control for oldest first.
   The inbox order is unchanged ([#394](https://github.com/bgoleno/opportun/issues/394)).
+- **A thread of more than 200 messages says so and shows the rest.** The server returns 200
+  messages at a time, so a longer thread used to stop there with no sign of it. The tab now
+  says "Showing the newest 200 of 205 messages." (or the oldest, in the order you chose) and a
+  **Show N more** button adds the next page below. Switching between newest and oldest first
+  never shows the other order's partial list turned round: it says it is loading until the
+  right page arrives. A thread of 200 or fewer looks as before
+  ([#422](https://github.com/bgoleno/opportun/issues/422); PR
+  [#446](https://github.com/bgoleno/opportun/pull/446)).
+- **The Resume tab leads you through one resume flow.** A card at the top of the tab shows four
+  steps (Base, Tailor, Finish, Apply), says where this opportunity is, and offers one filled
+  button for the next action with a quieter alternative beneath it: register or choose a base
+  resume, create a tailored copy, mark it final, then apply or record that you sent it. A
+  base resume can also be sent as it is, which marks it final everywhere it is used. After an
+  action, focus moves to the new state and a status line says what happened and what is next.
+  The older ways of adding a resume moved into a collapsed **Other ways to add a resume**
+  section, and the separate **Create tailored copy** card is now the flow's own button. On a
+  phone the steps become one line, "Step 3 of 4: Finish"
+  ([#440](https://github.com/bgoleno/opportun/issues/440); PR
+  [#443](https://github.com/bgoleno/opportun/pull/443)).
+- **A tailored copy's own page shows the next step, and the Resume tab fits a phone with a long
+  title.** Under the title of a tailored resume that belongs to an opportunity, a strip shows
+  the same state as the opportunity's Resume tab and offers the one action that fits it: **Mark
+  as final** in place (with **Score again** beside it) while it is a draft or in review, **Apply**
+  when it is ready and assisted apply can start, and otherwise **Back to the opportunity**. A
+  copy the flow does not follow gets a line linking the one it does. **Change status** opens the
+  full status control, so every status stays reachable. Scoring runs one request at a time: the
+  strip's button, the match report's and the tab's cannot send two AI calls. The Resume tab no
+  longer widens past a 375 px phone when a copy's title is one long unbroken word. A base
+  resume's page is unchanged
+  ([#447](https://github.com/bgoleno/opportun/issues/447),
+  [#486](https://github.com/bgoleno/opportun/issues/486); PR
+  [#490](https://github.com/bgoleno/opportun/pull/490)).
+- **Three small fixes on the Resume tab and in toasts.** Detaching a resume from an opportunity
+  now shows its "Resume removed from this opportunity" message, or "Could not remove the resume"
+  on a failure: the row left the list before the server answered, and the message was lost. A
+  fast double click on **Create tailored copy** or **Tailor again** makes one copy, not two; a
+  click after a failure works again. A toast whose title or description holds one long unbroken
+  word, such as a tailored copy's title, breaks inside the toast instead of running past its
+  edge
+  ([#469](https://github.com/bgoleno/opportun/issues/469),
+  [#484](https://github.com/bgoleno/opportun/issues/484),
+  [#491](https://github.com/bgoleno/opportun/issues/491); PR
+  [#494](https://github.com/bgoleno/opportun/pull/494)).
+- **A keyboard drop of a board card on Closed or Dismissed says it is waiting for a reason,
+  then whether it moved.** The drop announces "... is waiting for a reason to move to the
+  Closed column. Choose one in the dialog, or cancel to leave it where it is." Confirming the
+  reason announces that the card moved, and cancelling announces that it was not moved. A
+  server error leaves the dialog open with its error message and announces nothing. The card's own **Dismiss** button
+  and stage menu are unchanged
+  ([#432](https://github.com/bgoleno/opportun/issues/432); PR
+  [#474](https://github.com/bgoleno/opportun/pull/474)).
+- **The reason dialog for a stage move cannot be closed while the move is being saved.** From the moment you confirm until the server answers, **Cancel** is
+  disabled, the corner close button is hidden, and a click outside the dialog and **Escape** do
+  nothing, so a move cannot be reported as cancelled after it has gone through. If the server
+  refuses the move, the dialog stays open with its error and **Cancel** works again. This
+  applies wherever the dialog appears: the board, a card's menu and the stage control
+  ([#476](https://github.com/bgoleno/opportun/issues/476); PR
+  [#492](https://github.com/bgoleno/opportun/pull/492)).
 - **Assisted apply, only where it is on.** A refused **Apply** button looks dimmed and says why;
   a new draft starts filled from your profile, account and last application, with where each
   value came from and a **Save to my profile** tick (off by default); **Settings > Profile** has
@@ -240,6 +318,27 @@ milestone's work was merged.
   [#416](https://github.com/bgoleno/opportun/issues/416),
   [#428](https://github.com/bgoleno/opportun/issues/428),
   [#435](https://github.com/bgoleno/opportun/issues/435)).
+- **The extension chooses the one matching option in a Greenhouse list, and reports each choice
+  first.** On a Greenhouse form it fills the phone's country code, location, school and degree
+  lists, and a list question whose label equals one of your reviewed answers (such as "How did
+  you hear about this role?"), by choosing the single option that equals your value. If no
+  option, or more than one, equals it, or the list does not show in time (3 seconds), it
+  leaves the field empty and says why. It never touches the equal-opportunity and demographic
+  sections, multi-select lists, discipline, dates, a second education entry or **Locate me**,
+  and it leaves a list you already opened alone. The popup shows "Filling in the form" while it
+  runs and lists **Chosen from a list: check each before you submit** ahead of what it filled
+  in. The country detail is now called **Phone country code** in Opportun, with a hint; what
+  you stored under it does not change. The guide's lists paragraph used to say every list was
+  left for you
+  ([#402](https://github.com/bgoleno/opportun/issues/402); PR
+  [#461](https://github.com/bgoleno/opportun/pull/461)).
+- **The guide now says your resume reaches Greenhouse when the extension attaches it, not
+  when you press Submit.** The behaviour is not new: when the form's resume field is empty and
+  takes a PDF, the extension attaches your Final resume, and Greenhouse's own form uploads it
+  at once, as it does when you choose a file yourself. So Greenhouse can hold your resume even
+  if you then decide not to apply. Press **Fill in this application** only when you mean to
+  apply ([#468](https://github.com/bgoleno/opportun/issues/468); PR
+  [#470](https://github.com/bgoleno/opportun/pull/470)).
 - **A company's careers page and domain come from the domains its name gives.** The result is the
   same with or without a message; a careers page found through a sender is used for that
   opportunity only and is not saved on the company. Values already saved are not changed
@@ -249,12 +348,30 @@ milestone's work was merged.
 
 - **The optional settings in `deploy/.env` now reach the server on Compose.** `compose.yml` passes
   `OPPORTUN_SUBMISSIONS`, `OPPORTUN_DAILY_REVIEW_CAP`, `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP`,
-  `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`, `DB_POOL_MAX` and `OPPORTUN_PEPPER_VERSION` and
-  `OPPORTUN_PEPPER_V1` to `V9`. **On upgrade:** a line for one of these that was sitting in an
-  existing `deploy/.env` took no effect before and now does, at the next `docker compose up -d`;
-  check for stray lines. An empty value is the same as unset. `ANTHROPIC_BASE_URL` and
-  `OPENAI_BASE_URL` still need a `compose.override.yml`
-  ([#417](https://github.com/bgoleno/opportun/issues/417)).
+  `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`, `DB_POOL_MAX`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`
+  and `OPPORTUN_PEPPER_VERSION` and `OPPORTUN_PEPPER_V1` to `V9`. **On upgrade:** a line for one
+  of these that was sitting in an existing `deploy/.env` took no effect before and now does, at
+  the next `docker compose up -d`; check for stray lines, the two base URLs in particular, since
+  a value there now sends every request for that provider to that address. An empty value is the
+  same as unset
+  ([#417](https://github.com/bgoleno/opportun/issues/417); the two base URLs,
+  [#423](https://github.com/bgoleno/opportun/issues/423) and PR
+  [#479](https://github.com/bgoleno/opportun/pull/479)).
+- **An empty `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` no longer stops the server from
+  starting.** The AI library refused an empty or blank value ("baseURL must be a non-empty
+  string"), which crashed the container as soon as compose passed the variable empty. The
+  server and its command-line tools (backup, restore, password reset, seed, copy to Postgres)
+  now unset an empty or blank value before the library loads, so it is the same as not setting
+  it. CI gains a fourth Docker leg, `docker (minimal)`, that starts the stack from an empty
+  `.env` and fails if the container restarts; it is now a required check
+  ([#423](https://github.com/bgoleno/opportun/issues/423); PR
+  [#479](https://github.com/bgoleno/opportun/pull/479)).
+- **Two transitive dependencies moved so the dependency scan passes.** `hono` 4.13.13 to
+  4.13.18 and `@hono/node-server` 2.1.5 to 2.1.8, both pulled in by the MCP client library, in
+  `pnpm-lock.yaml` only. Opportun uses that library's client side only, and a test now fails if
+  server code imports anything else from it. The project's security review judged the advisories
+  not reachable ([#466](https://github.com/bgoleno/opportun/issues/466); PR
+  [#471](https://github.com/bgoleno/opportun/pull/471)).
 - **SQLite can checkpoint its write-ahead log in a background thread, for a slow disk. It is
   off by default.** Set `OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT=1` (only `1` turns it on; on
   Compose, put it in `deploy/.env`) and restart. A thread on its own connection then
@@ -269,6 +386,41 @@ milestone's work was merged.
   [install guide](docs/install.md#4-configuration-reference)
   ([#383](https://github.com/bgoleno/opportun/issues/383); PR
   [#393](https://github.com/bgoleno/opportun/pull/393)).
+- **The published image's `latest` tag moves only when a maintainer publishes, and the install
+  guide now has the upgrade steps for it.** The image at `ghcr.io/bgoleno/opportun` is built
+  only when someone runs the **Publish image** workflow by hand, so `latest` is the build last
+  published from `main` and can be behind it. If you run the published image, upgrade with a
+  backup, then `docker compose pull` and `docker compose up -d` (not `--build`), and change a
+  pinned `sha-...` tag in `OPPORTUN_IMAGE` first. Section 6 of the
+  [install guide](docs/install.md#6-upgrades-and-backups) has the steps and how a maintainer
+  publishes; the README says the same about `latest`
+  ([#477](https://github.com/bgoleno/opportun/issues/477); PR
+  [#481](https://github.com/bgoleno/opportun/pull/481)).
+- **Settings shows the version and commit that is running.** Under the list of Settings
+  sections, on every page, it reads "Version 0.3.1 (d4d97b6)", "Development build (d4d97b6)" when
+  only the commit is known, or "Development build" when neither is. Both come from the Publish
+  image build, which passes them into the image. They show only in an image published after
+  this change: 0.3.1 predates it, so it shows no version. An image built locally with
+  `docker compose up --build`, and a run from source, say "Development build". The route behind
+  it, `GET /api/v1/settings/build`, answers any signed-in user and makes no call to GitHub or
+  GHCR ([#480](https://github.com/bgoleno/opportun/issues/480); PR
+  [#487](https://github.com/bgoleno/opportun/pull/487)).
+- **A version publish is now a release: a git tag and a GitHub Release.** Running the Publish
+  image workflow with a version (for example `-f version=0.3.2`) creates the git tag
+  `v<version>` and a GitHub Release on the commit it built, as well as tagging the image. It
+  works only from `main`, and only when `CHANGELOG.md` has a non-empty `## <version>
+(YYYY-MM-DD)` section for that version: the release notes are that section, followed by the
+  image and a link to the commit. It refuses a version whose image tag, git tag or Release
+  already exists, so a version names one build. A publish without a version builds an image
+  only. The first tag, [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1), was
+  made by hand on 2026-11-13 at the commit of PR
+  [#474](https://github.com/bgoleno/opportun/pull/474). Separately, a `sha-...` image tag is
+  now one per commit and never moves (a second publish of the same commit is refused), and
+  every published image carries the labels `org.opencontainers.image.revision` (the commit) and
+  `org.opencontainers.image.version`. The install guide's section 6 and the
+  [demo deployment](docs/demo-deployment.md#publishing-a-new-build-from-a-workflow) page have
+  the rules ([#478](https://github.com/bgoleno/opportun/issues/478); PR
+  [#489](https://github.com/bgoleno/opportun/pull/489)).
 - The connector's messages name **Settings > Integrations > Extensions and Connectors** as the
   app shows it ([#235](https://github.com/bgoleno/opportun/issues/235)).
 
