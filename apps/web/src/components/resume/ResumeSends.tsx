@@ -41,9 +41,20 @@ export function sentAtFor(day: string, today = todayIso()): number | undefined {
 export function RecordSendFields({
   opportunityId,
   resume,
+  quiet = false,
+  onStart,
+  onFail,
 }: {
   opportunityId: string;
   resume: Resume;
+  /** An outline button, where the next action is elsewhere on the page (#440). */
+  quiet?: boolean;
+  /**
+   * Told as the send is submitted, and again if it fails, so the resume flow can move focus to
+   * where it leads (#440). Before, not after: the refreshed lists can show the new place first.
+   */
+  onStart?: () => void;
+  onFail?: () => void;
 }) {
   const record = useRecordSend(opportunityId);
   const [via, setVia] = useState('');
@@ -54,22 +65,32 @@ export function RecordSendFields({
   function submit(e: FormEvent) {
     e.preventDefault();
     const sentAt = sentAtFor(day);
-    record.mutate(
-      { resumeId: resume.id, sentVia: via.trim(), ...(sentAt === undefined ? {} : { sentAt }) },
-      {
-        onSuccess: () => {
+    onStart?.();
+    // The promise, not callbacks given to mutate (#443, as MarkFinal in ResumeFlowCard): in the
+    // resume flow the send moves the state on and this form unmounts before the last refreshed
+    // list lands, and the query library skips an unmounted caller's own callbacks. A failure
+    // still shows through `record.error` while the form is here.
+    record
+      .mutateAsync({
+        resumeId: resume.id,
+        sentVia: via.trim(),
+        ...(sentAt === undefined ? {} : { sentAt }),
+      })
+      .then(
+        () => {
           setVia('');
           toast({ title: 'Recorded as sent', description: resume.title, variant: 'success' });
         },
-      },
-    );
+        () => onFail?.(),
+      );
   }
 
   return (
     <form onSubmit={submit} className="grid gap-3">
       <p className="text-sm text-muted-foreground">
-        A base resume stays as it is. This records that you sent it for this opportunity, and it can
-        still be sent for others and tailored from.
+        {resume.kind === 'base'
+          ? 'A base resume stays as it is. This records that you sent it for this opportunity, and it can still be sent for others and tailored from.'
+          : 'This records that you sent it for this opportunity, and how.'}
       </p>
       <div className="grid gap-2">
         <Label htmlFor={viaId}>Sent via</Label>
@@ -95,7 +116,11 @@ export function RecordSendFields({
         <FormError message={resumeErrorMessage(record.error) ?? errorMessage(record.error)} />
       ) : null}
       {/* eslint-disable-next-line opportun/no-stretched-grid-button -- full width by default, not by decision: w-fit or w-full is still to be chosen (https://github.com/bgoleno/opportun/issues/9) */}
-      <Button type="submit" disabled={record.isPending || via.trim() === '' || day === ''}>
+      <Button
+        type="submit"
+        variant={quiet ? 'outline' : 'default'}
+        disabled={record.isPending || via.trim() === '' || day === ''}
+      >
         {record.isPending ? 'Recording...' : 'Record as sent'}
       </Button>
     </form>
