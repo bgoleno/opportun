@@ -74,7 +74,8 @@ describe('the detail field list', () => {
   // #435 (slice 1 of #402): four details a form asks for, and Location read as the city.
   it('labels the new details, and Location as the city', () => {
     const label = (key: string) => APPLICATION_DETAIL_FIELDS.find((f) => f.key === key)?.label;
-    expect(label('country')).toBe('Country');
+    // The phone's country code, the one control it fills (sec on #402): never read as residence.
+    expect(label('country')).toBe('Phone country code');
     expect(label('location')).toBe('Location (city)');
     expect(label('school')).toBe('School');
     expect(label('degree')).toBe('Degree');

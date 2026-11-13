@@ -106,10 +106,17 @@ set the extension up, under **Settings > Integrations > Extensions and Connector
    in a new tab.
 2. On that tab, click the Opportun icon in your browser's toolbar. If it is not there, open
    your browser's Extensions menu and pin Opportun.
-3. Press **Fill in this application**. The extension fills in what you reviewed, and lists
-   what it filled and what it left for you. Your resume is uploaded to Greenhouse at this
-   step, not when you submit (see below).
-4. Check every field, fill in anything it left, and press the site's own Submit button. The
+3. Press **Fill in this application**. The extension fills in what you reviewed. Where the
+   form asks with a list (the phone's country code, Location (City), the first School and
+   Degree, or a question such as "How did you hear about this role?"), it chooses the one
+   option that reads exactly as your value, waiting a few seconds for each list. If you type or
+   choose in a list while it waits, it leaves that list to you. Keep the popup open until it
+   shows its report. Your resume is uploaded to Greenhouse at this step, not when you submit
+   (see below).
+4. The report lists every option it chose first, then what it filled and what it left for you,
+   with the reason. A list it could not choose in (no option, or more than one, matches your
+   value) is left empty for you.
+5. Check every field, fill in anything it left, and press the site's own Submit button. The
    extension never submits.
 
 **Your resume reaches Greenhouse before you press Submit.** When the form's resume field is
