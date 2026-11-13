@@ -204,3 +204,64 @@ describe("flowSentence: the panel's words for the resume states", () => {
     ).toBeNull();
   });
 });
+
+// tl's rulings for slice 2 (https://github.com/bgoleno/opportun/issues/440#issuecomment-6805280758).
+describe('resumeFlowState: assisted apply not available here (#440, ruling 2)', () => {
+  it('a Final copy with the feature off is F, unavailable, with no reason to print', () => {
+    const r = resume({ status: 'final' });
+    const state = resumeFlowState(input({ resumes: [BASE, r], assistedApply: 'unavailable' }));
+    expect(state).toMatchObject({ state: 'F', step: 4, resume: r, unavailable: true });
+    expect(state).not.toHaveProperty('reason');
+  });
+
+  it('unavailable wins over a reason, which would name a feature that is not there', () => {
+    const r = resume({ status: 'final' });
+    const state = resumeFlowState(
+      input({ resumes: [BASE, r], assistedApply: 'unavailable', applyBlocked: 'Confirm it.' }),
+    );
+    expect(state).toMatchObject({ state: 'F', unavailable: true });
+    expect(state).not.toHaveProperty('reason');
+  });
+});
+
+describe('resumeFlowState: H names a copy that has gone nowhere yet (#440, ruling 6)', () => {
+  const sentBase = send({});
+  const again = (s: ReturnType<typeof resumeFlowState>) => (s.state === 'H' ? s.again : 'not H');
+
+  it('with no tailored copy, H has nothing again', () => {
+    expect(again(resumeFlowState(input({ resumes: [BASE], sends: [sentBase] })))).toBeUndefined();
+  });
+
+  it('a Draft copy with no send here is H again', () => {
+    const r = resume({ id: 'new', status: 'draft' });
+    expect(again(resumeFlowState(input({ resumes: [BASE, r], sends: [sentBase] })))).toBe(r);
+  });
+
+  it('a Final copy with no send here is H again', () => {
+    const r = resume({ id: 'new', status: 'final' });
+    expect(again(resumeFlowState(input({ resumes: [BASE, r], sends: [sentBase] })))).toBe(r);
+  });
+
+  it('a copy that was itself sent, recorded or applied with, is not again; nor a Submitted one', () => {
+    const r = resume({ id: 'copy', status: 'final' });
+    const sentCopy = send({ resumeId: 'copy', resumeKind: 'tailored' });
+    expect(
+      again(resumeFlowState(input({ resumes: [BASE, r], sends: [sentCopy] }))),
+    ).toBeUndefined();
+    const applied = attempt({ status: 'submitted', resumeId: 'copy' });
+    expect(
+      again(resumeFlowState(input({ resumes: [BASE, r], attempts: [applied] }))),
+    ).toBeUndefined();
+    const submitted = resume({ id: 'sub', status: 'submitted' });
+    expect(
+      again(resumeFlowState(input({ resumes: [BASE, submitted], sends: [sentBase] }))),
+    ).toBeUndefined();
+  });
+
+  it("the panel's sentence names a Draft or In review copy that has gone nowhere", () => {
+    const r = resume({ id: 'new', status: 'in_review' });
+    expect(flowSentence(resumeFlowState(input({ resumes: [BASE, r], sends: [sentBase] })))).toBe(
+      '"Acme Staff Engineer resume" is still In review. Mark it as final to apply.',
+    );
+  });
+});

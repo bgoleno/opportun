@@ -1,11 +1,20 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { formatDate } from '@/lib/opportunities';
+import { formatDate, type OpportunityView } from '@/lib/opportunities';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { rk, type Resume, type ResumeSend } from './api';
 import { OpportunityResumeTab } from './OpportunityResumeTab';
 import { sentAtFor } from './ResumeSends';
+
+const OPP = {
+  id: 'opp-1',
+  companyName: 'Acme',
+  title: 'Staff PM',
+  stage: 'preparing',
+  postingState: 'confirmed',
+  atsJobRef: null,
+} as unknown as OpportunityView;
 
 const archivedResume: Resume = {
   id: 'r-archived',
@@ -61,7 +70,7 @@ function resumeRoutes(opts: {
 describe('OpportunityResumeTab', () => {
   it('still shows an archived resume for its opportunity, marked, not filtered out', async () => {
     mockApi(resumeRoutes({ forOpportunity: [archivedResume] }));
-    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    renderWithProviders(<OpportunityResumeTab opp={OPP} />);
     const row = await screen.findByText('Archived Tailored Resume');
     const li = row.closest('li');
     expect(li).not.toBeNull();
@@ -75,7 +84,7 @@ describe('OpportunityResumeTab', () => {
       ...resumeRoutes({ all: [unattachedResume] }),
       'PATCH /resumes/r-free': { ...unattachedResume, opportunityId: 'opp-1' },
     });
-    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    renderWithProviders(<OpportunityResumeTab opp={OPP} />);
     await screen.findByText('Unattached Tailored Resume (Tailored)');
     await user.click(screen.getByRole('button', { name: 'Attach' }));
     await screen.findByText('Resume attached');
@@ -95,7 +104,7 @@ describe('OpportunityResumeTab', () => {
       ...resumeRoutes({}),
       'POST /resumes': { ...unattachedResume, id: 'r-new', opportunityId: 'opp-1' },
     });
-    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    renderWithProviders(<OpportunityResumeTab opp={OPP} />);
     const input = await screen.findByLabelText('Google Doc link');
     await user.type(input, 'https://docs.google.com/document/d/NewDoc/edit');
     await user.click(screen.getByRole('button', { name: 'Register and attach' }));
@@ -110,7 +119,7 @@ describe('OpportunityResumeTab', () => {
       ...resumeRoutes({ forOpportunity: [unattachedResume] }),
       'PATCH /resumes/r-free': { ...unattachedResume, opportunityId: null },
     });
-    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    renderWithProviders(<OpportunityResumeTab opp={OPP} />);
     await user.click(
       await screen.findByRole('button', {
         name: 'Remove Unattached Tailored Resume from this opportunity',
@@ -159,7 +168,7 @@ describe('OpportunityResumeTab: recording a base resume as sent (#158)', () => {
       ...resumeRoutes({ all: [baseResume] }),
       'POST /opportunities/opp-1/resume-sends': sentBase,
     });
-    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    renderWithProviders(<OpportunityResumeTab opp={OPP} />);
     await screen.findByText('Jane Base Resume (Base)');
     expect(screen.queryByRole('button', { name: 'Attach' })).not.toBeInTheDocument();
     const recordButton = screen.getByRole('button', { name: 'Record as sent' });
@@ -178,7 +187,7 @@ describe('OpportunityResumeTab: recording a base resume as sent (#158)', () => {
 
   it('a tailored resume in the same list is still attached', async () => {
     mockApi(resumeRoutes({ all: [unattachedResume, baseResume] }));
-    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    renderWithProviders(<OpportunityResumeTab opp={OPP} />);
     await screen.findByText('Unattached Tailored Resume (Tailored)');
     expect(screen.getByRole('button', { name: 'Attach' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Record as sent' })).not.toBeInTheDocument();
@@ -190,7 +199,7 @@ describe('OpportunityResumeTab: recording a base resume as sent (#158)', () => {
       ...resumeRoutes({ sends: [sentBase] }),
       'DELETE /opportunities/opp-1/resume-sends/send-1': () => ({ status: 204 }),
     });
-    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    renderWithProviders(<OpportunityResumeTab opp={OPP} />);
     const link = await screen.findByRole('link', { name: 'Jane Base Resume' });
     const li = link.closest('li')!;
     expect(li.textContent).toContain('Base resume');
@@ -237,7 +246,7 @@ describe('OpportunityResumeTab: recording a base resume as sent (#158)', () => {
   async function removeWhileTheRowLeaves(answer: { status: number; body?: unknown }) {
     const user = userEvent.setup();
     const { api, release } = heldRemoval(answer);
-    const { queryClient } = renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    const { queryClient } = renderWithProviders(<OpportunityResumeTab opp={OPP} />);
     await user.click(
       await screen.findByRole('button', {
         name: 'Remove the record that Jane Base Resume was sent',
@@ -294,7 +303,7 @@ describe('OpportunityResumeTab: one entry per resume, sends inside it (#404)', (
 
   it('a tailored resume with one send is one row, with the send line and View application', async () => {
     mockApi(resumeRoutes({ forOpportunity: [tailoredFinal], sends: [send({})] }));
-    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    renderWithProviders(<OpportunityResumeTab opp={OPP} />);
     const all = await rows();
     expect(all).toHaveLength(1);
     const row = all[0]!;
@@ -319,7 +328,7 @@ describe('OpportunityResumeTab: one entry per resume, sends inside it (#404)', (
         sends: [send({}), send({ id: 'send-t2', sentVia: 'Email', submissionId: null })],
       }),
     );
-    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    renderWithProviders(<OpportunityResumeTab opp={OPP} />);
     const all = await rows();
     expect(all).toHaveLength(1);
     expect(all[0]).toHaveTextContent('Sent via Greenhouse on');
@@ -329,7 +338,7 @@ describe('OpportunityResumeTab: one entry per resume, sends inside it (#404)', (
 
   it('a base resume sent as it is is one Base resume row with its send, and no Detach or Delete', async () => {
     mockApi(resumeRoutes({ bases: [baseResume], sends: [sentBase] }));
-    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    renderWithProviders(<OpportunityResumeTab opp={OPP} />);
     const all = await rows();
     expect(all).toHaveLength(1);
     expect(all[0]).toHaveTextContent('Base resume');
@@ -348,7 +357,7 @@ describe('OpportunityResumeTab: one entry per resume, sends inside it (#404)', (
 
   it('a tailored resume never sent is one row with no send lines', async () => {
     mockApi(resumeRoutes({ forOpportunity: [{ ...tailoredFinal, status: 'draft' as const }] }));
-    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    renderWithProviders(<OpportunityResumeTab opp={OPP} />);
     const all = await rows();
     expect(all).toHaveLength(1);
     expect(all[0]).not.toHaveTextContent('Sent via');
@@ -363,7 +372,7 @@ describe('OpportunityResumeTab: one entry per resume, sends inside it (#404)', (
       ...resumeRoutes({ forOpportunity: [tailoredFinal], sends: [send({})] }),
       'DELETE /opportunities/opp-1/resume-sends/send-t1': () => ({ status: 204 }),
     });
-    renderWithProviders(<OpportunityResumeTab opportunityId="opp-1" />);
+    renderWithProviders(<OpportunityResumeTab opp={OPP} />);
     await rows();
     await user.click(
       screen.getByRole('button', { name: 'Remove the record that Jane at Acme was sent' }),

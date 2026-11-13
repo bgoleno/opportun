@@ -45,6 +45,8 @@ function Button({
   return (
     <Comp
       data-slot="button"
+      // Which look it has, so a view can be checked for having one filled button (#440).
+      data-variant={variant ?? 'default'}
       className={cn(buttonVariants({ variant, size, className }))}
       // Default to type="button" so stray buttons inside forms never submit them.
       {...(asChild ? {} : { type: type ?? 'button' })}

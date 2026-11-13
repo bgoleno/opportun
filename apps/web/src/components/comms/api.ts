@@ -8,7 +8,14 @@ import type {
   OpportunityStage,
   OutreachKind,
 } from '@opportun/core';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
 import { api } from '@/lib/api';
 import type { RejectPayload } from './RejectForm';
 import { qk, type OpportunityView, type Page } from '@/lib/opportunities';
@@ -159,23 +166,77 @@ export function useBulkTriage() {
   });
 }
 
+/** The server's cap on one page of a thread, and the size of each page after it (#422). */
+export const THREAD_PAGE = 200;
+
+/**
+ * The pages of a thread held so far, joined: each message once, by id, and the thread's total as
+ * the newest page reports it (#422). Pages are asked for by offset, so a message linked between
+ * two of them moves the next page back a row (one message twice) and one unlinked moves it on (one
+ * skipped); `changed` says the pages' totals differ, the sign that this may have happened.
+ */
+export function joinThreadPages(pages: readonly Page<CommunicationView>[]): {
+  items: CommunicationView[];
+  total: number;
+  changed: boolean;
+} {
+  const seen = new Set<string>();
+  const items: CommunicationView[] = [];
+  for (const page of pages) {
+    for (const c of page.items) {
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+      items.push(c);
+    }
+  }
+  const total = pages.at(-1)?.total ?? items.length;
+  return { items, total, changed: pages.some((p) => p.total !== pages[0]?.total) };
+}
+
 /**
  * An opportunity's linked messages in `order` (#394). The server applies its 200 cap after
- * ordering, so a long thread asked for newest first is its newest messages. While the other
- * order loads, the page already held stays on screen (the tab re-sorts it at once).
+ * ordering, so a long thread asked for newest first is its newest messages; the next page
+ * carries on from there in the same order (#422). While the other order loads, the pages already
+ * held stay available (`isPlaceholderData`): the tab shows them re-sorted only when they are the
+ * whole thread, and a loading line otherwise.
+ *
+ * When the pages held report different totals, the thread changed between them, so the pages it
+ * holds are asked for again from the start, in the same order (the infinite query's own refetch).
+ * That happens at most once for each set of totals seen, so a thread that keeps changing cannot
+ * make it ask forever. One message linked and another unlinked between two pages leaves the
+ * totals equal and is not seen; repeats are still dropped by `joinThreadPages`.
  */
 export function useOpportunityCommunications(
   opportunityId: string,
   order: 'newest' | 'oldest' = 'newest',
 ) {
-  return useQuery({
+  const query = useInfiniteQuery({
     queryKey: [...ck.opportunity(opportunityId), order] as const,
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       api<Page<CommunicationView>>(
-        `/communications?view=all&opportunityId=${enc(opportunityId)}&order=${order}&limit=200`,
+        `/communications?view=all&opportunityId=${enc(opportunityId)}&order=${order}&limit=${THREAD_PAGE}${pageParam === 0 ? '' : `&offset=${pageParam}`}`,
       ),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      // An offset counts rows as the server holds them, repeats included.
+      const held = pages.reduce((n, p) => n + p.items.length, 0);
+      // An empty page ends it too, so a thread that shrank meanwhile cannot ask forever.
+      return last.items.length > 0 && held < last.total ? held : undefined;
+    },
     placeholderData: keepPreviousData,
   });
+  const { data, isPlaceholderData, isFetching, refetch } = query;
+  const totals =
+    data && !isPlaceholderData && joinThreadPages(data.pages).changed
+      ? `${order}:${data.pages.map((p) => p.total).join(',')}`
+      : null;
+  const refetchedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (totals === null || isFetching || refetchedFor.current === totals) return;
+    refetchedFor.current = totals;
+    void refetch();
+  }, [totals, isFetching, refetch]);
+  return query;
 }
 
 /** Refreshes every view a communication change can touch. */
