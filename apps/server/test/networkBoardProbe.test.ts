@@ -19,7 +19,7 @@ import {
   queueNightForUser,
   sweepNetworkProbes,
 } from '../src/jobs/networkBoardProbe';
-import { createSafeFetch, type RawResponse } from '../src/lib/safeFetch';
+import { createSafeFetch, FetchBlockedError, type RawResponse } from '../src/lib/safeFetch';
 import { listSources } from '../src/repos/discovery';
 import { userSettingExists, writeUserSetting } from '../src/repos/userSettings';
 import { useApi } from './api';
@@ -93,6 +93,25 @@ function net(routes: Record<string, () => RawResponse> = {}) {
     return await safe(url, opts);
   };
   return { fetch, called, hosts: () => called.map((u) => new URL(u).host) };
+}
+
+/** A 200 that declares a body over any cap: the vendor answered, and the answer cannot be used. */
+function tooLarge(): RawResponse {
+  return {
+    status: 200,
+    headers: { 'content-length': String(1024 * 1024 * 1024) },
+    body: (async function* () {})(),
+  };
+}
+
+/** `net`, except that every request is rejected with `err` before any answer, counted all the same. */
+function unreachable(err: () => Error) {
+  const n = net();
+  const fetch: SourceContext['fetch'] = async (url) => {
+    n.called.push(url);
+    throw err();
+  };
+  return { ...n, fetch };
 }
 
 const greenhouse = (slug: string) => `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs`;
@@ -286,20 +305,14 @@ describe('the nightly network probe (#296)', () => {
       expect(later.called).toEqual([]);
     });
 
-    it('a vendor error records nothing, and the company is tried again on a later night', async () => {
+    it('an answer that cannot be used records nothing, and the company is tried again on a later night', async () => {
       const { app, a } = await boot();
       const id = await inNetwork(a, 'Initech');
       await turnOn(app, a);
-      // The vendor's host does not resolve: an error, not an answer, and not a slow-down.
-      const failing = net();
-      const broken: SourceContext['fetch'] = async (url, opts) => {
-        if (url.startsWith('https://api.lever.co/')) {
-          failing.called.push(url);
-          throw new Error('getaddrinfo ENOTFOUND api.lever.co');
-        }
-        return await failing.fetch(url, opts);
-      };
-      await night(app, at0520(12), broken);
+      // Lever answers with a body too large to read: an answer, so a failed night, not a slow-down.
+      const n = net({ [lever('initech')]: tooLarge });
+      await night(app, at0520(12), n.fetch);
+      expect(n.hosts()).toContain('api.ashbyhq.com');
       expect(await rowOf(app, id)).toMatchObject({
         atsKind: null,
         boardProbedAt: null,
@@ -310,12 +323,12 @@ describe('the nightly network probe (#296)', () => {
       expect(await rowOf(app, id)).toMatchObject({ atsKind: 'ats_greenhouse' });
     });
 
-    it(`a provider failing on ${NETWORK_PROBE_FAILED_NIGHTS} nights is recorded as no board`, async () => {
+    it(`a vendor whose answers cannot be used on ${NETWORK_PROBE_FAILED_NIGHTS} nights is recorded as no board`, async () => {
       const { app, a } = await boot();
       const id = await inNetwork(a, 'Initech');
       await turnOn(app, a);
       for (let day = 12; day < 12 + NETWORK_PROBE_FAILED_NIGHTS; day++) {
-        await night(app, at0520(day), net({ [greenhouse('initech')]: () => respond(503) }).fetch);
+        await night(app, at0520(day), net({ [greenhouse('initech')]: tooLarge }).fetch);
       }
       expect(await rowOf(app, id)).toMatchObject({
         atsKind: 'none',
@@ -325,6 +338,19 @@ describe('the nightly network probe (#296)', () => {
       const after = net();
       expect(await night(app, at0520(20), after.fetch)).toBe(0);
       expect(after.called).toEqual([]);
+    });
+
+    it('a 200 whose body does not parse is a miss: with no other board, "no board" on the first night', async () => {
+      const { app, a } = await boot();
+      const id = await inNetwork(a, 'Initech');
+      await turnOn(app, a);
+      await night(
+        app,
+        at0520(12),
+        net({ [greenhouse('initech')]: () => respond(200, '<html>') }).fetch,
+      );
+      expect(await rowOf(app, id)).toMatchObject({ atsKind: 'none', boardProbeFailedNights: 0 });
+      expect((await rowOf(app, id)).boardProbedAt).not.toBeNull();
     });
   });
 
@@ -446,6 +472,67 @@ describe('the nightly network probe (#296)', () => {
       expect(n.called).toHaveLength(1);
       expect([greenhouse('initech'), greenhouse('hooli')]).toContain(n.called[0]);
     });
+
+    // tl's ruling on #462 (F1, https://github.com/bgoleno/opportun/pull/462#issuecomment-6841000369):
+    // a slow-down, and a request that got no answer at all, say nothing about the company's board.
+    for (const status of [429, 503]) {
+      it(`a ${status} on ${NETWORK_PROBE_FAILED_NIGHTS} nights records nothing for the company: no failed night, no "no board"`, async () => {
+        const { app, a } = await boot();
+        const id = await inNetwork(a, 'Initech');
+        await turnOn(app, a);
+        for (let day = 12; day < 12 + NETWORK_PROBE_FAILED_NIGHTS; day++) {
+          const n = net({ [greenhouse('initech')]: () => respond(status) });
+          expect(await night(app, at0520(day), n.fetch)).toBe(1);
+          expect(n.called).toEqual([greenhouse('initech')]);
+          expect(await rowOf(app, id)).toMatchObject({
+            atsKind: null,
+            boardProbedAt: null,
+            boardProbeFailedNights: 0,
+          });
+        }
+        const next = net(boardFor('initech', 'Platform Engineer'));
+        expect(await night(app, at0520(12 + NETWORK_PROBE_FAILED_NIGHTS), next.fetch)).toBe(1);
+        expect(await rowOf(app, id)).toMatchObject({
+          atsKind: 'ats_greenhouse',
+          boardProbeFailedNights: 0,
+        });
+      });
+    }
+
+    const NO_ANSWER: [string, () => Error][] = [
+      ['a failed DNS lookup', () => new Error('getaddrinfo ENOTFOUND boards-api.greenhouse.io')],
+      ['a refused connection', () => new Error('connect ECONNREFUSED 93.184.216.34:443')],
+      ['a timeout', () => new FetchBlockedError('timeout', '10000 ms')],
+      [
+        'a board host resolving to a private address',
+        () => new FetchBlockedError('private_address'),
+      ],
+    ];
+    for (const [what, err] of NO_ANSWER) {
+      it(`no answer (${what}) on ${NETWORK_PROBE_FAILED_NIGHTS} nights: the night stops after the first request, and nothing is recorded`, async () => {
+        const { app, a } = await boot();
+        const first = await inNetwork(a, 'Initech', 2);
+        const second = await inNetwork(a, 'Hooli');
+        await turnOn(app, a);
+        for (let day = 12; day < 12 + NETWORK_PROBE_FAILED_NIGHTS; day++) {
+          const n = unreachable(err);
+          expect(await night(app, at0520(day), n.fetch)).toBe(2);
+          // Whichever probe runs first (see the slow-down test) asks once, and nothing follows.
+          expect(n.called).toHaveLength(1);
+          for (const id of [first, second]) {
+            expect(await rowOf(app, id)).toMatchObject({
+              atsKind: null,
+              boardProbedAt: null,
+              boardProbeFailedNights: 0,
+            });
+          }
+        }
+        const next = net(boardFor('initech', 'Platform Engineer'));
+        expect(await night(app, at0520(12 + NETWORK_PROBE_FAILED_NIGHTS), next.fetch)).toBe(2);
+        expect(await rowOf(app, first)).toMatchObject({ atsKind: 'ats_greenhouse' });
+        expect(await rowOf(app, second)).toMatchObject({ atsKind: 'none' });
+      });
+    }
   });
 
   describe('a company that changed between the pick and the probe', () => {

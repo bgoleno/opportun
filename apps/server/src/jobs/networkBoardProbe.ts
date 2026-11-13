@@ -21,6 +21,7 @@ import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
 import { jsonText } from '../db/dialect';
 import { companies, jobs, networkContacts, settings, users } from '../db/schema';
+import { FetchBlockedError, type FetchBlockedReason } from '../lib/safeFetch';
 import type { UserCtx } from '../repos/base';
 import { userSettingKey } from '../repos/userSettings';
 import { ATS_PROBES, recordNone, type AtsKind } from './atsDetect';
@@ -245,11 +246,28 @@ async function stopTheNight(db: Db, ctx: UserCtx): Promise<number> {
 }
 
 /**
+ * safeFetch's refusals that come after the vendor answered: a body over the cap, or a redirect it
+ * will not follow (to another host or scheme, or past the limit). Every other error from the fetch
+ * means the request got no answer at all.
+ */
+const ANSWERED_REFUSALS: ReadonlySet<FetchBlockedReason> = new Set([
+  'too_large',
+  'redirect_blocked',
+  'host_not_allowed',
+  'scheme',
+]);
+
+/**
  * The probe's fetch for this job.
  * - Before each request it reads whether that request's vendor is stopped tonight for the
  *   instance, so a probe already running for another user stops asking it from its next request on.
- * - After this probe is told 429 or 5xx it stops that vendor for the instance, and refuses every
- *   further request of its own, so detection's remaining guesses go nowhere.
+ * - After this probe is told 429 or 5xx, or a request gets no answer at all (a failed DNS lookup,
+ *   a refused connection, a timeout, a TLS failure, a board host resolving to a private address),
+ *   it stops that vendor for the instance, and refuses every further request of its own, so
+ *   detection's remaining guesses go nowhere. tl's ruling on #462
+ *   (https://github.com/bgoleno/opportun/pull/462): neither says anything about the company's
+ *   board, so neither may count toward "no board"; on an instance with no network, every night's
+ *   companies would otherwise reach the failed-night limit and be recorded as having none.
  * Detection counts a refused request as a failed guess and ends by throwing its transient error,
  * so a refusal never records "no board"; the job then tells the two cases apart.
  */
@@ -266,7 +284,16 @@ function slowDownGuard(
       skippedStopped = true;
       throw new Error('this board provider asked to slow down tonight');
     }
-    const res = await sctx.fetch(url, opts);
+    let res;
+    try {
+      res = await sctx.fetch(url, opts);
+    } catch (err) {
+      if (!(err instanceof FetchBlockedError && ANSWERED_REFUSALS.has(err.reason))) {
+        slowedDown = true;
+        if (vendor !== undefined) await stopVendor(db, vendor, Date.now());
+      }
+      throw err;
+    }
     if (res.status === 429 || res.status >= 500) {
       slowedDown = true;
       if (vendor !== undefined) await stopVendor(db, vendor, Date.now());
@@ -325,12 +352,19 @@ export async function runNetworkProbe(
     if (guard.skippedStopped() && !guard.slowedDown()) {
       return { status: 'skipped', reason: 'vendor_stopped' };
     }
-    // A vendor error records nothing about the board: the company is picked again on a later night,
-    // unless this was its last allowed failure.
     sctx.log.warn(
       { 'opportun.company.id': companyId, 'error.type': err instanceof Error ? err.name : 'Error' },
       'network board probe failed',
     );
+    // Told to slow down, or no answer at all (slowDownGuard): the night stops, and nothing is
+    // recorded for this company, not a failed night and not "no board" (sec's criterion 12, and
+    // tl's ruling on #462). It is picked again on a later night.
+    if (guard.slowedDown()) {
+      await stopTheNight(db, ctx);
+      return { status: 'failed', reason: 'slow_down', givenUp: false };
+    }
+    // A vendor answered, and the answer could not be used: that is a failed night. The company is
+    // picked again on a later night, unless this was its last allowed failure.
     const failedNights = company.failedNights + 1;
     await db
       .update(companies)
@@ -342,9 +376,7 @@ export async function runNetworkProbe(
       await recordNone(db, ctx, companyId);
       await recordProbe(db, ctx, companyId, { openJobs: null, prefilterMatches: null });
     }
-    if (!guard.slowedDown()) return { status: 'failed', reason: 'error', givenUp };
-    await stopTheNight(db, ctx);
-    return { status: 'failed', reason: 'slow_down', givenUp };
+    return { status: 'failed', reason: 'error', givenUp };
   }
 }
 

@@ -196,11 +196,12 @@ boards for companies in my network" in **Settings > AI**; it stays off until you
   pre-filter passes, and up to 10 job titles. No AI call is made, and the company is not followed.
   The nightly industry tags then use those titles for a company not yet tagged; a tag already made
   is not changed.
-- **When a service says to slow down,** the night ends for you, and the rest wait for the next
-  night. That service is also left alone for every other account on the server until the next
-  night; the other two are still asked. A company that could not be looked up on that service is
-  not recorded as having no board: it waits for a later night. A company whose service fails on
-  three nights is recorded as having no board.
+- **When a service says to slow down, or cannot be reached at all** (for example while your
+  server is offline), the night ends for you, and the rest wait for the next night. That service
+  is also left alone for every other account on the server until the next night; the other two
+  are still asked. Nothing is recorded for the company being looked up: it waits for a later
+  night. A company whose service answers with something unusable on three nights is recorded as
+  having no board.
 - **Whose board it is:** a board found by trying a company's name can belong to another company of
   the same name. The row shows the board's address (for example `boards.greenhouse.io/acme`), which
   opens the board in a new tab, so you can see whose it is before following.
