@@ -121,7 +121,8 @@ On the click, and only then:
    If no option matches, more than one does, or the list never appears, it chooses nothing,
    empties the search box, and closes the list if it opened it, with one more `mouseup`. Lists
    in the self-identification sections, multi-choice lists, Discipline, the dates, a second
-   education entry, and a list you already opened are left alone.
+   education entry, and a list you already opened are left alone. So is a list you type or
+   choose in while it waits: it sends that list nothing more, and lists it for you.
 
 7. **It attaches the resume** to the form's file input through `DataTransfer`. The page side
    keeps no timer, so the popup then looks, read-only and for about 1.5 seconds, for the form

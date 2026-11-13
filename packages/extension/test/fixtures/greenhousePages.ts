@@ -22,7 +22,7 @@ export const text = (id: string, label: string, required = false, type = 'text',
       </div>
     </div>`;
 
-const area = (id: string, label: string, required = false) => `
+export const area = (id: string, label: string, required = false) => `
     <div class="field-wrapper">
       <div class="input-wrapper">
         <label id="${id}-label" for="${id}">${label}${required ? '<span aria-hidden="true">*</span>' : ''}</label>

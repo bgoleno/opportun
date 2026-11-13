@@ -114,6 +114,7 @@ const BASE_RESUME = {
   status: 'draft',
   submittedAt: null,
   submittedTo: null,
+  archivedAt: null,
   createdAt: NOW,
   updatedAt: NOW,
 };
@@ -157,10 +158,14 @@ function setup(
       body: { ...STEP, id: 'step-2', ...(c.body as object) },
     }),
     'PATCH /next-steps/step-1': { ...STEP, doneAt: NOW },
+    // As the server answers: the base in the whole list and the bases, none for this opportunity.
     'GET /resumes': (c: ApiCall) => ({
-      items: c.search.includes('kind=base') ? [BASE_RESUME] : [],
-      total: c.search.includes('kind=base') ? 1 : 0,
+      items: c.search.includes('opportunityId') ? [] : [BASE_RESUME],
+      total: c.search.includes('opportunityId') ? 0 : 1,
     }),
+    // Nothing sent yet. Answered, not left to 404: the Resume tab's flow shows a list that failed
+    // to load as an error, not as an empty one (tl on #443, blocking 2).
+    'GET /opportunities/opp-1/resume-sends': { items: [] },
     'GET /integrations/google': { connected: true, scopes: [], clientConfigured: true },
     'POST /resumes': () => ({
       status: 201,
@@ -402,7 +407,7 @@ describe('OpportunityDetail', () => {
     expect(
       await within(panel).findByText('No resume for this opportunity yet.'),
     ).toBeInTheDocument();
-    expect(within(panel).getByLabelText('Base resume')).toHaveDisplayValue('Jane Base');
+    expect(await within(panel).findByLabelText('Base resume')).toHaveDisplayValue('Jane Base');
     await user.click(within(panel).getByRole('button', { name: 'Create tailored copy' }));
     await waitFor(() =>
       expect(posts(api.calls, '/resumes').map((c) => c.body)).toEqual([

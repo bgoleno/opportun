@@ -1,9 +1,9 @@
-// The Resume tab of an opportunity: resumes attached to it, attaching one (existing or new),
-// detaching or deleting one, and "Create tailored copy" (#70, #77). A base resume is never
-// attached; it is recorded as sent instead, and listed with its sends (#158).
-import { Link, useNavigate } from '@tanstack/react-router';
-import { FilePlus2, Unlink } from 'lucide-react';
-import { useState } from 'react';
+// The Resume tab of an opportunity: the resume flow at the top (#440), then the resumes attached
+// to it or sent for it, attaching one (existing or new), detaching or deleting one (#70, #77). A
+// base resume is never attached; it is recorded as sent instead, and listed with its sends (#158).
+import { Link } from '@tanstack/react-router';
+import { Unlink } from 'lucide-react';
+import { useRef, useState } from 'react';
 import { MainWithRail } from '@/components/MainWithRail';
 import { FormError } from '@/components/FormError';
 import { Badge } from '@/components/ui/badge';
@@ -14,23 +14,17 @@ import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { toast } from '@/components/ui/toast';
 import { errorMessage } from '@/lib/api';
-import { formatDate } from '@/lib/opportunities';
+import { formatDate, type OpportunityView } from '@/lib/opportunities';
 import {
   resumeErrorMessage,
   useAttachResume,
-  useCreateResume,
   useOpportunitySends,
   useResumes,
   type Resume,
   type ResumeSend,
 } from './api';
-import {
-  ArchivedBadge,
-  DeleteResumeButton,
-  GoogleConnectHint,
-  RegisterDocCard,
-  StatusBadge,
-} from './ResumeList';
+import { ResumeFlowCard, useResumeFlow } from './ResumeFlowCard';
+import { ArchivedBadge, DeleteResumeButton, RegisterDocCard, StatusBadge } from './ResumeList';
 import { RecordSendFields, RemoveSendButton, sentLine } from './ResumeSends';
 
 /** A resume already registered elsewhere in Opportun, with no opportunity of its own yet. */
@@ -86,7 +80,12 @@ function AttachExistingCard({ opportunityId }: { opportunityId: string }) {
               </Select>
             </div>
             {picked?.kind === 'base' ? (
-              <RecordSendFields key={picked.id} opportunityId={opportunityId} resume={picked} />
+              <RecordSendFields
+                key={picked.id}
+                opportunityId={opportunityId}
+                resume={picked}
+                quiet
+              />
             ) : (
               <>
                 {attach.error ? (
@@ -95,7 +94,7 @@ function AttachExistingCard({ opportunityId }: { opportunityId: string }) {
                   />
                 ) : null}
                 {/* eslint-disable-next-line opportun/no-stretched-grid-button -- full width by default, not by decision: w-fit or w-full is still to be chosen (https://github.com/bgoleno/opportun/issues/9) */}
-                <Button onClick={attachChosen} disabled={attach.isPending}>
+                <Button variant="outline" onClick={attachChosen} disabled={attach.isPending}>
                   {attach.isPending ? 'Attaching...' : 'Attach'}
                 </Button>
               </>
@@ -226,107 +225,79 @@ function ResumeRow({ row, opportunityId }: { row: ResumeRowData; opportunityId: 
   );
 }
 
-export function OpportunityResumeTab({ opportunityId }: { opportunityId: string }) {
+export function OpportunityResumeTab({ opp }: { opp: OpportunityView }) {
+  const opportunityId = opp.id;
   const tailored = useResumes({ opportunityId });
   const sends = useOpportunitySends(opportunityId);
   const sendItems = sends.data?.items ?? [];
   const bases = useResumes({ kind: 'base' });
-  const create = useCreateResume();
-  const navigate = useNavigate();
-  const [chosen, setChosen] = useState('');
-  const baseItems = bases.data?.items ?? [];
-  const rows = resumeRows(tailored.data?.items ?? [], sendItems, baseItems);
-  const baseId = chosen || baseItems[0]?.id || '';
+  const flow = useResumeFlow(opp);
+  const rows = resumeRows(tailored.data?.items ?? [], sendItems, bases.data?.items ?? []);
 
-  function createCopy() {
-    if (baseId === '') return;
-    create.mutate(
-      { baseResumeId: baseId, opportunityId },
-      { onSuccess: (r) => void navigate({ to: '/resumes/$id', params: { id: r.id } }) },
-    );
-  }
+  // "Other ways to add a resume": open at step 1, closed from step 2 on, unless the user opened
+  // or closed it (tl on #440, ruling 3).
+  const [otherChosen, setOtherChosen] = useState<boolean | null>(null);
+  const atStepOne = flow.state?.state === 'A' || flow.state?.state === 'B';
+  const otherOpen = otherChosen ?? atStepOne;
+  const otherSummary = useRef<HTMLElement>(null);
 
   return (
     <MainWithRail>
-      <Card>
-        <CardHeader>
-          <CardTitle>Resumes for this opportunity</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {tailored.isPending || sends.isPending ? (
-            <p className="text-sm text-muted-foreground">Loading...</p>
-          ) : (tailored.data?.items.length ?? 0) === 0 && sendItems.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No resume for this opportunity yet.</p>
-          ) : (
-            <>
-              <ul className="grid gap-2" aria-label="Resumes for this opportunity">
-                {rows.map((row) => (
-                  <ResumeRow key={row.resumeId} row={row} opportunityId={opportunityId} />
-                ))}
-              </ul>
-              {sendItems.some((s) => s.submissionId !== null) ? (
-                <p className="mt-3 text-sm text-muted-foreground">
-                  The file that was sent is kept with the application.
-                </p>
-              ) : null}
-            </>
-          )}
-        </CardContent>
-      </Card>
-      <div className="grid gap-6">
+      <div className="grid content-start gap-6">
+        <ResumeFlowCard
+          opp={opp}
+          flow={flow}
+          onOpenOther={() => {
+            setOtherChosen(true);
+            otherSummary.current?.focus();
+          }}
+        />
         <Card>
           <CardHeader>
-            <CardTitle>Create tailored copy</CardTitle>
-            <CardDescription>
-              Copies a base resume next to it (Google Drive or Reactive Resume), named by your
-              naming template.
-            </CardDescription>
+            <CardTitle>Resumes for this opportunity</CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-3">
-            <GoogleConnectHint />
-            {bases.isPending ? (
+          <CardContent>
+            {tailored.isPending || sends.isPending ? (
               <p className="text-sm text-muted-foreground">Loading...</p>
-            ) : baseItems.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No base resume yet.{' '}
-                <Link to="/resumes" className="text-primary underline-offset-4 hover:underline">
-                  Register one
-                </Link>
-                .
-              </p>
+            ) : (tailored.data?.items.length ?? 0) === 0 && sendItems.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No resume for this opportunity yet.</p>
             ) : (
               <>
-                <div className="grid gap-2">
-                  <Label htmlFor="tailor-base">Base resume</Label>
-                  <Select
-                    id="tailor-base"
-                    value={baseId}
-                    onChange={(e) => setChosen(e.currentTarget.value)}
-                  >
-                    {baseItems.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.title}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-                {create.error ? (
-                  <FormError
-                    message={resumeErrorMessage(create.error) ?? errorMessage(create.error)}
-                  />
+                <ul className="grid gap-2" aria-label="Resumes for this opportunity">
+                  {rows.map((row) => (
+                    <ResumeRow key={row.resumeId} row={row} opportunityId={opportunityId} />
+                  ))}
+                </ul>
+                {sendItems.some((s) => s.submissionId !== null) ? (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    The file that was sent is kept with the application.
+                  </p>
                 ) : null}
-                {/* eslint-disable-next-line opportun/no-stretched-grid-button -- full width by default, not by decision: w-fit or w-full is still to be chosen (https://github.com/bgoleno/opportun/issues/9) */}
-                <Button onClick={createCopy} disabled={create.isPending}>
-                  <FilePlus2 aria-hidden="true" />
-                  {create.isPending ? 'Copying...' : 'Create tailored copy'}
-                </Button>
               </>
             )}
           </CardContent>
         </Card>
-        <AttachExistingCard opportunityId={opportunityId} />
-        <RegisterDocCard opportunityId={opportunityId} />
       </div>
+      <details
+        open={otherOpen}
+        // Only a toggle by the user is kept: React setting `open` fires this event too.
+        onToggle={(e) => {
+          const now = e.currentTarget.open;
+          if (now !== otherOpen) setOtherChosen(now);
+        }}
+        className="grid content-start gap-6"
+      >
+        <summary
+          ref={otherSummary}
+          className="cursor-pointer rounded-md text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Other ways to add a resume
+        </summary>
+        <div className="mt-4 grid gap-6">
+          <AttachExistingCard opportunityId={opportunityId} />
+          <RegisterDocCard opportunityId={opportunityId} quiet />
+        </div>
+      </details>
     </MainWithRail>
   );
 }
