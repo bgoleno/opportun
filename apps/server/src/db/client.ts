@@ -58,6 +58,7 @@ import {
   WriteGate,
 } from './gate';
 import type { DbConfig, DbSsl, PostgresConfig } from '../config';
+import { startBackgroundCheckpointer, type BackgroundCheckpointer } from './checkpointer';
 import { SCHEMA_DIALECT } from './schema';
 import * as pgSchema from './schema.pg';
 import * as schema from './schema.sqlite';
@@ -82,6 +83,8 @@ export interface SqliteHandle {
   dialect: 'sqlite';
   db: Db;
   sqlite: Sqlite;
+  /** The background WAL checkpointer, when it is on (db/checkpointer.ts, #383). */
+  checkpointer?: BackgroundCheckpointer;
 }
 
 /** An open Postgres database: `db` is typed as the SQLite driver (dialect erasure). */
@@ -572,6 +575,62 @@ function migrateSqliteDir(
   }
 }
 
+/** The main connection's automatic checkpoint threshold, in pages (#375). */
+const AUTOCHECKPOINT_PAGES = 100;
+
+/**
+ * The main connection's automatic checkpoint while the background checkpointer runs: a
+ * backstop, not off, and well above the worker's CHECKPOINT_PAGES (tl on #393).
+ *
+ * - Not 0: SQLite restarts the WAL only when a writer finds all of it copied, which never
+ *   happens while commits keep landing. With the main connection's checkpoint off, a steady
+ *   stream grew the WAL 5 MB a second without limit. 10,000 pages (about 40 MB) still bounds it.
+ * - Not 2,000: wal_autocheckpoint counts every frame, copied or not, so in a long burst it
+ *   fired every 2,000 frames whatever the worker did, and did the worker's job on the main
+ *   thread: a stall as long as with the checkpointer off on a slow disk, longer on an ordinary
+ *   one. At 10,000 a burst reaches it about once per 10,000 frames, each firing a pause of tens
+ *   of milliseconds that copies the worker's lag: per 10,000 frames, one firing of about 45 ms
+ *   against five of about 23 ms at 2,000 (sqliteCheckpointBench.test.ts).
+ * - It also leaves the catch-up after a long reader (the nightly VACUUM INTO) to the worker.
+ */
+const BACKSTOP_PAGES = 10_000;
+
+/** How long closeDatabase waits for the worker to stop before closing the main connection. */
+const CHECKPOINTER_CLOSE_WAIT_MS = 2_000;
+
+/**
+ * Starts the background checkpointer for the main connection `sqlite` (#383), after its
+ * migrations, and moves the main connection's automatic checkpoint to the backstop while it
+ * runs. The worker's connection gets the main one's sync settings and page size. When the
+ * worker stops, at close or by failing, the main connection's checkpoint goes back to its
+ * default at once; only a failure is logged.
+ */
+function backgroundCheckpointer(
+  sqlite: Sqlite,
+  file: string,
+  opts: ConnectOptions,
+): BackgroundCheckpointer {
+  const pragmas = (['synchronous', 'fullfsync', 'checkpoint_fullfsync'] as const).map(
+    (name) => `${name} = ${String(sqlite.pragma(name, { simple: true }))}`,
+  );
+  sqlite.pragma(`wal_autocheckpoint = ${BACKSTOP_PAGES}`);
+  return startBackgroundCheckpointer(file, {
+    pragmas,
+    pageSize: Number(sqlite.pragma('page_size', { simple: true })),
+    ...opts.checkpointerTuning,
+    onStopped: ({ unexpected, err }) => {
+      if (sqlite.open) sqlite.pragma(`wal_autocheckpoint = ${AUTOCHECKPOINT_PAGES}`);
+      if (unexpected) {
+        dbLog(
+          'warn',
+          { err },
+          'background checkpointer stopped: automatic checkpoints are back on',
+        );
+      }
+    },
+  });
+}
+
 /** Opens `${sqliteDir}/opportun.db` with WAL and foreign keys on, then applies migrations. */
 export function openDatabase(
   dataDir: string,
@@ -600,13 +659,17 @@ export function openDatabase(
     // 2 ms, a 2,000-span flush's work between two turns of the loop stays under 10 ms, and an
     // ordinary write's p99 halved (https://github.com/bgoleno/opportun/issues/375:
     // test/obsFlushBench.test.ts and test/sqliteWriteBench.test.ts, figures in its PR). If this
-    // ever falls short (a slow disk), the next step is a background checkpointer on its own
-    // connection in a worker, with this set to 0.
-    sqlite.pragma('wal_autocheckpoint = 100');
+    // ever falls short (a slow disk), OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT turns on the
+    // background checkpointer below, which moves this to a 10,000-page backstop while it runs.
+    sqlite.pragma(`wal_autocheckpoint = ${AUTOCHECKPOINT_PAGES}`);
     sqlite.pragma(`busy_timeout = ${BUSY_TIMEOUT_MS}`);
     // Migrations run on the raw connection before the async driver exists.
     migrateLocked(sqlite);
-    return { dialect: 'sqlite', db: asyncDatabase(sqlite, opts), sqlite };
+    const handle: SqliteHandle = { dialect: 'sqlite', db: asyncDatabase(sqlite, opts), sqlite };
+    if (opts.backgroundCheckpoint === true) {
+      handle.checkpointer = backgroundCheckpointer(sqlite, join(sqliteDir, 'opportun.db'), opts);
+    }
+    return handle;
   } catch (err) {
     sqlite.close();
     throw err;
@@ -780,6 +843,24 @@ export interface ConnectOptions {
    * smaller value here so it does not have to wait out the real production timeout.
    */
   migrationLockTimeoutMs?: number;
+  /**
+   * SQLite only: run the background WAL checkpointer (db/checkpointer.ts, #383). The server
+   * takes it from OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT (the SQLite DbConfig); a test may set
+   * it here.
+   */
+  backgroundCheckpoint?: boolean;
+  /**
+   * Tests only: the checkpointer's thresholds and poll, smaller, and a page size other than the
+   * database's (the worker then cannot read the WAL's size and stops, as on a format it does
+   * not know).
+   */
+  checkpointerTuning?: {
+    maxPages?: number;
+    maxWaitMs?: number;
+    pollMs?: number;
+    pageSize?: number;
+    unreadableMs?: number;
+  };
 }
 
 async function openPostgres(cfg: PostgresConfig, opts: ConnectOptions): Promise<PgHandle> {
@@ -824,7 +905,10 @@ export async function connectDatabase(
     throw new Error(`DB_DIALECT=${SCHEMA_DIALECT}: refusing to open the ${name} database`);
   }
   if (cfg.db.dialect === 'sqlite') {
-    return openDatabase(cfg.dataDir, cfg.sqliteDir ?? cfg.dataDir, opts);
+    return openDatabase(cfg.dataDir, cfg.sqliteDir ?? cfg.dataDir, {
+      ...opts,
+      backgroundCheckpoint: opts.backgroundCheckpoint ?? cfg.db.backgroundCheckpoint === true,
+    });
   }
   return openPostgres(cfg.db, opts);
 }
@@ -1360,8 +1444,19 @@ export async function pingDatabase(handle: DbHandle): Promise<boolean> {
 
 /** Closes the connection (SQLite) or ends the pool (Postgres); the handle is unusable after. */
 export async function closeDatabase(handle: DbHandle): Promise<void> {
-  if (handle.dialect === 'sqlite') handle.sqlite.close();
-  else await handle.pool.end();
+  if (handle.dialect === 'sqlite') {
+    // The worker's connection closes first, so the main one is the last to touch the WAL. A
+    // worker inside a native call cannot stop until it returns (a disk that does not answer),
+    // so the wait is bounded and the main connection closes anyway; that worker still holds the
+    // process's exit until its call returns, as the main connection would on the same disk.
+    if (handle.checkpointer !== undefined) {
+      await Promise.race([
+        handle.checkpointer.stop(),
+        new Promise((resolve) => setTimeout(resolve, CHECKPOINTER_CLOSE_WAIT_MS).unref()),
+      ]);
+    }
+    handle.sqlite.close();
+  } else await handle.pool.end();
 }
 
 /** True when `err` is Postgres giving up a lock wait at lock_timeout (55P03, lockScope's timeoutMs). */
