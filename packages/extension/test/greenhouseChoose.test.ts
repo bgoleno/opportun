@@ -13,6 +13,7 @@ import {
 import {
   BOARD,
   EDUCATION,
+  area,
   JOB_ID,
   LIST_QUESTIONS,
   LOCATION,
@@ -594,20 +595,34 @@ describe("tl's blocking 2 at 8084132: the choice is read back once the form has 
 describe("tl's blocking 3 at 8084132: nothing inside a self-identification block is written to", () => {
   it('a text question in each block, with a reviewed answer for its label, is left empty', async () => {
     const html = form(`${STANDARD}
-      <div class="eeoc__container">${text('question_9000301', 'Placeholder block text')}</div>
+      <div class="eeoc__container">
+        ${text('question_9000301', 'Placeholder block text')}
+        ${area('question_9000302', 'Placeholder block area')}
+      </div>
       <div id="demographic-section" class="demographic--container">
         ${text('4000009', 'Placeholder numeric text')}
+        ${area('4000010', 'Placeholder numeric area')}
       </div>`);
     const p = page(html);
-    const answers = ['Placeholder block text', 'Placeholder numeric text'].map((l) => ({
+    const labels = [
+      'Placeholder block text',
+      'Placeholder block area',
+      'Placeholder numeric text',
+      'Placeholder numeric area',
+    ];
+    const answers = labels.map((l) => ({
       labels: [l],
       name: l,
       value: 'Placeholder answer',
     }));
     const report = await settle(p, plan({ questions: answers }));
+    // A textarea in a block too (tl's G10 at 0bf9a81): reported, so its answer is never read as
+    // having no question (#204).
     for (const [id, label] of [
       ['question_9000301', 'Placeholder block text'],
+      ['question_9000302', 'Placeholder block area'],
       ['4000009', 'Placeholder numeric text'],
+      ['4000010', 'Placeholder numeric area'],
     ] as const) {
       expect(valueOf(p.doc, id)).toBe('');
       expect(on(p, id)).toEqual([]);
@@ -813,5 +828,216 @@ describe('the helpers themselves refuse anything but the control’s own box and
     expect(await late).toBe('late');
     expect(p.timers.pending()).toBe(0);
     expect(p.observing()).toBe(0);
+  });
+});
+
+/** The user's own typing in a box, as the page sees it: the native setter, then one input event. */
+function typeInto(p: LoadedForm, id: string, value: string): void {
+  const box = p.doc.getElementById(id) as HTMLInputElement;
+  const native = Object.getOwnPropertyDescriptor(p.window.HTMLInputElement.prototype, 'value')!;
+  native.set!.call(box, value);
+  box.dispatchEvent(new p.window.Event('input', { bubbles: true }) as unknown as Event);
+}
+
+// tl's blocking 1 at 0bf9a81: the list this fill opened is the user's as soon as they act in it
+// while the fill waits for its options. Then nothing more is done to it: no click, no emptying
+// and no closing mouseup, and it is reported as theirs.
+describe("tl's blocking 1 at 0bf9a81: the list being filled is read again while the fill waits", () => {
+  it('the user types in it, and the list then offers an equal option: nothing is clicked', async () => {
+    const p = page();
+    // The service answers nothing for the fill's text, and the equal option for the user's.
+    const school = standInList(p, 'school--0', {
+      options: (s) => (s === 'Univ' ? ['University of Example'] : []),
+    });
+    const run = fillGreenhouseForm(plan({ lists: [LISTS[2]!] }), p.doc);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(p.timers.pending()).toBe(1);
+    expect(school.isOpen()).toBe(true);
+    const before = p.events.length;
+    typeInto(p, 'school--0', 'Univ');
+    const report = await settleRun(p, run);
+    const after = p.events.slice(before).filter((e) => e.target === 'school--0');
+    // Only the user's own input event: nothing the fill sent.
+    expect(after.map((e) => e.type)).toEqual(['input']);
+    expect(p.events.slice(before).filter((e) => e.type === 'click')).toEqual([]);
+    expect(valueOf(p.doc, 'school--0')).toBe('Univ');
+    expect(school.isOpen()).toBe(true);
+    expect(report.chosen).toEqual([]);
+    expect(report.notFilled).toContainEqual({ label: 'School', reason: 'choose_on_form' });
+    expect(p.timers.pending()).toBe(0);
+    expect(p.observing()).toBe(0);
+  });
+
+  it('the user types in it, and the list does not change: when the timer ends nothing is undone', async () => {
+    const p = page();
+    const school = standInList(p, 'school--0', { options: () => [], arrive: 'never' });
+    const run = fillGreenhouseForm(plan({ lists: [LISTS[2]!] }), p.doc);
+    await new Promise((r) => setTimeout(r, 50));
+    const before = p.events.length;
+    typeInto(p, 'school--0', 'Univ');
+    const report = await settleRun(p, run);
+    const after = p.events.slice(before).filter((e) => e.target === 'school--0');
+    expect(after.map((e) => e.type)).toEqual(['input']);
+    expect(valueOf(p.doc, 'school--0')).toBe('Univ');
+    expect(school.isOpen()).toBe(true);
+    expect(report.notFilled).toContainEqual({ label: 'School', reason: 'choose_on_form' });
+    expect(report.notFilled.find((n) => n.label === 'School')?.reason).toBe('choose_on_form');
+  });
+
+  it('the user picks another option in it: that choice stands, reported as a value it has', async () => {
+    const p = page();
+    const school = standInList(p, 'school--0', { options: () => ['University of Elsewhere'] });
+    const run = fillGreenhouseForm(plan({ lists: [LISTS[2]!] }), p.doc);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(school.isOpen()).toBe(true);
+    const before = p.events.length;
+    (p.doc.getElementById('react-select-school--0-option-0') as HTMLElement).click();
+    const report = await settleRun(p, run);
+    // The user's click is the only one, and nothing reached the box after it.
+    expect(p.events.slice(before).filter((e) => e.target === 'school--0')).toEqual([]);
+    expect(shownIn(p, 'school--0')).toBe('University of Elsewhere');
+    expect(school.isOpen()).toBe(false);
+    expect(report.chosen).toEqual([]);
+    expect(report.notFilled).toContainEqual({ label: 'School', reason: 'has_value' });
+  });
+});
+
+describe("tl's blocking 1 at 0bf9a81: the fill stops waiting, and reads again before the click", () => {
+  it('a choice the user makes ends the wait at once, without the timer', async () => {
+    const p = page();
+    standInList(p, 'school--0', { options: () => ['University of Elsewhere'] });
+    const run = fillGreenhouseForm(plan({ lists: [LISTS[2]!] }), p.doc);
+    let done = false;
+    void run.then(() => {
+      done = true;
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(p.timers.pending()).toBe(1);
+    (p.doc.getElementById('react-select-school--0-option-0') as HTMLElement).click();
+    await new Promise((r) => setTimeout(r, 50));
+    // Done, and its timer cleared, with no timer fired.
+    expect(done).toBe(true);
+    expect(p.timers.pending()).toBe(0);
+    expect(ok(await run).notFilled).toContainEqual({ label: 'School', reason: 'has_value' });
+  });
+
+  it('the user types after the equal option shows and before the click: nothing is clicked', async () => {
+    const p = page();
+    standInList(p, 'school--0', { options: () => ['University of Example'], arrive: 'late' });
+    const run = fillGreenhouseForm(plan({ lists: [LISTS[2]!] }), p.doc);
+    // Created after the fill's own observer: it runs once the fill has seen the equal option,
+    // before the fill's click, as the user's keystroke would land there.
+    await new Promise((r) => setTimeout(r, 5));
+    let typed = false;
+    const user = new p.window.MutationObserver(() => {
+      const list = p.doc.getElementById('react-select-school--0-listbox');
+      if (typed || list === null || list.children.length === 0) return;
+      typed = true;
+      const box = p.doc.getElementById('school--0') as HTMLInputElement;
+      Object.getOwnPropertyDescriptor(p.window.HTMLInputElement.prototype, 'value')!.set!.call(
+        box,
+        'Univ',
+      );
+    });
+    user.observe(p.doc.body as unknown as Parameters<typeof user.observe>[0], {
+      childList: true,
+      subtree: true,
+    });
+    const report = await settleRun(p, run);
+    user.disconnect();
+    expect(typed).toBe(true);
+    expect(p.events.filter((e) => e.type === 'click')).toEqual([]);
+    expect(valueOf(p.doc, 'school--0')).toBe('Univ');
+    expect(report.chosen).toEqual([]);
+    expect(report.notFilled).toContainEqual({ label: 'School', reason: 'choose_on_form' });
+  });
+});
+
+// fs1's surviving F14 at 0bf9a81: an equal option seen, then replaced by the list before the
+// click. There was one, so the field is "choose it on the form", not "no option".
+describe('an equal option replaced before the click', () => {
+  it('is reported choose_on_form, with the box emptied and the list closed', async () => {
+    const p = page();
+    const school = standInList(p, 'school--0', {
+      options: () => ['University of Example'],
+      arrive: 'late',
+    });
+    const run = fillGreenhouseForm(plan({ lists: [LISTS[2]!] }), p.doc);
+    // Created after the fill's own observer, so it runs after the fill has seen the option and
+    // before the fill clicks it: the list renders its options again, as new elements.
+    await new Promise((r) => setTimeout(r, 5));
+    const list = () => p.doc.getElementById('react-select-school--0-listbox');
+    let replaced = false;
+    const rerender = new p.window.MutationObserver(() => {
+      const l = list();
+      if (replaced || l === null || l.children.length === 0) return;
+      replaced = true;
+      l.replaceChildren(...Array.from(l.children).map((o) => o.cloneNode(true)));
+    });
+    // The page's own observer type: the global DOM types and the page's differ.
+    rerender.observe(p.doc.body as unknown as Parameters<typeof rerender.observe>[0], {
+      childList: true,
+      subtree: true,
+    });
+    const report = await settleRun(p, run);
+    rerender.disconnect();
+    expect(replaced).toBe(true);
+    expect(p.events.filter((e) => e.type === 'click')).toEqual([]);
+    expect(report.chosen).toEqual([]);
+    expect(report.notFilled).toContainEqual({ label: 'School', reason: 'choose_on_form' });
+    expect(valueOf(p.doc, 'school--0')).toBe('');
+    expect(school.isOpen()).toBe(false);
+  });
+});
+
+// fs1's surviving F3 at 0bf9a81 (tl and sec optional): a list that opens on the fill's own input
+// event. The opening press is refused, nothing is waited for or clicked, and the list the fill
+// caused to open is closed again.
+describe("a list that opens on the fill's own write", () => {
+  it('is emptied and closed, with nothing waited for or clicked', async () => {
+    const p = page();
+    const school = standInList(p, 'school--0', { options: () => ['University of Example'] });
+    const box = p.doc.getElementById('school--0') as HTMLInputElement;
+    box.addEventListener('input', () => {
+      if (!school.isOpen()) {
+        box.dispatchEvent(
+          new p.window.MouseEvent('mouseup', { bubbles: true }) as unknown as Event,
+        );
+      }
+    });
+    const report = await settle(p, plan({ lists: [LISTS[2]!] }));
+    expect(p.events.filter((e) => e.type === 'click')).toEqual([]);
+    expect(report.chosen).toEqual([]);
+    expect(report.notFilled).toContainEqual({ label: 'School', reason: 'choose_on_form' });
+    expect(valueOf(p.doc, 'school--0')).toBe('');
+    expect(school.isOpen()).toBe(false);
+    expect(p.timers.pending()).toBe(0);
+  });
+});
+
+// tl's blocking 2 and sec's point at 0bf9a81: a field in a self-identification block is never
+// written, but it is still a question with its label, so a label it shares with a question
+// outside the blocks is ambiguous for both, as before this PR (#187, #192).
+describe('a label shared with a self-identification question', () => {
+  it.each([
+    ['text input', text('question_9000303', 'Placeholder shared')],
+    ['textarea', area('question_9000303', 'Placeholder shared')],
+  ])('in a block (%s) leaves the question outside it ambiguous and empty', async (_n, field) => {
+    const html = form(`${STANDARD}
+      ${text('question_9000304', 'Placeholder shared')}
+      <div class="eeoc__container">${field}</div>`);
+    const p = page(html);
+    const answer = {
+      labels: ['Placeholder shared'],
+      name: 'Placeholder shared',
+      value: 'Placeholder answer',
+    };
+    const report = await settle(p, plan({ questions: [answer] }));
+    expect(valueOf(p.doc, 'question_9000304')).toBe('');
+    expect(valueOf(p.doc, 'question_9000303')).toBe('');
+    expect(on(p, 'question_9000304')).toEqual([]);
+    expect(on(p, 'question_9000303')).toEqual([]);
+    expect(report.filled).not.toContain('Placeholder shared');
+    expect(report.notFilled).toContainEqual({ label: 'Placeholder shared', reason: 'ambiguous' });
   });
 });

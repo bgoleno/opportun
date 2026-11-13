@@ -217,7 +217,11 @@ export async function fillGreenhouseForm(
   const LIST_IDS = ['country', 'candidate-location', 'school--0', 'degree--0'];
   // Erased in the serialized source, with any comment just before it: kept above the helpers.
   type Found =
-    { kind: 'one'; option: Element } | { kind: 'several' } | { kind: 'none' } | { kind: 'no_list' };
+    | { kind: 'one'; option: Element }
+    | { kind: 'several' }
+    | { kind: 'none' }
+    | { kind: 'no_list' }
+    | { kind: 'theirs'; reason: 'choose_on_form' | 'has_value' };
 
   // list helpers: start. greenhouseListHelpers below holds the same code, for tests to call; a
   // test pins the two copies equal.
@@ -308,7 +312,15 @@ export async function fillGreenhouseForm(
   // The lists to choose in, in the form's order, done one at a time once the rest is filled.
   const lists: { box: HTMLInputElement; label: string; value: string; country: boolean }[] = [];
 
-  const fields: { el: Element; id: string; label: string; key: string; text: boolean }[] = [];
+  // `text` is whether a field may be written; `textLike`, whether it is a text question at all.
+  const fields: {
+    el: Element;
+    id: string;
+    label: string;
+    key: string;
+    text: boolean;
+    textLike: boolean;
+  }[] = [];
   for (const label of Array.from(form.querySelectorAll('label[for]'))) {
     const id = label.getAttribute('for') ?? '';
     if (id === '' || id === 'resume') continue;
@@ -323,8 +335,9 @@ export async function fillGreenhouseForm(
     const raw = label.textContent ?? '';
     // Nothing inside a self-identification block is written to, whatever its id or label
     // (sec on #402, tl's blocking 3 at 8084132): such a field is never text here, so it is only
-    // ever reported for the user to answer on the form.
-    fields.push({ el, id, label: raw, key: norm(raw), text: text && !inBlock(el) });
+    // ever reported for the user to answer on the form. It is still a text question with its
+    // label, so it counts for the duplicate-label rule below (tl's blocking 2 and sec at 0bf9a81).
+    fields.push({ el, id, label: raw, key: norm(raw), text: text && !inBlock(el), textLike: text });
   }
   // How many questions on the form carry each label: a label on two is ambiguous. A choice
   // control the form shows counts too (a select, a dropdown widget, a radio or checkbox, or the
@@ -338,11 +351,11 @@ export async function fillGreenhouseForm(
   for (const f of fields) {
     const type = (f.el.getAttribute('type') ?? '').toLowerCase();
     const choice =
-      !f.text &&
+      !f.textLike &&
       (f.el.tagName === 'SELECT' ||
         isChoice(f.el) ||
         (f.el.tagName === 'INPUT' && CHOICE_TYPES.includes(type)));
-    if (f.text && !STANDARD_IDS.includes(f.id)) count(f.key);
+    if (f.textLike && !STANDARD_IDS.includes(f.id)) count(f.key);
     else if (choice && !concealed(f.el, true)) count(f.key);
   }
   for (const group of Array.from(form.querySelectorAll('fieldset'))) {
@@ -602,29 +615,54 @@ export async function fillGreenhouseForm(
     setter.call(box, value);
     fire(box, 'input');
     fire(box, 'change');
-    if (!press(box, true)) {
-      // It opened meanwhile, or is no longer a list box: nothing is waited for or clicked.
-      empty();
-      notFilled.push({ label, reason: 'choose_on_form' });
-      continue;
-    }
+    // Refused when the list opened on this fill's own write, or the box is no longer a list box:
+    // then nothing is waited for or clicked. Nothing runs between the check above and this press,
+    // so a list open then was opened by the page on that write, and the way out below closes it
+    // again: press closes only a list that is open (fs1's F3, tl and sec at 0bf9a81).
+    const refused = !press(box, true);
+    // From here the list is the user's as soon as they act in it (tl's blocking 1 at 0bf9a81): a
+    // choice shows, the box holds other text than this fill wrote, or the list closed after it
+    // had opened. Read on every look, when the timer ends, and again just before the click.
+    let opened = false;
+    const theirs = (): Found | null => {
+      const expanded = box.getAttribute('aria-expanded') === 'true';
+      if (expanded) opened = true;
+      if (box.closest('div.select__value-container')?.querySelector('.select__single-value')) {
+        return { kind: 'theirs', reason: 'has_value' };
+      }
+      if (box.value !== value || (opened && !expanded)) {
+        return { kind: 'theirs', reason: 'choose_on_form' };
+      }
+      return null;
+    };
     // One 3 second wait for the options: "none" only when the timer ends, since they arrive more
     // than once; when an equal option is seen, the equal ones in the list then are counted.
-    const found = await watchFor<Found>(
-      box,
-      () => {
-        const equals = (optionsOf(box) ?? []).filter((o) => equal(o.textContent ?? ''));
-        const first = equals[0];
-        if (first === undefined) return null;
-        return equals.length === 1 ? { kind: 'one', option: first } : { kind: 'several' };
-      },
-      () => (optionsOf(box) === null ? { kind: 'no_list' } : { kind: 'none' }),
-      3000,
-    );
+    const found = refused
+      ? null
+      : await watchFor<Found>(
+          box,
+          () => {
+            const user = theirs();
+            if (user !== null) return user;
+            const equals = (optionsOf(box) ?? []).filter((o) => equal(o.textContent ?? ''));
+            const first = equals[0];
+            if (first === undefined) return null;
+            return equals.length === 1 ? { kind: 'one', option: first } : { kind: 'several' };
+          },
+          () => theirs() ?? (optionsOf(box) === null ? { kind: 'no_list' } : { kind: 'none' }),
+          3000,
+        );
+    // Theirs, during the wait or just before the click: left as it is, with no click, no
+    // emptying and no closing mouseup.
+    const user = found?.kind === 'theirs' ? found : found?.kind === 'one' ? theirs() : null;
+    if (user !== null && user.kind === 'theirs') {
+      notFilled.push({ label, reason: user.reason });
+      continue;
+    }
     // Found, then replaced before the click: there was one, so the field is "choose it on the
     // form", not "no option" (tl's optional point at 8084132). It leaves by the same way out.
     let replaced = false;
-    if (found.kind === 'one') {
+    if (found?.kind === 'one') {
       const text = found.option.textContent ?? '';
       if (pick(box, found.option)) {
         // The form shows the choice in its own time: React applies a click's update after the
@@ -648,7 +686,7 @@ export async function fillGreenhouseForm(
     empty();
     press(box, false);
     notFilled.push(
-      replaced
+      replaced || found === null
         ? { label, reason: 'choose_on_form' }
         : {
             label,
