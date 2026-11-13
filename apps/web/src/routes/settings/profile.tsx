@@ -9,7 +9,12 @@ import { FormError } from '@/components/FormError';
 import { FormField } from '@/components/FormField';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
-import { DETAIL_FIELDS, detailProblemText, LOCATION_HINT } from '@/components/apply/api';
+import {
+  DETAIL_FIELDS,
+  detailProblemText,
+  LOCATION_EXAMPLE,
+  LOCATION_HINT,
+} from '@/components/apply/api';
 import { ReviewCapCard } from '@/components/apply/ReviewUsage';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -121,7 +126,7 @@ function ProfileForm({ profile }: { profile: Profile }) {
               {(p) => (
                 <Input
                   {...p}
-                  placeholder="Product leader for developer platforms"
+                  placeholder="e.g. Senior software engineer"
                   {...form.register('headline')}
                 />
               )}
@@ -142,13 +147,19 @@ function ProfileForm({ profile }: { profile: Profile }) {
               {(p) => (
                 <Input
                   {...p}
-                  placeholder="Seattle, Washington, United States"
+                  placeholder={`e.g. ${LOCATION_EXAMPLE}`}
                   {...form.register('location')}
                 />
               )}
             </FormField>
             <FormField label="Work authorization" error={errors.workAuth?.message}>
-              {(p) => <Input {...p} placeholder="US citizen" {...form.register('workAuth')} />}
+              {(p) => (
+                <Input
+                  {...p}
+                  placeholder="e.g. Authorized to work, no sponsorship needed"
+                  {...form.register('workAuth')}
+                />
+              )}
             </FormField>
           </div>
 
