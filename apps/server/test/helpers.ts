@@ -39,6 +39,48 @@ export interface TestAppOptions {
   build?: Omit<BuildOptions, 'logStream'>;
 }
 
+/** The config every test app starts from: loopback, silent, no demo, no proxy trusted. */
+function testConfig(
+  dataDir: string,
+  pgDb: TestDatabase | undefined,
+  masterKey: Buffer,
+  overrides: Partial<Config>,
+): Config {
+  return {
+    port: 0,
+    // Loopback only: a test that does listen must never open a network-visible socket.
+    host: '127.0.0.1',
+    dataDir,
+    sqliteDir: dataDir,
+    baseUrl: 'http://localhost:3000',
+    masterKey,
+    logLevel: 'silent',
+    db: pgDb?.config ?? { dialect: 'sqlite' },
+    demo: false,
+    aiAllowLoopbackHttp: false,
+    telemetryAllowPrivate: false,
+    // Trust no proxy by default, matching production (issue #333). Tests that exercise proxy
+    // trust pass trustedProxies through overrides.
+    trustedProxies: [],
+    ...overrides,
+  };
+}
+
+/** buildApp's options for a test: no job runner and no network, plus the test's own fakes. */
+function testBuildOptions(opts: TestAppOptions): BuildOptions {
+  return {
+    // No polling runner in tests: they drain the queue with app.jobs.drain().
+    jobRunner: false,
+    // No network for the Google OAuth client probe: it answers as for a live client.
+    googleFetch: mockGoogleTokenFetch,
+    // No network for discovery/enrichment fetches either: every host fails DNS instantly.
+    // Tests that need responses substitute their own recording fake.
+    sourceFetch: offlineSourceFetch,
+    ...opts.build,
+    ...(opts.logStream ? { logStream: opts.logStream } : {}),
+  };
+}
+
 /**
  * Boots a full app on a fresh temp data dir with a random master key. On the Postgres leg
  * (TEST_DB_DIALECT=postgres) the app also gets a fresh database cloned from the run's
@@ -50,37 +92,10 @@ export async function testApp(
 ): Promise<{ app: FastifyInstance; dataDir: string }> {
   const dataDir = await mkdtemp(join(tmpdir(), 'opportun-test-'));
   const pgDb = testDialect === 'postgres' ? await createTestDatabase() : undefined;
-  const cfg: Config = {
-    port: 0,
-    // Loopback only: a test that does listen must never open a network-visible socket.
-    host: '127.0.0.1',
-    dataDir,
-    sqliteDir: dataDir,
-    baseUrl: 'http://localhost:3000',
-    masterKey: randomBytes(32),
-    logLevel: 'silent',
-    db: pgDb?.config ?? { dialect: 'sqlite' },
-    demo: false,
-    aiAllowLoopbackHttp: false,
-    telemetryAllowPrivate: false,
-    // Trust no proxy by default, matching production (issue #333). Tests that exercise proxy
-    // trust pass trustedProxies through overrides.
-    trustedProxies: [],
-    ...overrides,
-  };
+  const cfg = testConfig(dataDir, pgDb, randomBytes(32), overrides);
   let app: FastifyInstance;
   try {
-    app = await buildApp(cfg, {
-      // No polling runner in tests: they drain the queue with app.jobs.drain().
-      jobRunner: false,
-      // No network for the Google OAuth client probe: it answers as for a live client.
-      googleFetch: mockGoogleTokenFetch,
-      // No network for discovery/enrichment fetches either: every host fails DNS instantly.
-      // Tests that need responses substitute their own recording fake.
-      sourceFetch: offlineSourceFetch,
-      ...opts.build,
-      ...(opts.logStream ? { logStream: opts.logStream } : {}),
-    });
+    app = await buildApp(cfg, testBuildOptions(opts));
   } catch (err) {
     await pgDb?.drop();
     await rm(dataDir, { recursive: true, force: true });
@@ -118,6 +133,64 @@ export async function testApp(
     throw err;
   }
   return { app, dataDir };
+}
+
+/**
+ * An app that can be stopped and booted again on the same data: the same data dir, database and
+ * master key, with other settings, as an operator's restart after an upgrade or a change to the
+ * environment is (https://github.com/bgoleno/opportun/issues/455). `restart` closes the running
+ * app and boots a new one with `next` in place of the first boot's overrides; `close` closes the
+ * last one and removes the data. The caller closes it (an afterEach, or a finally).
+ */
+export async function restartableTestApp(
+  overrides: Partial<Config> = {},
+  opts: TestAppOptions = {},
+): Promise<{
+  /** The app booted last. */
+  app: () => FastifyInstance;
+  restart: (next: Partial<Config>) => Promise<FastifyInstance>;
+  close: () => Promise<void>;
+}> {
+  const dataDir = await mkdtemp(join(tmpdir(), 'opportun-test-'));
+  const pgDb = testDialect === 'postgres' ? await createTestDatabase() : undefined;
+  const masterKey = randomBytes(32);
+  let current: FastifyInstance | undefined;
+  const boot = async (next: Partial<Config>): Promise<FastifyInstance> => {
+    const app = await buildApp(testConfig(dataDir, pgDb, masterKey, next), testBuildOptions(opts));
+    current = app;
+    setProviderResolveOverride(app.db, resolvePublicForTests);
+    await opts.setup?.(app);
+    await app.ready();
+    return app;
+  };
+  // The data goes only once the last app is closed (the Postgres copy after its pool has
+  // ended, as testApp explains).
+  const close = async (): Promise<void> => {
+    const app = current;
+    current = undefined;
+    await app?.close();
+    await pgDb?.drop();
+    await rm(dataDir, { recursive: true, force: true });
+  };
+  try {
+    await boot(overrides);
+  } catch (err) {
+    await close().catch(() => undefined);
+    throw err;
+  }
+  return {
+    app: () => {
+      if (current === undefined) throw new Error('restartableTestApp: no app is running');
+      return current;
+    },
+    restart: async (next) => {
+      const running = current;
+      current = undefined;
+      await running?.close();
+      return await boot(next);
+    },
+    close,
+  };
 }
 
 /** Collects log lines in memory; `text()` joins everything written so far. */

@@ -17,7 +17,8 @@ https://github.com/bgoleno/opportun.
 **As of 2026-11-03, main at 3a2b3bd.** This goes stale with every merge; the live state is on
 https://github.com/bgoleno/opportun/issues/79 and the milestone issues it lists.
 
-- Everything built sits behind `OPPORTUN_SUBMISSIONS=1` (default off, never on for the demo).
+- Everything built sits behind `OPPORTUN_SUBMISSIONS`: on by default, off with `0`, never on for
+  the demo. It was off unless set to `1` until https://github.com/bgoleno/opportun/issues/455.
 - Merged: M1 (records, snapshot, review gate, apply screens), M2 (I submitted it, outcomes, the
   follow-up, confirmation email matching) and M4 (recording the confirmation page).
 - Open: M0, the spike (#113, parts of it need the owner's accounts and inbox), and M3, extension
