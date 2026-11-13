@@ -141,6 +141,12 @@ when the milestone's work was merged.
   [#321](https://github.com/bgoleno/opportun/issues/321),
   [#323](https://github.com/bgoleno/opportun/issues/323),
   [#331](https://github.com/bgoleno/opportun/issues/331)).
+- **Jobs queued at the same moment run in the order they were queued.** When several jobs were
+  due at the same millisecond, which one ran first was left to the database and could differ
+  between SQLite and Postgres. A tie on the time a job is due and was created is now broken by its
+  id, which is its queue order, on both. There is no migration and no setting
+  ([#465](https://github.com/bgoleno/opportun/issues/465); PR
+  [#501](https://github.com/bgoleno/opportun/pull/501)).
 - **Captures share one budget per user.** The web capture dialog and every extension token now
   share 60 captures per 15 minutes per user (the dialog had no limit; 30 per token still holds),
   and the limit says which one was reached and when to retry. A user's captures are saved one
