@@ -22,8 +22,13 @@ import { StageReasonDialog, type ReasonKind, type ReasonResult } from './StageRe
 export type StageSubject = Pick<OpportunityView, 'id' | 'stage' | 'title' | 'companyName'>;
 
 export interface StageFlow {
-  /** Asks to move `opp` to `to`; closed and dismissed open the reason dialog first. */
-  request: (opp: StageSubject, to: OpportunityStage) => void;
+  /**
+   * Asks to move `opp` to `to`; closed and dismissed open the reason dialog first. For those two,
+   * `onOutcome` hears how the dialog ended (#432): true once the server confirms the move, false
+   * when the dialog is cancelled. A server error leaves the dialog open and calls nothing, since
+   * the user can still confirm or cancel. A move that needs no reason never calls it.
+   */
+  request: (opp: StageSubject, to: OpportunityStage, onOutcome?: (moved: boolean) => void) => void;
   /**
    * Why `request` would refuse moving `opp` to `to`, in the words its message uses, or null when
    * it would go ahead (#413): the board's drag announcement says the same as the toast.
@@ -58,6 +63,7 @@ export function useStageFlow(): StageFlow {
   const [pendingReason, setPendingReason] = useState<{
     kind: ReasonKind;
     opp: StageSubject;
+    onOutcome?: (moved: boolean) => void;
   } | null>(null);
 
   const mutation = useMutation({
@@ -95,7 +101,7 @@ export function useStageFlow(): StageFlow {
   const send = useCallback((id: string, change: StageChange) => mutate({ id, change }), [mutate]);
 
   const request = useCallback(
-    (opp: StageSubject, to: OpportunityStage) => {
+    (opp: StageSubject, to: OpportunityStage, onOutcome?: (moved: boolean) => void) => {
       if (opp.stage === to) return;
       const refused = refusalOf(opp.stage, to);
       if (refused !== null) {
@@ -103,7 +109,7 @@ export function useStageFlow(): StageFlow {
         return;
       }
       if (to === 'closed' || to === 'dismissed') {
-        setPendingReason({ kind: to, opp });
+        setPendingReason({ kind: to, opp, onOutcome });
         return;
       }
       send(opp.id, { to });
@@ -123,7 +129,7 @@ export function useStageFlow(): StageFlow {
 
   function confirmReason(result: ReasonResult) {
     if (pendingReason === null) return;
-    const { opp } = pendingReason;
+    const { opp, onOutcome } = pendingReason;
     const note = result.note === undefined ? {} : { note: result.note };
     // Closes only once the server confirms (#124): closing on submit, before the request even
     // went out, told the person it worked before anything happened. onError leaves the dialog
@@ -136,7 +142,12 @@ export function useStageFlow(): StageFlow {
             ? { to: 'closed', closedReason: result.reason, ...note }
             : { to: 'dismissed', dismissedReason: result.reason, ...note },
       },
-      { onSuccess: () => setPendingReason(null) },
+      {
+        onSuccess: () => {
+          setPendingReason(null);
+          onOutcome?.(true);
+        },
+      },
     );
   }
 
@@ -145,7 +156,10 @@ export function useStageFlow(): StageFlow {
       kind={pendingReason?.kind ?? null}
       subject={pendingReason ? subjectLabel(pendingReason.opp) : ''}
       pending={mutation.isPending}
-      onCancel={() => setPendingReason(null)}
+      onCancel={() => {
+        pendingReason?.onOutcome?.(false);
+        setPendingReason(null);
+      }}
       onConfirm={confirmReason}
     />
   );
