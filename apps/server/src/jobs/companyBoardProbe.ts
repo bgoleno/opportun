@@ -18,7 +18,7 @@ import { adapterBoardLookup } from '../lib/postingSearch';
 import { prefilter } from '../lib/prefilter';
 import { line } from '../lib/promptText';
 import type { UserCtx } from '../repos/base';
-import { boardConfig, detectAts, type AtsKind } from './atsDetect';
+import { boardConfig, detectAts, type AtsKind, type DetectOptions } from './atsDetect';
 import { requireService, type JobHandler } from './registry';
 import { enqueueVendorCheck } from './vendorCheckQueue';
 
@@ -58,7 +58,8 @@ export function listingTitles(postings: readonly NormalizedPosting[]): string[] 
   return [...titles];
 }
 
-async function record(
+/** Records a probe's result on the company. */
+export async function recordProbe(
   db: Db,
   ctx: UserCtx,
   companyId: string,
@@ -94,17 +95,21 @@ async function prefilterMatches(
   return postings.filter((p) => prefilter(p, targets)?.outcome === 'pass').length;
 }
 
-/** Probes one of the user's companies. Public board requests only; never an AI call. */
+/**
+ * Probes one of the user's companies. Public board requests only; never an AI call. `opts` is
+ * detection's: the nightly network probe passes `boardApisOnly` (#296).
+ */
 export async function probeCompanyBoard(
   db: Db,
   ctx: UserCtx,
   companyId: string,
   sctx: SourceContext,
+  opts: DetectOptions = {},
 ): Promise<BoardProbeOutcome> {
-  const detected = await detectAts(db, ctx, companyId, sctx);
+  const detected = await detectAts(db, ctx, companyId, sctx, opts);
   if (detected.status === 'skipped') return detected;
   if (detected.status === 'none') {
-    await record(db, ctx, companyId, { openJobs: null, prefilterMatches: null });
+    await recordProbe(db, ctx, companyId, { openJobs: null, prefilterMatches: null });
     return { status: 'probed', kind: null, openJobs: null, prefilterMatches: null };
   }
   const board = {
@@ -119,14 +124,14 @@ export async function probeCompanyBoard(
     // The board answered detection and then no longer exists: nothing to count, and a retry would
     // find the same. Any other failure is the provider's and is retried.
     if (!(err instanceof SourceConfigError)) throw err;
-    await record(db, ctx, companyId, { openJobs: null, prefilterMatches: null });
+    await recordProbe(db, ctx, companyId, { openJobs: null, prefilterMatches: null });
     return { status: 'probed', kind: board.kind, openJobs: null, prefilterMatches: null };
   }
   // A Workday listing is read in part: its total is the board's, and the matches are among those read.
   const postings = Array.isArray(listing) ? listing : listing.postings;
   const openJobs = Array.isArray(listing) ? listing.length : listing.total;
   const matches = await prefilterMatches(db, ctx, postings);
-  await record(db, ctx, companyId, {
+  await recordProbe(db, ctx, companyId, {
     openJobs,
     prefilterMatches: matches,
     titles: listingTitles(postings),

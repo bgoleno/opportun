@@ -9,11 +9,16 @@ import type { UserCtx } from '../repos/base';
 import { enqueue } from './runner';
 
 /**
- * The job kinds that read ATS vendors' public pages: atsDetect.ts and companyBoardProbe.ts. Spelled
- * here, not imported, because both of those import this module; test/vendorCheckQueue.test.ts pins
- * them to ATS_DETECT_KIND and BOARD_PROBE_KIND.
+ * The job kinds that read ATS vendors' public pages: atsDetect.ts, companyBoardProbe.ts and the
+ * nightly network probe (networkBoardProbe.ts, #296). Spelled here, not imported, because those
+ * import this module; test/vendorCheckQueue.test.ts pins them to ATS_DETECT_KIND, BOARD_PROBE_KIND
+ * and NETWORK_PROBE_KIND.
  */
-export const VENDOR_CHECK_KINDS = ['company.ats_detect', 'company.board_probe'] as const;
+export const VENDOR_CHECK_KINDS = [
+  'company.ats_detect',
+  'company.board_probe',
+  'company.network_probe',
+] as const;
 export type VendorCheckKind = (typeof VENDOR_CHECK_KINDS)[number];
 
 /**
