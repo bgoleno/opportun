@@ -149,17 +149,69 @@ change them by hand.
 
 ### Resume
 
-The resumes attached to this opportunity. Beyond **Create tailored copy** from one of your
-base resumes, **Attach an existing resume** links one already registered elsewhere in
-Opportun, and **Attach a new document** registers and attaches a document not yet in Opportun
-in one step. Each attached resume has its own **Remove from this opportunity** (detach: the
-link is cleared, nothing else changes, and it's free to attach elsewhere) and **Delete** (the
-same rule as the Resumes page: a hard delete, except a submitted resume is archived instead).
+The tab leads you through one resume flow for this opportunity, from choosing a base resume to
+applying, and lists the resumes below it.
 
-Each resume appears once, with its kind (Tailored or Base resume), its status and when it was
-last updated. Its sends for this opportunity are listed inside it, one line each ("Sent via
-Greenhouse on _date_"), with **View application** when the send was an application made through
-assisted apply. The file that was sent is kept with that application, on its own page.
+![The Resume tab: a flow card at step 3, Finish, for a tailored copy that is In review, with Mark as final and Keep tailoring, above the list of resumes](images/resume-flow-card.png)
+
+_The Resume tab with a tailored copy In review._
+
+**The card at the top**, **Resume for this application**, has four steps: **1 Base**, **2
+Tailor**, **3 Finish** and **4 Apply**, with the current one outlined. Under them, a sentence says
+where this opportunity is, then comes one filled button for the next action and, beneath it, a
+quieter second one. On a phone the four steps become one line, "Step 3 of 4: Finish", and "All
+four steps done" once an application is out.
+
+What it shows depends on where you are:
+
+| Where you are                                 | The sentence                                                  | Filled button                 | Quieter action                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------- |
+| No base resume yet                            | Add a base resume to start.                                   | **Register a base resume**    | **Attach a resume you already tailored**                                        |
+| A base resume, nothing for this opportunity   | Choose the resume to start from (with the base resume picker) | **Create tailored copy**      | **Send a base resume as it is**                                                 |
+| A tailored copy that is a Draft               | Tailor "_title_" for this role.                               | **Open and tailor**           | **It needs no changes: mark as final**                                          |
+| A tailored copy that is In review             | Finished tailoring? (with its title, status and match score)  | **Mark as final**             | **Keep tailoring**                                                              |
+| A Final copy, and assisted apply can start    | Ready to apply.                                               | **Apply on** _ATS_            | **Record that you sent it yourself**                                            |
+| A Final copy, and assisted apply cannot start | The reason, or "Ready to send."                               | **Record that you sent it**   | A link to where the reason is fixed, where there is one                         |
+| An application in progress                    | Where it is                                                   | **Continue your application** | None                                                                            |
+| Sent                                          | "Sent: _title_ via _where_ on _date_."                        | None, nothing is owed         | **Tailor again for this opportunity**, or a link to a copy not sent yet (below) |
+
+**Create tailored copy** copies the base resume you picked, names it from your template (see
+[Resumes](resumes.md#create-a-tailored-copy)) and opens the copy's page to tailor it. **Mark as
+final** is the existing status change, in place: the button keeps its name, a toast says "Marked
+final", and a refused change says why inside the card. Where assisted apply is off, or on the
+demo, a Final copy shows "Ready to send." and **Record that you sent it**, and nothing of assisted
+apply is named.
+
+**Sending a base resume as it is** (for example through a job site's own apply flow) takes the
+same steps without a copy. If the base is not Final yet, the card offers **Mark** _base_ **as
+final**, and says this marks it final everywhere it is used. Then it offers **Apply on** _ATS_ or
+**Record that you sent it**, with the reason when assisted apply cannot start. **Tailor a copy
+instead** goes back to choosing. Nothing is stored except the base resume's status and the send.
+
+**Tailor again.** Once an application or a send is recorded, the card says "Sent: ..." and offers
+**Tailor again for this opportunity**, which starts a new copy of a base resume (the one this
+opportunity's last copy came from, when there is one) and says which. If you made another copy after sending and it has gone nowhere yet,
+the card says so instead: it offers **Continue tailoring** _title_ while that copy is a Draft or In
+review, or **Record that you sent** _title_ once it is Final.
+
+**After an action** (registering a base resume, **Mark as final**, recording a send), focus moves
+to the new sentence, and a status line read by screen readers says what happened and what is next,
+for example "Marked final. Next: apply."
+
+**Other ways to add a resume** is a collapsed section beside the list, open while you are at step
+1 and closed from step 2 on, and you can open or close it yourself. It holds **Attach an existing
+resume** and **Attach a new document**. **Attach an existing resume** links one already registered
+elsewhere in Opportun; **Attach a new document** registers and attaches a document not yet in
+Opportun in one step. There is no separate **Create tailored copy** card: it is a button in the card at the top.
+
+**Resumes for this opportunity**, the list below the card, shows each resume once, with its kind
+(Tailored or Base resume), its status and when it was last updated. Each attached resume has its
+own **Remove** _title_ **from this opportunity** (detach: the link is cleared, nothing else
+changes, and it's free to attach elsewhere) and **Delete** (the same rule as the Resumes page: a
+hard delete, except a submitted resume is archived instead). Its sends for this opportunity are
+listed inside it, one line each ("Sent via Greenhouse on _date_"), with **View application** when
+the send was an application made through assisted apply. The file that was sent is kept with that
+application, on its own page.
 
 A base resume is never attached. Pick one under **Attach an existing resume** and it offers
 **Record as sent** instead: say how you sent it (for example "Indeed") and on what day. It is
