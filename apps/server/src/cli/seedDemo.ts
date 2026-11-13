@@ -63,6 +63,8 @@
 // database with partial demo rows and a still-valid marker -- which the next run's pinned-ids
 // and marker checks both still pass, so it simply deletes whatever partial rows exist and
 // reseeds cleanly. Self-healing, not a case to build recovery machinery for.
+// First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
+import '../unsetEmptyAiBaseUrls';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
