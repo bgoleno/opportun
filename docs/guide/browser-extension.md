@@ -107,9 +107,18 @@ set the extension up, under **Settings > Integrations > Extensions and Connector
 2. On that tab, click the Opportun icon in your browser's toolbar. If it is not there, open
    your browser's Extensions menu and pin Opportun.
 3. Press **Fill in this application**. The extension fills in what you reviewed, and lists
-   what it filled and what it left for you.
+   what it filled and what it left for you. Your resume is uploaded to Greenhouse at this
+   step, not when you submit (see below).
 4. Check every field, fill in anything it left, and press the site's own Submit button. The
    extension never submits.
+
+**Your resume reaches Greenhouse before you press Submit.** When the form's resume field is
+empty and takes a PDF, the extension attaches your Final resume to it, and Greenhouse's own form
+then uploads the file to Greenhouse at once, exactly as it does when you choose a file yourself.
+So Greenhouse can hold your resume even if you then decide not to apply. Press **Fill in this
+application** only when you mean to apply. When the field has a file already, or does not take a
+PDF, the extension leaves it and lists the resume among what it did not fill. The extension
+still never presses Submit.
 
 It fills only a Greenhouse form on Greenhouse's own pages (`boards.greenhouse.io` or
 `job-boards.greenhouse.io`), and only the application you reviewed and opened from Opportun.
