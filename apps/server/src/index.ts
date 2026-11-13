@@ -1,11 +1,14 @@
 import { pathToFileURL } from 'node:url';
 import { buildApp } from './app';
 import { ConfigError, loadConfig } from './config';
-import { createLogger, installProcessHandlers } from './obs/log';
+import { createLogger, installProcessHandlers, raiseStackTraceLimit } from './obs/log';
 
 /** Server entry point: load config, build the app, listen. */
 export async function main(): Promise<void> {
-  // Before anything else: a crash or a warning from here on goes through the log gate (#345).
+  // Before anything else: an error made from here on keeps enough frames for the log gate to find
+  // Opportun's own under a deep dependency chain (#436), and a crash or a warning goes through the
+  // gate (#345).
+  raiseStackTraceLimit();
   installProcessHandlers();
   const cfg = loadConfig();
   // End-to-end fakes (OPPORTUN_*_MOCK=1, never in production): loaded only when asked for.
