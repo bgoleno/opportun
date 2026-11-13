@@ -344,6 +344,14 @@ when the milestone's work was merged.
   opportunity only and is not saved on the company. Values already saved are not changed
   ([#451](https://github.com/bgoleno/opportun/pull/451)).
 
+- **Empty Profile fields show neutral examples, each marked "e.g.".** Under **Settings > Profile**,
+  the empty Headline, Location (city) and Work authorization fields show examples such as "e.g.
+  Senior software engineer" and "e.g. Springfield, Illinois, United States", and the city and
+  school hints use neutral examples too. Only placeholder and hint text changed: nothing you
+  stored is different, and the details step of an application shows the same hints
+  ([#500](https://github.com/bgoleno/opportun/issues/500); PR
+  [#503](https://github.com/bgoleno/opportun/pull/503)).
+
 ### Install
 
 - **The optional settings in `deploy/.env` now reach the server on Compose.** `compose.yml` passes
@@ -386,6 +394,17 @@ when the milestone's work was merged.
   [install guide](docs/install.md#4-configuration-reference)
   ([#383](https://github.com/bgoleno/opportun/issues/383); PR
   [#393](https://github.com/bgoleno/opportun/pull/393)).
+- **The install guide and the guide now say how assisted apply is turned off, and how the daily
+  review limit works.** Assisted apply is on unless `OPPORTUN_SUBMISSIONS=0` is set (in
+  `deploy/.env` on Compose, then `docker compose up -d`); any other value stops the server from
+  starting, and it is never on the demo. `OPPORTUN_DAILY_REVIEW_CAP` (default 10, unset or empty
+  is 10, 1 to 25 in digits only, anything else stops the server from starting) is the most
+  applications one user can confirm a review for in a rolling 24 hours. A user can lower their own
+  limit under **Settings > Profile > Applications**, never above the server's. Section 4 of the
+  [install guide](docs/install.md#4-configuration-reference) has both settings, and the
+  [Settings page of the guide](docs/guide/settings.md#applications-and-the-review-limit) the
+  limit ([#453](https://github.com/bgoleno/opportun/issues/453); PR
+  [#499](https://github.com/bgoleno/opportun/pull/499)).
 - **The published image's `latest` tag moves only when a maintainer publishes, and the install
   guide now has the upgrade steps for it.** The image at `ghcr.io/bgoleno/opportun` is built
   only when someone runs the **Publish image** workflow by hand, so `latest` is the build last
