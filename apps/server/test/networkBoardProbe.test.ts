@@ -375,7 +375,9 @@ describe('the nightly network probe (#296)', () => {
       const ranFor = n.called[0] === greenhouse('initech') ? first : second;
       const jobsTonight = await probeJobs(app, a);
       expect(jobsTonight).toHaveLength(2);
-      const ran = jobsTonight.find((j) => (j.payload as { companyId: string }).companyId === ranFor);
+      const ran = jobsTonight.find(
+        (j) => (j.payload as { companyId: string }).companyId === ranFor,
+      );
       const cancelled = jobsTonight.find((j) => j !== ran);
       expect(ran).toMatchObject({
         status: 'done',
