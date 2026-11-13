@@ -100,12 +100,22 @@ export const RESUME_CHECKING =
   'Checking that the form shows your resume. Keep this window open until it finishes (about 2 seconds).';
 export const RESUME_UNCONFIRMED =
   'Your resume was not confirmed: this window closed before the check finished. Look at the form, and attach your resume yourself if it is not shown there.';
+/** While the filler runs: it waits for each list it chooses in (#402 slice 2, tl's rule 4). */
+export const FILLING =
+  'Filling in the form. Keep this window open until the report shows (up to a few seconds for each list).';
+export const FILL_UNSEEN =
+  "The last fill's result was not seen: this window closed before it finished. Check every field on the form, and choose or fill in yourself anything that is wrong or empty.";
 
+/**
+ * `stage` says what was unfinished: the fill itself (#402 slice 2) or the resume check after it.
+ * A note from before slice 2 has none, and was left by the resume check.
+ */
 interface CheckPending {
   tabId: number;
   board: string;
   jobId: string;
   at: number;
+  stage?: 'fill' | 'resume';
 }
 
 function isCheckPending(v: unknown): v is CheckPending {
@@ -115,7 +125,8 @@ function isCheckPending(v: unknown): v is CheckPending {
     typeof p.tabId === 'number' &&
     typeof p.board === 'string' &&
     typeof p.jobId === 'string' &&
-    typeof p.at === 'number'
+    typeof p.at === 'number' &&
+    (p.stage === undefined || p.stage === 'fill' || p.stage === 'resume')
   );
 }
 
@@ -375,6 +386,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       }
       report.append(heading, ul);
     };
+    list('Chosen from a list: check each before you submit', lines.chosen);
     list('Filled in', lines.filled);
     list('Not filled in', lines.notFilled);
   };
@@ -412,7 +424,20 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         return;
       }
       const plan = buildPlan(attempt, pinned, resume.kind === 'file' ? resume.base64 : null);
+      // The fill now waits for each list (#402 slice 2): say so, and leave a note for the next
+      // popup on this tab in case this one closes before the report arrives.
+      show({ tone: 'info', text: FILLING });
+      const fillNote: CheckPending = {
+        tabId: tab.id,
+        board: pinned.board,
+        jobId: pinned.jobId,
+        at: Date.now(),
+        stage: 'fill',
+      };
+      await deps.checkStore?.set({ [checkPendingKey(tab.id)]: fillNote }).catch(() => undefined);
       const filled = await deps.runFill(tab.id, plan);
+      // The report is here (or the run failed, which the popup says now): the note is done.
+      await deps.checkStore?.set({ [checkPendingKey(tab.id)]: null }).catch(() => undefined);
       if (filled === null) {
         show(renderPrefillStop({ kind: 'inject_failed' }));
         return;
@@ -423,7 +448,12 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       }
       // The resume: confirmed here, not in the page (tl and sec on #187). Look for its name a
       // bounded number of times; if it never shows, take back exactly our file.
-      const report = { ...filled, filled: [...filled.filled], notFilled: [...filled.notFilled] };
+      const report = {
+        ...filled,
+        chosen: [...filled.chosen],
+        filled: [...filled.filled],
+        notFilled: [...filled.notFilled],
+      };
       if (filled.resume !== null) {
         show({ tone: 'info', text: RESUME_CHECKING });
         // A popup closes when it loses focus, and this check would end with it, leaving the
@@ -435,6 +465,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
           board: pinned.board,
           jobId: pinned.jobId,
           at: Date.now(),
+          stage: 'resume',
         };
         await deps.checkStore?.set({ [checkPendingKey(tab.id)]: note }).catch(() => undefined);
         const check: ResumeCheck = {
@@ -550,7 +581,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     await deps.checkStore.set({ [key]: null });
     if (note.tabId !== tabId || Date.now() - note.at > CHECK_PENDING_MAX_AGE_MS) return;
     if (posting !== null && samePosting(posting, note)) {
-      show({ tone: 'error', text: RESUME_UNCONFIRMED });
+      show({ tone: 'error', text: note.stage === 'fill' ? FILL_UNSEEN : RESUME_UNCONFIRMED });
     }
   };
 

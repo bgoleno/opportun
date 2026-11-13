@@ -10,15 +10,26 @@
 // What it may do, enforced by a scan of its own source (test/greenhouseFill.test.ts):
 // - set a text input's or textarea's value once, with the element prototype's native setter
 //   (the form is React-controlled: a plain assignment is not seen), then dispatch a plain
-//   bubbling Event 'input' and Event 'change' on that element, and nothing else: no key,
-//   pointer, mouse, drag or focus events, no InputEvent, no per-character loop, no timers;
+//   bubbling Event 'input' and Event 'change' on that element: no key, pointer, drag or focus
+//   events, no InputEvent, no per-character loop;
+// - choose the one option of a single-choice list that equals the reviewed value (slice 2 of
+//   https://github.com/bgoleno/opportun/issues/402: tl's rule 3, issuecomment-6794050298 and
+//   6808214454 with its step 2.6, 6808394836; sec's rulings 6808114453 and 6808390283), only in
+//   the named controls and in a list question whose label is a reviewed answer's. It writes the
+//   value into the list's search box as above, opens the list with one plain bubbling
+//   MouseEvent 'mouseup' on that box (one helper, `press`), waits for the options with one
+//   MutationObserver and one 3 second timer (one helper, `waitFor`), and clicks the option once
+//   (one helper, `pick`). A list it opened and chose nothing from gets one more mouseup, to
+//   close it, after the box is emptied the same way. Nothing in a self-identification block,
+//   no multi-select, and nothing else is ever pressed;
 // - attach the resume through DataTransfer on #resume only, the one hidden input it touches,
 //   and return how often its name was on the form before. It does not judge whether the form
 //   took it: React renders the name after a macrotask, and the page side keeps no timer. The
 //   popup looks with resumeShown, read-only, at fixed gaps on its own timer, and if the name
 //   never appears, clearResume takes the file back out, and only if it is still exactly ours;
-// - leave alone a dropdown widget however it is marked up, and a label that is ambiguous (two
-//   questions, or two reviewed answers, carry it): which value goes where cannot be known;
+// - leave alone any other dropdown widget however it is marked up, and a label that is
+//   ambiguous (two questions, or two reviewed answers, carry it): which value goes where cannot
+//   be known;
 // - leave alone anything the form does not show: a field that is, or sits in a container that
 //   is, hidden, aria-hidden, inert, display:none or visibility:hidden (sec on #187);
 // - never activate a control, never send the form, never touch another frame, the captcha
@@ -36,6 +47,11 @@ export interface FillPlan {
   standard: { id: string; name: string; value: string }[];
   /** Questions matched by their label, normalised; any one of `labels` matches. */
   questions: { labels: string[]; name: string; value: string }[];
+  /**
+   * Lists chosen in by the form's own control id (#402 slice 2): `country` (the phone's country
+   * code), `candidate-location`, `school--0` and `degree--0`, with the reviewed value.
+   */
+  lists: { id: string; name: string; value: string }[];
   /** The ready resume snapshot as base64 (executeScript args are JSON only), or null. */
   resume: { filename: string; base64: string } | null;
   /**
@@ -69,13 +85,24 @@ export type NotFilledReason =
   /** The resume could not be checked (the tab moved on): look at it on the form. */
   | 'resume_unchecked'
   /** The server withheld the field: its stored value fails today's checks (#196). */
-  | 'withheld';
+  | 'withheld'
+  /** No option on the form's list equals the reviewed value (`detail`), by the bound. */
+  | 'no_option'
+  /** More than one option equals the reviewed value (`detail`): none is chosen. */
+  | 'several_options'
+  /** The form's list did not appear (no list named by aria-controls) by the bound. */
+  | 'list_not_shown'
+  /** An option (`detail`) was clicked but the control does not show it: check the field. */
+  | 'not_confirmed';
 
 export type FillReport =
   | {
       ok: true;
+      /** Each option chosen from a list, with the text chosen: listed first, to be checked. */
+      chosen: { label: string; text: string }[];
       filled: string[];
-      notFilled: { label: string; reason: NotFilledReason }[];
+      /** `detail` is the value looked for, or the option chosen, for the list reasons only. */
+      notFilled: { label: string; reason: NotFilledReason; detail?: string }[];
       /**
        * The resume the filler set, for the popup to confirm: its name, its size, and how often
        * the name was on the form before the attach. Null when it set none.
@@ -91,7 +118,10 @@ export interface ResumeCheck {
   filename: string;
 }
 
-export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): FillReport {
+export async function fillGreenhouseForm(
+  plan: FillPlan,
+  doc: Document = document,
+): Promise<FillReport> {
   const view = doc.defaultView;
   if (view === null) return { ok: false, reason: 'no_form' };
 
@@ -181,12 +211,116 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
     el.classList.contains('select__input') ||
     el.closest('.select, .select__container') !== null;
 
+  // The lists it may choose in (tl's rule 3.1): these named controls, and a list question whose
+  // label is a reviewed answer's. Nothing inside a self-identification block, whatever its id or
+  // label, and nothing else in the education block (Discipline, the dates, a second entry).
+  const LIST_IDS = ['country', 'candidate-location', 'school--0', 'degree--0'];
+  // Erased in the serialized source, with any comment just before it: kept above the helpers.
+  type Found =
+    | { kind: 'one'; option: Element }
+    | { kind: 'several' }
+    | { kind: 'none' }
+    | { kind: 'no_list' }
+    | { kind: 'theirs'; reason: 'choose_on_form' | 'has_value' };
+
+  // list helpers: start. greenhouseListHelpers below holds the same code, for tests to call; a
+  // test pins the two copies equal.
+  const inBlock = (el: Element): boolean =>
+    el.closest('div.eeoc__container, div#demographic-section') !== null;
+  // A single-choice list's own search box, in this form and outside both blocks: the only
+  // element `press` sends anything to.
+  const isBox = (el: Element): boolean => {
+    const shell = el.closest('div.select-shell');
+    const holder = el.closest('div.select__value-container');
+    return (
+      el.tagName === 'INPUT' &&
+      el.classList.contains('select__input') &&
+      el.getAttribute('role') === 'combobox' &&
+      form.contains(el) &&
+      !inBlock(el) &&
+      shell !== null &&
+      holder !== null &&
+      shell.contains(holder) &&
+      !holder.classList.contains('select__value-container--is-multi')
+    );
+  };
+  // One mouseup on a list's search box, to open its list (only while aria-expanded is "false")
+  // or to close one this fill opened (only while it is "true"). A plain bubbling mouse event with
+  // nothing else set; it refuses any other element.
+  const press = (box: Element, open: boolean): boolean => {
+    if (!isBox(box) || box.getAttribute('aria-expanded') !== (open ? 'false' : 'true')) {
+      return false;
+    }
+    box.dispatchEvent(new view.MouseEvent('mouseup', { bubbles: true }));
+    return true;
+  };
+  // The options of the list the box names in aria-controls while it is open, when that list is
+  // a listbox inside the box's own select-shell; null when there is no such list.
+  const optionsOf = (box: Element): Element[] | null => {
+    const shell = box.closest('div.select-shell');
+    const listId = box.getAttribute('aria-controls') ?? '';
+    const list = listId === '' ? null : doc.getElementById(listId);
+    if (shell === null || list === null) return null;
+    if (list.getAttribute('role') !== 'listbox' || !shell.contains(list)) return null;
+    return Array.from(list.querySelectorAll('[role="option"]')).filter(
+      (o) =>
+        o.closest('[role="listbox"]') === list &&
+        !['A', 'BUTTON', 'INPUT', 'LABEL'].includes(o.tagName),
+    );
+  };
+  // The one click: only on an option of the list this box names, inside its own select-shell.
+  const pick = (box: Element, option: Element): boolean => {
+    if (!(optionsOf(box) ?? []).includes(option)) return false;
+    (option as HTMLElement).click();
+    return true;
+  };
+  // Waits until `look` has an answer, with one observer on the control and one timer of `ms`;
+  // when the timer ends, `late` gives the answer. The observer is disconnected and the timer
+  // cleared on every way out.
+  const watchFor = <T>(box: Element, look: () => T | null, late: () => T, ms: number): Promise<T> =>
+    new Promise((resolve) => {
+      const shell = box.closest('div.select-shell') ?? box;
+      let over = false;
+      let timer = 0;
+      const end = (answer: T): void => {
+        if (over) return;
+        over = true;
+        watch.disconnect();
+        view.clearTimeout(timer);
+        resolve(answer);
+      };
+      const watch = new view.MutationObserver(() => {
+        const answer = look();
+        if (answer !== null) end(answer);
+      });
+      watch.observe(shell, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        characterData: true,
+      });
+      timer = view.setTimeout(() => end(late()), ms);
+      const now = look();
+      if (now !== null) end(now);
+    });
+  // list helpers: end
   const STANDARD_IDS = ['first_name', 'last_name', 'email', 'phone'];
   const TEXT_TYPES = ['', 'text', 'tel', 'email', 'url'];
+  const chosen: { label: string; text: string }[] = [];
   const filled: string[] = [];
-  const notFilled: { label: string; reason: NotFilledReason }[] = [];
+  const notFilled: { label: string; reason: NotFilledReason; detail?: string }[] = [];
+  // The lists to choose in, in the form's order, done one at a time once the rest is filled.
+  const lists: { box: HTMLInputElement; label: string; value: string; country: boolean }[] = [];
 
-  const fields: { el: Element; id: string; label: string; key: string; text: boolean }[] = [];
+  // `text` is whether a field may be written; `textLike`, whether it is a text question at all.
+  const fields: {
+    el: Element;
+    id: string;
+    label: string;
+    key: string;
+    text: boolean;
+    textLike: boolean;
+  }[] = [];
   for (const label of Array.from(form.querySelectorAll('label[for]'))) {
     const id = label.getAttribute('for') ?? '';
     if (id === '' || id === 'resume') continue;
@@ -199,7 +333,11 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
       ((el.tagName === 'INPUT' && TEXT_TYPES.includes(type)) || el.tagName === 'TEXTAREA') &&
       !isChoice(el);
     const raw = label.textContent ?? '';
-    fields.push({ el, id, label: raw, key: norm(raw), text });
+    // Nothing inside a self-identification block is written to, whatever its id or label
+    // (sec on #402, tl's blocking 3 at 8084132): such a field is never text here, so it is only
+    // ever reported for the user to answer on the form. It is still a text question with its
+    // label, so it counts for the duplicate-label rule below (tl's blocking 2 and sec at 0bf9a81).
+    fields.push({ el, id, label: raw, key: norm(raw), text: text && !inBlock(el), textLike: text });
   }
   // How many questions on the form carry each label: a label on two is ambiguous. A choice
   // control the form shows counts too (a select, a dropdown widget, a radio or checkbox, or the
@@ -213,11 +351,11 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
   for (const f of fields) {
     const type = (f.el.getAttribute('type') ?? '').toLowerCase();
     const choice =
-      !f.text &&
+      !f.textLike &&
       (f.el.tagName === 'SELECT' ||
         isChoice(f.el) ||
         (f.el.tagName === 'INPUT' && CHOICE_TYPES.includes(type)));
-    if (f.text && !STANDARD_IDS.includes(f.id)) count(f.key);
+    if (f.textLike && !STANDARD_IDS.includes(f.id)) count(f.key);
     else if (choice && !concealed(f.el, true)) count(f.key);
   }
   for (const group of Array.from(form.querySelectorAll('fieldset'))) {
@@ -230,8 +368,12 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
 
   const used = new Set<string>();
   for (const f of fields) {
-    const text = shown(f.label);
+    // The phone's country code is named as such, never "Country", so it is not read as where the
+    // user lives (sec's ruling 2.3 on #402).
+    const text = f.id === 'country' ? 'Phone country code' : shown(f.label);
     const standardAt = plan.standard.findIndex((s) => s.id === f.id);
+    const named = !f.text && LIST_IDS.includes(f.id);
+    const listAt = named ? plan.lists.findIndex((l) => l.id === f.id) : -1;
     const matches = !f.text
       ? []
       : STANDARD_IDS.includes(f.id)
@@ -244,7 +386,9 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
     // A field the server withheld (#196): nothing to fill it with, so it is reported once, as
     // withheld, under the form's label (never also as not reviewed: tl on #201).
     const withheldAt = !f.text
-      ? -1
+      ? named
+        ? (plan.withheld ?? []).findIndex((w) => w.id === f.id)
+        : -1
       : (plan.withheld ?? []).findIndex((w) =>
           STANDARD_IDS.includes(f.id) ? w.id === f.id : w.labels.some((l) => norm(l) === f.key),
         );
@@ -255,7 +399,8 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
     }
     // Nor anything the form does not show: reported only when there was a value for it.
     if (concealed(f.el, true)) {
-      if (matches.length > 0) {
+      if (listAt >= 0) used.add(`l${listAt}`);
+      if (matches.length > 0 || listAt >= 0) {
         for (const m of matches) used.add(m);
         notFilled.push({ label: text, reason: 'not_shown' });
       }
@@ -265,13 +410,47 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
       // Another file input (a cover letter): never set, but say so in the words that fit.
       if (f.el.tagName === 'INPUT' && (f.el.getAttribute('type') ?? '').toLowerCase() === 'file') {
         notFilled.push({ label: text, reason: 'attach_file_yourself' });
-      } else if (f.el.tagName === 'INPUT' || f.el.tagName === 'SELECT') {
-        notFilled.push({ label: text, reason: 'choose_on_form' });
-        // A reviewed answer for this choice is accounted for by that line: it is never also
-        // reported as having no question (#204).
-        plan.questions.forEach((q, i) => {
-          if (q.labels.some((l) => norm(l) === f.key)) used.add(`q${i}`);
-        });
+      } else if (
+        f.el.tagName === 'INPUT' ||
+        f.el.tagName === 'SELECT' ||
+        (f.el.tagName === 'TEXTAREA' && inBlock(f.el))
+      ) {
+        // A reviewed answer for this choice is accounted for here: it is never also reported as
+        // having no question (#204).
+        const answered = plan.questions.flatMap((q, i) =>
+          q.labels.some((l) => norm(l) === f.key) ? [i] : [],
+        );
+        for (const i of answered) used.add(`q${i}`);
+        if (listAt >= 0) used.add(`l${listAt}`);
+        // A named control takes its list detail by id; any other list, outside the education
+        // block, a reviewed answer by its label.
+        const listable =
+          isBox(f.el) && (named || f.el.closest('div.education--container') === null);
+        // Read by index only when there is one: at(-1) would be the last entry, another field's.
+        const only = answered.length === 1 ? answered[0] : undefined;
+        const value = named
+          ? listAt >= 0
+            ? plan.lists.at(listAt)?.value
+            : undefined
+          : only === undefined
+            ? undefined
+            : plan.questions.at(only)?.value;
+        const box = f.el as HTMLInputElement;
+        if (listable && !named && (answered.length > 1 || (sameLabel.get(f.key) ?? 0) > 1)) {
+          notFilled.push({ label: text, reason: 'ambiguous' });
+        } else if (!listable || value === undefined) {
+          notFilled.push({ label: text, reason: 'choose_on_form' });
+        } else if (box.getAttribute('aria-expanded') !== 'false') {
+          // Open already (the user opened it), or not a list this can open: never touched.
+          notFilled.push({ label: text, reason: 'choose_on_form' });
+        } else if (
+          box.value !== '' ||
+          box.closest('div.select__value-container')?.querySelector('.select__single-value')
+        ) {
+          notFilled.push({ label: text, reason: 'has_value' });
+        } else {
+          lists.push({ box, label: text, value, country: f.id === 'country' });
+        }
       }
       continue;
     }
@@ -378,7 +557,151 @@ export function fillGreenhouseForm(plan: FillPlan, doc: Document = document): Fi
     attached = { filename: name, size: pdf.size, before };
   }
 
-  return { ok: true, filled, notFilled, resume: attached };
+  // Options are compared with case and spaces normalised only: `norm` also drops a trailing `*`
+  // (a required field's mark), which would make "Other *" equal "Other" (tl at 8084132).
+  const same = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase();
+  // Whether the control shows the option chosen: its text, or for the phone's country code the
+  // option's "+digits" and, where the control exposes the flag's country, that country.
+  // 'flag' is a flag that names another country (sec 2.2: choose it on the form).
+  const showsChoice = (box: Element, option: string, phoneCode: boolean): 'yes' | 'no' | 'flag' => {
+    const holder = box.closest('div.select__value-container');
+    if (holder === null) return 'no';
+    const seen = same(holder.textContent ?? '');
+    if (!phoneCode) return seen === same(option) ? 'yes' : 'no';
+    const code = / (\+\d{1,4})$/.exec(same(option))?.[1];
+    if (code === undefined || !seen.split(' ').includes(code)) return 'no';
+    const flag = Array.from(holder.querySelectorAll('[alt], [title], [aria-label]')).find(
+      (n) => n !== box,
+    );
+    if (flag === undefined) return 'yes';
+    const says =
+      flag.getAttribute('alt') ?? flag.getAttribute('title') ?? flag.getAttribute('aria-label');
+    return same(says ?? '') === same(option).replace(/ \+\d{1,4}$/, '') ? 'yes' : 'flag';
+  };
+  // Whether the control shows a choice already, or its box holds text.
+  const inUse = (box: HTMLInputElement): boolean =>
+    box.value !== '' ||
+    box.closest('div.select__value-container')?.querySelector('.select__single-value') != null;
+
+  // The lists, one at a time: write the value, open the list, wait, choose the one equal option.
+  for (const job of lists) {
+    const { box, label, value } = job;
+    const setter = inputValue?.set;
+    // Checked again just before acting (tl's blocking 1 at 8084132): seconds may have passed
+    // since the fields were read, and the user may have opened this list or typed in it. Then
+    // it is theirs, and it is left as it is.
+    if (setter === undefined || box.getAttribute('aria-expanded') !== 'false') {
+      notFilled.push({ label, reason: 'choose_on_form' });
+      continue;
+    }
+    if (inUse(box)) {
+      notFilled.push({ label, reason: 'has_value' });
+      continue;
+    }
+    const want = same(value);
+    // The phone's country code: each option's text without one trailing " +digits" (sec 2.1).
+    const equal = job.country
+      ? (t: string): boolean => same(t).replace(/ \+\d{1,4}$/, '') === want
+      : (t: string): boolean => same(t) === want;
+    // Emptied only while it still holds what this fill wrote, never over the user's own text.
+    const empty = (): void => {
+      if (box.value !== value) return;
+      setter.call(box, '');
+      fire(box, 'input');
+      fire(box, 'change');
+    };
+    // Written before the list opens: the education lists ask their service, when they open, for
+    // the text the box holds then.
+    setter.call(box, value);
+    fire(box, 'input');
+    fire(box, 'change');
+    // Refused when the list opened on this fill's own write, or the box is no longer a list box:
+    // then nothing is waited for or clicked. Nothing runs between the check above and this press,
+    // so a list open then was opened by the page on that write, and the way out below closes it
+    // again: press closes only a list that is open (fs1's F3, tl and sec at 0bf9a81).
+    const refused = !press(box, true);
+    // From here the list is the user's as soon as they act in it (tl's blocking 1 at 0bf9a81): a
+    // choice shows, the box holds other text than this fill wrote, or the list closed after it
+    // had opened. Read on every look, when the timer ends, and again just before the click.
+    let opened = false;
+    const theirs = (): Found | null => {
+      const expanded = box.getAttribute('aria-expanded') === 'true';
+      if (expanded) opened = true;
+      if (box.closest('div.select__value-container')?.querySelector('.select__single-value')) {
+        return { kind: 'theirs', reason: 'has_value' };
+      }
+      if (box.value !== value || (opened && !expanded)) {
+        return { kind: 'theirs', reason: 'choose_on_form' };
+      }
+      return null;
+    };
+    // One 3 second wait for the options: "none" only when the timer ends, since they arrive more
+    // than once; when an equal option is seen, the equal ones in the list then are counted.
+    const found = refused
+      ? null
+      : await watchFor<Found>(
+          box,
+          () => {
+            const user = theirs();
+            if (user !== null) return user;
+            const equals = (optionsOf(box) ?? []).filter((o) => equal(o.textContent ?? ''));
+            const first = equals[0];
+            if (first === undefined) return null;
+            return equals.length === 1 ? { kind: 'one', option: first } : { kind: 'several' };
+          },
+          () => theirs() ?? (optionsOf(box) === null ? { kind: 'no_list' } : { kind: 'none' }),
+          3000,
+        );
+    // Theirs, during the wait or just before the click: left as it is, with no click, no
+    // emptying and no closing mouseup.
+    const user = found?.kind === 'theirs' ? found : found?.kind === 'one' ? theirs() : null;
+    if (user !== null && user.kind === 'theirs') {
+      notFilled.push({ label, reason: user.reason });
+      continue;
+    }
+    // Found, then replaced before the click: there was one, so the field is "choose it on the
+    // form", not "no option" (tl's optional point at 8084132). It leaves by the same way out.
+    let replaced = false;
+    if (found?.kind === 'one') {
+      const text = found.option.textContent ?? '';
+      if (pick(box, found.option)) {
+        // The form shows the choice in its own time: React applies a click's update after the
+        // click returns (tl's blocking 2 at 8084132). Waited for within a second, the same way.
+        const verdict = await watchFor<'yes' | 'no' | 'flag'>(
+          box,
+          () => (showsChoice(box, text, job.country) === 'yes' ? 'yes' : null),
+          () => showsChoice(box, text, job.country),
+          1000,
+        );
+        if (verdict === 'yes') chosen.push({ label, text: shown(text) });
+        // A flag naming another country: choose it on the form (sec 2.2).
+        else if (verdict === 'flag') notFilled.push({ label, reason: 'choose_on_form' });
+        else notFilled.push({ label, reason: 'not_confirmed', detail: shown(text) });
+        continue;
+      }
+      replaced = true;
+    }
+    // Nothing chosen: the box is emptied the same way first, then the list this fill opened is
+    // closed with one more mouseup (step 2.6).
+    empty();
+    press(box, false);
+    notFilled.push(
+      replaced || found === null
+        ? { label, reason: 'choose_on_form' }
+        : {
+            label,
+            reason:
+              found.kind === 'several'
+                ? 'several_options'
+                : found.kind === 'no_list'
+                  ? 'list_not_shown'
+                  : 'no_option',
+            detail: shown(value),
+          },
+    );
+  }
+
+  return { ok: true, chosen, filled, notFilled, resume: attached };
 }
 
 /**
@@ -529,4 +852,96 @@ export function clearResume(
   fire(fileInput, 'input');
   fire(fileInput, 'change');
   return 'cleared';
+}
+
+/**
+ * The list helpers the filler uses, built on their own for tests (sec on #402, point 1.1: each
+ * refusal is fed to the helper itself). The filler cannot call this: it is serialized alone, so
+ * it carries its own copy, and test/greenhouseFill.test.ts pins the two copies equal. Nothing in
+ * the extension calls this function.
+ */
+export function greenhouseListHelpers(doc: Document, form: Element) {
+  const view = doc.defaultView as Window & typeof globalThis;
+  // list helpers: start. greenhouseListHelpers below holds the same code, for tests to call; a
+  // test pins the two copies equal.
+  const inBlock = (el: Element): boolean =>
+    el.closest('div.eeoc__container, div#demographic-section') !== null;
+  // A single-choice list's own search box, in this form and outside both blocks: the only
+  // element `press` sends anything to.
+  const isBox = (el: Element): boolean => {
+    const shell = el.closest('div.select-shell');
+    const holder = el.closest('div.select__value-container');
+    return (
+      el.tagName === 'INPUT' &&
+      el.classList.contains('select__input') &&
+      el.getAttribute('role') === 'combobox' &&
+      form.contains(el) &&
+      !inBlock(el) &&
+      shell !== null &&
+      holder !== null &&
+      shell.contains(holder) &&
+      !holder.classList.contains('select__value-container--is-multi')
+    );
+  };
+  // One mouseup on a list's search box, to open its list (only while aria-expanded is "false")
+  // or to close one this fill opened (only while it is "true"). A plain bubbling mouse event with
+  // nothing else set; it refuses any other element.
+  const press = (box: Element, open: boolean): boolean => {
+    if (!isBox(box) || box.getAttribute('aria-expanded') !== (open ? 'false' : 'true')) {
+      return false;
+    }
+    box.dispatchEvent(new view.MouseEvent('mouseup', { bubbles: true }));
+    return true;
+  };
+  // The options of the list the box names in aria-controls while it is open, when that list is
+  // a listbox inside the box's own select-shell; null when there is no such list.
+  const optionsOf = (box: Element): Element[] | null => {
+    const shell = box.closest('div.select-shell');
+    const listId = box.getAttribute('aria-controls') ?? '';
+    const list = listId === '' ? null : doc.getElementById(listId);
+    if (shell === null || list === null) return null;
+    if (list.getAttribute('role') !== 'listbox' || !shell.contains(list)) return null;
+    return Array.from(list.querySelectorAll('[role="option"]')).filter(
+      (o) =>
+        o.closest('[role="listbox"]') === list &&
+        !['A', 'BUTTON', 'INPUT', 'LABEL'].includes(o.tagName),
+    );
+  };
+  // The one click: only on an option of the list this box names, inside its own select-shell.
+  const pick = (box: Element, option: Element): boolean => {
+    if (!(optionsOf(box) ?? []).includes(option)) return false;
+    (option as HTMLElement).click();
+    return true;
+  };
+  // Waits until `look` has an answer, with one observer on the control and one timer of `ms`;
+  // when the timer ends, `late` gives the answer. The observer is disconnected and the timer
+  // cleared on every way out.
+  const watchFor = <T>(box: Element, look: () => T | null, late: () => T, ms: number): Promise<T> =>
+    new Promise((resolve) => {
+      const shell = box.closest('div.select-shell') ?? box;
+      let over = false;
+      let timer = 0;
+      const end = (answer: T): void => {
+        if (over) return;
+        over = true;
+        watch.disconnect();
+        view.clearTimeout(timer);
+        resolve(answer);
+      };
+      const watch = new view.MutationObserver(() => {
+        const answer = look();
+        if (answer !== null) end(answer);
+      });
+      watch.observe(shell, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        characterData: true,
+      });
+      timer = view.setTimeout(() => end(late()), ms);
+      const now = look();
+      if (now !== null) end(now);
+    });
+  // list helpers: end
+  return { inBlock, isBox, press, optionsOf, pick, watchFor };
 }
