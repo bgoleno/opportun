@@ -327,6 +327,15 @@ milestone's work was merged.
   publishes; the README says the same about `latest`
   ([#477](https://github.com/bgoleno/opportun/issues/477); PR
   [#481](https://github.com/bgoleno/opportun/pull/481)).
+- **Settings shows the version and commit that is running.** Under the list of Settings
+  sections, on every page, it reads "Version 0.3.1 (d4d97b6)", "Development build (d4d97b6)" when
+  only the commit is known, or "Development build" when neither is. Both come from the Publish
+  image build, which passes them into the image. They show only in an image published after
+  this change: 0.3.1 predates it, so it shows no version. An image built locally with
+  `docker compose up --build`, and a run from source, say "Development build". The route behind
+  it, `GET /api/v1/settings/build`, answers any signed-in user and makes no call to GitHub or
+  GHCR ([#480](https://github.com/bgoleno/opportun/issues/480); PR
+  [#487](https://github.com/bgoleno/opportun/pull/487)).
 - **Releases now have git tags,** starting with
   [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1), made by hand on
   2026-11-13 at the commit of PR [#474](https://github.com/bgoleno/opportun/pull/474). A
