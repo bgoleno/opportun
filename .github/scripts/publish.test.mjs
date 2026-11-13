@@ -65,6 +65,10 @@ test('the version pattern: no leading v, one spelling per version', () => {
   ]) {
     assert.equal(isVersion(bad), false, bad);
   }
+  // Strict SemVer: a numeric identifier has no leading zero; `0` alone and alphanumerics are fine.
+  for (const bad of ['0.3.2-01', '0.3.2-rc.01']) assert.equal(isVersion(bad), false, bad);
+  for (const ok of ['0.3.2-0', '0.3.2-rc.0', '0.3.2-0rc', '0.3.2-x-y'])
+    assert.equal(isVersion(ok), true, ok);
   assert.equal(isVersion(`0.3.2-${'a'.repeat(58)}`), true);
   assert.equal(isVersion(`0.3.2-${'a'.repeat(59)}`), false, 'over 64 characters');
   assert.equal(gitTagOf('0.3.1'), 'v0.3.1');
@@ -139,8 +143,9 @@ test('a lookup that cannot answer refuses: it fails closed', async () => {
 test('release-free: refuses an existing tag or Release, and a lookup that cannot answer', async () => {
   const { asked, lookup } = nothingExists();
   assert.equal(await releaseFree('0.3.2', lookup), null);
-  assert.deepEqual(asked, ['gitTag:v0.3.2', 'release:v0.3.2']);
-  for (const exists of ['gitTag:v0.3.2', 'release:v0.3.2']) {
+  // A draft Release reads as absent on releases/tags/, so the list is asked too (tl on #489).
+  assert.deepEqual(asked, ['gitTag:v0.3.2', 'release:v0.3.2', 'draftRelease:v0.3.2']);
+  for (const exists of ['gitTag:v0.3.2', 'release:v0.3.2', 'draftRelease:v0.3.2']) {
     const found = async (q) => (`${q.kind}:${q.name}` === exists ? 'present' : 'absent');
     assert.match(await releaseFree('0.3.2', found), /exists already/, exists);
   }
@@ -254,8 +259,12 @@ test('the check runs before the build, and the release is made on the commit bui
     assert.notEqual(i, -1, s);
     return i;
   };
-  assert.ok(at('publish.mjs check') < at('docker build'));
-  assert.ok(at('docker build') < at('docker push'));
+  // The run lines, not the comments above them (tl on #489: a comment named the check first).
+  assert.ok(at('run: node .github/scripts/publish.mjs check') < at('          docker build \\'));
+  assert.ok(at('          docker build \\') < at('          docker push "$IMAGE:$TAG"'));
+  // The digest is read right after the sha push, before any version or latest tag.
+  assert.ok(at('          docker push "$IMAGE:$TAG"') < at('digest="$(docker inspect'));
+  assert.ok(at('digest="$(docker inspect') < at('docker tag "$IMAGE:$TAG" "$IMAGE:$VERSION"'));
   assert.match(publish, /--label "org\.opencontainers\.image\.revision=\$GITHUB_SHA"/);
   assert.match(publish, /--label "org\.opencontainers\.image\.version=\$LABEL_VERSION"/);
   // The commands, not the comments above them, which name `gh release create` too.
@@ -361,4 +370,46 @@ test('every checkout leaves no credentials behind, and the push step stops on an
     script.slice(0, script.indexOf('- name:') === -1 ? undefined : script.indexOf('- name:')),
     /docker tag[^\n]*&&/,
   );
+});
+
+test('the registry token: anonymous only after a 401, and a 5xx is an error', async () => {
+  const token = (first) => {
+    const seen = [];
+    const fetchImpl = async (url, opts = {}) => {
+      seen.push(opts.headers?.Authorization === undefined ? 'anonymous' : 'basic');
+      if (url.startsWith('https://ghcr.io/token')) {
+        const status = seen.length === 1 ? first : 200;
+        return { status, json: async () => ({ token: 'pull-token' }) };
+      }
+      return { status: 404 };
+    };
+    return { seen, lookup: liveLookup({ image: IMAGE, repository: 'r/r', token: 't', fetchImpl }) };
+  };
+  const refused = token(401);
+  assert.equal(await refused.lookup({ kind: 'image', name: 'sha-0000000' }), 'absent');
+  assert.deepEqual(refused.seen.slice(0, 2), ['basic', 'anonymous']);
+  const down = token(503);
+  await assert.rejects(
+    down.lookup({ kind: 'image', name: 'sha-0000000' }),
+    /token answered HTTP 503/,
+  );
+  assert.deepEqual(down.seen, ['basic']);
+});
+
+test('a draft Release with the tag reads as present', async () => {
+  const fetchImpl = async (url) => {
+    assert.equal(url, 'https://api.github.com/repos/bgoleno/opportun/releases?per_page=100');
+    return {
+      status: 200,
+      json: async () => [{ tag_name: 'v0.3.1' }, { tag_name: 'v0.3.2', draft: true }],
+    };
+  };
+  const lookup = liveLookup({
+    image: IMAGE,
+    repository: 'bgoleno/opportun',
+    token: 't',
+    fetchImpl,
+  });
+  assert.equal(await lookup({ kind: 'draftRelease', name: 'v0.3.2' }), 'present');
+  assert.equal(await lookup({ kind: 'draftRelease', name: 'v0.3.3' }), 'absent');
 });

@@ -29,7 +29,8 @@ export function isVersion(value) {
   if (dash === -1) return true;
   const pre = value.slice(dash + 1);
   if (pre.endsWith('.lock')) return false;
-  return pre.split('.').every((id) => /^[0-9A-Za-z-]+$/.test(id));
+  // SemVer: a numeric identifier has no leading zero.
+  return pre.split('.').every((id) => /^[0-9A-Za-z-]+$/.test(id) && !/^0[0-9]+$/.test(id));
 }
 
 /** The git tag and Release name for a version: `v` + the version, as the git convention has it. */
@@ -118,7 +119,7 @@ export async function check({ version, ref, sha, image, changelog, lookup }) {
  * tag's commit, not to the one built.
  */
 export async function releaseFree(version, lookup) {
-  for (const kind of ['gitTag', 'release']) {
+  for (const kind of ['gitTag', 'release', 'draftRelease']) {
     let answer;
     try {
       answer = await lookup({ kind, name: gitTagOf(version) });
@@ -169,14 +170,20 @@ const MANIFEST_TYPES = [
 export function liveLookup({ image, repository, token, fetchImpl = fetch }) {
   const [registry, ...path] = image.split('/');
   const repoPath = path.join('/');
+  const githubHeaders = {
+    Accept: 'application/vnd.github+json',
+    Authorization: `Bearer ${token}`,
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
   let registryToken;
   async function pullToken() {
     if (registryToken !== undefined) return registryToken;
     const url = `https://${registry}/token?scope=repository:${repoPath}:pull`;
     const basic = `Basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
     let res = await fetchImpl(url, { headers: { Authorization: basic } });
-    // A public package also answers without credentials.
-    if (res.status !== 200) res = await fetchImpl(url);
+    // A public package also answers without credentials; only a refused token falls back, so a
+    // 5xx is an error, and a private package never reads as "absent" through an anonymous 404.
+    if (res.status === 401) res = await fetchImpl(url);
     if (res.status !== 200) throw new Error(`${registry} token answered HTTP ${res.status}`);
     registryToken = (await res.json()).token;
     return registryToken;
@@ -189,13 +196,20 @@ export function liveLookup({ image, repository, token, fetchImpl = fetch }) {
       });
       return presence(res.status, `${image}:${name}`);
     }
+    if (kind === 'draftRelease') {
+      // releases/tags/ answers only published Releases, so a draft with this tag reads as absent
+      // there; the list shows drafts to the release job's token (contents: write). The newest 100.
+      const res = await fetchImpl(
+        `https://api.github.com/repos/${repository}/releases?per_page=100`,
+        { headers: githubHeaders },
+      );
+      if (res.status !== 200) throw new Error(`GitHub's releases list answered HTTP ${res.status}`);
+      const releases = await res.json();
+      return releases.some((r) => r.tag_name === name) ? 'present' : 'absent';
+    }
     const route = kind === 'gitTag' ? `git/ref/tags/${name}` : `releases/tags/${name}`;
     const res = await fetchImpl(`https://api.github.com/repos/${repository}/${route}`, {
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${token}`,
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
+      headers: githubHeaders,
     });
     return presence(res.status, `GitHub's ${route}`);
   };

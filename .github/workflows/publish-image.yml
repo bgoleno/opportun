@@ -147,10 +147,16 @@ jobs:
         #
         # One command a line, under set -e: `docker tag ... && docker push ...` inside an `if` is
         # exempt from set -e, so a failed tag went unnoticed and the job went on (tl on #489).
-        # The digest is checked too, since the Release's notes name it.
+        # The digest is read and checked right after the sha push, before any version tag: the
+        # Release's notes name it, and "Re-run failed jobs" can finish a release only if it is set.
         run: |
           set -euo pipefail
           docker push "$IMAGE:$TAG"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$TAG")"
+          case "$digest" in
+            "$IMAGE@sha256:"*) echo "digest=$digest" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::no pushed digest for $IMAGE:$TAG" && exit 1 ;;
+          esac
           if [ -n "$VERSION" ]; then
             docker tag "$IMAGE:$TAG" "$IMAGE:$VERSION"
             docker push "$IMAGE:$VERSION"
@@ -159,12 +165,6 @@ jobs:
             docker tag "$IMAGE:$TAG" "$IMAGE:latest"
             docker push "$IMAGE:latest"
           fi
-          # The pushed image's digest, for the Release's notes.
-          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$TAG")"
-          case "$digest" in
-            "$IMAGE@sha256:"*) echo "digest=$digest" >> "$GITHUB_OUTPUT" ;;
-            *) echo "::error::no pushed digest for $IMAGE:$TAG" && exit 1 ;;
-          esac
 
       - name: Report the tag and what to do with it
         env:
