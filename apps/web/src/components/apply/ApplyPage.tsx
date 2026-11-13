@@ -1201,10 +1201,10 @@ function ReviewStep({
             extension can fill this form. */}
         {canFill ? (
           <p className="text-sm">
-            {/* "then press Fill in this application" until #403 slice 2 fills on the click itself
-                (tl's ruling on #416): never more than the extension does today. */}
-            When the form opens, click the Opportun icon in your browser&apos;s toolbar, then press
-            Fill in this application. It fills in what you reviewed here.
+            {/* Opening the popup on the handed-off posting fills it (#403 slice 2), so there is no
+                button to press after the click. */}
+            When the form opens, click the Opportun icon in your browser&apos;s toolbar. It fills in
+            what you reviewed here.
           </p>
         ) : null}
         <p id={hintId} className="text-sm text-muted-foreground" aria-live="polite">
@@ -1339,6 +1339,7 @@ function OpenStep({
           </CardHeader>
           <CardContent className="grid gap-3 text-sm">
             {canFill ? <ExtensionSteps host={host} /> : <CopySteps />}
+            <ExtensionRead live={live} canFill={canFill} />
             <p>Did the tab not open? {link}.</p>
           </CardContent>
         </Card>
@@ -1407,13 +1408,31 @@ function ExtensionSteps({ host }: { host: string }) {
           alt=""
           className="inline size-4 align-text-bottom"
         />{' '}
-        in the toolbar, then press Fill in this application. Not there? Open your browser&apos;s
+        in the toolbar. It fills in what you reviewed. Not there? Open your browser&apos;s
         Extensions menu and pin Opportun.
       </li>
       <li>Check every field. The extension lists what it filled and what it left for you.</li>
       <li>Press the site&apos;s own Submit button. Only you can do this.</li>
     </ol>
   );
+}
+
+/**
+ * Whether the extension has been there (#403 slice 2, tl's note on #403, change 1): the time the
+ * server recorded its first read of this attempt. "Not filled yet" only where the extension can
+ * fill this form, so nothing is promised that the user's setup cannot do. The attempt is read
+ * again when the user comes back to the tab, so the line follows.
+ */
+function ExtensionRead({ live, canFill }: { live: SubmissionView; canFill: boolean }) {
+  if (live.prefillReadAt != null) {
+    return (
+      <p role="status">
+        The extension read this application at {formatDateTime(live.prefillReadAt)}. Check the form
+        and press Submit there.
+      </p>
+    );
+  }
+  return canFill ? <p className="text-muted-foreground">Not filled by the extension yet.</p> : null;
 }
 
 /**

@@ -11,7 +11,8 @@ import { applicationSubmissions, attachments, auditLog } from '../src/db/schema'
 import { REDACTED, redactDetail } from '../src/lib/audit';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
-import { api, handedOffAttempt, requisition } from './submissionFixtures';
+import { markPrefillRead } from '../src/repos/submissions';
+import { api, handedOffAttempt, requisition, submittedAttempt } from './submissionFixtures';
 
 const boot = useApi();
 const ON = { submissions: true };
@@ -134,6 +135,7 @@ describe('GET /connector/apply/current (#182 criterion 2)', () => {
           filename: null,
           bytes: null,
         },
+        firstRead: true,
       },
       reason: null,
     });
@@ -488,5 +490,79 @@ describe('rate limit (#182 criterion 5)', () => {
     expect((await current(app, t, url)).statusCode).toBe(429);
     // A different token has its own budget.
     expect((await current(app, await token(a, ['apply:assist']), url)).statusCode).toBe(200);
+  });
+});
+
+// #403 slice 2 (tl's design note with sec's rulings, condition 2): opening the popup on the
+// handed-off posting fills it once. The server records the first read that returns the attempt,
+// in the same statement that checks none was recorded, and says whether this read was it.
+describe('the first read of a handed-off attempt (#403)', () => {
+  const readAt = async (app: FastifyInstance, id: string) =>
+    (
+      await app.db
+        .select({ at: applicationSubmissions.prefillReadAt })
+        .from(applicationSubmissions)
+        .where(eq(applicationSubmissions.id, id))
+        .get()
+    )?.at;
+
+  it('the first read is first and records the time; a later one is not, and keeps it', async () => {
+    const { app, a } = await boot(ON);
+    const s = await handedOffAttempt(app, a);
+    const t = await token(a, ['apply:assist']);
+    expect(await readAt(app, s.id)).toBeNull();
+    const before = Date.now();
+    const first = await current(app, t, pageOf(s.ats));
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json().attempt.firstRead).toBe(true);
+    const at = await readAt(app, s.id);
+    expect(at).toBeGreaterThanOrEqual(before);
+    const again = await current(app, t, pageOf(s.ats));
+    expect(again.json().attempt.id).toBe(s.id);
+    expect(again.json().attempt.firstRead).toBe(false);
+    expect(await readAt(app, s.id)).toBe(at);
+  });
+
+  it('two reads at once: exactly one is first', async () => {
+    const { app, a } = await boot(ON);
+    const s = await handedOffAttempt(app, a);
+    const t = await token(a, ['apply:assist']);
+    const reads = await Promise.all(
+      Array.from({ length: 4 }, () => current(app, t, pageOf(s.ats))),
+    );
+    const firsts = reads.map((r) => r.json().attempt.firstRead as boolean);
+    expect(firsts.filter(Boolean)).toHaveLength(1);
+    expect(firsts).toHaveLength(4);
+  });
+
+  it('a miss records nothing: another posting, or an attempt that is not handed off', async () => {
+    const { app, a } = await boot(ON);
+    const s = await handedOffAttempt(app, a);
+    const reviewed = await handedOffAttempt(app, a, { stopAt: 'reviewed', title: 'Reviewed Role' });
+    const t = await token(a, ['apply:assist']);
+    expect((await current(app, t, requisition().url!)).json().attempt).toBeNull();
+    expect((await current(app, t, pageOf(reviewed.ats))).json().attempt).toBeNull();
+    expect(await readAt(app, s.id)).toBeNull();
+    expect(await readAt(app, reviewed.id)).toBeNull();
+  });
+
+  // The lookup and the mark are two statements: an attempt submitted in between is not marked.
+  it('an attempt no longer handed off is never marked, even called directly', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const ctx = { userId: a.userId, isAdmin: false };
+    expect(await markPrefillRead(app.db, ctx, s.id)).toBe(false);
+    expect(await readAt(app, s.id)).toBeNull();
+  });
+
+  it("the attempt's own view carries the time, for the Open step's line", async () => {
+    const { app, a } = await boot(ON);
+    const s = await handedOffAttempt(app, a);
+    const t = await token(a, ['apply:assist']);
+    expect((await api(a, 'GET', `/submissions/${s.id}`)).json().prefillReadAt).toBeNull();
+    await current(app, t, pageOf(s.ats));
+    const after = (await api(a, 'GET', `/submissions/${s.id}`)).json();
+    expect(after.prefillReadAt).toBe(await readAt(app, s.id));
+    expect(typeof after.prefillReadAt).toBe('number');
   });
 });

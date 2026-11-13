@@ -48,6 +48,7 @@ function attempt(over: Partial<SubmissionView> = {}): SubmissionView {
     reviewExpiresAt: NOW - 3 * DAY + 30 * MIN,
     reviewedAt: NOW - 3 * DAY,
     handedOffAt: NOW - 3 * DAY + 5 * MIN,
+    prefillReadAt: null,
     submittedAt: NOW - 3 * DAY + 20 * MIN,
     confirmedAt: null,
     confirmationKind: null,

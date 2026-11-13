@@ -301,6 +301,10 @@ export function useOpportunitySubmissions(opportunityId: string) {
       q.state.data?.items.some((s) => s.snapshotState === 'pending') === true
         ? SNAPSHOT_POLL_MS
         : false,
+    // Read again whenever the user comes back to this tab (#403 slice 2): the Open step then says
+    // whether the extension read the application while they were on the form. 'always', since
+    // they are often back well within the app's 30 second staleTime.
+    refetchOnWindowFocus: 'always',
   });
 }
 

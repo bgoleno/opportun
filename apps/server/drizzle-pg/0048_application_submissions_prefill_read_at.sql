@@ -1,0 +1,1 @@
+ALTER TABLE "application_submissions" ADD COLUMN "prefill_read_at" bigint;

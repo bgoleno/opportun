@@ -66,6 +66,9 @@ export const samePosting = (
 /** The attempt as GET /connector/apply/current returns it (routes/connectorApply.ts, #182). */
 export interface PrefillAttempt {
   id: string;
+  /** The role and company, for the line that says what is being filled (#403). */
+  opportunityTitle: string;
+  companyName: string;
   destinationUrl: string;
   fields: Record<string, string>;
   answers: { label: string; value: string }[];
@@ -75,6 +78,11 @@ export interface PrefillAttempt {
    * keys only. Each is listed for the user to fill, never filled.
    */
   withheld: string[];
+  /**
+   * Whether this read was the first for the attempt (#403 slice 2): the popup fills on open only
+   * then. False when the server does not say (one from before #403), so nothing fills by itself.
+   */
+  firstRead: boolean;
 }
 
 export type PrefillMiss = 'no_matching_attempt' | 'several_handed_off' | 'review_stale';
@@ -113,6 +121,9 @@ function parseCurrent(body: unknown): CurrentResult | null {
   if (!isRecord(a) || typeof a.id !== 'string' || typeof a.destinationUrl !== 'string') {
     return null;
   }
+  // Shown to the user before the fill on open: a server from before #403 sent them too (#182).
+  const opportunityTitle = typeof a.opportunityTitle === 'string' ? a.opportunityTitle : '';
+  const companyName = typeof a.companyName === 'string' ? a.companyName : '';
   const fields = stringRecord(a.fields);
   if (fields === null || !Array.isArray(a.answers) || !isRecord(a.resume)) return null;
   const answers: { label: string; value: string }[] = [];
@@ -131,6 +142,8 @@ function parseCurrent(body: unknown): CurrentResult | null {
     kind: 'attempt',
     attempt: {
       id: a.id,
+      opportunityTitle,
+      companyName,
       destinationUrl: a.destinationUrl,
       fields,
       answers,
@@ -140,6 +153,7 @@ function parseCurrent(body: unknown): CurrentResult | null {
         bytes: typeof r.bytes === 'number' ? r.bytes : null,
       },
       withheld,
+      firstRead: a.firstRead === true,
     },
   };
 }

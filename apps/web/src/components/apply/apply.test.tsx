@@ -2,6 +2,7 @@
 // review gate and the handoff, against a stubbed API. Criteria: 1 the review shows everything,
 // unticked; 2 any edit goes back to review; 3 a clock time, not a countdown; 4 keyboard and
 // screen-reader paths; 5 nothing of the feature where it is off.
+import { focusManager } from '@tanstack/react-query';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -84,6 +85,7 @@ function submission(over: Partial<SubmissionView> = {}): SubmissionView {
     reviewExpiresAt: null,
     reviewedAt: null,
     handedOffAt: null,
+    prefillReadAt: null,
     submittedAt: null,
     confirmedAt: null,
     confirmationKind: null,
@@ -1005,8 +1007,10 @@ describe('S5: open the form', () => {
 });
 
 describe('#416: the next step names the extension only where it can fill this form', () => {
+  // #403 slice 2: opening the popup on the handed-off posting fills it, so there is no button
+  // to press (tl's note on #403, change 2).
   const REVIEW_LINE =
-    "When the form opens, click the Opportun icon in your browser's toolbar, then press Fill in this application. It fills in what you reviewed here.";
+    "When the form opens, click the Opportun icon in your browser's toolbar. It fills in what you reviewed here.";
   const token = (over: Record<string, unknown> = {}) => ({
     id: 'tok-1',
     name: 'Laptop',
@@ -1117,8 +1121,9 @@ describe('#416: the next step names the extension only where it can fill this fo
       expect(text).toHaveLength(4);
       expect(text[0]).toMatch(/^Go to the boards\.greenhouse\.io tab\./);
       expect(text[1]).toContain(
-        'Click the Opportun icon in the toolbar, then press Fill in this application.',
+        'Click the Opportun icon in the toolbar. It fills in what you reviewed.',
       );
+      expect(text[1]).not.toContain('Fill in this application');
       expect(text[1]).toContain("Not there? Open your browser's Extensions menu and pin Opportun.");
       // The icon itself is shown beside the words.
       expect(card.querySelector('img[src="/favicon.svg"]')).not.toBeNull();
@@ -1142,6 +1147,59 @@ describe('#416: the next step names the extension only where it can fill this fo
     }
     // The details to copy stay below either way.
     expect(screen.getByText('Your details to copy')).toBeVisible();
+  });
+
+  // #403 slice 2: the Open step says whether the extension has been there, from the time the
+  // server recorded the first read (prefillReadAt).
+  it('where the extension can fill: "not filled yet" before it read this application', async () => {
+    await renderAfterTokens(
+      'open',
+      { items: [token()] },
+      submission({ status: 'handed_off', handedOffAt: NOW, prefillReadAt: null }),
+    );
+    expect(await screen.findByText('Not filled by the extension yet.')).toBeVisible();
+    expect(screen.queryByText(/The extension read this application at/)).toBeNull();
+  });
+
+  it('once it read this application: when, and what to do now', async () => {
+    await renderAfterTokens(
+      'open',
+      { items: [token()] },
+      submission({ status: 'handed_off', handedOffAt: NOW, prefillReadAt: NOW + MIN }),
+    );
+    const line = await screen.findByText(/The extension read this application at/);
+    expect(line).toHaveTextContent(
+      `The extension read this application at ${formatDateTime(NOW + MIN)}. Check the form and press Submit there.`,
+    );
+    expect(screen.queryByText('Not filled by the extension yet.')).toBeNull();
+  });
+
+  it('coming back to the tab reads the attempt again, so the line follows', async () => {
+    const api = mockApi({
+      ...routes(submission({ status: 'handed_off', handedOffAt: NOW, prefillReadAt: null })),
+      'GET /device-tokens': { items: [token()] },
+    });
+    renderStep('open');
+    expect(await screen.findByText('Not filled by the extension yet.')).toBeVisible();
+    const before = calls(api.calls, 'GET', '/opportunities/opp-1/submissions').length;
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await waitFor(() =>
+      expect(calls(api.calls, 'GET', '/opportunities/opp-1/submissions').length).toBeGreaterThan(
+        before,
+      ),
+    );
+    focusManager.setFocused(undefined);
+  });
+
+  it('where it cannot fill: no "not filled yet" line, which would promise it might', async () => {
+    await renderAfterTokens(
+      'open',
+      { items: [] },
+      submission({ status: 'handed_off', handedOffAt: NOW, prefillReadAt: null }),
+    );
+    await screen.findByText('Fill in the form, copying from your details below.');
+    expect(screen.queryByText('Not filled by the extension yet.')).toBeNull();
   });
 
   it('a token list the server will not give (an older server) promises nothing', async () => {
