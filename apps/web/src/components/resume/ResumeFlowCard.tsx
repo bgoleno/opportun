@@ -30,6 +30,7 @@ import {
   useOpportunitySends,
   useResumes,
   useScoreMatch,
+  useScoringMatch,
   useUpdateResume,
   type Resume,
   type ResumeSend,
@@ -38,7 +39,7 @@ import { GoogleConnectHint, RegisterDocCard, StatusBadge } from './ResumeList';
 import { RecordSendFields } from './ResumeSends';
 import { resumeFlowState, type ResumeFlowState } from './resumeFlow';
 
-type Step = 1 | 2 | 3 | 4 | 'done';
+export type Step = 1 | 2 | 3 | 4 | 'done';
 
 const STEP_LABELS = ['Base', 'Tailor', 'Finish', 'Apply'] as const;
 
@@ -76,8 +77,9 @@ export function useResumeFlow(opp: OpportunityView) {
   return { state, error, resumes, sends: sendItems, assisted };
 }
 
-/** The steps, the current one outlined and named, ApplyStepper's look (#400 note). */
-function FlowSteps({ current }: { current: Step }) {
+/** The steps, the current one outlined and named, ApplyStepper's look (#400 note). Shared
+ *  with the resume page's strip (#447). */
+export function FlowSteps({ current }: { current: Step }) {
   const at = current === 'done' ? STEP_LABELS.length + 1 : current;
   return (
     <>
@@ -108,13 +110,13 @@ function FlowSteps({ current }: { current: Step }) {
   );
 }
 
-const primaryClass = 'w-full sm:w-fit';
-const quietClass =
+export const primaryClass = 'w-full sm:w-fit';
+export const quietClass =
   'w-fit text-left text-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
 /** A quiet second action: a text button under the primary one. Disabled while its request is
  *  out, as the filled one is (tl on #443, blocking 3). */
-function Quiet({
+export function Quiet({
   onClick,
   disabled = false,
   children,
@@ -167,7 +169,7 @@ function tailorAgainBase(
 }
 
 /** "Sent: <title> via <where> on <date>." for state H. */
-function sentSentence(state: Extract<ResumeFlowState, { state: 'H' }>): string {
+export function sentSentence(state: Extract<ResumeFlowState, { state: 'H' }>): string {
   if (state.send !== undefined) {
     return `Sent: ${state.send.resumeTitle} via ${state.send.sentVia} on ${formatDate(state.send.sentAt)}.`;
   }
@@ -184,7 +186,8 @@ function appliedSentence(a: SubmissionView): string {
   return `Sent: ${a.resumeTitle} through ${atsLabel(a.atsKind)}${on}.`;
 }
 
-const NEXT: Record<ResumeFlowState['state'], string> = {
+/** What the live region says after an action leads to each state; the strip says the same. */
+export const NEXT: Record<ResumeFlowState['state'], string> = {
   A: 'Next: add a base resume.',
   B: 'Next: create a tailored copy.',
   C: 'Next: tailor it.',
@@ -609,7 +612,7 @@ function TailorAgain({ base, opportunityId }: { base: Resume; opportunityId: str
  * Marks a resume Final with the existing update. The button keeps the action's name, the toast
  * says "Marked final" and the badge "Final" (#400 note); a refusal says why here, in the flow.
  */
-function MarkFinal({
+export function MarkFinal({
   resume,
   onStart,
   onFail,
@@ -655,7 +658,6 @@ function MarkFinal({
 /** D's line: the resume, its status, and its match score with "Score again" (#175). */
 function ResumeLine({ resume, opportunityId }: { resume: Resume; opportunityId: string }) {
   const match = useMatchReport(resume.id, opportunityId);
-  const score = useScoreMatch(resume.id);
   const m = match.data;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
@@ -667,18 +669,38 @@ function ResumeLine({ resume, opportunityId }: { resume: Resume; opportunityId: 
           {m.stale ? ' (before the last tailoring)' : ''}
         </span>
       )}
+      <ScoreAgain resumeId={resume.id} opportunityId={opportunityId} />
+    </div>
+  );
+}
+
+/**
+ * "Score again", disabled while any scoring of this resume is out, whichever button sent it
+ * (tl on #447, ruling 3): the resume page also has the match report's own button.
+ */
+export function ScoreAgain({
+  resumeId,
+  opportunityId,
+}: {
+  resumeId: string;
+  opportunityId: string;
+}) {
+  const score = useScoreMatch(resumeId);
+  const scoring = useScoringMatch(resumeId);
+  return (
+    <>
       <Button
         variant="outline"
         size="sm"
-        disabled={score.isPending}
+        disabled={scoring}
         onClick={() => score.mutate(opportunityId)}
       >
-        {score.isPending ? 'Scoring...' : 'Score again'}
+        {scoring ? 'Scoring...' : 'Score again'}
       </Button>
       {score.error ? (
         <FormError message={resumeErrorMessage(score.error) ?? errorMessage(score.error)} />
       ) : null}
-    </div>
+    </>
   );
 }
 

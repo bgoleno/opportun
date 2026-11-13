@@ -1,5 +1,6 @@
 // One resume: its document, status, the tailoring chat and the match report (FR-U4).
 import { Link } from '@tanstack/react-router';
+import { useEffect, useState } from 'react';
 import { ArrowLeft, ExternalLink } from 'lucide-react';
 import { FormError } from '@/components/FormError';
 import { Badge } from '@/components/ui/badge';
@@ -7,9 +8,10 @@ import { errorMessage } from '@/lib/api';
 import { useMatchReport, useResume, type Resume } from './api';
 import { ChatPanel } from './ChatPanel';
 import { MatchPanel, MatchScoreHeader } from './MatchPanel';
+import { ResumeFlowStrip } from './ResumeFlowStrip';
 import { ResumeSentFor } from './ResumeSends';
 import { ResumeTextViewer } from './ResumeTextViewer';
-import { StatusControl } from './StatusControl';
+import { SentToLine, StatusControl } from './StatusControl';
 
 function BackLink() {
   return (
@@ -99,9 +101,18 @@ function ResumeWorkspaceLoaded({ resume }: { resume: Resume }) {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <MatchScoreHeader view={matchView} />
-            <StatusControl resume={resume} />
+            {/* A tailored copy's next step is the strip below; the full status choice stays as
+                a quiet "Change status" (#447). A base resume keeps the select as it was. */}
+            {resume.kind === 'tailored' && resume.opportunityId !== null ? (
+              <ChangeStatus resume={resume} />
+            ) : (
+              <StatusControl resume={resume} />
+            )}
           </div>
         </div>
+        {resume.kind === 'tailored' && resume.opportunityId !== null ? (
+          <ResumeFlowStrip resume={resume} opportunityId={resume.opportunityId} />
+        ) : null}
       </div>
       {/* Only when there is no external URL (issue #321): for local_file that is a fidelity
           guarantee, not a convenience -- readText on that store is lossless, since the stored
@@ -123,5 +134,30 @@ function ResumeWorkspaceLoaded({ resume }: { resume: Resume }) {
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Today's StatusControl behind a quiet button (#447, tl's ruling 4): every status stays
+ * reachable (back to Draft, In review, Submitted with where it went, the "Sent to" line), and
+ * "Mark as final" in the strip is no longer the select's job. Opening it puts focus on the select.
+ */
+function ChangeStatus({ resume }: { resume: Resume }) {
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (open) document.getElementById(`resume-status-${resume.id}`)?.focus();
+  }, [open, resume.id]);
+  return (
+    <div className="grid gap-2">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="w-fit text-left text-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        Change status
+      </button>
+      {open ? <StatusControl resume={resume} /> : <SentToLine resume={resume} />}
+    </div>
   );
 }
