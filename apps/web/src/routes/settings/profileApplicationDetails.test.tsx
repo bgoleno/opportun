@@ -61,7 +61,7 @@ describe('Settings > Profile > Application details (#401)', () => {
         'Phone country code',
         /The country your phone number belongs to, as the form's list shows it, for example United States/,
       ],
-      ['School', /as the form's list shows it, for example University of/],
+      ['School', /as the form's list shows it, for example Springfield State University\./],
       ['Degree', /as the form's list shows it, for example Bachelor's Degree/],
       ['How did you hear about this role?', /as the form's list shows it, for example LinkedIn/],
     ] as const) {
@@ -69,13 +69,27 @@ describe('Settings > Profile > Application details (#401)', () => {
     }
     // The city is the profile's own Location column, on the profile card above.
     expect(screen.getByLabelText('Location (city)')).toHaveAccessibleDescription(
-      /as the form's list shows it, for example Seattle, Washington/,
+      /as the form's list shows it, for example Springfield, Illinois, United States\./,
     );
     // Its placeholder shows the same wording as its hint (tl on #437).
     expect(screen.getByLabelText('Location (city)')).toHaveAttribute(
       'placeholder',
-      'Seattle, Washington, United States',
+      'e.g. Springfield, Illinois, United States',
     );
+  });
+
+  // #500: an empty field's grey text is a clearly generic example, never what reads as someone's
+  // own details, so a new user cannot take it for data already filled in.
+  it('shows neutral examples in the profile card, each marked as an example', async () => {
+    setup();
+    await card();
+    for (const [label, placeholder] of [
+      ['Headline', 'e.g. Senior software engineer'],
+      ['Location (city)', 'e.g. Springfield, Illinois, United States'],
+      ['Work authorization', 'e.g. Authorized to work, no sponsorship needed'],
+    ] as const) {
+      expect(screen.getByLabelText(label)).toHaveAttribute('placeholder', placeholder);
+    }
   });
 
   it('saves the details with the profile as stored, and only the details change', async () => {

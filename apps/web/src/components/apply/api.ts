@@ -51,6 +51,12 @@ export type SubmissionView = Submission & {
 const asListed = (example: string): string =>
   `Write it as the form's list shows it, for example ${example}.`;
 
+/**
+ * The city's example, in the hint and as the profile card's placeholder (#437). Every example a
+ * new user sees is a clearly generic one, never what reads as a real person's details (#500).
+ */
+export const LOCATION_EXAMPLE = 'Springfield, Illinois, United States';
+
 const DETAIL_INPUTS = new Map<
   ApplicationDetailKey,
   { type: 'text' | 'email' | 'tel' | 'url'; autoComplete: string; hint?: string }
@@ -74,11 +80,11 @@ const DETAIL_INPUTS = new Map<
     {
       type: 'text',
       autoComplete: 'address-level2',
-      hint: asListed('Seattle, Washington, United States'),
+      hint: asListed(LOCATION_EXAMPLE),
     },
   ],
   ['workAuthorization', { type: 'text', autoComplete: 'off' }],
-  ['school', { type: 'text', autoComplete: 'off', hint: asListed('University of Washington') }],
+  ['school', { type: 'text', autoComplete: 'off', hint: asListed('Springfield State University') }],
   ['degree', { type: 'text', autoComplete: 'off', hint: asListed("Bachelor's Degree") }],
   // 'off', not 'url': the browser's one "url" value is a home page, which belongs in Website.
   ['linkedinUrl', { type: 'url', autoComplete: 'off' }],
@@ -88,7 +94,7 @@ const DETAIL_INPUTS = new Map<
 ]);
 
 /** The hint under the city, also on the profile card's own Location field (#435). */
-export const LOCATION_HINT = asListed('Seattle, Washington, United States');
+export const LOCATION_HINT = asListed(LOCATION_EXAMPLE);
 
 /**
  * The profile values a form usually asks for, in the order the details step shows them.

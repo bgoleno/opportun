@@ -2805,8 +2805,11 @@ describe('#401: the details step, filled from the profile, the account and the l
         'Phone country code',
         /The country your phone number belongs to, as the form's list shows it, for example United States/,
       ],
-      ['Location (city)', /as the form's list shows it, for example Seattle, Washington/],
-      ['School', /as the form's list shows it, for example University of/],
+      [
+        'Location (city)',
+        /as the form's list shows it, for example Springfield, Illinois, United States\./,
+      ],
+      ['School', /as the form's list shows it, for example Springfield State University\./],
       ['Degree', /as the form's list shows it, for example Bachelor's Degree/],
       ['How did you hear about this role?', /as the form's list shows it, for example LinkedIn/],
     ];
