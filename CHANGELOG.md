@@ -261,6 +261,20 @@ milestone's work was merged.
   [#416](https://github.com/bgoleno/opportun/issues/416),
   [#428](https://github.com/bgoleno/opportun/issues/428),
   [#435](https://github.com/bgoleno/opportun/issues/435)).
+- **The extension chooses the one matching option in a Greenhouse list, and reports each choice
+  first.** On a Greenhouse form it fills the phone's country code, location, school and degree
+  lists, and a list question whose label equals one of your reviewed answers (such as "How did
+  you hear about this role?"), by choosing the single option that equals your value. If no
+  option, or more than one, equals it, or the list does not show in time (3 seconds), it
+  leaves the field empty and says why. It never touches the equal-opportunity and demographic
+  sections, multi-select lists, discipline, dates, a second education entry or **Locate me**,
+  and it leaves a list you already opened alone. The popup shows "Filling in the form" while it
+  runs and lists **Chosen from a list: check each before you submit** ahead of what it filled
+  in. The country detail is now called **Phone country code** in Opportun, with a hint; what
+  you stored under it does not change. The guide's lists paragraph used to say every list was
+  left for you
+  ([#402](https://github.com/bgoleno/opportun/issues/402); PR
+  [#461](https://github.com/bgoleno/opportun/pull/461)).
 - **The guide now says your resume reaches Greenhouse when the extension attaches it, not
   when you press Submit.** The behaviour is not new: when the form's resume field is empty and
   takes a PDF, the extension attaches your Final resume, and Greenhouse's own form uploads it
