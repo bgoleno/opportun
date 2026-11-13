@@ -54,7 +54,8 @@ export function StageReasonDialog(props: {
   kind: ReasonKind | null;
   subject: string;
   /** True while a previous confirm is still in flight: disables the confirm button so the
-   *  request cannot be sent twice (the dialog now stays open until it settles, see #124). */
+   *  request cannot be sent twice (the dialog now stays open until it settles, see #124), and
+   *  nothing closes the dialog until it settles (#476). */
   pending?: boolean;
   onCancel: () => void;
   onConfirm: (result: ReasonResult) => void;
@@ -78,7 +79,15 @@ export function StageReasonDialog(props: {
   });
   const { errors } = form.formState;
 
+  // While the confirm is out, the move is the server's to make: a cancel then would close the
+  // dialog and say "not moved", and the move would happen anyway (qa on #474, issue #476). So
+  // Cancel is disabled, the corner close button is not shown, and Escape, a backdrop click or a
+  // close the browser makes on its own are refused. A server error ends the pending state, and
+  // Cancel works again.
+  const pending = props.pending === true;
+
   function close() {
+    if (pending) return;
     form.reset();
     props.onCancel();
   }
@@ -100,7 +109,23 @@ export function StageReasonDialog(props: {
         if (!open) close();
       }}
     >
-      <DialogContent className="max-w-md">
+      <DialogContent
+        className="max-w-md"
+        showClose={!pending}
+        // Escape on a modal <dialog> fires `cancel`; refusing it keeps the dialog open.
+        onCancel={(e) => {
+          if (pending) e.preventDefault();
+        }}
+        // A browser may still close it (a second Escape is not always cancelable): show it again,
+        // since the dialog's own open state has not changed. Only while it is meant to be open: a
+        // confirmed move closes it (kind becomes null) possibly before pending has cleared.
+        onClose={(e) => {
+          if (!pending || props.kind === null) return;
+          const el = e.currentTarget;
+          if (typeof el.showModal === 'function') el.showModal();
+          else el.setAttribute('open', '');
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>
@@ -124,7 +149,7 @@ export function StageReasonDialog(props: {
             {(control) => <Textarea rows={3} {...control} {...form.register('note')} />}
           </FormField>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={close}>
+            <Button type="button" variant="outline" onClick={close} disabled={pending}>
               Cancel
             </Button>
             <Button
