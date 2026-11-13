@@ -467,7 +467,7 @@ Principles applied from `docs/engineering-principles.md`: prove the absence of d
 
 ## 9. Rollout: small, independently shippable milestones
 
-Each milestone is behind a per-instance config flag `OPPORTUN_SUBMISSIONS=1`, default off, off in demo, until M2a is accepted.
+Each milestone is behind a per-instance config flag, `OPPORTUN_SUBMISSIONS`, always off on the demo. It was off unless set to `1` while the milestones were built. Since https://github.com/bgoleno/opportun/issues/455 (the owner's decision, after M2a closed) it is on by default, and an operator turns it off with `0`; any other value refuses to start.
 
 The Tech Lead re-cut these milestones against main on 2026-11-02 (https://github.com/bgoleno/opportun/issues/79#issuecomment-6572248522), and each has its own issue. The original M0 to M4 shape stands; M1 is now four PRs and M2 two. At 3a2b3bd, M1, M2 and M4 are closed; M0 (#113) and M3 (#120) are open.
 
@@ -483,7 +483,7 @@ The Tech Lead re-cut these milestones against main on 2026-11-02 (https://github
 | M3  | Extension prefill, Greenhouse first             | #120  | The `apply:assist` scope, device routes, a separate popup path, the filler and destination pinning. Gated on M0 item 2 for that ATS (whether prefill works on real forms); the owner lifted the terms gate on 2026-11-02 (#113). Lever and Ashby follow as small PRs. |
 | M4  | Confirmation page capture                       | #121  | The confirmation route, the popup button and the `capture` activity. After M3.                                                                                                                                                                                        |
 
-Rules for every milestone: Opportun never transmits an application; everything sits behind `OPPORTUN_SUBMISSIONS=1` (default off, always off on the demo) until M2a is accepted, and M1 alone is never switched on for users; one opportunity per request, with no batch or list-and-act route.
+Rules for every milestone: Opportun never transmits an application; everything sits behind `OPPORTUN_SUBMISSIONS` (off unless `1` until M2a; on by default since #455, off with `0`; always off on the demo), and M1 alone is never switched on for users; one opportunity per request, with no batch or list-and-act route.
 
 Each milestone is releasable alone; M1 without M2 is already useful as "resume I sent" bookkeeping, but I would not release M1 to users without M2's follow-up job (a submitted row that silently stays `submitted` forever is a false "never" in the sense of `docs/engineering-principles.md` lines 215–226).
 

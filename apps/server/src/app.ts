@@ -432,11 +432,17 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   // just correct when called directly.
   if (cfg.demo) await seedSchedule(db, DEMO_RESET_JOB_KIND, DEMO_RESET_CRON);
   // Only where application submissions exist (issue #116): elsewhere there is nothing to expire,
-  // and Settings > Jobs should not show a schedule the deployment has no use for.
+  // and Settings > Jobs should not show a schedule the deployment has no use for. With the
+  // feature off, boot removes them (and any run they queued): since assisted apply is on by
+  // default (#455), OPPORTUN_SUBMISSIONS=0 after an upgrade is the usual way off, on a database
+  // that already has them.
   if (submissionsEnabled(cfg)) {
     await seedSchedule(db, SUBMISSION_EXPIRE_JOB_KIND, SUBMISSION_EXPIRE_CRON);
     // The follow-up for applications with no confirmation (#118), same reasoning.
     await seedSchedule(db, SUBMISSION_FOLLOWUP_JOB_KIND, SUBMISSION_FOLLOWUP_CRON);
+  } else {
+    await removeSchedule(db, SUBMISSION_EXPIRE_JOB_KIND);
+    await removeSchedule(db, SUBMISSION_FOLLOWUP_JOB_KIND);
   }
   await seedSchedule(db, GMAIL_SYNC_ALL_KIND, GMAIL_SYNC_ALL_CRON);
   await seedSchedule(db, REFINE_JOB_KIND, REFINE_CRON);
@@ -593,7 +599,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       await api.register(connectorApplyRoutes);
       await api.register(networkRoutes);
       await api.register(referralRoutes);
-      // Assisted apply (#114): every route 404s unless OPPORTUN_SUBMISSIONS=1, never on the demo.
+      // Assisted apply (#114): every route 404s with OPPORTUN_SUBMISSIONS=0, and on the demo.
       await api.register(submissionRoutes);
       await api.register(obsSettingsRoutes);
       await api.register(obsTraceRoutes);

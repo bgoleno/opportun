@@ -74,10 +74,10 @@ with both `capture:push` and `apply:assist`.
   involved, whether AI refined the capture, and the stage the capture moved an opportunity
   to, if any. It cannot enumerate or fetch records.
 - **`apply:assist`** (the capture extension, for assisted apply): stored application data.
-  This is the only scope that reads stored records, and it applies only with assisted apply
-  switched on (`OPPORTUN_SUBMISSIONS=1`, never on the demo). With it off, this scope cannot
-  be created and its routes answer 404 whatever a token's scopes, so the two scopes above are
-  all a device token can do. With it on, a token with this scope can:
+  This is the only scope that reads stored records. It is available unless the operator turns
+  assisted apply off with `OPPORTUN_SUBMISSIONS=0`, and never on the demo. With it off, this
+  scope cannot be created and its routes answer 404 whatever a token's scopes, so the two
+  scopes above are all a device token can do. With it on, a token with this scope can:
   - read the application handed off to a posting it names: the field values and answers the
     user reviewed, the role title, company and destination, and the resume copy;
   - look up an application from a page on the same ATS board: the id, role title and company

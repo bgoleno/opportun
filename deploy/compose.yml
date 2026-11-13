@@ -80,6 +80,8 @@ services:
       # reads them itself when it loads and refuses an empty string, so the server would not
       # start), OPPORTUN_DEMO (compose.demo.yml passes it), an inline OPPORTUN_MASTER_KEY (it
       # would override the key file above) and SMTP_URL (reserved).
+      # Assisted apply is on unless this is 0 (issue #455); any value but empty, 0 or 1 stops the
+      # server from starting.
       OPPORTUN_SUBMISSIONS: ${OPPORTUN_SUBMISSIONS:-}
       OPPORTUN_DAILY_REVIEW_CAP: ${OPPORTUN_DAILY_REVIEW_CAP:-}
       OPPORTUN_AI_ALLOW_LOOPBACK_HTTP: ${OPPORTUN_AI_ALLOW_LOOPBACK_HTTP:-}

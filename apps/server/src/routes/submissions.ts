@@ -8,8 +8,8 @@
 //   test/submissionRouteShape.test.ts, which reads the registered paths). A body names no
 //   opportunity or submission: the only id it may carry is the chosen resume's, and an id array
 //   or any other key is refused by the strict schemas (test/submissions.test.ts).
-// - The whole feature is behind OPPORTUN_SUBMISSIONS=1 and never on the demo: otherwise every
-//   route answers 404 feature_unavailable from its own first hook. The app-wide session and
+// - The whole feature is on unless OPPORTUN_SUBMISSIONS=0 (#455), and never on the demo: there
+//   every route answers 404 feature_unavailable from its own first hook. The app-wide session and
 //   CSRF hooks run before it, as for every route; nothing of a submission is read before it.
 // - A body with an unknown key, or a value of the wrong shape (an id array included), is 422.
 import {
