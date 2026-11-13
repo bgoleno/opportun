@@ -185,7 +185,7 @@ export function OpportunityDetail({
           <DetailsPanel opp={opp} />
         </TabsContent>
         <TabsContent value="resume" className="pt-2">
-          <OpportunityResumeTab opportunityId={opp.id} />
+          <OpportunityResumeTab opp={opp} />
         </TabsContent>
         <TabsContent value="communications" className="pt-2">
           <CommunicationsTab opportunityId={opp.id} />
