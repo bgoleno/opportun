@@ -467,6 +467,26 @@ export function processLogger(): Logger {
  * the exit Node would make, and a warning is its type and code only. Installed by the server
  * process (index.ts), not by tests or CLIs.
  */
+/**
+ * How many frames V8 keeps in a stack, set once at startup by raiseStackTraceLimit (#436). Node
+ * keeps 10, so an error a dependency threw under 10 or more of its own frames reached the log
+ * gate without the Opportun frame that called it, and collapsing the dependency's frames into one
+ * placeholder could not bring it back. 50 leaves room for deep chains (a framework's plugins, a
+ * driver's internals) under the gate's own cap of MAX_FRAMES written. The cost is paid when an
+ * error is made, only for frames that exist: about 1.3 microseconds for one 66 frames deep at 10,
+ * and 3.4 at 50; about 4 and 16 with its stack text read (measured on #436).
+ */
+export const STACK_TRACE_LIMIT = 50;
+
+/**
+ * Raises Error.stackTraceLimit to STACK_TRACE_LIMIT. The server's main() calls it first; code
+ * that lowers the limit for a short stack of its own (db/client.ts's callSite) restores what it
+ * found.
+ */
+export function raiseStackTraceLimit(): void {
+  Error.stackTraceLimit = STACK_TRACE_LIMIT;
+}
+
 export function installProcessHandlers(): void {
   // A line written just before exiting must reach stderr first: on a pipe that write can be
   // asynchronous, so the crash path exits from the write's callback (or after a second at most).
