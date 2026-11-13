@@ -2,36 +2,31 @@
 // real server with OPPORTUN_SUBMISSIONS=1 (playwright.config.ts).
 //
 // Nothing leaves the machine: every request to a host other than the test server is answered
-// here by a stub page, so the handoff's new tab never reaches a real ATS (Opportun never
-// submits; the e2e never even visits).
+// by a stub page (stubOtherHosts), so the handoff's new tab never reaches a real ATS (Opportun
+// never submits; the e2e never even visits).
 import { expect, test, type Page, type PlaywrightWorkerArgs } from '@playwright/test';
-import { BASE_URL } from '../playwright.config';
-import { card, choose, createCaptureToken, createOpportunity, registerUser } from './helpers';
-
-const STUB = '<!doctype html><title>Stub ATS</title><h1>Stub application form</h1>';
+import {
+  captureGreenhouseOpportunity,
+  card,
+  choose,
+  createOpportunity,
+  registerBaseResume,
+  registerUser,
+  stubOtherHosts,
+} from './helpers';
 
 test.beforeEach(async ({ context }) => {
-  await context.route(
-    (url) => !url.href.startsWith(BASE_URL),
-    (route) => route.fulfill({ status: 200, contentType: 'text/html', body: STUB }),
-  );
+  await stubOtherHosts(context);
 });
 
 /**
- * An opportunity whose posting the server confirmed on a recognised Greenhouse board, and a
- * final resume. The path a user takes: the extension captures the LinkedIn job page, and the
- * posting job (posting.reconcile, every second here) finds the same job on the company's board
- * (the OPPORTUN_SOURCE_MOCK fixture: boards.greenhouse.io/vandelay/jobs/1002), which names the
- * ATS and the requisition. The LinkedIn page itself is never fetched: the capture carries it.
+ * An opportunity whose posting the server confirmed on a recognised Greenhouse board
+ * (captureGreenhouseOpportunity), and a final resume.
  */
 async function readyOpportunity(page: Page, playwright: PlaywrightWorkerArgs['playwright']) {
   await registerUser(page);
 
-  await page.goto('/resumes');
-  await page
-    .getByLabel('Google Doc link')
-    .fill('https://docs.google.com/document/d/e2eApplyResumeDoc1/edit');
-  await page.getByRole('button', { name: 'Register' }).click();
+  await registerBaseResume(page, 'e2eApplyResumeDoc1');
   await page.getByRole('link', { name: 'Jane Example Base Resume' }).click();
   // Choosing a status saves it: wait for the server to have it.
   const saved = page.waitForResponse(
@@ -40,34 +35,7 @@ async function readyOpportunity(page: Page, playwright: PlaywrightWorkerArgs['pl
   await choose(page, 'Status', 'Final');
   await saved;
 
-  const token = await createCaptureToken(page);
-  const extension = await playwright.request.newContext({ baseURL: BASE_URL });
-  let opportunityId: string;
-  try {
-    const res = await extension.post('/api/v1/connector/capture', {
-      headers: { authorization: `Bearer ${token}` },
-      data: {
-        url: 'https://www.linkedin.com/jobs/view/3901234599/',
-        title: 'Staff Platform Engineer | Vandelay Industries | LinkedIn',
-        text: [
-          'Vandelay Industries',
-          'Staff Platform Engineer',
-          'Remote (US) · 2 days ago',
-          'Full-time',
-          'About the job',
-          'Lead our Go platform on Kubernetes. Terraform and on-call leadership a plus.',
-          'About the company',
-          'Vandelay Industries',
-        ].join('\n'),
-      },
-    });
-    expect(res.status(), await res.text()).toBe(201);
-    const body = (await res.json()) as { kind: string; opportunityId: string };
-    expect(body.kind).toBe('job');
-    opportunityId = body.opportunityId;
-  } finally {
-    await extension.dispose();
-  }
+  const opportunityId = await captureGreenhouseOpportunity(page, playwright);
 
   await page.goto(`/opportunities/${opportunityId}`);
   const panel = page.getByRole('region', { name: 'Assisted apply' });
