@@ -291,12 +291,24 @@ milestone's work was merged.
 
 - **The optional settings in `deploy/.env` now reach the server on Compose.** `compose.yml` passes
   `OPPORTUN_SUBMISSIONS`, `OPPORTUN_DAILY_REVIEW_CAP`, `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP`,
-  `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`, `DB_POOL_MAX` and `OPPORTUN_PEPPER_VERSION` and
-  `OPPORTUN_PEPPER_V1` to `V9`. **On upgrade:** a line for one of these that was sitting in an
-  existing `deploy/.env` took no effect before and now does, at the next `docker compose up -d`;
-  check for stray lines. An empty value is the same as unset. `ANTHROPIC_BASE_URL` and
-  `OPENAI_BASE_URL` still need a `compose.override.yml`
-  ([#417](https://github.com/bgoleno/opportun/issues/417)).
+  `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`, `DB_POOL_MAX`, `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`
+  and `OPPORTUN_PEPPER_VERSION` and `OPPORTUN_PEPPER_V1` to `V9`. **On upgrade:** a line for one
+  of these that was sitting in an existing `deploy/.env` took no effect before and now does, at
+  the next `docker compose up -d`; check for stray lines, the two base URLs in particular, since
+  a value there now sends every request for that provider to that address. An empty value is the
+  same as unset
+  ([#417](https://github.com/bgoleno/opportun/issues/417); the two base URLs,
+  [#423](https://github.com/bgoleno/opportun/issues/423) and PR
+  [#479](https://github.com/bgoleno/opportun/pull/479)).
+- **An empty `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` no longer stops the server from
+  starting.** The AI library refused an empty or blank value ("baseURL must be a non-empty
+  string"), which crashed the container as soon as compose passed the variable empty. The
+  server and its command-line tools (backup, restore, password reset, seed, copy to Postgres)
+  now unset an empty or blank value before the library loads, so it is the same as not setting
+  it. CI gains a fourth Docker leg, `docker (minimal)`, that starts the stack from an empty
+  `.env` and fails if the container restarts; it is now a required check
+  ([#423](https://github.com/bgoleno/opportun/issues/423); PR
+  [#479](https://github.com/bgoleno/opportun/pull/479)).
 - **Two transitive dependencies moved so the dependency scan passes.** `hono` 4.13.13 to
   4.13.18 and `@hono/node-server` 2.1.5 to 2.1.8, both pulled in by the MCP client library, in
   `pnpm-lock.yaml` only. Opportun uses that library's client side only, and a test now fails if
