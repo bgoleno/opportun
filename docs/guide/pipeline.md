@@ -198,8 +198,9 @@ review, or **Record that you sent** _title_ once it is Final.
 to the new sentence, and a status line read by screen readers says what happened and what is next,
 for example "Marked final. Next: apply."
 
-**Other ways to add a resume** is a collapsed section beside the list, open while you are at step
-1 and closed from step 2 on, and you can open or close it yourself. It holds **Attach an existing
+**Other ways to add a resume** is a collapsed section beside the list, open until you have a
+tailored copy (and while you are sending a base resume as it is), closed from then on, and you can
+open or close it yourself. It holds **Attach an existing
 resume** and **Attach a new document**. **Attach an existing resume** links one already registered
 elsewhere in Opportun; **Attach a new document** registers and attaches a document not yet in
 Opportun in one step. There is no separate **Create tailored copy** card: it is a button in the card at the top.
