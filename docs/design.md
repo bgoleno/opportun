@@ -1187,7 +1187,13 @@ so a mistake in code fails CI instead of passing in silence.
   function name and its path relative to the root. Any other frame (Node's own, a builtin's, a
   dependency's, wherever it is installed) is not the app's: each run of them is one fixed
   `at <external>`, with no name and no path, so they cannot fill the 20-frame cap before the
-  app's own frames (https://github.com/bgoleno/opportun/issues/399). An error whose message has
+  app's own frames (https://github.com/bgoleno/opportun/issues/399). The server raises Node's
+  stack frame limit (`Error.stackTraceLimit`) from 10 to 50 at startup, so an error a
+  dependency throws under many of its own frames still reaches the gate with the app's frame
+  that called it (https://github.com/bgoleno/opportun/issues/436). That limit is the main
+  thread's: a worker thread has its own, and the background checkpointer's
+  (https://github.com/bgoleno/opportun/issues/383) keeps Node's 10, enough for its own stacks,
+  which are a few frames deep under a timer. An error whose message has
   a `: ` past 4,096 characters, such as a validation error with many issues as its cause, gets
   the whole-message reading only and logs no frames (a cost cap on the header search). Every
   other line of a stack, where a message can
