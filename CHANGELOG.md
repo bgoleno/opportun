@@ -251,6 +251,13 @@ milestone's work was merged.
   [#416](https://github.com/bgoleno/opportun/issues/416),
   [#428](https://github.com/bgoleno/opportun/issues/428),
   [#435](https://github.com/bgoleno/opportun/issues/435)).
+- **The guide now says your resume reaches Greenhouse when the extension attaches it, not
+  when you press Submit.** The behaviour is not new: when the form's resume field is empty and
+  takes a PDF, the extension attaches your Final resume, and Greenhouse's own form uploads it
+  at once, as it does when you choose a file yourself. So Greenhouse can hold your resume even
+  if you then decide not to apply. Press **Fill in this application** only when you mean to
+  apply ([#468](https://github.com/bgoleno/opportun/issues/468); PR
+  [#470](https://github.com/bgoleno/opportun/pull/470)).
 - **A company's careers page and domain come from the domains its name gives.** The result is the
   same with or without a message; a careers page found through a sender is used for that
   opportunity only and is not saved on the company. Values already saved are not changed
