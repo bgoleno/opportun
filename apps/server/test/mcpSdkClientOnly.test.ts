@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const SRC = join(__dirname, '..', 'src');
-const SDK = /['"](@modelcontextprotocol\/sdk(?:\/[^'"]*)?)['"]/g;
+// The package root and every subpath: anything not allowed below is refused.
+const SDK = /['"](@modelcontextprotocol\/sdk[^'"]*)['"]/g;
 const ALLOWED = /^@modelcontextprotocol\/sdk\/(client\/|shared\/|types\.js$)/;
 
 function sourceFiles(): string[] {
