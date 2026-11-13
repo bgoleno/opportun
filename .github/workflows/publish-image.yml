@@ -4,13 +4,24 @@
 # merging.
 #
 # Three kinds of tag, for two audiences:
-#   sha-<7>   every build. Immutable by convention. The demo host pins one of these, because
-#             its pull_policy: always plus a moving tag would leave no way to say what is running
-#             or to roll back.
+#   sha-<7>   every build. One build per commit: refused if it already exists, so it never moves
+#             (on 2026-11-13 a rebuild at the same commit moved one to a different image). The
+#             demo host pins one of these, because its pull_policy: always plus a moving tag
+#             would leave no way to say what is running or to roll back.
 #   latest    moved to this build, only when dispatched from main. For adopters who want
 #             whatever main last published.
-#   <version> optional, e.g. 0.1.0, when a release version is given at dispatch. Refused if it
-#             already exists, so a version always names one build.
+#   <version> optional, e.g. 0.1.0, when a release version is given at dispatch. Only from main.
+#             Refused if the image tag, the git tag or the Release already exists, so a version
+#             always names one build.
+#
+# A version is a release (#478): the `release` job then makes the git tag v<version> and a GitHub
+# Release on the exact commit built, with the notes from CHANGELOG.md's `## <version> (date)`
+# section. That section is required: a release is the commit that renames `## Unreleased` to it.
+# Every image carries org.opencontainers.image.revision (the commit) and .version (the version,
+# or its sha tag), and OPPORTUN_VERSION and OPPORTUN_COMMIT, which Settings shows (#480).
+#
+# The checks and the notes are .github/scripts/publish.mjs, tested by publish.test.mjs: this
+# workflow publishes in public, so it is never run to test it.
 #
 # Why this exists at all, rather than the `docker build && docker push` the deployment doc
 # used to describe as the only route: that route runs on the owner's Apple Silicon Mac, which
@@ -37,48 +48,51 @@ concurrency:
   group: publish-image
   cancel-in-progress: false
 
+# Read only here; each job asks for the one write it needs.
 permissions:
   contents: read
-  # Lets the automatically-provided GITHUB_TOKEN push to ghcr.io/<owner>/<repo>. This is the
-  # whole reason no personal access token is involved: the `write:packages` PAT the deployment
-  # doc describes is needed only when pushing from a laptop.
-  packages: write
 
 jobs:
   publish:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    permissions:
+      contents: read
+      # Lets the automatically-provided GITHUB_TOKEN push to ghcr.io/<owner>/<repo>. This is the
+      # whole reason no personal access token is involved: the `write:packages` PAT the deployment
+      # doc describes is needed only when pushing from a laptop.
+      packages: write
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      digest: ${{ steps.push.outputs.digest }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Derive the tag
-        id: tag
-        # Exactly seven characters sliced from GITHUB_SHA rather than `git rev-parse --short`,
-        # which picks its own length from the repository's object count and would not reliably
-        # agree with what the same command prints on a developer's machine. The tag has to be
-        # typed into the host's .env by hand, so it must be predictable, not merely unique.
-        run: echo "tag=sha-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .nvmrc
 
-      - name: Decide the extra tags
-        id: extra
-        # The version input is free text typed into a form, so it goes through env and is
-        # checked against a strict pattern before it gets anywhere near a command line or an
-        # image reference. A leading `v` is refused rather than stripped: one spelling per
-        # version, so nobody has to guess whether it is 0.1.0 or v0.1.0.
-        #
-        # `latest` moves only on main. Dispatching from a branch is a legitimate way to test a
-        # build, and must not silently become what every adopter pulls.
+      - name: Check before building
+        id: check
+        # Every refusal before anything is built or pushed (publish.mjs check), read-only:
+        # - the version pattern. The input is free text typed into a form, so it goes through env
+        #   and is checked before it gets anywhere near a command line or an image reference. A
+        #   leading `v` is refused rather than stripped: one spelling per version;
+        # - a version only from main, since a version makes a public tag and Release;
+        # - a version's CHANGELOG.md section;
+        # - the sha tag, the version's image tag, its git tag v<version> and its Release.
+        # A lookup that cannot answer refuses too. It writes the tags: the sha tag is exactly seven
+        # characters of GITHUB_SHA, not `git rev-parse --short`, whose length depends on the
+        # repository: it is typed into the host's .env by hand, so it must be predictable.
+        # `latest` moves only on main: dispatching from a branch tests a build, and must not
+        # become what every adopter pulls.
         env:
           VERSION: ${{ inputs.version }}
           REF: ${{ github.ref }}
-        run: |
-          if [ -n "$VERSION" ] && ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
-            echo "::error::version '$VERSION' is not MAJOR.MINOR.PATCH (optionally -prerelease), without a leading v"
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if [ "$REF" = "refs/heads/main" ]; then echo "latest=true" >> "$GITHUB_OUTPUT"; else echo "latest=false" >> "$GITHUB_OUTPUT"; fi
+          IMAGE: ghcr.io/${{ github.repository_owner }}/opportun
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node .github/scripts/publish.mjs check
 
       - name: Log in to GHCR
         # --password-stdin, never -p: an argument is visible in the process list of every other
@@ -88,26 +102,13 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
 
-      - name: Refuse a version that is already published
-        if: steps.extra.outputs.version != ''
-        # Checked before building, so a mistyped re-release costs seconds rather than a build.
-        # A version that could be re-pushed would stop meaning one specific build, which is the
-        # only thing a version tag is for.
-        env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/opportun
-          VERSION: ${{ steps.extra.outputs.version }}
-        run: |
-          if docker manifest inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
-            echo "::error::$IMAGE:$VERSION already exists. Pick a new version."
-            exit 1
-          fi
-
       - name: Build
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/opportun
-          TAG: ${{ steps.tag.outputs.tag }}
+          TAG: ${{ steps.check.outputs.tag }}
           # Already checked against the version pattern above, or empty.
-          VERSION: ${{ steps.extra.outputs.version }}
+          VERSION: ${{ steps.check.outputs.version }}
+          LABEL_VERSION: ${{ steps.check.outputs.label_version }}
         # --platform is redundant on an amd64 runner and stated anyway: it is the one property
         # of this artifact that the demo host cannot tolerate being wrong, so it belongs in the
         # command rather than in an assumption about the runner.
@@ -116,23 +117,27 @@ jobs:
         # now, not reuse whatever a previous job happened to leave on this runner.
         #
         # The version (empty when none was given) and the commit go into the image, where Settings
-        # shows them (#480). The server shows only a value that is a version or a commit.
+        # shows them (#480). The server shows only a value that is a version or a commit. The
+        # same two are the OCI labels, so a pulled image says which commit it is (#478).
         run: |
           docker build \
             --platform linux/amd64 \
             --pull \
             --build-arg "OPPORTUN_VERSION=$VERSION" \
             --build-arg "OPPORTUN_COMMIT=$GITHUB_SHA" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$LABEL_VERSION" \
             -f deploy/Dockerfile \
             -t "$IMAGE:$TAG" \
             .
 
       - name: Push
+        id: push
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/opportun
-          TAG: ${{ steps.tag.outputs.tag }}
-          VERSION: ${{ steps.extra.outputs.version }}
-          LATEST: ${{ steps.extra.outputs.latest }}
+          TAG: ${{ steps.check.outputs.tag }}
+          VERSION: ${{ steps.check.outputs.version }}
+          LATEST: ${{ steps.check.outputs.latest }}
         # The sha tag goes first, so the immutable reference exists before any moving one is
         # pointed at the same image. If a later push fails, what is left is a published build
         # with fewer names, never a `latest` or a version that resolves to nothing.
@@ -144,14 +149,16 @@ jobs:
           if [ "$LATEST" = "true" ]; then
             docker tag "$IMAGE:$TAG" "$IMAGE:latest" && docker push "$IMAGE:latest"
           fi
+          # The pushed image's digest, for the Release's notes.
+          echo "digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$TAG")" >> "$GITHUB_OUTPUT"
 
       - name: Report the tag and what to do with it
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/opportun
-          TAG: ${{ steps.tag.outputs.tag }}
+          TAG: ${{ steps.check.outputs.tag }}
           REF: ${{ github.ref_name }}
-          VERSION: ${{ steps.extra.outputs.version }}
-          LATEST: ${{ steps.extra.outputs.latest }}
+          VERSION: ${{ steps.check.outputs.version }}
+          LATEST: ${{ steps.check.outputs.latest }}
         # Written to the run summary because the next step is manual and happens elsewhere:
         # somebody has to read a value off this page and type it into a file on another
         # machine. Printing it to a log line that scrolls past is not good enough.
@@ -166,7 +173,7 @@ jobs:
             echo "Built from: \`$REF\` at \`$GITHUB_SHA\`. Pushed:"
             echo
             echo "- \`$IMAGE:$TAG\`"
-            if [ -n "$VERSION" ]; then echo "- \`$IMAGE:$VERSION\`"; fi
+            if [ -n "$VERSION" ]; then echo "- \`$IMAGE:$VERSION\` (the release job tags and releases \`v$VERSION\`)"; fi
             if [ "$LATEST" = "true" ]; then echo "- \`$IMAGE:latest\`"; else echo "- \`latest\` not moved: dispatched from \`$REF\`, not main"; fi
             echo
             echo "Set that variable in the demo host's \`.env\`, then on the host:"
@@ -181,3 +188,40 @@ jobs:
             echo
             echo "The package is public by decision, so anyone can \`docker pull\` these with no login."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    # A version only, after a successful publish: a failed or cancelled publish never starts this
+    # job, so it leaves no tag or Release behind. The only job with contents: write, which
+    # `gh release create` needs to make the git tag and the Release; it pushes no image.
+    # If this job fails after the publish, "Re-run failed jobs" retries it alone: that is the way
+    # to finish, since a new dispatch would be refused (the image tags exist now).
+    needs: publish
+    if: needs.publish.outputs.version != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Tag and release the commit built
+        env:
+          VERSION: ${{ needs.publish.outputs.version }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          IMAGE: ghcr.io/${{ github.repository_owner }}/opportun
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # The tag and the Release are checked free again first: `gh release create` on a tag that
+        # exists would attach the Release to that tag's commit instead of the one built. --target
+        # makes the tag on GITHUB_SHA, the commit the image was built from. A prerelease version
+        # (with a -suffix) is marked so, which makes a first live test cheap to undo.
+        run: |
+          node .github/scripts/publish.mjs release-free
+          node .github/scripts/publish.mjs notes "$RUNNER_TEMP/notes.md"
+          prerelease=""
+          case "$VERSION" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "v$VERSION" --target "$GITHUB_SHA" --title "Opportun $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" $prerelease
