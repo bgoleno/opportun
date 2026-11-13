@@ -208,7 +208,8 @@ test.describe('a keyboard drag reaches the collapsed rails, in column order (#47
 
     await card(page, opp.company, opp.title).focus();
     await page.keyboard.press('Space');
-    await expect(liveRegion(page)).toContainText('Picked up');
+    // Picked up, then at once over its own column (dnd-kit's onDragOver replaces "Picked up").
+    await expect(liveRegion(page)).toHaveText(`${name} is over the Offer column.`);
     await page.keyboard.press('ArrowRight');
     await expect(liveRegion(page)).toHaveText(`${name} is over the Dismissed column.`);
     await page.keyboard.press('ArrowRight');
@@ -233,6 +234,7 @@ test.describe('a keyboard drag reaches the collapsed rails, in column order (#47
     page,
   }) => {
     await registerUser(page);
+    await page.goto('/pipeline');
     const expand = page.getByRole('button', { name: /^Expand Dismissed/ });
     await expand.focus();
     await page.keyboard.press('Enter');
