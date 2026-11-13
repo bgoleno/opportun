@@ -2,7 +2,7 @@
 // real StageReasonDialog: true when the server confirms the move, false when the dialog is
 // cancelled, and nothing while a server error leaves the dialog open for another answer.
 import type { OpportunityStage } from '@opportun/core';
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { OpportunityView } from '@/lib/opportunities';
@@ -101,9 +101,62 @@ describe('useStageFlow: the outcome of a move that waits for a reason (#432)', (
     expect(screen.getByRole('dialog', { name: 'Close opportunity' })).toBeInTheDocument();
     expect(onOutcome).not.toHaveBeenCalled();
 
+    // #476: once the request has failed, Cancel is enabled again.
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeEnabled();
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(onOutcome).toHaveBeenCalledTimes(1);
     expect(onOutcome).toHaveBeenCalledWith(false);
+  });
+
+  // #476 (qa on #474): a cancel while the confirm was out closed the dialog and said "not moved",
+  // and the server then made the move anyway. Until the answer comes, nothing closes the dialog.
+  async function confirmAndHold(server: ReturnType<typeof deferredStage>) {
+    const ctx = setup('closed', server.handler);
+    await ctx.user.click(await screen.findByRole('button', { name: 'Move it' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Close opportunity' });
+    await ctx.user.selectOptions(within(dialog).getByLabelText('Reason'), 'rejected');
+    await ctx.user.click(within(dialog).getByRole('button', { name: 'Close opportunity' }));
+    await waitFor(() => expect(stageCalls(ctx.api.calls)).toHaveLength(1));
+    return { ...ctx, dialog };
+  }
+
+  it('while the confirm is out, Cancel, the close button and a backdrop click leave the dialog open', async () => {
+    const server = deferredStage();
+    const { user, onOutcome, dialog } = await confirmAndHold(server);
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    expect(cancel).toBeDisabled();
+    await user.click(cancel);
+    // The corner close button is not offered while the request is out.
+    expect(within(dialog).queryByRole('button', { name: 'Close' })).toBeNull();
+    // A click on the dialog element itself is a backdrop click.
+    fireEvent.click(dialog);
+    expect(screen.getByRole('dialog', { name: 'Close opportunity' })).toBeInTheDocument();
+    expect(onOutcome).not.toHaveBeenCalled();
+
+    await act(async () => server.answer());
+    await waitFor(() => expect(onOutcome).toHaveBeenCalledTimes(1));
+    expect(onOutcome).toHaveBeenCalledWith(true);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(onOutcome).toHaveBeenCalledTimes(1);
+  });
+
+  it('while the confirm is out, Escape leaves the dialog open, even when the browser closes it', async () => {
+    const server = deferredStage();
+    const { onOutcome, dialog } = await confirmAndHold(server);
+    // Escape on a modal <dialog> fires `cancel`, which the dialog now refuses...
+    const escape = new Event('cancel', { cancelable: true });
+    dialog.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(true);
+    // ...and a browser may close it anyway on a second Escape: then it is shown again.
+    (dialog as HTMLDialogElement).removeAttribute('open');
+    fireEvent(dialog, new Event('close'));
+    expect(dialog).toHaveAttribute('open');
+    expect(screen.getByRole('dialog', { name: 'Close opportunity' })).toBeInTheDocument();
+    expect(onOutcome).not.toHaveBeenCalled();
+
+    await act(async () => server.answer());
+    await waitFor(() => expect(onOutcome).toHaveBeenCalledWith(true));
+    expect(onOutcome).toHaveBeenCalledTimes(1);
   });
 
   it('does not report on a move that needs no reason', async () => {
