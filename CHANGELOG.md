@@ -258,6 +258,17 @@ when the milestone's work was merged.
   ([#447](https://github.com/bgoleno/opportun/issues/447),
   [#486](https://github.com/bgoleno/opportun/issues/486); PR
   [#490](https://github.com/bgoleno/opportun/pull/490)).
+- **Three small fixes on the Resume tab and in toasts.** Detaching a resume from an opportunity
+  now shows its "Resume removed from this opportunity" message, or "Could not remove the resume"
+  on a failure: the row left the list before the server answered, and the message was lost. A
+  fast double click on **Create tailored copy** or **Tailor again** makes one copy, not two; a
+  click after a failure works again. A toast whose title or description holds one long unbroken
+  word, such as a tailored copy's title, breaks inside the toast instead of running past its
+  edge
+  ([#469](https://github.com/bgoleno/opportun/issues/469),
+  [#484](https://github.com/bgoleno/opportun/issues/484),
+  [#491](https://github.com/bgoleno/opportun/issues/491); PR
+  [#494](https://github.com/bgoleno/opportun/pull/494)).
 - **A keyboard drop of a board card on Closed or Dismissed says it is waiting for a reason,
   then whether it moved.** The drop announces "... is waiting for a reason to move to the
   Closed column. Choose one in the dialog, or cancel to leave it where it is." Confirming the
