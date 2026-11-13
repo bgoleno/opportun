@@ -163,6 +163,9 @@ function setup(
       items: c.search.includes('opportunityId') ? [] : [BASE_RESUME],
       total: c.search.includes('opportunityId') ? 0 : 1,
     }),
+    // Nothing sent yet. Answered, not left to 404: the Resume tab's flow shows a list that failed
+    // to load as an error, not as an empty one (tl on #443, blocking 2).
+    'GET /opportunities/opp-1/resume-sends': { items: [] },
     'GET /integrations/google': { connected: true, scopes: [], clientConfigured: true },
     'POST /resumes': () => ({
       status: 201,
