@@ -242,6 +242,13 @@ when the milestone's work was merged.
   and stage menu are unchanged
   ([#432](https://github.com/bgoleno/opportun/issues/432); PR
   [#474](https://github.com/bgoleno/opportun/pull/474)).
+- **The reason dialog for a stage move cannot be closed while the move is being saved.** From the moment you confirm until the server answers, **Cancel** is
+  disabled, the corner close button is hidden, and a click outside the dialog and **Escape** do
+  nothing, so a move cannot be reported as cancelled after it has gone through. If the server
+  refuses the move, the dialog stays open with its error and **Cancel** works again. This
+  applies wherever the dialog appears: the board, a card's menu and the stage control
+  ([#476](https://github.com/bgoleno/opportun/issues/476); PR
+  [#492](https://github.com/bgoleno/opportun/pull/492)).
 - **Assisted apply, only where it is on.** A refused **Apply** button looks dimmed and says why;
   a new draft starts filled from your profile, account and last application, with where each
   value came from and a **Save to my profile** tick (off by default); **Settings > Profile** has
