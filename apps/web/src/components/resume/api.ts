@@ -1,6 +1,12 @@
 // Resume workspace data: resumes, tailoring sessions (with the SSE chat stream), match
 // reports, the Google connection and the Reactive Resume connection (FR-R7).
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { toast } from '@/components/ui/toast';
 import { api, ApiError, CSRF_COOKIE, API_BASE, errorMessage, readCookie } from '@/lib/api';
 
@@ -418,10 +424,14 @@ export function useMatchReport(resumeId: string, opportunityId: string | null) {
   });
 }
 
+/** The key every scoring of one resume runs under (#447): see useScoringMatch. */
+const scoreKey = (resumeId: string) => ['resumes', 'score', resumeId] as const;
+
 /** Scores the resume against its opportunity and stores the result (#175). */
 export function useScoreMatch(resumeId: string) {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey: scoreKey(resumeId),
     mutationFn: (opportunityId: string) =>
       api<MatchReportView>(`/resumes/${enc(resumeId)}/match`, {
         method: 'POST',
@@ -429,6 +439,16 @@ export function useScoreMatch(resumeId: string) {
       }),
     onSuccess: (view, opportunityId) => qc.setQueryData(rk.match(resumeId, opportunityId), view),
   });
+}
+
+/**
+ * True while any scoring of this resume is out, from whichever button sent it (tl on #447,
+ * ruling 3). The resume page has two Score again buttons, the strip's and the match report's,
+ * each with its own mutation; each one's own `isPending` would call the other idle, and one
+ * click on each would send two scoring requests, each an AI call.
+ */
+export function useScoringMatch(resumeId: string): boolean {
+  return useIsMutating({ mutationKey: scoreKey(resumeId) }) > 0;
 }
 
 /**

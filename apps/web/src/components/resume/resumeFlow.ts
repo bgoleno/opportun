@@ -58,17 +58,26 @@ export type ResumeFlowState =
       again?: Resume;
     };
 
-/** This opportunity's resume: its newest tailored copy that is not archived. */
-function currentResume(input: FlowInput): Resume | undefined {
-  return input.resumes
+/**
+ * This opportunity's resume: its newest tailored copy that is not archived. Exported for the
+ * resume page's strip (#447), which shows the flow only on that copy's own page.
+ */
+export function opportunityResume(
+  resumes: readonly Resume[],
+  opportunityId: string,
+): Resume | undefined {
+  return resumes
     .filter(
-      (r) =>
-        r.kind === 'tailored' && r.opportunityId === input.opportunityId && r.archivedAt === null,
+      (r) => r.kind === 'tailored' && r.opportunityId === opportunityId && r.archivedAt === null,
     )
     .reduce<Resume | undefined>(
       (newest, r) => (newest === undefined || r.createdAt > newest.createdAt ? r : newest),
       undefined,
     );
+}
+
+function currentResume(input: FlowInput): Resume | undefined {
+  return opportunityResume(input.resumes, input.opportunityId);
 }
 
 /**
