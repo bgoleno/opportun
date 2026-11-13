@@ -11,6 +11,20 @@ when the milestone's work was merged.
 
 ### Upgrading: prompts, defaults and costs
 
+- **Assisted apply is now on by default.** Until now it was off unless `OPPORTUN_SUBMISSIONS=1`.
+  Now it is on when the variable is unset, empty or `1`, and `0` turns it off. Any other value
+  stops the server from starting with an error naming the variable: before this change a value
+  such as `false`, `off` or `no` meant off, so it is refused rather than read as on. It is never
+  on the demo. Assisted apply never sends an application: it prepares one for you to review and
+  submit yourself. What to check when upgrading:
+  - **To keep it off, set `OPPORTUN_SUBMISSIONS=0`.** An install that never set the variable, or
+    removed it to turn the feature off, has it on after upgrading.
+  - **Device tokens made with the Assisted apply permission (`apply:assist`) while it was on work
+    again.** Turning the feature off never revoked them. Revoke any you no longer want in
+    **Settings > Integrations > Extensions and Connectors**.
+  - With it off, the server also removes the feature's three scheduled jobs (the review expiry,
+    the follow-up and the resume snapshot check) at startup; before, it removed only the last.
+    ([#455](https://github.com/bgoleno/opportun/issues/455))
 - **Network job boards, on by default.** A nightly check of companies where you know someone, and
   that you have not followed, denied or checked, so their rows in Recommended companies show the
   board, its open jobs and an estimate without a click. It is on for every account after
