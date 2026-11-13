@@ -293,6 +293,49 @@ describe('the nightly network probe (#296)', () => {
       for (const id of ids) expect(await rowOf(app, id)).toMatchObject({ atsKind: 'none' });
     });
 
+    it('a company with a Workday board on record is not this job’s: not picked, no request, the board kept', async () => {
+      // tl's blocking 1 on #462: followed, its board found from the careers URL, then unfollowed.
+      // This job may not check a Workday board, and its guesses missing must not erase it.
+      const { app, a } = await boot();
+      const id = await inNetwork(a, 'Initech');
+      await app.db
+        .update(companies)
+        .set({
+          atsKind: 'ats_workday',
+          atsRef: 'initech/External',
+          careersUrl: 'https://initech.wd5.myworkdayjobs.com/External',
+        })
+        .where(eq(companies.id, id))
+        .run();
+      await turnOn(app, a);
+      const n = net();
+      expect(await night(app, at0520(12), n.fetch)).toBe(0);
+      expect(n.called).toEqual([]);
+      expect(await rowOf(app, id)).toMatchObject({
+        atsKind: 'ats_workday',
+        atsRef: 'initech/External',
+        boardProbedAt: null,
+      });
+    });
+
+    it('a Workday board recorded after the pick: the probe makes no request and keeps it', async () => {
+      const { app, a } = await boot();
+      const id = await inNetwork(a, 'Initech');
+      await turnOn(app, a);
+      const n = net();
+      vi.setSystemTime(at0520(12));
+      app.jobs.services.sourceFetch = n.fetch;
+      expect(await sweepNetworkProbes(app.db, at0520(12))).toBe(1);
+      await app.db
+        .update(companies)
+        .set({ atsKind: 'ats_workday', atsRef: 'initech/External' })
+        .where(eq(companies.id, id))
+        .run();
+      await app.jobs.drain();
+      expect(n.called).toEqual([]);
+      expect(await rowOf(app, id)).toMatchObject({ atsKind: 'ats_workday', boardProbedAt: null });
+    });
+
     it('no board found is recorded once, and not tried again on a later night', async () => {
       const { app, a } = await boot();
       const id = await inNetwork(a, 'Initech');
@@ -338,6 +381,51 @@ describe('the nightly network probe (#296)', () => {
       const after = net();
       expect(await night(app, at0520(20), after.fetch)).toBe(0);
       expect(after.called).toEqual([]);
+    });
+
+    it(`a board found, whose listing cannot be read on ${NETWORK_PROBE_FAILED_NIGHTS} nights, is kept, not "no board"`, async () => {
+      // tl's blocking 2 on #462: detection records the board, then the listing read that follows
+      // gets an answer it cannot use. Giving up stops the company holding a slot; it keeps the board.
+      const { app, a } = await boot();
+      const id = await inNetwork(a, 'Initech');
+      await turnOn(app, a);
+      const routes = {
+        ...boardFor('initech', 'Platform Engineer'),
+        [`${greenhouse('initech')}?content=true`]: tooLarge,
+      };
+      for (let day = 12; day < 12 + NETWORK_PROBE_FAILED_NIGHTS; day++) {
+        await night(app, at0520(day), net(routes).fetch);
+        expect(await rowOf(app, id)).toMatchObject({
+          atsKind: 'ats_greenhouse',
+          atsRef: 'initech',
+          boardProbeFailedNights: day - 11,
+        });
+      }
+      expect(await rowOf(app, id)).toMatchObject({
+        atsKind: 'ats_greenhouse',
+        boardOpenJobs: null,
+      });
+      expect((await rowOf(app, id)).boardProbedAt).not.toBeNull();
+      const after = net();
+      expect(await night(app, at0520(20), after.fetch)).toBe(0);
+      expect(after.called).toEqual([]);
+    });
+
+    it('a redirect safeFetch refuses is an answer: a failed night, and the night goes on', async () => {
+      // ANSWERED_REFUSALS: the vendor answered, with something that cannot be used.
+      const { app, a } = await boot();
+      const id = await inNetwork(a, 'Initech');
+      await turnOn(app, a);
+      const n = net({ [greenhouse('initech')]: () => ({ ...respond(302), headers: {} }) });
+      await night(app, at0520(12), n.fetch);
+      // Not a slow-down: Lever and Ashby were still asked.
+      expect(n.hosts()).toContain('api.lever.co');
+      expect(n.hosts()).toContain('api.ashbyhq.com');
+      expect(await rowOf(app, id)).toMatchObject({
+        atsKind: null,
+        boardProbedAt: null,
+        boardProbeFailedNights: 1,
+      });
     });
 
     it('a 200 whose body does not parse is a miss: with no other board, "no board" on the first night', async () => {
@@ -533,6 +621,41 @@ describe('the nightly network probe (#296)', () => {
         expect(await rowOf(app, second)).toMatchObject({ atsKind: 'none' });
       });
     }
+
+    it('no answer from one vendor stops that vendor for every user tonight, as a 429 does', async () => {
+      // sec's P8b on #462: the instance-wide stop holds for a request that got no answer.
+      const { app, a, b } = await boot();
+      await inNetwork(a, 'Initech');
+      const hooli = await inNetwork(b, 'Hooli');
+      await turnOn(app, a);
+      await turnOn(app, b);
+      const first = net();
+      const leverDown: SourceContext['fetch'] = async (url, opts) => {
+        if (url.startsWith('https://api.lever.co/')) {
+          first.called.push(url);
+          throw new Error('getaddrinfo ENOTFOUND api.lever.co');
+        }
+        return await first.fetch(url, opts);
+      };
+      vi.setSystemTime(at0520(12));
+      app.jobs.services.sourceFetch = leverDown;
+      expect(await queueNightForUser(app.db, ctxOf(a), at0520(12))).toBe(1);
+      await app.jobs.drain();
+      expect(first.called).toEqual([greenhouse('initech'), lever('initech')]);
+      const later = at0520(12) + 30 * 60_000;
+      const second = net();
+      vi.setSystemTime(later);
+      app.jobs.services.sourceFetch = second.fetch;
+      expect(await queueNightForUser(app.db, ctxOf(b), later)).toBe(1);
+      await app.jobs.drain();
+      expect(second.hosts()).not.toContain('api.lever.co');
+      expect(second.hosts()).toContain('api.ashbyhq.com');
+      expect(await rowOf(app, hooli)).toMatchObject({
+        atsKind: null,
+        boardProbedAt: null,
+        boardProbeFailedNights: 0,
+      });
+    });
   });
 
   describe('a company that changed between the pick and the probe', () => {

@@ -163,8 +163,22 @@ async function stoppedSince(db: Db, ctx: UserCtx, since: number): Promise<boolea
 }
 
 /**
+ * The board kinds this job may check: the three it guesses on. A company with any other board on
+ * record (a Workday board, found from its careers URL while it was followed) is not this job's.
+ * Under boardApisOnly detection skips that board, so its guesses missing would record "none" over
+ * it (tl's blocking 1 on #462, https://github.com/bgoleno/opportun/pull/462).
+ */
+const NETWORK_BOARD_KINDS: readonly AtsKind[] = ATS_PROBES.map((p) => p.kind);
+
+/** Whether this job may probe a company with `atsKind` on record: none yet, or one of the three. */
+function isNetworkBoardKind(atsKind: string | null): boolean {
+  return atsKind === null || (NETWORK_BOARD_KINDS as readonly string[]).includes(atsKind);
+}
+
+/**
  * Up to `limit` of the user's companies to probe: a current contact there, not followed, not
- * denied, never probed, and not yet given up on. Most contacts first, then by name.
+ * denied, never probed, not yet given up on, and no board on record but one of the three.
+ * Most contacts first, then by name.
  */
 export async function pickNetworkCompanies(db: Db, ctx: UserCtx, limit: number): Promise<string[]> {
   if (limit <= 0) return [];
@@ -185,6 +199,7 @@ export async function pickNetworkCompanies(db: Db, ctx: UserCtx, limit: number):
         inArray(companies.status, ['none', 'suggested']),
         isNull(companies.boardProbedAt),
         lt(companies.boardProbeFailedNights, NETWORK_PROBE_FAILED_NIGHTS),
+        or(isNull(companies.atsKind), inArray(companies.atsKind, [...NETWORK_BOARD_KINDS])),
       ),
     )
     .groupBy(companies.id, companies.name)
@@ -311,7 +326,15 @@ export type NetworkProbeOutcome =
   | { status: 'probed'; board: boolean }
   | {
       status: 'skipped';
-      reason: 'off' | 'stopped' | 'vendor_stopped' | 'missing' | 'followed' | 'denied' | 'probed';
+      reason:
+        | 'off'
+        | 'stopped'
+        | 'vendor_stopped'
+        | 'missing'
+        | 'followed'
+        | 'denied'
+        | 'probed'
+        | 'other_board';
     }
   | { status: 'failed'; reason: 'slow_down' | 'error'; givenUp: boolean };
 
@@ -331,6 +354,7 @@ export async function runNetworkProbe(
       status: companies.status,
       boardProbedAt: companies.boardProbedAt,
       failedNights: companies.boardProbeFailedNights,
+      atsKind: companies.atsKind,
     })
     .from(companies)
     .where(and(eq(companies.userId, ctx.userId), eq(companies.id, companyId)))
@@ -340,6 +364,7 @@ export async function runNetworkProbe(
   if (company.status === 'denied') return { status: 'skipped', reason: 'denied' };
   if (company.status === 'followed') return { status: 'skipped', reason: 'followed' };
   if (company.boardProbedAt !== null) return { status: 'skipped', reason: 'probed' };
+  if (!isNetworkBoardKind(company.atsKind)) return { status: 'skipped', reason: 'other_board' };
   const guard = slowDownGuard(db, sctx);
   try {
     const outcome = await probeCompanyBoard(db, ctx, companyId, guard.sctx, {
@@ -373,7 +398,17 @@ export async function runNetworkProbe(
       .run();
     const givenUp = failedNights >= NETWORK_PROBE_FAILED_NIGHTS;
     if (givenUp) {
-      await recordNone(db, ctx, companyId);
+      // "No board" only when none is on record. Detection can have found the board this night or
+      // an earlier one (recordHit) before the listing read failed: giving up then keeps the board,
+      // and only stops the company holding a slot (tl's blocking 2 on #462).
+      const now = await db
+        .select({ atsKind: companies.atsKind })
+        .from(companies)
+        .where(and(eq(companies.userId, ctx.userId), eq(companies.id, companyId)))
+        .get();
+      if (now === undefined || now.atsKind === null || now.atsKind === 'none') {
+        await recordNone(db, ctx, companyId);
+      }
       await recordProbe(db, ctx, companyId, { openJobs: null, prefilterMatches: null });
     }
     return { status: 'failed', reason: 'error', givenUp };

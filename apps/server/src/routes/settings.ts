@@ -92,8 +92,8 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  // Off unless the user turns it on (#296): each night, up to 20 companies in the user's network
-  // are looked up by name on Greenhouse, Lever and Ashby.
+  // On unless the user turns it off (#296, the owner's rule): each night, up to 20 companies in
+  // the user's network are looked up by name on Greenhouse, Lever and Ashby.
   api.get(
     '/settings/network-board-check',
     { schema: { response: { 200: NetworkBoardCheckBody } } },

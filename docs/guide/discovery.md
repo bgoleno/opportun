@@ -187,8 +187,10 @@ Ashby by name. Those services see the names it tries, which come from where your
 your server's address. No contact's name or details are sent. To turn it off, clear "Check job
 boards for companies in my network" in **Settings > AI**; it stays off until you turn it on again.
 
-- **Which companies:** ones where you know someone, that you have not followed, denied or checked.
-  The ones where you know the most people go first, then by name. The rest wait for later nights.
+- **Which companies:** ones where you know someone, that you have not followed, denied or checked,
+  and that have no board on record other than one on these three services (a Workday board found
+  while you followed a company is left as it is). The ones where you know the most people go
+  first, then by name. The rest wait for later nights.
 - **What it reads:** only the public board pages of those three services. It never reads a
   company's own careers page and never a Workday site, even when you have saved a careers page for
   the company.
