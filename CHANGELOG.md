@@ -238,10 +238,10 @@ milestone's work was merged.
   checkpoints once 1,000 pages (about 4 MB) wait to be copied or anything has waited a
   minute, so a write no longer waits for the checkpoint's copy and sync, and the server's own
   automatic checkpoint moves from 100 pages to 10,000 as a backstop. Unset, nothing changes.
-  It has no effect on Postgres. The costs: the log grows to about 4 MB between checkpoints
-  (about 40 MB in a long burst), a second connection stays open, and writes are synced about
-  once a minute instead of every 100 pages. The slowest single write in a long burst can be
-  slower than without it. If the thread stops, the server logs it and goes back to automatic
+  It has no effect on Postgres. Writes are synced within about a minute, or sooner under
+  load, instead of every 100 pages. The costs: the log grows to about 4 MB between
+  checkpoints (about 40 MB in a long burst), a second connection stays open, and the slowest
+  single write in a long burst can be slower than without it. If the thread stops, the server logs it and goes back to automatic
   checkpoints. On an SSD, leave it unset. See **SQLite on a slow disk** in the
   [install guide](docs/install.md#4-configuration-reference)
   ([#383](https://github.com/bgoleno/opportun/issues/383); PR
