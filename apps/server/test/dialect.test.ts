@@ -294,7 +294,8 @@ describe('dialect helpers: Postgres SQL (compiled, no server)', () => {
 
   it('the job claim skips rows another worker has locked', () => {
     const pgClaim = compile(claimJobSql('w1', 5, 'postgres')).sql.replace(/\s+/g, ' ');
-    expect(pgClaim).toContain('ORDER BY run_at, created_at LIMIT 1 FOR UPDATE SKIP LOCKED)');
+    // id breaks a tie on run_at and created_at (#465).
+    expect(pgClaim).toContain('ORDER BY run_at, created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED)');
     const liteClaim = new PgDialect().sqlToQuery(claimJobSql('w1', 5, 'sqlite')).sql;
     expect(liteClaim).not.toContain('SKIP LOCKED');
   });
