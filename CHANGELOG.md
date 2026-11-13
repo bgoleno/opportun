@@ -1,7 +1,8 @@
 # Changelog
 
-Opportun has no tagged releases yet; while it is in beta, `main` is the only supported
-version (see [SECURITY.md](SECURITY.md)). Entries are grouped by milestone (requirements
+Opportun's first tagged release is [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1)
+(2026-11-13, made by hand, at the commit of PR [#474](https://github.com/bgoleno/opportun/pull/474)). See
+[SECURITY.md](SECURITY.md) for which versions are supported. Entries are grouped by milestone (requirements
 section 7, [docs/requirements.md](docs/requirements.md)), newest first, dated by when the
 milestone's work was merged.
 
@@ -293,6 +294,21 @@ milestone's work was merged.
   [install guide](docs/install.md#4-configuration-reference)
   ([#383](https://github.com/bgoleno/opportun/issues/383); PR
   [#393](https://github.com/bgoleno/opportun/pull/393)).
+- **The published image's `latest` tag moves only when a maintainer publishes, and the install
+  guide now has the upgrade steps for it.** The image at `ghcr.io/bgoleno/opportun` is built
+  only when someone runs the **Publish image** workflow by hand, so `latest` is the build last
+  published from `main` and can be behind it. If you run the published image, upgrade with a
+  backup, then `docker compose pull` and `docker compose up -d` (not `--build`), and change a
+  pinned `sha-...` tag in `OPPORTUN_IMAGE` first. Section 6 of the
+  [install guide](docs/install.md#6-upgrades-and-backups) has the steps and how a maintainer
+  publishes; the README says the same about `latest`
+  ([#477](https://github.com/bgoleno/opportun/issues/477); PR
+  [#481](https://github.com/bgoleno/opportun/pull/481)).
+- **Releases now have git tags,** starting with
+  [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1), made by hand on
+  2026-11-13 at the commit of PR [#474](https://github.com/bgoleno/opportun/pull/474). A
+  release tag is separate from the image tags: the Publish image workflow's optional version
+  input tags an image, and does not create a git tag.
 - The connector's messages name **Settings > Integrations > Extensions and Connectors** as the
   app shows it ([#235](https://github.com/bgoleno/opportun/issues/235)).
 
