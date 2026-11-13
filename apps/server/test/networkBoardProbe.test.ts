@@ -473,25 +473,20 @@ describe('the nightly network probe (#296)', () => {
       const second = await inNetwork(a, 'Hooli');
       await turnOn(app, a);
       // The two probes are queued in the same millisecond (the clock is frozen), so their run_at and
-      // created_at tie, and the claim's ORDER BY leaves the tie to the database: SQLite runs them in
-      // insertion order, Postgres in no fixed order. Whichever runs first is told to slow down, so
-      // the test names the jobs by company, not by order.
+      // created_at tie. The claim breaks the tie by id, which is enqueue order (#465), so the pick
+      // order holds on both dialects: Initech, with more contacts, runs first.
       const n = net({
         [greenhouse('initech')]: () => respond(429),
         [greenhouse('hooli')]: () => respond(429),
       });
       expect(await night(app, at0520(12), n.fetch)).toBe(2);
       // The 429 was the first request, and nothing followed it.
-      expect(n.called).toHaveLength(1);
-      expect([greenhouse('initech'), greenhouse('hooli')]).toContain(n.called[0]);
+      expect(n.called).toEqual([greenhouse('initech')]);
       expect(await rowOf(app, first)).toMatchObject({ atsKind: null, boardProbedAt: null });
       expect(await rowOf(app, second)).toMatchObject({ atsKind: null, boardProbedAt: null });
-      const ranFor = n.called[0] === greenhouse('initech') ? first : second;
       const jobsTonight = await probeJobs(app, a);
       expect(jobsTonight).toHaveLength(2);
-      const ran = jobsTonight.find(
-        (j) => (j.payload as { companyId: string }).companyId === ranFor,
-      );
+      const ran = jobsTonight.find((j) => (j.payload as { companyId: string }).companyId === first);
       const cancelled = jobsTonight.find((j) => j !== ran);
       expect(ran).toMatchObject({
         status: 'done',

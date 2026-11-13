@@ -900,6 +900,42 @@ describe("tl's blocking 1 at 0bf9a81: the list being filled is read again while 
     expect(report.chosen).toEqual([]);
     expect(report.notFilled).toContainEqual({ label: 'School', reason: 'has_value' });
   });
+
+  // #483 (qa's X2 and sec's T4 on #461): the user's only act is closing the list. It is theirs as
+  // when they type or pick: left closed, with the fill's text in the box, not emptied, and the
+  // wait ends at once.
+  it('the user closes it without typing: it stays closed and is reported, with nothing undone', async () => {
+    const p = page();
+    const school = standInList(p, 'school--0', { options: () => ['University of Elsewhere'] });
+    const run = fillGreenhouseForm(plan({ lists: [LISTS[2]!] }), p.doc);
+    let done = false;
+    void run.then(() => {
+      done = true;
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(school.isOpen()).toBe(true);
+    expect(p.timers.pending()).toBe(1);
+    const box = p.doc.getElementById('school--0') as HTMLInputElement;
+    const before = p.events.length;
+    box.dispatchEvent(new p.window.MouseEvent('mouseup', { bubbles: true }) as unknown as Event);
+    expect(school.isOpen()).toBe(false);
+    await new Promise((r) => setTimeout(r, 50));
+    // Done without the timer firing, and nothing reached the box but the user's own mouseup.
+    expect(done).toBe(true);
+    expect(p.timers.pending()).toBe(0);
+    const report = ok(await run);
+    expect(
+      p.events
+        .slice(before)
+        .filter((e) => e.target === 'school--0')
+        .map((e) => e.type),
+    ).toEqual(['mouseup']);
+    expect(p.events.slice(before).filter((e) => e.type === 'click')).toEqual([]);
+    expect(school.isOpen()).toBe(false);
+    expect(valueOf(p.doc, 'school--0')).toBe('University of Example');
+    expect(report.chosen).toEqual([]);
+    expect(report.notFilled).toContainEqual({ label: 'School', reason: 'choose_on_form' });
+  });
 });
 
 describe("tl's blocking 1 at 0bf9a81: the fill stops waiting, and reads again before the click", () => {
