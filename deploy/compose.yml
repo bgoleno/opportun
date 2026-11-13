@@ -86,6 +86,7 @@ services:
       OPPORTUN_TELEMETRY_ALLOW_PRIVATE: ${OPPORTUN_TELEMETRY_ALLOW_PRIVATE:-}
       DB_POOL_MAX: ${DB_POOL_MAX:-}
       OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT: ${OPPORTUN_SQLITE_BACKGROUND_CHECKPOINT:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
       DATA_DIR: /data
       # opportun.db's own directory, separate from /data (issue #179, incident #165): SQLite
       # coordinates concurrent access through this file's WAL and shared-memory index, which
