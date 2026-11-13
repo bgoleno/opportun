@@ -11,8 +11,18 @@ export interface BuildInfo {
   commit: string | null;
 }
 
-// The publish workflow's own version pattern, so only what it would accept is shown.
-const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/;
+// The publish workflow's own version pattern (MAJOR.MINOR.PATCH, optionally -prerelease), so only
+// what it would accept is shown. Checked in two parts rather than one pattern with an optional
+// group, which the lint's unsafe-regex rule refuses.
+const VERSION_CORE = /^[0-9]+\.[0-9]+\.[0-9]+$/;
+const PRERELEASE = /^[0-9A-Za-z.-]+$/;
+
+function isVersion(value: string): boolean {
+  const dash = value.indexOf('-');
+  if (dash === -1) return VERSION_CORE.test(value);
+  return VERSION_CORE.test(value.slice(0, dash)) && PRERELEASE.test(value.slice(dash + 1));
+}
+
 // A git object name as GITHUB_SHA gives it: lowercase hex.
 const COMMIT = /^[0-9a-f]{7,40}$/;
 
@@ -21,7 +31,7 @@ export function readBuildInfo(env: NodeJS.ProcessEnv): BuildInfo {
   const version = env.OPPORTUN_VERSION?.trim() ?? '';
   const commit = env.OPPORTUN_COMMIT?.trim() ?? '';
   return {
-    version: VERSION.test(version) ? version : null,
+    version: isVersion(version) ? version : null,
     commit: COMMIT.test(commit) ? commit.slice(0, 7) : null,
   };
 }
