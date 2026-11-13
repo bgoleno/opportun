@@ -109,28 +109,29 @@ export function RegisterDocCard({
   function submit(e: FormEvent) {
     e.preventDefault();
     onStart?.();
-    create.mutate(
-      {
+    // The promise, not callbacks given to mutate (#443): in the resume flow a new base moves the
+    // state from A to B and this card unmounts before the last refreshed list lands, and the
+    // query library skips an unmounted caller's own callbacks. `create.error` shows a failure.
+    create
+      .mutateAsync({
         store: rr ? 'reactive_resume' : 'google_doc',
         docRef: docRef.trim(),
         ...(attaching ? { opportunityId } : {}),
-      },
-      {
-        onSuccess: (r) => {
+      })
+      .then(
+        (r) => {
           setDocRef('');
           registered(r);
         },
-        onError: () => onFail?.(),
-      },
-    );
+        () => onFail?.(),
+      );
   }
 
   function pickFromDrive(hit: DriveSearchHit) {
     onStart?.();
-    create.mutate(
-      { store: 'google_doc', docRef: hit.id, ...(attaching ? { opportunityId } : {}) },
-      { onSuccess: registered, onError: () => onFail?.() },
-    );
+    create
+      .mutateAsync({ store: 'google_doc', docRef: hit.id, ...(attaching ? { opportunityId } : {}) })
+      .then(registered, () => onFail?.());
   }
 
   return (

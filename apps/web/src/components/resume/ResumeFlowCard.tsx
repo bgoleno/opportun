@@ -42,12 +42,22 @@ type Step = 1 | 2 | 3 | 4 | 'done';
 
 const STEP_LABELS = ['Base', 'Tailor', 'Finish', 'Apply'] as const;
 
-/** The flow's data and state for one opportunity; `state` is undefined while it loads. */
+/**
+ * The flow's data and state for one opportunity. `state` is undefined while it loads, and when a
+ * list failed to load: `error` then holds the failure (tl on #443, blocking 2). An empty fallback
+ * would read as "no resumes" or "nothing sent" and claim a state, with its primary action, that
+ * nobody knows. A 404 on attempts is not an error: it is `null`, assisted apply unavailable.
+ */
 export function useResumeFlow(opp: OpportunityView) {
   const all = useResumes();
   const sends = useOpportunitySends(opp.id);
   const submissions = useOpportunitySubmissions(opp.id);
-  const loading = all.isPending || sends.isPending || submissions.isPending;
+  // Only a failure with nothing loaded: a refetch that fails after a load keeps the data it had,
+  // which is real, if not the newest.
+  const failedLoad = (q: { error: unknown; data: unknown }) =>
+    q.error !== null && q.data === undefined ? q.error : null;
+  const error = failedLoad(all) ?? failedLoad(sends) ?? failedLoad(submissions);
+  const loading = error !== null || all.isPending || sends.isPending || submissions.isPending;
   const resumes = all.data?.items ?? [];
   const sendItems = sends.data?.items ?? [];
   // null (or no answer): assisted apply is not available here, and nothing of it shows (#117).
@@ -63,7 +73,7 @@ export function useResumeFlow(opp: OpportunityView) {
         applyBlocked: applyBlockedReason(opp),
         ...(assisted ? {} : { assistedApply: 'unavailable' as const }),
       });
-  return { state, resumes, sends: sendItems, assisted };
+  return { state, error, resumes, sends: sendItems, assisted };
 }
 
 /** The steps, the current one outlined and named, ApplyStepper's look (#400 note). */
@@ -102,10 +112,24 @@ const primaryClass = 'w-full sm:w-fit';
 const quietClass =
   'w-fit text-left text-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
-/** A quiet second action: a text button under the primary one. */
-function Quiet({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+/** A quiet second action: a text button under the primary one. Disabled while its request is
+ *  out, as the filled one is (tl on #443, blocking 3). */
+function Quiet({
+  onClick,
+  disabled = false,
+  children,
+}: {
+  onClick: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
   return (
-    <button type="button" className={quietClass} onClick={onClick}>
+    <button
+      type="button"
+      className={cn(quietClass, 'disabled:cursor-not-allowed disabled:opacity-50')}
+      onClick={onClick}
+      disabled={disabled}
+    >
       {children}
     </button>
   );
@@ -264,7 +288,15 @@ export function ResumeFlowCard({
                 opportunityId={opp.id}
                 label="Create tailored copy"
               />
-              <Quiet onClick={() => setAsIs(true)}>Send a base resume as it is</Quiet>
+              <Quiet
+                onClick={() => {
+                  // A change of place, so focus and the live region follow it (qa's F1 on #443).
+                  if (base !== undefined) startAction(`Sending ${base.title} as it is.`);
+                  setAsIs(true);
+                }}
+              >
+                Send a base resume as it is
+              </Quiet>
             </>
           ),
         };
@@ -395,7 +427,16 @@ export function ResumeFlowCard({
    *  base's status and a send. */
   function asIsView(base: Resume, bases: Resume[], ats: string): View {
     const usable = base.status === 'final' || base.status === 'submitted';
-    const leave = <Quiet onClick={() => setAsIs(false)}>Tailor a copy instead</Quiet>;
+    const leave = (
+      <Quiet
+        onClick={() => {
+          startAction('Back to choosing a resume.');
+          setAsIs(false);
+        }}
+      >
+        Tailor a copy instead
+      </Quiet>
+    );
     const picker = <BasePicker bases={bases} value={base.id} onChange={setChosenBase} />;
     if (!usable) {
       return {
@@ -456,7 +497,9 @@ export function ResumeFlowCard({
         <CardTitle id={titleId}>Resume for this application</CardTitle>
       </CardHeader>
       <CardContent className="grid gap-4">
-        {view === undefined ? (
+        {flow.error !== null ? (
+          <FormError message={`Could not load this resume flow: ${errorMessage(flow.error)}`} />
+        ) : view === undefined ? (
           <p className="text-sm text-muted-foreground">Loading...</p>
         ) : (
           <>
@@ -534,7 +577,9 @@ function CreateCopyButton({
         <FormError message={resumeErrorMessage(create.error) ?? errorMessage(create.error)} />
       ) : null}
       {quiet ? (
-        <Quiet onClick={createCopy}>{create.isPending ? 'Copying...' : label}</Quiet>
+        <Quiet onClick={createCopy} disabled={create.isPending}>
+          {create.isPending ? 'Copying...' : label}
+        </Quiet>
       ) : (
         <Button className={primaryClass} onClick={createCopy} disabled={create.isPending}>
           {create.isPending ? 'Copying...' : label}
@@ -595,7 +640,9 @@ function MarkFinal({
         <FormError message={resumeErrorMessage(update.error) ?? errorMessage(update.error)} />
       ) : null}
       {quiet ? (
-        <Quiet onClick={mark}>{children}</Quiet>
+        <Quiet onClick={mark} disabled={update.isPending}>
+          {children}
+        </Quiet>
       ) : (
         <Button className={primaryClass} onClick={mark} disabled={update.isPending}>
           {children}

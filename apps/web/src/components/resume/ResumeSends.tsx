@@ -66,16 +66,23 @@ export function RecordSendFields({
     e.preventDefault();
     const sentAt = sentAtFor(day);
     onStart?.();
-    record.mutate(
-      { resumeId: resume.id, sentVia: via.trim(), ...(sentAt === undefined ? {} : { sentAt }) },
-      {
-        onSuccess: () => {
+    // The promise, not callbacks given to mutate (#443, as MarkFinal in ResumeFlowCard): in the
+    // resume flow the send moves the state on and this form unmounts before the last refreshed
+    // list lands, and the query library skips an unmounted caller's own callbacks. A failure
+    // still shows through `record.error` while the form is here.
+    record
+      .mutateAsync({
+        resumeId: resume.id,
+        sentVia: via.trim(),
+        ...(sentAt === undefined ? {} : { sentAt }),
+      })
+      .then(
+        () => {
           setVia('');
           toast({ title: 'Recorded as sent', description: resume.title, variant: 'success' });
         },
-        onError: () => onFail?.(),
-      },
-    );
+        () => onFail?.(),
+      );
   }
 
   return (

@@ -593,3 +593,151 @@ describe('the Resume tab: the cards around the flow (#440)', () => {
     expect(await within(region).findByText('Step 2 of 4: Tailor')).toBeInTheDocument();
   });
 });
+
+// tl's review of #443 at a6d33b0 (https://github.com/bgoleno/opportun/pull/443#issuecomment-6840403069).
+describe('the Resume tab flow: tl on #443', () => {
+  // Blocking 1, as for Mark as final: the flow moves on and the form is gone before the
+  // opportunity's own list lands, so a callback given to the call itself never ran.
+  it('Record as sent: its toast still shows when one list answers after the others', async () => {
+    let sends: ResumeSend[] = [];
+    const final = copy({ status: 'final' });
+    const { user } = setup({
+      extra: {
+        'GET /resumes': async (call: ApiCall) => {
+          const mine = call.search.includes('opportunityId');
+          if (sends.length > 0 && mine) await new Promise((r) => setTimeout(r, 50));
+          const items = call.search.includes('kind=base') ? [BASE] : mine ? [final] : [BASE, final];
+          return { items, total: items.length };
+        },
+        'GET /opportunities/opp-1/resume-sends': () => ({ items: sends }),
+        'POST /opportunities/opp-1/resume-sends': () => {
+          sends = [
+            { ...SEND, resumeId: 'copy', resumeTitle: 'Acme tailored', resumeKind: 'tailored' },
+          ];
+          return { status: 201, body: sends[0] };
+        },
+      },
+    });
+    const region = await flow();
+    await user.click(
+      await within(region).findByRole('button', { name: 'Record that you sent it yourself' }),
+    );
+    await user.type(within(region).getByLabelText('Sent via'), 'Email');
+    await user.click(within(region).getByRole('button', { name: 'Record as sent' }));
+    await waitFor(() => expect(said(region)).toHaveTextContent(/^Sent: Acme tailored/));
+    expect(await screen.findByText('Recorded as sent')).toBeInTheDocument();
+  });
+
+  it('Register: its toast still shows when one list answers after the others', async () => {
+    let resumes: Resume[] = [];
+    const { user } = setup({
+      extra: {
+        'GET /resumes': async (call: ApiCall) => {
+          if (resumes.length > 0 && call.search.includes('opportunityId')) {
+            await new Promise((r) => setTimeout(r, 50));
+            return { items: [], total: 0 };
+          }
+          return { items: resumes, total: resumes.length };
+        },
+        'POST /resumes': () => {
+          resumes = [BASE];
+          return { status: 201, body: BASE };
+        },
+      },
+    });
+    const region = await flow();
+    await user.click(await within(region).findByRole('button', { name: 'Register a base resume' }));
+    await user.type(
+      within(region).getByLabelText('Google Doc link'),
+      'https://docs.google.com/document/d/Base/edit',
+    );
+    await user.click(within(region).getByRole('button', { name: 'Register' }));
+    await waitFor(() => expect(said(region)).toHaveTextContent('Choose the resume to start from.'));
+    expect(await screen.findByText('Base resume registered')).toBeInTheDocument();
+  });
+
+  // Blocking 2: a list that failed to load is not an empty list, so no state is claimed.
+  const failed = { status: 500, body: { error: { code: 'internal', message: 'Server down' } } };
+  const noState = async (region: HTMLElement) => {
+    expect(await within(region).findByRole('alert')).toBeInTheDocument();
+    expect(within(region).queryByRole('list', { name: 'Resume steps' })).toBeNull();
+    expect(within(region).queryByRole('heading', { level: 3 })).toBeNull();
+    expect(region.querySelectorAll('[data-slot="button"][data-variant="default"]')).toHaveLength(0);
+  };
+
+  it('a failed resume list shows the error, with no step and no primary action', async () => {
+    setup({ extra: { 'GET /resumes': () => failed } });
+    const region = await flow();
+    await noState(region);
+    expect(within(region).queryByText('Add a base resume to start.')).toBeNull();
+  });
+
+  it("a failed list of this opportunity's sends shows the error, not Ready to apply", async () => {
+    setup({
+      resumes: [BASE, copy({ status: 'final' })],
+      extra: { 'GET /opportunities/opp-1/resume-sends': () => failed },
+    });
+    const region = await flow();
+    await noState(region);
+    expect(within(region).queryByText('Ready to apply.')).toBeNull();
+  });
+
+  it('a failed list of attempts (a 500, not the 404 of "unavailable") shows the error, not F', async () => {
+    setup({
+      resumes: [BASE, copy({ status: 'final' })],
+      extra: { 'GET /opportunities/opp-1/submissions': () => failed },
+    });
+    const region = await flow();
+    await noState(region);
+    expect(within(region).queryByText('Ready to send.')).toBeNull();
+  });
+
+  // Blocking 3: a quiet action is disabled while its request is out, as the filled one is.
+  it('a double click on "Tailor again" makes one copy', async () => {
+    let answer: () => void = () => undefined;
+    const { api, user } = setup({
+      resumes: [BASE],
+      sends: [SEND],
+      extra: {
+        'POST /resumes': () =>
+          new Promise((resolve) => {
+            answer = () => resolve({ status: 201, body: copy() });
+          }),
+      },
+    });
+    const region = await flow();
+    const again = await within(region).findByRole('button', {
+      name: 'Tailor again for this opportunity',
+    });
+    await user.click(again);
+    await waitFor(() =>
+      expect(api.calls.filter((c) => c.method === 'POST' && c.path === '/resumes')).toHaveLength(1),
+    );
+    await user.click(within(region).getByRole('button', { name: 'Copying...' }));
+    expect(api.calls.filter((c) => c.method === 'POST' && c.path === '/resumes')).toHaveLength(1);
+    answer();
+  });
+
+  // Blocking 4 (qa's F1): entering and leaving the branch changes the step, so focus moves to the
+  // new sentence and it is announced; a second Enter does not undo the first.
+  it('by keyboard, entering and leaving the base-as-is branch moves focus and announces', async () => {
+    const { user } = setup({ resumes: [{ ...BASE, status: 'in_review' }] });
+    const region = await flow();
+    (await within(region).findByRole('button', { name: 'Send a base resume as it is' })).focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(said(region)).toHaveTextContent('Send a base resume as it is.'));
+    expect(currentStep(region)).toMatch(/^3 Finish/);
+    expect(said(region)).toHaveFocus();
+    expect(within(region).getByRole('status')).toHaveTextContent(
+      'Sending Jane base as it is. Next: mark it as final.',
+    );
+
+    within(region).getByRole('button', { name: 'Tailor a copy instead' }).focus();
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(said(region)).toHaveTextContent('Choose the resume to start from.'));
+    expect(said(region)).toHaveFocus();
+    expect(within(region).getByRole('status')).toHaveTextContent(
+      'Back to choosing a resume. Next: create a tailored copy.',
+    );
+  });
+});
