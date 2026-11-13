@@ -212,7 +212,15 @@ describe('hotspot 3: pending 2FA token double redeem', () => {
 describe('hotspot 4: job double claim', () => {
   afterEach(() => unregisterJob('test.race'));
 
-  it('two runners draining one queue of 50 jobs run every job exactly once', async () => {
+  // The server seeds cron schedules (discovery sweeps every 10 minutes, Gmail every 15, ...), and
+  // the runner materialises each one's next occurrence after every job it runs, with its own
+  // clock. A drain that crossed one of those instants also ran that scheduled job, so counting
+  // every job the runners ran read 51 for 50 (https://github.com/bgoleno/opportun/issues/485, qa's
+  // classification there). So the runners' clock is the test's: frozen, the total is exactly 50;
+  // across an instant, only the test's own jobs are counted. Either way each must run once.
+
+  /** Two runners draining 50 test.race jobs together, on the clock `clock()` makes once they are queued. */
+  async function drain(clock: () => () => number) {
     const { app } = await boot();
     const runs = new Map<string, number>();
     registerJob({
@@ -227,18 +235,20 @@ describe('hotspot 4: job double claim', () => {
       },
     });
     for (let n = 0; n < 50; n++) await enqueue(app.db, 'test.race', { n });
+    // Made now, so every one of the 50 is already due on it.
+    const now = clock();
     // Both runners' first claims are issued together, then they keep racing.
     const barrier = holdAt('jobs.claim', 2);
     const [first, second] = await Promise.all([
-      runDueJobs(app.db, { workerId: 'runner-a' }),
-      runDueJobs(app.db, { workerId: 'runner-b' }),
+      runDueJobs(app.db, { workerId: 'runner-a', now }),
+      runDueJobs(app.db, { workerId: 'runner-b', now }),
     ]);
     expect(barrier.arrived()).toBe(2);
-    expect(first + second).toBe(50);
     expect(first).toBeGreaterThan(0);
     expect(second).toBeGreaterThan(0);
+    // Each of the 50 ran exactly once, by the handler's own count and by its row.
     expect(runs.size).toBe(50);
-    expect([...runs.values()].every((count) => count === 1)).toBe(true);
+    expect([...runs.entries()].filter(([, count]) => count !== 1)).toEqual([]);
     const rows = await app.db
       .select({ status: jobs.status, attempts: jobs.attempts })
       .from(jobs)
@@ -246,6 +256,33 @@ describe('hotspot 4: job double claim', () => {
       .all();
     expect(rows).toHaveLength(50);
     expect(rows.every((r) => r.status === 'done' && r.attempts === 1)).toBe(true);
+    return { ran: first + second };
+  }
+
+  it('two runners draining one queue of 50 jobs run every job exactly once', async () => {
+    // Frozen once the 50 are queued: they are due, and no schedule comes due mid-drain.
+    const { ran } = await drain(() => {
+      const frozen = Date.now();
+      return () => frozen;
+    });
+    expect(ran).toBe(50);
+  });
+
+  it('a drain across a cron instant still runs each of the 50 exactly once', async () => {
+    // From 100 ms before the next 10-minute instant (a discovery sweep's), 2 ms each read: the
+    // scheduled job that comes due mid-drain runs too, and is not one of the 50.
+    const tenMinutes = 10 * 60_000;
+    let instant = 0;
+    let t = 0;
+    const { ran } = await drain(() => {
+      // At least 200 ms ahead, so the clock starts after the 50 were queued.
+      instant = Math.ceil((Date.now() + 200) / tenMinutes) * tenMinutes;
+      t = instant - 100 - 2;
+      return () => (t += 2);
+    });
+    // The instant was crossed, or this case would prove nothing.
+    expect(t).toBeGreaterThan(instant);
+    expect(ran).toBeGreaterThan(50);
   });
 });
 
