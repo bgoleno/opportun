@@ -245,6 +245,19 @@ when the milestone's work was merged.
   phone the steps become one line, "Step 3 of 4: Finish"
   ([#440](https://github.com/bgoleno/opportun/issues/440); PR
   [#443](https://github.com/bgoleno/opportun/pull/443)).
+- **A tailored copy's own page shows the next step, and the Resume tab fits a phone with a long
+  title.** Under the title of a tailored resume that belongs to an opportunity, a strip shows
+  the same state as the opportunity's Resume tab and offers the one action that fits it: **Mark
+  as final** in place (with **Score again** beside it) while it is a draft or in review, **Apply**
+  when it is ready and assisted apply can start, and otherwise **Back to the opportunity**. A
+  copy the flow does not follow gets a line linking the one it does. **Change status** opens the
+  full status control, so every status stays reachable. Scoring runs one request at a time: the
+  strip's button, the match report's and the tab's cannot send two AI calls. The Resume tab no
+  longer widens past a 375 px phone when a copy's title is one long unbroken word. A base
+  resume's page is unchanged
+  ([#447](https://github.com/bgoleno/opportun/issues/447),
+  [#486](https://github.com/bgoleno/opportun/issues/486); PR
+  [#490](https://github.com/bgoleno/opportun/pull/490)).
 - **A keyboard drop of a board card on Closed or Dismissed says it is waiting for a reason,
   then whether it moved.** The drop announces "... is waiting for a reason to move to the
   Closed column. Choose one in the dialog, or cancel to leave it where it is." Confirming the
