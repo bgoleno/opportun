@@ -48,7 +48,11 @@ stage. **Table** switches to a sortable table of the same opportunities.
   Closed card dropped on one of those columns: "Use Reopen to move a closed opportunity back to
   Interested." A drop within a column while the search box filters it is also announced as not
   moved, because cards cannot be reordered while a search is active. Cancelling is announced as
-  "Moving ... was cancelled."
+  "Moving ... was cancelled." A drop on Closed or Dismissed opens the reason dialog, so nothing
+  has moved yet: it is announced as "... is waiting for a reason to move to the Closed column.
+  Choose one in the dialog, or cancel to leave it where it is." Confirming the dialog is then
+  announced as "... moved to the Closed column.", and cancelling it as "... was not moved.",
+  with the card left where it was.
 - A card Opportun thinks is a duplicate of one you already track carries a **Possible
   duplicate** badge. Open either card to resolve it.
 

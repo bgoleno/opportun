@@ -30,6 +30,9 @@ import { cn } from '@/lib/utils';
 import { reorderColumn } from './reorder';
 import { CardPreview, KanbanCard } from './KanbanCard';
 
+/** The stages a move waits on the reason dialog for (useStageFlow's request). */
+const needsReason = (stage: OpportunityStage) => stage === 'closed' || stage === 'dismissed';
+
 const START_WITH_SPACE_ONLY: KeyboardCodes = {
   start: [KeyboardCode.Space],
   cancel: [KeyboardCode.Esc],
@@ -140,6 +143,11 @@ export function Kanban(props: {
     }),
   );
   const [activeId, setActiveId] = useState<string | null>(null);
+  /**
+   * What the reason dialog's answer did to a dragged card (#432), for the board's own polite live
+   * region: dnd-kit speaks only drag events, and the dialog ends after the drag has.
+   */
+  const [outcome, setOutcome] = useState('');
   const byId = new Map(props.columns.flatMap((c) => c.items.map((o) => [o.id, o] as const)));
   const active = activeId === null ? undefined : byId.get(activeId);
 
@@ -191,10 +199,15 @@ export function Kanban(props: {
     onDragStart: ({ active: a }) => `Picked up ${nameOf(a.id)}.`,
     onDragOver: ({ active: a, over }) => `${nameOf(a.id)} is over ${columnOf(over?.id)}.`,
     onDragEnd: ({ active: a, over }) => {
-      const refused = refusedDrop(dropOf(a.id, over?.id));
-      return refused === null
-        ? `${nameOf(a.id)} was dropped on ${columnOf(over?.id)}.`
-        : `${nameOf(a.id)} was not moved. ${refused}`;
+      const drop = dropOf(a.id, over?.id);
+      const refused = refusedDrop(drop);
+      if (refused !== null) return `${nameOf(a.id)} was not moved. ${refused}`;
+      // Closed and Dismissed open the reason dialog: nothing has moved yet, and cancelling
+      // leaves it where it is (#432). The outcome is spoken later, in the board's own region.
+      if (drop.kind === 'stage' && needsReason(drop.to)) {
+        return `${nameOf(a.id)} is waiting for a reason to move to ${columnOf(over?.id)}. Choose one in the dialog, or cancel to leave it where it is.`;
+      }
+      return `${nameOf(a.id)} was dropped on ${columnOf(over?.id)}.`;
     },
     onDragCancel: ({ active: a }) => `Moving ${nameOf(a.id)} was cancelled.`,
   };
@@ -203,7 +216,14 @@ export function Kanban(props: {
     setActiveId(null);
     const drop = dropOf(e.active.id, e.over?.id);
     if (drop.kind === 'stage') {
-      props.flow.request({ ...drop.opp, stage: drop.from }, drop.to);
+      const { opp, to } = drop;
+      props.flow.request({ ...opp, stage: drop.from }, to, (moved) =>
+        setOutcome(
+          moved
+            ? `${subjectLabel(opp)} moved to the ${stageLabel(to)} column.`
+            : `${subjectLabel(opp)} was not moved.`,
+        ),
+      );
       return;
     }
     if (drop.kind !== 'reorder') return;
@@ -251,7 +271,11 @@ export function Kanban(props: {
       sensors={sensors}
       collisionDetection={collision}
       accessibility={{ announcements }}
-      onDragStart={(e) => setActiveId(String(e.active.id))}
+      onDragStart={(e) => {
+        setActiveId(String(e.active.id));
+        // Emptied on each drag, so the same outcome twice in a row is spoken twice.
+        setOutcome('');
+      }}
       onDragCancel={() => setActiveId(null)}
       onDragEnd={onDragEnd}
     >
@@ -269,6 +293,9 @@ export function Kanban(props: {
       <DragOverlay dropAnimation={null}>
         {active ? <CardPreview opp={{ ...active, stage: props.stageOf(active) }} /> : null}
       </DragOverlay>
+      <div role="status" aria-live="polite" className="sr-only" data-testid="board-announcement">
+        {outcome}
+      </div>
     </DndContext>
   );
 }

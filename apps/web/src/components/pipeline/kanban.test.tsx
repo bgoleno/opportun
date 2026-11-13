@@ -271,6 +271,95 @@ describe('Kanban drag and drop', () => {
         'Acme: Staff PM was not moved. Clear the search to drag cards within a column.',
       );
     });
+
+    // #432: Closed and Dismissed open the reason dialog, so the card has not moved yet.
+    it('says a drop on Closed or Dismissed is waiting for a reason, not dropped', async () => {
+      await renderBoard();
+      expect(announceEnd('opp-3', 'closed')).toBe(
+        'Initech: Director is waiting for a reason to move to the Closed column. Choose one in the dialog, or cancel to leave it where it is.',
+      );
+      expect(announceEnd('opp-1', 'dismissed')).toBe(
+        'Acme: Staff PM is waiting for a reason to move to the Dismissed column. Choose one in the dialog, or cancel to leave it where it is.',
+      );
+      // Onto a card already in Closed, as the keyboard sensor often lands.
+      expect(announceEnd('opp-3', 'opp-4')).toBe(
+        'Initech: Director is waiting for a reason to move to the Closed column. Choose one in the dialog, or cancel to leave it where it is.',
+      );
+    });
+  });
+
+  // #432: what the dialog's answer did, in the board's own polite live region.
+  describe('the outcome of a drop that waits for a reason', () => {
+    const announcer = () => screen.getByTestId('board-announcement');
+
+    it('is a polite live region, empty until a drop gives it something to say', async () => {
+      await renderBoard();
+      expect(announcer()).toHaveAttribute('role', 'status');
+      expect(announcer()).toHaveAttribute('aria-live', 'polite');
+      expect(announcer()).toHaveTextContent('');
+    });
+
+    it('says the card moved once the server confirms the close', async () => {
+      const { user } = await renderBoard();
+      await drop('opp-3', 'closed');
+      const dialog = await screen.findByRole('dialog', { name: 'Close opportunity' });
+      expect(announcer()).toHaveTextContent('');
+      await user.selectOptions(within(dialog).getByLabelText('Reason'), 'rejected');
+      await user.click(within(dialog).getByRole('button', { name: 'Close opportunity' }));
+      await waitFor(() =>
+        expect(announcer()).toHaveTextContent('Initech: Director moved to the Closed column.'),
+      );
+    });
+
+    it('says the card was not moved when the dialog is cancelled', async () => {
+      const { user } = await renderBoard();
+      await drop('opp-1', 'dismissed');
+      const dialog = await screen.findByRole('dialog', { name: 'Dismiss opportunity' });
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      expect(announcer()).toHaveTextContent('Acme: Staff PM was not moved.');
+      expect(within(column('New')).getByRole('article', { name: /Acme/ })).toBeVisible();
+    });
+
+    it('says nothing while a server error keeps the dialog open', async () => {
+      const { user } = await renderBoard(() => ({
+        status: 500,
+        body: { error: { code: 'internal', message: 'Something went wrong' } },
+      }));
+      await drop('opp-1', 'dismissed');
+      const dialog = await screen.findByRole('dialog', { name: 'Dismiss opportunity' });
+      await user.selectOptions(within(dialog).getByLabelText('Reason'), 'location');
+      await user.click(within(dialog).getByRole('button', { name: 'Dismiss' }));
+      expect(await screen.findByText('Stage not changed')).toBeInTheDocument();
+      expect(screen.getByRole('dialog', { name: 'Dismiss opportunity' })).toBeInTheDocument();
+      expect(announcer()).toHaveTextContent('');
+    });
+
+    it("is left alone by the card's own Dismiss button, which is not a drag", async () => {
+      const { user } = await renderBoard();
+      const card = within(column('New')).getByRole('article', { name: /Acme/ });
+      await user.click(within(card).getByRole('button', { name: 'Dismiss' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Dismiss opportunity' });
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      expect(announcer()).toHaveTextContent('');
+    });
+
+    it('starts empty again on the next drag, so the same outcome is heard twice', async () => {
+      const { user } = await renderBoard();
+      await drop('opp-1', 'dismissed');
+      await user.click(
+        within(await screen.findByRole('dialog', { name: 'Dismiss opportunity' })).getByRole(
+          'button',
+          { name: 'Cancel' },
+        ),
+      );
+      expect(announcer()).toHaveTextContent('Acme: Staff PM was not moved.');
+      await act(async () => {
+        dnd.props?.onDragStart?.({ active: { id: 'opp-1' } } as unknown as Parameters<
+          NonNullable<DndContextProps['onDragStart']>
+        >[0]);
+      });
+      expect(announcer()).toHaveTextContent('');
+    });
   });
 
   it('asks for a closed reason before closing, and cancel sends nothing', async () => {

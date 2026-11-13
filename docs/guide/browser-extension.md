@@ -111,12 +111,21 @@ set the extension up, under **Settings > Integrations > Extensions and Connector
    Degree, or a question such as "How did you hear about this role?"), it chooses the one
    option that reads exactly as your value, waiting a few seconds for each list. If you type or
    choose in a list while it waits, it leaves that list to you. Keep the popup open until it
-   shows its report.
+   shows its report. Your resume is uploaded to Greenhouse at this step, not when you submit
+   (see below).
 4. The report lists every option it chose first, then what it filled and what it left for you,
    with the reason. A list it could not choose in (no option, or more than one, matches your
    value) is left empty for you.
 5. Check every field, fill in anything it left, and press the site's own Submit button. The
    extension never submits.
+
+**Your resume reaches Greenhouse before you press Submit.** When the form's resume field is
+empty and takes a PDF, the extension attaches your Final resume to it, and Greenhouse's own form
+then uploads the file to Greenhouse at once, exactly as it does when you choose a file yourself.
+So Greenhouse can hold your resume even if you then decide not to apply. Press **Fill in this
+application** only when you mean to apply. When the field has a file already, or does not take a
+PDF, the extension leaves it and lists the resume among what it did not fill. The extension
+still never presses Submit.
 
 It fills only a Greenhouse form on Greenhouse's own pages (`boards.greenhouse.io` or
 `job-boards.greenhouse.io`), and only the application you reviewed and opened from Opportun.
