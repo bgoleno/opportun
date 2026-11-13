@@ -61,6 +61,7 @@ import {
 import { COMPANY_SUGGEST_CRON, COMPANY_SUGGEST_KIND } from './jobs/companySuggest';
 import { TITLE_VARIANTS_SWEEP_CRON, TITLE_VARIANTS_SWEEP_KIND } from './jobs/titleVariants';
 import { COMPANY_TAGS_SWEEP_CRON, COMPANY_TAGS_SWEEP_KIND } from './jobs/companyTags';
+import { NETWORK_PROBE_SWEEP_CRON, NETWORK_PROBE_SWEEP_KIND } from './jobs/networkBoardProbe';
 import { connectorMailRoutes } from './routes/connectorMail';
 import { GMAIL_SYNC_ALL_CRON, GMAIL_SYNC_ALL_KIND } from './jobs/gmailSync';
 import { REFINE_CRON, REFINE_JOB_KIND } from './jobs/refineClassifyPrompt';
@@ -448,6 +449,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   await seedSchedule(db, COMPANY_SUGGEST_KIND, COMPANY_SUGGEST_CRON);
   await seedSchedule(db, TITLE_VARIANTS_SWEEP_KIND, TITLE_VARIANTS_SWEEP_CRON);
   await seedSchedule(db, COMPANY_TAGS_SWEEP_KIND, COMPANY_TAGS_SWEEP_CRON);
+  await seedSchedule(db, NETWORK_PROBE_SWEEP_KIND, NETWORK_PROBE_SWEEP_CRON);
   // Assisted apply (#115): settle any draft whose resume snapshot was left pending with no job.
   // Only while the feature is on; with it off nothing may export a resume, so the schedule (and
   // any run it queued) goes.
