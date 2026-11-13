@@ -72,6 +72,32 @@ describe("an opportunity's thread over the cap (#394)", () => {
     expect(subjects(await list())).toEqual(subjects(oldest));
   });
 
+  // https://github.com/bgoleno/opportun/issues/422: the tab shows the rest of a long thread with
+  // the next page, so a page must carry on from the last one in the same order, with no message
+  // twice and none missed.
+  it('the next page in either order carries on from the first: the rest, none twice', async () => {
+    const { app, a } = await boot();
+    const id = await longThread(app, a);
+    const page = async (order: string, offset: number) =>
+      (
+        await a.request({
+          method: 'GET',
+          url: `/api/v1/communications?view=all&opportunityId=${id}&order=${order}&limit=200&offset=${offset}`,
+        })
+      ).json();
+    for (const order of ['newest', 'oldest']) {
+      const first = subjects(await page(order, 0));
+      const rest = await page(order, 200);
+      expect(rest.total).toBe(COUNT);
+      expect(subjects(rest)).toHaveLength(COUNT - 200);
+      const all = [...first, ...subjects(rest)];
+      expect(new Set(all).size).toBe(COUNT);
+      const numbers = all.map((s) => Number(s?.replace('Message ', '')));
+      const sorted = [...numbers].sort((x, y) => (order === 'oldest' ? x - y : y - x));
+      expect(numbers).toEqual(sorted);
+    }
+  });
+
   it('the Inbox without an order is still newest first', async () => {
     const { app, a } = await boot();
     await longThread(app, a);
