@@ -1,3 +1,5 @@
+// First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
+import './unsetEmptyAiBaseUrls';
 import { pathToFileURL } from 'node:url';
 import { buildApp } from './app';
 import { ConfigError, loadConfig } from './config';
