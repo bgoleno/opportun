@@ -8,6 +8,8 @@
 // to a log, a file, the audit trail or stderr. Exits nonzero (touching nothing) when the email
 // is unknown. Run it against the same DATA_DIR (and, on Postgres, the same DB_DIALECT and
 // DATABASE_URL) as the server (in Docker: docker compose exec).
+// First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
+import '../unsetEmptyAiBaseUrls';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { eq } from 'drizzle-orm';

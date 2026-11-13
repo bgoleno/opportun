@@ -913,3 +913,33 @@ describe('#216: the disclosure line', () => {
     expect(closeSplit([p(2, 1), p(null, 2)])).toBe('');
   });
 });
+
+describe('#296: a board found by guessing names shows its address', () => {
+  it('a candidate with a Greenhouse board links to it, in a new tab', async () => {
+    routes();
+    renderWithProviders(<CompaniesManager />);
+    const l = await list();
+    const row = await within(l).findByRole('listitem', { name: 'Acme' });
+    const link = within(row).getByRole('link', {
+      name: 'Board for Acme: boards.greenhouse.io/acme (opens in a new tab)',
+    });
+    expect(link).toHaveAttribute('href', 'https://boards.greenhouse.io/acme');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link.getAttribute('rel')).toContain('noopener');
+  });
+
+  it('no board: no address, and the row asks for nothing more than it did before', async () => {
+    routes();
+    renderWithProviders(<CompaniesManager />);
+    const l = await list();
+    const row = await within(l).findByRole('listitem', { name: 'Northwind Traders' });
+    expect(row.querySelector('[data-board-address]')).toBeNull();
+    // What a company with no board has shown since #300: Follow says it will ask for the careers
+    // page, and nothing on the row asks for it before a Follow.
+    expect(
+      within(row).getByRole('button', { name: 'Follow Northwind Traders and add careers page' }),
+    ).toBeInTheDocument();
+    expect(within(row).queryByRole('textbox')).toBeNull();
+    expect(within(row).queryByText(/careers URL/i)).toBeNull();
+  });
+});

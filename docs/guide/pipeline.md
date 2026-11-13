@@ -208,8 +208,8 @@ and the review opens that board's page for the job, never the careers page.
 The **Details** step opens already filled with what Opportun holds for you, field by field:
 
 1. your profile: **Settings > Profile**, and its **Application details** card for first and
-   last name, country, school, degree, how you heard about the role, LinkedIn profile, website
-   and links;
+   last name, phone country code, school, degree, how you heard about the role, LinkedIn
+   profile, website and links;
 2. your account, for Email (your sign-in email) and Full name (your display name) only;
 3. the same field of the application you reviewed most recently, to any company.
 
@@ -225,11 +225,13 @@ off by default. Changes you make on the step apply to this application only. To 
 next time, tick **Save to my profile** before **Next: Review**: the application and your profile
 are saved together. On a field you emptied, the tick reads **Remove from my profile**.
 
-Country, Location (city), School, Degree and "How did you hear about this role?" are usually lists
-on the employer's form. Write each as the form's list shows it ("United States", not "USA"). The
-browser extension fills Location (city) and how you heard where the form asks them as a text
-question with the same label, and leaves a list for any of the five to you, saying "choose it on
-the form".
+Phone country code, Location (city), School, Degree and "How did you hear about this role?" are
+usually lists on the employer's form (School and Degree are the form's first education entry). Write each as the form's list shows it ("United States",
+not "USA"). Phone country code is the country your phone number belongs to, not where you live.
+On a Greenhouse form the browser extension chooses the one option that reads exactly as your
+value, and leaves the list for you when none does, or when more than one does. It fills
+Location (city) and how you heard where the form asks them as a text question with the same
+label.
 
 #### Finish on the application site
 

@@ -60,7 +60,15 @@ const DETAIL_INPUTS = new Map<
   ['fullName', { type: 'text', autoComplete: 'name' }],
   ['email', { type: 'email', autoComplete: 'email' }],
   ['phone', { type: 'tel', autoComplete: 'tel' }],
-  ['country', { type: 'text', autoComplete: 'country-name', hint: asListed('United States') }],
+  [
+    'country',
+    {
+      type: 'text',
+      autoComplete: 'country-name',
+      // The phone's country code (tl on #402, issuecomment-6808214454).
+      hint: "The country your phone number belongs to, as the form's list shows it, for example United States.",
+    },
+  ],
   [
     'location',
     {

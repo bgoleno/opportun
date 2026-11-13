@@ -168,8 +168,9 @@ only reads public job board pages, and it does not follow the company: the board
 until you follow it.
 
 **Check board.** A company in Recommended companies that has not been checked, from your network or
-a suggestion, has a **Check board** button. Nothing checks a company you have not asked about:
-only your click does, and only for that company, once. It does what the weekly check does: it looks
+a suggestion, has a **Check board** button. Apart from **Network job boards** (below), which is on
+unless you turn it off, nothing checks a company you have not asked about: only your click does, and
+only for that company, once. It does what the weekly check does: it looks
 for the company's public job board (the company's name, as board-name guesses, goes to the Greenhouse,
 Lever, Ashby and Workday public pages, as following does), reads the list of its open jobs once, and
 keeps how many there are, how many the pre-filter passes, and up to 10 of the job titles. No AI call
@@ -179,6 +180,33 @@ again. A company with no board found says so, and its **Follow and add careers p
 it so that you can add the careers page under Followed companies. The job titles are also what the
 nightly industry tags use for a company with no postings stored yet, and a check that reads titles
 after the model could not place a company has it asked again.
+
+**Network job boards.** On by default, for every account, including one that existed before this
+was added. Each night, Opportun looks up as many as 20 of these companies on Greenhouse, Lever and
+Ashby by name. Those services see the names it tries, which come from where your contacts work, and
+your server's address. No contact's name or details are sent. To turn it off, clear "Check job
+boards for companies in my network" in **Settings > AI**; it stays off until you turn it on again.
+
+- **Which companies:** ones where you know someone, that you have not followed, denied or checked,
+  and that have no board on record other than one on these three services (a Workday board found
+  while you followed a company is left as it is). The ones where you know the most people go
+  first, then by name. The rest wait for later nights.
+- **What it reads:** only the public board pages of those three services. It never reads a
+  company's own careers page and never a Workday site, even when you have saved a careers page for
+  the company.
+- **What it keeps,** as Check board does: the board, how many jobs it has open, how many the
+  pre-filter passes, and up to 10 job titles. No AI call is made, and the company is not followed.
+  The nightly industry tags then use those titles for a company not yet tagged; a tag already made
+  is not changed.
+- **When a service says to slow down, or cannot be reached at all** (for example while your
+  server is offline), the night ends for you, and the rest wait for the next night. That service
+  is also left alone for every other account on the server until the next night; the other two
+  are still asked. Nothing is recorded for the company being looked up: it waits for a later
+  night. A company whose service answers with something unusable on three nights is recorded as
+  having no board.
+- **Whose board it is:** a board found by trying a company's name can belong to another company of
+  the same name. The row shows the board's address (for example `boards.greenhouse.io/acme`), which
+  opens the board in a new tab, so you can see whose it is before following.
 
 **The estimate line.** A row whose board was checked says what following it would bring, for example
 "about 4 new a day, est. $0.02 a day; first run 25, $0.50". New postings a day are 2% of the open
