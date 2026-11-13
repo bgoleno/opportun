@@ -104,6 +104,13 @@ COPY --from=build /src/apps/web/dist /app/web/dist
 # artifacts route with the server's own address added.
 COPY --from=build /src/packages/extension/dist/chrome /app/artifacts/chrome
 COPY --from=build /src/packages/extension/dist/firefox /app/artifacts/firefox
+# The version and commit Settings shows (#480), passed by the Publish image workflow. Empty for a
+# local build, which then reads as a development build. Declared last, so a new commit changes
+# only this layer.
+ARG OPPORTUN_VERSION=
+ARG OPPORTUN_COMMIT=
+ENV OPPORTUN_VERSION=${OPPORTUN_VERSION} \
+    OPPORTUN_COMMIT=${OPPORTUN_COMMIT}
 USER opportun
 VOLUME ["/data", "/sqlite"]
 EXPOSE 8080
