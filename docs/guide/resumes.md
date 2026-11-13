@@ -35,10 +35,13 @@ On **Resumes**, paste the Google Doc link under **Register a base resume** and p
 
 ## Create a tailored copy
 
-Open an opportunity, go to its **Resume** tab, pick a base resume and press **Create tailored
-copy**. The copy is named by the template under **Settings > Integrations > Tailored resume
-names** (by default your name, the company and the role, for example
-`Jane Example-Initech-staff_platform_engineer`). Opportun opens the tailoring workspace.
+Open an opportunity, go to its **Resume** tab and choose the base resume to start from. With a
+base resume registered, the card at the top offers **Create tailored copy**; press it. The
+copy is named by the template under **Settings > Integrations > Tailored resume names** (by
+default your name, the company and the role, for example
+`Jane Example-Initech-staff_platform_engineer`). Opportun opens the tailoring workspace. The
+card, and the rest of the flow from here to applying, are described under
+[Resume](pipeline.md#resume) in the pipeline guide.
 
 ## The tailoring chat
 
@@ -81,9 +84,33 @@ as a prediction of whether you will get a call.
 
 ## Status and submission
 
-The **Status** menu on a tailored resume moves it through Draft, In review, Final and
-Submitted. Choosing Submitted asks where you sent it (for example "Northwind careers portal")
-and records it on the resume, so you can always tell which version a company has.
+A tailored resume moves through Draft, In review, Final and Submitted. For a copy made for an
+opportunity, finishing happens on the copy's own page, in a **Next step for this resume** strip
+under its title:
+
+![A tailored copy's page: the strip at step 3, Finish, with Mark as final and Score again, and a Change status link at the top right](images/resume-flow-strip.png)
+
+_A tailored copy's page, In review._
+
+- **While it is a Draft or In review**, the strip shows the same four steps and sentence as the
+  opportunity's **Resume** tab and **Mark as final** in place, with **Score again** beside it.
+  Mark it Final when you are done tailoring.
+- **Once it is Final**, the strip offers **Apply on** _ATS_ when assisted apply can start, and
+  takes you to the apply flow at its resume step. Otherwise it offers **Back to the
+  opportunity**, with the reason assisted apply cannot start, or where the application is.
+- **After an application or a send**, the strip says what was sent and offers **Back to the
+  opportunity**, as a quiet link.
+- **A copy the flow does not follow** (an older copy, or an archived one) shows no steps and no
+  action, only a line naming, with a link, the copy the opportunity's flow does follow, or the
+  opportunity when it follows none.
+- **Scoring** runs one request at a time: **Score again** in the strip and the match report's
+  own button cannot send two at once.
+
+**Change status**, beside the title, opens the full status menu, so every status stays reachable:
+Draft, In review, Final and Submitted. Choosing Submitted asks where you sent it (for example
+"Northwind careers portal") and records it on the resume, so you can always tell which version a
+company has; the "Sent to ..." line shows while the menu is closed. A base resume's page has no
+strip: it keeps the **Status** menu as it was.
 
 A resume can also be **recorded as sent** for an opportunity, from that opportunity's
 **Resume** tab. This is how a base resume you sent as it is (for example through a job site's
