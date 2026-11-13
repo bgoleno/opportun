@@ -179,7 +179,7 @@ jobs:
     # Once per database engine: the browser flows must hold on Postgres too.
     # Pull requests only. A squash merge puts the same tree on main that this job already
     # tested as the merge result, so re-running the browser and image matrices on the push
-    # buys nothing and costs five of the seven matrix jobs per merge. `check` still runs on
+    # buys nothing and costs six of the eight matrix jobs per merge. `check` still runs on
     # main, so a broken main is still visible.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
@@ -247,10 +247,14 @@ jobs:
     # then checks health, the SPA, the non-root user and the read-only root filesystem.
     # Once per database: the default (SQLite in ./data), the opt-in postgres profile, and
     # an existing SQLite install moved to Postgres with the copy tool by the documented
-    # runbook (docs/install.md section 15).
+    # runbook (docs/install.md section 15). And `minimal` (issue #423): SQLite with a .env
+    # that sets nothing, since the install guide's two required settings come from
+    # compose.yml itself (the key file and OPPORTUN_BASE_URL's default). Every optional
+    # setting then reaches the server as compose's empty `${VAR:-}`, the case that
+    # crash-looped on #421 and that .env.example's values hide.
     # Pull requests only. A squash merge puts the same tree on main that this job already
     # tested as the merge result, so re-running the browser and image matrices on the push
-    # buys nothing and costs five of the seven matrix jobs per merge. `check` still runs on
+    # buys nothing and costs six of the eight matrix jobs per merge. `check` still runs on
     # main, so a broken main is still visible.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
@@ -258,7 +262,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        db: [sqlite, postgres, sqlite-to-postgres]
+        db: [sqlite, postgres, sqlite-to-postgres, minimal]
     defaults:
       run:
         working-directory: deploy
@@ -274,7 +278,7 @@ jobs:
 
       - name: Quick start (as documented)
         run: |
-          cp ../.env.example .env
+          if [ "${{ matrix.db }}" = minimal ]; then : > .env; else cp ../.env.example .env; fi
           pw="$(openssl rand -hex 24)"
           {
             echo "COMPOSE_PROFILES=postgres"
@@ -314,12 +318,21 @@ jobs:
           curl -fsS http://127.0.0.1:8080/ | grep -q '<div id="root">'
           test "$(docker compose exec -T opportun id -u)" = "10001"
           cid="$(docker compose ps -q opportun)"
+          # Healthy once is not enough: a server that exits and is restarted by the policy can
+          # pass a health check between two crashes.
+          test "$(docker inspect -f '{{.RestartCount}}' "$cid")" = "0"
           test "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$cid")" = "true"
           test "$(docker inspect -f '{{.Config.User}}' "$cid")" = "opportun"
           if docker compose exec -T opportun sh -c 'touch /app/server/probe'; then
             echo "root filesystem is writable" && exit 1
           fi
-          if [ "${{ matrix.db }}" != sqlite ]; then
+          if [ "${{ matrix.db }}" = minimal ]; then
+            # The leg ran with what it is for: both AI base URLs set, and empty.
+            docker compose exec -T opportun sh -c \
+              'test "${ANTHROPIC_BASE_URL+set}" = set && test -z "$ANTHROPIC_BASE_URL" &&
+               test "${OPENAI_BASE_URL+set}" = set && test -z "$OPENAI_BASE_URL"'
+          fi
+          if [ "${{ matrix.db }}" = postgres ] || [ "${{ matrix.db }}" = sqlite-to-postgres ]; then
             # The database lives in the db service (C collation). A fresh install has no
             # SQLite file; a moved one keeps it untouched as the rollback.
             if [ "${{ matrix.db }}" = postgres ]; then
