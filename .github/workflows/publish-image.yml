@@ -68,6 +68,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Nothing here pushes with git: the token is not left in .git/config (sec on #489).
+          persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
@@ -141,16 +144,27 @@ jobs:
         # The sha tag goes first, so the immutable reference exists before any moving one is
         # pointed at the same image. If a later push fails, what is left is a published build
         # with fewer names, never a `latest` or a version that resolves to nothing.
+        #
+        # One command a line, under set -e: `docker tag ... && docker push ...` inside an `if` is
+        # exempt from set -e, so a failed tag went unnoticed and the job went on (tl on #489).
+        # The digest is checked too, since the Release's notes name it.
         run: |
+          set -euo pipefail
           docker push "$IMAGE:$TAG"
           if [ -n "$VERSION" ]; then
-            docker tag "$IMAGE:$TAG" "$IMAGE:$VERSION" && docker push "$IMAGE:$VERSION"
+            docker tag "$IMAGE:$TAG" "$IMAGE:$VERSION"
+            docker push "$IMAGE:$VERSION"
           fi
           if [ "$LATEST" = "true" ]; then
-            docker tag "$IMAGE:$TAG" "$IMAGE:latest" && docker push "$IMAGE:latest"
+            docker tag "$IMAGE:$TAG" "$IMAGE:latest"
+            docker push "$IMAGE:latest"
           fi
           # The pushed image's digest, for the Release's notes.
-          echo "digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$TAG")" >> "$GITHUB_OUTPUT"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$TAG")"
+          case "$digest" in
+            "$IMAGE@sha256:"*) echo "digest=$digest" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::no pushed digest for $IMAGE:$TAG" && exit 1 ;;
+          esac
 
       - name: Report the tag and what to do with it
         env:
@@ -203,6 +217,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Nothing here pushes with git: the token is not left in .git/config (sec on #489).
+          persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:

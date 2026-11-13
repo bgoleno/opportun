@@ -7,11 +7,13 @@ import { test } from 'node:test';
 import {
   changelogSection,
   check,
+  escapeCommandData,
   gitTagOf,
   isVersion,
   liveLookup,
   releaseFree,
   releaseNotes,
+  run,
   shaTagOf,
 } from './publish.mjs';
 
@@ -52,6 +54,19 @@ test('the version pattern: no leading v, one spelling per version', () => {
   for (const bad of ['v0.3.1', '0.3', '0.3.1-', '0.3.1 ', '0.3.1;rm', '']) {
     assert.equal(isVersion(bad), false, bad);
   }
+  // What git refuses as a tag name (tl on #489), and what is not semver.
+  for (const bad of [
+    '0.3.2-rc..1',
+    '0.3.2-rc.',
+    '0.3.2-.rc',
+    '0.3.2-rc.lock',
+    '01.3.2',
+    '0.3.2-rc_1',
+  ]) {
+    assert.equal(isVersion(bad), false, bad);
+  }
+  assert.equal(isVersion(`0.3.2-${'a'.repeat(58)}`), true);
+  assert.equal(isVersion(`0.3.2-${'a'.repeat(59)}`), false, 'over 64 characters');
   assert.equal(gitTagOf('0.3.1'), 'v0.3.1');
   assert.equal(shaTagOf(SHA), 'sha-d4d97b6');
 });
@@ -248,4 +263,102 @@ test('the check runs before the build, and the release is made on the commit bui
   assert.notEqual(release.indexOf('publish.mjs release-free'), -1);
   assert.ok(release.indexOf('publish.mjs release-free') < release.indexOf('gh release create'));
   assert.match(release, /gh release create "v\$VERSION" --target "\$GITHUB_SHA"/);
+});
+
+test('a message is escaped as a workflow command: a newline cannot start a second one', () => {
+  assert.equal(escapeCommandData('a%b\r\n::add-mask::x'), 'a%25b%0D%0A::add-mask::x');
+});
+
+/** run() with effects captured: lines said, outputs set, files written. */
+function cli(lookup, changelog = CHANGELOG) {
+  const said = [];
+  const outputs = [];
+  const files = new Map();
+  const io = {
+    say: (line) => said.push(line),
+    setOutput: (values) => outputs.push(values),
+    writeFile: (file, text) => files.set(file, text),
+    changelog: () => changelog,
+    lookup,
+  };
+  return { said, outputs, files, io };
+}
+const ENV = {
+  REF: 'refs/heads/main',
+  GITHUB_SHA: SHA,
+  IMAGE,
+  GITHUB_REPOSITORY: 'bgoleno/opportun',
+  DIGEST,
+};
+
+test('the check command: refuses with one escaped error line and exit 1, or writes the outputs', async () => {
+  const bad = cli(nothingExists().lookup);
+  assert.equal(await run(['check'], { ...ENV, VERSION: '0.3.2\n::add-mask::x' }, bad.io), 1);
+  assert.equal(bad.said.length, 1);
+  assert.doesNotMatch(bad.said[0], /\n/);
+  assert.match(bad.said[0], /^::error::version "0\.3\.2\\n::add-mask::x" is not/);
+  assert.deepEqual(bad.outputs, []);
+  // A raw newline reaching the message (here from a lookup's error) is escaped, not printed.
+  const broken = cli(async () => {
+    throw new Error('HTTP 500\n::add-mask::x');
+  });
+  assert.equal(await run(['check'], { ...ENV, VERSION: '' }, broken.io), 1);
+  assert.deepEqual(broken.said, [
+    '::error::could not check whether ghcr.io/bgoleno/opportun:sha-d4d97b6 exists: HTTP 500%0A::add-mask::x',
+  ]);
+  const ok = cli(nothingExists().lookup);
+  assert.equal(await run(['check'], { ...ENV, VERSION: '0.3.2' }, ok.io), 0);
+  assert.deepEqual(ok.outputs, [
+    { tag: 'sha-d4d97b6', version: '0.3.2', latest: 'true', label_version: '0.3.2' },
+  ]);
+});
+
+test('the release-free command: exit 0 only when both are free, 1 otherwise (sec X3 on #489)', async () => {
+  assert.equal(
+    await run(['release-free'], { ...ENV, VERSION: '0.3.2' }, cli(nothingExists().lookup).io),
+    0,
+  );
+  const taken = cli(async (q) => (q.kind === 'release' ? 'present' : 'absent'));
+  assert.equal(await run(['release-free'], { ...ENV, VERSION: '0.3.2' }, taken.io), 1);
+  assert.match(taken.said[0], /^::error::release v0\.3\.2 exists already/);
+  const none = cli(nothingExists().lookup);
+  assert.equal(await run(['release-free'], { ...ENV, VERSION: '' }, none.io), 1);
+  assert.match(none.said[0], /not a version/);
+});
+
+test('the notes command writes the notes; a bad digest or an unknown command exits 1', async () => {
+  const ok = cli(nothingExists().lookup);
+  assert.equal(await run(['notes', '/tmp/notes.md'], { ...ENV, VERSION: '0.3.2' }, ok.io), 0);
+  assert.match(ok.files.get('/tmp/notes.md'), /Image: `ghcr\.io\/bgoleno\/opportun:0\.3\.2`/);
+  const badDigest = cli(nothingExists().lookup);
+  assert.equal(
+    await run(['notes', 'n.md'], { ...ENV, VERSION: '0.3.2', DIGEST: 'x' }, badDigest.io),
+    1,
+  );
+  assert.equal(badDigest.files.size, 0);
+  const unknown = cli(nothingExists().lookup);
+  assert.equal(await run(['publish'], ENV, unknown.io), 1);
+});
+
+test('every checkout leaves no credentials behind, and the push step stops on any failure', () => {
+  // Each checkout's next few lines (its `with:` block) set persist-credentials: false.
+  const lines = WORKFLOW.split('\n');
+  const checkouts = lines.flatMap((line, i) =>
+    line.includes('uses: actions/checkout@') ? [i] : [],
+  );
+  assert.equal(checkouts.length, 2);
+  for (const i of checkouts) {
+    assert.ok(
+      lines.slice(i + 1, i + 5).some((l) => l.trim() === 'persist-credentials: false'),
+      `checkout at line ${i + 1}`,
+    );
+  }
+  const push = jobOf('publish').slice(jobOf('publish').indexOf('- name: Push'));
+  const script = push.slice(push.indexOf('run: |'));
+  assert.match(script, /set -euo pipefail/);
+  // `a && b` in an if-body is exempt from set -e: a failed docker tag would go unnoticed.
+  assert.doesNotMatch(
+    script.slice(0, script.indexOf('- name:') === -1 ? undefined : script.indexOf('- name:')),
+    /docker tag[^\n]*&&/,
+  );
 });

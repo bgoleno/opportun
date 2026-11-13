@@ -112,6 +112,7 @@ const FLAGGED_FILES = [
   'packages/extension/popup.html',
   'packages/extension/src/manifest.ts',
   '.github/scripts/check-security-paths.mjs',
+  '.github/scripts/publish.mjs',
   '.github/workflows/ci.yml',
   '.github/workflows/identifier-guard.yml',
   '.github/workflows/publish-image.yml',

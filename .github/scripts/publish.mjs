@@ -12,12 +12,24 @@
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-/** MAJOR.MINOR.PATCH, optionally -prerelease, with no leading v: one spelling per version. */
+/** At most this long, so `v<version>` is a git tag and the version a Docker tag (128 at most). */
+export const MAX_VERSION_LENGTH = 64;
+
+/**
+ * MAJOR.MINOR.PATCH, optionally -prerelease, with no leading v: one spelling per version. The
+ * prerelease is dot-separated semver identifiers, each non-empty ([0-9A-Za-z-]), so there is no
+ * `..` and no trailing `.`; and it may not end in `.lock`. Git refuses all three as a tag name, and
+ * the image would then be published under a version with no tag or Release (tl on #489).
+ */
 export function isVersion(value) {
+  if (value.length === 0 || value.length > MAX_VERSION_LENGTH) return false;
   const dash = value.indexOf('-');
   const core = dash === -1 ? value : value.slice(0, dash);
-  if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(core)) return false;
-  return dash === -1 || /^[0-9A-Za-z.-]+$/.test(value.slice(dash + 1));
+  if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(core)) return false;
+  if (dash === -1) return true;
+  const pre = value.slice(dash + 1);
+  if (pre.endsWith('.lock')) return false;
+  return pre.split('.').every((id) => /^[0-9A-Za-z-]+$/.test(id));
 }
 
 /** The git tag and Release name for a version: `v` + the version, as the git convention has it. */
@@ -52,7 +64,7 @@ export function changelogSection(changelog, version) {
 export async function check({ version, ref, sha, image, changelog, lookup }) {
   if (version !== '' && !isVersion(version)) {
     return {
-      refused: `version '${version}' is not MAJOR.MINOR.PATCH (optionally -prerelease), without a leading v`,
+      refused: `version ${JSON.stringify(version)} is not MAJOR.MINOR.PATCH (optionally -prerelease), without a leading v, at most ${MAX_VERSION_LENGTH} characters`,
     };
   }
   const onMain = ref === 'refs/heads/main';
@@ -189,62 +201,84 @@ export function liveLookup({ image, repository, token, fetchImpl = fetch }) {
   };
 }
 
-function output(values) {
-  const lines = Object.entries(values).map(([k, v]) => `${k}=${v}`);
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${lines.join('\n')}\n`);
-  else console.log(lines.join('\n'));
+/**
+ * A workflow command's message, escaped as GitHub's runner reads it: `%`, CR and LF are encoded,
+ * so a value with a newline in it (the free-text version) can never start a second command (sec
+ * on #489).
+ */
+export function escapeCommandData(message) {
+  return message.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
 }
 
-function refuse(message) {
-  console.log(`::error::${message}`);
-  process.exit(1);
-}
-
-async function main(argv, env) {
+/**
+ * The command line, with its effects passed in so publish.test.mjs can run each command: returns
+ * the exit code. `say` prints a line, `setOutput` writes the step's outputs, `writeFile` the notes.
+ */
+export async function run(argv, env, io) {
   const version = (env.VERSION ?? '').trim();
-  const changelog = readFileSync('CHANGELOG.md', 'utf8');
-  const lookup = liveLookup({
-    image: env.IMAGE,
-    repository: env.GITHUB_REPOSITORY,
-    token: env.GH_TOKEN,
-  });
-  if (argv[0] === 'check') {
-    const result = await check({
-      version,
-      ref: env.REF,
-      sha: env.GITHUB_SHA,
-      image: env.IMAGE,
-      changelog,
-      lookup,
-    });
-    if (result.refused) refuse(result.refused);
-    output({
-      tag: result.tag,
-      version: result.version,
-      latest: String(result.latest),
-      label_version: result.labelVersion,
-    });
-  } else if (argv[0] === 'release-free') {
-    if (!isVersion(version)) refuse(`not a version: '${version}'`);
-    const refused = await releaseFree(version, lookup);
-    if (refused !== null) refuse(refused);
-  } else if (argv[0] === 'notes') {
-    writeFileSync(
-      argv[1],
-      releaseNotes({
-        changelog,
+  const refuse = (message) => {
+    io.say(`::error::${escapeCommandData(message)}`);
+    return 1;
+  };
+  try {
+    if (argv[0] === 'check') {
+      const result = await check({
         version,
-        image: env.IMAGE,
-        digest: env.DIGEST,
+        ref: env.REF,
         sha: env.GITHUB_SHA,
-        repository: env.GITHUB_REPOSITORY,
-      }),
-    );
-  } else {
-    refuse(`unknown command: ${argv[0]}`);
+        image: env.IMAGE,
+        changelog: io.changelog(),
+        lookup: io.lookup,
+      });
+      if (result.refused) return refuse(result.refused);
+      io.setOutput({
+        tag: result.tag,
+        version: result.version,
+        latest: String(result.latest),
+        label_version: result.labelVersion,
+      });
+      return 0;
+    }
+    if (argv[0] === 'release-free') {
+      if (!isVersion(version)) return refuse(`not a version: ${JSON.stringify(version)}`);
+      const refused = await releaseFree(version, io.lookup);
+      return refused === null ? 0 : refuse(refused);
+    }
+    if (argv[0] === 'notes') {
+      io.writeFile(
+        argv[1],
+        releaseNotes({
+          changelog: io.changelog(),
+          version,
+          image: env.IMAGE,
+          digest: env.DIGEST,
+          sha: env.GITHUB_SHA,
+          repository: env.GITHUB_REPOSITORY,
+        }),
+      );
+      return 0;
+    }
+    return refuse(`unknown command: ${JSON.stringify(argv[0] ?? '')}`);
+  } catch (err) {
+    return refuse(err instanceof Error ? err.message : String(err));
   }
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv.slice(2), process.env).catch((err) => refuse(err.message));
+  const env = process.env;
+  process.exitCode = await run(process.argv.slice(2), env, {
+    say: (line) => console.log(line),
+    setOutput: (values) => {
+      const lines = Object.entries(values).map(([k, v]) => `${k}=${v}`);
+      if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `${lines.join('\n')}\n`);
+      else console.log(lines.join('\n'));
+    },
+    writeFile: (file, text) => writeFileSync(file, text),
+    changelog: () => readFileSync('CHANGELOG.md', 'utf8'),
+    lookup: liveLookup({
+      image: env.IMAGE,
+      repository: env.GITHUB_REPOSITORY,
+      token: env.GH_TOKEN,
+    }),
+  });
 }
