@@ -6,7 +6,7 @@ on:
   pull_request:
 
 # One run per ref. A new push to a pull request cancels the run its commit superseded, which
-# is the single largest source of wasted minutes here: eleven required checks, several of them
+# is the single largest source of wasted minutes here: fourteen required checks, several of them
 # building images or driving a browser. Pushes to main are never cancelled, because main's run
 # is the record of what landed.
 concurrency:
