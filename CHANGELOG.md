@@ -182,6 +182,13 @@ milestone's work was merged.
   two rows. The figures come from the cost recorded at call time, so earlier rows keep their price
   ([#341](https://github.com/bgoleno/opportun/issues/341),
   [#350](https://github.com/bgoleno/opportun/issues/350)).
+- **An error a dependency throws deep in its own code keeps the Opportun frame that called
+  it in the log.** Node keeps 10 stack frames by default, so such an error reached the log
+  without the Opportun line that led to it. The server now keeps 50 from startup. The log still
+  writes at most 20 frames per error, and an error made 66 frames deep costs about 2 µs more to
+  create, measured in the PR
+  ([#436](https://github.com/bgoleno/opportun/issues/436); PR
+  [#445](https://github.com/bgoleno/opportun/pull/445)).
 
 ### Mail, pipeline and assisted apply
 
@@ -197,6 +204,33 @@ milestone's work was merged.
   [#413](https://github.com/bgoleno/opportun/issues/413)).
 - **An opportunity's Communications tab opens newest first,** with a control for oldest first.
   The inbox order is unchanged ([#394](https://github.com/bgoleno/opportun/issues/394)).
+- **A thread of more than 200 messages says so and shows the rest.** The server returns 200
+  messages at a time, so a longer thread used to stop there with no sign of it. The tab now
+  says "Showing the newest 200 of 205 messages." (or the oldest, in the order you chose) and a
+  **Show N more** button adds the next page below. Switching between newest and oldest first
+  never shows the other order's partial list turned round: it says it is loading until the
+  right page arrives. A thread of 200 or fewer looks as before
+  ([#422](https://github.com/bgoleno/opportun/issues/422); PR
+  [#446](https://github.com/bgoleno/opportun/pull/446)).
+- **The Resume tab leads you through one resume flow.** A card at the top of the tab shows four
+  steps (Base, Tailor, Finish, Apply), says where this opportunity is, and offers one filled
+  button for the next action with a quieter alternative beneath it: register or choose a base
+  resume, create a tailored copy, mark it final, then apply or record that you sent it. A
+  base resume can also be sent as it is, which marks it final everywhere it is used. After an
+  action, focus moves to the new state and a status line says what happened and what is next.
+  The older ways of adding a resume moved into a collapsed **Other ways to add a resume**
+  section, and the separate **Create tailored copy** card is now the flow's own button. On a
+  phone the steps become one line, "Step 3 of 4: Finish"
+  ([#440](https://github.com/bgoleno/opportun/issues/440); PR
+  [#443](https://github.com/bgoleno/opportun/pull/443)).
+- **A keyboard drop of a board card on Closed or Dismissed says it is waiting for a reason,
+  then whether it moved.** The drop announces "... is waiting for a reason to move to the
+  Closed column. Choose one in the dialog, or cancel to leave it where it is." Confirming the
+  reason announces that the card moved, and cancelling announces that it was not moved. A
+  server error leaves the dialog open with its error message and announces nothing. The card's own **Dismiss** button
+  and stage menu are unchanged
+  ([#432](https://github.com/bgoleno/opportun/issues/432); PR
+  [#474](https://github.com/bgoleno/opportun/pull/474)).
 - **Assisted apply, only where it is on.** A refused **Apply** button looks dimmed and says why;
   a new draft starts filled from your profile, account and last application, with where each
   value came from and a **Save to my profile** tick (off by default); **Settings > Profile** has
@@ -232,6 +266,12 @@ milestone's work was merged.
   check for stray lines. An empty value is the same as unset. `ANTHROPIC_BASE_URL` and
   `OPENAI_BASE_URL` still need a `compose.override.yml`
   ([#417](https://github.com/bgoleno/opportun/issues/417)).
+- **Two transitive dependencies moved so the dependency scan passes.** `hono` 4.13.13 to
+  4.13.18 and `@hono/node-server` 2.1.5 to 2.1.8, both pulled in by the MCP client library, in
+  `pnpm-lock.yaml` only. Opportun uses that library's client side only, and a test now fails if
+  server code imports anything else from it. The project's security review judged the advisories
+  not reachable ([#466](https://github.com/bgoleno/opportun/issues/466); PR
+  [#471](https://github.com/bgoleno/opportun/pull/471)).
 - The connector's messages name **Settings > Integrations > Extensions and Connectors** as the
   app shows it ([#235](https://github.com/bgoleno/opportun/issues/235)).
 
