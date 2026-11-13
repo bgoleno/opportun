@@ -1,6 +1,13 @@
 // Shared steps for the e2e flows. Every flow registers its own user through the UI, so each
 // test sees only its own data on the shared server.
-import { expect, type Locator, type Page } from '@playwright/test';
+import {
+  expect,
+  type BrowserContext,
+  type Locator,
+  type Page,
+  type PlaywrightWorkerArgs,
+} from '@playwright/test';
+import { BASE_URL } from '../playwright.config';
 
 export const PASSWORD = 'correct horse battery staple';
 
@@ -127,4 +134,67 @@ export async function createCaptureToken(page: Page): Promise<string> {
   const token = await shown.getByLabel('Device token').inputValue();
   await shown.getByRole('button', { name: 'I saved it' }).click();
   return token;
+}
+
+const STUB = '<!doctype html><title>Stub ATS</title><h1>Stub application form</h1>';
+
+/**
+ * Answers every request to a host other than the test server with a stub page, so nothing leaves
+ * the machine: a handoff's new tab never reaches a real ATS (Opportun never submits; the e2e
+ * never even visits).
+ */
+export async function stubOtherHosts(context: BrowserContext): Promise<void> {
+  await context.route(
+    (url) => !url.href.startsWith(BASE_URL),
+    (route) => route.fulfill({ status: 200, contentType: 'text/html', body: STUB }),
+  );
+}
+
+/** Registers a base resume from a Google Doc link on /resumes (OPPORTUN_DOCS_MOCK). */
+export async function registerBaseResume(page: Page, docId: string): Promise<void> {
+  await page.goto('/resumes');
+  await page.getByLabel('Google Doc link').fill(`https://docs.google.com/document/d/${docId}/edit`);
+  await page.getByRole('button', { name: 'Register' }).click();
+  await expect(page.getByRole('link', { name: 'Jane Example Base Resume' })).toBeVisible();
+}
+
+/**
+ * An opportunity whose posting the server will confirm on a recognised Greenhouse board, the path
+ * a user takes: the extension captures the LinkedIn job page, and the posting job
+ * (posting.reconcile, every second here) finds the same job on the company's board (the
+ * OPPORTUN_SOURCE_MOCK fixture: boards.greenhouse.io/vandelay/jobs/1002), which names the ATS and
+ * the requisition. The LinkedIn page itself is never fetched: the capture carries it. Returns the
+ * opportunity's id; the caller waits for the confirmation in whatever its page shows.
+ */
+export async function captureGreenhouseOpportunity(
+  page: Page,
+  playwright: PlaywrightWorkerArgs['playwright'],
+): Promise<string> {
+  const token = await createCaptureToken(page);
+  const extension = await playwright.request.newContext({ baseURL: BASE_URL });
+  try {
+    const res = await extension.post('/api/v1/connector/capture', {
+      headers: { authorization: `Bearer ${token}` },
+      data: {
+        url: 'https://www.linkedin.com/jobs/view/3901234599/',
+        title: 'Staff Platform Engineer | Vandelay Industries | LinkedIn',
+        text: [
+          'Vandelay Industries',
+          'Staff Platform Engineer',
+          'Remote (US) · 2 days ago',
+          'Full-time',
+          'About the job',
+          'Lead our Go platform on Kubernetes. Terraform and on-call leadership a plus.',
+          'About the company',
+          'Vandelay Industries',
+        ].join('\n'),
+      },
+    });
+    expect(res.status(), await res.text()).toBe(201);
+    const body = (await res.json()) as { kind: string; opportunityId: string };
+    expect(body.kind).toBe('job');
+    return body.opportunityId;
+  } finally {
+    await extension.dispose();
+  }
 }
