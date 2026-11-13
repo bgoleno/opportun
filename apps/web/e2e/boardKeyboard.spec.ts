@@ -168,6 +168,10 @@ test.describe('a keyboard drop that waits for a reason says so, then says what h
     const opp = { company: 'Initrode', title: 'Staff Keyboard Engineer' };
     await inOffer(page, opp);
     const name = `${opp.company}: ${opp.title}`;
+    // Expanded, as #413's tests have it: from Offer, ArrowRight went past the narrow collapsed
+    // Dismissed rail straight to Closed in CI (the sensor picks the nearest target by position).
+    await page.getByRole('button', { name: /^Expand Dismissed/ }).click();
+    await expect(page.getByRole('button', { name: 'Collapse Dismissed' })).toBeVisible();
 
     await keyboardDrop(page, card(page, opp.company, opp.title), 'Dismissed', 'ArrowRight');
 
