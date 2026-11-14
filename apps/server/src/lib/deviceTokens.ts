@@ -6,11 +6,12 @@ import { createHash, randomBytes } from 'node:crypto';
 import { newId } from '@opportun/core';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { FastifyReply, FastifyRequest, preHandlerAsyncHookHandler } from 'fastify';
-import type { Db, Exec } from '../db/client';
-import { deviceTokens, type DeviceTokenScope } from '../db/schema';
+import { lockScope, withTransaction, type Db, type Exec } from '../db/client';
+import { deviceTokens, users, type DeviceTokenScope } from '../db/schema';
 import { DEVICE_AUTH_MARK } from '../plugins/security';
 import type { UserCtx } from '../repos/base';
-import { notFound, unauthorized } from './errors';
+import { HttpError, notFound, unauthorized } from './errors';
+import { passwordScope } from './passwords';
 import { racePoint } from './racePoints';
 
 export const DEVICE_TOKEN_PREFIX = 'odt_';
@@ -55,21 +56,63 @@ export function hashDeviceToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-/** Creates a token for the caller; the plaintext is returned here and nowhere else, ever. */
+/**
+ * Creates a token for the caller; the plaintext is returned here and nowhere else, ever.
+ *
+ * With `passwordHash` (the hash the caller's password was just proven against), the insert happens
+ * only while that is still the user's hash, under the lock a password change and a reset take
+ * (passwordScope): a change that revokes tokens, or a reset, that commits during the check wins,
+ * and this answers 403 having created nothing (#539).
+ */
 export async function createDeviceToken(
   db: Db,
   ctx: UserCtx,
   input: { name: string; scopes: DeviceTokenScope[] },
+  opts: { passwordHash?: string } = {},
 ): Promise<{ meta: DeviceTokenMeta; token: string }> {
   const token = DEVICE_TOKEN_PREFIX + randomBytes(32).toString('base64url');
   const now = Date.now();
   const scopes = [...new Set(input.scopes)];
-  const meta = await db
+  const { passwordHash } = opts;
+  if (passwordHash === undefined) {
+    return { meta: await insertToken(db, ctx, input.name, token, scopes, now), token };
+  }
+  return await withTransaction(db, async (tx) => {
+    await lockScope(tx, passwordScope(ctx.userId));
+    // The comparison is the query's: the user's row with the verified hash, or none.
+    const stillCurrent = await tx
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.id, ctx.userId), eq(users.passwordHash, passwordHash)))
+      .get();
+    if (stillCurrent === undefined) {
+      throw new HttpError(
+        403,
+        'password_changed',
+        'Your password changed while this was being checked. Sign in again and try once more.',
+      );
+    }
+    // Holding the lock, the hash still current: a change or reset now waits for this insert, and
+    // then revokes it with the rest (test/deviceTokenPasswordRace.test.ts parks here).
+    await racePoint('deviceTokens.create.locked');
+    return { meta: await insertToken(tx, ctx, input.name, token, scopes, now), token };
+  });
+}
+
+async function insertToken(
+  db: Exec,
+  ctx: UserCtx,
+  name: string,
+  token: string,
+  scopes: DeviceTokenScope[],
+  now: number,
+): Promise<DeviceTokenMeta> {
+  return await db
     .insert(deviceTokens)
     .values({
       id: newId(),
       userId: ctx.userId,
-      name: input.name,
+      name,
       tokenHash: hashDeviceToken(token),
       scopes,
       createdAt: now,
@@ -77,7 +120,6 @@ export async function createDeviceToken(
     })
     .returning(META_COLUMNS)
     .get();
-  return { meta, token };
 }
 
 export async function listDeviceTokens(db: Db, ctx: UserCtx): Promise<DeviceTokenMeta[]> {
