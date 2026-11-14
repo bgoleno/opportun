@@ -416,6 +416,12 @@ which was tagged by hand from `main` on 2026-11-13, and what merged after it.
   the popup then only offers the button
   ([#403](https://github.com/bgoleno/opportun/issues/403); PR
   [#507](https://github.com/bgoleno/opportun/pull/507)).
+- **The project's identifier guard in CI keeps withheld terms out of its public log.** The guard
+  that fails a pull request when a withheld identifier is present now masks every term before it
+  scans, whatever the term's case, and reports a hit by file and line only, never the term or the
+  matching text. This changes the project's own CI and nothing in the running application
+  ([#520](https://github.com/bgoleno/opportun/issues/520); PR
+  [#529](https://github.com/bgoleno/opportun/pull/529)).
 - **The guide now says your resume reaches Greenhouse when the extension attaches it, not
   when you press Submit.** The behaviour is not new: when the form's resume field is empty and
   takes a PDF, the extension attaches your Final resume, and Greenhouse's own form uploads it
