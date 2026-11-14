@@ -544,6 +544,44 @@ describe('the nightly network probe (#296)', () => {
       });
     }
 
+    // https://github.com/bgoleno/opportun/issues/514: the stopped vendor's guess was skipped, so a
+    // board with the same name on another vendor can be a decoy of the company's real one.
+    it('Greenhouse stopped tonight and a Lever hit for the same slug: nothing recorded, and the company waits', async () => {
+      const { app, a, b } = await boot();
+      await inNetwork(a, 'Initech');
+      const hooli = await inNetwork(b, 'Hooli');
+      await turnOn(app, a);
+      await turnOn(app, b);
+      // The first user's probe: Greenhouse says slow down, so it is stopped for the instance.
+      const first = net({ [greenhouse('initech')]: () => respond(429) });
+      vi.setSystemTime(at0520(12));
+      app.jobs.services.sourceFetch = first.fetch;
+      expect(await queueNightForUser(app.db, ctxOf(a), at0520(12))).toBe(1);
+      await app.jobs.drain();
+      expect(first.called).toEqual([greenhouse('initech')]);
+      // Later the same night: the second user's company has a board named hooli on Lever.
+      const later = at0520(12) + 30 * 60_000;
+      const second = net({
+        [lever('hooli')]: () => respond(200, '[{"id":"l1","text":"Staff Platform Engineer"}]'),
+      });
+      vi.setSystemTime(later);
+      app.jobs.services.sourceFetch = second.fetch;
+      expect(await queueNightForUser(app.db, ctxOf(b), later)).toBe(1);
+      await app.jobs.drain();
+      expect(second.hosts()).not.toContain('boards-api.greenhouse.io');
+      expect(second.called).toContain(lever('hooli'));
+      expect(await rowOf(app, hooli)).toMatchObject({
+        atsKind: null,
+        boardProbedAt: null,
+        boardProbeFailedNights: 0,
+      });
+      const [probe] = await probeJobs(app, b);
+      expect(probe).toMatchObject({
+        status: 'done',
+        result: { status: 'skipped', reason: 'vendor_stopped' },
+      });
+    });
+
     it('a 5xx ends the night as a 429 does', async () => {
       const { app, a } = await boot();
       await inNetwork(a, 'Initech', 2);
