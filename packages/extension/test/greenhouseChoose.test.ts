@@ -10,6 +10,8 @@ import {
   type FillPlan,
   type FillReport,
 } from '../src/greenhouseFill';
+import { isFillReport } from '../src/fillReport';
+import { NOT_FILLED_WORDS } from '../src/prefill';
 import {
   BOARD,
   EDUCATION,
@@ -1117,6 +1119,9 @@ describe('one fill at a time in the page (#531)', () => {
       p.doc,
     );
     expect(second).toEqual({ ok: false, reason: 'fill_running' });
+    // The popup takes this report as it is, not as a tab it could not run in (qa's live run at
+    // 66dab73: the check in popup.ts knew only wrong_page and no_form).
+    expect(isFillReport(second)).toBe(true);
     expect(p.events.slice(before)).toEqual([]);
     expect(valueOf(p.doc, 'first_name')).toBe('');
     // The first ends (its timer), and the page is free again.
@@ -1179,5 +1184,41 @@ describe('the page is still the posting before each list write (#537)', () => {
     expect(shownIn(p, 'school--0')).toBeNull();
     expect(report.chosen).toEqual([]);
     expect(report.notFilled).toEqual([{ label: 'School', reason: 'page_changed' }]);
+  });
+});
+
+// What the popup accepts back from the tab (src/fillReport.ts): every reason the popup has words
+// for, so a reason added to the filler and to prefill.ts is not taken for a broken tab.
+describe('the popup accepts every report the filler can give', () => {
+  it('a report with each not-filled reason the popup has words for', () => {
+    expect(NOT_FILLED_WORDS.size).toBeGreaterThan(0);
+    for (const reason of NOT_FILLED_WORDS.keys()) {
+      expect(
+        isFillReport({
+          ok: true,
+          chosen: [],
+          filled: [],
+          notFilled: [{ label: 'School', reason }],
+          resume: null,
+        }),
+        reason,
+      ).toBe(true);
+    }
+  });
+
+  it('each stop the filler returns, and nothing else', () => {
+    for (const reason of ['wrong_page', 'no_form', 'fill_running']) {
+      expect(isFillReport({ ok: false, reason }), reason).toBe(true);
+    }
+    expect(isFillReport({ ok: false, reason: 'elsewhere' })).toBe(false);
+    expect(
+      isFillReport({
+        ok: true,
+        chosen: [],
+        filled: [],
+        notFilled: [{ label: 'School', reason: 'elsewhere' }],
+        resume: null,
+      }),
+    ).toBe(false);
   });
 });
