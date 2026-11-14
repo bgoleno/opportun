@@ -4,9 +4,9 @@
 // lost both phone and recovery codes can get back in and re-enroll (plan Review Focus 3).
 import { randomBytes } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
-import { withTransaction, type Db } from '../db/client';
+import { lockScope, withTransaction, type Db } from '../db/client';
 import { deviceTokens, users } from '../db/schema';
-import { hashPassword, NO_PEPPERS, type PepperSet } from './passwords';
+import { hashPassword, NO_PEPPERS, passwordScope, type PepperSet } from './passwords';
 import { destroyAllSessions } from './sessions';
 import { clearTwoFactor } from './twoFactor';
 
@@ -27,6 +27,8 @@ export async function resetUserPassword(
   const password = temporaryPassword();
   const passwordHash = await hashPassword(password, peppers);
   await withTransaction(db, async (tx) => {
+    // The lock a token minted after a password check takes (#539): see passwordScope.
+    await lockScope(tx, passwordScope(userId));
     await tx
       .update(users)
       .set({ passwordHash, updatedAt: Date.now() })

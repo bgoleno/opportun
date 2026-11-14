@@ -6,7 +6,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { and, asc, eq, inArray, max } from 'drizzle-orm';
 import QRCode from 'qrcode';
 import { z } from 'zod';
-import { isUniqueViolation, withTransaction } from '../db/client';
+import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
 import { auditLog, settings, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { racePoint } from '../lib/racePoints';
@@ -25,6 +25,7 @@ import {
   hashPassword,
   hashVersion,
   NO_PEPPERS,
+  passwordScope,
   verifyPasswordWithUpgrade,
 } from '../lib/passwords';
 import { rateLimit } from '../lib/rateLimit';
@@ -690,6 +691,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // The revocation, when asked (#523), commits with the new hash or not at all: a refused
       // change revokes nothing, and a crash cannot leave the password changed and tokens live.
       const changed = await withTransaction(db, async (tx) => {
+        // The lock a token minted after a password check takes (#539): such a mint waits for
+        // this change, then finds the hash it verified gone and creates nothing.
+        await lockScope(tx, passwordScope(user.id));
         const row = await tx
           .update(users)
           .set({ passwordHash, updatedAt: Date.now() })
