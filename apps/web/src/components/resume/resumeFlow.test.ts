@@ -265,3 +265,60 @@ describe('resumeFlowState: H names a copy that has gone nowhere yet (#440, rulin
     );
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/516: a copy set to Submitted from "Change status",
+// with no send recorded, is "something was sent", as a send or an applied attempt is. After
+// "Tailor again" the new copy is the newest, and the flow stays H, naming it (ruling 6 on #440).
+describe('resumeFlowState: a Submitted copy counts as sent, newest or not (#516)', () => {
+  const submitted = resume({
+    id: 'sub',
+    status: 'submitted',
+    submittedTo: 'Acme careers',
+    createdAt: 2,
+  });
+
+  it('a Submitted copy and a newer Draft copy is H, with the newer copy as again', () => {
+    const newer = resume({ id: 'new', status: 'draft', createdAt: 5 });
+    expect(resumeFlowState(input({ resumes: [BASE, submitted, newer] }))).toMatchObject({
+      state: 'H',
+      step: 'done',
+      resume: submitted,
+      again: newer,
+    });
+  });
+
+  it('a newer Final copy that went nowhere is again too', () => {
+    const newer = resume({ id: 'new', status: 'final', createdAt: 5 });
+    expect(resumeFlowState(input({ resumes: [BASE, submitted, newer] }))).toMatchObject({
+      state: 'H',
+      again: newer,
+    });
+  });
+
+  it('a Submitted copy alone is H, as before, with nothing again', () => {
+    const state = resumeFlowState(input({ resumes: [BASE, submitted] }));
+    expect(state).toMatchObject({ state: 'H', step: 'done', resume: submitted });
+    expect(state).not.toHaveProperty('again');
+  });
+
+  it('an archived Submitted copy does not count', () => {
+    const newer = resume({ id: 'new', status: 'draft', createdAt: 5 });
+    expect(
+      resumeFlowState(input({ resumes: [BASE, { ...submitted, archivedAt: 3 }, newer] })),
+    ).toMatchObject({ state: 'C', resume: newer });
+  });
+
+  it("another opportunity's Submitted copy does not count", () => {
+    const newer = resume({ id: 'new', status: 'draft', createdAt: 5 });
+    expect(
+      resumeFlowState(input({ resumes: [BASE, { ...submitted, opportunityId: 'opp-2' }, newer] })),
+    ).toMatchObject({ state: 'C', resume: newer });
+  });
+
+  it("the panel's sentence names the newer Draft copy, as for any H with again", () => {
+    const newer = resume({ id: 'new', title: 'Acme second try', status: 'draft', createdAt: 5 });
+    expect(flowSentence(resumeFlowState(input({ resumes: [BASE, submitted, newer] })))).toBe(
+      '"Acme second try" is still a Draft. Tailor it, then mark it as final to apply.',
+    );
+  });
+});
