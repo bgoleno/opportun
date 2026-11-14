@@ -46,7 +46,6 @@ const DEFAULT_MAX = 20;
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const SLUG = /^[a-z0-9-]{1,100}$/;
 const URLISH = /https?:\/\/[^\s"'<>)\]}]+/g;
-const TRAILING = /[.,;:!?]+$/;
 
 function segmentsOf(url: URL): string[] {
   return url.pathname.split('/').filter((s) => s.length > 0);
@@ -117,41 +116,55 @@ function fromBoardPath(board: AtsBoard, url: URL): Omit<AtsJobRef, 'url'> | null
 }
 
 /**
- * The ATS job references in `text`, deduplicated by board and job id, in first-seen order.
- * A link that names a board but no single job is not a reference: nothing can be fetched by it.
+ * The job one address names, read from that parsed URL alone (#521, sec's audit): never a URL
+ * embedded in its query. On a recognised board host the board's own path names the job (tl on
+ * #151): a stray `gh_jid` there may name another requisition, or (on Lever, Ashby, Workday) none
+ * of this board's at all, so it counts only when the path names no job, and only of the board's
+ * kind. A `gh_jid` on any other host (a company career page) is read as before. Trailing
+ * punctuation (`.,;:!?`) is not part of it, as the text scan always read it (sec at 23f3a37).
+ */
+export function atsJobRefOfUrl(address: string): AtsJobRef | null {
+  // Dropped by a loop, not a regular expression, so it stays linear whatever the address holds.
+  let raw = address;
+  while (raw.length > 0 && '.,;:!?'.includes(raw[raw.length - 1]!)) raw = raw.slice(0, -1);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  const board = boardFromUrl(raw);
+  let ref: Omit<AtsJobRef, 'url'> | null;
+  if (board === null) {
+    ref = fromGreenhouseJid(url);
+  } else {
+    ref = fromBoardPath(board, url);
+    if (ref === null) {
+      const jid = fromGreenhouseJid(url);
+      ref = jid !== null && jid.kind === board.kind ? jid : null;
+    }
+  }
+  return ref === null ? null : { ...ref, url: raw };
+}
+
+/**
+ * The ATS job references in free text (a posting's body, a message), deduplicated by board and
+ * job id, in first-seen order: each URL-like substring read by atsJobRefOfUrl. A link that names
+ * a board but no single job is not a reference: nothing can be fetched by it. For one address the
+ * caller already has, use atsJobRefOfUrl: this scan would also read a URL embedded in that
+ * address's query, and stops a URL at a `)` (#521).
  */
 export function extractAtsJobRefs(text: string, max: number = DEFAULT_MAX): AtsJobRef[] {
   const out: AtsJobRef[] = [];
   const seen = new Set<string>();
   for (const match of text.replace(/&amp;/g, '&').matchAll(URLISH)) {
     if (out.length >= max) break;
-    const raw = match[0].replace(TRAILING, '');
-    let url: URL;
-    try {
-      url = new URL(raw);
-    } catch {
-      continue;
-    }
-    // On a recognised board host the board's own path names the job (tl on #151): a stray
-    // `gh_jid` there may name another requisition, or (on Lever, Ashby, Workday) none of this
-    // board's at all. It counts only when the path names no job, and only of the board's kind.
-    // A `gh_jid` on any other host (a company career page) is read as before.
-    const board = boardFromUrl(raw);
-    let ref: Omit<AtsJobRef, 'url'> | null;
-    if (board === null) {
-      ref = fromGreenhouseJid(url);
-    } else {
-      ref = fromBoardPath(board, url);
-      if (ref === null) {
-        const jid = fromGreenhouseJid(url);
-        ref = jid !== null && jid.kind === board.kind ? jid : null;
-      }
-    }
+    const ref = atsJobRefOfUrl(match[0]);
     if (ref === null) continue;
     const key = `${ref.kind}:${ref.org ?? ''}:${ref.externalId}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ ...ref, url: raw });
+    out.push(ref);
   }
   return out;
 }
@@ -171,11 +184,12 @@ export function postingAtsJobRef(postingUrl: string | null | undefined): AtsJobR
   if (postingUrl == null) return null;
   const board = boardFromUrl(postingUrl);
   if (board === null) return null;
-  // extractAtsJobRefs reads a board URL's own path first (#143), as destinationAllowed does
-  // through it: the two must name the same job, or a draft could never be handed off. On a board
-  // host it only ever returns a ref of that board's kind, so no second kind check is needed here.
-  const ref = extractAtsJobRefs(postingUrl, 1)[0];
-  if (ref === undefined) return null;
+  // atsJobRefOfUrl reads a board URL's own path first (#143), as destinationAllowed does: the two
+  // must name the same job, or a draft could never be handed off. One address read as one URL
+  // (#521, tl at 23f3a37): the text scan stopped a Workday path at its "(Remote)". On a board host
+  // it only ever returns a ref of that board's kind, so no second kind check is needed here.
+  const ref = atsJobRefOfUrl(postingUrl);
+  if (ref === null) return null;
   return { ...ref, org: board.slug };
 }
 
