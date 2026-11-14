@@ -218,8 +218,11 @@ describe('PasswordCard: device tokens (#523)', () => {
         revokeDeviceTokens: true,
       }),
     );
+    // Worded so it is true whether or not any were paired (tl on #536).
     expect(
-      await screen.findByText(/extension and Mail connector were signed out/),
+      await screen.findByText(
+        /Any browser extension or Mail connector you had paired needs pairing again/,
+      ),
     ).toBeInTheDocument();
   });
 

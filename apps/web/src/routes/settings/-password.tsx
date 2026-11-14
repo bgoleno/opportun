@@ -46,7 +46,7 @@ export function PasswordCard({ email }: { email: string }) {
       toast({
         title: 'Password changed',
         description: revokeDeviceTokens
-          ? 'Other devices have been signed out, and the extension and Mail connector were signed out too: pair them again from Settings.'
+          ? 'Other devices have been signed out. Any browser extension or Mail connector you had paired needs pairing again from Settings.'
           : 'Other devices have been signed out.',
         variant: 'success',
       });
