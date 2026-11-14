@@ -81,6 +81,28 @@ async function isStillReferenced(db: Db, storedPath: string): Promise<boolean> {
   return fromAttachments.length > 0 || fromCommunications.length > 0;
 }
 
+/**
+ * Removes one stored file now, with no grace period, when nothing in either table references it
+ * (the demo reset, #544: a visitor's files go with the visitor's rows, the same night). The same
+ * guards as the sweep below, minus the age: the references are read fresh, and the file's mtime is
+ * read before and again right before the unlink, so a concurrent upload reusing this exact path
+ * (which bumps the mtime, storage.ts) and its new row stop the delete. Returns whether it removed.
+ */
+export async function removeIfUnreferenced(
+  db: Db,
+  storage: Storage,
+  storedPath: string,
+): Promise<boolean> {
+  const before = await storage.attachmentMtime(storedPath);
+  if (before === undefined) return false;
+  if (await isStillReferenced(db, storedPath)) return false;
+  await racePoint('attachments.removeNow.beforeDelete');
+  const current = await storage.attachmentMtime(storedPath);
+  if (current !== before || (await isStillReferenced(db, storedPath))) return false;
+  await storage.removeAttachment(storedPath);
+  return true;
+}
+
 export async function sweepOrphanedAttachments(
   db: Db,
   storage: Storage,

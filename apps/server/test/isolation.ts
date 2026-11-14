@@ -27,7 +27,7 @@ export interface TestClient {
 
 const SESSION = 'opportun_session';
 const CSRF = 'opportun_csrf';
-const PASSWORD = 'correct horse battery';
+export const PASSWORD = 'correct horse battery';
 
 function cookieValue(res: Response, name: string): string {
   const c = (res.cookies as { name: string; value: string }[]).find((x) => x.name === name);

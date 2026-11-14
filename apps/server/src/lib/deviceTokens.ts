@@ -4,12 +4,13 @@
 // accepted ONLY by routes that opt in through deviceRoute(); they never act as a session.
 import { createHash, randomBytes } from 'node:crypto';
 import { newId } from '@opportun/core';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import type { FastifyReply, FastifyRequest, preHandlerAsyncHookHandler } from 'fastify';
-import type { Db, Exec } from '../db/client';
+import { lockScope, withTransaction, type Db, type Exec } from '../db/client';
 import { deviceTokens, type DeviceTokenScope } from '../db/schema';
 import { DEVICE_AUTH_MARK } from '../plugins/security';
 import type { UserCtx } from '../repos/base';
+import { audit } from './audit';
 import { notFound, unauthorized } from './errors';
 import { racePoint } from './racePoints';
 
@@ -55,21 +56,68 @@ export function hashDeviceToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-/** Creates a token for the caller; the plaintext is returned here and nowhere else, ever. */
+/** The most active (unrevoked) tokens one demo account keeps (sec on #542 and #544). */
+export const DEMO_MAX_ACTIVE_TOKENS = 20;
+
+/**
+ * Creates a token for the caller; the plaintext is returned here and nowhere else, ever. With
+ * `maxActive`, the caller keeps at most that many unrevoked tokens: when the new one would pass it,
+ * the oldest are revoked to make room, and each revoke is audited as a manual one is, with `ip`
+ * (tl on #550: a visitor on a shared demo account always gets a token, and the one least likely
+ * still in use goes). The count, the revokes and the insert share the user's lock in one
+ * transaction, so two at once cannot leave more than `maxActive`.
+ */
 export async function createDeviceToken(
   db: Db,
   ctx: UserCtx,
   input: { name: string; scopes: DeviceTokenScope[] },
+  opts: { maxActive?: number; ip?: string } = {},
 ): Promise<{ meta: DeviceTokenMeta; token: string }> {
   const token = DEVICE_TOKEN_PREFIX + randomBytes(32).toString('base64url');
   const now = Date.now();
   const scopes = [...new Set(input.scopes)];
-  const meta = await db
+  const { maxActive } = opts;
+  if (maxActive === undefined)
+    return { meta: await insertToken(db, ctx, input.name, token, scopes, now), token };
+  return await withTransaction(db, async (tx) => {
+    await lockScope(tx, `device_tokens:${ctx.userId}`);
+    const active = await tx
+      .select({ id: deviceTokens.id, name: deviceTokens.name })
+      .from(deviceTokens)
+      .where(and(eq(deviceTokens.userId, ctx.userId), isNull(deviceTokens.revokedAt)))
+      .orderBy(asc(deviceTokens.createdAt), asc(deviceTokens.id))
+      .all();
+    // Room for the new one: the oldest go first.
+    for (const old of active.slice(0, Math.max(active.length - maxActive + 1, 0))) {
+      await tx
+        .update(deviceTokens)
+        .set({ revokedAt: now, updatedAt: now })
+        .where(and(eq(deviceTokens.id, old.id), isNull(deviceTokens.revokedAt)))
+        .run();
+      await audit(tx, 'device_token.revoked', {
+        userId: ctx.userId,
+        ...(opts.ip === undefined ? {} : { ip: opts.ip }),
+        detail: { id: old.id, name: old.name },
+      });
+    }
+    return { meta: await insertToken(tx, ctx, input.name, token, scopes, now), token };
+  });
+}
+
+async function insertToken(
+  db: Exec,
+  ctx: UserCtx,
+  name: string,
+  token: string,
+  scopes: DeviceTokenScope[],
+  now: number,
+): Promise<DeviceTokenMeta> {
+  return await db
     .insert(deviceTokens)
     .values({
       id: newId(),
       userId: ctx.userId,
-      name: input.name,
+      name,
       tokenHash: hashDeviceToken(token),
       scopes,
       createdAt: now,
@@ -77,7 +125,6 @@ export async function createDeviceToken(
     })
     .returning(META_COLUMNS)
     .get();
-  return { meta, token };
 }
 
 export async function listDeviceTokens(db: Db, ctx: UserCtx): Promise<DeviceTokenMeta[]> {

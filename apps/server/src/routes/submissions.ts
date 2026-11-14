@@ -52,7 +52,8 @@ const CreateBody = z
   .object({
     /** Client-generated per attempt; a repeat with the same key returns the same draft. */
     idempotencyKey: z.uuid(),
-    resumeId: z.string().min(1).max(64),
+    /** Required off the demo; on the demo an attempt may carry none (#544, tl). */
+    resumeId: z.string().min(1).max(64).optional(),
   })
   .strict();
 
@@ -200,6 +201,7 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
         app.requireUser(req),
         req.params.id,
         req.body,
+        { demo: app.config.demo },
       );
       if (replayed) void reply.header('idempotent-replayed', 'true');
       return reply.code(replayed ? 200 : 201).send(submission);
@@ -241,7 +243,9 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req, reply) => {
       if (answeredInvalid(req, reply)) return reply;
-      return updateSubmissionDraft(db, app.requireUser(req), req.params.id, req.body);
+      return updateSubmissionDraft(db, app.requireUser(req), req.params.id, req.body, {
+        demo: app.config.demo,
+      });
     },
   );
 
@@ -298,7 +302,9 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req, reply) => {
       if (answeredInvalid(req, reply)) return reply;
-      return handoffSubmission(db, app.requireUser(req), req.params.id);
+      return handoffSubmission(db, app.requireUser(req), req.params.id, {
+        demo: app.config.demo,
+      });
     },
   );
 

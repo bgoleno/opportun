@@ -94,6 +94,7 @@ import {
   users,
   communications,
 } from '../db/schema';
+import { removeIfUnreferenced } from '../jobs/attachmentSweep';
 import { budgetKey, writeSetting } from '../lib/ai';
 import { bindVaultKey, putSecretIn } from '../lib/secretBox';
 import { hashPassword } from '../lib/passwords';
@@ -694,12 +695,32 @@ export async function seedDemo(
   let opportunitiesPerUser = 0;
   let resumesPerUser = 0;
   let contactsPerUser = 0;
+  // The files the demo users' rows point at before the delete: a visitor's own uploads and
+  // submission snapshots among them. Removed once the reseed has committed (sec on #544).
+  let filesBefore: string[] = [];
   const deletedExisting = await withTransaction(
     db,
     async (tx) => {
       // Inside the transaction, not before it: see the header comment above for why this and
       // the delete it guards must share the same write lock, with no gap between them.
       await requireOnlyPinnedUsers(tx, userIds);
+      // Both tables that point at stored files (jobs/attachmentSweep.ts): attachments, and a
+      // communication's stored body.
+      const [fromAttachments, fromBodies] = await Promise.all([
+        tx
+          .select({ path: attachments.storedPath })
+          .from(attachments)
+          .where(inArray(attachments.userId, [...userIds]))
+          .all(),
+        tx
+          .select({ path: communications.bodyRef })
+          .from(communications)
+          .where(inArray(communications.userId, [...userIds]))
+          .all(),
+      ]);
+      filesBefore = [...fromAttachments, ...fromBodies]
+        .map((r) => r.path)
+        .filter((p): p is string => p !== null);
       const deleted = await deleteExistingDemoUsers(tx, userIds);
       for (let i = 0; i < DEMO_USERS.length; i++) {
         const user = DEMO_USERS[i]!;
@@ -742,6 +763,12 @@ export async function seedDemo(
     },
     { scope: 'seed_demo' },
   );
+  // After the commit, never before: the reseed rewrites the seeded resumes' files with the same
+  // content, so the same hashes, and only a file that a deleted row referenced and no row in
+  // either table references now is a visitor's to remove (sec on #544; tl on #550: the sweep's
+  // own reference and mtime checks). The rows went with the users; this takes the files too, so
+  // nothing a visitor uploaded, a snapshot holds or an email body was stored as outlives the reset.
+  for (const path of new Set(filesBefore)) await removeIfUnreferenced(db, storage, path);
 
   return {
     deletedExisting,
