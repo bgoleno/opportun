@@ -593,7 +593,18 @@ export async function detectAts(
     recorded !== null && opts.boardApisOnly === true && !SLUG_ADDRESSED.has(recorded.kind)
       ? null
       : recorded;
-  if (current !== null && (await tryBoard(current))) return await found(current, 'current');
+  // Its error, like a guess's, leaves the company's real board unknown: a guess that hits after it
+  // could be a decoy that would replace the board on record, so it seeds every slug's error below
+  // (tl on https://github.com/bgoleno/opportun/pull/526).
+  let currentErrored = false;
+  if (current !== null) {
+    const result = await probeBoard(sctx, current);
+    if (result === 'hit') return await found(current, 'current');
+    if (result === 'error') {
+      transient = true;
+      currentErrored = true;
+    }
+  }
   // 2. Slug candidates from the name and domain, each against every slug-addressed provider
   //    (never Workday: ATS_PROBES has no Workday entry, there is no slug to guess).
   //    A guess that errored (a 429, a 5xx, no answer, or one the nightly probe skipped because its
@@ -601,9 +612,9 @@ export async function detectAts(
   //    the one it could not see. A board with the same slug on a later vendor can then be a
   //    same-named decoy, so that hit is not recorded: detection ends transient, the company keeps
   //    what it had, and the guesses are made again later (#514). A hit for a slug whose earlier
-  //    guesses all answered is recorded as before.
+  //    guesses all answered, after a recorded board that answered, is recorded as before.
   for (const slug of slugCandidates(company.name, company.domain)) {
-    let slugErrored = false;
+    let slugErrored = currentErrored;
     for (const p of ATS_PROBES) {
       const board = { kind: p.kind, slug };
       const result = await probeBoard(sctx, board);

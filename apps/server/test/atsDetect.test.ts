@@ -402,6 +402,94 @@ describe('detectAts', () => {
       expect((await getCompany(app.db, ctx, company.id)).atsKind).toBe('ats_lever');
     });
 
+    // tl and qa on https://github.com/bgoleno/opportun/pull/526: the recorded board's slug is not
+    // one of the guesses, so only step 1's error can hold back a guess's hit.
+    it('the recorded board errors on re-verification, and a guess hits on another vendor: transient, the board and its source kept', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const company = await createCompany(app.db, ctx, {
+        name: 'Initech',
+        careersUrl: 'https://careers.initech.example/jobs',
+        status: 'followed',
+      });
+      const recordedBoard = 'https://boards-api.greenhouse.io/v1/boards/initechcareers/jobs';
+      const page = '<a href="https://boards.greenhouse.io/initechcareers">Open roles</a>';
+      const first = await detectAts(app.db, ctx, company.id, {
+        fetch: net(
+          { 'careers.initech.example': [PUBLIC_IP] },
+          {
+            'https://careers.initech.example/jobs': () => respond(200, page),
+            [recordedBoard]: () => respond(200, GREENHOUSE_JOBS),
+          },
+        ).fetch,
+        log,
+      });
+      expect(first).toMatchObject({ status: 'found', org: 'initechcareers', via: 'careers_page' });
+
+      const { fetch, requested } = net(
+        {},
+        {
+          [recordedBoard]: () => respond(503),
+          [LEVER_HIT]: () => respond(200, LEVER_JOBS),
+        },
+      );
+      await expect(detectAts(app.db, ctx, company.id, { fetch, log })).rejects.toThrow(/retrying/);
+
+      expect(requested).toContain(LEVER_HIT);
+      expect(await getCompany(app.db, ctx, company.id)).toMatchObject({
+        atsKind: 'ats_greenhouse',
+        atsRef: 'initechcareers',
+      });
+      const sources = (await listSources(app.db, ctx, { limit: 50, offset: 0 })).items;
+      expect(sources.map((s) => [s.kind, s.enabled])).toEqual([['ats_greenhouse', true]]);
+    });
+
+    // qa's P1: a miss on a vendor in between does not clear the earlier error.
+    it('Greenhouse 503, Lever 404, then an Ashby hit for the same slug: transient', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const company = await createCompany(app.db, ctx, { name: 'Initech', status: 'followed' });
+      const { fetch, requested } = net(
+        {},
+        {
+          [GREENHOUSE_INITECH]: () => respond(503),
+          [ASHBY_INITECH]: () => respond(200, '{"jobs":[{"id":"a1","title":"PM"}]}'),
+        },
+      );
+
+      await expect(detectAts(app.db, ctx, company.id, { fetch, log })).rejects.toThrow(/retrying/);
+
+      expect(requested).toEqual([GREENHOUSE_INITECH, LEVER_HIT, ASHBY_INITECH]);
+      expect((await getCompany(app.db, ctx, company.id)).atsKind).toBeNull();
+    });
+
+    // qa's K4: detection ends there, as #514's criterion 1 says, rather than skipping the decoy
+    // and recording a later slug's board.
+    it('the decoy ends detection: a later slug that hits is not recorded either', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      // Slugs in order: initechlabs, initech-labs, initech (the domain label).
+      const company = await createCompany(app.db, ctx, {
+        name: 'Initech Labs',
+        domain: 'initech.io',
+        status: 'followed',
+      });
+      const { fetch, requested } = net(
+        {},
+        {
+          'https://boards-api.greenhouse.io/v1/boards/initechlabs/jobs': () => respond(503),
+          'https://api.lever.co/v0/postings/initechlabs?mode=json&limit=1': () =>
+            respond(200, LEVER_JOBS),
+          [ASHBY_INITECH]: () => respond(200, '{"jobs":[{"id":"a1","title":"PM"}]}'),
+        },
+      );
+
+      await expect(detectAts(app.db, ctx, company.id, { fetch, log })).rejects.toThrow(/retrying/);
+
+      expect(requested).not.toContain(ASHBY_INITECH);
+      expect((await getCompany(app.db, ctx, company.id)).atsKind).toBeNull();
+    });
+
     it('an error for one slug does not hold back a hit for another slug', async () => {
       const { app, a } = await boot();
       const ctx = ctxOf(a);
