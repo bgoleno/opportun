@@ -777,7 +777,7 @@ describe('the helpers themselves refuse anything but the control’s own box and
 
   // #537 (sec's audit #524): an option wrapped in a control under the listbox is not an option
   // either, as one that is a control itself is not.
-  it('optionsOf refuses an option inside a link, button, label or summary under the listbox', () => {
+  it('optionsOf refuses an option inside a link (an SVG one too), area, button, label or summary under the listbox', () => {
     const { p, h, byId } = helpers();
     const box = byId('degree--0');
     standInList(p, 'degree--0', { options: () => ["Bachelor's Degree"] });
@@ -792,6 +792,22 @@ describe('the helpers themselves refuse anything but the control’s own box and
     summary.setAttribute('role', 'option');
     summary.id = 'as-summary';
     list.append(summary);
+    // An image map's area, and an SVG link, follow their link on a click too (sec at 7b7f5b3). An
+    // SVG element's tagName is lowercase, so the check compares it in upper case.
+    const area = p.doc.createElement('area');
+    area.setAttribute('href', 'https://example.com/');
+    area.innerHTML = `<div role="option" id="in-area">Bachelor's Degree</div>`;
+    list.append(area);
+    const svg = p.doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const svgLink = p.doc.createElementNS('http://www.w3.org/2000/svg', 'a');
+    svgLink.setAttribute('href', 'https://example.com/');
+    const svgOption = p.doc.createElementNS('http://www.w3.org/2000/svg', 'text');
+    svgOption.setAttribute('role', 'option');
+    svgOption.id = 'in-svg-a';
+    svgLink.append(svgOption);
+    svg.append(svgLink);
+    list.append(svg);
+    expect(svgLink.tagName).toBe('a');
     // details is not a control: an option inside it is still one, unless inside its summary.
     expect(h.optionsOf(box)!.map((o) => o.id)).toEqual([
       'react-select-degree--0-option-0',

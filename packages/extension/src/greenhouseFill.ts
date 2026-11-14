@@ -275,11 +275,13 @@ export async function fillGreenhouseForm(
     if (shell === null || list === null) return null;
     if (list.getAttribute('role') !== 'listbox' || !shell.contains(list)) return null;
     // Never one that is, or sits inside, a link or a control under the listbox (#537, sec's
-    // audit #524): a click there would follow the link or press the control.
+    // audit #524): a click there would follow the link or press the control. In upper case: an
+    // SVG link's tagName is "a", and it follows its link too (sec at 7b7f5b3).
     return Array.from(list.querySelectorAll('[role="option"]')).filter((o) => {
       if (o.closest('[role="listbox"]') !== list) return false;
       for (let at: Element | null = o; at !== null && at !== list; at = at.parentElement) {
-        if (['A', 'BUTTON', 'INPUT', 'LABEL', 'SUMMARY'].includes(at.tagName)) return false;
+        const tag = at.tagName.toUpperCase();
+        if (['A', 'AREA', 'BUTTON', 'INPUT', 'LABEL', 'SUMMARY'].includes(tag)) return false;
       }
       return true;
     });
@@ -940,11 +942,13 @@ export function greenhouseListHelpers(doc: Document, form: Element) {
     if (shell === null || list === null) return null;
     if (list.getAttribute('role') !== 'listbox' || !shell.contains(list)) return null;
     // Never one that is, or sits inside, a link or a control under the listbox (#537, sec's
-    // audit #524): a click there would follow the link or press the control.
+    // audit #524): a click there would follow the link or press the control. In upper case: an
+    // SVG link's tagName is "a", and it follows its link too (sec at 7b7f5b3).
     return Array.from(list.querySelectorAll('[role="option"]')).filter((o) => {
       if (o.closest('[role="listbox"]') !== list) return false;
       for (let at: Element | null = o; at !== null && at !== list; at = at.parentElement) {
-        if (['A', 'BUTTON', 'INPUT', 'LABEL', 'SUMMARY'].includes(at.tagName)) return false;
+        const tag = at.tagName.toUpperCase();
+        if (['A', 'AREA', 'BUTTON', 'INPUT', 'LABEL', 'SUMMARY'].includes(tag)) return false;
       }
       return true;
     });
