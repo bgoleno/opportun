@@ -311,6 +311,11 @@ export const SubmissionSchema = z.object({
   reviewExpiresAt: TimestampSchema.nullable(),
   reviewedAt: TimestampSchema.nullable(),
   handedOffAt: TimestampSchema.nullable(),
+  /**
+   * When the browser extension first read this attempt to fill it (#403 slice 2), or null: the
+   * Open step says whether the extension has been there.
+   */
+  prefillReadAt: TimestampSchema.nullable(),
   submittedAt: TimestampSchema.nullable(),
   confirmedAt: TimestampSchema.nullable(),
   confirmationKind: z.enum(SUBMISSION_CONFIRMATION_KINDS).nullable(),

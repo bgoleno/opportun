@@ -10,7 +10,8 @@ and a job into an opportunity (FR-C5).
 LinkedIn's User Agreement prohibits automated retrieval of its pages, so Opportun never
 fetches linkedin.com, and this extension is built so that it cannot be used as a scraper:
 
-- **Explicit click only.** Nothing runs until you open the popup and click Capture. There is no
+- **Explicit click only.** Nothing runs until you open the popup and click Capture. (The popup
+  opens on a click on its icon, or on its keyboard shortcut: see below.) There is no
   background worker, no content script and no timer; the manifest declares none (a unit test
   enforces it). The page is read by one injection (`activeTab` + `scripting`) into the tab you
   clicked on, at the moment you clicked. The manifest grants host access to linkedin.com and
@@ -49,6 +50,10 @@ body `{ url, title, text }`:
 The server decides what the page is. Feeds, search results, company pages, the sign-in wall
 and half-loaded pages are refused (`422 unrecognized_page`) and the popup tells you why.
 
+Assisted apply sends something too: opening the popup over a Greenhouse posting sends that
+posting's address to your own server. See **What opening the popup sends** under
+[Assisted apply](#assisted-apply-filling-a-greenhouse-application).
+
 ### Indeed
 
 Indeed jobs are read on `www.indeed.com` (and `indeed.com`) only, on a single job page
@@ -73,12 +78,30 @@ not recognized and sends nothing. It never falls back to the whole page.
 ## Assisted apply: filling a Greenhouse application
 
 With assisted apply on, and a token set up with **Also let it fill in applications you hand
-off** (the `apply:assist` scope), the popup offers **Fill in this application** over a
-Greenhouse posting (`job-boards.greenhouse.io/<board>/jobs/<id>`, or the same on
-`boards.greenhouse.io`). It fills only what you reviewed in Opportun, and you press the site's
-own Submit button ([#183](https://github.com/bgoleno/opportun/issues/183)).
+off** (the `apply:assist` scope), the extension fills a Greenhouse application form
+(`job-boards.greenhouse.io/<board>/jobs/<id>`, or the same on `boards.greenhouse.io`) with what
+you reviewed in Opportun, and you press the site's own Submit button
+([#183](https://github.com/bgoleno/opportun/issues/183)).
 
-On the click, and only then:
+**Opening the popup on the posting fills it, the first time**
+([#403](https://github.com/bgoleno/opportun/issues/403)). Open the popup (click the Opportun icon,
+or press its shortcut) on the tab of the posting you handed off, and it says "Filling the
+application for _role_ at _company_ on _host_", fills, and shows its report. Your server records
+that first read, so the next time you open the popup there it does not fill by itself: it offers
+**Fill in this application**, which fills again when you press it. On any other page, opening
+the popup fills nothing, and a failed lookup shows no error.
+
+**What opening the popup sends.** Over a Greenhouse posting only, it sends that posting's address
+to your own server, with your token, to ask whether an application is handed off to it: the
+request the button makes. Nothing in the page is read for it, and it goes nowhere else. Over any
+other page, or with no token saved, nothing is sent.
+
+**The shortcut.** Alt+Shift+O opens the popup, as a click on the icon does, and does nothing
+more. Change or clear it at `chrome://extensions/shortcuts` (Chrome, Edge, Brave), or in Firefox
+under **about:addons**, the gear menu, **Manage Extension Shortcuts**. It is the extension's only
+command (`_execute_action`), and a unit test pins that.
+
+When the popup opens there for the first time, or on the click, and only then:
 
 1. **The popup asks your server for the application.**
    - It calls `GET <server>/api/v1/connector/apply/current?url=<the tab's address>`, which

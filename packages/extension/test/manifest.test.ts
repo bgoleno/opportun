@@ -45,6 +45,15 @@ describe('buildManifest', () => {
     // C-1: nothing runs in the background or in pages on its own.
     expect(m).not.toHaveProperty('background');
     expect(m).not.toHaveProperty('content_scripts');
+    // #403 (sec's conditions for the shortcut): one command, the browser's own "open the popup"
+    // (_execute_action), so a keypress does exactly what a click on the icon does, with the same
+    // activeTab grant and nothing more. Rebindable in the browser's shortcut settings.
+    expect(m.commands).toEqual({
+      _execute_action: {
+        suggested_key: { default: 'Alt+Shift+O' },
+        description: 'Open Opportun',
+      },
+    });
     expect(m).not.toHaveProperty('externally_connectable');
     expect(m).not.toHaveProperty('web_accessible_resources');
     // No remote code: the default extension CSP (script-src 'self') is not loosened.

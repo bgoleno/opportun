@@ -19,6 +19,7 @@ import {
   RESUME_CHECKS,
   RESUME_GAP_MS,
   type GetLike,
+  type PrefillAttempt,
   renderPrefillStop,
   reportLines,
   samePosting,
@@ -100,9 +101,22 @@ export const RESUME_CHECKING =
   'Checking that the form shows your resume. Keep this window open until it finishes (about 2 seconds).';
 export const RESUME_UNCONFIRMED =
   'Your resume was not confirmed: this window closed before the check finished. Look at the form, and attach your resume yourself if it is not shown there.';
+const KEEP_OPEN =
+  'Keep this window open until the report shows (up to a few seconds for each list).';
 /** While the filler runs: it waits for each list it chooses in (#402 slice 2, tl's rule 4). */
-export const FILLING =
-  'Filling in the form. Keep this window open until the report shows (up to a few seconds for each list).';
+export const FILLING = `Filling in the form. ${KEEP_OPEN}`;
+/**
+ * While a fill started by opening the popup runs (#403 slice 2, sec's condition 4): what is being
+ * filled, said before the report, with the same advice as FILLING.
+ */
+export const fillingFor = (title: string, company: string, host: string): string =>
+  `Filling the application for ${title} at ${company} on ${host}. ${KEEP_OPEN}`;
+/**
+ * How long opening the popup waits for its lookup before giving up silently (#403, tl at
+ * 9399746): the open holds the buttons while it decides, and a server that never answers must
+ * not hold them for longer than this.
+ */
+export const OPEN_LOOKUP_MS = 5_000;
 export const FILL_UNSEEN =
   "The last fill's result was not seen: this window closed before it finished. Check every field on the form, and choose or fill in yourself anything that is wrong or empty.";
 
@@ -202,8 +216,23 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
   const showOutcome = (o: Outcome, site?: CaptureSiteId): void => show(renderOutcome(o, site));
 
   /** Disables the buttons while `work` runs; a thrown error is shown, never swallowed. */
-  const busy = async (work: () => Promise<void>): Promise<void> => {
+  /**
+   * How many pieces of work are running: each busy(), and the open path while it decides (#403).
+   * Every button is disabled while any runs, and enabled again only when none does (tl at
+   * 21274b2), so no fill can start while other work runs, and work that ends never re-enables a
+   * button in the middle of another's.
+   */
+  let working = 0;
+  const hold = (): void => {
+    working += 1;
     for (const b of buttons) b.disabled = true;
+  };
+  const release = (): void => {
+    working -= 1;
+    if (working === 0) for (const b of buttons) b.disabled = false;
+  };
+  const busy = async (work: () => Promise<void>): Promise<void> => {
+    hold();
     status.textContent = '';
     report.replaceChildren();
     try {
@@ -211,7 +240,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     } catch {
       show({ tone: 'error', text: 'Something went wrong. Try again.' });
     } finally {
-      for (const b of buttons) b.disabled = false;
+      release();
     }
   };
 
@@ -391,6 +420,122 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     list('Not filled in', lines.notFilled);
   };
 
+  /**
+   * Fills the tab from the handed-off attempt and shows the report: the one path for the button
+   * and for opening the popup on the posting (#403 slice 2), so every check the button makes
+   * (the pinned posting, a stale review, the resume) holds for both. `filling` is the line shown
+   * while the filler runs.
+   */
+  const fillAttempt = async (
+    tab: { id: number },
+    posting: { board: string; jobId: string },
+    s: Settings,
+    attempt: PrefillAttempt,
+    filling: string,
+  ): Promise<void> => {
+    // The server matched the page to the attempt; the popup checks again against the pinned
+    // destination itself, so a wrong answer can never fill another posting (acceptance 4).
+    const pinned = greenhouseJobOf(attempt.destinationUrl);
+    if (pinned === null || !samePosting(pinned, posting)) {
+      show(renderPrefillStop({ kind: 'other_posting', destinationUrl: attempt.destinationUrl }));
+      return;
+    }
+    const resume = await fetchResume(deps.get, s, attempt);
+    if (resume.kind === 'review_stale') {
+      show(renderPrefillStop({ kind: 'none', reason: 'review_stale' }));
+      return;
+    }
+    const plan = buildPlan(attempt, pinned, resume.kind === 'file' ? resume.base64 : null);
+    // The fill now waits for each list (#402 slice 2): say so, and leave a note for the next
+    // popup on this tab in case this one closes before the report arrives.
+    show({ tone: 'info', text: filling });
+    const fillNote: CheckPending = {
+      tabId: tab.id,
+      board: pinned.board,
+      jobId: pinned.jobId,
+      at: Date.now(),
+      stage: 'fill',
+    };
+    await deps.checkStore?.set({ [checkPendingKey(tab.id)]: fillNote }).catch(() => undefined);
+    const filled = await deps.runFill(tab.id, plan);
+    // The report is here (or the run failed, which the popup says now): the note is done.
+    await deps.checkStore?.set({ [checkPendingKey(tab.id)]: null }).catch(() => undefined);
+    if (filled === null) {
+      show(renderPrefillStop({ kind: 'inject_failed' }));
+      return;
+    }
+    if (!filled.ok) {
+      show(renderPrefillStop({ kind: filled.reason }));
+      return;
+    }
+    // The resume: confirmed here, not in the page (tl and sec on #187). Look for its name a
+    // bounded number of times; if it never shows, take back exactly our file.
+    const report = {
+      ...filled,
+      chosen: [...filled.chosen],
+      filled: [...filled.filled],
+      notFilled: [...filled.notFilled],
+    };
+    if (filled.resume !== null) {
+      show({ tone: 'info', text: RESUME_CHECKING });
+      // A popup closes when it loses focus, and this check would end with it, leaving the
+      // file set and unconfirmed (sec on #187). The note says so to the next popup on this
+      // tab, and is cleared once the check has its answer. Popup storage only: nothing new
+      // runs in the page, and there is still no background worker (#191).
+      const note: CheckPending = {
+        tabId: tab.id,
+        board: pinned.board,
+        jobId: pinned.jobId,
+        at: Date.now(),
+        stage: 'resume',
+      };
+      await deps.checkStore?.set({ [checkPendingKey(tab.id)]: note }).catch(() => undefined);
+      const check: ResumeCheck = {
+        board: pinned.board,
+        jobId: pinned.jobId,
+        filename: filled.resume.filename,
+      };
+      let outcome: 'shown' | 'gone' | 'unseen' = 'unseen';
+      for (let i = 0; i < RESUME_CHECKS; i += 1) {
+        if (i > 0) await deps.wait(RESUME_GAP_MS);
+        const count = await deps.runResumeCheck(tab.id, check);
+        if (count === null) {
+          outcome = 'gone';
+          break;
+        }
+        if (count > filled.resume.before) {
+          outcome = 'shown';
+          break;
+        }
+      }
+      let reason: NotFilledReason | null = null;
+      if (outcome === 'gone') reason = 'resume_unchecked';
+      if (outcome === 'unseen') {
+        const cleared = await deps.runResumeClear(tab.id, {
+          ...check,
+          size: filled.resume.size,
+          before: filled.resume.before,
+        });
+        // Shown at the last moment: attached. Taken back out, or already empty: attach it
+        // yourself. Another file (the user's): left. Anything else: look at it yourself.
+        reason =
+          cleared === 'shown'
+            ? null
+            : cleared === 'cleared' || cleared === 'empty'
+              ? 'attach_yourself'
+              : cleared === 'kept'
+                ? 'has_value'
+                : 'resume_unchecked';
+      }
+      await deps.checkStore?.set({ [checkPendingKey(tab.id)]: null }).catch(() => undefined);
+      if (reason === null) report.filled.push('Resume');
+      else report.notFilled.push({ label: 'Resume', reason });
+    }
+    const lines = reportLines(report);
+    show({ tone: 'info', text: lines.reminder });
+    showReport(lines);
+  };
+
   prefillButton.addEventListener('click', () => {
     void busy(async () => {
       const s = await ready();
@@ -410,108 +555,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         show(renderPrefillStop(current));
         return;
       }
-      const { attempt } = current;
-      // The server matched the page to the attempt; the popup checks again against the pinned
-      // destination itself, so a wrong answer can never fill another posting (acceptance 4).
-      const pinned = greenhouseJobOf(attempt.destinationUrl);
-      if (pinned === null || !samePosting(pinned, posting)) {
-        show(renderPrefillStop({ kind: 'other_posting', destinationUrl: attempt.destinationUrl }));
-        return;
-      }
-      const resume = await fetchResume(deps.get, s, attempt);
-      if (resume.kind === 'review_stale') {
-        show(renderPrefillStop({ kind: 'none', reason: 'review_stale' }));
-        return;
-      }
-      const plan = buildPlan(attempt, pinned, resume.kind === 'file' ? resume.base64 : null);
-      // The fill now waits for each list (#402 slice 2): say so, and leave a note for the next
-      // popup on this tab in case this one closes before the report arrives.
-      show({ tone: 'info', text: FILLING });
-      const fillNote: CheckPending = {
-        tabId: tab.id,
-        board: pinned.board,
-        jobId: pinned.jobId,
-        at: Date.now(),
-        stage: 'fill',
-      };
-      await deps.checkStore?.set({ [checkPendingKey(tab.id)]: fillNote }).catch(() => undefined);
-      const filled = await deps.runFill(tab.id, plan);
-      // The report is here (or the run failed, which the popup says now): the note is done.
-      await deps.checkStore?.set({ [checkPendingKey(tab.id)]: null }).catch(() => undefined);
-      if (filled === null) {
-        show(renderPrefillStop({ kind: 'inject_failed' }));
-        return;
-      }
-      if (!filled.ok) {
-        show(renderPrefillStop({ kind: filled.reason }));
-        return;
-      }
-      // The resume: confirmed here, not in the page (tl and sec on #187). Look for its name a
-      // bounded number of times; if it never shows, take back exactly our file.
-      const report = {
-        ...filled,
-        chosen: [...filled.chosen],
-        filled: [...filled.filled],
-        notFilled: [...filled.notFilled],
-      };
-      if (filled.resume !== null) {
-        show({ tone: 'info', text: RESUME_CHECKING });
-        // A popup closes when it loses focus, and this check would end with it, leaving the
-        // file set and unconfirmed (sec on #187). The note says so to the next popup on this
-        // tab, and is cleared once the check has its answer. Popup storage only: nothing new
-        // runs in the page, and there is still no background worker (#191).
-        const note: CheckPending = {
-          tabId: tab.id,
-          board: pinned.board,
-          jobId: pinned.jobId,
-          at: Date.now(),
-          stage: 'resume',
-        };
-        await deps.checkStore?.set({ [checkPendingKey(tab.id)]: note }).catch(() => undefined);
-        const check: ResumeCheck = {
-          board: pinned.board,
-          jobId: pinned.jobId,
-          filename: filled.resume.filename,
-        };
-        let outcome: 'shown' | 'gone' | 'unseen' = 'unseen';
-        for (let i = 0; i < RESUME_CHECKS; i += 1) {
-          if (i > 0) await deps.wait(RESUME_GAP_MS);
-          const count = await deps.runResumeCheck(tab.id, check);
-          if (count === null) {
-            outcome = 'gone';
-            break;
-          }
-          if (count > filled.resume.before) {
-            outcome = 'shown';
-            break;
-          }
-        }
-        let reason: NotFilledReason | null = null;
-        if (outcome === 'gone') reason = 'resume_unchecked';
-        if (outcome === 'unseen') {
-          const cleared = await deps.runResumeClear(tab.id, {
-            ...check,
-            size: filled.resume.size,
-            before: filled.resume.before,
-          });
-          // Shown at the last moment: attached. Taken back out, or already empty: attach it
-          // yourself. Another file (the user's): left. Anything else: look at it yourself.
-          reason =
-            cleared === 'shown'
-              ? null
-              : cleared === 'cleared' || cleared === 'empty'
-                ? 'attach_yourself'
-                : cleared === 'kept'
-                  ? 'has_value'
-                  : 'resume_unchecked';
-        }
-        await deps.checkStore?.set({ [checkPendingKey(tab.id)]: null }).catch(() => undefined);
-        if (reason === null) report.filled.push('Resume');
-        else report.notFilled.push({ label: 'Resume', reason });
-      }
-      const lines = reportLines(report);
-      show({ tone: 'info', text: lines.reminder });
-      showReport(lines);
+      await fillAttempt(tab, posting, s, current.attempt, FILLING);
     });
   });
 
@@ -585,19 +629,85 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     }
   };
 
+  /**
+   * Opening the popup over the handed-off posting fills it (#403 slice 2, tl's note with sec's
+   * conditions 1 to 5): only over a Greenhouse posting (the tab's address alone decides, and
+   * nothing in the page is read for it), only with settings saved, and only when the server says
+   * this is the first read of an attempt pinned to this posting. Anything else, a failed lookup
+   * included, leaves the popup as it was, with the button and no message.
+   */
+  const fillOnOpen = async (
+    tab: { id: number; url: string },
+    posting: { board: string; jobId: string },
+  ): Promise<void> => {
+    try {
+      // The settings and the lookup, bounded (OPEN_LOOKUP_MS): past the bound the open gives up
+      // without a word and releases the buttons, and an answer that comes later is dropped, so
+      // it can never start a fill on a popup the user has since used.
+      const decision = (async () => {
+        const s = await ready();
+        if (isOutcome(s)) return null;
+        return { s, current: await fetchCurrent(deps.get, s, tab.url) };
+      })();
+      decision.catch(() => undefined);
+      const decided = await Promise.race([
+        decision,
+        deps.wait(OPEN_LOOKUP_MS).then(() => 'gave_up' as const),
+      ]);
+      if (decided === null || decided === 'gave_up') return;
+      const { s, current } = decided;
+      if (current.kind !== 'attempt' || !current.attempt.firstRead) return;
+      const { attempt } = current;
+      // fillAttempt checks the pinned posting again; checked here too, so another posting is
+      // left without a word rather than told why on a popup the user only opened.
+      const pinned = greenhouseJobOf(attempt.destinationUrl);
+      if (pinned === null || !samePosting(pinned, posting)) return;
+      const filling = fillingFor(
+        attempt.opportunityTitle,
+        attempt.companyName,
+        new URL(tab.url).host,
+      );
+      await busy(() => fillAttempt(tab, posting, s, attempt, filling));
+    } catch {
+      // Opening the popup is not a request for anything: a failure here says nothing.
+    }
+  };
+
   // The Assisted apply section shows only over a Greenhouse posting tab: decided from the tab's
   // address, which the popup already knows; nothing in the page is read for it.
   void (async () => {
+    let holding = false;
+    let opened: {
+      tab: { id: number; url: string };
+      posting: { board: string; jobId: string };
+    } | null = null;
     try {
       const tab = await deps.activeTab();
       const posting = tab?.url === undefined ? null : greenhouseJobOf(tab.url);
+      // The open path holds the buttons from before the section shows until it has decided
+      // whether it fills (#403, tl's blocking 1 at 650aaf7 and at 21274b2): counted as work, so
+      // a click and the open never run two fills at once.
+      if (posting !== null && tab?.url !== undefined) {
+        hold();
+        holding = true;
+      }
       assist.hidden = posting === null;
       // Any https page may be a thank-you page; which one counts is the server's to say.
       confirm.hidden = tab?.url === undefined || !isHttpsPage(tab.url);
       await tellUnfinishedCheck(tab?.id ?? null, posting);
+      if (tab !== null && tab.url !== undefined && posting !== null) {
+        opened = { tab: { id: tab.id, url: tab.url }, posting };
+      }
     } catch {
       assist.hidden = true;
       confirm.hidden = true;
+    }
+    try {
+      if (opened !== null) await fillOnOpen(opened.tab, opened.posting);
+    } finally {
+      // Released on every way out, a failure before the lookup included, so the buttons are never
+      // left held. A fill the open started counted as its own work, inside this hold.
+      if (holding) release();
     }
   })();
 

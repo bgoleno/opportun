@@ -24,6 +24,9 @@ function attempt(fields: Record<string, string>): PrefillAttempt {
     answers: [],
     resume: { snapshotState: null, filename: null, bytes: null },
     withheld: [],
+    opportunityTitle: 'Senior Platform Engineer',
+    companyName: 'Example Corp',
+    firstRead: false,
   };
 }
 
