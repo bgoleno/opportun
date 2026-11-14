@@ -118,6 +118,22 @@ describe('UsersCard', () => {
 });
 
 describe('RegistrationCard', () => {
+  // A shared demo admin (#563): the server refuses the switch, read or write. The card says so,
+  // with no state it cannot know and no button.
+  it('says the setting is not available to this account when the server refuses it', async () => {
+    mockApi({
+      'GET /admin/registration': () => ({ status: 403, body: { error: { code: 'forbidden' } } }),
+    });
+    renderWithProviders(<RegistrationCard />);
+    expect(
+      await screen.findByText(
+        'This setting covers the whole instance and is not available to this account.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /registration/ })).toBeNull();
+    expect(screen.queryByText(/Request failed/)).toBeNull();
+  });
+
   it('shows the current state and toggles it once the password is confirmed', async () => {
     const user = userEvent.setup();
     let open = false;

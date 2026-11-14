@@ -506,6 +506,39 @@ one ordering rule: `up -d` first, so the container is recreated with the new `.e
 inherits the environment the container started with, so seeding before recreating would
 re-seed the old passwords.
 
+## A dedicated account for one person
+
+The five seeded accounts are shared logins: everyone you invite knows their passwords, the demo
+resets them every night, and `demo-admin`'s password is known to every invitee too. For someone
+who should have an account of their own on the demo (a journalist, say), make a **dedicated
+account** from the host:
+
+```sh
+docker compose ... exec opportun node --import tsx src/cli/createDemoAccount.ts reporter@example.com "A Reporter"
+```
+
+It prints the account's password on stdout, once, and nowhere else (not to the logs or the audit
+trail). Give it to its owner, who can change it under Settings. The command refuses, and changes
+nothing, off a demo server (`OPPORTUN_DEMO` not `1`), before the first seed, and for an email
+already in use.
+
+A dedicated account:
+
+- **is an ordinary account**, never an administrator, and its data is its own;
+- **is not reset**: the nightly reset deletes and reseeds the five pinned accounts only, and
+  leaves a dedicated account and its data as they are;
+- **is out of `demo-admin`'s reach**: on a demo server, `demo-admin` is an administrator only for
+  the user list, the pepper rotation list, password resets, and the jobs list and its retry, and
+  even there it sees and acts on the five pinned accounts only. It cannot reset a dedicated
+  account's password or turn off its two-factor sign-in, cannot open registration, and gets
+  "not available to this account" for every other instance-wide setting.
+
+The command also marks the account, in a settings row only it writes. That mark is what lets the
+nightly reset run beside it: the reset refuses to run while any account other than the five
+pinned ones is unmarked, which is how it tells a demo database from a real one. To remove a
+dedicated account by hand later, remove its `demo_dedicated_account:<user id>` settings row with
+it; a row left behind is harmless.
+
 ## Hard constraints on anything added to this deployment
 
 **No credentials, keys or passwords in this repository, including in a template.** Variable

@@ -28,7 +28,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { toast } from '@/components/ui/toast';
-import { api, errorMessage } from '@/lib/api';
+import { api, errorMessage, isForbidden, NOT_AVAILABLE_TO_ACCOUNT } from '@/lib/api';
 import { relativeTime } from './-devices';
 import { PasswordDialog, passwordError } from './-twoFactor';
 
@@ -259,7 +259,9 @@ export function RegistrationCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-wrap items-center gap-3">
-        {open === undefined ? null : (
+        {isForbidden(state.error) ? (
+          <p className="text-sm text-muted-foreground">{NOT_AVAILABLE_TO_ACCOUNT}</p>
+        ) : open === undefined ? null : (
           <>
             <p role="status" className="text-sm text-muted-foreground">
               Registration is {open ? 'open' : 'closed'}.

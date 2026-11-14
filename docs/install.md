@@ -1401,3 +1401,8 @@ a prebuilt image rather than building from a checkout, runs a seeded, nightly-re
 needs its own `.env`. See [docs/demo-deployment.md](demo-deployment.md) for the pull-only
 compose override, the publish-and-pull flow (GitHub Container Registry), and the full `.env`
 reference (`.env.demo.example`).
+
+On a demo server, an account for one person, not shared and not reset, comes from
+`src/cli/createDemoAccount.ts <email> <display name>`, which prints its password once. The demo's
+shared admin has no power over it. See
+[A dedicated account for one person](demo-deployment.md#a-dedicated-account-for-one-person).
