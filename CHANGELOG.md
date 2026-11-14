@@ -54,6 +54,31 @@ when the milestone's work was merged.
   environment, set in the repository's settings, is the platform's own limit
   ([#519](https://github.com/bgoleno/opportun/issues/519); PR
   [#532](https://github.com/bgoleno/opportun/pull/532)).
+- **The browser extension says so when it cannot fetch your resume in 30 seconds, and a closed
+  window's fill cannot be doubled.** Before, the popup could stay blank while it downloaded the
+  resume copy from your server. It now shows that it is filling, and past 30 seconds it fills
+  nothing and says "Your resume could not be fetched from your server in time. Try again.
+  Nothing was filled." A fill left running in a page by a popup you closed is now noticed: a
+  second fill writes nothing and says to wait a few seconds for the earlier one to finish
+  ([#531](https://github.com/bgoleno/opportun/issues/531); PR
+  [#556](https://github.com/bgoleno/opportun/pull/556)).
+- **A device token cannot be created while your password is being changed or reset.** A token
+  made at the same moment as a password change (with its devices signed out) or an administrator
+  or command-line reset could survive it. The creation is now refused, with `password_changed`,
+  if the password it was checked against is no longer the current one, so a token cannot outlive
+  the change ([#539](https://github.com/bgoleno/opportun/issues/539); PR
+  [#557](https://github.com/bgoleno/opportun/pull/557)).
+- **Demo servers can have a dedicated account for one person, out of the shared demo admin's
+  reach.** On a demo server, `createDemoAccount.ts <email> <display name>` makes an ordinary
+  account, prints its password once, and marks it so the nightly reset leaves it and its data
+  alone. The shared `demo-admin` is an administrator only for the user list, the pepper list,
+  password resets, and the jobs list and its retry, and only for the five seeded accounts: it
+  cannot reset or reach a dedicated account, open registration, or change other instance-wide
+  settings, which now say "This setting covers the whole instance and is not available to this
+  account." See [A dedicated account for one
+  person](docs/demo-deployment.md#a-dedicated-account-for-one-person)
+  ([#563](https://github.com/bgoleno/opportun/issues/563); PR
+  [#567](https://github.com/bgoleno/opportun/pull/567)).
 
 ## 0.4.0 (2026-11-14)
 
