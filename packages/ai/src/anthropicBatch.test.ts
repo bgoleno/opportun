@@ -281,7 +281,8 @@ describe('results (criterion 1)', () => {
       `https://llm-gateway.example.com/v1/messages/batches/${BATCH_ID}`,
       `https://llm-gateway.example.com/v1/messages/batches/${BATCH_ID}/results`,
     ]);
-    expect(sent.some((s) => s.url.includes('elsewhere.example.net'))).toBe(false);
+    // Compared as parsed hosts, not a substring (CodeQL js/incomplete-url-substring-sanitization).
+    expect(sent.every((s) => new URL(s.url).host !== 'elsewhere.example.net')).toBe(true);
   });
 
   it('a batch id with / ? or # stays one path segment, on the operator host (sec at 28b9731)', async () => {
