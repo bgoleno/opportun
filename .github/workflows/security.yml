@@ -14,7 +14,9 @@ permissions:
   contents: read
 
 # Action references are pinned to full commit SHAs with the version as a trailing comment
-# (Renovate keeps them current). osv-scanner-action stays version-pinned.
+# (Renovate keeps them current). osv-scanner-action too (#524): b1d267a is the commit its own
+# v2.7.0 release tag points to. Its action.yml still runs the image
+# ghcr.io/google/osv-scanner-action:v2.7.0 by tag, which the commit pin does not fix.
 
 jobs:
   visibility:
@@ -46,7 +48,7 @@ jobs:
 
       - name: Scan the lockfile
         id: scan
-        uses: google/osv-scanner-action/osv-scanner-action@v2.7.0
+        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
         continue-on-error: true
         with:
           scan-args: |-
@@ -65,7 +67,7 @@ jobs:
           fi
 
       - name: Report findings
-        uses: google/osv-scanner-action/osv-reporter-action@v2.7.0
+        uses: google/osv-scanner-action/osv-reporter-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
         with:
           scan-args: |-
             --output=osv-results.sarif
