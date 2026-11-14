@@ -783,6 +783,12 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'ats detection failed': ['opportun.company.id'],
   'discovery run failed': ['opportun.source.id', 'opportun.discovery.source_kind'],
   'ats probe failed': ['opportun.ats.kind'],
+  // https://github.com/bgoleno/opportun/issues/515: the user and the error's type, never its
+  // message, which can name a company.
+  "network probe sweep: one user's night could not be queued; the sweep goes on": [
+    'user.id',
+    'error.type',
+  ],
   'greenhouse job check failed': ['opportun.ats.kind'],
   'careers page fetch blocked': ['opportun.company.id', 'opportun.fetch.blocked_reason'],
   'network board probe failed': ['opportun.company.id', 'error.type'],
