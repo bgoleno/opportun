@@ -196,13 +196,21 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
   const shared = (userId: string) => isSharedDemoAccount(app.config, userId);
 
   // On a shared demo account an attempt is its visitor's (#545, sec's amendment on #542): everyone
-  // on the account may read it, and only the visitor who started it may change it, in any way. An
-  // account made for one person on a demo server is that person's alone: no binding (decision 133).
-  // The actor is written once, when the attempt is created, so reading it here, before the route,
-  // cannot race the route's own write. An attempt from before this (no actor) is read-only.
+  // on the account may read it, and only the visitor who started it may change it. An account made
+  // for one person on a demo server is that person's alone: no binding (decision 133). The actor is
+  // written once, when the attempt is created, so reading it here, before the route, cannot race
+  // the route's own write. An attempt from before this (no actor) is changed by no one.
+  //
+  // Cancel is the one exception: any session on the account may cancel (tl on #566). A draft never
+  // expires and holds its opportunity's one live slot, so without it a draft whose session ended
+  // (a sign-out, a cleared cookie, a password change by anyone on the account) would block that
+  // opportunity for everyone until the reset. Cancel reveals nothing, and any visitor can already
+  // delete the opportunity, which takes the attempt with it, so this grants no new power.
   app.addHook('preHandler', async (req) => {
     if (req.method === 'GET') return;
-    if (!(req.routeOptions.url ?? '').includes('/submissions/:id')) return;
+    const route = req.routeOptions.url ?? '';
+    if (!route.includes('/submissions/:id')) return;
+    if (route.endsWith('/submissions/:id/cancel')) return;
     const id = (req.params as { id?: unknown }).id;
     const ctx = req.userCtx;
     if (typeof id !== 'string' || ctx === null || !shared(ctx.userId)) return;
@@ -217,7 +225,8 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
       throw new HttpError(
         403,
         'not_your_application',
-        'Another visitor started this application on this shared demo account. You can read it, but only they can change it.',
+        // The same words as the web's (components/apply/api.ts), which is what the visitor reads.
+        'This application was started in another session on this shared demo account. You can read it or cancel it; only that session can change it.',
       );
     }
   });

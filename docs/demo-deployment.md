@@ -524,7 +524,14 @@ On a shared account, enforced by the server:
   employer's form), and the demo's own names and addresses are refused.
 - **An application is its visitor's.** Everyone signed in to the account can read its drafts, but
   only the visitor (the session) who started one can change, review or hand it off, and only that
-  visitor's device token is given it. A new sign-in is a new visitor.
+  visitor's device token is given it. A new sign-in is a new visitor, so an extension paired in an
+  earlier session must be paired again.
+  - **Any visitor can cancel one,** so an application whose session has ended does not hold its
+    opportunity until the reset.
+  - **Some changes reach another visitor's application indirectly,** as anything shared does:
+    editing the opportunity's posting address sends a reviewed application back to draft, deleting
+    the opportunity removes its applications, and a `mail:push` confirmation can match any
+    application on the account.
 - **At most 20 active device tokens per account.** Minting past it revokes the account's oldest
   token, which can sign another visitor's extension out. Every scope can be minted, `mail:push`
   included, by the owner's decision: a visitor's own mail in a shared account is visible to the other

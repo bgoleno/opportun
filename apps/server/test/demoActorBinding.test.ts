@@ -144,7 +144,7 @@ describe('the switch is on for the demo, with the binding (#545)', () => {
 });
 
 describe('only the visitor who started an attempt may act on it (#545, criterion 4)', () => {
-  it('a second session on the same account can read the draft, and gets 403 on every change', async () => {
+  it('a second session on the same account can read the draft, and gets 403 on every change but cancel', async () => {
     const { app, a } = await bootShared();
     const id = await draftOf(app, a);
     const other = await signIn(app, A_EMAIL);
@@ -156,7 +156,10 @@ describe('only the visitor who started an attempt may act on it (#545, criterion
       ['PATCH', `/submissions/${id}`, { fields: { fullName: 'Someone Else' } }],
       ['POST', `/submissions/${id}/review`, { reviewDigest: digest, acknowledged: true }],
       ['POST', `/submissions/${id}/handoff`, {}],
-      ['POST', `/submissions/${id}/cancel`, {}],
+      // The routes a narrower URL check could miss (tl on #566).
+      ['POST', `/submissions/${id}/attest`, {}],
+      ['POST', `/submissions/${id}/outcome`, {}],
+      ['POST', `/submissions/${id}/unlink-confirmation`, {}],
     ] as const) {
       const res = await api(other, method, url, payload);
       expect(res.statusCode, `${method} ${url}`).toBe(403);
@@ -169,15 +172,67 @@ describe('only the visitor who started an attempt may act on it (#545, criterion
     expect((await review(a, id)).statusCode).toBe(200);
   });
 
-  it('a new sign-in is a new visitor: the old session’s drafts are read-only to it', async () => {
+  it('a new sign-in is a new visitor: the old session’s drafts are not its to change', async () => {
     const { app, a } = await bootShared();
     const id = await draftOf(app, a);
     const again = await signIn(app, A_EMAIL);
     expect((await api(again, 'GET', `/submissions/${id}`)).statusCode).toBe(200);
-    expect((await api(again, 'POST', `/submissions/${id}/cancel`, {})).statusCode).toBe(403);
+    const patched = await api(again, 'PATCH', `/submissions/${id}`, {
+      fields: { fullName: 'X Y' },
+    });
+    expect(patched.statusCode).toBe(403);
+    expect(patched.json<{ error: unknown }>().error).toMatchObject(notYours);
   });
 
-  it('an attempt from before the binding (no actor) is read-only for everyone', async () => {
+  // tl on #566: a draft never expires and holds its opportunity's one live slot, so a draft whose
+  // session ended (a sign-out, a cleared cookie, a password change by anyone on the account) would
+  // block that opportunity for the whole account until the reset. Any session may cancel it.
+  it('a stranded draft is cancelled by a new session, and a new attempt on the opportunity then succeeds', async () => {
+    const { app, a } = await bootShared();
+    const oppId = await readyOpportunity(app, a);
+    const started = await api(a, 'POST', `/opportunities/${oppId}/submissions`, {
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(started.statusCode, started.body).toBe(201);
+    const id = started.json<{ id: string }>().id;
+    // The visitor's session ends; the next one finds the slot taken.
+    const again = await signIn(app, A_EMAIL);
+    const blocked = await api(again, 'POST', `/opportunities/${oppId}/submissions`, {
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(blocked.statusCode).toBe(409);
+    const cancelled = await api(again, 'POST', `/submissions/${id}/cancel`, {});
+    expect(cancelled.statusCode, cancelled.body).toBe(200);
+    expect(cancelled.json<{ status: string }>().status).toBe('abandoned');
+    const fresh = await api(again, 'POST', `/opportunities/${oppId}/submissions`, {
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(fresh.statusCode, fresh.body).toBe(201);
+    // The new attempt is the new session's own.
+    expect(
+      (
+        await api(again, 'PATCH', `/submissions/${fresh.json<{ id: string }>().id}`, {
+          fields: { fullName: 'Jane Visitor' },
+        })
+      ).statusCode,
+    ).toBe(200);
+  });
+
+  it('another live session’s draft can be cancelled by a second session, but not patched', async () => {
+    const { app, a } = await bootShared();
+    const id = await draftOf(app, a);
+    const other = await signIn(app, A_EMAIL);
+    expect(
+      (await api(other, 'PATCH', `/submissions/${id}`, { fields: { fullName: 'X Y' } })).statusCode,
+    ).toBe(403);
+    const cancelled = await api(other, 'POST', `/submissions/${id}/cancel`, {});
+    expect(cancelled.statusCode, cancelled.body).toBe(200);
+    expect((await api(a, 'GET', `/submissions/${id}`)).json<{ status: string }>().status).toBe(
+      'abandoned',
+    );
+  });
+
+  it('an attempt from before the binding (no actor) can be read or cancelled, and changed by no one', async () => {
     const { app, a } = await bootShared();
     const id = await draftOf(app, a);
     await app.db
@@ -189,6 +244,7 @@ describe('only the visitor who started an attempt may act on it (#545, criterion
     expect(
       (await api(a, 'PATCH', `/submissions/${id}`, { fields: { fullName: 'X Y' } })).statusCode,
     ).toBe(403);
+    expect((await api(a, 'POST', `/submissions/${id}/cancel`, {})).statusCode).toBe(200);
   });
 
   it('off the demo there is no binding: a second session of the user acts as before', async () => {
