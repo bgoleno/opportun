@@ -24,6 +24,7 @@ import {
   FILL_UNSEEN,
   FILLING,
   mountPopup,
+  OPEN_LOOKUP_MS,
   RESUME_CHECKING,
   RESUME_UNCONFIRMED,
   type PopupDeps,
@@ -48,11 +49,17 @@ const TAB_URL = `${POSTING_URL}?gh_src=placeholder`;
  * The attempt as /current sends it. `withheld` is absent unless a test sets it, as the server
  * leaves it out when nothing is withheld (#196).
  */
-type AttemptJson = Omit<PrefillAttempt, 'withheld'> & { withheld?: string[] };
+// `firstRead` too is absent unless a test sets it, as a server from before #403 sends it.
+type AttemptJson = Omit<PrefillAttempt, 'withheld' | 'firstRead'> & {
+  withheld?: string[];
+  firstRead?: boolean;
+};
 
 function attempt(over: Partial<AttemptJson> = {}): AttemptJson {
   return {
     id: 'sub-1',
+    opportunityTitle: 'Senior Platform Engineer',
+    companyName: 'Example Corp',
     destinationUrl: `https://boards.greenhouse.io/${BOARD}/jobs/${JOB_ID}`,
     fields: {
       firstName: 'Jane',
@@ -142,6 +149,10 @@ function setup(opts: {
   });
   const plans: FillPlan[] = [];
   let waits = 0;
+  let endOpenBound: () => void = () => undefined;
+  const openBound = new Promise<void>((r) => {
+    endOpenBound = r;
+  });
   const deps: PopupDeps = {
     storage,
     fetch: vi.fn(async () => {
@@ -169,8 +180,10 @@ function setup(opts: {
           page.doc,
         ),
     ),
-    // The popup's own timer, made deterministic: each wait lets the page's pending timers run.
-    wait: vi.fn(async () => {
+    // The popup's own timer, made deterministic: each wait lets the page's pending timers run. The
+    // open's bound (#403, OPEN_LOOKUP_MS) ends only when a test calls endOpenBound().
+    wait: vi.fn(async (ms: number) => {
+      if (ms === OPEN_LOOKUP_MS) return openBound;
       waits += 1;
       opts.duringWait?.(page, waits);
       await new Promise((r) => page.window.setTimeout(r, 1));
@@ -180,11 +193,23 @@ function setup(opts: {
     bakedServerUrl: vi.fn(async () => ''),
   };
   const $ = (id: string) => doc.getElementById(id)!;
-  return { doc, deps, get, page, plans, $ };
+  return { doc, deps, get, page, plans, $, endOpenBound: () => endOpenBound() };
+}
+
+/**
+ * Lets what the popup does as it opens finish (#403: over a Greenhouse posting it asks the
+ * server once), then forgets those reads, so a test of the button counts the button's own.
+ */
+async function settleOpen(s: ReturnType<typeof setup>) {
+  await vi.waitFor(() => expect(s.deps.activeTab).toHaveBeenCalled());
+  for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+  s.get.mockClear();
+  vi.mocked(s.deps.wait).mockClear();
 }
 
 async function clickFill(s: ReturnType<typeof setup>) {
   await mountPopup(s.doc, s.deps);
+  await settleOpen(s);
   s.$('prefill').click();
   await vi.waitFor(() => expect(s.$('status').textContent).not.toBe(''));
   await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
@@ -723,7 +748,7 @@ describe('#204 in the popup: an answer for a dropdown is listed once', () => {
 describe('buildPlan', () => {
   it('maps each withheld key to the field it names, with no value (#196, tl on #201)', () => {
     const p = buildPlan(
-      { ...attempt(), withheld: ['firstName', 'websiteUrl', 'someOther'] },
+      { ...attempt(), firstRead: false, withheld: ['firstName', 'websiteUrl', 'someOther'] },
       { board: BOARD, jobId: JOB_ID },
       null,
     );
@@ -739,6 +764,7 @@ describe('buildPlan', () => {
     const p = buildPlan(
       {
         withheld: [],
+        firstRead: false,
         ...attempt({ fields: { firstName: 'Jane', websiteUrl: 'https://jane.example.com' } }),
       },
       { board: BOARD, jobId: JOB_ID },
@@ -753,7 +779,11 @@ describe('buildPlan', () => {
   });
 
   it('the LinkedIn address matches a question labelled "LinkedIn Profile" or plain "LinkedIn" (qa on #187)', () => {
-    const p = buildPlan({ withheld: [], ...attempt() }, { board: BOARD, jobId: JOB_ID }, null);
+    const p = buildPlan(
+      { withheld: [], firstRead: false, ...attempt() },
+      { board: BOARD, jobId: JOB_ID },
+      null,
+    );
     expect(p.questions[0]).toEqual({
       labels: ['LinkedIn Profile', 'LinkedIn'],
       name: 'LinkedIn profile',
@@ -802,6 +832,8 @@ describe('#191: a popup that closes before the resume check ends', () => {
     // The popup is gone mid-check: its next look never comes back.
     first.deps.runResumeCheck = vi.fn(() => new Promise<number | null>(() => undefined));
     await mountPopup(first.doc, first.deps);
+    // The open's lookup decides first: the button is held until it has (#403).
+    await settleOpen(first);
     first.$('prefill').click();
     await vi.waitFor(() => expect(first.$('status').textContent).toBe(RESUME_CHECKING));
     expect(store.data['resumeCheckPending:7']).not.toBeNull();
@@ -810,8 +842,11 @@ describe('#191: a popup that closes before the resume check ends', () => {
     await mountPopup(next.doc, next.deps);
     await vi.waitFor(() => expect(next.$('status').textContent).toBe(RESUME_UNCONFIRMED));
     expect(store.data['resumeCheckPending:7']).toBeNull();
-    // Nothing was asked of the server or the page to say so.
-    expect(next.get).not.toHaveBeenCalled();
+    // Nothing was asked of the page to say so, and of the server only the lookup that opening
+    // the popup over the posting makes (#403): not a first read here, so nothing is filled.
+    expect(next.get).toHaveBeenCalledTimes(1);
+    expect(next.get.mock.calls[0]![0]).toContain('/connector/apply/current?');
+    expect(next.deps.runFill).not.toHaveBeenCalled();
     expect(next.deps.runResumeCheck).not.toHaveBeenCalled();
 
     const again = setup({ checkStore: store });
@@ -877,6 +912,8 @@ describe('#402 slice 2: the fill waits for lists, and the report lists every cho
       return run(tabId, plan);
     });
     await mountPopup(s.doc, s.deps);
+    // The open's lookup decides first: the button is held until it has (#403).
+    await settleOpen(s);
     s.$('prefill').click();
     await vi.waitFor(() => expect(s.$('status').textContent).toBe(FILLING));
     expect(store.data['resumeCheckPending:7']).toEqual({
@@ -896,6 +933,8 @@ describe('#402 slice 2: the fill waits for lists, and the report lists every cho
     const first = setup({ checkStore: store });
     first.deps.runFill = vi.fn(() => new Promise<null>(() => undefined));
     await mountPopup(first.doc, first.deps);
+    // The open's lookup decides first: the button is held until it has (#403).
+    await settleOpen(first);
     first.$('prefill').click();
     await vi.waitFor(() => expect(first.$('status').textContent).toBe(FILLING));
 
@@ -960,5 +999,287 @@ describe('#402 slice 2: the fill waits for lists, and the report lists every cho
       "School: the form's list did not appear in time: choose it on the form",
       'Degree: the form did not show the choice "Bachelor\'s Degree": check this field',
     ]);
+  });
+});
+
+// #403 slice 2 (tl's design note with sec's rulings, conditions 1 to 5): opening the popup over
+// the handed-off posting fills it at once, the first time only. The server says which read is
+// the first (firstRead); the popup's own checks are the button's, unchanged.
+describe('#403: opening the popup on the handed-off posting fills it, once', () => {
+  const HOST = new URL(TAB_URL).host;
+  const first = (over: Partial<AttemptJson & { firstRead: boolean }> = {}) =>
+    json(200, { attempt: { ...attempt(), firstRead: true, ...over }, reason: null });
+
+  /** Mounts the popup, recording the status line whenever the filler is run. */
+  async function open(s: ReturnType<typeof setup>) {
+    const atFill: string[] = [];
+    const run = s.deps.runFill;
+    s.deps.runFill = vi.fn(async (tabId: number, plan: FillPlan) => {
+      atFill.push(s.$('status').textContent ?? '');
+      return run(tabId, plan);
+    });
+    await mountPopup(s.doc, s.deps);
+    return atFill;
+  }
+
+  it('the first read: it says what it is filling, fills once, and shows the report', async () => {
+    const s = setup({ current: first() });
+    const atFill = await open(s);
+    await vi.waitFor(() => expect(s.deps.runFill).toHaveBeenCalledTimes(1));
+    expect(atFill).toEqual([
+      `Filling the application for Senior Platform Engineer at Example Corp on ${HOST}. Keep this window open until the report shows (up to a few seconds for each list).`,
+    ]);
+    await vi.waitFor(() => expect(listed(s, 'Filled in')).toContain('First Name'));
+    expect(valueOf(s.page.doc, 'first_name')).toBe('Jane');
+    expect(s.$('status').textContent).toMatch(/has not submitted anything.*own Submit button/);
+    // One lookup, for this tab, then the copy: the same reads the button makes.
+    const urls = s.get.mock.calls.map(([u]) => u);
+    expect(urls).toEqual([
+      `${SERVER}/api/v1/connector/apply/current?url=${encodeURIComponent(TAB_URL)}`,
+      `${SERVER}/api/v1/connector/apply/sub-1/snapshot`,
+    ]);
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it.each([
+    ['a later read', { firstRead: false }],
+    ['a server that does not say (before #403)', {}],
+  ])('%s: nothing is filled, and the button is there as today', async (_n, over) => {
+    const s = setup({ current: json(200, { attempt: { ...attempt(), ...over }, reason: null }) });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    expect(s.$('assist').hidden).toBe(false);
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false);
+    expect(s.$('status').textContent).toBe('');
+  });
+
+  it.each([
+    ['another posting', `https://boards.greenhouse.io/${BOARD}/jobs/1000002`],
+    ['the same job id on another board', `https://boards.greenhouse.io/othercorp/jobs/${JOB_ID}`],
+  ])('an attempt pinned to %s: nothing filled, nothing said', async (_n, destinationUrl) => {
+    const s = setup({ current: first({ destinationUrl }) });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    expect(s.$('status').textContent).toBe('');
+    expect(valueOf(s.page.doc, 'first_name')).toBe('');
+  });
+
+  it.each([
+    ['a miss', json(200, { attempt: null, reason: 'no_matching_attempt' })],
+    ['a server error', json(500, {})],
+    ['a revoked token', json(401, {})],
+    [
+      'no network',
+      async () => {
+        throw new Error('offline');
+      },
+    ],
+  ] as const)('%s on open: no error shown, the button stays', async (_n, current) => {
+    const s = setup({
+      current: typeof current === 'function' ? current : (current as FetchResponse),
+    });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    expect(s.$('status').textContent).toBe('');
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it.each([
+    ['a page that is not a Greenhouse posting', 'https://careers.example.com/jobs/1000001'],
+    ['a capture site', 'https://www.linkedin.com/jobs/view/3901234567/'],
+  ])('%s: nothing is asked on open', async (_n, tabUrl) => {
+    const s = setup({ tabUrl, current: first() });
+    await open(s);
+    await vi.waitFor(() => expect(s.deps.activeTab).toHaveBeenCalled());
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.get).not.toHaveBeenCalled();
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+  });
+
+  it('no token saved: nothing is asked on open, and nothing is said', async () => {
+    const s = setup({ current: first() });
+    await s.deps.storage.set({ token: '' });
+    await open(s);
+    await vi.waitFor(() => expect(s.deps.activeTab).toHaveBeenCalled());
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.get).not.toHaveBeenCalled();
+    expect(s.$('status').textContent).toBe('');
+  });
+
+  // tl's blocking 1 at 650aaf7 (qa reproduced it): a click while the open's lookup is out must not
+  // start a second fill beside the one the open starts.
+  it("a click while the open's lookup is out waits for it: one fill, never two at once", async () => {
+    let release: (r: FetchResponse) => void = () => undefined;
+    const held = new Promise<FetchResponse>((r) => {
+      release = r;
+    });
+    const s = setup({ current: () => held });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    // The section shows, but its button waits for the open to decide.
+    expect(s.$('assist').hidden).toBe(false);
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(true);
+    s.$('prefill').click();
+    release(first());
+    await vi.waitFor(() => expect(s.deps.runFill).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.deps.runFill).toHaveBeenCalledTimes(1);
+    // Only the open's lookup and its copy: the click sent nothing.
+    expect(s.get.mock.calls.filter(([u]) => u.includes('/current?'))).toHaveLength(1);
+  });
+
+  it('a failure before the lookup never leaves the button held', async () => {
+    const s = setup({ current: first() });
+    // tellUnfinishedCheck reads storage.session first: it fails here.
+    s.deps.checkStore = {
+      get: async () => {
+        throw new Error('storage unavailable');
+      },
+      set: async () => undefined,
+    };
+    await open(s);
+    await vi.waitFor(() => expect(s.deps.activeTab).toHaveBeenCalled());
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  // qa at 21274b2: the other window. Work that ends while the open's lookup is still out (Test
+  // connection, here) must not free Fill either.
+  it("another button's work ending during the open's lookup leaves Fill held: one fill", async () => {
+    let release: (r: FetchResponse) => void = () => undefined;
+    const held = new Promise<FetchResponse>((r) => {
+      release = r;
+    });
+    const s = setup({ current: () => held });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    // Test connection's work, which ends at once here (the harness refuses its request).
+    s.$('test').click();
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(true);
+    s.$('prefill').click();
+    release(first());
+    await vi.waitFor(() => expect(s.deps.runFill).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.deps.runFill).toHaveBeenCalledTimes(1);
+  });
+
+  // The count itself (tl's fix (a) at 21274b2): work that starts while the buttons are held, here
+  // the settings form submitted directly, which a user cannot do while Save is disabled, ends
+  // without freeing them while the open still decides.
+  it('work that ends while the open still decides frees no button: the count, not the last finally', async () => {
+    let release: (r: FetchResponse) => void = () => undefined;
+    const held = new Promise<FetchResponse>((r) => {
+      release = r;
+    });
+    const s = setup({ current: () => held });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    s.$('settings').dispatchEvent(new s.doc.defaultView!.Event('submit', { cancelable: true }));
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(true);
+    s.$('prefill').click();
+    release(first());
+    await vi.waitFor(() => expect(s.deps.runFill).toHaveBeenCalledTimes(1));
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.deps.runFill).toHaveBeenCalledTimes(1);
+  });
+
+  // tl at 21274b2: busy() was not exclusive, so another piece of work ending during the open's fill
+  // (Record, here) re-enabled Fill mid-fill. No fill may start while any work runs.
+  it("Record ending during the open's fill leaves Fill held: one fill, never two", async () => {
+    let releaseCurrent: (r: FetchResponse) => void = () => undefined;
+    const current = new Promise<FetchResponse>((r) => {
+      releaseCurrent = r;
+    });
+    let releaseConfirm: (r: FetchResponse) => void = () => undefined;
+    const confirmable = new Promise<FetchResponse>((r) => {
+      releaseConfirm = r;
+    });
+    const s = setup({ current: () => current });
+    const realGet = s.get.getMockImplementation()!;
+    s.get.mockImplementation(async (url, init) =>
+      url.includes('/connector/apply/confirmable?') ? confirmable : realGet(url, init),
+    );
+    // The open's fill stays in progress: runFill never answers in this test.
+    const fills: number[] = [];
+    s.deps.runFill = vi.fn(async () => {
+      fills.push(fills.length);
+      return new Promise<null>(() => undefined);
+    });
+    await mountPopup(s.doc, s.deps);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    // 1. While the open's lookup is out, Record is clicked.
+    s.$('record').click();
+    // 2. The open's lookup answers: its fill starts.
+    releaseCurrent(first());
+    await vi.waitFor(() => expect(fills).toHaveLength(1));
+    // 3. Record's lookup answers, so its work ends while the open's fill is still running.
+    releaseConfirm(json(404, { error: { code: 'feature_unavailable' } }));
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    // 4. Fill stays held, and a click on it starts nothing.
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(true);
+    s.$('prefill').click();
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(fills).toHaveLength(1);
+  });
+
+  // tl at 9399746: the open's lookup is bounded, so a server that never answers cannot hold the
+  // popup's buttons on this tab (OPEN_LOOKUP_MS).
+  it('no answer within the bound: the open gives up silently and every button is free', async () => {
+    const s = setup({ current: () => new Promise<FetchResponse>(() => undefined) });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(true);
+    expect(s.deps.wait).toHaveBeenCalledWith(OPEN_LOOKUP_MS);
+    s.endOpenBound();
+    for (const id of ['capture', 'save', 'test', 'prefill', 'record']) {
+      await vi.waitFor(() => expect((s.$(id) as HTMLButtonElement).disabled).toBe(false));
+    }
+    expect(s.$('status').textContent).toBe('');
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+  });
+
+  it('a first read that arrives after the bound starts no fill', async () => {
+    let release: (r: FetchResponse) => void = () => undefined;
+    const held = new Promise<FetchResponse>((r) => {
+      release = r;
+    });
+    const s = setup({ current: () => held });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    s.endOpenBound();
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+    release(first());
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    expect(s.$('status').textContent).toBe('');
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('after a later read on open, the button is free again and fills on a click', async () => {
+    const s = setup({ current: first({ firstRead: false }) });
+    await open(s);
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    s.$('prefill').click();
+    await vi.waitFor(() => expect(s.deps.runFill).toHaveBeenCalledTimes(1));
+  });
+
+  it('after the fill on open, the button still fills again on purpose', async () => {
+    const s = setup({ current: first() });
+    await open(s);
+    await vi.waitFor(() => expect(s.deps.runFill).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+    s.$('prefill').click();
+    await vi.waitFor(() => expect(s.deps.runFill).toHaveBeenCalledTimes(2));
   });
 });

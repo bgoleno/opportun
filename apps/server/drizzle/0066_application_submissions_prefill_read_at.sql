@@ -1,0 +1,1 @@
+ALTER TABLE `application_submissions` ADD `prefill_read_at` integer;

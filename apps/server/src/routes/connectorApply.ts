@@ -27,7 +27,7 @@ import { deviceRoute, requireDevice, requireDeviceToken } from '../lib/deviceTok
 import { HttpError } from '../lib/errors';
 import { rateLimit } from '../lib/rateLimit';
 import { confirmableForPage, confirmFromPage, hostOf } from '../repos/submissionConfirm';
-import { handedOffForPage, handedOffSnapshot } from '../repos/submissions';
+import { handedOffForPage, handedOffSnapshot, markPrefillRead } from '../repos/submissions';
 import { contentDisposition } from './attachments';
 
 /** The full path, for the request log's query redaction (app.ts): the page URL is not logged. */
@@ -75,6 +75,11 @@ const CurrentResponse = z.object({
         filename: z.string().nullable(),
         bytes: z.number().int().nullable(),
       }),
+      /**
+       * Whether this read was the first for the attempt (#403 slice 2): the popup fills on open
+       * only then. Recorded once, atomically (markPrefillRead); every later read is false.
+       */
+      firstRead: z.boolean(),
     })
     .nullable(),
   /** Why there is no attempt for this page; null when there is one. */
@@ -155,6 +160,9 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
     async (req) => {
       const ctx = requireDevice(req);
       const found = await handedOffForPage(db, ctx, req.query.url);
+      // Since #403 the popup makes this read whenever it opens over a Greenhouse posting, not only
+      // on its button: so this audit row, and one of the token's reads, now also mean "the popup
+      // was opened there", a miss included.
       await audit(db, 'submission.prefill_read', {
         userId: ctx.userId,
         ip: req.ip,
@@ -168,6 +176,7 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
       });
       if (found.kind === 'none') return { attempt: null, reason: found.reason };
       const { row } = found;
+      const firstRead = await markPrefillRead(db, ctx, row.id);
       // Each stored field through the rule the PATCH uses (core's submissionFieldProblem): a
       // value that fails it is left out, and only its key is named (#196, tl's ruling).
       const entries = Object.entries(row.fields);
@@ -195,6 +204,7 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
             filename: found.snapshotFile?.filename ?? null,
             bytes: found.snapshotFile?.bytes ?? null,
           },
+          firstRead,
         },
         reason: null,
       };

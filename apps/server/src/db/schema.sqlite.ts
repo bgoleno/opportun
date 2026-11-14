@@ -1080,6 +1080,12 @@ export const applicationSubmissions = sqliteTable(
     reviewExpiresAt: integer('review_expires_at'),
     reviewedAt: integer('reviewed_at'),
     handedOffAt: integer('handed_off_at'),
+    /**
+     * When the extension first read this attempt to fill it (#403 slice 2): set once, by the
+     * first GET /connector/apply/current that returns it, in the statement that checks it is
+     * still null. The popup fills on open only for that first read; after it, the button.
+     */
+    prefillReadAt: integer('prefill_read_at'),
     submittedAt: integer('submitted_at'),
     confirmedAt: integer('confirmed_at'),
     /** 'user_attested' is the only basis: only the user's word makes an attempt submitted. */
