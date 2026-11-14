@@ -321,6 +321,14 @@ which was tagged by hand from `main` earlier the same day, and what merged after
   ([#495](https://github.com/bgoleno/opportun/issues/495),
   [#400](https://github.com/bgoleno/opportun/issues/400); PR
   [#502](https://github.com/bgoleno/opportun/pull/502)).
+- **A resume copy marked Submitted counts as sent in the resume flow.** After a copy of this
+  opportunity is marked Submitted, **Tailor again** now keeps the flow at "sent" and names the new
+  copy, where it used to fall back to tailoring. The newest Submitted copy counts, newer or not. With
+  an older Submitted copy and a newer Final one, the Resume tab shows "Sent" with a quiet **Record
+  that you sent** _title_ link. The tab, the copy's own page and the Assisted apply panel all read
+  the same state
+  ([#516](https://github.com/bgoleno/opportun/issues/516); PR
+  [#528](https://github.com/bgoleno/opportun/pull/528)).
 - **A keyboard drop of a board card on Closed or Dismissed says it is waiting for a reason,
   then whether it moved.** The drop announces "... is waiting for a reason to move to the
   Closed column. Choose one in the dialog, or cancel to leave it where it is." Confirming the
