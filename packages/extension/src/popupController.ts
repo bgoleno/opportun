@@ -446,7 +446,8 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     show({ tone: 'info', text: filling });
     // Bounded (RESUME_FETCH_MS): the buttons are held while it runs, so a server that never
     // finishes must not hold them. Past the bound, nothing is filled and the popup says why; an
-    // answer that comes later is dropped.
+    // answer that comes later is dropped. A fill from an earlier window is found by the filler, in
+    // the page, after this: a fill it refuses may still have downloaded the copy (tl on #556).
     const download = fetchResume(deps.get, s, attempt);
     download.catch(() => undefined);
     const resume = await Promise.race([
