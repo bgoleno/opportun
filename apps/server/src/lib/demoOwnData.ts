@@ -4,10 +4,13 @@
 // an application with its own test data: the seeded accounts' identities, the invented candidate,
 // or a seeded resume. A visitor's own values, typed into the draft, may be filled.
 //
-// Server-side and on the demo only: off the demo nothing here runs. The checks run at review,
+// Server-side, for the demo's shared accounts only (lib/demoAccounts.ts, decision 133): an account
+// made for one person on a demo server, and every account off the demo, is untouched. The checks run at review,
 // at handoff and when the extension asks for the attempt (/connector/apply/current), so a fixture
 // value put back behind the server's back is still never sent.
 import { DEMO_IDENTITY_VALUES } from '../cli/seedDemoFixture';
+import type { Config } from '../config';
+import { isSharedDemoAccount } from './demoAccounts';
 import { HttpError } from './errors';
 
 /**
@@ -105,4 +108,16 @@ export function refuseFixtureData(attempt: {
  */
 export function sameVisitor(attemptActor: string | null, actor: string | null): boolean {
   return attemptActor !== null && actor !== null && attemptActor === actor;
+}
+
+/**
+ * Whether assisted apply is switched off for this user: a shared demo account while the operator
+ * has set OPPORTUN_DEMO_SHARED_ASSISTED_APPLY=0 (decision 133). Everyone else follows
+ * OPPORTUN_SUBMISSIONS alone.
+ */
+export function sharedAssistedApplyOff(
+  cfg: Pick<Config, 'demo' | 'demoSharedAssistedApply'>,
+  userId: string,
+): boolean {
+  return cfg.demoSharedAssistedApply === false && isSharedDemoAccount(cfg, userId);
 }

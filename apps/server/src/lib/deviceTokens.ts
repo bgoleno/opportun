@@ -58,9 +58,6 @@ export function hashDeviceToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-/** The most active (unrevoked) tokens one demo account keeps (sec on #542 and #544). */
-export const DEMO_MAX_ACTIVE_TOKENS = 20;
-
 /**
  * Creates a token for the caller; the plaintext is returned here and nowhere else, ever. With
  * `maxActive`, the caller keeps at most that many unrevoked tokens: when the new one would pass it,

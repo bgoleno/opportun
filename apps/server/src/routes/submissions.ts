@@ -47,6 +47,8 @@ import {
 import { detailView, unlinkConfirmation } from '../repos/submissionConfirm';
 import { contentDisposition } from './attachments';
 import { demoActorOf } from '../plugins/session';
+import { isSharedDemoAccount } from '../lib/demoAccounts';
+import { sharedAssistedApplyOff } from '../lib/demoOwnData';
 import { applicationSubmissions } from '../db/schema';
 import { and, eq } from 'drizzle-orm';
 import { DEFAULT_LIMIT, IdParams, MAX_LIMIT, pageOf } from './common';
@@ -180,23 +182,30 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
   const db = app.db;
 
-  // Off: no route here exists as far as a caller can tell (design 7.8).
-  app.addHook('onRequest', async () => {
+  // Off: no route here exists as far as a caller can tell (design 7.8). Also for a shared demo
+  // account while the operator has switched assisted apply off for those (decision 133).
+  app.addHook('onRequest', async (req) => {
     if (!submissionsEnabled(app.config)) {
       throw new HttpError(404, 'feature_unavailable');
     }
+    if (req.userCtx !== null && sharedAssistedApplyOff(app.config, req.userCtx.userId)) {
+      throw new HttpError(404, 'feature_unavailable');
+    }
   });
+  /** A shared demo account (lib/demoAccounts.ts): where the demo's own-data rules apply. */
+  const shared = (userId: string) => isSharedDemoAccount(app.config, userId);
 
-  // On the demo an attempt is its visitor's (#545, sec's amendment on #542): everyone on the
-  // shared account may read it, and only the visitor who started it may change it, in any way.
+  // On a shared demo account an attempt is its visitor's (#545, sec's amendment on #542): everyone
+  // on the account may read it, and only the visitor who started it may change it, in any way. An
+  // account made for one person on a demo server is that person's alone: no binding (decision 133).
   // The actor is written once, when the attempt is created, so reading it here, before the route,
   // cannot race the route's own write. An attempt from before this (no actor) is read-only.
   app.addHook('preHandler', async (req) => {
-    if (!app.config.demo || req.method === 'GET') return;
+    if (req.method === 'GET') return;
     if (!(req.routeOptions.url ?? '').includes('/submissions/:id')) return;
     const id = (req.params as { id?: unknown }).id;
     const ctx = req.userCtx;
-    if (typeof id !== 'string' || ctx === null) return;
+    if (typeof id !== 'string' || ctx === null || !shared(ctx.userId)) return;
     const row = await db
       .select({ actor: applicationSubmissions.actor })
       .from(applicationSubmissions)
@@ -230,7 +239,7 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
         app.requireUser(req),
         req.params.id,
         req.body,
-        { demo: app.config.demo, actor: demoActorOf(req) },
+        { demo: shared(app.requireUser(req).userId), actor: demoActorOf(req) },
       );
       if (replayed) void reply.header('idempotent-replayed', 'true');
       return reply.code(replayed ? 200 : 201).send(submission);
@@ -273,7 +282,7 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       if (answeredInvalid(req, reply)) return reply;
       return updateSubmissionDraft(db, app.requireUser(req), req.params.id, req.body, {
-        demo: app.config.demo,
+        demo: shared(app.requireUser(req).userId),
       });
     },
   );
@@ -332,7 +341,7 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       if (answeredInvalid(req, reply)) return reply;
       return handoffSubmission(db, app.requireUser(req), req.params.id, {
-        demo: app.config.demo,
+        demo: shared(app.requireUser(req).userId),
       });
     },
   );

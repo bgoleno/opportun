@@ -25,7 +25,8 @@ import { and, eq } from 'drizzle-orm';
 import { submissionsEnabled } from '../config';
 import { applicationSubmissions } from '../db/schema';
 import { audit } from '../lib/audit';
-import { refuseFixtureData, sameVisitor } from '../lib/demoOwnData';
+import { isSharedDemoAccount } from '../lib/demoAccounts';
+import { refuseFixtureData, sameVisitor, sharedAssistedApplyOff } from '../lib/demoOwnData';
 import {
   deviceRoute,
   requireDevice,
@@ -158,12 +159,20 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
     keyFn: (req) => requireDevice(req).tokenId,
   });
 
-  // On the demo a device token is given only the attempts its own visitor started (#545): another
-  // visitor's on the same shared account is, to this token, not there (404, or no match).
+  // On a shared demo account a device token is given only the attempts its own visitor started
+  // (#545): another visitor's on the same account is, to this token, not there (404, or no match).
+  // Switched off for the shared accounts (decision 133): as if the feature were off, 404.
+  app.addHook('preHandler', async (req) => {
+    const ctx = req.deviceCtx;
+    if (ctx !== null && sharedAssistedApplyOff(app.config, ctx.userId)) {
+      throw new HttpError(404, 'feature_unavailable');
+    }
+  });
+  const shared = (ctx: DeviceCtx) => isSharedDemoAccount(app.config, ctx.userId);
   const visitorOf = (ctx: DeviceCtx): { actor?: string | null } =>
-    app.config.demo ? { actor: ctx.actor } : {};
+    shared(ctx) ? { actor: ctx.actor } : {};
   async function refuseOtherVisitors(ctx: DeviceCtx, id: string): Promise<void> {
-    if (!app.config.demo) return;
+    if (!shared(ctx)) return;
     const row = await db
       .select({ actor: applicationSubmissions.actor })
       .from(applicationSubmissions)
@@ -201,7 +210,7 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
       // On the demo, the last check before anything leaves for the form: a seeded identity value,
       // or any resume, put back behind the server's back is never sent, and nothing is marked
       // read (#544). The refusal names the field.
-      if (app.config.demo) refuseFixtureData(row);
+      if (shared(ctx)) refuseFixtureData(row);
       const firstRead = await markPrefillRead(db, ctx, row.id);
       // Each stored field through the rule the PATCH uses (core's submissionFieldProblem): a
       // value that fails it is left out, and only its key is named (#196, tl's ruling).

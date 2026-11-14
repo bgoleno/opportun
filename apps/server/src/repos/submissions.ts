@@ -219,7 +219,11 @@ export interface CreateDraftInput {
   resumeId?: string | undefined;
 }
 
-/** Where a draft is being made: on the demo, only the visitor's own data goes in (#544). */
+/**
+ * Where a draft is being made. `demo`: the caller is a shared demo account (lib/demoAccounts.ts),
+ * where only the visitor's own data goes in (#544). An account made for one person on a demo
+ * server is not one, and drafts as anywhere (decision 133).
+ */
 export interface DraftOptions {
   demo?: boolean;
   /** The demo visitor making the draft (#545): only they may act on it. Null off the demo. */

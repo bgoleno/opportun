@@ -271,3 +271,49 @@ describe('loadConfig: OPPORTUN_DAILY_REVIEW_CAP (#136)', () => {
     },
   );
 });
+
+// Decision 133 (tl and sec on #542): the shared demo accounts' limits are the operator's to set,
+// with today's values as the defaults (#545, criterion c).
+describe('OPPORTUN_DEMO_TOKEN_CAP and OPPORTUN_DEMO_SHARED_ASSISTED_APPLY', () => {
+  it('default to a cap of 20 and assisted apply on', () => {
+    const cfg = loadConfig(base);
+    expect(cfg.demoTokenCap).toBe(20);
+    expect(cfg.demoSharedAssistedApply).toBe(true);
+    expect(
+      loadConfig({ ...base, OPPORTUN_DEMO_TOKEN_CAP: '', OPPORTUN_DEMO_SHARED_ASSISTED_APPLY: '' }),
+    ).toMatchObject({ demoTokenCap: 20, demoSharedAssistedApply: true });
+  });
+
+  it('take a whole number of tokens, 0 meaning no cap', () => {
+    expect(loadConfig({ ...base, OPPORTUN_DEMO_TOKEN_CAP: '0' }).demoTokenCap).toBe(0);
+    expect(loadConfig({ ...base, OPPORTUN_DEMO_TOKEN_CAP: '5' }).demoTokenCap).toBe(5);
+    expect(loadConfig({ ...base, OPPORTUN_DEMO_TOKEN_CAP: '100' }).demoTokenCap).toBe(100);
+  });
+
+  it.each(['-1', '1.5', 'twenty', ' 5', '5 ', '05', '1e3'])(
+    'refuse to start with OPPORTUN_DEMO_TOKEN_CAP=%j',
+    (raw) => {
+      expect(errorOf(() => loadConfig({ ...base, OPPORTUN_DEMO_TOKEN_CAP: raw })).message).toMatch(
+        /OPPORTUN_DEMO_TOKEN_CAP must be a whole number/,
+      );
+    },
+  );
+
+  it('take 0 and 1 for assisted apply on the shared accounts', () => {
+    expect(
+      loadConfig({ ...base, OPPORTUN_DEMO_SHARED_ASSISTED_APPLY: '0' }).demoSharedAssistedApply,
+    ).toBe(false);
+    expect(
+      loadConfig({ ...base, OPPORTUN_DEMO_SHARED_ASSISTED_APPLY: '1' }).demoSharedAssistedApply,
+    ).toBe(true);
+  });
+
+  it.each(['off', 'false', '2', ' 1'])(
+    'refuse to start with OPPORTUN_DEMO_SHARED_ASSISTED_APPLY=%j',
+    (raw) => {
+      expect(
+        errorOf(() => loadConfig({ ...base, OPPORTUN_DEMO_SHARED_ASSISTED_APPLY: raw })).message,
+      ).toMatch(/OPPORTUN_DEMO_SHARED_ASSISTED_APPLY must be 0/);
+    },
+  );
+});

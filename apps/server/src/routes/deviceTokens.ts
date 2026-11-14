@@ -5,13 +5,14 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { DEVICE_TOKEN_SCOPES } from '../db/schema';
-import { submissionsEnabled } from '../config';
+import { demoTokenCap, submissionsEnabled } from '../config';
+import { isSharedDemoAccount } from '../lib/demoAccounts';
+import { sharedAssistedApplyOff } from '../lib/demoOwnData';
 import { demoActorOf } from '../plugins/session';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import {
   createDeviceToken,
-  DEMO_MAX_ACTIVE_TOKENS,
   listDeviceTokens,
   renameDeviceToken,
   revokeDeviceToken,
@@ -68,7 +69,10 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
       const ctx = requireUser(req);
       // The assisted apply scope exists only where the feature is on (#182; sec): its routes
       // 404 otherwise, and no token should carry a right this server never grants.
-      if (req.body.scopes.includes('apply:assist') && !submissionsEnabled(app.config)) {
+      if (
+        req.body.scopes.includes('apply:assist') &&
+        (!submissionsEnabled(app.config) || sharedAssistedApplyOff(app.config, ctx.userId))
+      ) {
         throw new HttpError(422, 'scope_unavailable', 'Assisted apply is not available here.');
       }
       const confirmed = await confirmPassword(req, reply, {
@@ -78,15 +82,18 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
       });
       if (!confirmed) return reply;
       const { name, scopes } = req.body;
-      // On the demo, at most DEMO_MAX_ACTIVE_TOKENS per shared account: the oldest is revoked to
-      // make room (sec on #544, tl on #550).
+      // A shared demo account (decision 133): at most OPPORTUN_DEMO_TOKEN_CAP active tokens, the
+      // oldest revoked to make room (sec on #544, tl on #550; 0 means no cap), and the token
+      // records its visitor, so it is given only their attempts (#545). An account made for one
+      // person on a demo server has neither.
+      const sharedAccount = isSharedDemoAccount(app.config, ctx.userId);
+      const cap = demoTokenCap(app.config);
       const { meta, token } = await createDeviceToken(
         db,
         ctx,
         { name, scopes },
-        // On the demo the token also records its visitor, and is given only their attempts (#545).
-        app.config.demo
-          ? { maxActive: DEMO_MAX_ACTIVE_TOKENS, ip: req.ip, actor: demoActorOf(req) }
+        sharedAccount
+          ? { ...(cap > 0 ? { maxActive: cap } : {}), ip: req.ip, actor: demoActorOf(req) }
           : {},
       );
       await audit(db, 'device_token.created', {

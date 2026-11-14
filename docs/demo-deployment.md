@@ -508,23 +508,37 @@ re-seed the old passwords.
 
 ## Device tokens and assisted apply on the demo
 
-Since [#545](https://github.com/bgoleno/opportun/issues/545), assisted apply is on for the demo, with
-these limits, all enforced by the server, on the demo only:
+Since [#545](https://github.com/bgoleno/opportun/issues/545), assisted apply is on for the demo. A
+demo server has two kinds of account (the owner's decision 133):
 
-- **A token may carry any scope: `apply:assist`, `capture:push` and `mail:push`.** A visitor may pair
-  the Mail connector too, by the owner's decision: their own mail in a shared account is visible to
-  the other visitors on it, behind the same warning as everything else entered there.
-- **At most 20 active tokens per demo account.** Minting a 21st revokes that account's oldest
-  token, which can sign another visitor's extension out.
-- **An application is its visitor's.** Everyone signed in to a shared account can read its drafts,
-  but only the visitor (the session) who started one can change, review or hand it off. Only that
-  visitor's device token is given it. A new sign-in is a new visitor.
+- **The shared accounts**: the seed's five pinned logins (`demo-admin`, `demo-user1` to
+  `demo-user4`), shared by every visitor and reset nightly. The limits below apply to these only.
+- **A dedicated account**: one the owner makes for one person on a demo server. It behaves as an
+  account on any instance, with none of the limits below.
+
+On a shared account, enforced by the server:
+
 - **Only the visitor's own data is filled**
   ([#544](https://github.com/bgoleno/opportun/issues/544)). A draft starts empty, nothing is saved
   to the shared profile, the application carries no resume (the visitor attaches their own on the
   employer's form), and the demo's own names and addresses are refused.
+- **An application is its visitor's.** Everyone signed in to the account can read its drafts, but
+  only the visitor (the session) who started one can change, review or hand it off, and only that
+  visitor's device token is given it. A new sign-in is a new visitor.
+- **At most 20 active device tokens per account.** Minting past it revokes the account's oldest
+  token, which can sign another visitor's extension out. Every scope can be minted, `mail:push`
+  included, by the owner's decision: a visitor's own mail in a shared account is visible to the other
+  visitors on it, behind the same warning as everything else entered there.
 
-The nightly reset removes every demo token, application and stored file.
+Two settings change the limits for the shared accounts, with these defaults:
+
+- `OPPORTUN_DEMO_TOKEN_CAP`: active device tokens per shared account. Default `20`; `0` means no
+  cap. Anything else that isn't a whole number refuses to start.
+- `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY`: `0` turns assisted apply off for the shared accounts only.
+  Default `1`, on.
+
+`OPPORTUN_SUBMISSIONS=0` still turns assisted apply off for everyone. The nightly reset removes every
+shared account's tokens, applications and stored files.
 
 ## Hard constraints on anything added to this deployment
 

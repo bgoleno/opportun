@@ -9,6 +9,7 @@ import { newId } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
+import { DEMO_USERS } from '../src/cli/seedDemoFixture';
 import { submissionsEnabled } from '../src/config';
 import {
   applicationSubmissions,
@@ -23,13 +24,23 @@ import { setRaceHook } from '../src/lib/racePoints';
 import { createOpportunity } from '../src/repos/opportunities';
 import { insertResume } from '../src/repos/resumes';
 import { useApi } from './api';
-import { PASSWORD, signIn, type TestClient } from './isolation';
+import { PASSWORD, sharedDemoUser, signIn, type TestClient } from './isolation';
 import { api, requisition } from './submissionFixtures';
 
 const boot = useApi();
 const ON_THE_DEMO = { demo: true, submissions: true } as const;
+
+/**
+ * A demo server, signed in as one of the seed's pinned accounts: a shared demo account, where the
+ * own-data rules and the binding apply (decision 133). `a` is that shared account.
+ */
+async function bootShared(overrides: Record<string, unknown> = {}) {
+  const env = await boot({ ...ON_THE_DEMO, ...overrides });
+  return { ...env, a: await sharedDemoUser(env.app, 1) };
+}
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
-const A_EMAIL = 'isolation-a@example.com';
+/** The shared account bootShared signs in as: a second session signs in to the same one. */
+const A_EMAIL = DEMO_USERS[1]!.email;
 
 async function readyOpportunity(app: FastifyInstance, c: TestClient): Promise<string> {
   const opp = await createOpportunity(app.db, ctxOf(c), {
@@ -110,7 +121,7 @@ describe('the switch is on for the demo, with the binding (#545)', () => {
   });
 
   it('a demo deployment has the submission routes and mints apply:assist; OPPORTUN_SUBMISSIONS=0 still turns them off', async () => {
-    const on = await boot(ON_THE_DEMO);
+    const on = await bootShared();
     const created = await api(
       on.a,
       'POST',
@@ -134,7 +145,7 @@ describe('the switch is on for the demo, with the binding (#545)', () => {
 
 describe('only the visitor who started an attempt may act on it (#545, criterion 4)', () => {
   it('a second session on the same account can read the draft, and gets 403 on every change', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const id = await draftOf(app, a);
     const other = await signIn(app, A_EMAIL);
     const read = await api(other, 'GET', `/submissions/${id}`);
@@ -159,7 +170,7 @@ describe('only the visitor who started an attempt may act on it (#545, criterion
   });
 
   it('a new sign-in is a new visitor: the old session’s drafts are read-only to it', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const id = await draftOf(app, a);
     const again = await signIn(app, A_EMAIL);
     expect((await api(again, 'GET', `/submissions/${id}`)).statusCode).toBe(200);
@@ -167,7 +178,7 @@ describe('only the visitor who started an attempt may act on it (#545, criterion
   });
 
   it('an attempt from before the binding (no actor) is read-only for everyone', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const id = await draftOf(app, a);
     await app.db
       .update(applicationSubmissions)
@@ -205,7 +216,7 @@ describe('only the visitor who started an attempt may act on it (#545, criterion
       .where(eq(applicationSubmissions.id, id))
       .get();
     expect(row?.actor).toBeNull();
-    const other = await signIn(app, A_EMAIL);
+    const other = await signIn(app, 'isolation-a@example.com');
     expect(
       (await api(other, 'PATCH', `/submissions/${id}`, { fields: { fullName: 'X Y' } })).statusCode,
     ).toBe(200);
@@ -214,7 +225,7 @@ describe('only the visitor who started an attempt may act on it (#545, criterion
 
 describe('a demo device token is given only its own visitor’s attempts (#545, criterion 4)', () => {
   it('the other visitor’s token gets no attempt from /current, a 404 for /snapshot and for the confirmation, and no confirmable', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const { id, destinationUrl } = await handedOff(app, a);
     const mine = await tokenOf(a);
     const other = await signIn(app, A_EMAIL);
@@ -257,7 +268,7 @@ describe('a demo device token is given only its own visitor’s attempts (#545, 
   });
 
   it('a token from before the binding (no actor) is given nothing, even an attempt with no actor either', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const { id, destinationUrl } = await handedOff(app, a);
     const { token } = await createDeviceToken(app.db, ctxOf(a), {
       name: 'old',
@@ -276,14 +287,14 @@ describe('a demo device token is given only its own visitor’s attempts (#545, 
   });
 
   it('a token minted on the demo records its visitor', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     await tokenOf(a);
     const [row] = await app.db
       .select()
       .from(deviceTokens)
       .where(eq(deviceTokens.userId, a.userId))
       .all();
-    expect(row?.actor).toMatch(/^demo-other\.[0-9a-f]{10}$/);
+    expect(row?.actor).toMatch(/^demo-user1\.[0-9a-f]{10}$/);
   });
 });
 
@@ -292,7 +303,7 @@ describe('a demo device token is given only its own visitor’s attempts (#545, 
 // visitors on it, behind the same warning as assisted apply (#546).
 describe('device token scopes on the demo (the owner’s decision on #545)', () => {
   it('mail:push, capture:push and apply:assist all mint', async () => {
-    const { a } = await boot(ON_THE_DEMO);
+    const { a } = await bootShared();
     for (const scopes of [
       ['mail:push'],
       ['capture:push'],
@@ -306,7 +317,7 @@ describe('device token scopes on the demo (the owner’s decision on #545)', () 
 
 describe('the reset’s file removal re-checks the references right before the unlink (tl’s E3 on #550)', () => {
   it('a row that starts referencing the file just before the unlink keeps it', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const file = await app.storage.writeAttachment(Buffer.from(`late reference ${newId()}`));
     setRaceHook(async (point) => {
       if (point !== 'attachments.removeNow.beforeDelete') return;

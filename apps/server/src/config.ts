@@ -98,6 +98,20 @@ export interface Config {
    */
   submissions?: boolean;
   /**
+   * OPPORTUN_DEMO_TOKEN_CAP (decision 133, tl and sec on #542): the most active device tokens one
+   * shared demo account keeps; minting past it revokes the oldest. Default 20, 0 means no cap,
+   * anything else not a whole number refuses to start. Only the shared accounts (the seed's pinned
+   * ids, lib/demoAccounts.ts) have a cap; an account made for one person on a demo server does not.
+   * A Config built without it (as tests do) has the default.
+   */
+  demoTokenCap?: number;
+  /**
+   * OPPORTUN_DEMO_SHARED_ASSISTED_APPLY (decision 133): 0 turns assisted apply off for the shared
+   * demo accounts only, leaving it as OPPORTUN_SUBMISSIONS says for everyone else. Unset, empty or
+   * 1 is on, anything else refuses to start. A Config built without it (as tests do) is on.
+   */
+  demoSharedAssistedApply?: boolean;
+  /**
    * OPPORTUN_DAILY_REVIEW_CAP (assisted apply M1c, https://github.com/bgoleno/opportun/issues/116):
    * the most application reviews one user may make in a rolling 24 hours on this deployment.
    * Default 10; refused above MAX_DAILY_REVIEW_CAP (25), the instance ceiling. A user can lower
@@ -254,6 +268,34 @@ function loadSubmissions(env: NodeJS.ProcessEnv): boolean {
   throw new ConfigError(
     `OPPORTUN_SUBMISSIONS must be 0 (assisted apply off) or 1 (on), or unset for on, got: ${JSON.stringify(raw)}`,
   );
+}
+
+/** The default for OPPORTUN_DEMO_TOKEN_CAP, the shared demo accounts' token cap. */
+export const DEFAULT_DEMO_TOKEN_CAP = 20;
+
+function loadDemoTokenCap(env: NodeJS.ProcessEnv): number {
+  const raw = env.OPPORTUN_DEMO_TOKEN_CAP;
+  if (raw === undefined || raw === '') return DEFAULT_DEMO_TOKEN_CAP;
+  if (!/^(0|[1-9][0-9]{0,5})$/.test(raw)) {
+    throw new ConfigError(
+      `OPPORTUN_DEMO_TOKEN_CAP must be a whole number of device tokens per shared demo account (0 for no cap), or unset for ${String(DEFAULT_DEMO_TOKEN_CAP)}, got: ${JSON.stringify(raw)}`,
+    );
+  }
+  return Number(raw);
+}
+
+function loadDemoSharedAssistedApply(env: NodeJS.ProcessEnv): boolean {
+  const raw = env.OPPORTUN_DEMO_SHARED_ASSISTED_APPLY;
+  if (raw === undefined || raw === '' || raw === '1') return true;
+  if (raw === '0') return false;
+  throw new ConfigError(
+    `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY must be 0 (assisted apply off for the shared demo accounts) or 1 (on), or unset for on, got: ${JSON.stringify(raw)}`,
+  );
+}
+
+/** The shared demo accounts' token cap, or none (0, or not a shared account). */
+export function demoTokenCap(cfg: Pick<Config, 'demoTokenCap'>): number {
+  return cfg.demoTokenCap ?? DEFAULT_DEMO_TOKEN_CAP;
 }
 
 function loadHost(env: NodeJS.ProcessEnv): string {
@@ -514,6 +556,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     db: loadDbConfig(env),
     demo: env.OPPORTUN_DEMO === '1',
     submissions: loadSubmissions(env),
+    demoTokenCap: loadDemoTokenCap(env),
+    demoSharedAssistedApply: loadDemoSharedAssistedApply(env),
     dailyReviewCap: loadDailyReviewCap(env),
     aiAllowLoopbackHttp: env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1',
     telemetryAllowPrivate: env.OPPORTUN_TELEMETRY_ALLOW_PRIVATE === '1',
