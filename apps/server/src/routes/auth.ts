@@ -10,6 +10,7 @@ import { isUniqueViolation } from '../db/client';
 import { auditLog, settings, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { racePoint } from '../lib/racePoints';
+import { revokeAllDeviceTokens } from '../lib/deviceTokens';
 import { resetUserPassword } from '../lib/passwordReset';
 import {
   canRegister,
@@ -88,6 +89,12 @@ const PasswordBody = z.object({
    */
   current: z.string().min(1).max(1024).optional(),
   next: NewPassword,
+  /**
+   * Also revoke every device token of the user (the browser extension, the Mail connector), as
+   * the admin and CLI reset always does (#523, sec's audit). The dialog offers it, checked by
+   * default; omitted means no, so another client's change keeps today's behaviour.
+   */
+  revokeDeviceTokens: z.boolean().optional(),
 });
 const RegistrationBody = z.object({ open: z.boolean() });
 
@@ -687,12 +694,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         .returning({ id: users.id })
         .get();
       if (changed === undefined) return fail(reply, 403, 'invalid_current_password');
+      // Only once the change itself has gone through: a refused change revokes nothing.
+      const revokedDevices =
+        req.body.revokeDeviceTokens === true ? await revokeAllDeviceTokens(db, user.id) : 0;
       // Every existing session (other devices and this one) dies; this client gets a fresh token.
       await destroyAllSessions(db, user.id);
       await startSession(req, reply, user.id);
       await audit(db, initial ? 'auth.password_set_initial' : 'auth.password_changed', {
         userId: user.id,
         ip: req.ip,
+        // A count, under a key the audit's redaction leaves alone (it hides any key with "token").
+        ...(req.body.revokeDeviceTokens === true ? { detail: { revokedDevices } } : {}),
       });
       return reply.code(204).send(null);
     },

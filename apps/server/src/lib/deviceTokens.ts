@@ -120,6 +120,21 @@ export async function revokeDeviceToken(
  * running two of the same browser needs to tell them apart). It grants nothing, so unlike
  * creating a token this needs no password.
  */
+/**
+ * Revokes every active device token of `userId` and returns how many: on a password change when
+ * the user asks (#523), as the admin and CLI reset does in its own transaction (passwordReset.ts).
+ */
+export async function revokeAllDeviceTokens(db: Db, userId: string): Promise<number> {
+  const now = Date.now();
+  const rows = await db
+    .update(deviceTokens)
+    .set({ revokedAt: now, updatedAt: now })
+    .where(and(eq(deviceTokens.userId, userId), isNull(deviceTokens.revokedAt)))
+    .returning({ id: deviceTokens.id })
+    .all();
+  return rows.length;
+}
+
 export async function renameDeviceToken(
   db: Db,
   ctx: UserCtx,
