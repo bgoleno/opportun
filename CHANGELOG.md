@@ -9,10 +9,10 @@ when the milestone's work was merged.
 
 ## Unreleased
 
-## 0.4.0 (2026-11-13)
+## 0.4.0 (2026-11-14)
 
 This release includes everything in [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1),
-which was tagged by hand from `main` earlier the same day, and what merged after it.
+which was tagged by hand from `main` on 2026-11-13, and what merged after it.
 
 ### Upgrading: prompts, defaults and costs
 
