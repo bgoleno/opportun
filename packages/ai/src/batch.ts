@@ -2,11 +2,13 @@
 // issuecomment-6794239917 and ruling on #441). A batch provider takes many structured requests at
 // once, at a lower price, and answers within hours. This file is the provider-neutral side: the
 // interface a provider's batch client implements, what a request is estimated to cost, how a
-// result is parsed, and its run record. No provider has a client yet (slice 2 adds Anthropic's), so
-// batchProviderFor finds none and every request is made live.
+// result is parsed, and its run record. Anthropic's client is anthropicBatch.ts (#509); for every
+// other provider batchProviderFor finds none and every request is made live.
 import type { z } from 'zod';
+import { createAnthropicBatchProvider } from './anthropicBatch';
 import { batchMultiplier, estimateCost } from './pricing';
 import { CHARS_PER_TOKEN, STRUCTURED_OUTPUT_TOKENS, type StructuredRequest } from './router';
+import { ATTR, inBatchSpan, OPERATION_BATCH_COLLECT, OPERATION_BATCH_SUBMIT } from './telemetry';
 import type { ModelPolicy, ProviderFetchOptions, TaskKey, TaskRunRecord } from './types';
 
 export { batchMultiplier };
@@ -54,17 +56,73 @@ export interface BatchProvider {
 
 /**
  * The batch client for this policy's provider, or null when it has none: then every request is
- * made live. No provider has one in this slice; Anthropic's comes in slice 2, built like every
- * other provider client here, with the explicit fetch and base URL and never the environment.
+ * made live. Anthropic has one (#509, anthropicBatch.ts), built like every other provider client
+ * here, with the explicit fetch and base URL and never the environment. OpenAI's is slice B; an
+ * OpenAI-compatible endpoint has none.
  */
 export function batchProviderFor(target: {
   policy: ModelPolicy;
   apiKey: string;
   providerFetch: ProviderFetchOptions;
 }): BatchProvider | null {
-  // Slice 2 builds Anthropic's client from these; until then there is no client for any.
-  void target;
-  return null;
+  return target.policy.provider === 'anthropic'
+    ? withBatchSpans(createAnthropicBatchProvider(target), target.policy)
+    : null;
+}
+
+/**
+ * Any provider's batch client, with its two spans (#509 criterion 5, tl's ruling on #509): one
+ * for submitting (the request count, the provider's batch id) and one for collecting (the count
+ * of each result type, the total tokens and the cost at the batch rate). None for reading the
+ * state, which the collect job polls, and none for each request.
+ */
+function withBatchSpans(provider: BatchProvider, policy: ModelPolicy): BatchProvider {
+  return {
+    submit: (requests) =>
+      inBatchSpan(OPERATION_BATCH_SUBMIT, policy, async (set) => {
+        set({ [ATTR.batchRequests]: requests.length });
+        const out = await provider.submit(requests);
+        set({ [ATTR.batchId]: out.batchId });
+        return out;
+      }),
+    state: (batchId) => provider.state(batchId),
+    results: (batchId) =>
+      inBatchSpan(OPERATION_BATCH_COLLECT, policy, async (set) => {
+        set({ [ATTR.batchId]: batchId });
+        const items = await provider.results(batchId);
+        const kinds = { succeeded: 0, errored: 0, expired: 0, canceled: 0 };
+        const total = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, usd: 0 };
+        for (const item of items) {
+          kinds[item.kind] += 1;
+          if (item.kind !== 'succeeded') continue;
+          total.input += item.usage.input;
+          total.output += item.usage.output;
+          total.cacheRead += item.usage.cacheRead;
+          total.cacheWrite += item.usage.cacheWrite;
+          total.usd += estimateCost(
+            policy.provider,
+            policy.model,
+            item.usage.input,
+            item.usage.output,
+            policy,
+            { readTokens: item.usage.cacheRead, writeTokens: item.usage.cacheWrite },
+            { batch: true },
+          ).usd;
+        }
+        set({
+          [ATTR.batchSucceeded]: kinds.succeeded,
+          [ATTR.batchErrored]: kinds.errored,
+          [ATTR.batchExpired]: kinds.expired,
+          [ATTR.batchCanceled]: kinds.canceled,
+          [ATTR.usageInputTokens]: total.input,
+          [ATTR.usageOutputTokens]: total.output,
+          [ATTR.usageCacheReadInputTokens]: total.cacheRead,
+          [ATTR.usageCacheWriteInputTokens]: total.cacheWrite,
+          [ATTR.usageCost]: total.usd,
+        });
+        return items;
+      }),
+  };
 }
 
 /** How many successful calls an average output must come from before it is trusted (tl). */
