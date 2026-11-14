@@ -40,9 +40,13 @@ when the milestone's work was merged.
   none), never from another address that appears in its query string. An address whose path names
   another job is refused, and a confirmation page for another job is not recorded. This was always
   the intent, and nothing the extension fills changes. A Workday address with parentheses in its
-  path, such as `(Remote)`, now names its job too, so assisted apply recognises it
-  ([#521](https://github.com/bgoleno/opportun/issues/521); PR
-  [#538](https://github.com/bgoleno/opportun/pull/538)).
+  path, such as `(Remote)`, now names its job too, so assisted apply recognises it, and a
+  stored posting address that ends in a stray `)`, pasted out of parentheses, keeps its job id
+  again, while a `)` that closes a `(` in the address is kept
+  ([#521](https://github.com/bgoleno/opportun/issues/521),
+  [#549](https://github.com/bgoleno/opportun/issues/549); PRs
+  [#538](https://github.com/bgoleno/opportun/pull/538),
+  [#555](https://github.com/bgoleno/opportun/pull/555)).
 - **The Publish image workflow runs in a `release` environment, so GitHub itself can limit
   publishing to `main`.** Both of its jobs, `publish` and `release`, declare
   `environment: release`. "Only from `main`" was otherwise enforced only by the workflow's own
