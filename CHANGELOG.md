@@ -20,6 +20,14 @@ when the milestone's work was merged.
   password reset already revoked every device token
   ([#523](https://github.com/bgoleno/opportun/issues/523); PR
   [#536](https://github.com/bgoleno/opportun/pull/536)).
+- **Assisted apply reads the job of a handoff address or a confirmation page from its own path
+  only.** An address for a posting on a job board, and the page recorded as an application's
+  confirmation, now name their job from the address's path (or its `gh_jid` where the path names
+  none), never from another address that appears in its query string. An address whose path names
+  another job is refused, and a confirmation page for another job is not recorded. This was always
+  the intent, and nothing the extension fills changes
+  ([#521](https://github.com/bgoleno/opportun/issues/521); PR
+  [#538](https://github.com/bgoleno/opportun/pull/538)).
 - **The Publish image workflow runs in a `release` environment, so GitHub itself can limit
   publishing to `main`.** Both of its jobs, `publish` and `release`, declare
   `environment: release`. "Only from `main`" was otherwise enforced only by the workflow's own
