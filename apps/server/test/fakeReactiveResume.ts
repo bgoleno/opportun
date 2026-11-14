@@ -27,6 +27,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
   createSafeFetch,
+  type safeFetch,
   type FetchTarget,
   type RawResponse,
   type SafeFetchDeps,
@@ -71,7 +72,7 @@ export interface FakeRr {
   /** When true, /api/health answers 503. */
   unhealthy: boolean;
   deps: SafeFetchDeps;
-  fetch: ReturnType<typeof createSafeFetch>;
+  fetch: typeof safeFetch;
   /** Seeds a copy of the fixture (or `resume`) for `owner`; returns its id. */
   seed(owner: string, resume?: Partial<RrResume>): string;
 }
@@ -124,7 +125,7 @@ export function fakeReactiveResume(opts: { host?: string } = {}): FakeRr {
     redirects: new Map(),
     unhealthy: false,
     deps: undefined as unknown as SafeFetchDeps,
-    fetch: undefined as unknown as ReturnType<typeof createSafeFetch>,
+    fetch: undefined as unknown as typeof safeFetch,
     seed(owner, resume = {}) {
       const id = resume.id ?? randomUUID();
       rr.resumes.set(id, { owner, resume: { ...clone(RR_FIXTURE), ...clone(resume), id } });

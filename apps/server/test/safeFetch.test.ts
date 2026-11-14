@@ -333,6 +333,59 @@ describe('safeFetch', () => {
   });
 });
 
+// #524 (sec's audit): the per-host rate buckets.
+describe('safeFetch per-host buckets (#524)', () => {
+  it('a wait that aborts gives its slot back, so the next request does not wait for it', async () => {
+    const h = harness({ 'jobs.example.com': [PUBLIC_IP] }, [ok(), ok()]);
+    let calls = 0;
+    h.sleep = (ms) => {
+      h.sleeps.push(ms);
+      calls += 1;
+      // The first wait never ends: the request's own timeout aborts it.
+      return calls === 1 ? new Promise<void>(() => undefined) : Promise.resolve();
+    };
+    const fetch = createSafeFetch(h);
+    await fetch('https://jobs.example.com/1', ALLOW);
+    expect(await reason(fetch('https://jobs.example.com/2', { ...ALLOW, timeoutMs: 20 }))).toBe(
+      'timeout',
+    );
+    await fetch('https://jobs.example.com/3', ALLOW);
+    // The aborted request reserved 1000..2000 ms; it gave that back, so the third waits 1000, not 2000.
+    expect(h.sleeps).toEqual([1000, 1000]);
+  });
+
+  it('one bucket per host, whatever its case or trailing dots', async () => {
+    const h = harness(
+      {
+        'jobs.example.com': [PUBLIC_IP],
+        'JOBS.example.com.': [PUBLIC_IP],
+        'jobs.example.com.': [PUBLIC_IP],
+      },
+      [ok(), ok()],
+    );
+    const fetch = createSafeFetch(h);
+    await fetch('https://jobs.example.com/1', ALLOW);
+    await fetch('https://JOBS.example.com./2', ALLOW);
+    expect(h.sleeps).toEqual([1000]);
+  });
+
+  it('forgets a host once its slot has passed', async () => {
+    let clock = 0;
+    const h = harness(
+      { 'a.example.org': [PUBLIC_IP], 'b.example.org': [PUBLIC_IP], 'c.example.org': [PUBLIC_IP] },
+      [ok(), ok(), ok()],
+    );
+    h.now = () => clock;
+    const fetch = createSafeFetch(h);
+    await fetch('https://a.example.org/', ALLOW);
+    await fetch('https://b.example.org/', ALLOW);
+    expect(fetch.bucketCount()).toBe(2);
+    clock += 5000;
+    await fetch('https://c.example.org/', ALLOW);
+    expect(fetch.bucketCount()).toBe(1);
+  });
+});
+
 describe('safeFetch allowPublic mode (user-entered URLs)', () => {
   const PUBLIC = { allowHosts: [] as string[], allowPublic: true };
 
@@ -551,6 +604,14 @@ describe('isPrivateAddress', () => {
     '::127.0.0.1',
     '::10.0.0.1',
     '::ffff:0:127.0.0.1',
+    // #524: an IPv4-mapped address the unwrap below does not catch (the full spelling) fails
+    // closed on ::ffff:0:0/96, even when the address inside is public; a private one inside was
+    // already caught, since node's BlockList checks mapped addresses against the IPv4 rules. The
+    // local-use NAT64 prefix is blocked like the well-known one.
+    '0:0:0:0:0:ffff:7f00:1',
+    '0:0:0:0:0:ffff:5db8:d822',
+    '64:ff9b:1::a00:1',
+    '64:ff9b:1:ffff::1',
     'not-an-ip',
   ])('%s is private (or not a usable public address)', (ip) => {
     expect(isPrivateAddress(ip)).toBe(true);
