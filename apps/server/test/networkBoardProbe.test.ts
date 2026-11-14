@@ -22,6 +22,7 @@ import {
   sweepNetworkProbes,
 } from '../src/jobs/networkBoardProbe';
 import { createSafeFetch, FetchBlockedError, type RawResponse } from '../src/lib/safeFetch';
+import { gateLogLine } from '../src/obs/log';
 import { listSources } from '../src/repos/discovery';
 import { userSettingExists, writeUserSetting } from '../src/repos/userSettings';
 import { useApi } from './api';
@@ -693,6 +694,13 @@ describe('the nightly network probe (#296)', () => {
         'error.type': 'SyntaxError',
       });
       expect(JSON.stringify(warn.mock.calls)).not.toContain('Initech');
+      // And the production log gate keeps that entry: a message missing from LOG_MESSAGES would
+      // reach the log as "[message withheld]" with neither field (tl on #525).
+      const [fields, msg] = warn.mock.calls[0]! as [Record<string, unknown>, string];
+      const gated = JSON.parse(
+        gateLogLine(JSON.stringify({ level: 40, time: 1, msg, ...fields }), () => undefined)!,
+      ) as Record<string, unknown>;
+      expect(gated).toMatchObject({ msg, 'user.id': failedUser, 'error.type': 'SyntaxError' });
     });
 
     it('the job records the failed users with the queued count', async () => {
