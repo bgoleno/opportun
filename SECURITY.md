@@ -68,7 +68,16 @@ read. A token can hold more than one scope: the extension's Set up flow can crea
 with both `capture:push` and `apply:assist`.
 
 - **`mail:push`** (the Apple Mail connector): nothing stored. It submits messages, and its
-  response gives only how many were stored and how many were new.
+  response gives only how many were stored and how many were new. A pushed message can also
+  change one record, the same way a message synced from Gmail can: if it matches an application
+  the user said they submitted, within 14 days after the submission, that application is marked
+  confirmed by email. This belongs to mail ingest and not to the token's scope. The match can
+  rest on the sender's address, which the receiving server does not authenticate, so a forged
+  message inside that window can mark it confirmed if it links the application's job, or comes
+  from an address at the company's domain and names the role and company. The confirmation changes no stage and keeps only the message's
+  id and the names of the signals that matched, never the message text, and the user can undo it
+  with **Not this application** on the application's evidence card, which returns it to
+  submitted.
 - **`capture:push`** (the capture extension): no stored content. It submits a captured page,
   and its response says what happened: whether a record was created, the ids of the records
   involved, whether AI refined the capture, and the stage the capture moved an opportunity
