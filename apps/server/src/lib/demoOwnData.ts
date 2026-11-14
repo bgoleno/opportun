@@ -23,14 +23,22 @@ const IDENTITY = new Set(DEMO_IDENTITY_VALUES.map(normalise));
 const IDENTITY_DIGITS = new Set(DEMO_IDENTITY_VALUES.map(digits).filter((d) => d.length >= 7));
 /**
  * The demo's own mail domain: every email the seed writes is at it, and no visitor's own address
- * is, so any address there is the demo's (tl on #550), not only the ones the seed lists today.
+ * is, so any address there, or at a subdomain of it (qa on #550), is the demo's (tl on #550), not
+ * only the ones the seed lists today.
  */
-const DEMO_MAIL_DOMAIN = '@opportun-demo.example';
+const DEMO_MAIL_DOMAIN = 'opportun-demo.example';
+
+function atDemoDomain(v: string): boolean {
+  const at = v.lastIndexOf('@');
+  if (at < 0) return false;
+  const domain = v.slice(at + 1);
+  return domain === DEMO_MAIL_DOMAIN || domain.endsWith(`.${DEMO_MAIL_DOMAIN}`);
+}
 
 /** Whether `value`, in field `key`, is one of the demo's own identity values. */
 export function isFixtureIdentity(key: string, value: string): boolean {
   const v = normalise(value);
-  if (IDENTITY.has(v) || v.endsWith(DEMO_MAIL_DOMAIN)) return true;
+  if (IDENTITY.has(v) || atDemoDomain(v)) return true;
   return key === 'phone' && digits(value).length >= 7 && IDENTITY_DIGITS.has(digits(value));
 }
 
@@ -88,4 +96,13 @@ export function refuseFixtureData(attempt: {
   const field = fixtureField(attempt.fields);
   if (field !== null) throw fixtureValueRefused(field);
   if (attempt.resumeId !== null || attempt.resumeStore !== null) throw demoResumeRefused();
+}
+
+/**
+ * Whether an attempt belongs to `actor` (#545): on the demo, a device token is given only the
+ * attempts its own visitor started. An attempt or a token with no actor (from before the binding)
+ * belongs to nobody, so null never matches null.
+ */
+export function sameVisitor(attemptActor: string | null, actor: string | null): boolean {
+  return attemptActor !== null && actor !== null && attemptActor === actor;
 }

@@ -90,21 +90,13 @@ export interface Config {
    * OPPORTUN_SUBMISSIONS (assisted apply, https://github.com/bgoleno/opportun/issues/79): the
    * application submission routes. On by default since the owner's decision on
    * https://github.com/bgoleno/opportun/issues/455: unset, empty or 1 is on, 0 is off, and any other
-   * value refuses to start (loadSubmissions). The demo never has them, whatever this says
-   * (submissionsEnabled). They were off by default until then, first until the outcome milestone
+   * value refuses to start (loadSubmissions). The demo has them too since #545, bound to each
+   * visitor (submissionsEnabled). They were off by default until then, first until the outcome milestone
    * (M2a, #118, closed with its follow-up job) so that no submission marked "submitted" went
    * without a follow-up. loadConfig always sets this; a Config built without it (as tests do) is
    * off.
    */
   submissions?: boolean;
-  /**
-   * Assisted apply on the demo (https://github.com/bgoleno/opportun/issues/542). Not read from the
-   * environment: off, so the demo still has no submission routes, until the attempt is bound to
-   * the visitor whose data it holds (#545, slice 2). Until then one visitor could hand off and
-   * fill another's data on a shared account, so main never holds a demo with this on and no
-   * binding (sec on #544). The own-data rules of slice 1 (#544) are built and tested behind it.
-   */
-  demoSubmissions?: boolean;
   /**
    * OPPORTUN_DAILY_REVIEW_CAP (assisted apply M1c, https://github.com/bgoleno/opportun/issues/116):
    * the most application reviews one user may make in a rolling 24 hours on this deployment.
@@ -494,14 +486,13 @@ export function loadDbConfig(env: NodeJS.ProcessEnv = process.env): DbConfig {
 }
 
 /**
- * Whether the application submission routes exist on this deployment: OPPORTUN_SUBMISSIONS is
- * not 0 (loadSubmissions), and not on the demo, which holds shared fixture accounts (design Part A
- * section 7.8), unless demoSubmissions is on (never, until #545: see its comment).
+ * Whether the application submission routes exist on this deployment: OPPORTUN_SUBMISSIONS is not
+ * 0 (loadSubmissions). The demo too, since #545 (slice 2 of #542): there each attempt is bound to
+ * the visitor who started it, and fills only their own data (#544). The binding and the switch
+ * came in one change, so the demo is never on without it (sec on #544).
  */
-export function submissionsEnabled(
-  cfg: Pick<Config, 'submissions' | 'demo' | 'demoSubmissions'>,
-): boolean {
-  return cfg.submissions === true && (!cfg.demo || cfg.demoSubmissions === true);
+export function submissionsEnabled(cfg: Pick<Config, 'submissions'>): boolean {
+  return cfg.submissions === true;
 }
 
 /** Reads and validates configuration. Throws a ConfigError naming the offending variable. */

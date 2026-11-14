@@ -506,6 +506,26 @@ one ordering rule: `up -d` first, so the container is recreated with the new `.e
 inherits the environment the container started with, so seeding before recreating would
 re-seed the old passwords.
 
+## Device tokens and assisted apply on the demo
+
+Since [#545](https://github.com/bgoleno/opportun/issues/545), assisted apply is on for the demo, with
+these limits, all enforced by the server, on the demo only:
+
+- **A token may carry any scope: `apply:assist`, `capture:push` and `mail:push`.** A visitor may pair
+  the Mail connector too, by the owner's decision: their own mail in a shared account is visible to
+  the other visitors on it, behind the same warning as everything else entered there.
+- **At most 20 active tokens per demo account.** Minting a 21st revokes that account's oldest
+  token, which can sign another visitor's extension out.
+- **An application is its visitor's.** Everyone signed in to a shared account can read its drafts,
+  but only the visitor (the session) who started one can change, review or hand it off. Only that
+  visitor's device token is given it. A new sign-in is a new visitor.
+- **Only the visitor's own data is filled**
+  ([#544](https://github.com/bgoleno/opportun/issues/544)). A draft starts empty, nothing is saved
+  to the shared profile, the application carries no resume (the visitor attaches their own on the
+  employer's form), and the demo's own names and addresses are refused.
+
+The nightly reset removes every demo token, application and stored file.
+
 ## Hard constraints on anything added to this deployment
 
 **No credentials, keys or passwords in this repository, including in a template.** Variable

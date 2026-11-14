@@ -438,12 +438,17 @@ describe('the guards no other test pins (tl on #185)', () => {
     expect(file.statusCode).toBe(401);
   });
 
-  it('on the demo, every apply route is a 404, whatever the token holds', async () => {
+  // Since #545 the demo has these routes, and a demo token is given only its own visitor's
+  // attempts (test/demoActorBinding.test.ts). A token and an attempt with no visitor recorded, as
+  // these are, made off the demo, are nobody's there: nothing is given.
+  it('on the demo, a token with no visitor is given no attempt, and no snapshot', async () => {
     const { app, a } = await boot(ON);
     const s = await handedOffAttempt(app, a);
     const t = await token(a, ['apply:assist']);
     (app.config as { demo: boolean }).demo = true;
-    expect((await current(app, t, pageOf(s.ats))).statusCode).toBe(404);
+    const res = await current(app, t, pageOf(s.ats));
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ attempt: null, reason: 'no_matching_attempt' });
     expect((await snapshot(app, t, s.id)).statusCode).toBe(404);
   });
 

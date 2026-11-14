@@ -46,6 +46,9 @@ import {
 } from '../repos/submissionReview';
 import { detailView, unlinkConfirmation } from '../repos/submissionConfirm';
 import { contentDisposition } from './attachments';
+import { demoActorOf } from '../plugins/session';
+import { applicationSubmissions } from '../db/schema';
+import { and, eq } from 'drizzle-orm';
 import { DEFAULT_LIMIT, IdParams, MAX_LIMIT, pageOf } from './common';
 
 const CreateBody = z
@@ -177,10 +180,36 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
   const db = app.db;
 
-  // Off, or on the demo: no route here exists as far as a caller can tell (design 7.8).
+  // Off: no route here exists as far as a caller can tell (design 7.8).
   app.addHook('onRequest', async () => {
     if (!submissionsEnabled(app.config)) {
       throw new HttpError(404, 'feature_unavailable');
+    }
+  });
+
+  // On the demo an attempt is its visitor's (#545, sec's amendment on #542): everyone on the
+  // shared account may read it, and only the visitor who started it may change it, in any way.
+  // The actor is written once, when the attempt is created, so reading it here, before the route,
+  // cannot race the route's own write. An attempt from before this (no actor) is read-only.
+  app.addHook('preHandler', async (req) => {
+    if (!app.config.demo || req.method === 'GET') return;
+    if (!(req.routeOptions.url ?? '').includes('/submissions/:id')) return;
+    const id = (req.params as { id?: unknown }).id;
+    const ctx = req.userCtx;
+    if (typeof id !== 'string' || ctx === null) return;
+    const row = await db
+      .select({ actor: applicationSubmissions.actor })
+      .from(applicationSubmissions)
+      .where(and(eq(applicationSubmissions.id, id), eq(applicationSubmissions.userId, ctx.userId)))
+      .get();
+    // Not this account's: the route's own 404.
+    if (row === undefined) return;
+    if (row.actor === null || row.actor !== demoActorOf(req)) {
+      throw new HttpError(
+        403,
+        'not_your_application',
+        'Another visitor started this application on this shared demo account. You can read it, but only they can change it.',
+      );
     }
   });
 
@@ -201,7 +230,7 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
         app.requireUser(req),
         req.params.id,
         req.body,
-        { demo: app.config.demo },
+        { demo: app.config.demo, actor: demoActorOf(req) },
       );
       if (replayed) void reply.header('idempotent-replayed', 'true');
       return reply.code(replayed ? 200 : 201).send(submission);

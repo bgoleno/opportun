@@ -29,7 +29,7 @@ import {
   resumes,
 } from '../db/schema';
 import { audit } from '../lib/audit';
-import { demoResumeRefused } from '../lib/demoOwnData';
+import { demoResumeRefused, sameVisitor } from '../lib/demoOwnData';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { submissionDigest } from '../lib/submissionDigest';
@@ -222,6 +222,8 @@ export interface CreateDraftInput {
 /** Where a draft is being made: on the demo, only the visitor's own data goes in (#544). */
 export interface DraftOptions {
   demo?: boolean;
+  /** The demo visitor making the draft (#545): only they may act on it. Null off the demo. */
+  actor?: string | null;
 }
 
 /**
@@ -347,6 +349,7 @@ export async function createSubmissionDraft(
         destinationUrl: destination.href,
         status: 'draft',
         idempotencyKey: input.idempotencyKey,
+        actor: demo ? (opts.actor ?? null) : null,
         resumeTitle: resume?.title ?? null,
         resumeStore: resume?.store ?? null,
         resumeDocRef: resume?.docRef ?? null,
@@ -607,6 +610,7 @@ export async function handedOffForPage(
   db: Db,
   ctx: UserCtx,
   pageUrl: string,
+  opts: { actor?: string | null } = {},
 ): Promise<PrefillLookup> {
   const rows = await db
     .select({
@@ -624,7 +628,12 @@ export async function handedOffForPage(
       ),
     )
     .all();
-  const matching = rows.filter((r) => destinationAllowed(pageUrl, r.row));
+  // On the demo, only the token's own visitor's attempts (#545): another visitor's is not there.
+  const matching = rows.filter(
+    (r) =>
+      destinationAllowed(pageUrl, r.row) &&
+      (opts.actor === undefined || sameVisitor(r.row.actor, opts.actor)),
+  );
   if (matching.length === 0) return { kind: 'none', reason: 'no_matching_attempt' };
   if (matching.length > 1) return { kind: 'none', reason: 'several_handed_off' };
   const only = matching[0]!;

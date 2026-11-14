@@ -6,6 +6,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { DEVICE_TOKEN_SCOPES } from '../db/schema';
 import { submissionsEnabled } from '../config';
+import { demoActorOf } from '../plugins/session';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import {
@@ -83,7 +84,10 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
         db,
         ctx,
         { name, scopes },
-        app.config.demo ? { maxActive: DEMO_MAX_ACTIVE_TOKENS, ip: req.ip } : {},
+        // On the demo the token also records its visitor, and is given only their attempts (#545).
+        app.config.demo
+          ? { maxActive: DEMO_MAX_ACTIVE_TOKENS, ip: req.ip, actor: demoActorOf(req) }
+          : {},
       );
       await audit(db, 'device_token.created', {
         userId: ctx.userId,

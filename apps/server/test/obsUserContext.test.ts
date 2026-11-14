@@ -127,7 +127,13 @@ async function server(): Promise<FastifyInstance> {
     {
       onRequest: async (req) => {
         await new Promise((r) => setImmediate(r));
-        req.deviceCtx = { userId: 'device-user', isAdmin: false, tokenId: 't', scopes: [] };
+        req.deviceCtx = {
+          userId: 'device-user',
+          isAdmin: false,
+          tokenId: 't',
+          scopes: [],
+          actor: null,
+        };
       },
     },
     handler,

@@ -25,6 +25,8 @@ export interface DeviceCtx extends UserCtx {
   isAdmin: false;
   tokenId: string;
   scopes: DeviceTokenScope[];
+  /** The demo visitor who minted the token (#545), or null (off the demo, or minted before). */
+  actor: string | null;
 }
 
 declare module 'fastify' {
@@ -71,14 +73,15 @@ export async function createDeviceToken(
   db: Db,
   ctx: UserCtx,
   input: { name: string; scopes: DeviceTokenScope[] },
-  opts: { maxActive?: number; ip?: string } = {},
+  opts: { maxActive?: number; ip?: string; actor?: string | null } = {},
 ): Promise<{ meta: DeviceTokenMeta; token: string }> {
   const token = DEVICE_TOKEN_PREFIX + randomBytes(32).toString('base64url');
   const now = Date.now();
   const scopes = [...new Set(input.scopes)];
   const { maxActive } = opts;
+  const actor = opts.actor ?? null;
   if (maxActive === undefined)
-    return { meta: await insertToken(db, ctx, input.name, token, scopes, now), token };
+    return { meta: await insertToken(db, ctx, input.name, token, scopes, now, actor), token };
   return await withTransaction(db, async (tx) => {
     await lockScope(tx, `device_tokens:${ctx.userId}`);
     const active = await tx
@@ -100,7 +103,7 @@ export async function createDeviceToken(
         detail: { id: old.id, name: old.name },
       });
     }
-    return { meta: await insertToken(tx, ctx, input.name, token, scopes, now), token };
+    return { meta: await insertToken(tx, ctx, input.name, token, scopes, now, actor), token };
   });
 }
 
@@ -111,6 +114,7 @@ async function insertToken(
   token: string,
   scopes: DeviceTokenScope[],
   now: number,
+  actor: string | null,
 ): Promise<DeviceTokenMeta> {
   return await db
     .insert(deviceTokens)
@@ -120,6 +124,7 @@ async function insertToken(
       name,
       tokenHash: hashDeviceToken(token),
       scopes,
+      actor,
       createdAt: now,
       updatedAt: now,
     })
@@ -219,6 +224,7 @@ export async function authenticateDeviceToken(
       scopes: deviceTokens.scopes,
       lastUsedAt: deviceTokens.lastUsedAt,
       revokedAt: deviceTokens.revokedAt,
+      actor: deviceTokens.actor,
     })
     .from(deviceTokens)
     .where(eq(deviceTokens.tokenHash, hashDeviceToken(token)))
@@ -231,7 +237,13 @@ export async function authenticateDeviceToken(
   }
   return {
     ok: true,
-    ctx: { userId: row.userId, isAdmin: false, tokenId: row.id, scopes: row.scopes },
+    ctx: {
+      userId: row.userId,
+      isAdmin: false,
+      tokenId: row.id,
+      scopes: row.scopes,
+      actor: row.actor,
+    },
   };
 }
 

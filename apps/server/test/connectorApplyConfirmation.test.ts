@@ -370,14 +370,15 @@ describe('POST /connector/apply/:id/confirmation (#121)', () => {
     expect(await pagesOf(app, s.oppId)).toHaveLength(0);
   });
 
-  it('on the demo, or off, is a 404 before any token is looked at, and stores nothing (#189)', async () => {
+  // Since #545 the demo has this route, and a demo token is given only its own visitor's
+  // attempts: a token and an attempt with no visitor recorded (made off the demo) are nobody's.
+  it('on the demo a token with no visitor gets a 404; off, a 404 before any token is looked at; and nothing is stored (#189)', async () => {
     const { app, a } = await boot(ON);
     const s = await submittedAttempt(app, a);
     const t = await token(a, ['apply:assist']);
     (app.config as { demo: boolean }).demo = true;
     const demo = await record(app, t, s.id, page(thanksOn(s.ats)));
     expect(demo.statusCode).toBe(404);
-    expect(demo.json().error.code).toBe('feature_unavailable');
     (app.config as { demo: boolean }).demo = false;
     (app.config as { submissions?: boolean }).submissions = false;
     for (const bearerToken of [null, `odt_${'B'.repeat(43)}`]) {

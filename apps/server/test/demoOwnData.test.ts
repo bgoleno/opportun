@@ -1,7 +1,6 @@
 // Assisted apply on the demo fills only the visitor's own data
-// (https://github.com/bgoleno/opportun/issues/544, slice 1 of #542). The demo's own submission
-// switch stays off until #545 binds each attempt to its visitor (sec on #544), so these tests turn
-// on the internal demoSubmissions flag to reach the rules built behind it.
+// (https://github.com/bgoleno/opportun/issues/544, slice 1 of #542). The switch is on for the
+// demo since #545, which binds each attempt to its visitor (test/demoActorBinding.test.ts).
 import { newId } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -12,7 +11,6 @@ import {
   DEMO_IDENTITY_VALUES,
   DEMO_USERS,
 } from '../src/cli/seedDemoFixture';
-import { submissionsEnabled } from '../src/config';
 import {
   applicationSubmissions,
   auditLog,
@@ -33,7 +31,7 @@ import { PASSWORD, type TestClient } from './isolation';
 import { api, requisition } from './submissionFixtures';
 
 const boot = useApi();
-const ON_THE_DEMO = { demo: true, submissions: true, demoSubmissions: true } as const;
+const ON_THE_DEMO = { demo: true, submissions: true } as const;
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
 
 /** An opportunity on a recognised, confirmed Greenhouse posting, ready for a draft. */
@@ -98,9 +96,18 @@ async function handedOff(app: FastifyInstance, c: TestClient, fields: Record<str
   return { id, destinationUrl: row.destinationUrl };
 }
 
-/** A device token with the apply scope, made as the extension's pairing does. */
-async function applyToken(app: FastifyInstance, c: TestClient): Promise<string> {
-  return (await createDeviceToken(app.db, ctxOf(c), { name: 'x', scopes: ['apply:assist'] })).token;
+/**
+ * A device token with the apply scope, made as the extension's pairing does: through the route, by
+ * this visitor's session, so on the demo it is given this visitor's attempts (#545).
+ */
+async function applyToken(_app: FastifyInstance, c: TestClient): Promise<string> {
+  const res = await api(c, 'POST', '/device-tokens', {
+    name: 'Chrome',
+    scopes: ['apply:assist'],
+    password: PASSWORD,
+  });
+  expect(res.statusCode, res.body).toBe(201);
+  return res.json<{ token: string }>().token;
 }
 
 const current = (app: FastifyInstance, token: string, url: string) =>
@@ -109,31 +116,6 @@ const current = (app: FastifyInstance, token: string, url: string) =>
     url: `/api/v1/connector/apply/current?url=${encodeURIComponent(url)}`,
     headers: { authorization: `Bearer ${token}` },
   });
-
-describe('the switch stays off on the demo until #545 (sec on #544)', () => {
-  it('submissionsEnabled is off on the demo unless demoSubmissions is on, and on off the demo', () => {
-    expect(submissionsEnabled({ submissions: true, demo: true })).toBe(false);
-    expect(submissionsEnabled({ submissions: true, demo: true, demoSubmissions: true })).toBe(true);
-    expect(submissionsEnabled({ submissions: true, demo: false })).toBe(true);
-    // The off switch still wins on the demo.
-    expect(submissionsEnabled({ submissions: false, demo: true, demoSubmissions: true })).toBe(
-      false,
-    );
-  });
-
-  it('a demo deployment as configured (no demoSubmissions) has no submission routes', async () => {
-    const { app, a } = await boot({ demo: true, submissions: true });
-    const res = await create(a, await readyOpportunity(app, a));
-    expect(res.statusCode).toBe(404);
-    expect(res.json<{ error: { code: string } }>().error.code).toBe('feature_unavailable');
-    const mint = await api(a, 'POST', '/device-tokens', {
-      name: 'Chrome',
-      scopes: ['apply:assist'],
-      password: PASSWORD,
-    });
-    expect(mint.json<{ error: { code: string } }>().error.code).toBe('scope_unavailable');
-  });
-});
 
 describe('a demo draft starts empty, and is the visitor’s own (#544, criterion 2)', () => {
   it('GET /profile/application-details offers nothing on the demo (tl on #550)', async () => {
@@ -426,6 +408,9 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
     expect(fixtureField({ firstName: 'Avery' })).toBeNull();
     // Any address at the demo's own domain, listed or not, and a full-width form of a listed name.
     expect(isFixtureIdentity('email', 'someone-new@OPPORTUN-DEMO.example')).toBe(true);
+    // A subdomain of it too (qa on #550), and not a domain that merely ends in the same letters.
+    expect(isFixtureIdentity('email', 'x@mail.opportun-demo.example')).toBe(true);
+    expect(isFixtureIdentity('email', 'x@notopportun-demo.example')).toBe(false);
     expect(isFixtureIdentity('email', 'jane@example.com')).toBe(false);
     expect(isFixtureIdentity('fullName', 'Ａｖｅｒｙ Ｃｈｅｎ')).toBe(true);
     for (const v of DEMO_IDENTITY_VALUES) expect(isFixtureIdentity('any', v), v).toBe(true);
