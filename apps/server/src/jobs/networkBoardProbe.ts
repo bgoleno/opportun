@@ -15,7 +15,7 @@
 // stops this job's requests to that vendor for every user until the next night's sweep; the other
 // two vendors go on.
 import { CronExpressionParser } from 'cron-parser';
-import { and, asc, count, desc, eq, gte, inArray, isNull, lt, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, isNull, lt, lte, or } from 'drizzle-orm';
 import { z } from 'zod';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
@@ -38,6 +38,8 @@ export const NETWORK_PROBES_PER_NIGHT = 20;
 /** A company whose provider failed on this many nights is recorded as having no board. */
 export const NETWORK_PROBE_FAILED_NIGHTS = 3;
 export const NETWORK_BOARD_CHECK_SETTING = 'network_board_check';
+/** The longest a company that stopped a vendor is left out of the nightly pick (#518). */
+export const NETWORK_PROBE_PARK_MAX_NIGHTS = 8;
 /** The reason on a probe cancelled because a vendor said slow down. */
 export const NETWORK_PROBE_STOPPED =
   'a board provider asked to slow down: the rest wait for the next night';
@@ -122,6 +124,24 @@ export function nightStart(now: number): number {
     .getTime();
 }
 
+/**
+ * The start of the night `nights` after tonight's. Noon of that day, then back to its 05:15, so a
+ * daylight-saving change in between (a 23- or 25-hour day) still lands on that night.
+ */
+function nightsAfter(now: number, nights: number): number {
+  return nightStart(nightStart(now) + nights * 24 * 60 * 60_000 + 7 * 60 * 60_000);
+}
+
+/**
+ * When a company whose own request stopped a vendor tonight is picked again (#518, tl's design):
+ * after 2^(stops-1) nights out of the pick, at most NETWORK_PROBE_PARK_MAX_NIGHTS. The doubling
+ * bounds how often one company whose request always fails can stop its vendor for every user.
+ */
+export function parkedUntil(now: number, stops: number): number {
+  const nights = Math.min(2 ** Math.max(stops - 1, 0), NETWORK_PROBE_PARK_MAX_NIGHTS);
+  return nightsAfter(now, nights + 1);
+}
+
 /** How many of the user's network probes were queued since `since`, in any state. */
 async function takenSince(db: Db, ctx: UserCtx, since: number): Promise<number> {
   const row = await db
@@ -180,7 +200,12 @@ function isNetworkBoardKind(atsKind: string | null): boolean {
  * denied, never probed, not yet given up on, and no board on record but one of the three.
  * Most contacts first, then by name.
  */
-export async function pickNetworkCompanies(db: Db, ctx: UserCtx, limit: number): Promise<string[]> {
+export async function pickNetworkCompanies(
+  db: Db,
+  ctx: UserCtx,
+  limit: number,
+  tonight: number,
+): Promise<string[]> {
   if (limit <= 0) return [];
   const contacts = count(networkContacts.id);
   const rows = await db
@@ -199,6 +224,8 @@ export async function pickNetworkCompanies(db: Db, ctx: UserCtx, limit: number):
         inArray(companies.status, ['none', 'suggested']),
         isNull(companies.boardProbedAt),
         lt(companies.boardProbeFailedNights, NETWORK_PROBE_FAILED_NIGHTS),
+        // Parked after stopping a vendor (#518): not picked until its park ends.
+        or(isNull(companies.boardProbeParkedUntil), lte(companies.boardProbeParkedUntil, tonight)),
         or(isNull(companies.atsKind), inArray(companies.atsKind, [...NETWORK_BOARD_KINDS])),
       ),
     )
@@ -218,7 +245,7 @@ export async function queueNightForUser(db: Db, ctx: UserCtx, now: number): Prom
   const since = nightStart(now);
   if (await stoppedSince(db, ctx, since)) return 0;
   const room = NETWORK_PROBES_PER_NIGHT - (await takenSince(db, ctx, since));
-  const picks = await pickNetworkCompanies(db, ctx, room);
+  const picks = await pickNetworkCompanies(db, ctx, room, since);
   for (const companyId of picks) {
     await enqueueVendorCheck(
       db,
@@ -354,6 +381,8 @@ export async function runNetworkProbe(
       status: companies.status,
       boardProbedAt: companies.boardProbedAt,
       failedNights: companies.boardProbeFailedNights,
+      stops: companies.boardProbeStops,
+      parkedUntil: companies.boardProbeParkedUntil,
       atsKind: companies.atsKind,
     })
     .from(companies)
@@ -366,10 +395,21 @@ export async function runNetworkProbe(
   if (company.boardProbedAt !== null) return { status: 'skipped', reason: 'probed' };
   if (!isNetworkBoardKind(company.atsKind)) return { status: 'skipped', reason: 'other_board' };
   const guard = slowDownGuard(db, sctx);
+  const thisCompany = and(eq(companies.userId, ctx.userId), eq(companies.id, companyId));
+  // An answered probe ends any park (#518): the vendor answers this company's requests again.
+  const unpark = async () => {
+    if (company.stops === 0 && company.parkedUntil === null) return;
+    await db
+      .update(companies)
+      .set({ boardProbeStops: 0, boardProbeParkedUntil: null })
+      .where(thisCompany)
+      .run();
+  };
   try {
     const outcome = await probeCompanyBoard(db, ctx, companyId, guard.sctx, {
       boardApisOnly: true,
     });
+    await unpark();
     return { status: 'probed', board: outcome.status === 'probed' && outcome.kind !== null };
   } catch (err) {
     // A vendor stopped tonight was not asked, and its board may be the one: nothing is recorded,
@@ -384,7 +424,17 @@ export async function runNetworkProbe(
     // Told to slow down, or no answer at all (slowDownGuard): the night stops, and nothing is
     // recorded for this company, not a failed night and not "no board" (sec's criterion 12, and
     // tl's ruling on #462). It is picked again on a later night.
+    // This company's own request stopped the vendor for every user tonight, so it is parked out
+    // of the pick for a while (#518, tl's design). Only here: a probe that skipped an already
+    // stopped vendor (above) neither parks nor unparks it. Its board stays as it was, and so do its
+    // failed nights.
     if (guard.slowedDown()) {
+      const stops = Number(company.stops) + 1;
+      await db
+        .update(companies)
+        .set({ boardProbeStops: stops, boardProbeParkedUntil: parkedUntil(Date.now(), stops) })
+        .where(thisCompany)
+        .run();
       await stopTheNight(db, ctx);
       return { status: 'failed', reason: 'slow_down', givenUp: false };
     }
@@ -394,8 +444,9 @@ export async function runNetworkProbe(
     await db
       .update(companies)
       .set({ boardProbeFailedNights: failedNights })
-      .where(and(eq(companies.userId, ctx.userId), eq(companies.id, companyId)))
+      .where(thisCompany)
       .run();
+    await unpark();
     const givenUp = failedNights >= NETWORK_PROBE_FAILED_NIGHTS;
     if (givenUp) {
       // "No board" only when none is on record. Detection can have found the board this night or

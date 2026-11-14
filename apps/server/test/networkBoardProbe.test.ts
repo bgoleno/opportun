@@ -7,7 +7,7 @@ import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetSources, type SourceContext } from '../src/adapters/discoverySource';
-import { companies, jobs } from '../src/db/schema';
+import { companies, jobs, settings } from '../src/db/schema';
 import { slugCandidates } from '../src/jobs/atsDetect';
 import {
   NETWORK_BOARD_CHECK_SETTING,
@@ -16,6 +16,7 @@ import {
   NETWORK_PROBE_STOPPED,
   NETWORK_PROBES_PER_NIGHT,
   nightStart,
+  vendorStopKey,
   queueNightForUser,
   sweepNetworkProbes,
 } from '../src/jobs/networkBoardProbe';
@@ -493,11 +494,13 @@ describe('the nightly network probe (#296)', () => {
         result: { status: 'failed', reason: 'slow_down' },
       });
       expect(cancelled).toMatchObject({ status: 'dead', lastError: NETWORK_PROBE_STOPPED });
-      // The rest wait for the next night.
+      // The rest wait for a later night: the next one for Hooli, whose probe was cancelled, and the
+      // one after for Initech, whose own request stopped the vendor and is parked a night (#518).
       expect(await night(app, at0520(12) + 60 * 60_000, n.fetch)).toBe(0);
       const next = net(boardFor('hooli', 'Sales'));
-      expect(await night(app, at0520(13), next.fetch)).toBe(2);
+      expect(await night(app, at0520(13), next.fetch)).toBe(1);
       expect(await rowOf(app, second)).toMatchObject({ atsKind: 'ats_greenhouse' });
+      expect(await night(app, at0520(14), next.fetch)).toBe(1);
     });
 
     for (const status of [429, 503]) {
@@ -563,7 +566,9 @@ describe('the nightly network probe (#296)', () => {
         const { app, a } = await boot();
         const id = await inNetwork(a, 'Initech');
         await turnOn(app, a);
-        for (let day = 12; day < 12 + NETWORK_PROBE_FAILED_NIGHTS; day++) {
+        // Ten nights apart, longer than any park (#518, at most NETWORK_PROBE_PARK_MAX_NIGHTS), so
+        // the company that stopped the vendor is picked again on each of these nights.
+        for (let day = 12; day < 12 + 10 * NETWORK_PROBE_FAILED_NIGHTS; day += 10) {
           const n = net({ [greenhouse('initech')]: () => respond(status) });
           expect(await night(app, at0520(day), n.fetch)).toBe(1);
           expect(n.called).toEqual([greenhouse('initech')]);
@@ -574,7 +579,7 @@ describe('the nightly network probe (#296)', () => {
           });
         }
         const next = net(boardFor('initech', 'Platform Engineer'));
-        expect(await night(app, at0520(12 + NETWORK_PROBE_FAILED_NIGHTS), next.fetch)).toBe(1);
+        expect(await night(app, at0520(12 + 10 * NETWORK_PROBE_FAILED_NIGHTS), next.fetch)).toBe(1);
         expect(await rowOf(app, id)).toMatchObject({
           atsKind: 'ats_greenhouse',
           boardProbeFailedNights: 0,
@@ -597,7 +602,9 @@ describe('the nightly network probe (#296)', () => {
         const first = await inNetwork(a, 'Initech', 2);
         const second = await inNetwork(a, 'Hooli');
         await turnOn(app, a);
-        for (let day = 12; day < 12 + NETWORK_PROBE_FAILED_NIGHTS; day++) {
+        // Ten nights apart, longer than any park (#518, at most NETWORK_PROBE_PARK_MAX_NIGHTS), so
+        // the company that stopped the vendor is picked again on each of these nights.
+        for (let day = 12; day < 12 + 10 * NETWORK_PROBE_FAILED_NIGHTS; day += 10) {
           const n = unreachable(err);
           expect(await night(app, at0520(day), n.fetch)).toBe(2);
           // Whichever probe runs first (see the slow-down test) asks once, and nothing follows.
@@ -611,7 +618,7 @@ describe('the nightly network probe (#296)', () => {
           }
         }
         const next = net(boardFor('initech', 'Platform Engineer'));
-        expect(await night(app, at0520(12 + NETWORK_PROBE_FAILED_NIGHTS), next.fetch)).toBe(2);
+        expect(await night(app, at0520(12 + 10 * NETWORK_PROBE_FAILED_NIGHTS), next.fetch)).toBe(2);
         expect(await rowOf(app, first)).toMatchObject({ atsKind: 'ats_greenhouse' });
         expect(await rowOf(app, second)).toMatchObject({ atsKind: 'none' });
       });
@@ -646,6 +653,151 @@ describe('the nightly network probe (#296)', () => {
       expect(second.hosts()).not.toContain('api.lever.co');
       expect(second.hosts()).toContain('api.ashbyhq.com');
       expect(await rowOf(app, hooli)).toMatchObject({
+        atsKind: null,
+        boardProbedAt: null,
+        boardProbeFailedNights: 0,
+      });
+    });
+  });
+
+  // https://github.com/bgoleno/opportun/issues/518 (tl's design, issuecomment-6872432393, and sec's
+  // sign-off): the company whose own request was told to slow down, or got no answer, stopped its
+  // vendor for every user that night and was picked again the next. It is now parked out of the
+  // pick for 2^(stops-1) nights, at most 8, with nothing recorded about its board.
+  describe('the company that stopped a vendor', () => {
+    const GH_DOWN = (slug: string) => ({ [greenhouse(slug)]: () => respond(503) });
+    const park = async (app: FastifyInstance, id: string) => {
+      const row = await rowOf(app, id);
+      return { stops: Number(row.boardProbeStops), parkedUntil: row.boardProbeParkedUntil };
+    };
+
+    it("another user's company is detected by night 2, while the stopping company waits (criterion 1)", async () => {
+      const { app, a, b } = await boot();
+      const initech = await inNetwork(a, 'Initech');
+      const hooli = await inNetwork(b, 'Hooli');
+      await turnOn(app, a);
+      await turnOn(app, b);
+      const nightOf = async (day: number, routes: Record<string, () => RawResponse>) => {
+        const n = net(routes);
+        app.jobs.services.sourceFetch = n.fetch;
+        vi.setSystemTime(at0520(day));
+        const firstQueued = await queueNightForUser(app.db, ctxOf(a), at0520(day));
+        await app.jobs.drain();
+        const later = at0520(day) + 30 * 60_000;
+        vi.setSystemTime(later);
+        await queueNightForUser(app.db, ctxOf(b), later);
+        await app.jobs.drain();
+        return { firstQueued, n };
+      };
+      // A's Greenhouse request fails every night; B's company has a Greenhouse board.
+      const routes = { ...GH_DOWN('initech'), ...boardFor('hooli', 'Platform Engineer') };
+
+      const one = await nightOf(12, routes);
+      expect(one.firstQueued).toBe(1);
+      // B's probe found Greenhouse stopped: nothing recorded, and no park for it (sec).
+      expect(await rowOf(app, hooli)).toMatchObject({ atsKind: null, boardProbedAt: null });
+      expect(await park(app, hooli)).toEqual({ stops: 0, parkedUntil: null });
+      expect(await park(app, initech)).toEqual({ stops: 1, parkedUntil: nightStart(at0520(14)) });
+
+      const two = await nightOf(13, routes);
+      // Parked: not picked, so it makes no request at all tonight.
+      expect(two.firstQueued).toBe(0);
+      expect(two.n.called).not.toContain(greenhouse('initech'));
+      expect(await rowOf(app, hooli)).toMatchObject({ atsKind: 'ats_greenhouse' });
+      // Nothing about Initech's board (tl's F1 on #462).
+      expect(await rowOf(app, initech)).toMatchObject({
+        atsKind: null,
+        boardProbedAt: null,
+        boardProbeFailedNights: 0,
+      });
+    });
+
+    it('the park doubles: stops on nights 1, 3 and 6, not picked in between, and never "no board"', async () => {
+      const { app, a } = await boot();
+      const initech = await inNetwork(a, 'Initech');
+      await turnOn(app, a);
+      const picked: number[] = [];
+      for (let k = 1; k <= 10; k++) {
+        const n = net(GH_DOWN('initech'));
+        const queued = await night(app, at0520(10 + k), n.fetch);
+        if (queued > 0) picked.push(k);
+        else expect(n.called, `night ${k}`).toEqual([]);
+      }
+      // Parked 1 night after the first stop, 2 after the second, 4 after the third.
+      expect(picked).toEqual([1, 3, 6]);
+      expect(await park(app, initech)).toEqual({ stops: 3, parkedUntil: nightStart(at0520(21)) });
+      expect(await rowOf(app, initech)).toMatchObject({
+        atsKind: null,
+        boardProbedAt: null,
+        boardProbeFailedNights: 0,
+      });
+    });
+
+    it('the park is at most 8 nights', async () => {
+      const { app, a } = await boot();
+      const initech = await inNetwork(a, 'Initech');
+      await turnOn(app, a);
+      await app.db
+        .update(companies)
+        .set({ boardProbeStops: 6 })
+        .where(eq(companies.id, initech))
+        .run();
+      await night(app, at0520(12), net(GH_DOWN('initech')).fetch);
+      // A 7th stop would be 2^6 nights: it is 8.
+      expect(await park(app, initech)).toEqual({ stops: 7, parkedUntil: nightStart(at0520(21)) });
+    });
+
+    it('an answered probe resets the park', async () => {
+      const { app, a } = await boot();
+      const initech = await inNetwork(a, 'Initech');
+      await turnOn(app, a);
+      await night(app, at0520(12), net(GH_DOWN('initech')).fetch);
+      expect((await park(app, initech)).stops).toBe(1);
+      // Night 3 of the run: picked again, and Greenhouse answers with a body that cannot be used,
+      // a failed night, so the company is still picked on later nights.
+      expect(await night(app, at0520(14), net({ [greenhouse('initech')]: tooLarge }).fetch)).toBe(
+        1,
+      );
+      expect(await park(app, initech)).toEqual({ stops: 0, parkedUntil: null });
+      expect(await rowOf(app, initech)).toMatchObject({ boardProbeFailedNights: 1 });
+      expect(await night(app, at0520(15), net().fetch)).toBe(1);
+    });
+
+    it('a probe that skips a stopped vendor neither parks nor resets the company (sec)', async () => {
+      const { app, a } = await boot();
+      const initech = await inNetwork(a, 'Initech');
+      await turnOn(app, a);
+      // Night 1: Initech stops Greenhouse, and is parked for night 2.
+      await night(app, at0520(12), net(GH_DOWN('initech')).fetch);
+      const parkedFirst = await park(app, initech);
+      expect(parkedFirst).toEqual({ stops: 1, parkedUntil: nightStart(at0520(14)) });
+      // Night 3: Greenhouse is already stopped tonight, as when another user's company stopped it.
+      // The instance's stop row (night 1's, moved to tonight) is written directly, so which probe
+      // runs first cannot matter.
+      const stoppedAt = nightStart(at0520(14)) + 60_000;
+      await app.db
+        .insert(settings)
+        .values({
+          key: vendorStopKey('ats_greenhouse'),
+          userId: null,
+          value: stoppedAt,
+          updatedAt: stoppedAt,
+        })
+        .onConflictDoUpdate({
+          target: settings.key,
+          set: { value: stoppedAt, updatedAt: stoppedAt },
+        })
+        .run();
+      const n = net();
+      expect(await night(app, at0520(14), n.fetch)).toBe(1);
+      expect(n.called).not.toContain(greenhouse('initech'));
+      const [probe] = (await probeJobs(app, a)).filter(
+        (j) => j.createdAt >= nightStart(at0520(14)),
+      );
+      expect(probe).toMatchObject({ result: { status: 'skipped', reason: 'vendor_stopped' } });
+      // Neither parked again nor reset, and still nothing about its board.
+      expect(await park(app, initech)).toEqual(parkedFirst);
+      expect(await rowOf(app, initech)).toMatchObject({
         atsKind: null,
         boardProbedAt: null,
         boardProbeFailedNights: 0,

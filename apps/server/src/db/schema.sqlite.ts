@@ -396,6 +396,14 @@ export const companies = sqliteTable(
      * a place in each night's picks.
      */
     boardProbeFailedNights: integer('board_probe_failed_nights').notNull().default(0),
+    /**
+     * How many times this company's own network probe request was told to slow down or got no
+     * answer, which stops that vendor for the night (#518). Each one parks the company out of the
+     * nightly pick for 2^(stops-1) nights, at most 8, until boardProbeParkedUntil (ms). Nothing
+     * about its board is recorded (tl's ruling on #462). An answered probe resets both.
+     */
+    boardProbeStops: integer('board_probe_stops').notNull().default(0),
+    boardProbeParkedUntil: integer('board_probe_parked_until'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
