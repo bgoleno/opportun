@@ -206,6 +206,12 @@ collection is not available at all, and the page says that instead.
 created through Google, GitHub or LinkedIn sign-in start without a password; to set one, you
 first confirm with the linked provider, then choose it here.
 
+A password change does not end your [device tokens](#device-tokens) on its own: they are a
+separate credential. **Also sign out the browser extension and the Mail connector**, checked by
+default, revokes all of them as part of the change. The capture extension and the Apple Mail
+connector then stop working until you pair them again with a new token. Leave it checked if you
+are changing your password because you think someone else has it; clear it to keep them working.
+
 ### Two-factor sign-in
 
 1. Press **Enable two-factor** and confirm your current password.
