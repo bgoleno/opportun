@@ -171,6 +171,7 @@ for (const [net, prefix] of [
   ['::', 96], // unspecified, loopback, and the deprecated IPv4-compatible form (::a.b.c.d)
   ['::ffff:0:0:0', 96], // IPv4-translated (embeds an IPv4 address)
   ['64:ff9b::', 96], // NAT64 (embeds an IPv4 address)
+  ['64:ff9b:1::', 48], // local-use NAT64 (RFC 8215; embeds an IPv4 address, #524)
   ['100::', 64], // discard
   ['2001::', 23], // IETF protocol assignments (Teredo included)
   ['2001:db8::', 32], // documentation
@@ -201,6 +202,15 @@ function mappedIpv4(ip: string): string | undefined {
   return [hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join('.');
 }
 
+/**
+ * IPv4-mapped addresses (::ffff:0:0/96) that mappedIpv4 did not unwrap, such as the full
+ * spelling 0:0:0:0:0:ffff:5db8:d822, fail closed (#524). A list of its own, checked only for IPv6:
+ * node's BlockList matches across families, so this range in `blocked` would block every IPv4
+ * address too.
+ */
+const unwrappedMapped = new BlockList();
+unwrappedMapped.addSubnet('::ffff:0:0', 96, 'ipv6');
+
 /** True for loopback, private, link-local and other non-public ranges, and for non-IPs. */
 export function isPrivateAddress(ip: string): boolean {
   const family = isIP(ip);
@@ -208,7 +218,7 @@ export function isPrivateAddress(ip: string): boolean {
   if (family === 6) {
     const v4 = mappedIpv4(ip);
     if (v4 !== undefined) return blocked.check(v4, 'ipv4');
-    return blocked.check(ip, 'ipv6');
+    return unwrappedMapped.check(ip, 'ipv6') || blocked.check(ip, 'ipv6');
   }
   // Not an address at all: fail closed.
   return true;
@@ -377,14 +387,33 @@ function untilAbort<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
 
 /** Builds a safeFetch over the given IO, with its own per-host rate buckets. */
 export function createSafeFetch(deps: SafeFetchDeps) {
-  /** host -> time the next token is available. */
+  /**
+   * Normalised host -> time its next token is available (#524: keyed as the lists match, so
+   * `Example.com.` and `example.com` share one bucket, and pruned once a slot has passed, so the
+   * map holds only hosts with a wait still ahead).
+   */
   const nextFree = new Map<string, number>();
 
-  async function takeToken(host: string, signal: AbortSignal): Promise<void> {
+  function prune(now: number): void {
+    for (const [host, at] of nextFree) if (at <= now) nextFree.delete(host);
+  }
+
+  async function takeToken(rawHost: string, signal: AbortSignal): Promise<void> {
+    const host = normalizeHost(rawHost);
     const now = deps.now();
+    prune(now);
     const at = Math.max(now, nextFree.get(host) ?? now);
-    nextFree.set(host, at + BUCKET_INTERVAL_MS);
-    if (at > now) await untilAbort(deps.sleep(at - now), signal);
+    const reserved = at + BUCKET_INTERVAL_MS;
+    nextFree.set(host, reserved);
+    if (at <= now) return;
+    try {
+      await untilAbort(deps.sleep(at - now), signal);
+    } catch (err) {
+      // The wait aborted, so the slot was never used: give it back (#524), unless a later request
+      // has reserved after it, whose own slot this one cannot shorten.
+      if (nextFree.get(host) === reserved) nextFree.set(host, at);
+      throw err;
+    }
   }
 
   /** Scheme, prohibited and allowed hosts, and a public pinned address for one hop. */
@@ -442,10 +471,7 @@ export function createSafeFetch(deps: SafeFetchDeps) {
     await it.return?.();
   }
 
-  return async function safeFetchWith(
-    url: string,
-    opts: SafeFetchOptions,
-  ): Promise<SafeFetchResponse> {
+  async function safeFetchWith(url: string, opts: SafeFetchOptions): Promise<SafeFetchResponse> {
     if (opts.headers !== undefined && opts.allowPublic === true) {
       throw new Error('safeFetch: caller headers are not allowed with allowPublic');
     }
@@ -537,7 +563,10 @@ export function createSafeFetch(deps: SafeFetchDeps) {
     } finally {
       clearTimeout(timer);
     }
-  };
+  }
+
+  // bucketCount: how many hosts the rate buckets hold, for the tests of pruning (#524).
+  return Object.assign(safeFetchWith, { bucketCount: () => nextFree.size });
 }
 
 /** The process-wide safeFetch (real DNS, pinned HTTPS, shared per-host buckets). */
