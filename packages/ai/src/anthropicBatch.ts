@@ -138,10 +138,10 @@ export function createAnthropicBatchProvider(target: {
   // The same fetch and base URL as the live Anthropic client (providers.ts createLanguageModel):
   // the operator's ANTHROPIC_BASE_URL when set, with the fetch that trusts its origin.
   const doFetch = providerFetch.officialFetch ?? providerFetch.fetch;
-  const base = (providerFetch.baseUrls?.anthropic ?? OFFICIAL_BASE_URLS.anthropic).replace(
-    /\/+$/,
-    '',
-  );
+  // Its trailing slashes dropped by a loop, not a regular expression (CodeQL js/polynomial-redos on
+  // #534): the base is the operator's setting, and this stays linear whatever it holds.
+  let base = providerFetch.baseUrls?.anthropic ?? OFFICIAL_BASE_URLS.anthropic;
+  while (base.endsWith('/')) base = base.slice(0, -1);
   const batches = `${base}/messages/batches`;
   const headers = (json: boolean): Record<string, string> => ({
     'x-api-key': apiKey,

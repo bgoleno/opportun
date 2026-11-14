@@ -142,6 +142,14 @@ describe('submit (criteria 1 and 2)', () => {
     ]);
   });
 
+  it("an operator base URL's trailing slashes give one clean path", async () => {
+    const { fetch, sent } = recordingFetch(() => json(messageBatch('in_progress')));
+    await client(fetch, {
+      baseUrls: { anthropic: 'https://llm-gateway.example.com/v1///' },
+    }).submit([request(POSTING)]);
+    expect(sent.map((s) => s.url)).toEqual(['https://llm-gateway.example.com/v1/messages/batches']);
+  });
+
   it('refuses a custom id Anthropic would not take, before anything is sent', async () => {
     const { fetch, sent } = recordingFetch(() => json(messageBatch('in_progress')));
     for (const id of ['', 'has space', 'a'.repeat(65), 'slash/id']) {
