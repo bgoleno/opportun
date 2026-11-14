@@ -52,6 +52,23 @@ export const SECURITY_SENSITIVE_GLOBS = [
   'packages/extension/popup.html',
   'apps/web/src/routes/settings/-devices.tsx',
   'apps/web/src/routes/settings/-extensionSetup.tsx',
+  // the web pages where another credential is typed or shown once: a password, a 2FA code or its
+  // recovery codes, an OAuth client secret, a linked sign-in, an API or provider key (#256). The
+  // server enforces every check; these are where the browser handles the value.
+  'apps/web/src/routes/login.tsx',
+  'apps/web/src/routes/register.tsx',
+  'apps/web/src/routes/settings/security.tsx',
+  'apps/web/src/routes/settings/-setPassword.tsx',
+  'apps/web/src/routes/settings/-twoFactor.tsx',
+  'apps/web/src/routes/settings/-linkedAccounts.tsx',
+  'apps/web/src/routes/settings/-oauthProviders.tsx',
+  'apps/web/src/routes/settings/-reactiveResume.tsx',
+  'apps/web/src/components/ai/ProviderKeysCard.tsx',
+  'apps/web/src/components/google/GoogleSetup.tsx',
+  // the web app's one API client: it sends the CSRF header and sets the credentials mode
+  'apps/web/src/lib/api.ts',
+  // the AI settings client: provider keys, and the user-set baseUrl the server then fetches
+  'apps/web/src/components/ai/api.ts',
   // the audit trail and its redaction. It has no category of its own in CONTRIBUTING.md; it is
   // here because auth, reauth and token changes are among what it records.
   '**/lib/audit.ts',
@@ -84,6 +101,10 @@ export const SECURITY_SENSITIVE_GLOBS = [
   // decides what the Publish image jobs holding packages: write and contents: write publish:
   // which image tags, git tag and Release, and which refusals stop them (#478)
   '.github/scripts/publish.mjs',
+  // the merge procedure for protected main, and the script that deletes a deployment's files
+  // and data (#256)
+  'scripts/merge-when-green.sh',
+  'deploy/destroy.sh',
 ];
 
 /** The changed paths, in order, that match a security-sensitive glob. */
