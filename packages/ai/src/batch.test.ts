@@ -223,10 +223,19 @@ describe('the run record of a batch result', () => {
   });
 });
 
-describe('no provider has a batch client in this slice', () => {
+// Anthropic has a client since #509 (anthropicBatch.test.ts); every other provider still has none.
+describe('a provider without a batch client', () => {
   it.each([
-    ['anthropic', SONNET],
     ['openai', { provider: 'openai', model: 'gpt-5', maxOutputTokens: 2000 } as ModelPolicy],
+    [
+      'openai_compatible',
+      {
+        provider: 'openai_compatible',
+        model: 'local',
+        maxOutputTokens: 2000,
+        baseUrl: 'https://llm.example.com/v1',
+      } as ModelPolicy,
+    ],
   ])('%s: none, so ranking stays live', (_, policy) => {
     expect(
       batchProviderFor({

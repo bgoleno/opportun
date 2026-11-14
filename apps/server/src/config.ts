@@ -98,6 +98,14 @@ export interface Config {
    */
   submissions?: boolean;
   /**
+   * Assisted apply on the demo (https://github.com/bgoleno/opportun/issues/542). Not read from the
+   * environment: off, so the demo still has no submission routes, until the attempt is bound to
+   * the visitor whose data it holds (#545, slice 2). Until then one visitor could hand off and
+   * fill another's data on a shared account, so main never holds a demo with this on and no
+   * binding (sec on #544). The own-data rules of slice 1 (#544) are built and tested behind it.
+   */
+  demoSubmissions?: boolean;
+  /**
    * OPPORTUN_DAILY_REVIEW_CAP (assisted apply M1c, https://github.com/bgoleno/opportun/issues/116):
    * the most application reviews one user may make in a rolling 24 hours on this deployment.
    * Default 10; refused above MAX_DAILY_REVIEW_CAP (25), the instance ceiling. A user can lower
@@ -487,11 +495,13 @@ export function loadDbConfig(env: NodeJS.ProcessEnv = process.env): DbConfig {
 
 /**
  * Whether the application submission routes exist on this deployment: OPPORTUN_SUBMISSIONS is
- * not 0 (loadSubmissions), and never on the demo, which holds shared fixture accounts (design
- * Part A section 7.8).
+ * not 0 (loadSubmissions), and not on the demo, which holds shared fixture accounts (design Part A
+ * section 7.8), unless demoSubmissions is on (never, until #545: see its comment).
  */
-export function submissionsEnabled(cfg: Pick<Config, 'submissions' | 'demo'>): boolean {
-  return cfg.submissions === true && !cfg.demo;
+export function submissionsEnabled(
+  cfg: Pick<Config, 'submissions' | 'demo' | 'demoSubmissions'>,
+): boolean {
+  return cfg.submissions === true && (!cfg.demo || cfg.demoSubmissions === true);
 }
 
 /** Reads and validates configuration. Throws a ConfigError naming the offending variable. */
