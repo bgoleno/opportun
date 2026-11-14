@@ -19,7 +19,7 @@ import {
 } from '../db/schema';
 import { WORKDAY_HOST } from '../adapters/discoverySource';
 import { boardFromUrl } from '../jobs/atsDetect';
-import { extractAtsJobRefs } from '../lib/atsJobRef';
+import { atsJobRefOfUrl } from '../lib/atsJobRef';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
@@ -191,8 +191,8 @@ export type ConfirmationPageVerdict = 'ok' | 'wrong_site' | 'different_job';
  *   Indeed), which boardFromUrl never names either.
  *
  * The job (tl, from qa's PASS on https://github.com/bgoleno/opportun/pull/188): a page on the
- * right site whose address names a job of that ATS (extractAtsJobRefs) other than the attempt's
- * is another job's page: `different_job`. One that names no job counts, as does the posting
+ * right site whose address names a job of that ATS (atsJobRefOfUrl, from its own path, #521)
+ * other than the attempt's is another job's page: `different_job`. One that names no job counts, as does the posting
  * page itself (Ashby may show its confirmation at the posting's address).
  */
 export function confirmationPageVerdict(
@@ -217,8 +217,9 @@ export function confirmationPageVerdict(
         board.slug.toLowerCase() === sub.atsRef.toLowerCase()
       : url.origin === destination.origin && WORKDAY_HOST.test(url.hostname);
   if (!site) return 'wrong_site';
-  const jobs = extractAtsJobRefs(url.href).filter((r) => r.kind === sub.atsKind);
-  if (jobs.length > 0 && !jobs.some((r) => r.externalId === sub.atsExternalId)) {
+  // The job this address names, from its own path (#521): a URL in its query names nothing here.
+  const job = atsJobRefOfUrl(url.href);
+  if (job !== null && job.kind === sub.atsKind && job.externalId !== sub.atsExternalId) {
     return 'different_job';
   }
   return 'ok';

@@ -162,6 +162,22 @@ export async function revokeDeviceToken(
 }
 
 /**
+ * Revokes every active device token of `userId` and returns how many: on a password change when
+ * the user asks (#523), in the same transaction as the password update, as the admin and CLI reset
+ * does (passwordReset.ts).
+ */
+export async function revokeAllDeviceTokens(db: Exec, userId: string): Promise<number> {
+  const now = Date.now();
+  const rows = await db
+    .update(deviceTokens)
+    .set({ revokedAt: now, updatedAt: now })
+    .where(and(eq(deviceTokens.userId, userId), isNull(deviceTokens.revokedAt)))
+    .returning({ id: deviceTokens.id })
+    .all();
+  return rows.length;
+}
+
+/**
  * Renames the caller's own token; 404 otherwise. The name is a label for the person reading
  * the list (design D6: the setup dialog proposes "<Browser> · <display name>", and someone
  * running two of the same browser needs to tell them apart). It grants nothing, so unlike

@@ -2,6 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
+import { PasswordCard } from './-password';
 import { TwoFactorCard } from './-twoFactor';
 
 const QR = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==';
@@ -185,5 +186,61 @@ describe('TwoFactorCard', () => {
       recoveryCode: 'AAAAA-BBBBB',
       password: PW,
     });
+  });
+});
+
+// #523 (sec's audit): changing the password can also revoke the user's device tokens, checked by
+// default, with the effect stated: the browser extension and the Mail connector pair again.
+describe('PasswordCard: device tokens (#523)', () => {
+  async function change(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(await screen.findByLabelText('Current password'), PW);
+    await user.type(screen.getByLabelText('New password'), 'a brand new passphrase');
+    await user.type(screen.getByLabelText('Confirm new password'), 'a brand new passphrase');
+    await user.click(screen.getByRole('button', { name: 'Change password' }));
+  }
+
+  it('offers to sign out the extension and Mail connector, checked by default, and sends it', async () => {
+    const api = mockApi({ 'POST /auth/password': { status: 204 } });
+    const user = userEvent.setup();
+    renderWithProviders(<PasswordCard email="ada@example.com" />);
+    const box = await screen.findByRole('checkbox', {
+      name: 'Also sign out the browser extension and the Mail connector',
+    });
+    expect(box).toBeChecked();
+    expect(
+      screen.getByText(/revokes their device tokens: pair them again from Settings/),
+    ).toBeInTheDocument();
+    await change(user);
+    await waitFor(() =>
+      expect(api.calls.find((c: ApiCall) => c.path === '/auth/password')?.body).toEqual({
+        current: PW,
+        next: 'a brand new passphrase',
+        revokeDeviceTokens: true,
+      }),
+    );
+    // Worded so it is true whether or not any were paired (tl on #536).
+    expect(
+      await screen.findByText(
+        /Any browser extension or Mail connector you had paired needs pairing again/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('unchecked, it keeps them and says so', async () => {
+    const api = mockApi({ 'POST /auth/password': { status: 204 } });
+    const user = userEvent.setup();
+    renderWithProviders(<PasswordCard email="ada@example.com" />);
+    await user.click(
+      await screen.findByRole('checkbox', {
+        name: 'Also sign out the browser extension and the Mail connector',
+      }),
+    );
+    await change(user);
+    await waitFor(() =>
+      expect(api.calls.find((c: ApiCall) => c.path === '/auth/password')?.body).toMatchObject({
+        revokeDeviceTokens: false,
+      }),
+    );
+    expect(await screen.findByText('Other devices have been signed out.')).toBeInTheDocument();
   });
 });

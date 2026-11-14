@@ -58,6 +58,7 @@ export const SECURITY_SENSITIVE_GLOBS = [
   'apps/web/src/routes/login.tsx',
   'apps/web/src/routes/register.tsx',
   'apps/web/src/routes/settings/security.tsx',
+  'apps/web/src/routes/settings/-password.tsx',
   'apps/web/src/routes/settings/-setPassword.tsx',
   'apps/web/src/routes/settings/-twoFactor.tsx',
   'apps/web/src/routes/settings/-linkedAccounts.tsx',
