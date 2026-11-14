@@ -70,8 +70,10 @@ test('a filename that merely contains "adapters" outside the adapters/ directory
 });
 
 test('a same-named file in an unrelated directory is not a match (directory-scoped, not basename-scoped)', () => {
-  // apps/web has its own lib/api.ts; it must not be confused with apps/server's auth/crypto libs.
-  assert.deepEqual(matchingSecurityPaths(['apps/web/src/lib/api.ts']), []);
+  // A made-up name, so it claims nothing: the same file name as lib/passwords.ts, outside lib/.
+  // (This used apps/web/src/lib/api.ts, which sends the CSRF header and is now on the list:
+  // https://github.com/bgoleno/opportun/issues/256.)
+  assert.deepEqual(matchingSecurityPaths(['apps/server/src/routes/passwords.ts']), []);
 });
 
 test('an empty change set matches nothing', () => {
@@ -117,6 +119,24 @@ const FLAGGED_FILES = [
   '.github/workflows/identifier-guard.yml',
   '.github/workflows/publish-image.yml',
   '.github/workflows/security.yml',
+  // https://github.com/bgoleno/opportun/issues/256: the web pages where a credential is typed or
+  // shown once, the web client that sends the CSRF header, the AI settings client that carries a
+  // user-set baseUrl and the provider keys, the merge procedure, and the script that deletes a
+  // deployment's files.
+  'apps/web/src/routes/login.tsx',
+  'apps/web/src/routes/register.tsx',
+  'apps/web/src/routes/settings/security.tsx',
+  'apps/web/src/routes/settings/-setPassword.tsx',
+  'apps/web/src/routes/settings/-twoFactor.tsx',
+  'apps/web/src/routes/settings/-linkedAccounts.tsx',
+  'apps/web/src/routes/settings/-oauthProviders.tsx',
+  'apps/web/src/routes/settings/-reactiveResume.tsx',
+  'apps/web/src/components/ai/ProviderKeysCard.tsx',
+  'apps/web/src/components/google/GoogleSetup.tsx',
+  'apps/web/src/lib/api.ts',
+  'apps/web/src/components/ai/api.ts',
+  'scripts/merge-when-green.sh',
+  'deploy/destroy.sh',
 ];
 
 for (const file of FLAGGED_FILES) {
@@ -145,7 +165,12 @@ const NOT_SENSITIVE = [
   'apps/server/src/lib/sourceLabels.ts',
   'apps/server/src/lib/lookback.ts',
   'apps/web/src/routes/settings/role-targets.tsx',
-  'apps/connector/src/normalize.ts',
+  // process wiring only (sec on #255). It replaces apps/connector/src/normalize.ts, which bounds its
+  // parsing against a hostile mail body and so is not neutral (#256).
+  'apps/connector/src/index.ts',
+  'apps/web/src/routes/pipeline.tsx',
+  'apps/web/src/lib/utils.ts',
+  'apps/web/src/components/ai/UsageTable.tsx',
   'packages/extension/src/normalize.ts',
   '.github/pull_request_template.md',
   // real files with the same name as a connector or extension file above, which is why those
@@ -162,6 +187,8 @@ const NOT_SENSITIVE = [
   'apps/server/src/lib/secrets.ts',
   'apps/server/src/lib/auditHelper.ts',
   'apps/server/src/lib/aiHelper.ts',
+  'scripts/format-docs.sh',
+  'deploy/example.sh',
   // the only other config.ts and types.ts in the repository are on the list or not neutral, so
   // these guard **/config.ts and **/types.ts with names that exist nowhere
   'packages/core/src/config.ts',
