@@ -69,17 +69,22 @@ describe('the identifier guard does not publish a withheld term (#520)', () => {
   const tree = {
     'notes.txt': ['first line', `about ${TERMS[0]} and the-rest-of-this-line`, 'last'].join('\n'),
     [`${TERMS[1]}.md`]: `ref ${TERMS[1]} here\n`,
+    // The scan matches without regard to case, and a mask only as the secret spells the term, so
+    // a path holding the term in another case would be printed as it is (tl and sec on #529).
+    'Zorblaxian-Notes.md': 'nothing here\nZORBLAXIAN again\n',
     'clean.txt': 'nothing to see\n',
   };
+  /** What the step prints in place of a path that holds a term, in any case. */
+  const WITHHELD_PATH = '(a file whose name holds a withheld term)';
 
   it('a hit fails the job and names each place as file:line', () => {
     const { status, lines } = scan(tree, TERMS.join(' '));
     expect(status).toBe(1);
     const log = lines.filter((l) => !MASK.test(l)).join('\n');
     expect(log).toContain('notes.txt:2');
-    // The file whose name is the second term: its location is printed, and the runner masks the
-    // term inside it (registered first, below).
-    expect(log).toMatch(/\.md:1/);
+    // The files whose names hold a term, as written or in another case: the line, not the path.
+    expect(log).toContain(`${WITHHELD_PATH}:1`);
+    expect(log).toContain(`${WITHHELD_PATH}:2`);
   });
 
   it('every term is registered with ::add-mask:: before anything else is printed', () => {
@@ -94,10 +99,9 @@ describe('the identifier guard does not publish a withheld term (#520)', () => {
 
   it('prints no term and no matching line, outside the masking commands', () => {
     const { lines } = scan(tree, TERMS.join(' '));
+    // Not even inside a path, in any case: the runner's mask matches the secret's spelling only.
     const log = lines.filter((l) => !MASK.test(l)).join('\n');
-    // A file name that holds a term is the runner's to mask; the step itself never echoes one.
-    const printedOutsidePaths = log.replace(/\S+:\d+/g, '');
-    for (const term of TERMS) expect(printedOutsidePaths.toLowerCase()).not.toContain(term);
+    for (const term of TERMS) expect(log.toLowerCase()).not.toContain(term);
     expect(log).not.toContain('the-rest-of-this-line');
     expect(log).not.toContain('about');
   });
