@@ -112,3 +112,41 @@ describe('one address, read one way (#521, review at 23f3a37)', () => {
     ).toBe('different_job');
   });
 });
+
+// #549 (qa on #538): a stored posting URL can end in a stray `)` (pasted out of "(...)"). It is
+// dropped, as `.,;:!?` are, but only when no `(` before it is left open: a Workday path such as
+// ".../San-Jose-CA-(Remote)/..." and a balanced "(...)" at the end are part of the address.
+describe('a trailing ) (#549)', () => {
+  const STRAY = 'https://boards.greenhouse.io/examplecorp/jobs/1000002)';
+
+  it('a stray ) is dropped: the Greenhouse job is read, from postingAtsJobRef and destinationRefusal', () => {
+    expect(postingAtsJobRef(STRAY)).toEqual({
+      kind: 'ats_greenhouse',
+      org: 'examplecorp',
+      externalId: '1000002',
+      url: 'https://boards.greenhouse.io/examplecorp/jobs/1000002',
+    });
+    expect(destinationRefusal(STRAY, { ...SUB, atsExternalId: '1000002' })).toBeNull();
+  });
+
+  it('a stray ) after other trailing punctuation, or before it, is dropped too', () => {
+    expect(atsJobRefOfUrl(`${STRAY}.`)?.externalId).toBe('1000002');
+    expect(
+      atsJobRefOfUrl('https://boards.greenhouse.io/examplecorp/jobs/1000002.)')?.externalId,
+    ).toBe('1000002');
+  });
+
+  it('a Workday "(Remote)" segment is kept, and its job read', () => {
+    const workday =
+      'https://acme.wd5.myworkdayjobs.com/External/job/San-Jose-CA-(Remote)/Platform-Engineer_R12345';
+    const ref = atsJobRefOfUrl(workday);
+    expect(ref?.externalId).toBe('R12345');
+    expect(ref?.url).toBe(workday);
+  });
+
+  it('a balanced (...) at the end is kept; one ) more than ( is dropped', () => {
+    const balanced = 'https://boards.greenhouse.io/examplecorp/jobs/1000002?src=(newsletter)';
+    expect(atsJobRefOfUrl(balanced)?.url).toBe(balanced);
+    expect(atsJobRefOfUrl(`${balanced})`)?.url).toBe(balanced);
+  });
+});
