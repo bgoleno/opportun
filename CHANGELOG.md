@@ -20,12 +20,27 @@ when the milestone's work was merged.
   password reset already revoked every device token
   ([#523](https://github.com/bgoleno/opportun/issues/523); PR
   [#536](https://github.com/bgoleno/opportun/pull/536)).
+- **Hardening from the 2026-11-13 audit: two more address ranges blocked, tidier per-host rate
+  buckets, a pinned scanner action, and a Compose proxy note.** The outbound fetch guard now
+  blocks the local-use NAT64 range `64:ff9b:1::/48` and treats an IPv4-mapped IPv6 address it
+  cannot unwrap as private, so such a spelling no longer passes as public. A request whose wait
+  timed out gives its per-host slot back, and the per-host buckets are keyed on the host in
+  lower case without a trailing dot and are dropped once their slot has passed. In CI, the OSV
+  scanner action is pinned to a commit, and a test fails if any workflow action is not. The
+  [install guide](docs/install.md#3-exposing-to-the-internet) now explains that where
+  Docker's userland proxy makes the connection (Docker Desktop on macOS or Windows, rootless
+  Docker, and IPv6 clients on some setups), Caddy sees one client address, so the per-IP sign-in
+  limits are shared by everyone and the per-account limits still apply. For a server many people
+  sign in to, run Docker Engine as root on Linux and reach it over IPv4
+  ([#524](https://github.com/bgoleno/opportun/issues/524); PR
+  [#551](https://github.com/bgoleno/opportun/pull/551)).
 - **Assisted apply reads the job of a handoff address or a confirmation page from its own path
   only.** An address for a posting on a job board, and the page recorded as an application's
   confirmation, now name their job from the address's path (or its `gh_jid` where the path names
   none), never from another address that appears in its query string. An address whose path names
   another job is refused, and a confirmation page for another job is not recorded. This was always
-  the intent, and nothing the extension fills changes
+  the intent, and nothing the extension fills changes. A Workday address with parentheses in its
+  path, such as `(Remote)`, now names its job too, so assisted apply recognises it
   ([#521](https://github.com/bgoleno/opportun/issues/521); PR
   [#538](https://github.com/bgoleno/opportun/pull/538)).
 - **The Publish image workflow runs in a `release` environment, so GitHub itself can limit
