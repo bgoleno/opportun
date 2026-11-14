@@ -188,11 +188,15 @@ final**, and says this marks it final everywhere it is used. Then it offers **Ap
 **Record that you sent it**, with the reason when assisted apply cannot start. **Tailor a copy
 instead** goes back to choosing. Nothing is stored except the base resume's status and the send.
 
-**Tailor again.** Once an application or a send is recorded, the card says "Sent: ..." and offers
-**Tailor again for this opportunity**, which starts a new copy of a base resume (the one this
-opportunity's last copy came from, when there is one) and says which. If you made another copy after sending and it has gone nowhere yet,
-the card says so instead: it offers **Continue tailoring** _title_ while that copy is a Draft or In
-review, or **Record that you sent** _title_ once it is Final.
+**Tailor again.** Once an application or a send is recorded, or a copy of this opportunity is
+marked Submitted (from **Change status** on the copy's page), the card says "Sent: ..." (for a
+Submitted copy, "Sent: _title_ to _where_ on _date_.") and offers **Tailor again for this
+opportunity**, which starts a new copy of a base resume (the one this opportunity's last copy came
+from, when there is one) and says which. A Submitted copy counts as sent whether or not it is the
+newest, so after you tailor again the card stays at "Sent". If you made another copy after sending
+and it has gone nowhere yet, the card says so instead: it offers **Continue tailoring** _title_
+while that copy is a Draft or In review, or a quiet **Record that you sent** _title_ once it is
+Final, which is what you see with an older Submitted copy and a newer Final one.
 
 **After an action** (registering a base resume, **Mark as final**, recording a send), focus moves
 to the new sentence, and a status line read by screen readers says what happened and what is next,
