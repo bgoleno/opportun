@@ -29,7 +29,7 @@ import {
   resumes,
 } from '../db/schema';
 import { audit } from '../lib/audit';
-import { fixtureResumeRefused, isSeededResume } from '../lib/demoOwnData';
+import { demoResumeRefused } from '../lib/demoOwnData';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { submissionDigest } from '../lib/submissionDigest';
@@ -313,12 +313,10 @@ export async function createSubmissionDraft(
     throw ineligible('destination_not_allowed');
   }
   if (resumeId === null && !demo) throw new HttpError(422, 'resume_required', 'Choose a resume.');
+  // On the demo an attempt carries no resume: every resume there is the demo's own (#544, tl on
+  // #550). The visitor attaches their own on the employer's form.
+  if (demo && resumeId !== null) throw demoResumeRefused();
   const resume = resumeId === null ? null : await finalResume(db, ctx, resumeId);
-  // On the demo the resume is never the demo's own: one the seed made, or tailored from one
-  // (#544). Without one, the visitor attaches their own on the employer's form.
-  if (demo && resume !== null && (await isSeededResume(db, ctx, resume.id))) {
-    throw fixtureResumeRefused();
-  }
   // A new draft starts as a copy of what Opportun holds for the user (#411): the profile, then
   // the account, then the last reviewed application, each value passing today's checks. After
   // this the draft is its own. A replay returned above, so a repeated create fills nothing.
@@ -474,6 +472,7 @@ export async function updateSubmissionDraft(
       'On the demo, details stay on this application and are not saved to the profile.',
     );
   }
+  if (demo && patch.resumeId !== undefined) throw demoResumeRefused();
   const updated = await withTransaction(db, async (tx) => {
     // The attempt's lock (repos/submissionReview.ts): a review or handoff in flight checks the
     // row after this edit, or this edit waits until it is done.
@@ -483,9 +482,6 @@ export async function updateSubmissionDraft(
     applySubmissionTransition(row, 'draft');
     if (patch.fields !== undefined) refuseChangedFieldProblem(row.fields, patch.fields);
     const resume = patch.resumeId === undefined ? null : await finalResume(tx, ctx, patch.resumeId);
-    if (demo && resume !== null && (await isSeededResume(tx, ctx, resume.id))) {
-      throw fixtureResumeRefused();
-    }
     const [changed] = await tx
       .update(applicationSubmissions)
       .set({

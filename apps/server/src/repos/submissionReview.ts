@@ -298,8 +298,8 @@ export async function reviewSubmission(
     const refresh = row.status === 'reviewed' && sameDigest;
     if (row.status !== 'draft' && !refresh) throw notNow(row, 'reviewed');
     // On the demo nothing the demo itself holds is ever reviewed for sending: no seeded identity
-    // value in a field, and no seeded resume or copy of one (#544). Under the lock, like the rest.
-    if (cfg.demo) await refuseFixtureData(tx, ctx, row);
+    // value in a field, and no resume, all of which are the demo's (#544). Under the lock.
+    if (cfg.demo) refuseFixtureData(row);
     // The resume snapshot (#115): review waits while it is pending, and refuses a failed one
     // until the user chooses the resume again. Ready, or unsupported (the user attaches a file
     // themselves, and the review shows that), may go ahead. Under the lock, like every check.
@@ -470,7 +470,7 @@ export async function handoffSubmission(
     if (row.status === 'handed_off') return handedOff(row);
     if (row.status !== 'reviewed') throw notNow(row, 'handed_off');
     // On the demo, before anything else is weighed, so the refusal names the field (#544).
-    if (opts.demo === true) await refuseFixtureData(tx, ctx, row);
+    if (opts.demo === true) refuseFixtureData(row);
     const now = Date.now();
     if (row.reviewExpiresAt === null || row.reviewExpiresAt <= now) {
       throw new HttpError(409, 'review_expired', 'This review has expired. Review it again.');

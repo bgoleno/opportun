@@ -15,15 +15,16 @@ import {
 import { submissionsEnabled } from '../src/config';
 import {
   applicationSubmissions,
+  auditLog,
+  deviceTokens,
   jobs,
   opportunities,
   profiles,
   resumes,
-  settings,
 } from '../src/db/schema';
 import { SNAPSHOT_JOB_KIND } from '../src/jobs/submissionSnapshot';
 import { createDeviceToken } from '../src/lib/deviceTokens';
-import { DEMO_RESUME_IDS_KEY, fixtureField, isFixtureIdentity } from '../src/lib/demoOwnData';
+import { fixtureField, isFixtureIdentity } from '../src/lib/demoOwnData';
 import { submissionDigest } from '../src/lib/submissionDigest';
 import { createOpportunity } from '../src/repos/opportunities';
 import { insertResume } from '../src/repos/resumes';
@@ -63,15 +64,6 @@ async function finalResume(app: FastifyInstance, c: TestClient, parent: string |
   });
   await app.db.update(resumes).set({ status: 'final' }).where(eq(resumes.id, r.id)).run();
   return r.id;
-}
-
-/** Records `ids` as the demo seed's own resumes, as seedDemo does. */
-async function markSeeded(app: FastifyInstance, ids: string[]) {
-  await app.db
-    .insert(settings)
-    .values({ key: DEMO_RESUME_IDS_KEY, userId: null, value: ids, updatedAt: Date.now() })
-    .onConflictDoUpdate({ target: settings.key, set: { value: ids } })
-    .run();
 }
 
 const create = (c: TestClient, oppId: string, resumeId?: string) =>
@@ -144,6 +136,18 @@ describe('the switch stays off on the demo until #545 (sec on #544)', () => {
 });
 
 describe('a demo draft starts empty, and is the visitor’s own (#544, criterion 2)', () => {
+  it('GET /profile/application-details offers nothing on the demo (tl on #550)', async () => {
+    const { app, a } = await boot(ON_THE_DEMO);
+    const now = Date.now();
+    await app.db
+      .insert(profiles)
+      .values({ userId: a.userId, fullName: 'Someone Else', createdAt: now, updatedAt: now })
+      .run();
+    const res = await api(a, 'GET', '/profile/application-details');
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ values: [], leftOut: [] });
+  });
+
   it('nothing is prefilled, though the account has a profile', async () => {
     const { app, a } = await boot(ON_THE_DEMO);
     const now = Date.now();
@@ -232,45 +236,78 @@ describe('a demo attempt may carry no resume (tl on #544)', () => {
   });
 });
 
-describe('the resume is never the demo’s own (#544, criterion 3)', () => {
-  it('a seeded resume, or one tailored from a seeded base, is refused at draft; the visitor’s own is accepted', async () => {
+describe('no resume on a demo attempt (#544, criterion 3; tl and sec on #550)', () => {
+  // Every resume on the demo is the seed's or a copy of one, so none is allowed: telling seeded ones
+  // apart by their parents failed open once a base was deleted (parent_resume_id is ON DELETE SET
+  // NULL). There is no seeded-ids row to be missing any more: nothing here reads one.
+  async function threeResumes(app: FastifyInstance, c: TestClient) {
+    const seeded = await finalResume(app, c);
+    const tailored = await finalResume(app, c, seeded);
+    // A copy whose base was deleted: its parent is null now, and it still comes from the seed.
+    const orphanBase = await finalResume(app, c);
+    const orphan = await finalResume(app, c, orphanBase);
+    await app.db.delete(resumes).where(eq(resumes.id, orphanBase)).run();
+    const row = await app.db.select().from(resumes).where(eq(resumes.id, orphan)).get();
+    expect(row?.parentResumeId).toBeNull();
+    return { seeded, tailored, orphan };
+  }
+  const refusedResume = { code: 'resume_unavailable_on_demo', field: 'resume' };
+
+  it('each kind is refused at create and at PATCH', async () => {
     const { app, a } = await boot(ON_THE_DEMO);
-    const seeded = await finalResume(app, a);
-    const tailored = await finalResume(app, a, seeded);
-    const ownBase = await finalResume(app, a);
-    const ownTailored = await finalResume(app, a, ownBase);
-    await markSeeded(app, [seeded]);
-    for (const resumeId of [seeded, tailored]) {
+    const all = await threeResumes(app, a);
+    for (const [kind, resumeId] of Object.entries(all)) {
       const res = await create(a, await readyOpportunity(app, a), resumeId);
-      expect(res.statusCode, resumeId).toBe(422);
-      expect(res.json<{ error: unknown }>().error).toMatchObject({
-        code: 'demo_fixture_resume',
-        field: 'resume',
-      });
-    }
-    const draft = await create(a, await readyOpportunity(app, a));
-    const id = draft.json<{ id: string }>().id;
-    const patched = await api(a, 'PATCH', `/submissions/${id}`, { resumeId: tailored });
-    expect(patched.statusCode).toBe(422);
-    for (const resumeId of [ownBase, ownTailored]) {
-      expect((await create(a, await readyOpportunity(app, a), resumeId)).statusCode).toBe(201);
+      expect(res.statusCode, kind).toBe(422);
+      expect(res.json<{ error: unknown }>().error, kind).toMatchObject(refusedResume);
+      const draft = await create(a, await readyOpportunity(app, a));
+      const id = draft.json<{ id: string }>().id;
+      const patched = await api(a, 'PATCH', `/submissions/${id}`, { resumeId });
+      expect(patched.statusCode, kind).toBe(422);
+      expect(patched.json<{ error: unknown }>().error, kind).toMatchObject(refusedResume);
     }
   });
 
-  it('a seeded resume put on the attempt behind the server’s back is refused at review', async () => {
+  it('each kind put on the attempt behind the server’s back is refused at review and at handoff', async () => {
     const { app, a } = await boot(ON_THE_DEMO);
-    const seeded = await finalResume(app, a);
-    await markSeeded(app, [seeded]);
+    const all = await threeResumes(app, a);
+    const putOn = async (id: string, resumeId: string) =>
+      await app.db
+        .update(applicationSubmissions)
+        .set({ resumeId, resumeStore: 'local_file', resumeTitle: 'My Resume' })
+        .where(eq(applicationSubmissions.id, id))
+        .run();
+    for (const [kind, resumeId] of Object.entries(all)) {
+      const draft = await create(a, await readyOpportunity(app, a));
+      const id = draft.json<{ id: string }>().id;
+      await putOn(id, resumeId);
+      const reviewed = await review(a, id);
+      expect(reviewed.statusCode, kind).toBe(422);
+      expect(reviewed.json<{ error: unknown }>().error, kind).toMatchObject(refusedResume);
+
+      const other = await create(a, await readyOpportunity(app, a));
+      const otherId = other.json<{ id: string }>().id;
+      expect((await review(a, otherId)).statusCode).toBe(200);
+      await putOn(otherId, resumeId);
+      const handoff = await api(a, 'POST', `/submissions/${otherId}/handoff`, {});
+      expect(handoff.statusCode, kind).toBe(422);
+      expect(handoff.json<{ error: unknown }>().error, kind).toMatchObject(refusedResume);
+    }
+  });
+
+  it('a resume the server no longer holds, but whose copy is still on the attempt, is refused too', async () => {
+    const { app, a } = await boot(ON_THE_DEMO);
     const draft = await create(a, await readyOpportunity(app, a));
     const id = draft.json<{ id: string }>().id;
+    // The resume row went (resume_id set null), and the attempt kept its copied facts.
     await app.db
       .update(applicationSubmissions)
-      .set({ resumeId: seeded })
+      .set({ resumeId: null, resumeStore: 'local_file', resumeTitle: 'My Resume' })
       .where(eq(applicationSubmissions.id, id))
       .run();
     const res = await review(a, id);
     expect(res.statusCode).toBe(422);
-    expect(res.json<{ error: { code: string } }>().error.code).toBe('demo_fixture_resume');
+    expect(res.json<{ error: unknown }>().error).toMatchObject(refusedResume);
   });
 });
 
@@ -372,7 +409,7 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
   });
 });
 
-describe('device tokens: at most 20 active per demo account (sec)', () => {
+describe('device tokens: at most 20 active per demo account (sec; tl on #550)', () => {
   const mint = (c: TestClient) =>
     api(c, 'POST', '/device-tokens', {
       name: 'Chrome',
@@ -380,18 +417,41 @@ describe('device tokens: at most 20 active per demo account (sec)', () => {
       password: PASSWORD,
     });
 
-  it('the 21st is refused while 20 are active, and one more is allowed once one is revoked', async () => {
+  it('the 21st mint leaves exactly 20 active: the oldest is revoked, and audited as a manual revoke is', async () => {
     const { app, a } = await boot(ON_THE_DEMO);
     const made = [];
-    for (let i = 0; i < 20; i++)
+    for (let i = 0; i < 20; i++) {
       made.push(
         await createDeviceToken(app.db, ctxOf(a), { name: `t${i}`, scopes: ['apply:assist'] }),
       );
-    const refused = await mint(a);
-    expect(refused.statusCode, refused.body).toBe(422);
-    expect(refused.json<{ error: { code: string } }>().error.code).toBe('device_token_limit');
-    expect((await api(a, 'DELETE', `/device-tokens/${made[0]!.meta.id}`)).statusCode).toBe(204);
-    expect((await mint(a)).statusCode).toBe(201);
+      await new Promise((r) => setTimeout(r, 2)); // distinct createdAt, so "oldest" is defined
+    }
+    const res = await mint(a);
+    expect(res.statusCode, res.body).toBe(201);
+    const rows = await app.db
+      .select()
+      .from(deviceTokens)
+      .where(eq(deviceTokens.userId, a.userId))
+      .all();
+    const active = rows.filter((r) => r.revokedAt === null);
+    expect(active).toHaveLength(20);
+    const revoked = rows.filter((r) => r.revokedAt !== null).map((r) => r.id);
+    expect(revoked).toEqual([made[0]!.meta.id]);
+    expect(active.map((r) => r.id)).toContain(res.json<{ id: string }>().id);
+    const entries = await app.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.event, 'device_token.revoked'))
+      .all();
+    expect(entries.map((e) => e.detail)).toEqual([{ id: made[0]!.meta.id, name: 't0' }]);
+    expect(entries[0]!.userId).toBe(a.userId);
+    // The revoked one fails on its next request.
+    const old = await app.inject({
+      method: 'GET',
+      url: '/api/v1/connector/apply/current?url=https%3A%2F%2Fboards.greenhouse.io%2Fx%2Fjobs%2F1',
+      headers: { authorization: `Bearer ${made[0]!.token}` },
+    });
+    expect(old.statusCode).toBe(401);
   });
 
   it('off the demo there is no such cap', async () => {

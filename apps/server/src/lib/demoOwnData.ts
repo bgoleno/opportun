@@ -7,15 +7,8 @@
 // Server-side and on the demo only: off the demo nothing here runs. The checks run at review,
 // at handoff and when the extension asks for the attempt (/connector/apply/current), so a fixture
 // value put back behind the server's back is still never sent.
-import { and, eq, inArray } from 'drizzle-orm';
-import type { Exec } from '../db/client';
-import { resumes, settings } from '../db/schema';
 import { DEMO_IDENTITY_VALUES } from '../cli/seedDemoFixture';
-import type { UserCtx } from '../repos/base';
 import { HttpError } from './errors';
-
-/** The settings row (user null) where the demo seed records the ids of the resumes it made. */
-export const DEMO_RESUME_IDS_KEY = 'demo_resume_ids';
 
 /** Case and runs of whitespace do not make a value someone else's. */
 const normalise = (v: string): string => v.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -40,42 +33,8 @@ export function fixtureField(fields: Readonly<Record<string, string>>): string |
   return null;
 }
 
-/** The ids the demo seed recorded for its resumes, or none. */
-async function seededResumeIds(exec: Exec): Promise<ReadonlySet<string>> {
-  const row = await exec
-    .select({ value: settings.value })
-    .from(settings)
-    .where(eq(settings.key, DEMO_RESUME_IDS_KEY))
-    .get();
-  const ids = row?.value;
-  return new Set(Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : []);
-}
-
-/**
- * Whether the resume is one the seed made, or tailored (at any depth) from one: its lineage root,
- * by parentResumeId, is a seeded resume. A content hash would miss the tailored copies.
- */
-export async function isSeededResume(exec: Exec, ctx: UserCtx, resumeId: string): Promise<boolean> {
-  const seeded = await seededResumeIds(exec);
-  if (seeded.size === 0) return false;
-  const seen = new Set<string>();
-  let id: string | null = resumeId;
-  // Bounded by the user's own resumes: a cycle cannot loop, since each id is visited once.
-  while (id !== null && !seen.has(id)) {
-    if (seeded.has(id)) return true;
-    seen.add(id);
-    const row: { parent: string | null } | undefined = await exec
-      .select({ parent: resumes.parentResumeId })
-      .from(resumes)
-      .where(and(eq(resumes.userId, ctx.userId), inArray(resumes.id, [id])))
-      .get();
-    id = row?.parent ?? null;
-  }
-  return false;
-}
-
 export const DEMO_RESUME_MESSAGE =
-  'This resume came with the demo. Apply without a resume here, and attach your own on the employer’s form.';
+  'On the demo an application carries no resume: attach your own on the employer’s form.';
 export const DEMO_FIXTURE_MESSAGE =
   'This value came with the demo. Enter your own, or leave the field empty.';
 
@@ -83,22 +42,27 @@ export const DEMO_FIXTURE_MESSAGE =
 export const fixtureValueRefused = (field: string): HttpError =>
   new HttpError(422, 'demo_fixture_value', DEMO_FIXTURE_MESSAGE, { field });
 
-/** 422 for a seeded or seeded-derived resume. */
-export const fixtureResumeRefused = (): HttpError =>
-  new HttpError(422, 'demo_fixture_resume', DEMO_RESUME_MESSAGE, { field: 'resume' });
+/**
+ * 422 for any resume on a demo attempt. Every resume on the demo is the seed's, or a copy tailored
+ * from one: there is no upload path. So none is allowed, rather than telling seeded ones apart by
+ * walking parentResumeId, which fails open: that column is ON DELETE SET NULL, so deleting the
+ * seeded base orphans its copies (tl on #550). When an upload path arrives, record where a resume
+ * came from at creation, as a flag a tailored copy carries forward; never derive it from parents.
+ */
+export const demoResumeRefused = (): HttpError =>
+  new HttpError(422, 'resume_unavailable_on_demo', DEMO_RESUME_MESSAGE, { field: 'resume' });
 
 /**
  * The backstop for review, handoff and /connector/apply/current: throws while any field holds a
- * fixture identity value, or while the attempt's resume is seeded or tailored from a seeded base.
+ * fixture identity value, or while the attempt carries a resume at all (demoResumeRefused). Pure:
+ * it reads only the attempt, so nothing it depends on can be missing and let it pass.
  */
-export async function refuseFixtureData(
-  exec: Exec,
-  ctx: UserCtx,
-  attempt: { fields: Readonly<Record<string, string>>; resumeId: string | null },
-): Promise<void> {
+export function refuseFixtureData(attempt: {
+  fields: Readonly<Record<string, string>>;
+  resumeId: string | null;
+  resumeStore: string | null;
+}): void {
   const field = fixtureField(attempt.fields);
   if (field !== null) throw fixtureValueRefused(field);
-  if (attempt.resumeId !== null && (await isSeededResume(exec, ctx, attempt.resumeId))) {
-    throw fixtureResumeRefused();
-  }
+  if (attempt.resumeId !== null || attempt.resumeStore !== null) throw demoResumeRefused();
 }

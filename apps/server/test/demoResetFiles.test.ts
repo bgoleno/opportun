@@ -18,14 +18,15 @@ import {
 import {
   applicationSubmissions,
   attachments,
+  communications,
   deviceTokens,
   opportunities,
   profiles,
-  settings,
   users,
 } from '../src/db/schema';
 import { runDemoReset } from '../src/jobs/demoReset';
-import { DEMO_RESUME_IDS_KEY, isFixtureIdentity, isSeededResume } from '../src/lib/demoOwnData';
+import { removeIfUnreferenced } from '../src/jobs/attachmentSweep';
+import { isFixtureIdentity } from '../src/lib/demoOwnData';
 import { createDeviceToken } from '../src/lib/deviceTokens';
 import { createSubmissionDraft } from '../src/repos/submissions';
 import { testApp } from './helpers';
@@ -146,23 +147,33 @@ describe('the demo reset removes a visitor’s files too (#544)', () => {
     }
   });
 
-  it('records the seed’s own resumes, so each one, and a copy tailored from it, is known as seeded', async () => {
+  it('an email body stored for a visitor goes too, and a file a communication still references stays (tl on #550)', async () => {
     const { app, dataDir } = await testApp(ON_THE_DEMO, {});
     try {
       await runDemoReset(app.db, demoEnv(dataDir));
-      const row = await app.db
-        .select({ value: settings.value })
-        .from(settings)
-        .where(eq(settings.key, DEMO_RESUME_IDS_KEY))
-        .get();
-      const expected = DEMO_USERS.flatMap((_, i) => [
-        derivedId(DEMO_RESUME_BASE_ID, i),
-        ...DEMO_TAILORED_RESUMES.map((t) => derivedId(t.id, i)),
-      ]);
-      expect([...(row!.value as string[])].sort()).toEqual([...expected].sort());
-      const ctx = { userId: DEMO_USERS[2]!.id, isAdmin: false };
-      expect(await isSeededResume(app.db, ctx, derivedId(DEMO_RESUME_BASE_ID, 2))).toBe(true);
-      expect(await isSeededResume(app.db, ctx, newId())).toBe(false);
+      const visitor = DEMO_USERS[3]!;
+      const body = await app.storage.writeAttachment(Buffer.from(`an email body ${newId()}`));
+      const communication = (stored: string) => ({
+        id: newId(),
+        userId: visitor.id,
+        channel: 'gmail' as const,
+        externalId: newId(),
+        from: 'someone@example.com',
+        sentAt: Date.now(),
+        bodyRef: stored,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      await app.db.insert(communications).values(communication(body.storedPath)).run();
+
+      await runDemoReset(app.db, demoEnv(dataDir));
+      expect(await app.storage.attachmentMtime(body.storedPath)).toBeUndefined();
+
+      // The removal reads both tables: a file only a communication points at is kept.
+      const kept = await app.storage.writeAttachment(Buffer.from(`another body ${newId()}`));
+      await app.db.insert(communications).values(communication(kept.storedPath)).run();
+      expect(await removeIfUnreferenced(app.db, app.storage, kept.storedPath)).toBe(false);
+      expect(await app.storage.attachmentMtime(kept.storedPath)).toBeDefined();
     } finally {
       await app.close();
     }

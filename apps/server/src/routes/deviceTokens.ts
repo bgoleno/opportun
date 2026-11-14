@@ -77,12 +77,13 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
       });
       if (!confirmed) return reply;
       const { name, scopes } = req.body;
-      // On the demo, at most DEMO_MAX_ACTIVE_TOKENS per shared account (sec on #544).
+      // On the demo, at most DEMO_MAX_ACTIVE_TOKENS per shared account: the oldest is revoked to
+      // make room (sec on #544, tl on #550).
       const { meta, token } = await createDeviceToken(
         db,
         ctx,
         { name, scopes },
-        app.config.demo ? { maxActive: DEMO_MAX_ACTIVE_TOKENS } : {},
+        app.config.demo ? { maxActive: DEMO_MAX_ACTIVE_TOKENS, ip: req.ip } : {},
       );
       await audit(db, 'device_token.created', {
         userId: ctx.userId,

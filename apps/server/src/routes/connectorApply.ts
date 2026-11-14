@@ -177,10 +177,10 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
       });
       if (found.kind === 'none') return { attempt: null, reason: found.reason };
       const { row } = found;
-      // On the demo, the last check before anything leaves for the form: a seeded identity value
-      // or resume put back behind the server's back is never sent, and nothing is marked read
-      // (#544). The refusal names the field.
-      if (app.config.demo) await refuseFixtureData(db, ctx, row);
+      // On the demo, the last check before anything leaves for the form: a seeded identity value,
+      // or any resume, put back behind the server's back is never sent, and nothing is marked
+      // read (#544). The refusal names the field.
+      if (app.config.demo) refuseFixtureData(row);
       const firstRead = await markPrefillRead(db, ctx, row.id);
       // Each stored field through the rule the PATCH uses (core's submissionFieldProblem): a
       // value that fails it is left out, and only its key is named (#196, tl's ruling).
