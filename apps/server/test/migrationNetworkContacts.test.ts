@@ -71,6 +71,8 @@ const LATER_COLUMNS_DEFAULT_ON = new Set([
 const LATER_COLUMNS_DEFAULT_ZERO = new Set([
   // No failed nights yet for the nightly network probe (#296).
   'companies.board_probe_failed_nights',
+  // No vendor stops yet for it either (#518).
+  'companies.board_probe_stops',
 ]);
 
 function onlyEarlierColumns(
