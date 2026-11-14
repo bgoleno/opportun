@@ -525,6 +525,32 @@ describe('Collapsible columns', () => {
     expect(within(column('New')).queryByRole('button', { name: /^Expand/ })).toBeNull();
   });
 
+  // #475: the control pressed unmounts when the column re-renders, and focus fell to the page
+  // body. It goes to the column's other control instead, by keyboard and by click.
+  it('keeps keyboard focus on the column: Enter on Expand lands on Collapse, and back', async () => {
+    const { user } = await renderBoard();
+    within(column('Dismissed')).getByRole('button', { name: 'Expand Dismissed (0)' }).focus();
+    await user.keyboard('{Enter}');
+    expect(
+      within(column('Dismissed')).getByRole('button', { name: 'Collapse Dismissed' }),
+    ).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(
+      within(column('Dismissed')).getByRole('button', { name: 'Expand Dismissed (0)' }),
+    ).toHaveFocus();
+  });
+
+  it('moves focus only for the column that was toggled', async () => {
+    const { user } = await renderBoard();
+    const filter = screen.getByRole('searchbox');
+    await user.click(within(column('New')).getByRole('button', { name: 'Collapse New' }));
+    expect(within(column('New')).getByRole('button', { name: 'Expand New (2)' })).toHaveFocus();
+    // Another column re-rendering (here, the board after typing) does not take focus.
+    filter.focus();
+    await user.type(filter, 'z');
+    expect(filter).toHaveFocus();
+  });
+
   it('persists the collapsed set to localStorage and restores it on the next render', async () => {
     const { user, unmount } = await renderBoard();
     await user.click(within(column('Applied')).getByRole('button', { name: 'Collapse Applied' }));
