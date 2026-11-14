@@ -80,6 +80,22 @@ function currentResume(input: FlowInput): Resume | undefined {
   return opportunityResume(input.resumes, input.opportunityId);
 }
 
+/** This opportunity's newest tailored copy marked Submitted that is not archived (#516). */
+function newestSubmitted(input: FlowInput): Resume | undefined {
+  return input.resumes
+    .filter(
+      (r) =>
+        r.kind === 'tailored' &&
+        r.opportunityId === input.opportunityId &&
+        r.archivedAt === null &&
+        r.status === 'submitted',
+    )
+    .reduce<Resume | undefined>(
+      (newest, r) => (newest === undefined || r.createdAt > newest.createdAt ? r : newest),
+      undefined,
+    );
+}
+
 /**
  * H with this opportunity's resume as `again`, when it has gone nowhere yet: no send of it here,
  * no attempt made with it, and not Submitted (tl on #440, ruling 6).
@@ -113,8 +129,14 @@ export function resumeFlowState(input: FlowInput): ResumeFlowState {
   }
   const [send] = input.sends;
   if (send !== undefined) return withAgain({ state: 'H', step: 'done', send }, resume, input);
+  // A copy marked Submitted (from "Change status", with no send recorded) was sent too, newest or
+  // not (#516): after "Tailor again" the new copy is the newest, and the flow stays H, naming it,
+  // rather than dropping back to C as if nothing had been sent.
+  const submitted = newestSubmitted(input);
+  if (submitted !== undefined) {
+    return withAgain({ state: 'H', step: 'done', resume: submitted }, resume, input);
+  }
   if (resume !== undefined) {
-    if (resume.status === 'submitted') return { state: 'H', step: 'done', resume };
     if (resume.status === 'draft') return { state: 'C', step: 2, resume };
     if (resume.status === 'in_review') return { state: 'D', step: 3, resume };
     if (input.assistedApply === 'unavailable') {
