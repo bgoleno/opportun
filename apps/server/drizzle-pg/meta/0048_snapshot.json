@@ -1,5 +1,5 @@
 {
-  "id": "be72e4a0-7e4c-4e6f-9029-50ca48a121b1",
+  "id": "b8c6edcb-8084-499a-9604-90c49ddf4ca5",
   "prevId": "628bfdb9-c568-4417-beef-ff5a90ad382b",
   "version": "7",
   "dialect": "postgresql",
@@ -119,8 +119,12 @@
           "name": "activities_user_id_users_id_fk",
           "tableFrom": "activities",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -128,8 +132,12 @@
           "name": "activities_opportunity_id_opportunities_id_fk",
           "tableFrom": "activities",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -286,6 +294,12 @@
         },
         "handed_off_at": {
           "name": "handed_off_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "prefill_read_at": {
+          "name": "prefill_read_at",
           "type": "bigint",
           "primaryKey": false,
           "notNull": false
@@ -500,8 +514,12 @@
           "name": "application_submissions_user_id_users_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -509,8 +527,12 @@
           "name": "application_submissions_opportunity_id_opportunities_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -518,8 +540,12 @@
           "name": "application_submissions_resume_id_resumes_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "resumes",
-          "columnsFrom": ["resume_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "resume_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -527,8 +553,12 @@
           "name": "application_submissions_resume_attachment_id_attachments_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "attachments",
-          "columnsFrom": ["resume_attachment_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "resume_attachment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -536,8 +566,12 @@
           "name": "application_submissions_confirmation_comm_id_communications_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "communications",
-          "columnsFrom": ["confirmation_comm_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "confirmation_comm_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -545,8 +579,12 @@
           "name": "application_submissions_submitted_activity_id_activities_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "activities",
-          "columnsFrom": ["submitted_activity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "submitted_activity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -554,8 +592,12 @@
           "name": "application_submissions_confirmation_activity_id_activities_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "activities",
-          "columnsFrom": ["confirmation_activity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "confirmation_activity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -563,8 +605,12 @@
           "name": "application_submissions_followup_next_step_id_next_steps_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "next_steps",
-          "columnsFrom": ["followup_next_step_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "followup_next_step_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -572,8 +618,12 @@
           "name": "application_submissions_reapply_of_application_submissions_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "application_submissions",
-          "columnsFrom": ["reapply_of"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "reapply_of"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -680,8 +730,12 @@
           "name": "attachments_user_id_users_id_fk",
           "tableFrom": "attachments",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -689,8 +743,12 @@
           "name": "attachments_opportunity_id_opportunities_id_fk",
           "tableFrom": "attachments",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -779,8 +837,12 @@
           "name": "audit_log_user_id_users_id_fk",
           "tableFrom": "audit_log",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1045,8 +1107,12 @@
           "name": "communications_user_id_users_id_fk",
           "tableFrom": "communications",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1054,8 +1120,12 @@
           "name": "communications_opportunity_id_opportunities_id_fk",
           "tableFrom": "communications",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1063,8 +1133,12 @@
           "name": "communications_contact_id_network_contacts_id_fk",
           "tableFrom": "communications",
           "tableTo": "network_contacts",
-          "columnsFrom": ["contact_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "contact_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1213,19 +1287,6 @@
           "notNull": true,
           "default": 0
         },
-        "board_probe_stops": {
-          "name": "board_probe_stops",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "board_probe_parked_until": {
-          "name": "board_probe_parked_until",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "bigint",
@@ -1303,8 +1364,12 @@
           "name": "companies_user_id_users_id_fk",
           "tableFrom": "companies",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1396,8 +1461,12 @@
           "name": "device_tokens_user_id_users_id_fk",
           "tableFrom": "device_tokens",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1407,7 +1476,9 @@
         "device_tokens_token_hash_unique": {
           "name": "device_tokens_token_hash_unique",
           "nullsNotDistinct": false,
-          "columns": ["token_hash"]
+          "columns": [
+            "token_hash"
+          ]
         }
       },
       "policies": {},
@@ -1646,8 +1717,12 @@
           "name": "discovery_results_user_id_users_id_fk",
           "tableFrom": "discovery_results",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1655,8 +1730,12 @@
           "name": "discovery_results_run_id_discovery_runs_id_fk",
           "tableFrom": "discovery_results",
           "tableTo": "discovery_runs",
-          "columnsFrom": ["run_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1664,8 +1743,12 @@
           "name": "discovery_results_rank_batch_id_rank_batches_id_fk",
           "tableFrom": "discovery_results",
           "tableTo": "rank_batches",
-          "columnsFrom": ["rank_batch_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "rank_batch_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1673,8 +1756,12 @@
           "name": "discovery_results_opportunity_id_opportunities_id_fk",
           "tableFrom": "discovery_results",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1682,8 +1769,12 @@
           "name": "discovery_results_source_communication_id_communications_id_fk",
           "tableFrom": "discovery_results",
           "tableTo": "communications",
-          "columnsFrom": ["source_communication_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "source_communication_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1784,8 +1875,12 @@
           "name": "discovery_runs_user_id_users_id_fk",
           "tableFrom": "discovery_runs",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1793,8 +1888,12 @@
           "name": "discovery_runs_source_id_discovery_sources_id_fk",
           "tableFrom": "discovery_runs",
           "tableTo": "discovery_sources",
-          "columnsFrom": ["source_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "source_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1802,8 +1901,12 @@
           "name": "discovery_runs_role_target_id_role_targets_id_fk",
           "tableFrom": "discovery_runs",
           "tableTo": "role_targets",
-          "columnsFrom": ["role_target_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "role_target_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1929,8 +2032,12 @@
           "name": "discovery_sources_user_id_users_id_fk",
           "tableFrom": "discovery_sources",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1938,8 +2045,12 @@
           "name": "discovery_sources_role_target_id_role_targets_id_fk",
           "tableFrom": "discovery_sources",
           "tableTo": "role_targets",
-          "columnsFrom": ["role_target_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "role_target_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1947,8 +2058,12 @@
           "name": "discovery_sources_company_id_companies_id_fk",
           "tableFrom": "discovery_sources",
           "tableTo": "companies",
-          "columnsFrom": ["company_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -2075,8 +2190,12 @@
           "name": "dismissal_feedback_user_id_users_id_fk",
           "tableFrom": "dismissal_feedback",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2084,8 +2203,12 @@
           "name": "dismissal_feedback_opportunity_id_opportunities_id_fk",
           "tableFrom": "dismissal_feedback",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -2093,8 +2216,12 @@
           "name": "dismissal_feedback_result_id_discovery_results_id_fk",
           "tableFrom": "dismissal_feedback",
           "tableTo": "discovery_results",
-          "columnsFrom": ["result_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "result_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -2102,8 +2229,12 @@
           "name": "dismissal_feedback_communication_id_communications_id_fk",
           "tableFrom": "dismissal_feedback",
           "tableTo": "communications",
-          "columnsFrom": ["communication_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "communication_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -2202,8 +2333,12 @@
           "name": "industry_profile_user_id_users_id_fk",
           "tableFrom": "industry_profile",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2403,8 +2538,12 @@
           "name": "jobs_user_id_users_id_fk",
           "tableFrom": "jobs",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2525,8 +2664,12 @@
           "name": "mail_filter_rules_user_id_users_id_fk",
           "tableFrom": "mail_filter_rules",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2667,8 +2810,12 @@
           "name": "network_contacts_user_id_users_id_fk",
           "tableFrom": "network_contacts",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2676,8 +2823,12 @@
           "name": "network_contacts_current_company_id_companies_id_fk",
           "tableFrom": "network_contacts",
           "tableTo": "companies",
-          "columnsFrom": ["current_company_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "current_company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -2784,8 +2935,12 @@
           "name": "next_steps_user_id_users_id_fk",
           "tableFrom": "next_steps",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2793,8 +2948,12 @@
           "name": "next_steps_opportunity_id_opportunities_id_fk",
           "tableFrom": "next_steps",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2895,8 +3054,12 @@
           "name": "oauth_accounts_user_id_users_id_fk",
           "tableFrom": "oauth_accounts",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3048,8 +3211,12 @@
           "name": "obs_metric_points_user_id_users_id_fk",
           "tableFrom": "obs_metric_points",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3057,7 +3224,11 @@
       "compositePrimaryKeys": {
         "obs_metric_points_series_resolution_bucket_start_pk": {
           "name": "obs_metric_points_series_resolution_bucket_start_pk",
-          "columns": ["series", "resolution", "bucket_start"]
+          "columns": [
+            "series",
+            "resolution",
+            "bucket_start"
+          ]
         }
       },
       "uniqueConstraints": {},
@@ -3197,8 +3368,12 @@
           "name": "obs_spans_trace_id_obs_traces_trace_id_fk",
           "tableFrom": "obs_spans",
           "tableTo": "obs_traces",
-          "columnsFrom": ["trace_id"],
-          "columnsTo": ["trace_id"],
+          "columnsFrom": [
+            "trace_id"
+          ],
+          "columnsTo": [
+            "trace_id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3206,8 +3381,12 @@
           "name": "obs_spans_user_id_users_id_fk",
           "tableFrom": "obs_spans",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3215,7 +3394,10 @@
       "compositePrimaryKeys": {
         "obs_spans_trace_id_span_id_pk": {
           "name": "obs_spans_trace_id_span_id_pk",
-          "columns": ["trace_id", "span_id"]
+          "columns": [
+            "trace_id",
+            "span_id"
+          ]
         }
       },
       "uniqueConstraints": {},
@@ -3415,8 +3597,12 @@
           "name": "obs_traces_user_id_users_id_fk",
           "tableFrom": "obs_traces",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3691,8 +3877,12 @@
           "name": "opportunities_user_id_users_id_fk",
           "tableFrom": "opportunities",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3700,8 +3890,12 @@
           "name": "opportunities_company_id_companies_id_fk",
           "tableFrom": "opportunities",
           "tableTo": "companies",
-          "columnsFrom": ["company_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3709,8 +3903,12 @@
           "name": "opportunities_role_target_id_role_targets_id_fk",
           "tableFrom": "opportunities",
           "tableTo": "role_targets",
-          "columnsFrom": ["role_target_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "role_target_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -3718,8 +3916,12 @@
           "name": "opportunities_possible_duplicate_of_opportunities_id_fk",
           "tableFrom": "opportunities",
           "tableTo": "opportunities",
-          "columnsFrom": ["possible_duplicate_of"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "possible_duplicate_of"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -3853,8 +4055,12 @@
           "name": "opportunity_dedupe_candidates_user_id_users_id_fk",
           "tableFrom": "opportunity_dedupe_candidates",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3862,8 +4068,12 @@
           "name": "opportunity_dedupe_candidates_opportunity_id_a_opportunities_id_fk",
           "tableFrom": "opportunity_dedupe_candidates",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id_a"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id_a"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3871,8 +4081,12 @@
           "name": "opportunity_dedupe_candidates_opportunity_id_b_opportunities_id_fk",
           "tableFrom": "opportunity_dedupe_candidates",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id_b"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id_b"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3962,8 +4176,12 @@
           "name": "profiles_user_id_users_id_fk",
           "tableFrom": "profiles",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4124,8 +4342,12 @@
           "name": "prompts_user_id_users_id_fk",
           "tableFrom": "prompts",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4133,8 +4355,12 @@
           "name": "prompts_parent_id_prompts_id_fk",
           "tableFrom": "prompts",
           "tableTo": "prompts",
-          "columnsFrom": ["parent_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "parent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -4256,8 +4482,12 @@
           "name": "rank_batches_user_id_users_id_fk",
           "tableFrom": "rank_batches",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4325,8 +4555,12 @@
           "name": "resume_match_reports_user_id_users_id_fk",
           "tableFrom": "resume_match_reports",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4334,8 +4568,12 @@
           "name": "resume_match_reports_resume_id_resumes_id_fk",
           "tableFrom": "resume_match_reports",
           "tableTo": "resumes",
-          "columnsFrom": ["resume_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "resume_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4343,8 +4581,12 @@
           "name": "resume_match_reports_opportunity_id_opportunities_id_fk",
           "tableFrom": "resume_match_reports",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4352,7 +4594,10 @@
       "compositePrimaryKeys": {
         "resume_match_reports_resume_id_opportunity_id_pk": {
           "name": "resume_match_reports_resume_id_opportunity_id_pk",
-          "columns": ["resume_id", "opportunity_id"]
+          "columns": [
+            "resume_id",
+            "opportunity_id"
+          ]
         }
       },
       "uniqueConstraints": {},
@@ -4437,8 +4682,12 @@
           "name": "resume_rules_user_id_users_id_fk",
           "tableFrom": "resume_rules",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4566,8 +4815,12 @@
           "name": "resume_sends_user_id_users_id_fk",
           "tableFrom": "resume_sends",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4575,8 +4828,12 @@
           "name": "resume_sends_opportunity_id_opportunities_id_fk",
           "tableFrom": "resume_sends",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4584,8 +4841,12 @@
           "name": "resume_sends_resume_id_resumes_id_fk",
           "tableFrom": "resume_sends",
           "tableTo": "resumes",
-          "columnsFrom": ["resume_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "resume_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4593,8 +4854,12 @@
           "name": "resume_sends_submission_id_application_submissions_id_fk",
           "tableFrom": "resume_sends",
           "tableTo": "application_submissions",
-          "columnsFrom": ["submission_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "submission_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -4732,8 +4997,12 @@
           "name": "resumes_user_id_users_id_fk",
           "tableFrom": "resumes",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4741,8 +5010,12 @@
           "name": "resumes_opportunity_id_opportunities_id_fk",
           "tableFrom": "resumes",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -4750,8 +5023,12 @@
           "name": "resumes_parent_resume_id_resumes_id_fk",
           "tableFrom": "resumes",
           "tableTo": "resumes",
-          "columnsFrom": ["parent_resume_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "parent_resume_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -4910,8 +5187,12 @@
           "name": "role_targets_user_id_users_id_fk",
           "tableFrom": "role_targets",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4919,8 +5200,12 @@
           "name": "role_targets_discovery_prompt_id_prompts_id_fk",
           "tableFrom": "role_targets",
           "tableTo": "prompts",
-          "columnsFrom": ["discovery_prompt_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "discovery_prompt_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -5030,8 +5315,12 @@
           "name": "secrets_user_id_users_id_fk",
           "tableFrom": "secrets",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -5131,8 +5420,12 @@
           "name": "sessions_user_id_users_id_fk",
           "tableFrom": "sessions",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -5194,8 +5487,12 @@
           "name": "settings_user_id_users_id_fk",
           "tableFrom": "settings",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -5296,8 +5593,12 @@
           "name": "stage_history_user_id_users_id_fk",
           "tableFrom": "stage_history",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -5305,8 +5606,12 @@
           "name": "stage_history_opportunity_id_opportunities_id_fk",
           "tableFrom": "stage_history",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -5358,8 +5663,12 @@
           "name": "sync_state_user_id_users_id_fk",
           "tableFrom": "sync_state",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -5367,7 +5676,10 @@
       "compositePrimaryKeys": {
         "sync_state_user_id_integration_pk": {
           "name": "sync_state_user_id_integration_pk",
-          "columns": ["user_id", "integration"]
+          "columns": [
+            "user_id",
+            "integration"
+          ]
         }
       },
       "uniqueConstraints": {},
@@ -5467,8 +5779,12 @@
           "name": "tailoring_sessions_user_id_users_id_fk",
           "tableFrom": "tailoring_sessions",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -5476,8 +5792,12 @@
           "name": "tailoring_sessions_resume_id_resumes_id_fk",
           "tableFrom": "tailoring_sessions",
           "tableTo": "resumes",
-          "columnsFrom": ["resume_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "resume_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -5637,8 +5957,12 @@
           "name": "task_runs_user_id_users_id_fk",
           "tableFrom": "task_runs",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -5646,8 +5970,12 @@
           "name": "task_runs_prompt_id_prompts_id_fk",
           "tableFrom": "task_runs",
           "tableTo": "prompts",
-          "columnsFrom": ["prompt_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "prompt_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -5744,7 +6072,9 @@
         "users_email_unique": {
           "name": "users_email_unique",
           "nullsNotDistinct": false,
-          "columns": ["email"]
+          "columns": [
+            "email"
+          ]
         }
       },
       "policies": {},

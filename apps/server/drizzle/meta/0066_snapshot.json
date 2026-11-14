@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8e9144c8-31f3-4cd2-a828-e245b59588cf",
+  "id": "53b5484b-0047-41db-b8da-88f1f5bb7f90",
   "prevId": "50eeea29-785b-4833-8ba0-2f245c922953",
   "tables": {
     "activities": {
@@ -89,12 +89,17 @@
       "indexes": {
         "activities_user_id_idx": {
           "name": "activities_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "activities_opportunity_idx": {
           "name": "activities_opportunity_idx",
-          "columns": ["opportunity_id", "occurred_at"],
+          "columns": [
+            "opportunity_id",
+            "occurred_at"
+          ],
           "isUnique": false
         }
       },
@@ -103,8 +108,12 @@
           "name": "activities_user_id_users_id_fk",
           "tableFrom": "activities",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -112,8 +121,12 @@
           "name": "activities_opportunity_id_opportunities_id_fk",
           "tableFrom": "activities",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -295,6 +308,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "prefill_read_at": {
+          "name": "prefill_read_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "submitted_at": {
           "name": "submitted_at",
           "type": "integer",
@@ -404,28 +424,44 @@
       "indexes": {
         "application_submissions_user_id_idx": {
           "name": "application_submissions_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "application_submissions_opportunity_idx": {
           "name": "application_submissions_opportunity_idx",
-          "columns": ["opportunity_id", "created_at"],
+          "columns": [
+            "opportunity_id",
+            "created_at"
+          ],
           "isUnique": false
         },
         "application_submissions_user_idem_uq": {
           "name": "application_submissions_user_idem_uq",
-          "columns": ["user_id", "idempotency_key"],
+          "columns": [
+            "user_id",
+            "idempotency_key"
+          ],
           "isUnique": true
         },
         "application_submissions_live_uq": {
           "name": "application_submissions_live_uq",
-          "columns": ["user_id", "opportunity_id"],
+          "columns": [
+            "user_id",
+            "opportunity_id"
+          ],
           "isUnique": true,
           "where": "\"application_submissions\".\"status\" IN ('draft', 'reviewed', 'handed_off')"
         },
         "application_submissions_requisition_idx": {
           "name": "application_submissions_requisition_idx",
-          "columns": ["user_id", "ats_kind", "ats_ref", "ats_external_id"],
+          "columns": [
+            "user_id",
+            "ats_kind",
+            "ats_ref",
+            "ats_external_id"
+          ],
           "isUnique": false
         }
       },
@@ -434,8 +470,12 @@
           "name": "application_submissions_user_id_users_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -443,8 +483,12 @@
           "name": "application_submissions_opportunity_id_opportunities_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -452,8 +496,12 @@
           "name": "application_submissions_resume_id_resumes_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "resumes",
-          "columnsFrom": ["resume_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "resume_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -461,8 +509,12 @@
           "name": "application_submissions_resume_attachment_id_attachments_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "attachments",
-          "columnsFrom": ["resume_attachment_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "resume_attachment_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -470,8 +522,12 @@
           "name": "application_submissions_confirmation_comm_id_communications_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "communications",
-          "columnsFrom": ["confirmation_comm_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "confirmation_comm_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -479,8 +535,12 @@
           "name": "application_submissions_submitted_activity_id_activities_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "activities",
-          "columnsFrom": ["submitted_activity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "submitted_activity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -488,8 +548,12 @@
           "name": "application_submissions_confirmation_activity_id_activities_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "activities",
-          "columnsFrom": ["confirmation_activity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "confirmation_activity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -497,8 +561,12 @@
           "name": "application_submissions_followup_next_step_id_next_steps_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "next_steps",
-          "columnsFrom": ["followup_next_step_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "followup_next_step_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -506,8 +574,12 @@
           "name": "application_submissions_reapply_of_application_submissions_id_fk",
           "tableFrom": "application_submissions",
           "tableTo": "application_submissions",
-          "columnsFrom": ["reapply_of"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "reapply_of"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -586,12 +658,16 @@
       "indexes": {
         "attachments_user_id_idx": {
           "name": "attachments_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "attachments_opportunity_idx": {
           "name": "attachments_opportunity_idx",
-          "columns": ["opportunity_id"],
+          "columns": [
+            "opportunity_id"
+          ],
           "isUnique": false
         }
       },
@@ -600,8 +676,12 @@
           "name": "attachments_user_id_users_id_fk",
           "tableFrom": "attachments",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -609,8 +689,12 @@
           "name": "attachments_opportunity_id_opportunities_id_fk",
           "tableFrom": "attachments",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -668,12 +752,16 @@
       "indexes": {
         "audit_log_user_id_idx": {
           "name": "audit_log_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "audit_log_created_at_idx": {
           "name": "audit_log_created_at_idx",
-          "columns": ["created_at"],
+          "columns": [
+            "created_at"
+          ],
           "isUnique": false
         }
       },
@@ -682,8 +770,12 @@
           "name": "audit_log_user_id_users_id_fk",
           "tableFrom": "audit_log",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -890,22 +982,33 @@
       "indexes": {
         "communications_user_id_idx": {
           "name": "communications_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "communications_user_channel_external_uq": {
           "name": "communications_user_channel_external_uq",
-          "columns": ["user_id", "channel", "external_id"],
+          "columns": [
+            "user_id",
+            "channel",
+            "external_id"
+          ],
           "isUnique": true
         },
         "communications_user_thread_idx": {
           "name": "communications_user_thread_idx",
-          "columns": ["user_id", "thread_key"],
+          "columns": [
+            "user_id",
+            "thread_key"
+          ],
           "isUnique": false
         },
         "communications_opportunity_idx": {
           "name": "communications_opportunity_idx",
-          "columns": ["opportunity_id"],
+          "columns": [
+            "opportunity_id"
+          ],
           "isUnique": false
         }
       },
@@ -914,8 +1017,12 @@
           "name": "communications_user_id_users_id_fk",
           "tableFrom": "communications",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -923,8 +1030,12 @@
           "name": "communications_opportunity_id_opportunities_id_fk",
           "tableFrom": "communications",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -932,8 +1043,12 @@
           "name": "communications_contact_id_network_contacts_id_fk",
           "tableFrom": "communications",
           "tableTo": "network_contacts",
-          "columnsFrom": ["contact_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "contact_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1101,21 +1216,6 @@
           "autoincrement": false,
           "default": 0
         },
-        "board_probe_stops": {
-          "name": "board_probe_stops",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": 0
-        },
-        "board_probe_parked_until": {
-          "name": "board_probe_parked_until",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "integer",
@@ -1134,17 +1234,25 @@
       "indexes": {
         "companies_user_id_idx": {
           "name": "companies_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "companies_user_name_idx": {
           "name": "companies_user_name_idx",
-          "columns": ["user_id", "name"],
+          "columns": [
+            "user_id",
+            "name"
+          ],
           "isUnique": false
         },
         "companies_user_match_key_idx": {
           "name": "companies_user_match_key_idx",
-          "columns": ["user_id", "company_match_key"],
+          "columns": [
+            "user_id",
+            "company_match_key"
+          ],
           "isUnique": false
         }
       },
@@ -1153,8 +1261,12 @@
           "name": "companies_user_id_users_id_fk",
           "tableFrom": "companies",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1233,12 +1345,16 @@
       "indexes": {
         "device_tokens_token_hash_unique": {
           "name": "device_tokens_token_hash_unique",
-          "columns": ["token_hash"],
+          "columns": [
+            "token_hash"
+          ],
           "isUnique": true
         },
         "device_tokens_user_id_idx": {
           "name": "device_tokens_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         }
       },
@@ -1247,8 +1363,12 @@
           "name": "device_tokens_user_id_users_id_fk",
           "tableFrom": "device_tokens",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1419,27 +1539,39 @@
       "indexes": {
         "discovery_results_user_id_idx": {
           "name": "discovery_results_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "discovery_results_run_idx": {
           "name": "discovery_results_run_idx",
-          "columns": ["run_id"],
+          "columns": [
+            "run_id"
+          ],
           "isUnique": false
         },
         "discovery_results_user_dedupe_idx": {
           "name": "discovery_results_user_dedupe_idx",
-          "columns": ["user_id", "dedupe_key"],
+          "columns": [
+            "user_id",
+            "dedupe_key"
+          ],
           "isUnique": false
         },
         "discovery_results_user_deferred_idx": {
           "name": "discovery_results_user_deferred_idx",
-          "columns": ["user_id", "rank_deferred_at"],
+          "columns": [
+            "user_id",
+            "rank_deferred_at"
+          ],
           "isUnique": false
         },
         "discovery_results_rank_batch_idx": {
           "name": "discovery_results_rank_batch_idx",
-          "columns": ["rank_batch_id"],
+          "columns": [
+            "rank_batch_id"
+          ],
           "isUnique": false
         }
       },
@@ -1448,8 +1580,12 @@
           "name": "discovery_results_user_id_users_id_fk",
           "tableFrom": "discovery_results",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1457,8 +1593,12 @@
           "name": "discovery_results_run_id_discovery_runs_id_fk",
           "tableFrom": "discovery_results",
           "tableTo": "discovery_runs",
-          "columnsFrom": ["run_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1466,8 +1606,12 @@
           "name": "discovery_results_rank_batch_id_rank_batches_id_fk",
           "tableFrom": "discovery_results",
           "tableTo": "rank_batches",
-          "columnsFrom": ["rank_batch_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "rank_batch_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1475,8 +1619,12 @@
           "name": "discovery_results_opportunity_id_opportunities_id_fk",
           "tableFrom": "discovery_results",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1484,8 +1632,12 @@
           "name": "discovery_results_source_communication_id_communications_id_fk",
           "tableFrom": "discovery_results",
           "tableTo": "communications",
-          "columnsFrom": ["source_communication_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "source_communication_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1557,12 +1709,16 @@
       "indexes": {
         "discovery_runs_user_id_idx": {
           "name": "discovery_runs_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "discovery_runs_source_idx": {
           "name": "discovery_runs_source_idx",
-          "columns": ["source_id"],
+          "columns": [
+            "source_id"
+          ],
           "isUnique": false
         }
       },
@@ -1571,8 +1727,12 @@
           "name": "discovery_runs_user_id_users_id_fk",
           "tableFrom": "discovery_runs",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1580,8 +1740,12 @@
           "name": "discovery_runs_source_id_discovery_sources_id_fk",
           "tableFrom": "discovery_runs",
           "tableTo": "discovery_sources",
-          "columnsFrom": ["source_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "source_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1589,8 +1753,12 @@
           "name": "discovery_runs_role_target_id_role_targets_id_fk",
           "tableFrom": "discovery_runs",
           "tableTo": "role_targets",
-          "columnsFrom": ["role_target_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "role_target_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1708,7 +1876,9 @@
       "indexes": {
         "discovery_sources_user_id_idx": {
           "name": "discovery_sources_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         }
       },
@@ -1717,8 +1887,12 @@
           "name": "discovery_sources_user_id_users_id_fk",
           "tableFrom": "discovery_sources",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1726,8 +1900,12 @@
           "name": "discovery_sources_role_target_id_role_targets_id_fk",
           "tableFrom": "discovery_sources",
           "tableTo": "role_targets",
-          "columnsFrom": ["role_target_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "role_target_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1735,8 +1913,12 @@
           "name": "discovery_sources_company_id_companies_id_fk",
           "tableFrom": "discovery_sources",
           "tableTo": "companies",
-          "columnsFrom": ["company_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1824,12 +2006,18 @@
       "indexes": {
         "dismissal_feedback_user_id_idx": {
           "name": "dismissal_feedback_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "dismissal_feedback_user_kind_at_idx": {
           "name": "dismissal_feedback_user_kind_at_idx",
-          "columns": ["user_id", "kind", "at"],
+          "columns": [
+            "user_id",
+            "kind",
+            "at"
+          ],
           "isUnique": false
         }
       },
@@ -1838,8 +2026,12 @@
           "name": "dismissal_feedback_user_id_users_id_fk",
           "tableFrom": "dismissal_feedback",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1847,8 +2039,12 @@
           "name": "dismissal_feedback_opportunity_id_opportunities_id_fk",
           "tableFrom": "dismissal_feedback",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1856,8 +2052,12 @@
           "name": "dismissal_feedback_result_id_discovery_results_id_fk",
           "tableFrom": "dismissal_feedback",
           "tableTo": "discovery_results",
-          "columnsFrom": ["result_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "result_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -1865,8 +2065,12 @@
           "name": "dismissal_feedback_communication_id_communications_id_fk",
           "tableFrom": "dismissal_feedback",
           "tableTo": "communications",
-          "columnsFrom": ["communication_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "communication_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -1946,7 +2150,10 @@
       "indexes": {
         "industry_profile_user_code_uq": {
           "name": "industry_profile_user_code_uq",
-          "columns": ["user_id", "naics_code"],
+          "columns": [
+            "user_id",
+            "naics_code"
+          ],
           "isUnique": true
         }
       },
@@ -1955,8 +2162,12 @@
           "name": "industry_profile_user_id_users_id_fk",
           "tableFrom": "industry_profile",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2086,23 +2297,34 @@
       "indexes": {
         "jobs_status_run_at_idx": {
           "name": "jobs_status_run_at_idx",
-          "columns": ["status", "run_at"],
+          "columns": [
+            "status",
+            "run_at"
+          ],
           "isUnique": false
         },
         "jobs_kind_dedupe_idx": {
           "name": "jobs_kind_dedupe_idx",
-          "columns": ["kind", "dedupe_key"],
+          "columns": [
+            "kind",
+            "dedupe_key"
+          ],
           "isUnique": false
         },
         "jobs_unfinished_dedupe_uq": {
           "name": "jobs_unfinished_dedupe_uq",
-          "columns": ["kind", "dedupe_key"],
+          "columns": [
+            "kind",
+            "dedupe_key"
+          ],
           "isUnique": true,
           "where": "\"jobs\".\"dedupe_key\" IS NOT NULL AND \"jobs\".\"status\" IN ('pending', 'running')"
         },
         "jobs_user_id_idx": {
           "name": "jobs_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         }
       },
@@ -2111,8 +2333,12 @@
           "name": "jobs_user_id_users_id_fk",
           "tableFrom": "jobs",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2193,12 +2419,18 @@
       "indexes": {
         "mail_filter_rules_user_id_idx": {
           "name": "mail_filter_rules_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "mail_filter_rules_user_effect_pattern_uq": {
           "name": "mail_filter_rules_user_effect_pattern_uq",
-          "columns": ["user_id", "effect", "pattern"],
+          "columns": [
+            "user_id",
+            "effect",
+            "pattern"
+          ],
           "isUnique": true
         }
       },
@@ -2207,8 +2439,12 @@
           "name": "mail_filter_rules_user_id_users_id_fk",
           "tableFrom": "mail_filter_rules",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2319,12 +2555,17 @@
       "indexes": {
         "network_contacts_user_id_idx": {
           "name": "network_contacts_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "network_contacts_user_company_idx": {
           "name": "network_contacts_user_company_idx",
-          "columns": ["user_id", "current_company_id"],
+          "columns": [
+            "user_id",
+            "current_company_id"
+          ],
           "isUnique": false
         }
       },
@@ -2333,8 +2574,12 @@
           "name": "network_contacts_user_id_users_id_fk",
           "tableFrom": "network_contacts",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2342,8 +2587,12 @@
           "name": "network_contacts_current_company_id_companies_id_fk",
           "tableFrom": "network_contacts",
           "tableTo": "companies",
-          "columnsFrom": ["current_company_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "current_company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -2422,12 +2671,16 @@
       "indexes": {
         "next_steps_user_id_idx": {
           "name": "next_steps_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "next_steps_opportunity_idx": {
           "name": "next_steps_opportunity_idx",
-          "columns": ["opportunity_id"],
+          "columns": [
+            "opportunity_id"
+          ],
           "isUnique": false
         }
       },
@@ -2436,8 +2689,12 @@
           "name": "next_steps_user_id_users_id_fk",
           "tableFrom": "next_steps",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2445,8 +2702,12 @@
           "name": "next_steps_opportunity_id_opportunities_id_fk",
           "tableFrom": "next_steps",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2511,12 +2772,17 @@
       "indexes": {
         "oauth_accounts_user_id_idx": {
           "name": "oauth_accounts_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "oauth_accounts_provider_account_uq": {
           "name": "oauth_accounts_provider_account_uq",
-          "columns": ["provider", "provider_account_id"],
+          "columns": [
+            "provider",
+            "provider_account_id"
+          ],
           "isUnique": true
         }
       },
@@ -2525,8 +2791,12 @@
           "name": "oauth_accounts_user_id_users_id_fk",
           "tableFrom": "oauth_accounts",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2619,17 +2889,26 @@
       "indexes": {
         "obs_metric_points_metric_idx": {
           "name": "obs_metric_points_metric_idx",
-          "columns": ["metric", "resolution", "bucket_start"],
+          "columns": [
+            "metric",
+            "resolution",
+            "bucket_start"
+          ],
           "isUnique": false
         },
         "obs_metric_points_age_idx": {
           "name": "obs_metric_points_age_idx",
-          "columns": ["resolution", "bucket_start"],
+          "columns": [
+            "resolution",
+            "bucket_start"
+          ],
           "isUnique": false
         },
         "obs_metric_points_user_id_idx": {
           "name": "obs_metric_points_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         }
       },
@@ -2638,15 +2917,23 @@
           "name": "obs_metric_points_user_id_users_id_fk",
           "tableFrom": "obs_metric_points",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
         "obs_metric_points_series_resolution_bucket_start_pk": {
-          "columns": ["series", "resolution", "bucket_start"],
+          "columns": [
+            "series",
+            "resolution",
+            "bucket_start"
+          ],
           "name": "obs_metric_points_series_resolution_bucket_start_pk"
         }
       },
@@ -2758,12 +3045,17 @@
       "indexes": {
         "obs_spans_user_started_idx": {
           "name": "obs_spans_user_started_idx",
-          "columns": ["user_id", "started_at"],
+          "columns": [
+            "user_id",
+            "started_at"
+          ],
           "isUnique": false
         },
         "obs_spans_started_idx": {
           "name": "obs_spans_started_idx",
-          "columns": ["started_at"],
+          "columns": [
+            "started_at"
+          ],
           "isUnique": false
         }
       },
@@ -2772,8 +3064,12 @@
           "name": "obs_spans_trace_id_obs_traces_trace_id_fk",
           "tableFrom": "obs_spans",
           "tableTo": "obs_traces",
-          "columnsFrom": ["trace_id"],
-          "columnsTo": ["trace_id"],
+          "columnsFrom": [
+            "trace_id"
+          ],
+          "columnsTo": [
+            "trace_id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -2781,15 +3077,22 @@
           "name": "obs_spans_user_id_users_id_fk",
           "tableFrom": "obs_spans",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
         "obs_spans_trace_id_span_id_pk": {
-          "columns": ["trace_id", "span_id"],
+          "columns": [
+            "trace_id",
+            "span_id"
+          ],
           "name": "obs_spans_trace_id_span_id_pk"
         }
       },
@@ -2945,17 +3248,25 @@
       "indexes": {
         "obs_traces_user_started_idx": {
           "name": "obs_traces_user_started_idx",
-          "columns": ["user_id", "started_at"],
+          "columns": [
+            "user_id",
+            "started_at"
+          ],
           "isUnique": false
         },
         "obs_traces_user_conversation_idx": {
           "name": "obs_traces_user_conversation_idx",
-          "columns": ["user_id", "conversation_id"],
+          "columns": [
+            "user_id",
+            "conversation_id"
+          ],
           "isUnique": false
         },
         "obs_traces_started_idx": {
           "name": "obs_traces_started_idx",
-          "columns": ["started_at"],
+          "columns": [
+            "started_at"
+          ],
           "isUnique": false
         }
       },
@@ -2964,8 +3275,12 @@
           "name": "obs_traces_user_id_users_id_fk",
           "tableFrom": "obs_traces",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3165,28 +3480,41 @@
       "indexes": {
         "opportunities_user_id_idx": {
           "name": "opportunities_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "opportunities_company_id_idx": {
           "name": "opportunities_company_id_idx",
-          "columns": ["company_id"],
+          "columns": [
+            "company_id"
+          ],
           "isUnique": false
         },
         "opportunities_user_stage_idx": {
           "name": "opportunities_user_stage_idx",
-          "columns": ["user_id", "stage"],
+          "columns": [
+            "user_id",
+            "stage"
+          ],
           "isUnique": false
         },
         "opportunities_user_dedupe_uq": {
           "name": "opportunities_user_dedupe_uq",
-          "columns": ["user_id", "dedupe_key"],
+          "columns": [
+            "user_id",
+            "dedupe_key"
+          ],
           "isUnique": true,
           "where": "\"opportunities\".\"dedupe_key\" IS NOT NULL"
         },
         "opportunities_user_possible_dup_idx": {
           "name": "opportunities_user_possible_dup_idx",
-          "columns": ["user_id", "possible_duplicate_of"],
+          "columns": [
+            "user_id",
+            "possible_duplicate_of"
+          ],
           "isUnique": false
         }
       },
@@ -3195,8 +3523,12 @@
           "name": "opportunities_user_id_users_id_fk",
           "tableFrom": "opportunities",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3204,8 +3536,12 @@
           "name": "opportunities_company_id_companies_id_fk",
           "tableFrom": "opportunities",
           "tableTo": "companies",
-          "columnsFrom": ["company_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "company_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3213,8 +3549,12 @@
           "name": "opportunities_role_target_id_role_targets_id_fk",
           "tableFrom": "opportunities",
           "tableTo": "role_targets",
-          "columnsFrom": ["role_target_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "role_target_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -3222,8 +3562,12 @@
           "name": "opportunities_possible_duplicate_of_opportunities_id_fk",
           "tableFrom": "opportunities",
           "tableTo": "opportunities",
-          "columnsFrom": ["possible_duplicate_of"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "possible_duplicate_of"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -3302,17 +3646,25 @@
       "indexes": {
         "opportunity_dedupe_candidates_user_id_idx": {
           "name": "opportunity_dedupe_candidates_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "opportunity_dedupe_candidates_pair_uq": {
           "name": "opportunity_dedupe_candidates_pair_uq",
-          "columns": ["opportunity_id_a", "opportunity_id_b"],
+          "columns": [
+            "opportunity_id_a",
+            "opportunity_id_b"
+          ],
           "isUnique": true
         },
         "opportunity_dedupe_candidates_decision_idx": {
           "name": "opportunity_dedupe_candidates_decision_idx",
-          "columns": ["user_id", "decision"],
+          "columns": [
+            "user_id",
+            "decision"
+          ],
           "isUnique": false
         }
       },
@@ -3321,8 +3673,12 @@
           "name": "opportunity_dedupe_candidates_user_id_users_id_fk",
           "tableFrom": "opportunity_dedupe_candidates",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3330,8 +3686,12 @@
           "name": "opportunity_dedupe_candidates_opportunity_id_a_opportunities_id_fk",
           "tableFrom": "opportunity_dedupe_candidates",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id_a"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id_a"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3339,8 +3699,12 @@
           "name": "opportunity_dedupe_candidates_opportunity_id_b_opportunities_id_fk",
           "tableFrom": "opportunity_dedupe_candidates",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id_b"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id_b"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3438,8 +3802,12 @@
           "name": "profiles_user_id_users_id_fk",
           "tableFrom": "profiles",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3541,17 +3909,26 @@
       "indexes": {
         "prompts_user_id_idx": {
           "name": "prompts_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "prompts_task_version_user_uq": {
           "name": "prompts_task_version_user_uq",
-          "columns": ["task_key", "version", "user_id"],
+          "columns": [
+            "task_key",
+            "version",
+            "user_id"
+          ],
           "isUnique": true
         },
         "prompts_task_version_system_uq": {
           "name": "prompts_task_version_system_uq",
-          "columns": ["task_key", "version"],
+          "columns": [
+            "task_key",
+            "version"
+          ],
           "isUnique": true,
           "where": "\"prompts\".\"user_id\" IS NULL"
         }
@@ -3561,8 +3938,12 @@
           "name": "prompts_user_id_users_id_fk",
           "tableFrom": "prompts",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3570,8 +3951,12 @@
           "name": "prompts_parent_id_prompts_id_fk",
           "tableFrom": "prompts",
           "tableTo": "prompts",
-          "columnsFrom": ["parent_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "parent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -3678,7 +4063,10 @@
       "indexes": {
         "rank_batches_user_state_idx": {
           "name": "rank_batches_user_state_idx",
-          "columns": ["user_id", "state"],
+          "columns": [
+            "user_id",
+            "state"
+          ],
           "isUnique": false
         }
       },
@@ -3687,8 +4075,12 @@
           "name": "rank_batches_user_id_users_id_fk",
           "tableFrom": "rank_batches",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3739,7 +4131,9 @@
       "indexes": {
         "resume_match_reports_user_id_idx": {
           "name": "resume_match_reports_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         }
       },
@@ -3748,8 +4142,12 @@
           "name": "resume_match_reports_user_id_users_id_fk",
           "tableFrom": "resume_match_reports",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3757,8 +4155,12 @@
           "name": "resume_match_reports_resume_id_resumes_id_fk",
           "tableFrom": "resume_match_reports",
           "tableTo": "resumes",
-          "columnsFrom": ["resume_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "resume_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3766,15 +4168,22 @@
           "name": "resume_match_reports_opportunity_id_opportunities_id_fk",
           "tableFrom": "resume_match_reports",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
         "resume_match_reports_resume_id_opportunity_id_pk": {
-          "columns": ["resume_id", "opportunity_id"],
+          "columns": [
+            "resume_id",
+            "opportunity_id"
+          ],
           "name": "resume_match_reports_resume_id_opportunity_id_pk"
         }
       },
@@ -3846,7 +4255,9 @@
       "indexes": {
         "resume_rules_user_id_idx": {
           "name": "resume_rules_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         }
       },
@@ -3855,8 +4266,12 @@
           "name": "resume_rules_user_id_users_id_fk",
           "tableFrom": "resume_rules",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3928,17 +4343,25 @@
       "indexes": {
         "resume_sends_user_id_idx": {
           "name": "resume_sends_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "resume_sends_opportunity_idx": {
           "name": "resume_sends_opportunity_idx",
-          "columns": ["opportunity_id", "sent_at"],
+          "columns": [
+            "opportunity_id",
+            "sent_at"
+          ],
           "isUnique": false
         },
         "resume_sends_resume_idx": {
           "name": "resume_sends_resume_idx",
-          "columns": ["resume_id", "sent_at"],
+          "columns": [
+            "resume_id",
+            "sent_at"
+          ],
           "isUnique": false
         }
       },
@@ -3947,8 +4370,12 @@
           "name": "resume_sends_user_id_users_id_fk",
           "tableFrom": "resume_sends",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3956,8 +4383,12 @@
           "name": "resume_sends_opportunity_id_opportunities_id_fk",
           "tableFrom": "resume_sends",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3965,8 +4396,12 @@
           "name": "resume_sends_resume_id_resumes_id_fk",
           "tableFrom": "resume_sends",
           "tableTo": "resumes",
-          "columnsFrom": ["resume_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "resume_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3974,8 +4409,12 @@
           "name": "resume_sends_submission_id_application_submissions_id_fk",
           "tableFrom": "resume_sends",
           "tableTo": "application_submissions",
-          "columnsFrom": ["submission_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "submission_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -4090,12 +4529,16 @@
       "indexes": {
         "resumes_user_id_idx": {
           "name": "resumes_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "resumes_opportunity_idx": {
           "name": "resumes_opportunity_idx",
-          "columns": ["opportunity_id"],
+          "columns": [
+            "opportunity_id"
+          ],
           "isUnique": false
         }
       },
@@ -4104,8 +4547,12 @@
           "name": "resumes_user_id_users_id_fk",
           "tableFrom": "resumes",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4113,8 +4560,12 @@
           "name": "resumes_opportunity_id_opportunities_id_fk",
           "tableFrom": "resumes",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         },
@@ -4122,8 +4573,12 @@
           "name": "resumes_parent_resume_id_resumes_id_fk",
           "tableFrom": "resumes",
           "tableTo": "resumes",
-          "columnsFrom": ["parent_resume_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "parent_resume_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -4279,7 +4734,9 @@
       "indexes": {
         "role_targets_user_id_idx": {
           "name": "role_targets_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         }
       },
@@ -4288,8 +4745,12 @@
           "name": "role_targets_user_id_users_id_fk",
           "tableFrom": "role_targets",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4297,8 +4758,12 @@
           "name": "role_targets_discovery_prompt_id_prompts_id_fk",
           "tableFrom": "role_targets",
           "tableTo": "prompts",
-          "columnsFrom": ["discovery_prompt_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "discovery_prompt_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -4398,7 +4863,9 @@
       "indexes": {
         "secrets_user_id_idx": {
           "name": "secrets_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         }
       },
@@ -4407,8 +4874,12 @@
           "name": "secrets_user_id_users_id_fk",
           "tableFrom": "secrets",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4496,7 +4967,9 @@
       "indexes": {
         "sessions_user_id_idx": {
           "name": "sessions_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         }
       },
@@ -4505,8 +4978,12 @@
           "name": "sessions_user_id_users_id_fk",
           "tableFrom": "sessions",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4550,7 +5027,9 @@
       "indexes": {
         "settings_user_id_idx": {
           "name": "settings_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         }
       },
@@ -4559,8 +5038,12 @@
           "name": "settings_user_id_users_id_fk",
           "tableFrom": "settings",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4625,12 +5108,17 @@
       "indexes": {
         "stage_history_user_id_idx": {
           "name": "stage_history_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "stage_history_opportunity_idx": {
           "name": "stage_history_opportunity_idx",
-          "columns": ["opportunity_id", "at"],
+          "columns": [
+            "opportunity_id",
+            "at"
+          ],
           "isUnique": false
         }
       },
@@ -4639,8 +5127,12 @@
           "name": "stage_history_user_id_users_id_fk",
           "tableFrom": "stage_history",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4648,8 +5140,12 @@
           "name": "stage_history_opportunity_id_opportunities_id_fk",
           "tableFrom": "stage_history",
           "tableTo": "opportunities",
-          "columnsFrom": ["opportunity_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "opportunity_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4703,15 +5199,22 @@
           "name": "sync_state_user_id_users_id_fk",
           "tableFrom": "sync_state",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
         "sync_state_user_id_integration_pk": {
-          "columns": ["user_id", "integration"],
+          "columns": [
+            "user_id",
+            "integration"
+          ],
           "name": "sync_state_user_id_integration_pk"
         }
       },
@@ -4783,12 +5286,16 @@
       "indexes": {
         "tailoring_sessions_user_id_idx": {
           "name": "tailoring_sessions_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "tailoring_sessions_resume_idx": {
           "name": "tailoring_sessions_resume_idx",
-          "columns": ["resume_id"],
+          "columns": [
+            "resume_id"
+          ],
           "isUnique": false
         }
       },
@@ -4797,8 +5304,12 @@
           "name": "tailoring_sessions_user_id_users_id_fk",
           "tableFrom": "tailoring_sessions",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4806,8 +5317,12 @@
           "name": "tailoring_sessions_resume_id_resumes_id_fk",
           "tableFrom": "tailoring_sessions",
           "tableTo": "resumes",
-          "columnsFrom": ["resume_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "resume_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4933,12 +5448,18 @@
       "indexes": {
         "task_runs_user_id_idx": {
           "name": "task_runs_user_id_idx",
-          "columns": ["user_id"],
+          "columns": [
+            "user_id"
+          ],
           "isUnique": false
         },
         "task_runs_user_task_created_idx": {
           "name": "task_runs_user_task_created_idx",
-          "columns": ["user_id", "task_key", "created_at"],
+          "columns": [
+            "user_id",
+            "task_key",
+            "created_at"
+          ],
           "isUnique": false
         }
       },
@@ -4947,8 +5468,12 @@
           "name": "task_runs_user_id_users_id_fk",
           "tableFrom": "task_runs",
           "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -4956,8 +5481,12 @@
           "name": "task_runs_prompt_id_prompts_id_fk",
           "tableFrom": "task_runs",
           "tableTo": "prompts",
-          "columnsFrom": ["prompt_id"],
-          "columnsTo": ["id"],
+          "columnsFrom": [
+            "prompt_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
           "onDelete": "set null",
           "onUpdate": "no action"
         }
@@ -5059,7 +5588,9 @@
       "indexes": {
         "users_email_unique": {
           "name": "users_email_unique",
-          "columns": ["email"],
+          "columns": [
+            "email"
+          ],
           "isUnique": true
         }
       },

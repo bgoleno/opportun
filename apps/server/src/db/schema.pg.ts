@@ -1034,6 +1034,12 @@ export const applicationSubmissions = pgTable(
     reviewExpiresAt: int('review_expires_at'),
     reviewedAt: int('reviewed_at'),
     handedOffAt: int('handed_off_at'),
+    /**
+     * When the extension first read this attempt to fill it (#403 slice 2): set once, by the
+     * first GET /connector/apply/current that returns it, in the statement that checks it is
+     * still null. The popup fills on open only for that first read; after it, the button.
+     */
+    prefillReadAt: int('prefill_read_at'),
     submittedAt: int('submitted_at'),
     confirmedAt: int('confirmed_at'),
     /** 'user_attested' is the only basis: only the user's word makes an attempt submitted. */
