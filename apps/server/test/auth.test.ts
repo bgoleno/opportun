@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
+import { newId } from '@opportun/core';
+import { eq } from 'drizzle-orm';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { authenticateDeviceToken, createDeviceToken } from '../src/lib/deviceTokens';
+import { deviceTokens, users } from '../src/db/schema';
 import { DUMMY_HASH } from '../src/lib/passwords';
 import { createSession, getSessionUser } from '../src/lib/sessions';
 import { testApp, type TestAppOptions } from './helpers';
@@ -608,6 +612,130 @@ describe('session lifecycle', () => {
     expect(
       (await login(a, 'ada@example.com', 'a brand new passphrase', '10.0.0.9')).statusCode,
     ).toBe(200);
+  });
+
+  // #523 (sec's audit): a password change can also revoke the user's device tokens (the browser
+  // extension and the Mail connector), as the admin and CLI reset always does. The dialog offers
+  // it, checked by default; the API does it only when asked, so other clients are unchanged.
+  async function withDeviceToken(
+    a: FastifyInstance,
+  ): Promise<{ first: string; token: string; userId: string }> {
+    const first = await registerAdmin(a);
+    const { id } = (await queryOne(a, 'SELECT id FROM users')) as { id: string };
+    const { token } = await createDeviceToken(
+      a.db,
+      { userId: id, isAdmin: true },
+      { name: 'laptop', scopes: ['mail:push'] },
+    );
+    expect((await authenticateDeviceToken(a.db, token, 'mail:push')).ok).toBe(true);
+    return { first, token, userId: id };
+  }
+
+  it('password change with revokeDeviceTokens revokes every device token of the user', async () => {
+    const a = await boot();
+    const { first, token, userId } = await withDeviceToken(a);
+    // Another user's token is not theirs to revoke (sec on #536, mutation R3).
+    const bystander = newId();
+    await a.db
+      .insert(users)
+      .values({
+        id: bystander,
+        email: 'bystander@example.com',
+        passwordHash: DUMMY_HASH,
+        displayName: 'Bystander',
+        isAdmin: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+      .run();
+    // A token of the user revoked earlier keeps the time it was revoked (qa on #536, S3).
+    const { meta: earlier } = await createDeviceToken(
+      a.db,
+      { userId, isAdmin: true },
+      { name: 'old laptop', scopes: ['mail:push'] },
+    );
+    await a.db
+      .update(deviceTokens)
+      .set({ revokedAt: 123 })
+      .where(eq(deviceTokens.id, earlier.id))
+      .run();
+    const { token: theirs } = await createDeviceToken(
+      a.db,
+      { userId: bystander, isAdmin: false },
+      { name: 'their laptop', scopes: ['mail:push'] },
+    );
+    const res = await a.inject({
+      method: 'POST',
+      url: '/api/v1/auth/password',
+      payload: { current: PASSWORD, next: 'a brand new passphrase', revokeDeviceTokens: true },
+      ...authed(first),
+    });
+    expect(res.statusCode).toBe(204);
+    expect(await authenticateDeviceToken(a.db, token, 'mail:push')).toEqual({
+      ok: false,
+      status: 401,
+    });
+    expect((await authenticateDeviceToken(a.db, theirs, 'mail:push')).ok).toBe(true);
+    const old = await a.db.select().from(deviceTokens).where(eq(deviceTokens.id, earlier.id)).get();
+    expect(old?.revokedAt).toBe(123);
+    // And over HTTP, at the route the Mail connector really calls (tl on #536).
+    const batch = await a.inject({
+      method: 'POST',
+      url: '/api/v1/connector/mail/batch',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {},
+    });
+    expect(batch.statusCode).toBe(401);
+    const event = (await queryOne(
+      a,
+      "SELECT detail FROM audit_log WHERE event = 'auth.password_changed'",
+    )) as { detail: unknown };
+    // A JSON string on SQLite, an object on Postgres.
+    const detail = typeof event.detail === 'string' ? JSON.parse(event.detail) : event.detail;
+    expect(detail).toEqual({ revokedDevices: 1 });
+  });
+
+  it('password change without revokeDeviceTokens leaves device tokens working', async () => {
+    const a = await boot();
+    const { first, token } = await withDeviceToken(a);
+    const res = await a.inject({
+      method: 'POST',
+      url: '/api/v1/auth/password',
+      payload: { current: PASSWORD, next: 'a brand new passphrase', revokeDeviceTokens: false },
+      ...authed(first),
+    });
+    expect(res.statusCode).toBe(204);
+    expect((await authenticateDeviceToken(a.db, token, 'mail:push')).ok).toBe(true);
+  });
+
+  it('password change that omits revokeDeviceTokens leaves device tokens working', async () => {
+    const a = await boot();
+    const { first, token } = await withDeviceToken(a);
+    const res = await a.inject({
+      method: 'POST',
+      url: '/api/v1/auth/password',
+      payload: { current: PASSWORD, next: 'a brand new passphrase' },
+      ...authed(first),
+    });
+    expect(res.statusCode).toBe(204);
+    expect((await authenticateDeviceToken(a.db, token, 'mail:push')).ok).toBe(true);
+  });
+
+  it('a refused password change revokes nothing, even when asked', async () => {
+    const a = await boot();
+    const { first, token } = await withDeviceToken(a);
+    const res = await a.inject({
+      method: 'POST',
+      url: '/api/v1/auth/password',
+      payload: {
+        current: 'not my password',
+        next: 'a brand new passphrase',
+        revokeDeviceTokens: true,
+      },
+      ...authed(first),
+    });
+    expect(res.statusCode).toBe(403);
+    expect((await authenticateDeviceToken(a.db, token, 'mail:push')).ok).toBe(true);
   });
 
   it('password change requires a session', async () => {

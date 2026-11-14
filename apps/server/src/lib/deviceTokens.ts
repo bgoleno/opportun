@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { newId } from '@opportun/core';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { FastifyReply, FastifyRequest, preHandlerAsyncHookHandler } from 'fastify';
-import type { Db } from '../db/client';
+import type { Db, Exec } from '../db/client';
 import { deviceTokens, type DeviceTokenScope } from '../db/schema';
 import { DEVICE_AUTH_MARK } from '../plugins/security';
 import type { UserCtx } from '../repos/base';
@@ -112,6 +112,22 @@ export async function revokeDeviceToken(
   const current = await db.select(META_COLUMNS).from(deviceTokens).where(owned).get();
   if (current === undefined) throw notFound();
   return current;
+}
+
+/**
+ * Revokes every active device token of `userId` and returns how many: on a password change when
+ * the user asks (#523), in the same transaction as the password update, as the admin and CLI reset
+ * does (passwordReset.ts).
+ */
+export async function revokeAllDeviceTokens(db: Exec, userId: string): Promise<number> {
+  const now = Date.now();
+  const rows = await db
+    .update(deviceTokens)
+    .set({ revokedAt: now, updatedAt: now })
+    .where(and(eq(deviceTokens.userId, userId), isNull(deviceTokens.revokedAt)))
+    .returning({ id: deviceTokens.id })
+    .all();
+  return rows.length;
 }
 
 /**
