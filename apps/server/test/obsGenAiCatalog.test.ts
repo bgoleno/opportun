@@ -119,6 +119,75 @@ describe('the inference span in the catalog (#344)', () => {
   });
 });
 
+// #509 (tl's ruling on #509): a batch's two spans, made by packages/ai's inBatchSpan.
+describe('the batch spans in the catalog (#509)', () => {
+  const SUBMIT_KEYS = [
+    ATTR.operationName,
+    ATTR.providerName,
+    ATTR.aiProvider,
+    ATTR.requestModel,
+    ATTR.batchRequests,
+    ATTR.batchId,
+    ATTR.errorType,
+    ATTR.userId,
+  ];
+  const COLLECT_KEYS = [
+    ATTR.operationName,
+    ATTR.providerName,
+    ATTR.aiProvider,
+    ATTR.requestModel,
+    ATTR.batchId,
+    ATTR.batchSucceeded,
+    ATTR.batchErrored,
+    ATTR.batchExpired,
+    ATTR.batchCanceled,
+    ATTR.usageInputTokens,
+    ATTR.usageOutputTokens,
+    ATTR.usageCacheReadInputTokens,
+    ATTR.usageCacheWriteInputTokens,
+    ATTR.usageCost,
+    ATTR.errorType,
+    ATTR.userId,
+  ];
+
+  it('submit and collect list every key packages/ai sets, and each key is catalogued', () => {
+    expect([...SPANS['gen_ai.batch_submit'].attributes].sort()).toEqual([...SUBMIT_KEYS].sort());
+    expect([...SPANS['gen_ai.batch_collect'].attributes].sort()).toEqual([...COLLECT_KEYS].sort());
+    for (const key of [...SUBMIT_KEYS, ...COLLECT_KEYS]) {
+      expect(ATTRIBUTE_TYPES.has(key), key).toBe(true);
+    }
+    expect(SPANS['gen_ai.batch_submit']).toMatchObject({
+      template: 'batch_submit {gen_ai.request.model}',
+      kind: 'client',
+    });
+    expect(SPANS['gen_ai.batch_collect']).toMatchObject({
+      template: 'batch_collect {gen_ai.request.model}',
+      kind: 'client',
+    });
+  });
+
+  it('keeps the batch id local, as a response id is; the counts may be exported', () => {
+    expect(isLocalOnly(ATTR.batchId as keyof typeof ATTRIBUTES)).toBe(true);
+    for (const key of [
+      ATTR.batchRequests,
+      ATTR.batchSucceeded,
+      ATTR.batchErrored,
+      ATTR.batchExpired,
+      ATTR.batchCanceled,
+    ]) {
+      expect(isLocalOnly(key as keyof typeof ATTRIBUTES), key).toBe(false);
+    }
+  });
+
+  it('the operation names are the batch values, beside chat and invoke_workflow', () => {
+    const type = ATTRIBUTE_TYPES.get(ATTR.operationName as keyof typeof ATTRIBUTES)!;
+    for (const op of ['chat', 'invoke_workflow', 'batch_submit', 'batch_collect']) {
+      expect(checkValue(type, op), op).toBe(op);
+    }
+    expect(checkValue(type, 'batch')).toBeUndefined();
+  });
+});
+
 describe('the workflow span in the catalog (#344)', () => {
   it('is invoke_workflow {name} over the six workflows of 14.5', () => {
     expect(SPANS['gen_ai.workflow']).toMatchObject({

@@ -563,6 +563,12 @@ the name; the others stay in the instance.
 | `gen_ai.agent.name`                     | one of a fixed list      | yes      |
 | `gen_ai.token.modality`                 | one of a fixed list      | yes      |
 | `opportun.ai.cost.estimated`            | true or false            | yes      |
+| `opportun.gen_ai.batch.id`              | class or code            | no       |
+| `opportun.gen_ai.batch.requests`        | whole number             | yes      |
+| `opportun.gen_ai.batch.succeeded`       | whole number             | yes      |
+| `opportun.gen_ai.batch.errored`         | whole number             | yes      |
+| `opportun.gen_ai.batch.expired`         | whole number             | yes      |
+| `opportun.gen_ai.batch.canceled`        | whole number             | yes      |
 
 <!-- catalog-keys:end -->
 
