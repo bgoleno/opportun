@@ -63,26 +63,40 @@ async function register(app: FastifyInstance, email: string): Promise<TestClient
   return client(app, res);
 }
 
+// Written directly, not through PATCH /admin/registration: that route re-asks for the admin's
+// password (issue #10) and draws on the same 10-attempt budget the re-authentication tests
+// assert about, so a harness that used it would start every test with part of that spent.
+async function setRegistrationOpen(app: FastifyInstance, open: boolean): Promise<void> {
+  const now = Date.now();
+  await app.db
+    .insert(settings)
+    .values({ key: REGISTRATION_OPEN_KEY, userId: null, value: open, updatedAt: now })
+    .onConflictDoUpdate({ target: settings.key, set: { value: open, updatedAt: now } })
+    .run();
+}
+
 /** Registers two users on a fresh app: a (the admin) and b (a regular user). */
 export async function registerTwoUsers(
   app: FastifyInstance,
 ): Promise<{ a: TestClient; b: TestClient }> {
   const a = await register(app, 'isolation-a@example.com');
-  // Written directly, not through PATCH /admin/registration: that route re-asks for the admin's
-  // password (issue #10) and draws on the same 10-attempt budget the re-authentication tests
-  // assert about, so a harness that used it would start every test with part of that spent.
-  const setOpen = async (open: boolean) => {
-    const now = Date.now();
-    await app.db
-      .insert(settings)
-      .values({ key: REGISTRATION_OPEN_KEY, userId: null, value: open, updatedAt: now })
-      .onConflictDoUpdate({ target: settings.key, set: { value: open, updatedAt: now } })
-      .run();
-  };
-  await setOpen(true);
+  await setRegistrationOpen(app, true);
   const b = await register(app, 'isolation-b@example.com');
-  await setOpen(false);
+  await setRegistrationOpen(app, false);
   return { a, b };
+}
+
+/** One more regular user, after registerTwoUsers: registration is opened for it and closed again. */
+export async function registerAnotherUser(
+  app: FastifyInstance,
+  email: string,
+): Promise<TestClient> {
+  await setRegistrationOpen(app, true);
+  try {
+    return await register(app, email);
+  } finally {
+    await setRegistrationOpen(app, false);
+  }
 }
 
 export interface IsolationCase {
