@@ -1077,3 +1077,34 @@ describe('a label shared with a self-identification question', () => {
     expect(report.notFilled).toContainEqual({ label: 'Placeholder shared', reason: 'ambiguous' });
   });
 });
+
+// #531 (tl's review of #507): a popup closed mid-fill leaves its filler running in the page. The
+// filler marks the page while it waits on its lists, and another fill is refused until it ends.
+describe('one fill at a time in the page (#531)', () => {
+  it('a second fill while one waits on its lists is refused and writes nothing; after it, a fill runs', async () => {
+    const p = page();
+    standInList(p, 'school--0', { options: () => [], arrive: 'never' });
+    const first = fillGreenhouseForm(plan({ lists: [LISTS[2]!] }), p.doc);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(p.timers.pending()).toBe(1);
+    const before = p.events.length;
+    const second = await fillGreenhouseForm(
+      plan({ standard: [{ id: 'first_name', name: 'First name', value: 'Jane' }] }),
+      p.doc,
+    );
+    expect(second).toEqual({ ok: false, reason: 'fill_running' });
+    expect(p.events.slice(before)).toEqual([]);
+    expect(valueOf(p.doc, 'first_name')).toBe('');
+    // The first ends (its timer), and the page is free again.
+    p.timers.fire();
+    expect((await first).ok).toBe(true);
+    const third = ok(
+      await fillGreenhouseForm(
+        plan({ standard: [{ id: 'first_name', name: 'First name', value: 'Jane' }] }),
+        p.doc,
+      ),
+    );
+    expect(third.filled).toContain('First Name');
+    expect(valueOf(p.doc, 'first_name')).toBe('Jane');
+  });
+});

@@ -17,6 +17,8 @@ import {
   MAX_RESUME_BYTES,
   reportLines,
   RESUME_CHECKS,
+  RESUME_FETCH_MS,
+  RESUME_GAP_MS,
   type GetLike,
   type PrefillAttempt,
 } from '../src/prefill';
@@ -33,9 +35,11 @@ import type { SettingsStorage } from '../src/settings';
 import {
   BOARD,
   JOB_ID,
+  LIST_QUESTIONS,
   MANY_QUESTIONS,
   POSTING_URL,
   loadForm,
+  standInList,
   valueOf,
 } from './fixtures/greenhousePages';
 
@@ -153,6 +157,10 @@ function setup(opts: {
   const openBound = new Promise<void>((r) => {
     endOpenBound = r;
   });
+  let endResumeBound: () => void = () => undefined;
+  const resumeBound = new Promise<void>((r) => {
+    endResumeBound = r;
+  });
   const deps: PopupDeps = {
     storage,
     fetch: vi.fn(async () => {
@@ -184,6 +192,7 @@ function setup(opts: {
     // open's bound (#403, OPEN_LOOKUP_MS) ends only when a test calls endOpenBound().
     wait: vi.fn(async (ms: number) => {
       if (ms === OPEN_LOOKUP_MS) return openBound;
+      if (ms === RESUME_FETCH_MS) return resumeBound;
       waits += 1;
       opts.duringWait?.(page, waits);
       await new Promise((r) => page.window.setTimeout(r, 1));
@@ -193,7 +202,16 @@ function setup(opts: {
     bakedServerUrl: vi.fn(async () => ''),
   };
   const $ = (id: string) => doc.getElementById(id)!;
-  return { doc, deps, get, page, plans, $, endOpenBound: () => endOpenBound() };
+  return {
+    doc,
+    deps,
+    get,
+    page,
+    plans,
+    $,
+    endOpenBound: () => endOpenBound(),
+    endResumeBound: () => endResumeBound(),
+  };
 }
 
 /**
@@ -206,6 +224,10 @@ async function settleOpen(s: ReturnType<typeof setup>) {
   s.get.mockClear();
   vi.mocked(s.deps.wait).mockClear();
 }
+
+/** How many times the popup waited between resume checks (RESUME_GAP_MS), and nothing else. */
+const gaps = (s: ReturnType<typeof setup>): number =>
+  vi.mocked(s.deps.wait).mock.calls.filter(([ms]) => ms === RESUME_GAP_MS).length;
 
 async function clickFill(s: ReturnType<typeof setup>) {
   await mountPopup(s.doc, s.deps);
@@ -396,7 +418,8 @@ describe('the resume is confirmed by the popup, not the page (tl and sec on #187
     const s = setup({});
     await clickFill(s);
     expect(s.deps.runResumeCheck).toHaveBeenCalledTimes(1);
-    expect(s.deps.wait).not.toHaveBeenCalled();
+    // The waits between resume checks only (the download's bound, #531, is another wait).
+    expect(gaps(s)).toBe(0);
     expect(s.deps.runResumeClear).not.toHaveBeenCalled();
     expect(listed(s, 'Filled in')).toContain('Resume');
     expect(resumeFiles(s)).toHaveLength(1);
@@ -417,7 +440,7 @@ describe('the resume is confirmed by the popup, not the page (tl and sec on #187
     const s = setup({ showsFileName: false });
     await clickFill(s);
     expect(s.deps.runResumeCheck).toHaveBeenCalledTimes(RESUME_CHECKS);
-    expect(s.deps.wait).toHaveBeenCalledTimes(RESUME_CHECKS - 1);
+    expect(gaps(s)).toBe(RESUME_CHECKS - 1);
     expect(s.deps.runResumeClear).toHaveBeenCalledTimes(1);
     expect(resumeFiles(s)).toHaveLength(0);
     expect(listed(s, 'Filled in')).not.toContain('Resume');
@@ -1152,7 +1175,7 @@ describe('#403: opening the popup on the handed-off posting fills it, once', () 
 
   // qa at 21274b2: the other window. Work that ends while the open's lookup is still out (Test
   // connection, here) must not free Fill either.
-  it("another button's work ending during the open's lookup leaves Fill held: one fill", async () => {
+  it("Test connection cannot be clicked during the open's lookup, so nothing frees Fill: one fill", async () => {
     let release: (r: FetchResponse) => void = () => undefined;
     const held = new Promise<FetchResponse>((r) => {
       release = r;
@@ -1160,7 +1183,8 @@ describe('#403: opening the popup on the handed-off posting fills it, once', () 
     const s = setup({ current: () => held });
     await open(s);
     await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
-    // Test connection's work, which ends at once here (the harness refuses its request).
+    // Test connection is held with every other button (#531: a click on it starts nothing).
+    expect((s.$('test') as HTMLButtonElement).disabled).toBe(true);
     s.$('test').click();
     for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
     expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(true);
@@ -1195,7 +1219,7 @@ describe('#403: opening the popup on the handed-off posting fills it, once', () 
 
   // tl at 21274b2: busy() was not exclusive, so another piece of work ending during the open's fill
   // (Record, here) re-enabled Fill mid-fill. No fill may start while any work runs.
-  it("Record ending during the open's fill leaves Fill held: one fill, never two", async () => {
+  it("Record cannot be clicked during the open's lookup, so nothing frees Fill mid-fill: one fill", async () => {
     let releaseCurrent: (r: FetchResponse) => void = () => undefined;
     const current = new Promise<FetchResponse>((r) => {
       releaseCurrent = r;
@@ -1217,7 +1241,8 @@ describe('#403: opening the popup on the handed-off posting fills it, once', () 
     });
     await mountPopup(s.doc, s.deps);
     await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
-    // 1. While the open's lookup is out, Record is clicked.
+    // 1. While the open's lookup is out, Record is clicked: it is held, so nothing starts (#531).
+    expect((s.$('record') as HTMLButtonElement).disabled).toBe(true);
     s.$('record').click();
     // 2. The open's lookup answers: its fill starts.
     releaseCurrent(first());
@@ -1281,5 +1306,56 @@ describe('#403: opening the popup on the handed-off posting fills it, once', () 
     await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
     s.$('prefill').click();
     await vi.waitFor(() => expect(s.deps.runFill).toHaveBeenCalledTimes(2));
+  });
+});
+
+// #531 (tl's review of #507): the resume download is bounded, and a fill still running in the
+// page refuses a second one.
+describe('#531: the resume download is bounded, and the page holds one fill at a time', () => {
+  it('the filling line shows before the download; past its bound the popup says so and frees every button', async () => {
+    const s = setup({});
+    const realGet = s.get.getMockImplementation()!;
+    s.get.mockImplementation(async (url, init) =>
+      url.endsWith('/snapshot') ? new Promise<FetchResponse>(() => undefined) : realGet(url, init),
+    );
+    await mountPopup(s.doc, s.deps);
+    await settleOpen(s);
+    s.$('prefill').click();
+    await vi.waitFor(() => expect(s.$('status').textContent).toBe(FILLING));
+    expect(s.deps.wait).toHaveBeenCalledWith(RESUME_FETCH_MS);
+    s.endResumeBound();
+    await vi.waitFor(() =>
+      expect(s.$('status').textContent).toMatch(/resume could not be fetched/),
+    );
+    for (const id of ['capture', 'save', 'test', 'prefill', 'record']) {
+      expect((s.$(id) as HTMLButtonElement).disabled, id).toBe(false);
+    }
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+  });
+
+  it('a fill an earlier window started, still running in the page, refuses a second: it says so', async () => {
+    const s = setup({ html: LIST_QUESTIONS });
+    // The earlier window's filler, waiting for a list that never answers (as one closed mid-fill).
+    standInList(s.page, 'school--0', { options: () => [], arrive: 'never' });
+    const earlier = fillGreenhouseForm(
+      {
+        board: BOARD,
+        jobId: JOB_ID,
+        standard: [],
+        questions: [],
+        lists: [{ id: 'school--0', name: 'School', value: 'University of Example' }],
+        resume: null,
+        withheld: [],
+      },
+      s.page.doc,
+    );
+    void earlier;
+    await mountPopup(s.doc, s.deps);
+    await settleOpen(s);
+    s.$('prefill').click();
+    await vi.waitFor(() => expect(s.$('status').textContent).toMatch(/still running/));
+    // The second filler wrote nothing.
+    expect(valueOf(s.page.doc, 'first_name')).toBe('');
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false);
   });
 });
