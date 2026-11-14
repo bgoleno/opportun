@@ -221,6 +221,16 @@ when the milestone's work was merged.
   ([#436](https://github.com/bgoleno/opportun/issues/436); PR
   [#445](https://github.com/bgoleno/opportun/pull/445)).
 
+- **The observability docs match the code.** The guide's Settings pages now cover what was
+  missing: the **Mail filters** and **Telemetry** sections in the list, the nine metrics with
+  their units, the Metrics page's range, zoom and filter limits, the AI traces page's paging and
+  summary, the collection switch (no password, audited), what **Send a test** can report and the
+  reasons a record is dropped. They also say the local store keeps only AI traces and that the
+  log's access line holds the client's address (log only, never stored or exported). The design and
+  requirements are corrected where they had drifted, and ADR-16, 17 and 18 are Accepted
+  ([#340](https://github.com/bgoleno/opportun/issues/340); PR
+  [#513](https://github.com/bgoleno/opportun/pull/513)).
+
 ### Mail, pipeline and assisted apply
 
 - **An unsubscribe request your own mail app sent is filtered.** A message from your own address
