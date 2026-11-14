@@ -6,10 +6,11 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { and, asc, eq, inArray, max } from 'drizzle-orm';
 import QRCode from 'qrcode';
 import { z } from 'zod';
-import { isUniqueViolation } from '../db/client';
+import { isUniqueViolation, withTransaction } from '../db/client';
 import { auditLog, settings, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { racePoint } from '../lib/racePoints';
+import { revokeAllDeviceTokens } from '../lib/deviceTokens';
 import { resetUserPassword } from '../lib/passwordReset';
 import {
   canRegister,
@@ -88,6 +89,12 @@ const PasswordBody = z.object({
    */
   current: z.string().min(1).max(1024).optional(),
   next: NewPassword,
+  /**
+   * Also revoke every device token of the user (the browser extension, the Mail connector), as
+   * the admin and CLI reset always does (#523, sec's audit). The dialog offers it, checked by
+   * default; omitted means no, so another client's change keeps today's behaviour.
+   */
+  revokeDeviceTokens: z.boolean().optional(),
 });
 const RegistrationBody = z.object({ open: z.boolean() });
 
@@ -680,19 +687,30 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       await racePoint('auth.passwordChange');
       // Compare-and-set on the hash `current` was proven against: a concurrent change (or an
       // admin reset after a compromise) in between makes this one stale, not the winner.
-      const changed = await db
-        .update(users)
-        .set({ passwordHash, updatedAt: Date.now() })
-        .where(and(eq(users.id, user.id), eq(users.passwordHash, user.passwordHash)))
-        .returning({ id: users.id })
-        .get();
+      // The revocation, when asked (#523), commits with the new hash or not at all: a refused
+      // change revokes nothing, and a crash cannot leave the password changed and tokens live.
+      const changed = await withTransaction(db, async (tx) => {
+        const row = await tx
+          .update(users)
+          .set({ passwordHash, updatedAt: Date.now() })
+          .where(and(eq(users.id, user.id), eq(users.passwordHash, user.passwordHash)))
+          .returning({ id: users.id })
+          .get();
+        if (row === undefined) return undefined;
+        const revoked =
+          req.body.revokeDeviceTokens === true ? await revokeAllDeviceTokens(tx, user.id) : 0;
+        return { revoked };
+      });
       if (changed === undefined) return fail(reply, 403, 'invalid_current_password');
+      const revokedDevices = changed.revoked;
       // Every existing session (other devices and this one) dies; this client gets a fresh token.
       await destroyAllSessions(db, user.id);
       await startSession(req, reply, user.id);
       await audit(db, initial ? 'auth.password_set_initial' : 'auth.password_changed', {
         userId: user.id,
         ip: req.ip,
+        // A count, under a key the audit's redaction leaves alone (it hides any key with "token").
+        ...(req.body.revokeDeviceTokens === true ? { detail: { revokedDevices } } : {}),
       });
       return reply.code(204).send(null);
     },

@@ -267,6 +267,15 @@ you put your own proxy in front of a from-source run: set it to that proxy's IP 
 it unset behind a proxy is safe but degraded: every request appears to come from the proxy, so
 the per-IP rate limits collapse to one bucket and, over HTTPS, cookies are not marked Secure.
 
+On Compose, Caddy sees each client's real address only when Docker forwards the published port
+straight to it. Where Docker's userland proxy makes the connection instead (Docker Desktop on
+macOS or Windows, rootless Docker, and IPv6 clients on some setups), every client reaches Caddy
+from the Docker network's gateway address. That address is inside the trusted subnet, so
+Opportun sees one client: the per-IP sign-in limits share one bucket for everyone, and one
+person's wrong passwords can slow down another's sign-in. The per-account limits still apply.
+For a server many people sign in to, run Docker Engine as root on Linux and reach it over IPv4,
+where the published port is forwarded directly and Caddy sees each client's own address.
+
 ## 4. Configuration reference
 
 **On Compose, there are two ways to set an application setting.** Compose reads `deploy/.env`
