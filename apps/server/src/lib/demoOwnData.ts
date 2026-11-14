@@ -10,25 +10,48 @@
 import { DEMO_IDENTITY_VALUES } from '../cli/seedDemoFixture';
 import { HttpError } from './errors';
 
-/** Case and runs of whitespace do not make a value someone else's. */
-const normalise = (v: string): string => v.trim().replace(/\s+/g, ' ').toLowerCase();
+/**
+ * Case, runs of whitespace and Unicode's compatibility forms (a full-width letter, a ligature) do
+ * not make a value someone else's (NFKC, tl on #550).
+ */
+const normalise = (v: string): string =>
+  v.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 /** A phone number is the same number however it is punctuated. */
 const digits = (v: string): string => v.replace(/\D/g, '');
 
 const IDENTITY = new Set(DEMO_IDENTITY_VALUES.map(normalise));
 const IDENTITY_DIGITS = new Set(DEMO_IDENTITY_VALUES.map(digits).filter((d) => d.length >= 7));
+/**
+ * The demo's own mail domain: every email the seed writes is at it, and no visitor's own address
+ * is, so any address there is the demo's (tl on #550), not only the ones the seed lists today.
+ */
+const DEMO_MAIL_DOMAIN = '@opportun-demo.example';
 
 /** Whether `value`, in field `key`, is one of the demo's own identity values. */
 export function isFixtureIdentity(key: string, value: string): boolean {
-  if (IDENTITY.has(normalise(value))) return true;
+  const v = normalise(value);
+  if (IDENTITY.has(v) || v.endsWith(DEMO_MAIL_DOMAIN)) return true;
   return key === 'phone' && digits(value).length >= 7 && IDENTITY_DIGITS.has(digits(value));
 }
 
-/** The first field, by name, whose value is a fixture identity value, or null. */
+/**
+ * The first field, by name, whose value is a fixture identity value, or null. A name split over
+ * firstName and lastName is compared as one name too (qa and tl on #550), and named by firstName.
+ * A first name alone is not refused: it names nobody.
+ */
 export function fixtureField(fields: Readonly<Record<string, string>>): string | null {
   const entries = Object.entries(fields).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   for (const [key, value] of entries) {
     if (isFixtureIdentity(key, value)) return key;
+  }
+  const first = fields['firstName'];
+  const last = fields['lastName'];
+  if (
+    first !== undefined &&
+    last !== undefined &&
+    isFixtureIdentity('fullName', `${first} ${last}`)
+  ) {
+    return 'firstName';
   }
   return null;
 }

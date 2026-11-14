@@ -336,6 +336,21 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
     });
   }
 
+  it('review refuses the candidate’s name split over firstName and lastName (qa on #550)', async () => {
+    const { app, a } = await boot(ON_THE_DEMO);
+    const draft = await create(a, await readyOpportunity(app, a));
+    const id = draft.json<{ id: string }>().id;
+    await api(a, 'PATCH', `/submissions/${id}`, {
+      fields: { firstName: 'Avery', lastName: 'Chen' },
+    });
+    const res = await review(a, id);
+    expect(res.statusCode).toBe(422);
+    expect(res.json<{ error: unknown }>().error).toMatchObject({
+      code: 'demo_fixture_value',
+      field: 'firstName',
+    });
+  });
+
   it('generic values identify nobody and are not refused', async () => {
     const { app, a } = await boot(ON_THE_DEMO);
     const draft = await create(a, await readyOpportunity(app, a));
@@ -405,6 +420,14 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
       'email',
     );
     expect(fixtureField({ fullName: 'Jane Visitor' })).toBeNull();
+    // A name split over two fields is one name (qa on #550); a first name alone names nobody.
+    expect(fixtureField({ firstName: 'Avery', lastName: ' CHEN ' })).toBe('firstName');
+    expect(fixtureField({ firstName: 'Avery', lastName: 'Visitor' })).toBeNull();
+    expect(fixtureField({ firstName: 'Avery' })).toBeNull();
+    // Any address at the demo's own domain, listed or not, and a full-width form of a listed name.
+    expect(isFixtureIdentity('email', 'someone-new@OPPORTUN-DEMO.example')).toBe(true);
+    expect(isFixtureIdentity('email', 'jane@example.com')).toBe(false);
+    expect(isFixtureIdentity('fullName', 'Ａｖｅｒｙ Ｃｈｅｎ')).toBe(true);
     for (const v of DEMO_IDENTITY_VALUES) expect(isFixtureIdentity('any', v), v).toBe(true);
   });
 });
