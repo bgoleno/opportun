@@ -4,6 +4,7 @@
 // that another one already covers (LinkedIn and Indeed are never a recognised ATS board) would
 // otherwise have no test that fails without it.
 import { describe, expect, it } from 'vitest';
+import { atsJobRefOfUrl, postingAtsJobRef } from '../src/lib/atsJobRef';
 import { confirmationPageVerdict } from '../src/repos/submissionConfirm';
 import { destinationAllowed, destinationRefusal } from '../src/repos/submissionReview';
 
@@ -86,5 +87,28 @@ describe("the job is the address's own, never one embedded in its query (#521)",
       'https://boards.greenhouse.io/examplecorp/jobs/1000001?ref=)https://boards.greenhouse.io/examplecorp/jobs/1000002';
     expect(destinationRefusal(own, SUB)).toBeNull();
     expect(confirmationPageVerdict(own, DESTINATION)).toBe('ok');
+  });
+});
+
+// tl and sec at 23f3a37 (#538): every reader of one address reads it the same way.
+describe('one address, read one way (#521, review at 23f3a37)', () => {
+  it('a Workday path with a ")" in it: postingAtsJobRef names the job atsJobRefOfUrl names', () => {
+    const url =
+      'https://initech.wd5.myworkdayjobs.com/Initech_Careers/job/San-Jose-CA-(Remote)/Platform-Engineer_R12345';
+    const ref = atsJobRefOfUrl(url);
+    expect(ref?.externalId).toBe('R12345');
+    expect(postingAtsJobRef(url)?.externalId).toBe('R12345');
+    expect(postingAtsJobRef(url)?.kind).toBe(ref?.kind);
+  });
+
+  it('trailing punctuation is not part of the job, as the text scan always read it (sec)', () => {
+    expect(atsJobRefOfUrl(`${POSTING}.`)?.externalId).toBe('1000001');
+    expect(atsJobRefOfUrl(`${POSTING}?!`)?.externalId).toBe('1000001');
+    expect(
+      confirmationPageVerdict('https://boards.greenhouse.io/examplecorp/jobs/1000002.', {
+        ...SUB,
+        destinationUrl: POSTING,
+      }),
+    ).toBe('different_job');
   });
 });
