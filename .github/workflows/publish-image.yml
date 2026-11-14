@@ -56,6 +56,11 @@ jobs:
   publish:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    # Only from main as a platform rule, not only publish.mjs's check from the dispatched branch's
+    # own checkout (#519, sec's audit). The owner sets the `release` environment to main only, with
+    # the owner as the required reviewer. Until it exists, a dispatch creates it with no
+    # protection, so publishing works as before in the meantime.
+    environment: release
     permissions:
       contents: read
       # Lets the automatically-provided GITHUB_TOKEN push to ghcr.io/<owner>/<repo>. This is the
@@ -213,6 +218,8 @@ jobs:
     if: needs.publish.outputs.version != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # The same environment as publish (#519): the tag and the Release are made only from main.
+    environment: release
     permissions:
       contents: write
     steps:
