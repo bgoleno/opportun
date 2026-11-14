@@ -551,6 +551,35 @@ describe('Collapsible columns', () => {
     expect(filter).toHaveFocus();
   });
 
+  // #508 (and #517's first point): only a toggle moves focus. Loading the board, with some
+  // columns collapsed (the terminal ones) and some expanded, leaves focus where it was.
+  it('rendering the board moves no focus', async () => {
+    await renderBoard();
+    expect(
+      within(column('Closed')).getByRole('button', { name: 'Expand Closed (1)' }),
+    ).toBeVisible();
+    expect(within(column('New')).getByRole('button', { name: 'Collapse New' })).toBeVisible();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  // #508: with the stage filter on Applied, Applied is held open, so pressing its Collapse
+  // changes nothing on screen. That press must leave no mark: when the filter is cleared and
+  // Applied shows collapsed, focus stays on the filter the user just used.
+  it('a toggle that changes nothing on screen does not move focus later', async () => {
+    const { user } = await renderBoard();
+    const filter = screen.getByRole('combobox', { name: 'Stage filter' });
+    await user.selectOptions(filter, 'applied');
+    await user.click(within(column('Applied')).getByRole('button', { name: 'Collapse Applied' }));
+    expect(
+      within(column('Applied')).getByRole('button', { name: 'Collapse Applied' }),
+    ).toBeVisible();
+    await user.selectOptions(filter, '');
+    expect(
+      await within(column('Applied')).findByRole('button', { name: 'Expand Applied (1)' }),
+    ).toBeVisible();
+    expect(filter).toHaveFocus();
+  });
+
   it('persists the collapsed set to localStorage and restores it on the next render', async () => {
     const { user, unmount } = await renderBoard();
     await user.click(within(column('Applied')).getByRole('button', { name: 'Collapse Applied' }));

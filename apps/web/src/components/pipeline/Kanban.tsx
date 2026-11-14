@@ -15,7 +15,14 @@ import {
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { OPPORTUNITY_STAGES, type OpportunityStage } from '@opportun/core';
 import { ChevronsLeftRight } from 'lucide-react';
-import { useLayoutEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type ReactNode,
+} from 'react';
 import { toast } from '@/components/ui/toast';
 import { subjectLabel, type StageFlow } from '@/components/stage/useStageFlow';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -156,6 +163,13 @@ export function Kanban(props: {
     }),
   );
   const toggled = useRef<OpportunityStage | null>(null);
+  // A toggle that changed its column has been consumed by then (the column's layout effect runs
+  // earlier in the same commit). One that changed nothing on screen, such as Collapse on a column
+  // the stage filter holds open, is cleared here, so a later change to that column for another
+  // reason does not take focus (#508). Every press re-renders the board, so this always runs.
+  useEffect(() => {
+    toggled.current = null;
+  });
   const [activeId, setActiveId] = useState<string | null>(null);
   /**
    * What the reason dialog's answer did to a dragged card (#432), for the board's own polite live
