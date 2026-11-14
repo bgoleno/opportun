@@ -146,6 +146,16 @@ which was tagged by hand from `main` earlier the same day, and what merged after
   [#321](https://github.com/bgoleno/opportun/issues/321),
   [#323](https://github.com/bgoleno/opportun/issues/323),
   [#331](https://github.com/bgoleno/opportun/issues/331)).
+- **A board found on another vendor right after a failed guess for the same name is no longer
+  recorded.** When Opportun guesses a company's job board by name and one vendor's guess errors (a
+  429, a 5xx, no answer, or a vendor stopped for the night), a hit for the same name on another
+  vendor may be a decoy, and it used to be recorded. It is not recorded now: detection ends as
+  transient and retries later, and the company keeps the board it had, which also holds when
+  re-checking that recorded board errors. A hit after guesses that all answered is recorded as
+  before, and an error for one name does not hold back another name's hit. A link on the company's
+  careers page is not a guess and is unchanged
+  ([#514](https://github.com/bgoleno/opportun/issues/514); PR
+  [#526](https://github.com/bgoleno/opportun/pull/526)).
 - **One user's failure in the nightly network board check no longer stops it for everyone
   else.** If queuing one user's probes failed (a database error, a stored setting that does not
   parse), every later user got no probes that night and the retry stopped at the same user. The
