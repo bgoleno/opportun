@@ -27,7 +27,7 @@ import { lockScope, withTransaction } from '../db/client';
 import { jsonText } from '../db/dialect';
 import { applicationSubmissions, auditLog } from '../db/schema';
 import { boardFromUrl } from '../jobs/atsDetect';
-import { extractAtsJobRefs } from '../lib/atsJobRef';
+import { atsJobRefOfUrl } from '../lib/atsJobRef';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
@@ -420,8 +420,8 @@ export function destinationRefusal(
   if (url.protocol !== 'https:') return 'not_https';
   if (url.username !== '' || url.password !== '') return 'credentials';
   if (isPageFetchProhibited(url.hostname)) return 'prohibited_host';
-  // A recognised ATS board host, never a page that merely embeds a board: extractAtsJobRefs
-  // also reads `gh_jid` on any host, which is how a lookalike could name this requisition.
+  // A recognised ATS board host, never a page that merely embeds a board: atsJobRefOfUrl also
+  // reads `gh_jid` on any host, which is how a lookalike could name this requisition.
   const board = boardFromUrl(url.href);
   if (board === null) return 'not_ats_board';
   if (board.kind !== sub.atsKind) return 'other_board';
@@ -429,9 +429,9 @@ export function destinationRefusal(
   if (sub.atsRef !== null && board.slug.toLowerCase() !== sub.atsRef.toLowerCase()) {
     return 'other_board';
   }
-  const named = extractAtsJobRefs(url.href).some(
-    (r) => r.kind === sub.atsKind && r.externalId === sub.atsExternalId,
-  );
+  // The job this address names, from its own path (#521): a URL in its query names nothing here.
+  const ref = atsJobRefOfUrl(url.href);
+  const named = ref !== null && ref.kind === sub.atsKind && ref.externalId === sub.atsExternalId;
   return named ? null : 'not_this_posting';
 }
 
