@@ -121,12 +121,29 @@ function fromBoardPath(board: AtsBoard, url: URL): Omit<AtsJobRef, 'url'> | null
  * #151): a stray `gh_jid` there may name another requisition, or (on Lever, Ashby, Workday) none
  * of this board's at all, so it counts only when the path names no job, and only of the board's
  * kind. A `gh_jid` on any other host (a company career page) is read as before. Trailing
- * punctuation (`.,;:!?`) is not part of it, as the text scan always read it (sec at 23f3a37).
+ * punctuation (`.,;:!?`, and a `)` that closes no `(`, #549) is not part of it, as the text scan
+ * always read it (sec at 23f3a37).
  */
 export function atsJobRefOfUrl(address: string): AtsJobRef | null {
   // Dropped by a loop, not a regular expression, so it stays linear whatever the address holds.
+  // A `)` is trailing punctuation only while it closes no `(` (#549): a URL pasted out of "(...)"
+  // keeps its job id, and a Workday ".../San-Jose-CA-(Remote)/..." or a balanced "(...)" at the
+  // end stays as written. Counted once, then kept up to date as characters are dropped.
   let raw = address;
-  while (raw.length > 0 && '.,;:!?'.includes(raw[raw.length - 1]!)) raw = raw.slice(0, -1);
+  let unmatched = 0;
+  for (const c of raw) {
+    if (c === '(') unmatched -= 1;
+    else if (c === ')') unmatched += 1;
+  }
+  for (;;) {
+    const last = raw[raw.length - 1];
+    if (last === undefined) break;
+    if ('.,;:!?'.includes(last)) raw = raw.slice(0, -1);
+    else if (last === ')' && unmatched > 0) {
+      raw = raw.slice(0, -1);
+      unmatched -= 1;
+    } else break;
+  }
   let url: URL;
   try {
     url = new URL(raw);
