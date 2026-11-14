@@ -6,6 +6,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { DEMO_USERS } from '../cli/seedDemoFixture';
 import '../lib/deviceTokens';
+import { narrowSharedDemoAdmin } from '../lib/demoSharedAdmin';
 import { getSessionUser } from '../lib/sessions';
 import { requireUser } from '../repos/base';
 
@@ -69,12 +70,21 @@ async function session(app: FastifyInstance, opts: SessionOptions): Promise<void
       req.userCtx = null;
       return;
     }
+    // Built here, so requireUser hands every route the same context: on a demo server, the shared
+    // demo admin is an admin only on the routes lib/demoSharedAdmin.ts allows (#563).
+    const lookup = async () =>
+      narrowSharedDemoAdmin(
+        { demo: opts.demo === true },
+        await getSessionUser(app.db, token),
+        req.method,
+        route,
+      );
     if (req.routeOptions.config.reportsSessionErrors !== true) {
-      req.userCtx = await getSessionUser(app.db, token);
+      req.userCtx = await lookup();
       return;
     }
     try {
-      req.userCtx = await getSessionUser(app.db, token);
+      req.userCtx = await lookup();
     } catch (err) {
       req.log.error({ err }, 'session lookup failed');
       req.sessionLookupFailed = true;

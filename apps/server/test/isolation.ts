@@ -56,14 +56,19 @@ function client(app: FastifyInstance, res: Response): TestClient {
 }
 
 /**
- * A second, separate session for an account that already exists: what another person signed in
- * to the same shared demo account holds (#545). Its own session cookie, so its own demo actor.
+ * Signs in an existing account through POST /auth/login (no 2FA). A second call for the same
+ * account is a second, separate session: what another person signed in to the same shared demo
+ * account holds (#545). Its own session cookie, so its own demo actor.
  */
-export async function signIn(app: FastifyInstance, email: string): Promise<TestClient> {
+export async function signIn(
+  app: FastifyInstance,
+  email: string,
+  password = PASSWORD,
+): Promise<TestClient> {
   const res = await app.inject({
     method: 'POST',
     url: '/api/v1/auth/login',
-    payload: { email, password: PASSWORD },
+    payload: { email, password },
   });
   if (res.statusCode !== 200) throw new Error(`sign in ${email}: ${res.statusCode} ${res.body}`);
   return client(app, res);

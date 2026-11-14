@@ -39,6 +39,21 @@ const items = (
 ];
 
 describe('OAuthProvidersCard', () => {
+  // A shared demo admin (#563): sign-in providers are instance-wide, and the server refuses them.
+  it('says the setting is not available to this account when the server refuses it', async () => {
+    mockApi({
+      'GET /admin/oauth-providers': () => ({ status: 403, body: { error: { code: 'forbidden' } } }),
+    });
+    renderWithProviders(<OAuthProvidersCard />);
+    expect(
+      await screen.findByText(
+        'This setting covers the whole instance and is not available to this account.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Request failed/)).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Google sign-in' })).toBeNull();
+  });
+
   it('shows each provider with its redirect URI to copy and its status', async () => {
     mockApi({ 'GET /admin/oauth-providers': { items: items({ google: true, github: false }) } });
     renderWithProviders(<OAuthProvidersCard />);

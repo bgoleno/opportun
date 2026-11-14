@@ -52,6 +52,38 @@ export interface RegisterUserInput {
 }
 
 /**
+ * The users row an account starts as, shared by registerUser, the demo seed and the dedicated
+ * demo account CLI (#563), so an account made any of these ways has the same columns and
+ * defaults. It decides nothing: whether the account may exist, and whether it is the admin, are
+ * the caller's.
+ */
+export async function insertUserRow(
+  tx: Exec,
+  input: {
+    id?: string;
+    email: string;
+    passwordHash: string;
+    displayName: string;
+    isAdmin: boolean;
+    now: number;
+  },
+): Promise<typeof users.$inferSelect> {
+  return await tx
+    .insert(users)
+    .values({
+      id: input.id ?? newId(),
+      email: input.email,
+      passwordHash: input.passwordHash,
+      displayName: input.displayName,
+      isAdmin: input.isAdmin,
+      createdAt: input.now,
+      updatedAt: input.now,
+    })
+    .returning()
+    .get();
+}
+
+/**
  * The first account to register becomes admin and closes registration (FR-S2); every later
  * one needs it reopened first. Throws RegistrationClosedError when it is not, and whatever
  * db.insert throws on a duplicate email (isUniqueViolation), unchanged from before this was
@@ -73,19 +105,7 @@ export async function registerUser(
       const first = existing === 0;
       if (!first && !(await isRegistrationOpen(tx))) throw new RegistrationClosedError();
       await racePoint('auth.register.locked');
-      const row = await tx
-        .insert(users)
-        .values({
-          id: input.id ?? newId(),
-          email: input.email,
-          passwordHash: input.passwordHash,
-          displayName: input.displayName,
-          isAdmin: first,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .returning()
-        .get();
+      const row = await insertUserRow(tx, { ...input, isAdmin: first, now });
       if (first) {
         // FR-S2: the instance locks after its first account; admins reopen it.
         await tx

@@ -1,12 +1,14 @@
 // Job status API (design section 8). The admin sees every job and may revive dead ones; a
 // user sees only jobs run on their behalf (imports). Payloads and results are never listed:
 // an import payload carries the user's data.
-import { and, desc, eq, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, or, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { JOB_STATUSES, jobs } from '../db/schema';
 import { audit } from '../lib/audit';
+import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
+import { isSharedDemoAdmin, withinSharedDemo } from '../lib/demoSharedAdmin';
 import { forbidden, HttpError, notFound } from '../lib/errors';
 import { reviveDeadJob, type JobRow } from '../jobs/runner';
 import { requireUser } from '../repos/base';
@@ -56,8 +58,15 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req) => {
       const ctx = requireUser(req);
+      // An admin sees every job; the shared demo admin the pinned accounts' and the instance's
+      // own, never a dedicated account's (#563); anyone else their own.
+      const owner = !ctx.isAdmin
+        ? eq(jobs.userId, ctx.userId)
+        : isSharedDemoAdmin(app.config, ctx)
+          ? or(isNull(jobs.userId), inArray(jobs.userId, [...SHARED_DEMO_IDS]))
+          : undefined;
       const where = and(
-        ctx.isAdmin ? undefined : eq(jobs.userId, ctx.userId),
+        owner,
         req.query.status === undefined ? undefined : eq(jobs.status, req.query.status),
       ) as SQL | undefined;
       const rows = await db
@@ -77,6 +86,15 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
     async (req) => {
       const ctx = requireUser(req);
       if (!ctx.isAdmin) throw forbidden();
+      if (isSharedDemoAdmin(app.config, ctx)) {
+        const job = await db
+          .select({ userId: jobs.userId })
+          .from(jobs)
+          .where(eq(jobs.id, req.params.id))
+          .get();
+        // Not a pinned account's or the instance's: refused, the same whether it exists or not.
+        if (job === undefined || !withinSharedDemo(job.userId)) throw forbidden();
+      }
       const revived = await reviveDeadJob(db, req.params.id);
       if (revived === undefined) {
         const exists = await db

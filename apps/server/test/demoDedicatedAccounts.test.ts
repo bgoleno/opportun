@@ -2,8 +2,8 @@
 // https://github.com/bgoleno/opportun/issues/542#issuecomment-6884754511). The seed's pinned
 // accounts are shared logins, and the demo's protections exist for them. An account the owner
 // makes for one person on a demo server is that person's, and behaves as on any instance
-// (#545, criteria a and c). On main the nightly reset refuses a database with any non-pinned
-// user, so the dedicated user here is registered directly, never through seedDemo (tl).
+// (#545, criteria a and c). The dedicated user here is registered directly (tl); how the owner
+// makes one, and how the nightly reset leaves it alone, is #563's (test/demoDedicatedAccount.test.ts).
 import { newId } from '@opportun/core';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';

@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
-import { api, errorMessage } from '@/lib/api';
+import { api, errorMessage, isForbidden, NOT_AVAILABLE_TO_ACCOUNT } from '@/lib/api';
 import { providerLabel, type OAuthProvider } from '@/lib/oauth';
 
 interface ProviderStatus {
@@ -117,7 +117,11 @@ export function OAuthProvidersCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
-        {providers.isError ? <FormError message={errorMessage(providers.error)} /> : null}
+        {isForbidden(providers.error) ? (
+          <p className="text-sm text-muted-foreground">{NOT_AVAILABLE_TO_ACCOUNT}</p>
+        ) : providers.isError ? (
+          <FormError message={errorMessage(providers.error)} />
+        ) : null}
         {providers.data?.items.map((p) => (
           <ProviderSection key={p.provider} status={p} />
         ))}
