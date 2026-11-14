@@ -23,6 +23,25 @@ jobs:
             echo "::warning::BLOCKED_IDENTIFIERS secret is not set; identifier guard skipped."
             exit 0
           fi
+          # The job log is public, and Actions masks the secret's whole value, not each term in
+          # it. So every term is masked before anything else is printed, and a hit is reported as
+          # file:line only, never the term or the matching line (#520). A mask matches the term
+          # only as the secret spells it and the scan ignores case, so a path that holds any term
+          # in any case is not printed either: only its line number is. Nothing in this step may
+          # run with set -x, which would echo each term as it is used.
+          for t in $TERMS; do echo "::add-mask::$t"; done
+          where() {
+            cut -d: -f1,2 | head -5 | while IFS= read -r loc; do
+              path=${loc%:*}
+              for u in $TERMS; do
+                if printf '%s' "$path" | grep -qiF -- "$u"; then
+                  path='(a file whose name holds a withheld term)'
+                  break
+                fi
+              done
+              printf '%s:%s\n' "$path" "${loc##*:}"
+            done
+          }
           # Innocuous substrings that legitimately contain a blocked term (a city name, a
           # camelCase identifier, a dependency hash). Expand as real false positives appear.
           allow='francisco|withpepper|withpeople|rhel'
@@ -36,9 +55,8 @@ jobs:
               hits=$(git grep -niIF -- "$t" -- . ':!pnpm-lock.yaml' 2>/dev/null || true)
             fi
             if [ -n "$hits" ]; then
-              echo "::error::withheld identifier present"
-              echo "---- '$t' ----"
-              printf '%s\n' "$hits" | head -5
+              echo "::error::withheld identifier present; remove it from these places:"
+              printf '%s\n' "$hits" | where
               bad=1
             fi
           done

@@ -420,6 +420,39 @@ describe('the resume page strip: actions (#447)', () => {
     ).toHaveLength(1);
     await act(async () => answer());
   });
+
+  // #517: the other way round. The match report's Score again disables the strip's, so a click
+  // on each still sends one scoring request (each an AI call).
+  it("Score again in the report disables the strip's own, and one scoring request is sent", async () => {
+    let answer: () => void = () => undefined;
+    const { api, user } = setup({
+      extra: {
+        'POST /resumes/copy/match': () =>
+          new Promise((resolve) => {
+            answer = () => resolve(REPORT);
+          }),
+      },
+    });
+    const region = await strip();
+    const report = (await screen.findByRole('heading', { name: 'Match report' })).closest(
+      '[data-slot="card"]',
+    ) as HTMLElement;
+    await waitFor(() =>
+      expect(within(region).getByRole('button', { name: 'Score again' })).toBeEnabled(),
+    );
+    await waitFor(() =>
+      expect(within(report).getByRole('button', { name: 'Score again' })).toBeEnabled(),
+    );
+    await user.click(within(report).getByRole('button', { name: 'Score again' }));
+    await waitFor(() =>
+      expect(within(region).getByRole('button', { name: 'Scoring...' })).toBeDisabled(),
+    );
+    await user.click(within(region).getByRole('button', { name: 'Scoring...' }));
+    expect(
+      api.calls.filter((c) => c.method === 'POST' && c.path === '/resumes/copy/match'),
+    ).toHaveLength(1);
+    await act(async () => answer());
+  });
 });
 
 describe('the resume page: "Change status" (#447)', () => {
