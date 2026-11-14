@@ -190,6 +190,28 @@ test.describe('a keyboard drop that waits for a reason says so, then says what h
 
 // #475: with Dismissed and Closed collapsed to rails (the default), a keyboard drag steps through
 // the columns in on-screen order and reaches both rails; expanding a column keeps focus on it.
+/**
+ * Presses `key` until the live region changes, then expects `wanted` (#558). dnd-kit's
+ * KeyboardSensor adds its keydown listener in a setTimeout after the drag starts, so a key pressed
+ * right after "Picked up" can be lost: the region then stays as it was, and the key is pressed
+ * again (a few times at most). A change to anything but `wanted` fails at once, so a column that
+ * truly cannot be reached still fails the test.
+ */
+async function stepTo(page: Page, key: 'ArrowLeft' | 'ArrowRight', wanted: string) {
+  const before = (await liveRegion(page).textContent()) ?? '';
+  for (let i = 0; i < 5; i++) {
+    await page.keyboard.press(key);
+    const moved = await expect(liveRegion(page))
+      .not.toHaveText(before, { timeout: 1_000 })
+      .then(
+        () => true,
+        () => false,
+      );
+    if (moved) break;
+  }
+  await expect(liveRegion(page)).toHaveText(wanted, { timeout: 1 });
+}
+
 test.describe('a keyboard drag reaches the collapsed rails, in column order (#475)', () => {
   test.use({ viewport: { width: 2200, height: 1100 } });
 
@@ -210,12 +232,9 @@ test.describe('a keyboard drag reaches the collapsed rails, in column order (#47
     await page.keyboard.press('Space');
     // Picked up, then at once over its own column (dnd-kit's onDragOver replaces "Picked up").
     await expect(liveRegion(page)).toHaveText(`${name} is over the Offer column.`);
-    await page.keyboard.press('ArrowRight');
-    await expect(liveRegion(page)).toHaveText(`${name} is over the Dismissed column.`);
-    await page.keyboard.press('ArrowRight');
-    await expect(liveRegion(page)).toHaveText(`${name} is over the Closed column.`);
-    await page.keyboard.press('ArrowLeft');
-    await expect(liveRegion(page)).toHaveText(`${name} is over the Dismissed column.`);
+    await stepTo(page, 'ArrowRight', `${name} is over the Dismissed column.`);
+    await stepTo(page, 'ArrowRight', `${name} is over the Closed column.`);
+    await stepTo(page, 'ArrowLeft', `${name} is over the Dismissed column.`);
     await page.keyboard.press('Space');
 
     await expect(liveRegion(page)).toHaveText(
