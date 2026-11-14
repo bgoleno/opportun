@@ -373,12 +373,28 @@ when the milestone's work was merged.
   left for you
   ([#402](https://github.com/bgoleno/opportun/issues/402); PR
   [#461](https://github.com/bgoleno/opportun/pull/461)).
+- **Opening the extension on the form you handed off fills it, the first time, and a keyboard
+  shortcut opens the extension.** On the Greenhouse form of an application you reviewed and opened
+  from Opportun, opening the extension now fills it at once, the first time only: the popup says
+  "Filling the application for _role_ at _company_ on _host_. Keep this window open...", then
+  shows the same report as the button. Every later time, and on any other page, it behaves as
+  before, with **Fill in this application**. **Alt+Shift+O** opens the extension, exactly as a
+  click on its icon does, and you can rebind it or turn it off in the browser's own shortcut
+  settings. The popup's lookup is bounded at 5 seconds and its work runs one at a time. In
+  Opportun, the **Open** step reads "Not filled by the extension yet." until the extension has
+  read the application, then "The extension read this application at _time_. Check the form and
+  press Submit there." **On upgrade:** a nullable column `application_submissions.prefill_read_at`
+  is added (SQLite migration 0066, Postgres 0048). Use an extension built with this change
+  together with a server that has it: an older server does not say which read was the first, and
+  the popup then only offers the button
+  ([#403](https://github.com/bgoleno/opportun/issues/403); PR
+  [#507](https://github.com/bgoleno/opportun/pull/507)).
 - **The guide now says your resume reaches Greenhouse when the extension attaches it, not
   when you press Submit.** The behaviour is not new: when the form's resume field is empty and
   takes a PDF, the extension attaches your Final resume, and Greenhouse's own form uploads it
   at once, as it does when you choose a file yourself. So Greenhouse can hold your resume even
-  if you then decide not to apply. Press **Fill in this application** only when you mean to
-  apply ([#468](https://github.com/bgoleno/opportun/issues/468); PR
+  if you then decide not to apply. Open the extension on the form, or press **Fill in this
+  application**, only when you mean to apply ([#468](https://github.com/bgoleno/opportun/issues/468); PR
   [#470](https://github.com/bgoleno/opportun/pull/470)).
 - **A company's careers page and domain come from the domains its name gives.** The result is the
   same with or without a message; a careers page found through a sender is used for that
