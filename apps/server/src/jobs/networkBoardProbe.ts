@@ -115,10 +115,15 @@ function vendorOf(url: string): AtsKind | undefined {
  * When tonight's run started: the latest scheduled sweep at or before `now`, in the scheduler's own
  * time (runner.ts). Every probe queued since then is tonight's, whatever became of it, so a second
  * run the same night counts the first one's.
+ *
+ * `tz` is for tests only (an IANA zone, as cron-parser takes it): the server always uses its own
+ * time. A test cannot set process.env.TZ, which leaks to every file in its worker (#292), so a
+ * test of a daylight-saving change passes the zone here instead (#535).
  */
-export function nightStart(now: number): number {
+export function nightStart(now: number, tz?: string): number {
   return CronExpressionParser.parse(NETWORK_PROBE_SWEEP_CRON, {
     currentDate: new Date(now + 1),
+    ...(tz === undefined ? {} : { tz }),
   })
     .prev()
     .getTime();
@@ -128,8 +133,8 @@ export function nightStart(now: number): number {
  * The start of the night `nights` after tonight's. Noon of that day, then back to its 05:15, so a
  * daylight-saving change in between (a 23- or 25-hour day) still lands on that night.
  */
-function nightsAfter(now: number, nights: number): number {
-  return nightStart(nightStart(now) + nights * 24 * 60 * 60_000 + 7 * 60 * 60_000);
+function nightsAfter(now: number, nights: number, tz?: string): number {
+  return nightStart(nightStart(now, tz) + nights * 24 * 60 * 60_000 + 7 * 60 * 60_000, tz);
 }
 
 /**
@@ -137,9 +142,9 @@ function nightsAfter(now: number, nights: number): number {
  * after 2^(stops-1) nights out of the pick, at most NETWORK_PROBE_PARK_MAX_NIGHTS. The doubling
  * bounds how often one company whose request always fails can stop its vendor for every user.
  */
-export function parkedUntil(now: number, stops: number): number {
+export function parkedUntil(now: number, stops: number, tz?: string): number {
   const nights = Math.min(2 ** Math.max(stops - 1, 0), NETWORK_PROBE_PARK_MAX_NIGHTS);
-  return nightsAfter(now, nights + 1);
+  return nightsAfter(now, nights + 1, tz);
 }
 
 /** How many of the user's network probes were queued since `since`, in any state. */
