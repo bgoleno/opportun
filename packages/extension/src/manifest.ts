@@ -7,6 +7,9 @@
 //   at runtime for that one origin when the settings are saved (optional_host_permissions). The
 //   optional http pattern is wide because match patterns cannot say "private host"; the rule
 //   that matters lives in settings.ts isPrivateHost (ADR-14);
+// - one keyboard shortcut, the browser's own `_execute_action`, which opens the popup exactly as a
+//   click on the icon does (#403, sec's conditions): no other command, so a keypress can do
+//   nothing a click could not;
 // - the default extension CSP (script-src 'self'): no remote code.
 
 export type BrowserTarget = 'chrome' | 'firefox';
@@ -74,6 +77,16 @@ export function buildManifest(
       default_icon: ICONS,
     },
     icons: ICONS,
+    // Opens the popup, as a click on the icon does, with the same activeTab grant and nothing
+    // more (#403). Alt+Shift+O is only the suggestion: the user can change or clear it in the
+    // browser's shortcut settings (chrome://extensions/shortcuts, or Firefox's Manage Extension
+    // Shortcuts).
+    commands: {
+      _execute_action: {
+        suggested_key: { default: 'Alt+Shift+O' },
+        description: 'Open Opportun',
+      },
+    },
     permissions: ['activeTab', 'scripting', 'storage'],
     // The capture sites. Even with this, a tab is read only when the user clicks Capture in the
     // popup (one injection; no content scripts, no background worker).

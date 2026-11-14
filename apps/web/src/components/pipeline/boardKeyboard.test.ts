@@ -9,8 +9,15 @@ import {
   type KeyboardCoordinateGetter,
   type UniqueIdentifier,
 } from '@dnd-kit/core';
+import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { describe, expect, it, vi } from 'vitest';
 import { boardCollision, boardKeyboardCoordinates } from './boardKeyboard';
+
+// Spied on, not replaced: Left and Right never reach it, and Up and Down must (#508).
+vi.mock('@dnd-kit/sortable', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('@dnd-kit/sortable')>();
+  return { ...mod, sortableKeyboardCoordinates: vi.fn(mod.sortableKeyboardCoordinates) };
+});
 
 const rect = (left: number, top: number, width: number, height: number): ClientRect => ({
   left,
@@ -131,5 +138,24 @@ describe('the board keyboard drag (#475)', () => {
       pointerCoordinates: null,
     });
     expect(hits[0]?.id).toBe('card');
+  });
+
+  // #508 (and #517's second point): reordering within a column (#240) still steps as dnd-kit's
+  // sortable getter does, because Up and Down are handed to it unchanged.
+  it('passes ArrowUp and ArrowDown to sortableKeyboardCoordinates, with the same arguments', () => {
+    const spy = vi.mocked(sortableKeyboardCoordinates);
+    for (const code of [KeyboardCode.Up, KeyboardCode.Down]) {
+      spy.mockClear();
+      spy.mockReturnValueOnce({ x: 11, y: 22 });
+      const event = { code, preventDefault: vi.fn() } as unknown as KeyboardEvent;
+      const args = {
+        active: 'card',
+        currentCoordinates: { x: 0, y: 0 },
+        context: { active: { id: 'card' } } as never,
+      };
+      expect(getter(event, args)).toEqual({ x: 11, y: 22 });
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(event, args);
+    }
   });
 });
