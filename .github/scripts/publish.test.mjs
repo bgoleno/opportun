@@ -252,6 +252,28 @@ test('permissions: read at the top, packages: write only on publish, contents: w
   assert.match(release, /if: needs\.publish\.outputs\.version != ''/);
 });
 
+// #519 (sec's audit): "only from main" is a platform rule, not only publish.mjs's check from the
+// dispatched branch's own checkout. Both jobs run in the `release` environment, which the owner
+// limits to main, and no other job can push a package.
+const jobNames = () => {
+  const jobs = WORKFLOW.slice(WORKFLOW.indexOf('\njobs:\n'));
+  return [...jobs.matchAll(/\n {2}([a-z][a-z-]*):\n/g)].map((m) => m[1]);
+};
+
+test('both jobs run in the release environment', () => {
+  assert.deepEqual(jobNames(), ['publish', 'release']);
+  for (const name of ['publish', 'release']) {
+    assert.match(jobOf(name), /\n {4}environment: release\n/, name);
+  }
+});
+
+test('no job but publish has packages: write', () => {
+  for (const name of jobNames().filter((n) => n !== 'publish')) {
+    assert.doesNotMatch(jobOf(name), /packages: write/, name);
+  }
+  assert.match(jobOf('publish'), /packages: write/);
+});
+
 test('the check runs before the build, and the release is made on the commit built', () => {
   const publish = jobOf('publish');
   const at = (s) => {
