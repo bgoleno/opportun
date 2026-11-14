@@ -10,6 +10,7 @@ import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import {
   createDeviceToken,
+  DEMO_MAX_ACTIVE_TOKENS,
   listDeviceTokens,
   renameDeviceToken,
   revokeDeviceToken,
@@ -80,11 +81,17 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
       // commit: the insert is made only while the verified hash is still current (#539).
       await racePoint('deviceTokens.create.passwordChecked');
       const { name, scopes } = req.body;
+      // On the demo, at most DEMO_MAX_ACTIVE_TOKENS per shared account: the oldest is revoked to
+      // make room (sec on #544, tl on #550). The insert is also made only while the verified
+      // password hash is still current (#539).
       const { meta, token } = await createDeviceToken(
         db,
         ctx,
         { name, scopes },
-        { passwordHash: verified },
+        {
+          passwordHash: verified,
+          ...(app.config.demo ? { maxActive: DEMO_MAX_ACTIVE_TOKENS, ip: req.ip } : {}),
+        },
       );
       await audit(db, 'device_token.created', {
         userId: ctx.userId,

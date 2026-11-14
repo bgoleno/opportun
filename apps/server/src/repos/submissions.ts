@@ -29,6 +29,7 @@ import {
   resumes,
 } from '../db/schema';
 import { audit } from '../lib/audit';
+import { demoResumeRefused } from '../lib/demoOwnData';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { submissionDigest } from '../lib/submissionDigest';
@@ -214,7 +215,13 @@ async function finalResume(exec: Exec, ctx: UserCtx, resumeId: string) {
 
 export interface CreateDraftInput {
   idempotencyKey: string;
-  resumeId: string;
+  /** Required off the demo (the route says so); on the demo an attempt may carry none (#544). */
+  resumeId?: string | undefined;
+}
+
+/** Where a draft is being made: on the demo, only the visitor's own data goes in (#544). */
+export interface DraftOptions {
+  demo?: boolean;
 }
 
 /**
@@ -230,18 +237,21 @@ export async function createSubmissionDraft(
   ctx: UserCtx,
   opportunityId: string,
   input: CreateDraftInput,
+  opts: DraftOptions = {},
 ): Promise<{ submission: Submission; replayed: boolean }> {
+  const demo = opts.demo === true;
+  const resumeId = input.resumeId ?? null;
   const replay = async (): Promise<{ submission: Submission; replayed: boolean } | null> => {
     const prior = await byKey(db, ctx, input.idempotencyKey);
     if (prior === undefined) return null;
     // A key belongs to one attempt. Reusing it for another opportunity, or with another
     // resume, is a client bug: never answer it silently with the first request's choice.
-    if (prior.opportunityId !== opportunityId || prior.resumeId !== input.resumeId) {
+    if (prior.opportunityId !== opportunityId || prior.resumeId !== resumeId) {
       throw new HttpError(409, 'idempotency_key_reused', 'That key was used for another request.');
     }
     // A create interrupted between its insert and its enqueue is retried with the same key:
     // queue the snapshot here too (a no-op while it is queued or running; tl on #131).
-    if (prior.status === 'draft' && prior.snapshotState === 'pending') {
+    if (prior.status === 'draft' && prior.snapshotState === 'pending' && prior.resumeId !== null) {
       await enqueueSnapshot(db, ctx.userId, prior.id, prior.resumeId);
     }
     return { submission: view(prior), replayed: true };
@@ -302,12 +312,22 @@ export async function createSubmissionDraft(
   ) {
     throw ineligible('destination_not_allowed');
   }
-  const resume = await finalResume(db, ctx, input.resumeId);
+  if (resumeId === null && !demo) throw new HttpError(422, 'resume_required', 'Choose a resume.');
+  // On the demo an attempt carries no resume: every resume there is the demo's own (#544, tl on
+  // #550). The visitor attaches their own on the employer's form.
+  if (demo && resumeId !== null) throw demoResumeRefused();
+  const resume = resumeId === null ? null : await finalResume(db, ctx, resumeId);
   // A new draft starts as a copy of what Opportun holds for the user (#411): the profile, then
   // the account, then the last reviewed application, each value passing today's checks. After
   // this the draft is its own. A replay returned above, so a repeated create fills nothing.
-  const prefill = await applicationDetailsFor(db, ctx);
-  const fields = Object.fromEntries(prefill.values.map((v) => [v.key, v.value]));
+  // Not on the demo (#544): there the profile and the account are the demo's own test data, and
+  // the last reviewed application can be another visitor's on the shared account. A demo value
+  // is the visitor's only when a PATCH of this draft set it.
+  const fields = demo
+    ? {}
+    : Object.fromEntries(
+        (await applicationDetailsFor(db, ctx)).values.map((v) => [v.key, v.value]),
+      );
 
   // Two creates can both pass the checks above; the unique indexes then decide (test/races).
   await racePoint('submissions.create');
@@ -320,17 +340,19 @@ export async function createSubmissionDraft(
         id: newId(),
         userId: ctx.userId,
         opportunityId,
-        resumeId: resume.id,
+        resumeId: resume?.id ?? null,
         atsKind: ref.kind,
         atsRef: ref.org,
         atsExternalId: ref.externalId,
         destinationUrl: destination.href,
         status: 'draft',
         idempotencyKey: input.idempotencyKey,
-        resumeTitle: resume.title,
-        resumeStore: resume.store,
-        resumeDocRef: resume.docRef,
-        snapshotState: 'pending',
+        resumeTitle: resume?.title ?? null,
+        resumeStore: resume?.store ?? null,
+        resumeDocRef: resume?.docRef ?? null,
+        // With no resume there is nothing to snapshot: unsupported, as for a store with no PDF,
+        // which review allows (the user attaches a file themselves).
+        snapshotState: resume === null ? 'unsupported' : 'pending',
         fields,
         answers: [],
         createdAt: now,
@@ -339,7 +361,7 @@ export async function createSubmissionDraft(
       .returning();
     const created = row as SubmissionRow;
     // The payload names the attempt and the resume by id; the job reads both from storage.
-    await enqueueSnapshot(db, ctx.userId, created.id, resume.id);
+    if (resume !== null) await enqueueSnapshot(db, ctx.userId, created.id, resume.id);
     return { submission: view(created), replayed: false };
   } catch (err) {
     if (!isUniqueViolation(err)) throw err;
@@ -438,7 +460,19 @@ export async function updateSubmissionDraft(
   ctx: UserCtx,
   id: string,
   patch: SubmissionPatch,
+  opts: DraftOptions = {},
 ): Promise<Submission> {
+  const demo = opts.demo === true;
+  // On the demo the profile is shared test data on a shared account: a visitor's values stay on
+  // their draft and never land in it (#544).
+  if (demo && patch.saveToProfile !== undefined && patch.saveToProfile.length > 0) {
+    throw new HttpError(
+      403,
+      'unavailable_on_demo',
+      'On the demo, details stay on this application and are not saved to the profile.',
+    );
+  }
+  if (demo && patch.resumeId !== undefined) throw demoResumeRefused();
   const updated = await withTransaction(db, async (tx) => {
     // The attempt's lock (repos/submissionReview.ts): a review or handoff in flight checks the
     // row after this edit, or this edit waits until it is done.
@@ -655,6 +689,9 @@ export async function handedOffSnapshot(
 ): Promise<{ row: SubmissionRow; file: typeof attachments.$inferSelect }> {
   const row = await getRow(db, ctx, id);
   if (row.status !== 'handed_off') throw notFound();
+  // An attempt with no resume (the demo's, #544) has no file to serve, ever: not a snapshot that
+  // is not ready yet, so 404, not 409 (tl on #544).
+  if (row.resumeId === null && row.resumeStore === null) throw notFound();
   // Served only for an attempt /current would return (tl on #185): what was reviewed, unchanged.
   if (row.reviewDigest === null || submissionDigest(row) !== row.reviewDigest) {
     throw new HttpError(409, 'review_stale', 'This application changed after it was reviewed.');

@@ -8,6 +8,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { deviceTokens } from '../src/db/schema';
+import { createDeviceToken } from '../src/lib/deviceTokens';
 import { useApi } from './api';
 import { PASSWORD, type TestClient } from './isolation';
 import { onSlowTransaction } from '../src/db/gate';
@@ -107,6 +108,32 @@ describe('a token minted during a password change or reset is not created (#539)
       expect(await activeTokens(app, owner)).toEqual([]);
     });
   }
+
+  // With the demo's cap (#550) in the same transaction, the hash is checked first (sec on #557):
+  // a mint refused for a changed password revokes none of the account's tokens to make room.
+  it('on the demo at the cap, a mint refused for a changed password revokes nothing', async () => {
+    const { app, a } = await boot({ demo: true, submissions: true });
+    for (let i = 0; i < 20; i++) {
+      await createDeviceToken(
+        app.db,
+        { userId: a.userId, isAdmin: false },
+        {
+          name: `t${i}`,
+          scopes: ['capture:push'],
+        },
+      );
+    }
+    const res = await mintDuring(a, async () => {
+      const changed = await a.request({
+        method: 'POST',
+        url: '/api/v1/auth/password',
+        payload: { current: PASSWORD, next: NEW_PASSWORD },
+      });
+      expect(changed.statusCode, changed.body).toBe(204);
+    });
+    expect(res.statusCode, res.body).toBe(403);
+    expect(await activeTokens(app, a)).toHaveLength(20);
+  });
 
   it('with nothing in between, the same held mint is created (the control)', async () => {
     const { app, a } = await boot();
