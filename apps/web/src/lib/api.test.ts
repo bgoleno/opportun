@@ -8,7 +8,7 @@
 // suite backs is narrower and fully verifiable: small JSON mutations get keepalive, nothing
 // else does.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api } from './api';
+import { api, ApiError, errorMessage } from './api';
 
 function okResponse(): Response {
   return new Response(null, { status: 204 });
@@ -50,5 +50,16 @@ describe('api() keepalive', () => {
     await api('/imports', { method: 'POST', body: form });
     const [, init] = vi.mocked(fetch).mock.calls[0] ?? [];
     expect(init).toMatchObject({ keepalive: false });
+  });
+});
+
+describe('errorMessage', () => {
+  // The discovery source form shows this when the server refuses a source kind only the
+  // instance's administrator may add (#563: a shared demo admin, like any other user).
+  it('says in words that a command source is for the administrator', () => {
+    const err = new ApiError(403, 'mcp_stdio_admin_only', 'mcp_stdio_admin_only');
+    expect(errorMessage(err)).toBe(
+      "Only this instance's administrator can add a source that runs a command on the server.",
+    );
   });
 });

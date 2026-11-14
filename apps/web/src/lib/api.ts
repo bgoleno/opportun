@@ -134,6 +134,18 @@ export async function api<T>(path: string, opts?: { method?: string; body?: unkn
   return data as T;
 }
 
+/**
+ * What an instance-wide admin setting shows when the server refuses it to this account: a shared
+ * demo admin's, for one (#563), whose /auth/me still says admin.
+ */
+export const NOT_AVAILABLE_TO_ACCOUNT =
+  'This setting covers the whole instance and is not available to this account.';
+
+/** Whether api() failed with a 403: the server refuses this to the signed-in account. */
+export function isForbidden(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 403;
+}
+
 /** A short human message for an error thrown by api(). */
 export function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -152,6 +164,8 @@ export function errorMessage(err: unknown): string {
         return 'Not found.';
       case 'payload_too_large':
         return 'That file is too large.';
+      case 'mcp_stdio_admin_only':
+        return "Only this instance's administrator can add a source that runs a command on the server.";
       default:
         return err.message === err.code ? `Request failed (${err.code}).` : err.message;
     }
