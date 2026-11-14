@@ -57,11 +57,15 @@ describe('the log message catalog (#345)', () => {
     for (const { path, text } of FILES) {
       // The first argument may be an object literal or a variable holding one (`fields`). Run
       // over this repository's own source in a test, never over input from outside.
+      // Single- or double-quoted: a message with an apostrophe is written in double quotes, and a
+      // single-quote-only pattern let one reach the log withheld (tl on
+      // https://github.com/bgoleno/opportun/pull/525).
       const re =
         // eslint-disable-next-line security/detect-unsafe-regex
-        /\.(?:trace|debug|info|warn|error|fatal)\(\s*(?:(?:\{[^}]*\}|[\w.]+)\s*,\s*)?'((?:[^'\\]|\\.)+)'/g;
+        /\.(?:trace|debug|info|warn|error|fatal)\(\s*(?:(?:\{[^}]*\}|[\w.]+)\s*,\s*)?(?:'((?:[^'\\]|\\.)+)'|"((?:[^"\\]|\\.)+)")/g;
       for (const m of text.matchAll(re)) {
-        if (!LOG_MESSAGES.has(m[1]!)) missing.push(`${path}: ${m[1]}`);
+        const msg = m[1] ?? m[2]!;
+        if (!LOG_MESSAGES.has(msg)) missing.push(`${path}: ${msg}`);
       }
     }
     expect(missing).toEqual([]);

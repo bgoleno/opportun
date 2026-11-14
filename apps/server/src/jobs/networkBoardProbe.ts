@@ -231,13 +231,44 @@ export async function queueNightForUser(db: Db, ctx: UserCtx, now: number): Prom
   return picks.length;
 }
 
-/** The nightly sweep: each user's setting is read at the start of that user's run. */
-export async function sweepNetworkProbes(db: Db, now: number = Date.now()): Promise<number> {
+/** What one sweep did: counts only, no company names (the job's result). */
+export interface SweepResult {
+  queued: number;
+  /** Users whose night could not be queued: each is logged, and the sweep went on past it. */
+  failedUsers: number;
+}
+
+/**
+ * The nightly sweep: each user's setting is read at the start of that user's run.
+ *
+ * A failure while queuing one user's night (a database error, a stored setting that does not
+ * parse) is that user's alone: it is logged with the user and the error's type, never its
+ * message, which can name a company, and the sweep goes on to the next user. Rethrowing would
+ * leave every later user with no probes that night, and the job's retry would stop at the same
+ * user again (https://github.com/bgoleno/opportun/issues/515). `queue` is the per-user step,
+ * replaceable only so a test can make one user's fail.
+ */
+export async function sweepNetworkProbes(
+  db: Db,
+  now: number = Date.now(),
+  opts: { log: Pick<SourceContext['log'], 'warn'>; queue?: typeof queueNightForUser },
+): Promise<SweepResult> {
+  const queue = opts.queue ?? queueNightForUser;
   const all = await db.select({ id: users.id }).from(users).all();
   let queued = 0;
-  for (const { id } of all)
-    queued += await queueNightForUser(db, { userId: id, isAdmin: false }, now);
-  return queued;
+  let failedUsers = 0;
+  for (const { id } of all) {
+    try {
+      queued += await queue(db, { userId: id, isAdmin: false }, now);
+    } catch (err) {
+      failedUsers += 1;
+      opts.log.warn(
+        { 'user.id': id, 'error.type': err instanceof Error ? err.name : 'Error' },
+        "network probe sweep: one user's night could not be queued; the sweep goes on",
+      );
+    }
+  }
+  return { queued, failedUsers };
 }
 
 /** Cancels the user's pending network probes: a vendor said slow down. */
@@ -440,6 +471,8 @@ export const networkProbeSweepJob: JobHandler<Record<string, never>> = {
   maxAttempts: 2,
   async run(db, _payload, ctx) {
     // Counts only: no company names in the job's result.
-    await ctx.setResult({ queued: await sweepNetworkProbes(db) });
+    await ctx.setResult(
+      await sweepNetworkProbes(db, Date.now(), { log: requireService(ctx, 'log') }),
+    );
   },
 };

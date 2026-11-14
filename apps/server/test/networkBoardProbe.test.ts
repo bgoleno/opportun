@@ -9,21 +9,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetSources, type SourceContext } from '../src/adapters/discoverySource';
 import { companies, jobs } from '../src/db/schema';
 import { slugCandidates } from '../src/jobs/atsDetect';
+import { enqueue } from '../src/jobs/runner';
 import {
   NETWORK_BOARD_CHECK_SETTING,
   NETWORK_PROBE_FAILED_NIGHTS,
   NETWORK_PROBE_KIND,
   NETWORK_PROBE_STOPPED,
+  NETWORK_PROBE_SWEEP_KIND,
   NETWORK_PROBES_PER_NIGHT,
   nightStart,
   queueNightForUser,
   sweepNetworkProbes,
 } from '../src/jobs/networkBoardProbe';
 import { createSafeFetch, FetchBlockedError, type RawResponse } from '../src/lib/safeFetch';
+import { gateLogLine } from '../src/obs/log';
 import { listSources } from '../src/repos/discovery';
 import { userSettingExists, writeUserSetting } from '../src/repos/userSettings';
 import { useApi } from './api';
-import type { TestClient } from './isolation';
+import { registerAnotherUser, type TestClient } from './isolation';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -163,7 +166,7 @@ const probeJobs = (app: FastifyInstance, c: TestClient) =>
 async function night(app: FastifyInstance, now: number, fetch: SourceContext['fetch']) {
   vi.setSystemTime(now);
   app.jobs.services.sourceFetch = fetch;
-  const queued = await sweepNetworkProbes(app.db, now);
+  const { queued } = await sweepNetworkProbes(app.db, now, { log: app.log });
   await app.jobs.drain();
   return queued;
 }
@@ -241,7 +244,7 @@ describe('the nightly network probe (#296)', () => {
       const n = net(boardFor('initech', 'Platform Engineer'));
       vi.setSystemTime(at0520(12));
       app.jobs.services.sourceFetch = n.fetch;
-      expect(await sweepNetworkProbes(app.db, at0520(12))).toBe(1);
+      expect((await sweepNetworkProbes(app.db, at0520(12), { log: app.log })).queued).toBe(1);
       await turnOn(app, a, false);
       await app.jobs.drain();
       expect(n.called).toEqual([]);
@@ -325,7 +328,7 @@ describe('the nightly network probe (#296)', () => {
       const n = net();
       vi.setSystemTime(at0520(12));
       app.jobs.services.sourceFetch = n.fetch;
-      expect(await sweepNetworkProbes(app.db, at0520(12))).toBe(1);
+      expect((await sweepNetworkProbes(app.db, at0520(12), { log: app.log })).queued).toBe(1);
       await app.db
         .update(companies)
         .set({ atsKind: 'ats_workday', atsRef: 'initech/External' })
@@ -653,6 +656,66 @@ describe('the nightly network probe (#296)', () => {
     });
   });
 
+  // https://github.com/bgoleno/opportun/issues/515: a failure while queuing one user's night (a
+  // database error, a stored setting that does not parse) threw out of the sweep, and its retry
+  // stopped at the same user, so every later user got no probes that night.
+  describe('the sweep across users', () => {
+    it('goes on past a user whose night fails to queue, logs that user once, and counts the failure', async () => {
+      const { app, a, b } = await boot();
+      const c = await registerAnotherUser(app, 'isolation-c@example.com');
+      for (const u of [a, b, c]) await inNetwork(u, 'Initech');
+
+      // The second user's queuing throws, whichever user the sweep reaches second.
+      let calls = 0;
+      let failedUser: string | undefined;
+      const queue: typeof queueNightForUser = async (db, ctx, now) => {
+        calls += 1;
+        if (calls === 2) {
+          failedUser = ctx.userId;
+          throw new SyntaxError('Unexpected token in JSON at position 0 (Initech)');
+        }
+        return queueNightForUser(db, ctx, now);
+      };
+      const warn = vi.fn();
+      const log = { ...app.log, warn } as unknown as typeof app.log;
+
+      const result = await sweepNetworkProbes(app.db, at0520(12), { log, queue });
+
+      expect(result).toEqual({ queued: 2, failedUsers: 1 });
+      expect(calls).toBe(3);
+      for (const u of [a, b, c]) {
+        expect((await probeJobs(app, u)).length, u.userId).toBe(u.userId === failedUser ? 0 : 1);
+      }
+      // One entry: the user and the error's type, nothing from its message (which can name a
+      // company), and no company name anywhere.
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).toEqual({
+        'user.id': failedUser,
+        'error.type': 'SyntaxError',
+      });
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('Initech');
+      // And the production log gate keeps that entry: a message missing from LOG_MESSAGES would
+      // reach the log as "[message withheld]" with neither field (tl on #525).
+      const [fields, msg] = warn.mock.calls[0]! as [Record<string, unknown>, string];
+      const gated = JSON.parse(
+        gateLogLine(JSON.stringify({ level: 40, time: 1, msg, ...fields }), () => undefined)!,
+      ) as Record<string, unknown>;
+      expect(gated).toMatchObject({ msg, 'user.id': failedUser, 'error.type': 'SyntaxError' });
+    });
+
+    it('the job records the failed users with the queued count', async () => {
+      const { app, a } = await boot();
+      await inNetwork(a, 'Initech');
+      vi.setSystemTime(at0520(12));
+      app.jobs.services.sourceFetch = net().fetch;
+      const id = await enqueue(app.db, NETWORK_PROBE_SWEEP_KIND, {});
+      await app.jobs.drain();
+      const row = (await app.db.select().from(jobs).where(eq(jobs.id, id)).get())!;
+      expect(row.status).toBe('done');
+      expect(row.result).toEqual({ queued: 1, failedUsers: 0 });
+    });
+  });
+
   describe('a company that changed between the pick and the probe', () => {
     it('denied: no request at all, and nothing stored', async () => {
       const { app, a } = await boot();
@@ -661,7 +724,7 @@ describe('the nightly network probe (#296)', () => {
       const n = net(boardFor('initech', 'Platform Engineer'));
       vi.setSystemTime(at0520(12));
       app.jobs.services.sourceFetch = n.fetch;
-      await sweepNetworkProbes(app.db, at0520(12));
+      await sweepNetworkProbes(app.db, at0520(12), { log: app.log });
       const res = await a.request({
         method: 'PATCH',
         url: `/api/v1/companies/${id}`,
@@ -680,7 +743,7 @@ describe('the nightly network probe (#296)', () => {
       const n = net(boardFor('initech', 'Platform Engineer'));
       vi.setSystemTime(at0520(12));
       app.jobs.services.sourceFetch = n.fetch;
-      await sweepNetworkProbes(app.db, at0520(12));
+      await sweepNetworkProbes(app.db, at0520(12), { log: app.log });
       const res = await a.request({
         method: 'PATCH',
         url: `/api/v1/companies/${id}`,
