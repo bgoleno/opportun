@@ -10,6 +10,8 @@ import {
   type FillPlan,
   type FillReport,
 } from '../src/greenhouseFill';
+import { isFillReport } from '../src/fillReport';
+import { NOT_FILLED_WORDS } from '../src/prefill';
 import {
   BOARD,
   EDUCATION,
@@ -1075,5 +1077,75 @@ describe('a label shared with a self-identification question', () => {
     expect(on(p, 'question_9000303')).toEqual([]);
     expect(report.filled).not.toContain('Placeholder shared');
     expect(report.notFilled).toContainEqual({ label: 'Placeholder shared', reason: 'ambiguous' });
+  });
+});
+
+// #531 (tl's review of #507): a popup closed mid-fill leaves its filler running in the page. The
+// filler marks the page while it waits on its lists, and another fill is refused until it ends.
+describe('one fill at a time in the page (#531)', () => {
+  it('a second fill while one waits on its lists is refused and writes nothing; after it, a fill runs', async () => {
+    const p = page();
+    standInList(p, 'school--0', { options: () => [], arrive: 'never' });
+    const first = fillGreenhouseForm(plan({ lists: [LISTS[2]!] }), p.doc);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(p.timers.pending()).toBe(1);
+    const before = p.events.length;
+    const second = await fillGreenhouseForm(
+      plan({ standard: [{ id: 'first_name', name: 'First name', value: 'Jane' }] }),
+      p.doc,
+    );
+    expect(second).toEqual({ ok: false, reason: 'fill_running' });
+    // The popup takes this report as it is, not as a tab it could not run in (qa's live run at
+    // 66dab73: the check in popup.ts knew only wrong_page and no_form).
+    expect(isFillReport(second)).toBe(true);
+    expect(p.events.slice(before)).toEqual([]);
+    expect(valueOf(p.doc, 'first_name')).toBe('');
+    // The first ends (its timer), and the page is free again.
+    p.timers.fire();
+    expect((await first).ok).toBe(true);
+    const third = ok(
+      await fillGreenhouseForm(
+        plan({ standard: [{ id: 'first_name', name: 'First name', value: 'Jane' }] }),
+        p.doc,
+      ),
+    );
+    expect(third.filled).toContain('First Name');
+    expect(valueOf(p.doc, 'first_name')).toBe('Jane');
+  });
+});
+
+// What the popup accepts back from the tab (src/fillReport.ts): every reason the popup has words
+// for, so a reason added to the filler and to prefill.ts is not taken for a broken tab.
+describe('the popup accepts every report the filler can give', () => {
+  it('a report with each not-filled reason the popup has words for', () => {
+    expect(NOT_FILLED_WORDS.size).toBeGreaterThan(0);
+    for (const reason of NOT_FILLED_WORDS.keys()) {
+      expect(
+        isFillReport({
+          ok: true,
+          chosen: [],
+          filled: [],
+          notFilled: [{ label: 'School', reason }],
+          resume: null,
+        }),
+        reason,
+      ).toBe(true);
+    }
+  });
+
+  it('each stop the filler returns, and nothing else', () => {
+    for (const reason of ['wrong_page', 'no_form', 'fill_running']) {
+      expect(isFillReport({ ok: false, reason }), reason).toBe(true);
+    }
+    expect(isFillReport({ ok: false, reason: 'elsewhere' })).toBe(false);
+    expect(
+      isFillReport({
+        ok: true,
+        chosen: [],
+        filled: [],
+        notFilled: [{ label: 'School', reason: 'elsewhere' }],
+        resume: null,
+      }),
+    ).toBe(false);
   });
 });
