@@ -28,6 +28,11 @@ export type GetLike = (url: string, init: GetInit) => Promise<FetchResponse>;
  */
 export const RESUME_CHECKS = 6;
 export const RESUME_GAP_MS = 300;
+/**
+ * How long the popup waits for the resume copy before it stops (#531, tl's review of #507): the
+ * buttons are held while it downloads, and a server that never finishes must not hold them.
+ */
+export const RESUME_FETCH_MS = 30_000;
 
 /** The server's snapshot ceiling (10 MB, #115); anything larger is not attached. */
 export const MAX_RESUME_BYTES = 10 * 1024 * 1024;
@@ -410,7 +415,9 @@ export function renderPrefillStop(
     | { kind: 'other_posting'; destinationUrl: string }
     | { kind: 'inject_failed' }
     | { kind: 'wrong_page' }
-    | { kind: 'no_form' },
+    | { kind: 'no_form' }
+    | { kind: 'fill_running' }
+    | { kind: 'resume_timeout' },
 ): Rendered {
   const nothing = 'Nothing was filled.';
   switch (stop.kind) {
@@ -479,6 +486,18 @@ export function renderPrefillStop(
       return {
         tone: 'error',
         text: `The tab moved off this application's posting before filling. ${nothing}`,
+      };
+    // #531: an earlier window's fill is still choosing in this page's lists.
+    case 'fill_running':
+      return {
+        tone: 'error',
+        text: `A fill from an earlier window is still running on this page. Wait a few seconds for it to finish, then check the form. ${nothing}`,
+      };
+    // #531: the resume copy did not arrive within RESUME_FETCH_MS.
+    case 'resume_timeout':
+      return {
+        tone: 'error',
+        text: `Your resume could not be fetched from your server in time. Try again. ${nothing}`,
       };
     case 'no_form':
       return {
