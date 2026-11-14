@@ -156,6 +156,16 @@ which was tagged by hand from `main` on 2026-11-13, and what merged after it.
   careers page is not a guess and is unchanged
   ([#514](https://github.com/bgoleno/opportun/issues/514); PR
   [#526](https://github.com/bgoleno/opportun/pull/526)).
+- **A company whose nightly board check keeps getting refused is checked less often.** When a
+  company's own request to a job-board vendor is told to slow down or gets no answer, the vendor is
+  stopped for the night as before, and that company is now parked out of the nightly pick, for 1
+  night, then 2, 4 and 8, and 8 at most, until one of its checks is answered. So it no longer
+  holds up other users' checks on that vendor. Nothing is recorded about its board, no failed
+  night is counted, and nothing about it shows in the app. **On upgrade:** two columns are added to
+  `companies`, `board_probe_stops` and `board_probe_parked_until` (SQLite migration 0067, Postgres
+  0049); they travel in the data export like the other company columns
+  ([#518](https://github.com/bgoleno/opportun/issues/518); PR
+  [#533](https://github.com/bgoleno/opportun/pull/533)).
 - **One user's failure in the nightly network board check no longer stops it for everyone
   else.** If queuing one user's probes failed (a database error, a stored setting that does not
   parse), every later user got no probes that night and the retry stopped at the same user. The
