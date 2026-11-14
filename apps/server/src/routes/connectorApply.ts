@@ -160,6 +160,9 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
     async (req) => {
       const ctx = requireDevice(req);
       const found = await handedOffForPage(db, ctx, req.query.url);
+      // Since #403 the popup makes this read whenever it opens over a Greenhouse posting, not only
+      // on its button: so this audit row, and one of the token's reads, now also mean "the popup
+      // was opened there", a miss included.
       await audit(db, 'submission.prefill_read', {
         userId: ctx.userId,
         ip: req.ip,

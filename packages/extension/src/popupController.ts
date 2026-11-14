@@ -650,6 +650,10 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     try {
       const tab = await deps.activeTab();
       const posting = tab?.url === undefined ? null : greenhouseJobOf(tab.url);
+      // The Fill button is held disabled from before the section shows until the open path has
+      // decided whether it fills (#403, tl's blocking 1 at 650aaf7): a click and the open never
+      // run two fills at once. A disabled button takes no click, by mouse or keyboard.
+      if (posting !== null && tab?.url !== undefined) prefillButton.disabled = true;
       assist.hidden = posting === null;
       // Any https page may be a thank-you page; which one counts is the server's to say.
       confirm.hidden = tab?.url === undefined || !isHttpsPage(tab.url);
@@ -661,7 +665,13 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       assist.hidden = true;
       confirm.hidden = true;
     }
-    if (opened !== null) await fillOnOpen(opened.tab, opened.posting);
+    try {
+      if (opened !== null) await fillOnOpen(opened.tab, opened.posting);
+    } finally {
+      // Released on every way out, a failure before the lookup included, so the button is never
+      // left held. (A fill the open started released it already, at the end of its busy().)
+      prefillButton.disabled = false;
+    }
   })();
 
   // Fills an empty address field from the download's baked config, once that read finishes, but

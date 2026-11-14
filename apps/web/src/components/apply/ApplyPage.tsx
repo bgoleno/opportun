@@ -1421,14 +1421,16 @@ function ExtensionSteps({ host }: { host: string }) {
  * Whether the extension has been there (#403 slice 2, tl's note on #403, change 1): the time the
  * server recorded its first read of this attempt. "Not filled yet" only where the extension can
  * fill this form, so nothing is promised that the user's setup cannot do. The attempt is read
- * again when the user comes back to the tab, so the line follows.
+ * again when the user comes back to the tab, so the line follows. "If it is empty": the first read
+ * is used up even when the popup then filled nothing (a stale review, a failed injection, a popup
+ * closed first), so the line never says the form was filled (tl at 650aaf7).
  */
 function ExtensionRead({ live, canFill }: { live: SubmissionView; canFill: boolean }) {
   if (live.prefillReadAt != null) {
     return (
       <p role="status">
-        The extension read this application at {formatDateTime(live.prefillReadAt)}. Check the form
-        and press Submit there.
+        The extension read this application at {formatDateTime(live.prefillReadAt)}. Check the form,
+        and press Fill in this application in the extension if it is empty.
       </p>
     );
   }

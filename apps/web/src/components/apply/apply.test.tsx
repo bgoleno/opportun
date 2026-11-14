@@ -1169,19 +1169,27 @@ describe('#416: the next step names the extension only where it can fill this fo
     );
     const line = await screen.findByText(/The extension read this application at/);
     expect(line).toHaveTextContent(
-      `The extension read this application at ${formatDateTime(NOW + MIN)}. Check the form and press Submit there.`,
+      `The extension read this application at ${formatDateTime(NOW + MIN)}. Check the form, and press Fill in this application in the extension if it is empty.`,
     );
     expect(screen.queryByText('Not filled by the extension yet.')).toBeNull();
   });
 
   it('coming back to the tab reads the attempt again, so the line follows', async () => {
+    // The extension reads the application while the user is on the form (tl at 650aaf7: the
+    // second answer carries a time, so the line itself is seen to change).
+    let readAt: number | null = null;
     const api = mockApi({
-      ...routes(submission({ status: 'handed_off', handedOffAt: NOW, prefillReadAt: null })),
+      ...routes(null),
+      'GET /opportunities/opp-1/submissions': () => ({
+        items: [submission({ status: 'handed_off', handedOffAt: NOW, prefillReadAt: readAt })],
+        total: 1,
+      }),
       'GET /device-tokens': { items: [token()] },
     });
     renderStep('open');
     expect(await screen.findByText('Not filled by the extension yet.')).toBeVisible();
     const before = calls(api.calls, 'GET', '/opportunities/opp-1/submissions').length;
+    readAt = NOW + MIN;
     focusManager.setFocused(false);
     focusManager.setFocused(true);
     await waitFor(() =>
@@ -1189,6 +1197,8 @@ describe('#416: the next step names the extension only where it can fill this fo
         before,
       ),
     );
+    expect(await screen.findByText(/The extension read this application at/)).toBeVisible();
+    expect(screen.queryByText('Not filled by the extension yet.')).toBeNull();
     focusManager.setFocused(undefined);
   });
 

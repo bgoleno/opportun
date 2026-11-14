@@ -824,6 +824,8 @@ describe('#191: a popup that closes before the resume check ends', () => {
     // The popup is gone mid-check: its next look never comes back.
     first.deps.runResumeCheck = vi.fn(() => new Promise<number | null>(() => undefined));
     await mountPopup(first.doc, first.deps);
+    // The open's lookup decides first: the button is held until it has (#403).
+    await settleOpen(first);
     first.$('prefill').click();
     await vi.waitFor(() => expect(first.$('status').textContent).toBe(RESUME_CHECKING));
     expect(store.data['resumeCheckPending:7']).not.toBeNull();
@@ -902,6 +904,8 @@ describe('#402 slice 2: the fill waits for lists, and the report lists every cho
       return run(tabId, plan);
     });
     await mountPopup(s.doc, s.deps);
+    // The open's lookup decides first: the button is held until it has (#403).
+    await settleOpen(s);
     s.$('prefill').click();
     await vi.waitFor(() => expect(s.$('status').textContent).toBe(FILLING));
     expect(store.data['resumeCheckPending:7']).toEqual({
@@ -921,6 +925,8 @@ describe('#402 slice 2: the fill waits for lists, and the report lists every cho
     const first = setup({ checkStore: store });
     first.deps.runFill = vi.fn(() => new Promise<null>(() => undefined));
     await mountPopup(first.doc, first.deps);
+    // The open's lookup decides first: the button is held until it has (#403).
+    await settleOpen(first);
     first.$('prefill').click();
     await vi.waitFor(() => expect(first.$('status').textContent).toBe(FILLING));
 
@@ -1096,6 +1102,53 @@ describe('#403: opening the popup on the handed-off posting fills it, once', () 
     for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
     expect(s.get).not.toHaveBeenCalled();
     expect(s.$('status').textContent).toBe('');
+  });
+
+  // tl's blocking 1 at 650aaf7 (qa reproduced it): a click while the open's lookup is out must not
+  // start a second fill beside the one the open starts.
+  it("a click while the open's lookup is out waits for it: one fill, never two at once", async () => {
+    let release: (r: FetchResponse) => void = () => undefined;
+    const held = new Promise<FetchResponse>((r) => {
+      release = r;
+    });
+    const s = setup({ current: () => held });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    // The section shows, but its button waits for the open to decide.
+    expect(s.$('assist').hidden).toBe(false);
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(true);
+    s.$('prefill').click();
+    release(first());
+    await vi.waitFor(() => expect(s.deps.runFill).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.deps.runFill).toHaveBeenCalledTimes(1);
+    // Only the open's lookup and its copy: the click sent nothing.
+    expect(s.get.mock.calls.filter(([u]) => u.includes('/current?'))).toHaveLength(1);
+  });
+
+  it('a failure before the lookup never leaves the button held', async () => {
+    const s = setup({ current: first() });
+    // tellUnfinishedCheck reads storage.session first: it fails here.
+    s.deps.checkStore = {
+      get: async () => {
+        throw new Error('storage unavailable');
+      },
+      set: async () => undefined,
+    };
+    await open(s);
+    await vi.waitFor(() => expect(s.deps.activeTab).toHaveBeenCalled());
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('after a later read on open, the button is free again and fills on a click', async () => {
+    const s = setup({ current: first({ firstRead: false }) });
+    await open(s);
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    s.$('prefill').click();
+    await vi.waitFor(() => expect(s.deps.runFill).toHaveBeenCalledTimes(1));
   });
 
   it('after the fill on open, the button still fills again on purpose', async () => {

@@ -50,6 +50,10 @@ body `{ url, title, text }`:
 The server decides what the page is. Feeds, search results, company pages, the sign-in wall
 and half-loaded pages are refused (`422 unrecognized_page`) and the popup tells you why.
 
+Assisted apply sends something too: opening the popup over a Greenhouse posting sends that
+posting's address to your own server. See **What opening the popup sends** under
+[Assisted apply](#assisted-apply-filling-a-greenhouse-application).
+
 ### Indeed
 
 Indeed jobs are read on `www.indeed.com` (and `indeed.com`) only, on a single job page
