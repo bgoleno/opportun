@@ -159,8 +159,9 @@ which was tagged by hand from `main` on 2026-11-13, and what merged after it.
 - **A company whose nightly board check keeps getting refused is checked less often.** When a
   company's own request to a job-board vendor is told to slow down or gets no answer, the vendor is
   stopped for the night as before, and that company is now parked out of the nightly pick, for 1
-  night, then 2, 4 and 8, and 8 at most, until one of its checks is answered. So it no longer
-  holds up other users' checks on that vendor. Nothing is recorded about its board, no failed
+  night, then 2, 4 and 8, and 8 at most, until one of its checks is answered. The vendor is still
+  stopped on each night the company is refused, but on fewer and fewer nights, so it holds up
+  other users' checks on that vendor less often. Nothing is recorded about its board, no failed
   night is counted, and nothing about it shows in the app. **On upgrade:** two columns are added to
   `companies`, `board_probe_stops` and `board_probe_parked_until` (SQLite migration 0067, Postgres
   0049); they travel in the data export like the other company columns
@@ -343,7 +344,7 @@ which was tagged by hand from `main` on 2026-11-13, and what merged after it.
   [#502](https://github.com/bgoleno/opportun/pull/502)).
 - **A resume copy marked Submitted counts as sent in the resume flow.** After a copy of this
   opportunity is marked Submitted, **Tailor again** now keeps the flow at "sent" and names the new
-  copy, where it used to fall back to tailoring. The newest Submitted copy counts, newer or not. With
+  copy, where it used to fall back to tailoring. A Submitted copy counts whether or not it is the newest. With
   an older Submitted copy and a newer Final one, the Resume tab shows "Sent" with a quiet **Record
   that you sent** _title_ link. The tab, the copy's own page and the Assisted apply panel all read
   the same state
@@ -419,8 +420,8 @@ which was tagged by hand from `main` on 2026-11-13, and what merged after it.
   click on its icon does, and you can rebind it or turn it off in the browser's own shortcut
   settings. The popup's lookup is bounded at 5 seconds and its work runs one at a time. In
   Opportun, the **Open** step reads "Not filled by the extension yet." until the extension has
-  read the application, then "The extension read this application at _time_. Check the form and
-  press Submit there." **On upgrade:** a nullable column `application_submissions.prefill_read_at`
+  read the application, then "The extension read this application at _time_. Check the form, and
+  press Fill in this application in the extension if it is empty." **On upgrade:** a nullable column `application_submissions.prefill_read_at`
   is added (SQLite migration 0066, Postgres 0048). Use an extension built with this change
   together with a server that has it: an older server does not say which read was the first, and
   the popup then only offers the button
@@ -428,8 +429,8 @@ which was tagged by hand from `main` on 2026-11-13, and what merged after it.
   [#507](https://github.com/bgoleno/opportun/pull/507)).
 - **The project's identifier guard in CI keeps withheld terms out of its public log.** The guard
   that fails a pull request when a withheld identifier is present now masks every term before it
-  scans, whatever the term's case, and reports a hit by file and line only, never the term or the
-  matching text. This changes the project's own CI and nothing in the running application
+  scans, and reports a hit by file and line only, never the term or the
+  matching text; a path whose name holds a term, in any case, is not printed. This changes the project's own CI and nothing in the running application
   ([#520](https://github.com/bgoleno/opportun/issues/520); PR
   [#529](https://github.com/bgoleno/opportun/pull/529)).
 - **The guide now says your resume reaches Greenhouse when the extension attaches it, not
