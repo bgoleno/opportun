@@ -1,13 +1,18 @@
 # Changelog
 
-Opportun's first tagged release is [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1).
-A release is cut by running the Publish image workflow with a version: it needs a `## <version>
+Opportun's first tagged release is [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1),
+made by hand. A release is cut by running the Publish image workflow with a version: it needs a `## <version>
 (YYYY-MM-DD)` section in this file, made by renaming `## Unreleased` and starting a new one. See
 [SECURITY.md](SECURITY.md) for which versions are supported. Entries are grouped by milestone
 (requirements section 7, [docs/requirements.md](docs/requirements.md)), newest first, dated by
 when the milestone's work was merged.
 
 ## Unreleased
+
+## 0.4.0 (2026-11-13)
+
+This release includes everything in [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1),
+which was tagged by hand from `main` earlier the same day, and what merged after it.
 
 ### Upgrading: prompts, defaults and costs
 
@@ -329,9 +334,13 @@ when the milestone's work was merged.
   **Closed** rails included, where a drag could skip one of them. At either end the card does not
   move, and Up and Down still reorder within a column. Expanding or collapsing a column keeps
   keyboard focus on that column: it moves to the column's other control, **Collapse** after
-  **Expand** and the reverse. A pointer drag is unchanged
-  ([#475](https://github.com/bgoleno/opportun/issues/475); PR
-  [#505](https://github.com/bgoleno/opportun/pull/505)).
+  **Expand** and the reverse. A toggle that changes nothing on screen, such as Collapse on a
+  column the stage filter holds open, no longer moves focus later, when the filter is cleared. A
+  pointer drag is unchanged
+  ([#475](https://github.com/bgoleno/opportun/issues/475),
+  [#508](https://github.com/bgoleno/opportun/issues/508); PRs
+  [#505](https://github.com/bgoleno/opportun/pull/505),
+  [#527](https://github.com/bgoleno/opportun/pull/527)).
 - **The reason dialog for a stage move cannot be closed while the move is being saved.** From the moment you confirm until the server answers, **Cancel** is
   disabled, the corner close button is hidden, and a click outside the dialog and **Escape** do
   nothing, so a move cannot be reported as cancelled after it has gone through. If the server
@@ -500,7 +509,7 @@ when the milestone's work was merged.
 - The connector's messages name **Settings > Integrations > Extensions and Connectors** as the
   app shows it ([#235](https://github.com/bgoleno/opportun/issues/235)).
 
-### Earlier in Unreleased
+### Earlier in this release
 
 - **A message's full text is encrypted while it waits to be classified.** The text of a new
   message reaches the classifier through its job, which is cleared when the job finishes; it
