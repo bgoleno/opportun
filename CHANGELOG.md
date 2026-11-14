@@ -306,6 +306,14 @@ when the milestone's work was merged.
   and stage menu are unchanged
   ([#432](https://github.com/bgoleno/opportun/issues/432); PR
   [#474](https://github.com/bgoleno/opportun/pull/474)).
+- **On the Pipeline board, a keyboard drag reaches every column in on-screen order.** Left and
+  Right now step to the previous or next column as they appear, the collapsed **Dismissed** and
+  **Closed** rails included, where a drag could skip one of them. At either end the card does not
+  move, and Up and Down still reorder within a column. Expanding or collapsing a column keeps
+  keyboard focus on that column: it moves to the column's other control, **Collapse** after
+  **Expand** and the reverse. A pointer drag is unchanged
+  ([#475](https://github.com/bgoleno/opportun/issues/475); PR
+  [#505](https://github.com/bgoleno/opportun/pull/505)).
 - **The reason dialog for a stage move cannot be closed while the move is being saved.** From the moment you confirm until the server answers, **Cancel** is
   disabled, the corner close button is hidden, and a click outside the dialog and **Escape** do
   nothing, so a move cannot be reported as cancelled after it has gone through. If the server
