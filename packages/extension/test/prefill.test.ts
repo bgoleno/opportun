@@ -24,6 +24,7 @@ import {
   FILL_UNSEEN,
   FILLING,
   mountPopup,
+  OPEN_LOOKUP_MS,
   RESUME_CHECKING,
   RESUME_UNCONFIRMED,
   type PopupDeps,
@@ -148,6 +149,10 @@ function setup(opts: {
   });
   const plans: FillPlan[] = [];
   let waits = 0;
+  let endOpenBound: () => void = () => undefined;
+  const openBound = new Promise<void>((r) => {
+    endOpenBound = r;
+  });
   const deps: PopupDeps = {
     storage,
     fetch: vi.fn(async () => {
@@ -175,8 +180,10 @@ function setup(opts: {
           page.doc,
         ),
     ),
-    // The popup's own timer, made deterministic: each wait lets the page's pending timers run.
-    wait: vi.fn(async () => {
+    // The popup's own timer, made deterministic: each wait lets the page's pending timers run. The
+    // open's bound (#403, OPEN_LOOKUP_MS) ends only when a test calls endOpenBound().
+    wait: vi.fn(async (ms: number) => {
+      if (ms === OPEN_LOOKUP_MS) return openBound;
       waits += 1;
       opts.duringWait?.(page, waits);
       await new Promise((r) => page.window.setTimeout(r, 1));
@@ -186,7 +193,7 @@ function setup(opts: {
     bakedServerUrl: vi.fn(async () => ''),
   };
   const $ = (id: string) => doc.getElementById(id)!;
-  return { doc, deps, get, page, plans, $ };
+  return { doc, deps, get, page, plans, $, endOpenBound: () => endOpenBound() };
 }
 
 /**
@@ -197,6 +204,7 @@ async function settleOpen(s: ReturnType<typeof setup>) {
   await vi.waitFor(() => expect(s.deps.activeTab).toHaveBeenCalled());
   for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
   s.get.mockClear();
+  vi.mocked(s.deps.wait).mockClear();
 }
 
 async function clickFill(s: ReturnType<typeof setup>) {
@@ -1222,6 +1230,39 @@ describe('#403: opening the popup on the handed-off posting fills it, once', () 
     s.$('prefill').click();
     for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
     expect(fills).toHaveLength(1);
+  });
+
+  // tl at 9399746: the open's lookup is bounded, so a server that never answers cannot hold the
+  // popup's buttons on this tab (OPEN_LOOKUP_MS).
+  it('no answer within the bound: the open gives up silently and every button is free', async () => {
+    const s = setup({ current: () => new Promise<FetchResponse>(() => undefined) });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(true);
+    expect(s.deps.wait).toHaveBeenCalledWith(OPEN_LOOKUP_MS);
+    s.endOpenBound();
+    for (const id of ['capture', 'save', 'test', 'prefill', 'record']) {
+      await vi.waitFor(() => expect((s.$(id) as HTMLButtonElement).disabled).toBe(false));
+    }
+    expect(s.$('status').textContent).toBe('');
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+  });
+
+  it('a first read that arrives after the bound starts no fill', async () => {
+    let release: (r: FetchResponse) => void = () => undefined;
+    const held = new Promise<FetchResponse>((r) => {
+      release = r;
+    });
+    const s = setup({ current: () => held });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    s.endOpenBound();
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+    release(first());
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    expect(s.$('status').textContent).toBe('');
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('after a later read on open, the button is free again and fills on a click', async () => {

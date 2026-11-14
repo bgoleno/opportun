@@ -111,6 +111,12 @@ export const FILLING = `Filling in the form. ${KEEP_OPEN}`;
  */
 export const fillingFor = (title: string, company: string, host: string): string =>
   `Filling the application for ${title} at ${company} on ${host}. ${KEEP_OPEN}`;
+/**
+ * How long opening the popup waits for its lookup before giving up silently (#403, tl at
+ * 9399746): the open holds the buttons while it decides, and a server that never answers must
+ * not hold them for longer than this.
+ */
+export const OPEN_LOOKUP_MS = 5_000;
 export const FILL_UNSEEN =
   "The last fill's result was not seen: this window closed before it finished. Check every field on the form, and choose or fill in yourself anything that is wrong or empty.";
 
@@ -635,9 +641,21 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     posting: { board: string; jobId: string },
   ): Promise<void> => {
     try {
-      const s = await ready();
-      if (isOutcome(s)) return;
-      const current = await fetchCurrent(deps.get, s, tab.url);
+      // The settings and the lookup, bounded (OPEN_LOOKUP_MS): past the bound the open gives up
+      // without a word and releases the buttons, and an answer that comes later is dropped, so
+      // it can never start a fill on a popup the user has since used.
+      const decision = (async () => {
+        const s = await ready();
+        if (isOutcome(s)) return null;
+        return { s, current: await fetchCurrent(deps.get, s, tab.url) };
+      })();
+      decision.catch(() => undefined);
+      const decided = await Promise.race([
+        decision,
+        deps.wait(OPEN_LOOKUP_MS).then(() => 'gave_up' as const),
+      ]);
+      if (decided === null || decided === 'gave_up') return;
+      const { s, current } = decided;
       if (current.kind !== 'attempt' || !current.attempt.firstRead) return;
       const { attempt } = current;
       // fillAttempt checks the pinned posting again; checked here too, so another posting is
