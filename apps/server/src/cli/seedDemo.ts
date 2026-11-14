@@ -95,6 +95,7 @@ import {
   communications,
 } from '../db/schema';
 import { budgetKey, writeSetting } from '../lib/ai';
+import { DEMO_RESUME_IDS_KEY } from '../lib/demoOwnData';
 import { bindVaultKey, putSecretIn } from '../lib/secretBox';
 import { hashPassword } from '../lib/passwords';
 import { REGISTRATION_OPEN_KEY, registerUser } from '../lib/registration';
@@ -235,6 +236,28 @@ async function requireOnlyPinnedUsers(db: Exec, pinnedIds: readonly string[]): P
       `refusing to seed: a user exists (${stray.id}) that is not one of the five pinned demo ` +
         `ids. A demo instance's users are always a subset of those five; this is not one.`,
     );
+  }
+}
+
+/** Removes each of `paths` that no attachments row references any more. */
+async function removeUnreferencedFiles(
+  db: Db,
+  storage: Storage,
+  paths: readonly string[],
+): Promise<void> {
+  const candidates = [...new Set(paths)];
+  if (candidates.length === 0) return;
+  const kept = new Set(
+    (
+      await db
+        .select({ path: attachments.storedPath })
+        .from(attachments)
+        .where(inArray(attachments.storedPath, candidates))
+        .all()
+    ).map((r) => r.path),
+  );
+  for (const path of candidates) {
+    if (!kept.has(path)) await storage.removeAttachment(path);
   }
 }
 
@@ -694,12 +717,22 @@ export async function seedDemo(
   let opportunitiesPerUser = 0;
   let resumesPerUser = 0;
   let contactsPerUser = 0;
+  // The files the demo users' rows point at before the delete: a visitor's own uploads and
+  // submission snapshots among them. Removed once the reseed has committed (sec on #544).
+  let filesBefore: string[] = [];
   const deletedExisting = await withTransaction(
     db,
     async (tx) => {
       // Inside the transaction, not before it: see the header comment above for why this and
       // the delete it guards must share the same write lock, with no gap between them.
       await requireOnlyPinnedUsers(tx, userIds);
+      filesBefore = (
+        await tx
+          .select({ path: attachments.storedPath })
+          .from(attachments)
+          .where(inArray(attachments.userId, [...userIds]))
+          .all()
+      ).map((r) => r.path);
       const deleted = await deleteExistingDemoUsers(tx, userIds);
       for (let i = 0; i < DEMO_USERS.length; i++) {
         const user = DEMO_USERS[i]!;
@@ -733,6 +766,21 @@ export async function seedDemo(
       // half-seeded instance with no marker; only a failed RESET can leave partial rows behind,
       // and it does so with the marker still present (settings has no FK to cascade away),
       // which is exactly what lets the next run's checks pass and clean up on its own.
+      // The seed's own resumes, by id, beside the marker and rewritten with it: on the demo an
+      // application never carries one of them, or a copy tailored from one (lib/demoOwnData.ts,
+      // #544). A content hash would miss the tailored copies.
+      const seededResumeIds = DEMO_USERS.flatMap((_, i) => [
+        derivedId(DEMO_RESUME_BASE_ID, i),
+        ...DEMO_TAILORED_RESUMES.map((t) => derivedId(t.id, i)),
+      ]);
+      await tx
+        .insert(settings)
+        .values({ key: DEMO_RESUME_IDS_KEY, userId: null, value: seededResumeIds, updatedAt: now })
+        .onConflictDoUpdate({
+          target: settings.key,
+          set: { value: seededResumeIds, updatedAt: now },
+        })
+        .run();
       await tx
         .insert(settings)
         .values({ key: DEMO_MARKER_KEY, userId: null, value: true, updatedAt: now })
@@ -742,6 +790,11 @@ export async function seedDemo(
     },
     { scope: 'seed_demo' },
   );
+  // After the commit, never before: the reseed rewrites the seeded resumes' files with the same
+  // content, so the same hashes, and only a file that a deleted row referenced and no row now
+  // references is a visitor's to remove (sec on #544). The rows went with the users; this takes
+  // the files too, so nothing a visitor uploaded or a snapshot holds outlives the reset.
+  await removeUnreferencedFiles(db, storage, filesBefore);
 
   return {
     deletedExisting,

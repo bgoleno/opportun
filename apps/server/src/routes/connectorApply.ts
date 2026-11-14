@@ -23,6 +23,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { submissionsEnabled } from '../config';
 import { audit } from '../lib/audit';
+import { refuseFixtureData } from '../lib/demoOwnData';
 import { deviceRoute, requireDevice, requireDeviceToken } from '../lib/deviceTokens';
 import { HttpError } from '../lib/errors';
 import { rateLimit } from '../lib/rateLimit';
@@ -176,6 +177,10 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
       });
       if (found.kind === 'none') return { attempt: null, reason: found.reason };
       const { row } = found;
+      // On the demo, the last check before anything leaves for the form: a seeded identity value
+      // or resume put back behind the server's back is never sent, and nothing is marked read
+      // (#544). The refusal names the field.
+      if (app.config.demo) await refuseFixtureData(db, ctx, row);
       const firstRead = await markPrefillRead(db, ctx, row.id);
       // Each stored field through the rule the PATCH uses (core's submissionFieldProblem): a
       // value that fails it is left out, and only its key is named (#196, tl's ruling).
@@ -198,12 +203,18 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
           fields,
           ...(withheld.length > 0 ? { withheld } : {}),
           answers: row.answers,
-          resume: {
-            title: row.resumeTitle,
-            snapshotState: found.snapshotState,
-            filename: found.snapshotFile?.filename ?? null,
-            bytes: found.snapshotFile?.bytes ?? null,
-          },
+          // An attempt with no resume (the demo's, #544) still sends an object, of nulls: the
+          // extension refuses an attempt whose resume is not an object, and with no ready
+          // snapshot it fills the rest and attaches nothing (tl on #544).
+          resume:
+            row.resumeStore === null && row.resumeId === null
+              ? { title: null, snapshotState: null, filename: null, bytes: null }
+              : {
+                  title: row.resumeTitle,
+                  snapshotState: found.snapshotState,
+                  filename: found.snapshotFile?.filename ?? null,
+                  bytes: found.snapshotFile?.bytes ?? null,
+                },
           firstRead,
         },
         reason: null,

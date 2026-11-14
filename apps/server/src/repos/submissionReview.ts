@@ -29,6 +29,7 @@ import { applicationSubmissions, auditLog } from '../db/schema';
 import { boardFromUrl } from '../jobs/atsDetect';
 import { extractAtsJobRefs } from '../lib/atsJobRef';
 import { audit } from '../lib/audit';
+import { refuseFixtureData } from '../lib/demoOwnData';
 import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { isPageFetchProhibited } from '../lib/safeFetch';
@@ -274,7 +275,7 @@ type ReviewOutcome = { kind: 'reviewed'; row: SubmissionRow } | { kind: 'capped'
 export async function reviewSubmission(
   db: Db,
   ctx: UserCtx,
-  cfg: Pick<Config, 'dailyReviewCap'>,
+  cfg: Pick<Config, 'dailyReviewCap' | 'demo'>,
   id: string,
   input: ReviewInput,
 ): Promise<Submission> {
@@ -296,6 +297,9 @@ export async function reviewSubmission(
     }
     const refresh = row.status === 'reviewed' && sameDigest;
     if (row.status !== 'draft' && !refresh) throw notNow(row, 'reviewed');
+    // On the demo nothing the demo itself holds is ever reviewed for sending: no seeded identity
+    // value in a field, and no seeded resume or copy of one (#544). Under the lock, like the rest.
+    if (cfg.demo) await refuseFixtureData(tx, ctx, row);
     // The resume snapshot (#115): review waits while it is pending, and refuses a failed one
     // until the user chooses the resume again. Ready, or unsupported (the user attaches a file
     // themselves, and the review shows that), may go ahead. Under the lock, like every check.
@@ -451,7 +455,12 @@ export function destinationAllowed(
  * and re-review that lands while a handoff is in flight is either fully before it (and the
  * handoff hands off what was reviewed) or fully after it (and finds the attempt handed off).
  */
-export async function handoffSubmission(db: Db, ctx: UserCtx, id: string): Promise<HandoffResult> {
+export async function handoffSubmission(
+  db: Db,
+  ctx: UserCtx,
+  id: string,
+  opts: { demo?: boolean } = {},
+): Promise<HandoffResult> {
   await getRow(db, ctx, id);
   await racePoint('submissions.handoff');
 
@@ -460,6 +469,8 @@ export async function handoffSubmission(db: Db, ctx: UserCtx, id: string): Promi
     const row = await getRow(tx, ctx, id);
     if (row.status === 'handed_off') return handedOff(row);
     if (row.status !== 'reviewed') throw notNow(row, 'handed_off');
+    // On the demo, before anything else is weighed, so the refusal names the field (#544).
+    if (opts.demo === true) await refuseFixtureData(tx, ctx, row);
     const now = Date.now();
     if (row.reviewExpiresAt === null || row.reviewExpiresAt <= now) {
       throw new HttpError(409, 'review_expired', 'This review has expired. Review it again.');

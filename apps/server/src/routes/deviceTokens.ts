@@ -10,6 +10,7 @@ import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import {
   createDeviceToken,
+  DEMO_MAX_ACTIVE_TOKENS,
   listDeviceTokens,
   renameDeviceToken,
   revokeDeviceToken,
@@ -76,7 +77,13 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
       });
       if (!confirmed) return reply;
       const { name, scopes } = req.body;
-      const { meta, token } = await createDeviceToken(db, ctx, { name, scopes });
+      // On the demo, at most DEMO_MAX_ACTIVE_TOKENS per shared account (sec on #544).
+      const { meta, token } = await createDeviceToken(
+        db,
+        ctx,
+        { name, scopes },
+        app.config.demo ? { maxActive: DEMO_MAX_ACTIVE_TOKENS } : {},
+      );
       await audit(db, 'device_token.created', {
         userId: ctx.userId,
         ip: req.ip,
