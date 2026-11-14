@@ -12,7 +12,8 @@ import {
   type ExtractResult,
   type RawPage,
 } from './extract';
-import { clearResume, fillGreenhouseForm, resumeShown, type FillReport } from './greenhouseFill';
+import { clearResume, fillGreenhouseForm, resumeShown } from './greenhouseFill';
+import { isFillReport } from './fillReport';
 import { readConfirmationPage, type ReadPage } from './confirmation';
 import { mountPopup } from './popupController';
 import { bakedServerUrl, type SettingsStorage } from './settings';
@@ -57,23 +58,6 @@ const isExtractResult = (v: unknown): v is ExtractResult =>
     ((v as { ok?: unknown }).ok === false &&
       (v as { reason?: unknown }).reason === 'layout_unrecognized'));
 
-const NOT_FILLED_REASONS: readonly unknown[] = [
-  'choose_on_form',
-  'not_in_review',
-  'no_matching_question',
-  'has_value',
-  'not_shown',
-  'ambiguous',
-  'attach_yourself',
-  'attach_file_yourself',
-  'resume_unchecked',
-  'withheld',
-  'no_option',
-  'several_options',
-  'list_not_shown',
-  'not_confirmed',
-];
-
 /** What readConfirmationPage may return; anything else from the tab is treated as a failure. */
 const isReadPage = (v: unknown): v is ReadPage =>
   typeof v === 'object' &&
@@ -81,50 +65,6 @@ const isReadPage = (v: unknown): v is ReadPage =>
   typeof (v as ReadPage).href === 'string' &&
   typeof (v as ReadPage).title === 'string' &&
   typeof (v as ReadPage).text === 'string';
-
-/** What fillGreenhouseForm may return; anything else from the tab is treated as a failure. */
-const isFillReport = (v: unknown): v is FillReport => {
-  if (typeof v !== 'object' || v === null) return false;
-  const r = v as {
-    ok?: unknown;
-    reason?: unknown;
-    chosen?: unknown;
-    filled?: unknown;
-    notFilled?: unknown;
-  };
-  if (r.ok === false) return r.reason === 'wrong_page' || r.reason === 'no_form';
-  const resume = (v as { resume?: unknown }).resume;
-  const resumeOk =
-    resume === null ||
-    (typeof resume === 'object' &&
-      resume !== null &&
-      typeof (resume as { filename?: unknown }).filename === 'string' &&
-      typeof (resume as { size?: unknown }).size === 'number' &&
-      typeof (resume as { before?: unknown }).before === 'number');
-  return (
-    r.ok === true &&
-    resumeOk &&
-    Array.isArray(r.chosen) &&
-    r.chosen.every(
-      (c: unknown) =>
-        typeof c === 'object' &&
-        c !== null &&
-        typeof (c as { label?: unknown }).label === 'string' &&
-        typeof (c as { text?: unknown }).text === 'string',
-    ) &&
-    Array.isArray(r.filled) &&
-    r.filled.every((l) => typeof l === 'string') &&
-    Array.isArray(r.notFilled) &&
-    r.notFilled.every(
-      (n: unknown) =>
-        typeof n === 'object' &&
-        n !== null &&
-        typeof (n as { label?: unknown }).label === 'string' &&
-        NOT_FILLED_REASONS.includes((n as { reason?: unknown }).reason) &&
-        ['string', 'undefined'].includes(typeof (n as { detail?: unknown }).detail),
-    )
-  );
-};
 
 void mountPopup(document, {
   storage: chrome.storage.local,

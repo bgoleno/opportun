@@ -17,6 +17,7 @@ import {
   fetchResume,
   greenhouseJobOf,
   RESUME_CHECKS,
+  RESUME_FETCH_MS,
   RESUME_GAP_MS,
   type GetLike,
   type PrefillAttempt,
@@ -440,15 +441,30 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       show(renderPrefillStop({ kind: 'other_posting', destinationUrl: attempt.destinationUrl }));
       return;
     }
-    const resume = await fetchResume(deps.get, s, attempt);
+    // Said before the resume is downloaded (#531, tl's review of #507): the download is part of the
+    // fill, and the popup is never blank while it runs.
+    show({ tone: 'info', text: filling });
+    // Bounded (RESUME_FETCH_MS): the buttons are held while it runs, so a server that never
+    // finishes must not hold them. Past the bound, nothing is filled and the popup says why; an
+    // answer that comes later is dropped. A fill from an earlier window is found by the filler, in
+    // the page, after this: a fill it refuses may still have downloaded the copy (tl on #556).
+    const download = fetchResume(deps.get, s, attempt);
+    download.catch(() => undefined);
+    const resume = await Promise.race([
+      download,
+      deps.wait(RESUME_FETCH_MS).then(() => 'timed_out' as const),
+    ]);
+    if (resume === 'timed_out') {
+      show(renderPrefillStop({ kind: 'resume_timeout' }));
+      return;
+    }
     if (resume.kind === 'review_stale') {
       show(renderPrefillStop({ kind: 'none', reason: 'review_stale' }));
       return;
     }
     const plan = buildPlan(attempt, pinned, resume.kind === 'file' ? resume.base64 : null);
-    // The fill now waits for each list (#402 slice 2): say so, and leave a note for the next
-    // popup on this tab in case this one closes before the report arrives.
-    show({ tone: 'info', text: filling });
+    // The fill waits for each list (#402 slice 2): leave a note for the next popup on this tab
+    // in case this one closes before the report arrives.
     const fillNote: CheckPending = {
       tabId: tab.id,
       board: pinned.board,

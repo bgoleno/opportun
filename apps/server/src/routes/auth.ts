@@ -6,9 +6,11 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { and, asc, eq, inArray, max } from 'drizzle-orm';
 import QRCode from 'qrcode';
 import { z } from 'zod';
-import { isUniqueViolation, withTransaction } from '../db/client';
+import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
 import { auditLog, settings, users } from '../db/schema';
 import { audit } from '../lib/audit';
+import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
+import { isSharedDemoAdmin } from '../lib/demoSharedAdmin';
 import { racePoint } from '../lib/racePoints';
 import { revokeAllDeviceTokens } from '../lib/deviceTokens';
 import { resetUserPassword } from '../lib/passwordReset';
@@ -25,6 +27,7 @@ import {
   hashPassword,
   hashVersion,
   NO_PEPPERS,
+  passwordScope,
   verifyPasswordWithUpgrade,
 } from '../lib/passwords';
 import { rateLimit } from '../lib/rateLimit';
@@ -43,7 +46,7 @@ import {
   redeemPendingToken,
 } from '../lib/twoFactor';
 import { clearCsrfCookie, isSecureRequest, issueCsrfCookie } from '../plugins/security';
-import { requireUser } from '../repos/base';
+import { requireUser, type UserCtx } from '../repos/base';
 
 export const SESSION_COOKIE = 'opportun_session';
 export { REGISTRATION_OPEN_KEY };
@@ -204,6 +207,9 @@ export async function startUserSession(
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
   const db = app.db;
+  /** The users an admin list shows: every one, or the pinned ones for the shared demo admin. */
+  const sharedOnly = (ctx: UserCtx) =>
+    isSharedDemoAdmin(app.config, ctx) ? inArray(users.id, [...SHARED_DEMO_IDS]) : undefined;
   const peppers = app.config.peppers ?? NO_PEPPERS;
   /** Session cookie attributes, Secure following the request's scheme (ADR-14). */
   const cookieOpts = (req: FastifyRequest) =>
@@ -690,6 +696,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // The revocation, when asked (#523), commits with the new hash or not at all: a refused
       // change revokes nothing, and a crash cannot leave the password changed and tokens live.
       const changed = await withTransaction(db, async (tx) => {
+        // The lock a token minted after a password check takes (#539): such a mint waits for
+        // this change, then finds the hash it verified gone and creates nothing.
+        await lockScope(tx, passwordScope(user.id));
         const row = await tx
           .update(users)
           .set({ passwordHash, updatedAt: Date.now() })
@@ -792,6 +801,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           lastSeenAt: users.lastSeenAt,
         })
         .from(users)
+        // The shared demo admin sees the pinned accounts only (#563): a dedicated account's email
+        // and name are not every invitee's to read.
+        .where(sharedOnly(ctx))
         .orderBy(asc(users.createdAt), asc(users.id))
         .all();
       return reply.code(200).send({ items });
@@ -816,6 +828,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           passwordHash: users.passwordHash,
         })
         .from(users)
+        .where(sharedOnly(ctx))
         .orderBy(asc(users.createdAt), asc(users.id))
         .all();
       const notYetCurrent = rows.filter(
@@ -886,6 +899,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         action: 'admin.reset_password',
       });
       if (!confirmed) return reply;
+      // The shared demo admin resets pinned accounts only (#563), and is told so before any
+      // lookup: a dedicated account's id is not confirmed or denied.
+      if (isSharedDemoAdmin(app.config, ctx) && !SHARED_DEMO_IDS.has(targetId)) {
+        return fail(reply, 403, 'forbidden');
+      }
       const target = await db
         .select({ id: users.id })
         .from(users)

@@ -13,6 +13,8 @@ import {
   FINISH_REASONS,
   GEN_AI_METRIC,
   KEY_CHECK_TASK,
+  OPERATION_BATCH_COLLECT,
+  OPERATION_BATCH_SUBMIT,
   OPERATION_CHAT,
   OPERATION_INVOKE_WORKFLOW,
   OUTPUT_TYPES,
@@ -295,7 +297,16 @@ export const ATTRIBUTES = {
   'opportun.artifact.target': { kind: 'enum', values: ['chrome', 'firefox'] },
 
   // Gen AI (14.5), FR-T4 part 2. The names are @opportun/ai's.
-  [ATTR.operationName]: { kind: 'enum', values: [OPERATION_CHAT, OPERATION_INVOKE_WORKFLOW] },
+  [ATTR.operationName]: {
+    kind: 'enum',
+    values: [
+      OPERATION_CHAT,
+      OPERATION_INVOKE_WORKFLOW,
+      // A batch's two (#509): the conventions name no batch operation.
+      OPERATION_BATCH_SUBMIT,
+      OPERATION_BATCH_COLLECT,
+    ],
+  },
   [ATTR.providerName]: { kind: 'enum', values: WIRE_PROVIDERS },
   [ATTR.aiProvider]: { kind: 'enum', values: PROVIDERS },
   [ATTR.requestModel]: { kind: 'model', source: MODEL_SOURCE },
@@ -330,6 +341,18 @@ export const ATTRIBUTES = {
   [ATTR.agentName]: { kind: 'enum', values: WORKFLOWS },
   [ATTR.tokenModality]: { kind: 'enum', values: ['text'] },
   [ATTR.costEstimated]: { kind: 'bool' },
+  // A batch's own (#509, tl's ruling on #509).
+  [ATTR.batchId]: {
+    kind: 'code',
+    source: "the provider's id for a batch, as its batch API returns it",
+    // Chosen by the provider, as a response id is: local only (14.8).
+    localOnly: true,
+  },
+  [ATTR.batchRequests]: int,
+  [ATTR.batchSucceeded]: int,
+  [ATTR.batchErrored]: int,
+  [ATTR.batchExpired]: int,
+  [ATTR.batchCanceled]: int,
 } as const satisfies Record<string, AttrType>;
 
 export type AttrKey = keyof typeof ATTRIBUTES;
@@ -492,6 +515,44 @@ export const SPANS = {
       'error.type',
     ],
   },
+  // A batch's submit and collect, made by packages/ai (inBatchSpan, #509): one span each, never
+  // one for each request. A model not shaped like one leaves the operation alone as the name.
+  'gen_ai.batch_submit': {
+    template: 'batch_submit {gen_ai.request.model}',
+    kind: 'client',
+    attributes: [
+      ATTR.operationName,
+      ATTR.providerName,
+      ATTR.aiProvider,
+      ATTR.requestModel,
+      ATTR.batchRequests,
+      ATTR.batchId,
+      ATTR.errorType,
+      ATTR.userId,
+    ],
+  },
+  'gen_ai.batch_collect': {
+    template: 'batch_collect {gen_ai.request.model}',
+    kind: 'client',
+    attributes: [
+      ATTR.operationName,
+      ATTR.providerName,
+      ATTR.aiProvider,
+      ATTR.requestModel,
+      ATTR.batchId,
+      ATTR.batchSucceeded,
+      ATTR.batchErrored,
+      ATTR.batchExpired,
+      ATTR.batchCanceled,
+      ATTR.usageInputTokens,
+      ATTR.usageOutputTokens,
+      ATTR.usageCacheReadInputTokens,
+      ATTR.usageCacheWriteInputTokens,
+      ATTR.usageCost,
+      ATTR.errorType,
+      ATTR.userId,
+    ],
+  },
   // One per router call, made by packages/ai (InferenceSpan). The span store and the export
   // wrapper rebuild it from this entry; a model not shaped like one leaves the name `chat`.
   'gen_ai.inference': {
@@ -593,6 +654,7 @@ export const AUDIT_EVENTS = [
   'data.export',
   'data.import_queued',
   'data.linkedin_import_queued',
+  'demo.dedicated_account_created',
   'demo.reset',
   'device_token.created',
   'device_token.renamed',

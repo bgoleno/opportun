@@ -109,7 +109,7 @@ export type FillReport =
        */
       resume: { filename: string; size: number; before: number } | null;
     }
-  | { ok: false; reason: 'wrong_page' | 'no_form' };
+  | { ok: false; reason: 'wrong_page' | 'no_form' | 'fill_running' };
 
 /** What resumeShown and clearResume are given: the posting, and the file the filler set. */
 export interface ResumeCheck {
@@ -124,6 +124,13 @@ export async function fillGreenhouseForm(
 ): Promise<FillReport> {
   const view = doc.defaultView;
   if (view === null) return { ok: false, reason: 'no_form' };
+  // One fill at a time in this page (#531, tl's review of #507): a popup closed mid-fill leaves its
+  // filler waiting on the lists here, and a second one beside it would write over it. The mark is
+  // set on the extension's own window (its isolated world: the page can neither see nor set it)
+  // while the lists are chosen, and a fill that finds it writes nothing. Written as a literal: this
+  // function runs on its own in the page, with nothing from this module.
+  const marks = view as unknown as Record<string, unknown>;
+  if (marks.__opportunFillRunning === true) return { ok: false, reason: 'fill_running' };
 
   // The page must still be the posting the attempt was handed off to.
   let here: URL | null;
@@ -584,121 +591,127 @@ export async function fillGreenhouseForm(
     box.closest('div.select__value-container')?.querySelector('.select__single-value') != null;
 
   // The lists, one at a time: write the value, open the list, wait, choose the one equal option.
-  for (const job of lists) {
-    const { box, label, value } = job;
-    const setter = inputValue?.set;
-    // Checked again just before acting (tl's blocking 1 at 8084132): seconds may have passed
-    // since the fields were read, and the user may have opened this list or typed in it. Then
-    // it is theirs, and it is left as it is.
-    if (setter === undefined || box.getAttribute('aria-expanded') !== 'false') {
-      notFilled.push({ label, reason: 'choose_on_form' });
-      continue;
-    }
-    if (inUse(box)) {
-      notFilled.push({ label, reason: 'has_value' });
-      continue;
-    }
-    const want = same(value);
-    // The phone's country code: each option's text without one trailing " +digits" (sec 2.1).
-    const equal = job.country
-      ? (t: string): boolean => same(t).replace(/ \+\d{1,4}$/, '') === want
-      : (t: string): boolean => same(t) === want;
-    // Emptied only while it still holds what this fill wrote, never over the user's own text.
-    const empty = (): void => {
-      if (box.value !== value) return;
-      setter.call(box, '');
-      fire(box, 'input');
-      fire(box, 'change');
-    };
-    // Written before the list opens: the education lists ask their service, when they open, for
-    // the text the box holds then.
-    setter.call(box, value);
-    fire(box, 'input');
-    fire(box, 'change');
-    // Refused when the list opened on this fill's own write, or the box is no longer a list box:
-    // then nothing is waited for or clicked. Nothing runs between the check above and this press,
-    // so a list open then was opened by the page on that write, and the way out below closes it
-    // again: press closes only a list that is open (fs1's F3, tl and sec at 0bf9a81).
-    const refused = !press(box, true);
-    // From here the list is the user's as soon as they act in it (tl's blocking 1 at 0bf9a81): a
-    // choice shows, the box holds other text than this fill wrote, or the list closed after it
-    // had opened. Read on every look, when the timer ends, and again just before the click.
-    let opened = false;
-    const theirs = (): Found | null => {
-      const expanded = box.getAttribute('aria-expanded') === 'true';
-      if (expanded) opened = true;
-      if (box.closest('div.select__value-container')?.querySelector('.select__single-value')) {
-        return { kind: 'theirs', reason: 'has_value' };
-      }
-      if (box.value !== value || (opened && !expanded)) {
-        return { kind: 'theirs', reason: 'choose_on_form' };
-      }
-      return null;
-    };
-    // One 3 second wait for the options: "none" only when the timer ends, since they arrive more
-    // than once; when an equal option is seen, the equal ones in the list then are counted.
-    const found = refused
-      ? null
-      : await watchFor<Found>(
-          box,
-          () => {
-            const user = theirs();
-            if (user !== null) return user;
-            const equals = (optionsOf(box) ?? []).filter((o) => equal(o.textContent ?? ''));
-            const first = equals[0];
-            if (first === undefined) return null;
-            return equals.length === 1 ? { kind: 'one', option: first } : { kind: 'several' };
-          },
-          () => theirs() ?? (optionsOf(box) === null ? { kind: 'no_list' } : { kind: 'none' }),
-          3000,
-        );
-    // Theirs, during the wait or just before the click: left as it is, with no click, no
-    // emptying and no closing mouseup.
-    const user = found?.kind === 'theirs' ? found : found?.kind === 'one' ? theirs() : null;
-    if (user !== null && user.kind === 'theirs') {
-      notFilled.push({ label, reason: user.reason });
-      continue;
-    }
-    // Found, then replaced before the click: there was one, so the field is "choose it on the
-    // form", not "no option" (tl's optional point at 8084132). It leaves by the same way out.
-    let replaced = false;
-    if (found?.kind === 'one') {
-      const text = found.option.textContent ?? '';
-      if (pick(box, found.option)) {
-        // The form shows the choice in its own time: React applies a click's update after the
-        // click returns (tl's blocking 2 at 8084132). Waited for within a second, the same way.
-        const verdict = await watchFor<'yes' | 'no' | 'flag'>(
-          box,
-          () => (showsChoice(box, text, job.country) === 'yes' ? 'yes' : null),
-          () => showsChoice(box, text, job.country),
-          1000,
-        );
-        if (verdict === 'yes') chosen.push({ label, text: shown(text) });
-        // A flag naming another country: choose it on the form (sec 2.2).
-        else if (verdict === 'flag') notFilled.push({ label, reason: 'choose_on_form' });
-        else notFilled.push({ label, reason: 'not_confirmed', detail: shown(text) });
+  // The only part that waits, so the only part another fill could run beside: marked (above).
+  marks.__opportunFillRunning = true;
+  try {
+    for (const job of lists) {
+      const { box, label, value } = job;
+      const setter = inputValue?.set;
+      // Checked again just before acting (tl's blocking 1 at 8084132): seconds may have passed
+      // since the fields were read, and the user may have opened this list or typed in it. Then
+      // it is theirs, and it is left as it is.
+      if (setter === undefined || box.getAttribute('aria-expanded') !== 'false') {
+        notFilled.push({ label, reason: 'choose_on_form' });
         continue;
       }
-      replaced = true;
+      if (inUse(box)) {
+        notFilled.push({ label, reason: 'has_value' });
+        continue;
+      }
+      const want = same(value);
+      // The phone's country code: each option's text without one trailing " +digits" (sec 2.1).
+      const equal = job.country
+        ? (t: string): boolean => same(t).replace(/ \+\d{1,4}$/, '') === want
+        : (t: string): boolean => same(t) === want;
+      // Emptied only while it still holds what this fill wrote, never over the user's own text.
+      const empty = (): void => {
+        if (box.value !== value) return;
+        setter.call(box, '');
+        fire(box, 'input');
+        fire(box, 'change');
+      };
+      // Written before the list opens: the education lists ask their service, when they open, for
+      // the text the box holds then.
+      setter.call(box, value);
+      fire(box, 'input');
+      fire(box, 'change');
+      // Refused when the list opened on this fill's own write, or the box is no longer a list box:
+      // then nothing is waited for or clicked. Nothing runs between the check above and this press,
+      // so a list open then was opened by the page on that write, and the way out below closes it
+      // again: press closes only a list that is open (fs1's F3, tl and sec at 0bf9a81).
+      const refused = !press(box, true);
+      // From here the list is the user's as soon as they act in it (tl's blocking 1 at 0bf9a81): a
+      // choice shows, the box holds other text than this fill wrote, or the list closed after it
+      // had opened. Read on every look, when the timer ends, and again just before the click.
+      let opened = false;
+      const theirs = (): Found | null => {
+        const expanded = box.getAttribute('aria-expanded') === 'true';
+        if (expanded) opened = true;
+        if (box.closest('div.select__value-container')?.querySelector('.select__single-value')) {
+          return { kind: 'theirs', reason: 'has_value' };
+        }
+        if (box.value !== value || (opened && !expanded)) {
+          return { kind: 'theirs', reason: 'choose_on_form' };
+        }
+        return null;
+      };
+      // One 3 second wait for the options: "none" only when the timer ends, since they arrive more
+      // than once; when an equal option is seen, the equal ones in the list then are counted.
+      const found = refused
+        ? null
+        : await watchFor<Found>(
+            box,
+            () => {
+              const user = theirs();
+              if (user !== null) return user;
+              const equals = (optionsOf(box) ?? []).filter((o) => equal(o.textContent ?? ''));
+              const first = equals[0];
+              if (first === undefined) return null;
+              return equals.length === 1 ? { kind: 'one', option: first } : { kind: 'several' };
+            },
+            () => theirs() ?? (optionsOf(box) === null ? { kind: 'no_list' } : { kind: 'none' }),
+            3000,
+          );
+      // Theirs, during the wait or just before the click: left as it is, with no click, no
+      // emptying and no closing mouseup.
+      const user = found?.kind === 'theirs' ? found : found?.kind === 'one' ? theirs() : null;
+      if (user !== null && user.kind === 'theirs') {
+        notFilled.push({ label, reason: user.reason });
+        continue;
+      }
+      // Found, then replaced before the click: there was one, so the field is "choose it on the
+      // form", not "no option" (tl's optional point at 8084132). It leaves by the same way out.
+      let replaced = false;
+      if (found?.kind === 'one') {
+        const text = found.option.textContent ?? '';
+        if (pick(box, found.option)) {
+          // The form shows the choice in its own time: React applies a click's update after the
+          // click returns (tl's blocking 2 at 8084132). Waited for within a second, the same way.
+          const verdict = await watchFor<'yes' | 'no' | 'flag'>(
+            box,
+            () => (showsChoice(box, text, job.country) === 'yes' ? 'yes' : null),
+            () => showsChoice(box, text, job.country),
+            1000,
+          );
+          if (verdict === 'yes') chosen.push({ label, text: shown(text) });
+          // A flag naming another country: choose it on the form (sec 2.2).
+          else if (verdict === 'flag') notFilled.push({ label, reason: 'choose_on_form' });
+          else notFilled.push({ label, reason: 'not_confirmed', detail: shown(text) });
+          continue;
+        }
+        replaced = true;
+      }
+      // Nothing chosen: the box is emptied the same way first, then the list this fill opened is
+      // closed with one more mouseup (step 2.6).
+      empty();
+      press(box, false);
+      notFilled.push(
+        replaced || found === null
+          ? { label, reason: 'choose_on_form' }
+          : {
+              label,
+              reason:
+                found.kind === 'several'
+                  ? 'several_options'
+                  : found.kind === 'no_list'
+                    ? 'list_not_shown'
+                    : 'no_option',
+              detail: shown(value),
+            },
+      );
     }
-    // Nothing chosen: the box is emptied the same way first, then the list this fill opened is
-    // closed with one more mouseup (step 2.6).
-    empty();
-    press(box, false);
-    notFilled.push(
-      replaced || found === null
-        ? { label, reason: 'choose_on_form' }
-        : {
-            label,
-            reason:
-              found.kind === 'several'
-                ? 'several_options'
-                : found.kind === 'no_list'
-                  ? 'list_not_shown'
-                  : 'no_option',
-            detail: shown(value),
-          },
-    );
+  } finally {
+    delete marks.__opportunFillRunning;
   }
 
   return { ok: true, chosen, filled, notFilled, resume: attached };

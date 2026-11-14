@@ -354,6 +354,56 @@ describe('safeFetch per-host buckets (#524)', () => {
     expect(h.sleeps).toEqual([1000, 1000]);
   });
 
+  // #552 (tl and sec on #551): the slot an aborted wait gives back is its own only while no later
+  // request has reserved after it. Given back regardless, a request after the abort would take
+  // the aborted slot while the later one keeps its own, and two would go out at once.
+  it('an aborted wait does not give its slot back over a later reservation: requests stay one interval apart', async () => {
+    let clock = 0;
+    const waiting: { until: number; resolve: () => void }[] = [];
+    const sent: number[] = [];
+    const h = harness({ 'jobs.example.com': [PUBLIC_IP] }, [ok(), ok(), ok(), ok()]);
+    h.now = () => clock;
+    h.sleep = (ms) => {
+      h.sleeps.push(ms);
+      return new Promise<void>((resolve) => waiting.push({ until: clock + ms, resolve }));
+    };
+    const request = h.request;
+    h.request = (target, signal) => {
+      sent.push(clock);
+      return request(target, signal);
+    };
+    const settle = () => new Promise((r) => setTimeout(r, 0));
+    const advanceTo = async (t: number) => {
+      clock = t;
+      for (const w of waiting.splice(0)) {
+        if (w.until <= t) w.resolve();
+        else waiting.push(w);
+      }
+      await settle();
+    };
+    const fetch = createSafeFetch(h);
+
+    await fetch('https://jobs.example.com/x', ALLOW); // at 0; the next slot is 1000
+    const a = fetch('https://jobs.example.com/a', { ...ALLOW, timeoutMs: 20 }); // 1000..2000
+    await settle();
+    const b = fetch('https://jobs.example.com/b', ALLOW); // 2000..3000, reserved after a
+    await settle();
+    expect(await reason(a)).toBe('timeout');
+    const c = fetch('https://jobs.example.com/c', ALLOW);
+    await settle();
+    const d = fetch('https://jobs.example.com/d', ALLOW);
+    await settle();
+    for (const t of [1000, 2000, 3000, 4000]) await advanceTo(t);
+    await Promise.all([b, c, d]);
+
+    expect(sent).toHaveLength(4);
+    let previous: number | undefined;
+    for (const at of [...sent].sort((p, q) => p - q)) {
+      if (previous !== undefined) expect(at - previous).toBeGreaterThanOrEqual(1000);
+      previous = at;
+    }
+  });
+
   it('one bucket per host, whatever its case or trailing dots', async () => {
     const h = harness(
       {

@@ -68,7 +68,7 @@ import '../unsetEmptyAiBaseUrls';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { eq, inArray, notInArray, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { companyMatchKey, dedupeKey } from '@opportun/core';
 import { loadConfig, loadSqliteDir } from '../config';
 import {
@@ -98,7 +98,8 @@ import { removeIfUnreferenced } from '../jobs/attachmentSweep';
 import { budgetKey, writeSetting } from '../lib/ai';
 import { bindVaultKey, putSecretIn } from '../lib/secretBox';
 import { hashPassword } from '../lib/passwords';
-import { REGISTRATION_OPEN_KEY, registerUser } from '../lib/registration';
+import { firstUnmarkedUser } from '../lib/demoDedicated';
+import { insertUserRow, REGISTRATION_OPEN_KEY } from '../lib/registration';
 import { createStorage, readOperatorFile, type Storage } from '../lib/storage';
 import type { UserCtx } from '../repos/base';
 import { needsReviewFor } from '../repos/communications';
@@ -217,24 +218,21 @@ function requireDemoOverlay(env: NodeJS.ProcessEnv): void {
   }
 }
 
-/** A demo instance's user set is always a subset of the five pinned ids: empty before the
- *  first seed, exactly those five after. Any other user existing means this is not a demo
- *  instance, structurally, with nothing to misconfigure and nothing to forget.
+/** A demo instance's users are the five pinned ids (none before the first seed), plus any
+ *  dedicated account the operator made with cli/createDemoAccount.ts, each carrying that CLI's
+ *  mark (#563). Any other user means this is not a demo instance: a real database's users carry
+ *  no mark, so it still refuses, with nothing to misconfigure and nothing to forget.
  *
  *  Takes `Exec`, not `Db`: called from inside seedDemo's own transaction (passing `tx`), so the
  *  check and the delete it guards run under the same write lock, with no gap between them for
  *  another writer to insert a stray user into. */
 async function requireOnlyPinnedUsers(db: Exec, pinnedIds: readonly string[]): Promise<void> {
-  const stray = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(notInArray(users.id, [...pinnedIds]))
-    .limit(1)
-    .get();
-  if (stray !== undefined) {
+  const stray = await firstUnmarkedUser(db, pinnedIds);
+  if (stray !== null) {
     throw new UnexpectedUsersError(
-      `refusing to seed: a user exists (${stray.id}) that is not one of the five pinned demo ` +
-        `ids. A demo instance's users are always a subset of those five; this is not one.`,
+      `refusing to seed: a user exists (${stray}) that is not one of the five pinned demo ids ` +
+        `and is not a dedicated demo account. A demo instance's users are those five and the ` +
+        `dedicated accounts made with createDemoAccount.ts; this is not one.`,
     );
   }
 }
@@ -276,17 +274,22 @@ async function deleteExistingDemoUsers(tx: Exec, userIds: readonly string[]): Pr
   return true;
 }
 
+/** The account's row, the first (demo-admin) the admin. Not registerUser: it makes the first
+ *  account on the instance the admin, and with a dedicated account present demo-admin is not the
+ *  first (#563); nor does the seed open registration for it. */
 async function seedOneUserAccount(
   tx: Exec,
   user: (typeof DEMO_USERS)[number],
+  isAdmin: boolean,
   passwordHash: string,
   now: number,
 ): Promise<void> {
-  await registerUser(tx, {
+  await insertUserRow(tx, {
     id: user.id,
     email: user.email,
     displayName: user.displayName,
     passwordHash,
+    isAdmin,
     now: now + user.createdAtOffsetMs,
   });
 }
@@ -724,18 +727,7 @@ export async function seedDemo(
       const deleted = await deleteExistingDemoUsers(tx, userIds);
       for (let i = 0; i < DEMO_USERS.length; i++) {
         const user = DEMO_USERS[i]!;
-        // registerUser closes registration after the first account (FR-S2), same as the real
-        // route: reopen it for the four demo users, same as the issue's own sequence ("register
-        // the admin, reopen, register four, close"), then leave it closed at the end -- an
-        // invite-only demo stays invite-only, admin and demo accounts alike.
-        if (i === 1) {
-          await tx
-            .insert(settings)
-            .values({ key: REGISTRATION_OPEN_KEY, userId: null, value: true, updatedAt: now })
-            .onConflictDoUpdate({ target: settings.key, set: { value: true, updatedAt: now } })
-            .run();
-        }
-        await seedOneUserAccount(tx, user, passwordHashes[i]!, now);
+        await seedOneUserAccount(tx, user, i === 0, passwordHashes[i]!, now);
         const ctx = ctxFor(user.id, i === 0);
         const counts = await seedOneUserData(db, tx, ctx, i, creds.aiApiKey, now);
         companiesPerUser = counts.companies;
@@ -743,6 +735,8 @@ export async function seedDemo(
         contactsPerUser = counts.contacts;
         resumesPerUser = await seedOneUserResumes(resumeFiles, tx, ctx, i, now);
       }
+      // Registration closed, whatever it was: an invite-only demo stays invite-only, admin and
+      // demo accounts alike, and its dedicated accounts come from the CLI, never a sign-up.
       await tx
         .insert(settings)
         .values({ key: REGISTRATION_OPEN_KEY, userId: null, value: false, updatedAt: now })

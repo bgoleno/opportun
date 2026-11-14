@@ -53,6 +53,21 @@ function client(app: FastifyInstance, res: Response): TestClient {
   };
 }
 
+/** Signs in an existing account through POST /auth/login (no 2FA). */
+export async function signIn(
+  app: FastifyInstance,
+  email: string,
+  password = PASSWORD,
+): Promise<TestClient> {
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/v1/auth/login',
+    payload: { email, password },
+  });
+  if (res.statusCode !== 200) throw new Error(`sign in ${email}: ${res.statusCode} ${res.body}`);
+  return client(app, res);
+}
+
 async function register(app: FastifyInstance, email: string): Promise<TestClient> {
   const res = await app.inject({
     method: 'POST',

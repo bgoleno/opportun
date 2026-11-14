@@ -15,7 +15,8 @@ import {
   renameDeviceToken,
   revokeDeviceToken,
 } from '../lib/deviceTokens';
-import { confirmPassword, reauthLimits } from '../lib/reauth';
+import { racePoint } from '../lib/racePoints';
+import { confirmedPasswordHash, reauthLimits } from '../lib/reauth';
 import { requireUser } from '../repos/base';
 
 const Meta = z.object({
@@ -70,20 +71,27 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
       if (req.body.scopes.includes('apply:assist') && !submissionsEnabled(app.config)) {
         throw new HttpError(422, 'scope_unavailable', 'Assisted apply is not available here.');
       }
-      const confirmed = await confirmPassword(req, reply, {
+      const verified = await confirmedPasswordHash(req, reply, {
         userId: ctx.userId,
         password: req.body.password,
         action: 'device_token.create',
       });
-      if (!confirmed) return reply;
+      if (verified === null) return reply;
+      // Between the check and the insert a password change that revokes tokens, or a reset, can
+      // commit: the insert is made only while the verified hash is still current (#539).
+      await racePoint('deviceTokens.create.passwordChecked');
       const { name, scopes } = req.body;
       // On the demo, at most DEMO_MAX_ACTIVE_TOKENS per shared account: the oldest is revoked to
-      // make room (sec on #544, tl on #550).
+      // make room (sec on #544, tl on #550). The insert is also made only while the verified
+      // password hash is still current (#539).
       const { meta, token } = await createDeviceToken(
         db,
         ctx,
         { name, scopes },
-        app.config.demo ? { maxActive: DEMO_MAX_ACTIVE_TOKENS, ip: req.ip } : {},
+        {
+          passwordHash: verified,
+          ...(app.config.demo ? { maxActive: DEMO_MAX_ACTIVE_TOKENS, ip: req.ip } : {}),
+        },
       );
       await audit(db, 'device_token.created', {
         userId: ctx.userId,
