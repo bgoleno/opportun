@@ -3,10 +3,8 @@ import {
   DragOverlay,
   KeyboardCode,
   KeyboardSensor,
-  pointerWithin,
-  rectIntersection,
-  type CollisionDetection,
   type KeyboardCodes,
+  type UniqueIdentifier,
   PointerSensor,
   useDroppable,
   useSensor,
@@ -14,19 +12,23 @@ import {
   type Announcements,
   type DragEndEvent,
 } from '@dnd-kit/core';
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable';
+import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { OPPORTUNITY_STAGES, type OpportunityStage } from '@opportun/core';
 import { ChevronsLeftRight } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type ReactNode,
+} from 'react';
 import { toast } from '@/components/ui/toast';
 import { subjectLabel, type StageFlow } from '@/components/stage/useStageFlow';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { isTerminal, stageLabel, type OpportunityView } from '@/lib/opportunities';
 import { cn } from '@/lib/utils';
+import { boardCollision, boardKeyboardCoordinates } from './boardKeyboard';
 import { reorderColumn } from './reorder';
 import { CardPreview, KanbanCard } from './KanbanCard';
 
@@ -48,11 +50,27 @@ export interface BoardColumn {
 function Column(props: {
   column: BoardColumn;
   onToggle: (stage: OpportunityStage) => void;
+  /** The column whose Expand or Collapse was last pressed, until its new control has focus. */
+  toggled: MutableRefObject<OpportunityStage | null>;
   children: ReactNode;
 }) {
   const { stage, items, collapsed } = props.column;
   const { setNodeRef, isOver } = useDroppable({ id: stage });
   const name = stageLabel(stage);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  // The control pressed unmounts when the column re-renders, and focus fell to the page body
+  // (#475). Once this column has re-rendered, its other control takes focus. Only the column
+  // that was toggled acts, so no other re-render moves focus.
+  useLayoutEffect(() => {
+    if (props.toggled.current !== stage) return;
+    props.toggled.current = null;
+    toggleRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collapsed]);
+  const toggle = () => {
+    props.toggled.current = stage;
+    props.onToggle(stage);
+  };
   return (
     <section
       ref={setNodeRef}
@@ -65,10 +83,11 @@ function Column(props: {
     >
       {collapsed ? (
         <button
+          ref={toggleRef}
           type="button"
           aria-label={`Expand ${name} (${items.length})`}
           aria-expanded="false"
-          onClick={() => props.onToggle(stage)}
+          onClick={toggle}
           className="flex flex-1 cursor-pointer flex-col items-center gap-2 rounded-md py-2 text-sm font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ChevronsLeftRight className="size-4" aria-hidden="true" />
@@ -87,10 +106,11 @@ function Column(props: {
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
+                  ref={toggleRef}
                   type="button"
                   aria-label={`Collapse ${name}`}
                   aria-expanded="true"
-                  onClick={() => props.onToggle(stage)}
+                  onClick={toggle}
                   className="cursor-pointer rounded-sm p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <ChevronsLeftRight className="size-4" aria-hidden="true" />
@@ -105,15 +125,6 @@ function Column(props: {
     </section>
   );
 }
-
-/**
- * The column under the pointer wins; the dragged card's rectangle is only a fallback.
- * Rectangle overlap alone favours wide neighbours over the narrow collapsed columns.
- */
-const collision: CollisionDetection = (args) => {
-  const hits = pointerWithin(args);
-  return hits.length > 0 ? hits : rectIntersection(args);
-};
 
 /**
  * Columns are stages; a card dropped on a column (or on another card in a different column)
@@ -132,16 +143,33 @@ export function Kanban(props: {
   reorderDisabled: boolean;
   stageOf: (opp: OpportunityView) => OpportunityStage;
 }) {
+  // For the keyboard getter (#475): the columns in on-screen order, and a droppable's column.
+  const order = useRef<readonly string[]>([]);
+  const columnOfId = useRef<(id: UniqueIdentifier) => string | undefined>(() => undefined);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     // Space only to pick up (issue #240): the default also starts a drag on Enter, which
     // collides with this app's own Enter-opens-the-selected-card convention (useHotkeys
     // below, and every other screen in ShortcutsOverlay) for a card that merely has focus.
+    // Left and Right step through the columns in on-screen order, collapsed rails included
+    // (#475); Up and Down stay dnd-kit's sortable steps. Read through refs, as the sensor keeps
+    // the getter it was given.
     useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
+      coordinateGetter: boardKeyboardCoordinates(
+        () => order.current,
+        (id) => columnOfId.current(id),
+      ),
       keyboardCodes: START_WITH_SPACE_ONLY,
     }),
   );
+  const toggled = useRef<OpportunityStage | null>(null);
+  // A toggle that changed its column has been consumed by then (the column's layout effect runs
+  // earlier in the same commit). One that changed nothing on screen, such as Collapse on a column
+  // the stage filter holds open, is cleared here, so a later change to that column for another
+  // reason does not take focus (#508). Every press re-renders the board, so this always runs.
+  useEffect(() => {
+    toggled.current = null;
+  });
   const [activeId, setActiveId] = useState<string | null>(null);
   /**
    * What the reason dialog's answer did to a dragged card (#432), for the board's own polite live
@@ -243,7 +271,7 @@ export function Kanban(props: {
   }
 
   const renderColumn = (column: BoardColumn) => (
-    <Column key={column.stage} column={column} onToggle={props.onToggleColumn}>
+    <Column key={column.stage} column={column} onToggle={props.onToggleColumn} toggled={toggled}>
       <SortableContext items={column.items.map((o) => o.id)} strategy={verticalListSortingStrategy}>
         {column.items.map((opp) => (
           <KanbanCard
@@ -265,11 +293,18 @@ export function Kanban(props: {
   // Closed and dismissed sit outside the scrolling area so they are always drop targets.
   const chain = props.columns.filter((c) => !isTerminal(c.stage));
   const terminal = props.columns.filter((c) => isTerminal(c.stage));
+  order.current = [...chain, ...terminal].map((c) => c.stage);
+  columnOfId.current = (id) => {
+    const stage = OPPORTUNITY_STAGES.find((s) => s === id);
+    if (stage !== undefined) return stage;
+    const opp = byId.get(String(id));
+    return opp === undefined ? undefined : props.stageOf(opp);
+  };
 
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={collision}
+      collisionDetection={boardCollision}
       accessibility={{ announcements }}
       onDragStart={(e) => {
         setActiveId(String(e.active.id));

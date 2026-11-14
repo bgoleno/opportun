@@ -187,3 +187,60 @@ test.describe('a keyboard drop that waits for a reason says so, then says what h
     await expect(column(page, 'Offer').getByRole('article', { name })).toBeVisible();
   });
 });
+
+// #475: with Dismissed and Closed collapsed to rails (the default), a keyboard drag steps through
+// the columns in on-screen order and reaches both rails; expanding a column keeps focus on it.
+test.describe('a keyboard drag reaches the collapsed rails, in column order (#475)', () => {
+  test.use({ viewport: { width: 2200, height: 1100 } });
+
+  test('ArrowRight from Offer: Dismissed, then Closed; ArrowLeft back to Dismissed; Space drops there', async ({
+    page,
+  }) => {
+    await registerUser(page);
+    const opp = { company: 'Initrode', title: 'Staff Keyboard Engineer' };
+    await createOpportunity(page, opp);
+    await moveWithMenu(page, opp, 'Offer');
+    const name = `${opp.company}: ${opp.title}`;
+    await expect(column(page, 'Offer').getByRole('article', { name })).toBeVisible();
+    // Both terminal columns are rails.
+    await expect(page.getByRole('button', { name: /^Expand Dismissed/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Expand Closed/ })).toBeVisible();
+
+    await card(page, opp.company, opp.title).focus();
+    await page.keyboard.press('Space');
+    // Picked up, then at once over its own column (dnd-kit's onDragOver replaces "Picked up").
+    await expect(liveRegion(page)).toHaveText(`${name} is over the Offer column.`);
+    await page.keyboard.press('ArrowRight');
+    await expect(liveRegion(page)).toHaveText(`${name} is over the Dismissed column.`);
+    await page.keyboard.press('ArrowRight');
+    await expect(liveRegion(page)).toHaveText(`${name} is over the Closed column.`);
+    await page.keyboard.press('ArrowLeft');
+    await expect(liveRegion(page)).toHaveText(`${name} is over the Dismissed column.`);
+    await page.keyboard.press('Space');
+
+    await expect(liveRegion(page)).toHaveText(
+      `${name} is waiting for a reason to move to the Dismissed column. Choose one in the dialog, or cancel to leave it where it is.`,
+    );
+    const dialog = page.getByRole('dialog', { name: 'Dismiss opportunity' });
+    await expect(dialog).toBeVisible();
+    await choose(dialog, 'Reason', 'Other');
+    await dialog.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await page.getByRole('button', { name: /^Expand Dismissed/ }).click();
+    await expect(column(page, 'Dismissed').getByRole('article', { name })).toBeVisible();
+  });
+
+  test('Enter on Expand keeps focus on the column: on Collapse, and back on Expand', async ({
+    page,
+  }) => {
+    await registerUser(page);
+    await page.goto('/pipeline');
+    const expand = page.getByRole('button', { name: /^Expand Dismissed/ });
+    await expand.focus();
+    await page.keyboard.press('Enter');
+    const collapse = page.getByRole('button', { name: 'Collapse Dismissed' });
+    await expect(collapse).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('button', { name: /^Expand Dismissed/ })).toBeFocused();
+  });
+});

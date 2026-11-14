@@ -19,7 +19,7 @@ import {
   type SubmissionStatus,
   type ApplicationDetailKey,
 } from '@opportun/core';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
 import {
   applicationSubmissions,
@@ -114,6 +114,7 @@ export function view(row: SubmissionRow): Submission {
     reviewExpiresAt: row.reviewExpiresAt,
     reviewedAt: row.reviewedAt,
     handedOffAt: row.handedOffAt,
+    prefillReadAt: row.prefillReadAt,
     submittedAt: row.submittedAt,
     confirmedAt: row.confirmedAt,
     confirmationKind: row.confirmationKind,
@@ -612,6 +613,33 @@ export async function handedOffForPage(
   const snapshotState =
     only.row.snapshotState === 'ready' && file === undefined ? 'deleted' : only.row.snapshotState;
   return { kind: 'found', ...only, snapshotFile: file ?? null, snapshotState };
+}
+
+/**
+ * Records the first read of a handed-off attempt by the extension (#403 slice 2, sec's condition
+ * 2): true only for the one call that set `prefill_read_at`, in the same statement that checks it
+ * is still null, so two reads at once cannot both be first. The popup fills on open only then;
+ * every later read gets false and the popup shows its button. An attempt that is no longer
+ * handed off is never marked.
+ */
+export async function markPrefillRead(
+  db: Db,
+  ctx: UserCtx,
+  id: string,
+  now: number = Date.now(),
+): Promise<boolean> {
+  const [marked] = await db
+    .update(applicationSubmissions)
+    .set({ prefillReadAt: now })
+    .where(
+      and(
+        owned(ctx, id),
+        eq(applicationSubmissions.status, 'handed_off'),
+        isNull(applicationSubmissions.prefillReadAt),
+      ),
+    )
+    .returning({ id: applicationSubmissions.id });
+  return marked !== undefined;
 }
 
 /**

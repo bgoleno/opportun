@@ -649,7 +649,8 @@ Information architecture (FR-U):
   sources, runs, prompt editor with version diff (FR-U6).
 - **Network** `/network` (one contact at `/network/:id`; the old `/contacts` paths
   redirect here), **Settings** `/settings` (account, security, AI
-  providers + per-task models + budget, integrations, import/export, jobs, audit).
+  providers + per-task models + budget, integrations, mail filters, import/export, metrics and
+  telemetry, jobs, audit; the AI traces page is `/settings/traces`, reached from Metrics).
 
 SPA served by the same origin as the API; no third-party fonts or CDNs (CSP stays
 `self`). Light/dark/auto theming (FR-U10) via CSS custom properties and a
@@ -775,9 +776,9 @@ Rules that go with them:
 | ADR-13 | Match scoring (FR-R8) recreated as an internal AI task rather than embedding Resume-Matcher                                                                                                                                                               | Accepted 2026-10-15                                             |
 | ADR-14 | LAN-first access: plain HTTP over a private network is a supported path, TLS recommended but never required; nothing may assume a single canonical origin ([docs/adr/0014-lan-first-access.md](adr/0014-lan-first-access.md))                             | Accepted 2026-10-18                                             |
 | ADR-15 | Assisted apply instead of direct ATS submission: Opportun prepares and records, the user submits on the ATS site ([docs/adr/0015-assisted-apply.md](adr/0015-assisted-apply.md))                                                                          | Accepted 2026-10-28                                             |
-| ADR-16 | Observability by wrappers at five boundaries (routes, jobs, database, outbound requests, AI calls) with OpenTelemetry names, not auto-instrumentation and not a span per function (section 14.2)                                                          | Proposed 2026-11-10                                             |
-| ADR-17 | Telemetry has a local store in the app's own database and an export, each behind its own switch and both off by default; the in-app dashboards read only the local store (sections 14.1, 14.7, 14.10)                                                     | Proposed 2026-11-10                                             |
-| ADR-18 | Telemetry privacy by allowlist: only catalogued attribute keys with typed values are stored, logged or exported, checked in one gate at the sinks; export carries no user's row id, and no prompt or response content is stored for traces (section 14.8) | Proposed 2026-11-10                                             |
+| ADR-16 | Observability by wrappers at five boundaries (routes, jobs, database, outbound requests, AI calls) with OpenTelemetry names, not auto-instrumentation and not a span per function (section 14.2)                                                          | Accepted 2026-11-13 (owner decision); implemented 2026-11-11    |
+| ADR-17 | Telemetry has a local store in the app's own database and an export, each behind its own switch and both off by default; the in-app dashboards read only the local store (sections 14.1, 14.7, 14.10)                                                     | Accepted 2026-11-13 (owner decision); implemented 2026-11-11    |
+| ADR-18 | Telemetry privacy by allowlist: only catalogued attribute keys with typed values are stored, logged or exported, checked in one gate at the sinks; export carries no user's row id, and no prompt or response content is stored for traces (section 14.8) | Accepted 2026-11-13 (owner decision); implemented 2026-11-11    |
 
 Accepted decisions will move into `docs/adr/` as individual records once reviewed. A Proposed decision becomes Accepted when the owner accepts it.
 
@@ -806,6 +807,14 @@ not a list of what is left.
 Everything below describes the design in the present tense. It has shipped; see the status
 line above for how to read a difference.
 
+**The usage view (FR-T1)** is the one part of this feature that reads the usage ledger
+(`task_runs`, FR-A5) and not the telemetry store, so it works with collection off.
+`usageRollup` (`repos/taskRuns.ts`) sums each call's own `est_cost`, written when it ran, and
+groups by feature through `FEATURES` and `TASK_FEATURE` (`packages/ai/src/features.ts`): every
+feature in that order, each with every one of its tasks and zero where nothing ran, then an
+**Other** group for any task key no longer registered, so the features still add up to the
+ledger. A task lists one row per provider and model it ran on.
+
 Opportun measures itself with OpenTelemetry names and data shapes: metrics, traces and log
 records for HTTP routes, background jobs, database access, outbound requests and, most of
 all, AI calls. The data has two destinations:
@@ -830,6 +839,9 @@ Two instance-wide switches, both admin-only:
   403 `unavailable_on_demo` to every caller, for on and off alike. A Collect value stored before
   the instance became the demo is ignored there: boot and the switch's `GET` both read it as off.
 - **Turning either on or off applies without a restart.**
+- **Turning Collect off also turns export off,** and turning Collect back on does not resume
+  it: the export switch is stored as off, with a second audit record (`telemetry.export.updated`,
+  cause `collect_off`). `PUT /obs/export` answers 409 `collect_off` while Collect is off.
 - **Changing the Collect switch is audited** (`telemetry.collect.updated`, with the new
   state), as an export change is (14.10 rule 1), because turning it on starts recording every
   user's activity metadata. It needs no password re-confirmation: nothing leaves the instance.
@@ -903,14 +915,18 @@ apps/server/src/obs/
                   attribute key with its value type, every event name. It imports the
                   Gen AI names from @opportun/ai. Nothing outside it is stored or sent.
   gate.ts         the allowlist check every sink calls (14.8)
-  index.ts        what the rest of the server calls: obs.record(), obs.span(), obs.event()
-  config.ts       the two switches and the export settings
+  index.ts        what the rest of the server calls: obs.record(), obs.span(), obs.startSpan(),
+                  obs.startPreparedSpan() and obs.event()
+  config.ts       the Collect switch, and the rule that export is off while collection is
   metrics.ts      in-process aggregation, flushed to obs_metric_points every 60 s
   outbound.ts     the observed fetch and the wrapper safeFetch calls
   tracing.ts      the tracer provider, the async context manager, the keep rule (14.7)
   spanStore.ts    writes kept spans to obs_spans and obs_traces
   log.ts          the one pino configuration and the event writer (14.9)
-  export/         the export manager and the InfluxDB writer (14.10)
+  export/         the export manager and its settings, the destination checks, the OTLP and
+                  InfluxDB writers, the sender and the drop counts (14.10)
+  database.ts, spanRebuild.ts, workflow.ts   the database wrappers, the span rebuild for a
+                  continued trace, and the workflow wrapper
 packages/ai/src/telemetry.ts   the Gen AI names, the user context key, the router's span code
 ```
 
@@ -1024,7 +1040,7 @@ exception event: an AI SDK error's message can quote the model's output.
 **The AI SDK's own telemetry stays off.** It records prompts and responses by default, under
 names that are not the conventions', and it turns on by itself once a telemetry integration
 is registered. So every `generateText` and `streamText` call passes
-`telemetry: { isEnabled: false }`, nothing calls `registerTelemetry`, and neither `telemetry`
+`telemetry: { isEnabled: false, recordInputs: false, recordOutputs: false }`, nothing calls `registerTelemetry`, and neither `telemetry`
 nor the older `experimental_telemetry` is ever passed enabled. Turned off this way, the SDK
 also publishes nothing on its `ai:telemetry` diagnostics channel, where any in-process
 subscriber could otherwise read each call's prompts. A test checks all of it: the options,
@@ -1078,6 +1094,10 @@ model call (a fetch, a parse) is an ordinary span, never `execute_tool`.
 
 ### 14.7 The local store
 
+The dashboards read this store: the metric charts at `/settings/metrics` and the AI trace list
+at `/settings/traces`, which is reached from the Metrics page's link and is not in the Settings
+navigation.
+
 Three tables, in both dialects. The base slice creates all of them, and the `jobs` column,
 in one migration pair, so no later slice adds a migration.
 
@@ -1088,7 +1108,9 @@ in one migration pair, so no later slice adds a migration.
 | `obs_spans`         | One kept span: span id, trace id, parent span id, user, name, kind, start, duration, status, `error.type`, attributes, and its task, model and provider in columns of their own when it is an inference span.                   | 30 days, with its trace                         |
 
 - **Each metric flush writes the 1-minute row and adds to the 1-hour row**, so there is no
-  rollup job. A prune job runs hourly: it deletes by age and enforces the row caps of 14.11.
+  rollup job. A prune job (`obs.prune`, hourly) deletes by age and enforces the row caps of 14.11. It
+  runs whether or not collection is on, so rows written while it was on still age out after it is
+  turned off.
 - **The keep rule.** The local store keeps Gen AI spans (workflow and inference) and
   everything under them: the provider request under an inference span, and the span of a job
   that continues the trace, with what that job does. The keep mark travels in the context and
@@ -1112,7 +1134,8 @@ in one migration pair, so no later slice adds a migration.
   exporter's exclusion list. A backup contains them.
 - **No content is stored.** The trace view links to where the content already lives instead
   of keeping a copy: a chat trace links to its tailoring session (by conversation id), and a
-  span links to its prompt template (by prompt id).
+  span links to its prompt template (by task key and version, never by the prompt's row
+  id).
 
 ### 14.8 The privacy rule: an allowlist, enforced at the sinks
 
@@ -1265,12 +1288,12 @@ step with `obs/catalog.ts`, so "only catalogued keys" is something a reader can 
 
 One destination at a time, set by an admin in Settings.
 
-| Type       | Sends                 | How                                                                                                                                    | Settings                                                      |
-| ---------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| OTLP       | metrics, traces, logs | OTLP over HTTP (protobuf) to `/v1/metrics`, `/v1/traces` and `/v1/logs` under the base path                                            | scheme, host, port, base path, one optional header (a secret) |
-| Datadog    | metrics, traces, logs | OTLP over HTTP to the Datadog Agent's OTLP receiver (port 4318)                                                                        | host, port. No credential: the Agent holds the API key        |
-| Prometheus | metrics               | OTLP over HTTP to Prometheus's own receiver, `/api/v1/otlp/v1/metrics` (Prometheus runs with `--web.enable-otlp-receiver`), cumulative | scheme, host, port, optional credential                       |
-| InfluxDB   | metrics               | Line protocol to `/api/v2/write` (InfluxDB 2 and 3, and 1.8 or later), one write per interval                                          | scheme, host, port, organisation, bucket, token               |
+| Type       | Sends                 | How                                                                                                                                    | Settings                                                       |
+| ---------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| OTLP       | metrics, traces, logs | OTLP over HTTP (protobuf) to `/v1/metrics`, `/v1/traces` and `/v1/logs` under the base path                                            | scheme, host, port, base path, one optional header (a secret)  |
+| Datadog    | metrics, traces, logs | OTLP over HTTP to the Datadog Agent's OTLP receiver (port 4318)                                                                        | scheme, host, port. No credential: the Agent holds the API key |
+| Prometheus | metrics               | OTLP over HTTP to Prometheus's own receiver, `/api/v1/otlp/v1/metrics` (Prometheus runs with `--web.enable-otlp-receiver`), cumulative | scheme, host, port, optional credential                        |
+| InfluxDB   | metrics               | Line protocol to `/api/v2/write` (InfluxDB 2 and 3, and 1.8 or later), one write per interval                                          | scheme, host, port, organisation, bucket, token                |
 
 - **Three of the four are one exporter with presets.** InfluxDB has no OTLP endpoint, and
   Telegraf's OTLP input speaks gRPC only, so InfluxDB gets a small writer of its own
@@ -1341,7 +1364,8 @@ holds a credential.
 
 How it is shown: with collection off, a test drives requests, jobs and an AI call and asserts
 that no row reaches any `obs_` table, that no span is recording, and that the SDK was not
-loaded; a guard benchmark runs 100,000 disabled `obs` calls under a bound with a wide margin.
+loaded (the hourly `obs.prune` job still runs and the scheduler still writes its `jobs` row: no
+telemetry, but not nothing at all); a guard benchmark runs 100,000 disabled `obs` calls under a bound with a wide margin.
 With collection on, a benchmark of the same loop is reported in the pull request, and the
 caps are tested by exceeding them.
 
@@ -1423,9 +1447,10 @@ parts.
   give an admin's instance view only the points the instance owns.
 - **One step is sequenced.** FR-T7 adds its link to FR-T6's dashboards page as its last
   commit, after FR-T6 has merged.
-- **One chart library at most**, chosen in FR-T6 and reviewed there: it must work under the
-  current Content-Security-Policy unchanged, be operable by keyboard, and sit beside a table
-  of the same numbers. FR-T7's waterfall is plain markup and adds none.
+- **No chart library was added.** FR-T6's chart is plain SVG and markup
+  (`apps/web/src/components/metrics/LineChart.tsx`): it works under the current
+  Content-Security-Policy unchanged, is operable by keyboard (arrows, Home, End, `+` and `-`),
+  and sits beside a table of the same numbers. FR-T7's waterfall is plain markup too.
 
 ### 14.13 Deviations and what is out of scope
 
@@ -1442,6 +1467,9 @@ parts.
   a private address needs `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`), and an export that is on but
   blocked shows a notice with it (https://github.com/bgoleno/opportun/issues/382). The reason is
   the admin's to see and holds no host or credential.
+- **Two differences found in the build:** a span's prompt link is by task key and version, not
+  by the prompt's row id, and company ids are not resolved to names in the trace view, because
+  no catalogued attribute carries one yet.
 - **Out of scope:** a scrape endpoint, gRPC, more than one destination at a time, sampling
   (volume does not need it), an in-app log viewer, alerting, and storing or showing prompt or
   response content in traces.

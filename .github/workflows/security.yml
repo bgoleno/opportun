@@ -157,9 +157,13 @@ jobs:
     # passwords, and #5 then stayed open for a month because nothing linked them. This is not a
     # body-vs-diff parser (a body claim doesn't have to be dishonest to go stale, same as #47's
     # branch renaming its own scope mid-flight): it is a static, deterministic path list,
-    # derived from the areas CONTRIBUTING.md and SECURITY.md already name as security-sensitive
-    # (auth, crypto, adapters, fetchers; see .github/scripts/security-paths.mjs), applied with no
-    # regard for what the PR's title or body claims.
+    # starting from the areas CONTRIBUTING.md names as security-sensitive (auth, crypto,
+    # adapters, fetchers, the extension's permissions, the CI workflows), plus files outside
+    # those areas that handle a credential or run a destructive or merge step (where the
+    # connector, the extension and the web app type, keep, send or show a credential, the
+    # config that loads the keys, the audit trail, the merge procedure, the destroy script). The
+    # full list is .github/scripts/security-paths.mjs. It is applied with no regard for what the
+    # PR's title or body claims.
     #
     # Honest limit: this surfaces the mismatch, it does not block the merge or force a review.
     # It would have caught #47 because `security` showing up on a PR titled "feat(mail): ..." is
