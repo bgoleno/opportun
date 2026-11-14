@@ -6,7 +6,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { and, asc, eq, inArray, max } from 'drizzle-orm';
 import QRCode from 'qrcode';
 import { z } from 'zod';
-import { isUniqueViolation } from '../db/client';
+import { isUniqueViolation, withTransaction } from '../db/client';
 import { auditLog, settings, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { racePoint } from '../lib/racePoints';
@@ -687,16 +687,22 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       await racePoint('auth.passwordChange');
       // Compare-and-set on the hash `current` was proven against: a concurrent change (or an
       // admin reset after a compromise) in between makes this one stale, not the winner.
-      const changed = await db
-        .update(users)
-        .set({ passwordHash, updatedAt: Date.now() })
-        .where(and(eq(users.id, user.id), eq(users.passwordHash, user.passwordHash)))
-        .returning({ id: users.id })
-        .get();
+      // The revocation, when asked (#523), commits with the new hash or not at all: a refused
+      // change revokes nothing, and a crash cannot leave the password changed and tokens live.
+      const changed = await withTransaction(db, async (tx) => {
+        const row = await tx
+          .update(users)
+          .set({ passwordHash, updatedAt: Date.now() })
+          .where(and(eq(users.id, user.id), eq(users.passwordHash, user.passwordHash)))
+          .returning({ id: users.id })
+          .get();
+        if (row === undefined) return undefined;
+        const revoked =
+          req.body.revokeDeviceTokens === true ? await revokeAllDeviceTokens(tx, user.id) : 0;
+        return { revoked };
+      });
       if (changed === undefined) return fail(reply, 403, 'invalid_current_password');
-      // Only once the change itself has gone through: a refused change revokes nothing.
-      const revokedDevices =
-        req.body.revokeDeviceTokens === true ? await revokeAllDeviceTokens(db, user.id) : 0;
+      const revokedDevices = changed.revoked;
       // Every existing session (other devices and this one) dies; this client gets a fresh token.
       await destroyAllSessions(db, user.id);
       await startSession(req, reply, user.id);

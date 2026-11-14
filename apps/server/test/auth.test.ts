@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+import { newId } from '@opportun/core';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { authenticateDeviceToken, createDeviceToken } from '../src/lib/deviceTokens';
+import { users } from '../src/db/schema';
 import { DUMMY_HASH } from '../src/lib/passwords';
 import { createSession, getSessionUser } from '../src/lib/sessions';
 import { testApp, type TestAppOptions } from './helpers';
@@ -629,6 +631,25 @@ describe('session lifecycle', () => {
   it('password change with revokeDeviceTokens revokes every device token of the user', async () => {
     const a = await boot();
     const { first, token } = await withDeviceToken(a);
+    // Another user's token is not theirs to revoke (sec on #536, mutation R3).
+    const bystander = newId();
+    await a.db
+      .insert(users)
+      .values({
+        id: bystander,
+        email: 'bystander@example.com',
+        passwordHash: DUMMY_HASH,
+        displayName: 'Bystander',
+        isAdmin: false,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+      .run();
+    const { token: theirs } = await createDeviceToken(
+      a.db,
+      { userId: bystander, isAdmin: false },
+      { name: 'their laptop', scopes: ['mail:push'] },
+    );
     const res = await a.inject({
       method: 'POST',
       url: '/api/v1/auth/password',
@@ -640,6 +661,7 @@ describe('session lifecycle', () => {
       ok: false,
       status: 401,
     });
+    expect((await authenticateDeviceToken(a.db, theirs, 'mail:push')).ok).toBe(true);
     const event = (await queryOne(
       a,
       "SELECT detail FROM audit_log WHERE event = 'auth.password_changed'",

@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { newId } from '@opportun/core';
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { FastifyReply, FastifyRequest, preHandlerAsyncHookHandler } from 'fastify';
-import type { Db } from '../db/client';
+import type { Db, Exec } from '../db/client';
 import { deviceTokens, type DeviceTokenScope } from '../db/schema';
 import { DEVICE_AUTH_MARK } from '../plugins/security';
 import type { UserCtx } from '../repos/base';
@@ -115,16 +115,11 @@ export async function revokeDeviceToken(
 }
 
 /**
- * Renames the caller's own token; 404 otherwise. The name is a label for the person reading
- * the list (design D6: the setup dialog proposes "<Browser> · <display name>", and someone
- * running two of the same browser needs to tell them apart). It grants nothing, so unlike
- * creating a token this needs no password.
- */
-/**
  * Revokes every active device token of `userId` and returns how many: on a password change when
- * the user asks (#523), as the admin and CLI reset does in its own transaction (passwordReset.ts).
+ * the user asks (#523), in the same transaction as the password update, as the admin and CLI reset
+ * does (passwordReset.ts).
  */
-export async function revokeAllDeviceTokens(db: Db, userId: string): Promise<number> {
+export async function revokeAllDeviceTokens(db: Exec, userId: string): Promise<number> {
   const now = Date.now();
   const rows = await db
     .update(deviceTokens)
@@ -135,6 +130,12 @@ export async function revokeAllDeviceTokens(db: Db, userId: string): Promise<num
   return rows.length;
 }
 
+/**
+ * Renames the caller's own token; 404 otherwise. The name is a label for the person reading
+ * the list (design D6: the setup dialog proposes "<Browser> · <display name>", and someone
+ * running two of the same browser needs to tell them apart). It grants nothing, so unlike
+ * creating a token this needs no password.
+ */
 export async function renameDeviceToken(
   db: Db,
   ctx: UserCtx,
