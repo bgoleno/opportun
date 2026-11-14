@@ -397,9 +397,10 @@ describe('safeFetch per-host buckets (#524)', () => {
     await Promise.all([b, c, d]);
 
     expect(sent).toHaveLength(4);
-    const ordered = [...sent].sort((p, q) => p - q);
-    for (let i = 1; i < ordered.length; i++) {
-      expect(ordered[i]! - ordered[i - 1]!).toBeGreaterThanOrEqual(1000);
+    let previous: number | undefined;
+    for (const at of [...sent].sort((p, q) => p - q)) {
+      if (previous !== undefined) expect(at - previous).toBeGreaterThanOrEqual(1000);
+      previous = at;
     }
   });
 
