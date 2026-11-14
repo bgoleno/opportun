@@ -17,6 +17,7 @@ export const NOT_FILLED_REASONS: readonly unknown[] = [
   'several_options',
   'list_not_shown',
   'not_confirmed',
+  'page_changed',
 ];
 
 /** What fillGreenhouseForm may return; anything else from the tab is treated as a failure. */

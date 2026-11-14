@@ -1142,6 +1142,10 @@ describe('one fill at a time in the page (#531)', () => {
 // same-document change while a list waits (the form's own history.pushState, or the user
 // following a link inside it) stops the lists not yet written, which are reported.
 describe('the page is still the posting before each list write (#537)', () => {
+  // The lists' own lines in the report: the page's other questions are reported too.
+  const listsIn = (r: Extract<FillReport, { ok: true }>) =>
+    r.notFilled.filter((n) => n.label === 'School' || n.label === 'Degree');
+
   it('a same-document URL change during a list wait stops the remaining lists, and says so', async () => {
     const p = page();
     standInList(p, 'school--0', { options: () => [], arrive: 'never' });
@@ -1159,10 +1163,30 @@ describe('the page is still the posting before each list write (#537)', () => {
     expect(valueOf(p.doc, 'degree--0')).toBe('');
     expect(degree.isOpen()).toBe(false);
     expect(report.chosen).toEqual([]);
-    expect(report.notFilled).toEqual([
+    expect(listsIn(report)).toEqual([
       { label: 'School', reason: 'page_changed' },
       { label: 'Degree', reason: 'page_changed' },
     ]);
+  });
+
+  it('a move after a choice, while the form shows it: the next list is not written', async () => {
+    const p = page();
+    standInList(p, 'school--0', { options: () => ['University of Example'] });
+    const degree = standInList(p, 'degree--0', { options: () => ["Bachelor's Degree"] });
+    // The page moves on the click that chooses School's option (as a form that routes on its own
+    // choice would), so during the wait for the form to show it, not during an options wait.
+    p.doc.addEventListener('click', () => {
+      p.window.happyDOM.setURL(`https://job-boards.greenhouse.io/${BOARD}/jobs/1000002`);
+    });
+    const report = await settleRun(
+      p,
+      fillGreenhouseForm(plan({ lists: [LISTS[2]!, LISTS[3]!] }), p.doc),
+    );
+    expect(report.chosen.map((c) => c.label)).toEqual(['School']);
+    expect(on(p, 'degree--0')).toEqual([]);
+    expect(valueOf(p.doc, 'degree--0')).toBe('');
+    expect(degree.isOpen()).toBe(false);
+    expect(listsIn(report)).toEqual([{ label: 'Degree', reason: 'page_changed' }]);
   });
 
   it('a move while the options load: the equal option that arrives is not clicked', async () => {
@@ -1183,7 +1207,9 @@ describe('the page is still the posting before each list write (#537)', () => {
     expect(p.events.slice(before)).toEqual([]);
     expect(shownIn(p, 'school--0')).toBeNull();
     expect(report.chosen).toEqual([]);
-    expect(report.notFilled).toEqual([{ label: 'School', reason: 'page_changed' }]);
+    expect(report.notFilled.filter((n) => n.label === 'School')).toEqual([
+      { label: 'School', reason: 'page_changed' },
+    ]);
   });
 });
 
