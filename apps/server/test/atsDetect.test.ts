@@ -340,6 +340,93 @@ describe('detectAts', () => {
     expect((await getCompany(app.db, ctx, company.id)).atsKind).toBeNull();
   });
 
+  // https://github.com/bgoleno/opportun/issues/514: a guess that errored leaves its vendor
+  // unknown, so the same slug's hit on a later vendor can be a same-named decoy of the real board.
+  describe('a hit after a failed guess for the same slug', () => {
+    const GREENHOUSE_INITECH = 'https://boards-api.greenhouse.io/v1/boards/initech/jobs';
+    const ASHBY_INITECH = 'https://api.ashbyhq.com/posting-api/job-board/initech';
+
+    it('Greenhouse 503, then a Lever hit for the same slug: nothing recorded, and detection is transient', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const company = await createCompany(app.db, ctx, { name: 'Initech', status: 'followed' });
+      const { fetch, requested } = net(
+        {},
+        {
+          [GREENHOUSE_INITECH]: () => respond(503),
+          [LEVER_HIT]: () => respond(200, LEVER_JOBS),
+        },
+      );
+
+      await expect(detectAts(app.db, ctx, company.id, { fetch, log })).rejects.toThrow(/retrying/);
+
+      expect(requested).toContain(LEVER_HIT);
+      expect((await getCompany(app.db, ctx, company.id)).atsKind).toBeNull();
+      expect((await listSources(app.db, ctx, { limit: 50, offset: 0 })).items).toHaveLength(0);
+    });
+
+    it('the company keeps the board it had: Greenhouse 503, then a Lever hit for the same slug', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const company = await createCompany(app.db, ctx, { name: 'Initech', status: 'followed' });
+      await detectAts(app.db, ctx, company.id, {
+        fetch: net({}, { [GREENHOUSE_INITECH]: () => respond(200, GREENHOUSE_JOBS) }).fetch,
+        log,
+      });
+      const { fetch } = net(
+        {},
+        {
+          [GREENHOUSE_INITECH]: () => respond(503),
+          [LEVER_HIT]: () => respond(200, LEVER_JOBS),
+        },
+      );
+
+      await expect(detectAts(app.db, ctx, company.id, { fetch, log })).rejects.toThrow(/retrying/);
+
+      expect((await getCompany(app.db, ctx, company.id)).atsKind).toBe('ats_greenhouse');
+      const sources = (await listSources(app.db, ctx, { limit: 50, offset: 0 })).items;
+      expect(sources.map((s) => [s.kind, s.enabled])).toEqual([['ats_greenhouse', true]]);
+    });
+
+    it('Greenhouse 404, then a Lever hit for the same slug: Lever is recorded, as before', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const company = await createCompany(app.db, ctx, { name: 'Initech', status: 'followed' });
+
+      const outcome = await detectAts(app.db, ctx, company.id, {
+        fetch: net({}, { [LEVER_HIT]: () => respond(200, LEVER_JOBS) }).fetch,
+        log,
+      });
+
+      expect(outcome).toMatchObject({ status: 'found', kind: 'ats_lever', org: 'initech' });
+      expect((await getCompany(app.db, ctx, company.id)).atsKind).toBe('ats_lever');
+    });
+
+    it('an error for one slug does not hold back a hit for another slug', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      // Slugs in order: initechlabs, initech-labs, initech (the domain label).
+      const company = await createCompany(app.db, ctx, {
+        name: 'Initech Labs',
+        domain: 'initech.io',
+        status: 'followed',
+      });
+
+      const outcome = await detectAts(app.db, ctx, company.id, {
+        fetch: net(
+          {},
+          {
+            'https://boards-api.greenhouse.io/v1/boards/initechlabs/jobs': () => respond(503),
+            [ASHBY_INITECH]: () => respond(200, '{"jobs":[{"id":"a1","title":"PM"}]}'),
+          },
+        ).fetch,
+        log,
+      });
+
+      expect(outcome).toMatchObject({ status: 'found', kind: 'ats_ashby', org: 'initech' });
+    });
+  });
+
   it('a migrated board disables the old source and adds the new one', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
