@@ -120,38 +120,50 @@ function fromBoardPath(board: AtsBoard, url: URL): Omit<AtsJobRef, 'url'> | null
  * The ATS job references in `text`, deduplicated by board and job id, in first-seen order.
  * A link that names a board but no single job is not a reference: nothing can be fetched by it.
  */
+/**
+ * The job one address names, read from that parsed URL alone (#521, sec's audit): never a URL
+ * embedded in its query. On a recognised board host the board's own path names the job (tl on
+ * #151): a stray `gh_jid` there may name another requisition, or (on Lever, Ashby, Workday) none
+ * of this board's at all, so it counts only when the path names no job, and only of the board's
+ * kind. A `gh_jid` on any other host (a company career page) is read as before.
+ */
+export function atsJobRefOfUrl(raw: string): AtsJobRef | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  const board = boardFromUrl(raw);
+  let ref: Omit<AtsJobRef, 'url'> | null;
+  if (board === null) {
+    ref = fromGreenhouseJid(url);
+  } else {
+    ref = fromBoardPath(board, url);
+    if (ref === null) {
+      const jid = fromGreenhouseJid(url);
+      ref = jid !== null && jid.kind === board.kind ? jid : null;
+    }
+  }
+  return ref === null ? null : { ...ref, url: raw };
+}
+
+/**
+ * Every job named by a URL in free text (a posting's body, a message): each URL-like substring
+ * read by atsJobRefOfUrl. For one address the caller already has, use atsJobRefOfUrl: this scan
+ * would also read a URL embedded in that address's query (#521).
+ */
 export function extractAtsJobRefs(text: string, max: number = DEFAULT_MAX): AtsJobRef[] {
   const out: AtsJobRef[] = [];
   const seen = new Set<string>();
   for (const match of text.replace(/&amp;/g, '&').matchAll(URLISH)) {
     if (out.length >= max) break;
-    const raw = match[0].replace(TRAILING, '');
-    let url: URL;
-    try {
-      url = new URL(raw);
-    } catch {
-      continue;
-    }
-    // On a recognised board host the board's own path names the job (tl on #151): a stray
-    // `gh_jid` there may name another requisition, or (on Lever, Ashby, Workday) none of this
-    // board's at all. It counts only when the path names no job, and only of the board's kind.
-    // A `gh_jid` on any other host (a company career page) is read as before.
-    const board = boardFromUrl(raw);
-    let ref: Omit<AtsJobRef, 'url'> | null;
-    if (board === null) {
-      ref = fromGreenhouseJid(url);
-    } else {
-      ref = fromBoardPath(board, url);
-      if (ref === null) {
-        const jid = fromGreenhouseJid(url);
-        ref = jid !== null && jid.kind === board.kind ? jid : null;
-      }
-    }
+    const ref = atsJobRefOfUrl(match[0].replace(TRAILING, ''));
     if (ref === null) continue;
     const key = `${ref.kind}:${ref.org ?? ''}:${ref.externalId}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ ...ref, url: raw });
+    out.push(ref);
   }
   return out;
 }
