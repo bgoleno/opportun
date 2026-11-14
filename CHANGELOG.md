@@ -1,13 +1,18 @@
 # Changelog
 
-Opportun's first tagged release is [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1).
-A release is cut by running the Publish image workflow with a version: it needs a `## <version>
+Opportun's first tagged release is [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1),
+made by hand. A release is cut by running the Publish image workflow with a version: it needs a `## <version>
 (YYYY-MM-DD)` section in this file, made by renaming `## Unreleased` and starting a new one. See
 [SECURITY.md](SECURITY.md) for which versions are supported. Entries are grouped by milestone
 (requirements section 7, [docs/requirements.md](docs/requirements.md)), newest first, dated by
 when the milestone's work was merged.
 
 ## Unreleased
+
+## 0.4.0 (2026-11-14)
+
+This release includes everything in [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1),
+which was tagged by hand from `main` on 2026-11-13, and what merged after it.
 
 ### Upgrading: prompts, defaults and costs
 
@@ -141,6 +146,41 @@ when the milestone's work was merged.
   [#321](https://github.com/bgoleno/opportun/issues/321),
   [#323](https://github.com/bgoleno/opportun/issues/323),
   [#331](https://github.com/bgoleno/opportun/issues/331)).
+- **A board found on another vendor right after a failed guess for the same name is no longer
+  recorded.** When Opportun guesses a company's job board by name and one vendor's guess errors (a
+  429, a 5xx, no answer, or a vendor stopped for the night), a hit for the same name on another
+  vendor may be a decoy, and it used to be recorded. It is not recorded now: detection ends as
+  transient and retries later, and the company keeps the board it had, which also holds when
+  re-checking that recorded board errors. A hit after guesses that all answered is recorded as
+  before, and an error for one name does not hold back another name's hit. A link on the company's
+  careers page is not a guess and is unchanged
+  ([#514](https://github.com/bgoleno/opportun/issues/514); PR
+  [#526](https://github.com/bgoleno/opportun/pull/526)).
+- **A company whose nightly board check keeps getting refused is checked less often.** When a
+  company's own request to a job-board vendor is told to slow down or gets no answer, the vendor is
+  stopped for the night as before, and that company is now parked out of the nightly pick, for 1
+  night, then 2, 4 and 8, and 8 at most, until one of its checks is answered. The vendor is still
+  stopped on each night the company is refused, but on fewer and fewer nights, so it holds up
+  other users' checks on that vendor less often. Nothing is recorded about its board, no failed
+  night is counted, and nothing about it shows in the app. **On upgrade:** two columns are added to
+  `companies`, `board_probe_stops` and `board_probe_parked_until` (SQLite migration 0067, Postgres
+  0049); they travel in the data export like the other company columns
+  ([#518](https://github.com/bgoleno/opportun/issues/518); PR
+  [#533](https://github.com/bgoleno/opportun/pull/533)).
+- **One user's failure in the nightly network board check no longer stops it for everyone
+  else.** If queuing one user's probes failed (a database error, a stored setting that does not
+  parse), every later user got no probes that night and the retry stopped at the same user. The
+  failure is now logged, with the user's id and the error's type only, never its message, and the
+  sweep goes on to the next user. The job's result counts the users it queued and the users that
+  failed
+  ([#515](https://github.com/bgoleno/opportun/issues/515); PR
+  [#525](https://github.com/bgoleno/opportun/pull/525)).
+- **Jobs queued at the same moment run in the order they were queued.** When several jobs were
+  due at the same millisecond, which one ran first was left to the database and could differ
+  between SQLite and Postgres. A tie on the time a job is due and was created is now broken by its
+  id, which is its queue order, on both. There is no migration and no setting
+  ([#465](https://github.com/bgoleno/opportun/issues/465); PR
+  [#501](https://github.com/bgoleno/opportun/pull/501)).
 - **Captures share one budget per user.** The web capture dialog and every extension token now
   share 60 captures per 15 minutes per user (the dialog had no limit; 30 per token still holds),
   and the limit says which one was reached and when to retry. A user's captures are saved one
@@ -215,6 +255,16 @@ when the milestone's work was merged.
   ([#436](https://github.com/bgoleno/opportun/issues/436); PR
   [#445](https://github.com/bgoleno/opportun/pull/445)).
 
+- **The observability docs match the code.** The guide's Settings pages now cover what was
+  missing: the **Mail filters** and **Telemetry** sections in the list, the nine metrics with
+  their units, the Metrics page's range, zoom and filter limits, the AI traces page's paging and
+  summary, the collection switch (no password, audited), what **Send a test** can report and the
+  reasons a record is dropped. They also say the local store keeps only AI traces and that the
+  log's access line holds the client's address (log only, never stored or exported). The design and
+  requirements are corrected where they had drifted, and ADR-16, 17 and 18 are Accepted
+  ([#340](https://github.com/bgoleno/opportun/issues/340); PR
+  [#513](https://github.com/bgoleno/opportun/pull/513)).
+
 ### Mail, pipeline and assisted apply
 
 - **An unsubscribe request your own mail app sent is filtered.** A message from your own address
@@ -283,6 +333,23 @@ when the milestone's work was merged.
   [#484](https://github.com/bgoleno/opportun/issues/484),
   [#491](https://github.com/bgoleno/opportun/issues/491); PR
   [#494](https://github.com/bgoleno/opportun/pull/494)).
+- **The guide describes the resume flow.** The pipeline guide's **Resume** section now describes
+  the tab as it is: the **Resume for this application** card with its four steps, what it shows
+  from "add a base resume" to "sent", sending a base resume as it is, **Tailor again**,
+  **Other ways to add a resume** and the phone line. The resumes guide describes finishing a
+  tailored copy on its own page, with the **Next step for this resume** strip and **Change
+  status**. Two screenshots show the card and the strip
+  ([#495](https://github.com/bgoleno/opportun/issues/495),
+  [#400](https://github.com/bgoleno/opportun/issues/400); PR
+  [#502](https://github.com/bgoleno/opportun/pull/502)).
+- **A resume copy marked Submitted counts as sent in the resume flow.** After a copy of this
+  opportunity is marked Submitted, **Tailor again** now keeps the flow at "sent" and names the new
+  copy, where it used to fall back to tailoring. A Submitted copy counts whether or not it is the newest. With
+  an older Submitted copy and a newer Final one, the Resume tab shows "Sent" with a quiet **Record
+  that you sent** _title_ link. The tab, the copy's own page and the Assisted apply panel all read
+  the same state
+  ([#516](https://github.com/bgoleno/opportun/issues/516); PR
+  [#528](https://github.com/bgoleno/opportun/pull/528)).
 - **A keyboard drop of a board card on Closed or Dismissed says it is waiting for a reason,
   then whether it moved.** The drop announces "... is waiting for a reason to move to the
   Closed column. Choose one in the dialog, or cancel to leave it where it is." Confirming the
@@ -291,6 +358,18 @@ when the milestone's work was merged.
   and stage menu are unchanged
   ([#432](https://github.com/bgoleno/opportun/issues/432); PR
   [#474](https://github.com/bgoleno/opportun/pull/474)).
+- **On the Pipeline board, a keyboard drag reaches every column in on-screen order.** Left and
+  Right now step to the previous or next column as they appear, the collapsed **Dismissed** and
+  **Closed** rails included, where a drag could skip one of them. At either end the card does not
+  move, and Up and Down still reorder within a column. Expanding or collapsing a column keeps
+  keyboard focus on that column: it moves to the column's other control, **Collapse** after
+  **Expand** and the reverse. A toggle that changes nothing on screen, such as Collapse on a
+  column the stage filter holds open, no longer moves focus later, when the filter is cleared. A
+  pointer drag is unchanged
+  ([#475](https://github.com/bgoleno/opportun/issues/475),
+  [#508](https://github.com/bgoleno/opportun/issues/508); PRs
+  [#505](https://github.com/bgoleno/opportun/pull/505),
+  [#527](https://github.com/bgoleno/opportun/pull/527)).
 - **The reason dialog for a stage move cannot be closed while the move is being saved.** From the moment you confirm until the server answers, **Cancel** is
   disabled, the corner close button is hidden, and a click outside the dialog and **Escape** do
   nothing, so a move cannot be reported as cancelled after it has gone through. If the server
@@ -332,17 +411,47 @@ when the milestone's work was merged.
   left for you
   ([#402](https://github.com/bgoleno/opportun/issues/402); PR
   [#461](https://github.com/bgoleno/opportun/pull/461)).
+- **Opening the extension on the form you handed off fills it, the first time, and a keyboard
+  shortcut opens the extension.** On the Greenhouse form of an application you reviewed and opened
+  from Opportun, opening the extension now fills it at once, the first time only: the popup says
+  "Filling the application for _role_ at _company_ on _host_. Keep this window open...", then
+  shows the same report as the button. Every later time, and on any other page, it behaves as
+  before, with **Fill in this application**. **Alt+Shift+O** opens the extension, exactly as a
+  click on its icon does, and you can rebind it or turn it off in the browser's own shortcut
+  settings. The popup's lookup is bounded at 5 seconds and its work runs one at a time. In
+  Opportun, the **Open** step reads "Not filled by the extension yet." until the extension has
+  read the application, then "The extension read this application at _time_. Check the form, and
+  press Fill in this application in the extension if it is empty." **On upgrade:** a nullable column `application_submissions.prefill_read_at`
+  is added (SQLite migration 0066, Postgres 0048). Use an extension built with this change
+  together with a server that has it: an older server does not say which read was the first, and
+  the popup then only offers the button
+  ([#403](https://github.com/bgoleno/opportun/issues/403); PR
+  [#507](https://github.com/bgoleno/opportun/pull/507)).
+- **The project's identifier guard in CI keeps withheld terms out of its public log.** The guard
+  that fails a pull request when a withheld identifier is present now masks every term before it
+  scans, and reports a hit by file and line only, never the term or the
+  matching text; a path whose name holds a term, in any case, is not printed. This changes the project's own CI and nothing in the running application
+  ([#520](https://github.com/bgoleno/opportun/issues/520); PR
+  [#529](https://github.com/bgoleno/opportun/pull/529)).
 - **The guide now says your resume reaches Greenhouse when the extension attaches it, not
   when you press Submit.** The behaviour is not new: when the form's resume field is empty and
   takes a PDF, the extension attaches your Final resume, and Greenhouse's own form uploads it
   at once, as it does when you choose a file yourself. So Greenhouse can hold your resume even
-  if you then decide not to apply. Press **Fill in this application** only when you mean to
-  apply ([#468](https://github.com/bgoleno/opportun/issues/468); PR
+  if you then decide not to apply. Open the extension on the form, or press **Fill in this
+  application**, only when you mean to apply ([#468](https://github.com/bgoleno/opportun/issues/468); PR
   [#470](https://github.com/bgoleno/opportun/pull/470)).
 - **A company's careers page and domain come from the domains its name gives.** The result is the
   same with or without a message; a careers page found through a sender is used for that
   opportunity only and is not saved on the company. Values already saved are not changed
   ([#451](https://github.com/bgoleno/opportun/pull/451)).
+
+- **Empty Profile fields show neutral examples, each marked "e.g.".** Under **Settings > Profile**,
+  the empty Headline, Location (city) and Work authorization fields show examples such as "e.g.
+  Senior software engineer" and "e.g. Springfield, Illinois, United States", and the city and
+  school hints use neutral examples too. Only placeholder and hint text changed: nothing you
+  stored is different, and the details step of an application shows the same hints
+  ([#500](https://github.com/bgoleno/opportun/issues/500); PR
+  [#503](https://github.com/bgoleno/opportun/pull/503)).
 
 ### Install
 
@@ -386,6 +495,17 @@ when the milestone's work was merged.
   [install guide](docs/install.md#4-configuration-reference)
   ([#383](https://github.com/bgoleno/opportun/issues/383); PR
   [#393](https://github.com/bgoleno/opportun/pull/393)).
+- **The install guide and the guide now say how assisted apply is turned off, and how the daily
+  review limit works.** Assisted apply is on unless `OPPORTUN_SUBMISSIONS=0` is set (in
+  `deploy/.env` on Compose, then `docker compose up -d`); any other value stops the server from
+  starting, and it is never on the demo. `OPPORTUN_DAILY_REVIEW_CAP` (default 10, unset or empty
+  is 10, 1 to 25 in digits only, anything else stops the server from starting) is the most
+  applications one user can confirm a review for in a rolling 24 hours. A user can lower their own
+  limit under **Settings > Profile > Applications**, never above the server's. Section 4 of the
+  [install guide](docs/install.md#4-configuration-reference) has both settings, and the
+  [Settings page of the guide](docs/guide/settings.md#applications-and-the-review-limit) the
+  limit ([#453](https://github.com/bgoleno/opportun/issues/453); PR
+  [#499](https://github.com/bgoleno/opportun/pull/499)).
 - **The published image's `latest` tag moves only when a maintainer publishes, and the install
   guide now has the upgrade steps for it.** The image at `ghcr.io/bgoleno/opportun` is built
   only when someone runs the **Publish image** workflow by hand, so `latest` is the build last
@@ -424,7 +544,7 @@ when the milestone's work was merged.
 - The connector's messages name **Settings > Integrations > Extensions and Connectors** as the
   app shows it ([#235](https://github.com/bgoleno/opportun/issues/235)).
 
-### Earlier in Unreleased
+### Earlier in this release
 
 - **A message's full text is encrypted while it waits to be classified.** The text of a new
   message reaches the classifier through its job, which is cleared when the job finishes; it
