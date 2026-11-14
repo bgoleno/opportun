@@ -77,7 +77,8 @@ export async function signIn(app: FastifyInstance, email: string): Promise<TestC
  * for one person, which behaves as on any instance.
  */
 export async function sharedDemoUser(app: FastifyInstance, index: number): Promise<TestClient> {
-  const user = DEMO_USERS[index]!;
+  const user = DEMO_USERS.at(index);
+  if (user === undefined) throw new Error(`no pinned demo user ${String(index)}`);
   const now = Date.now();
   await app.db
     .insert(users)
