@@ -157,3 +157,10 @@ export function unusablePasswordHash(): string {
 export function hasUsablePassword(passwordHash: string): boolean {
   return !passwordHash.startsWith(UNUSABLE_PASSWORD_PREFIX);
 }
+
+/**
+ * The per-user lock for writes that depend on which password is current (#539): a password
+ * change, a reset, and a device token minted after a password check all take it, inside their
+ * transactions, so a token is never inserted after a change or reset that should have stopped it.
+ */
+export const passwordScope = (userId: string): string => `password:${userId}`;

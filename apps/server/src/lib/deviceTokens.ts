@@ -7,11 +7,12 @@ import { newId } from '@opportun/core';
 import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import type { FastifyReply, FastifyRequest, preHandlerAsyncHookHandler } from 'fastify';
 import { lockScope, withTransaction, type Db, type Exec } from '../db/client';
-import { deviceTokens, type DeviceTokenScope } from '../db/schema';
+import { deviceTokens, users, type DeviceTokenScope } from '../db/schema';
 import { DEVICE_AUTH_MARK } from '../plugins/security';
 import type { UserCtx } from '../repos/base';
 import { audit } from './audit';
-import { notFound, unauthorized } from './errors';
+import { HttpError, notFound, unauthorized } from './errors';
+import { passwordScope } from './passwords';
 import { racePoint } from './racePoints';
 
 export const DEVICE_TOKEN_PREFIX = 'odt_';
@@ -60,45 +61,78 @@ export function hashDeviceToken(token: string): string {
 export const DEMO_MAX_ACTIVE_TOKENS = 20;
 
 /**
- * Creates a token for the caller; the plaintext is returned here and nowhere else, ever. With
- * `maxActive`, the caller keeps at most that many unrevoked tokens: when the new one would pass it,
- * the oldest are revoked to make room, and each revoke is audited as a manual one is, with `ip`
- * (tl on #550: a visitor on a shared demo account always gets a token, and the one least likely
- * still in use goes). The count, the revokes and the insert share the user's lock in one
- * transaction, so two at once cannot leave more than `maxActive`.
+ * Creates a token for the caller; the plaintext is returned here and nowhere else, ever.
+ *
+ * With `passwordHash` (the hash the caller's password was just proven against), the insert happens
+ * only while that is still the user's hash, under the lock a password change and a reset take
+ * (passwordScope): a change that revokes tokens, or a reset, that commits during the check wins,
+ * and this answers 403 having created nothing (#539).
+ *
+ * With `maxActive`, the caller keeps at most that many unrevoked tokens: when the new one would
+ * pass it, the oldest are revoked to make room, and each revoke is audited as a manual one is,
+ * with `ip` (tl on #550: a visitor on a shared demo account always gets a token, and the one least
+ * likely still in use goes).
+ *
+ * Both happen in one transaction, in this order (sec on #557): the password lock, the hash check,
+ * then the tokens' lock, the revokes and the insert. A 403 for a changed password therefore
+ * revokes nothing, and two mints at once cannot leave more than `maxActive`.
  */
 export async function createDeviceToken(
   db: Db,
   ctx: UserCtx,
   input: { name: string; scopes: DeviceTokenScope[] },
-  opts: { maxActive?: number; ip?: string } = {},
+  opts: { passwordHash?: string; maxActive?: number; ip?: string } = {},
 ): Promise<{ meta: DeviceTokenMeta; token: string }> {
   const token = DEVICE_TOKEN_PREFIX + randomBytes(32).toString('base64url');
   const now = Date.now();
   const scopes = [...new Set(input.scopes)];
-  const { maxActive } = opts;
-  if (maxActive === undefined)
+  const { passwordHash, maxActive } = opts;
+  if (passwordHash === undefined && maxActive === undefined) {
     return { meta: await insertToken(db, ctx, input.name, token, scopes, now), token };
+  }
   return await withTransaction(db, async (tx) => {
-    await lockScope(tx, `device_tokens:${ctx.userId}`);
-    const active = await tx
-      .select({ id: deviceTokens.id, name: deviceTokens.name })
-      .from(deviceTokens)
-      .where(and(eq(deviceTokens.userId, ctx.userId), isNull(deviceTokens.revokedAt)))
-      .orderBy(asc(deviceTokens.createdAt), asc(deviceTokens.id))
-      .all();
-    // Room for the new one: the oldest go first.
-    for (const old of active.slice(0, Math.max(active.length - maxActive + 1, 0))) {
-      await tx
-        .update(deviceTokens)
-        .set({ revokedAt: now, updatedAt: now })
-        .where(and(eq(deviceTokens.id, old.id), isNull(deviceTokens.revokedAt)))
-        .run();
-      await audit(tx, 'device_token.revoked', {
-        userId: ctx.userId,
-        ...(opts.ip === undefined ? {} : { ip: opts.ip }),
-        detail: { id: old.id, name: old.name },
-      });
+    if (passwordHash !== undefined) {
+      await lockScope(tx, passwordScope(ctx.userId));
+      // After the lock, never before it (tl on #557): read before, the hash could be replaced
+      // between this check and the insert by a change that the lock would otherwise have held.
+      // The comparison is the query's: the user's row with the verified hash, or none.
+      const stillCurrent = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.id, ctx.userId), eq(users.passwordHash, passwordHash)))
+        .get();
+      if (stillCurrent === undefined) {
+        throw new HttpError(
+          403,
+          'password_changed',
+          'Your password changed while this was being checked. Sign in again and try once more.',
+        );
+      }
+      // Holding the lock, the hash still current: a change or reset now waits for this insert,
+      // and then revokes it with the rest (test/deviceTokenPasswordRace.test.ts parks here).
+      await racePoint('deviceTokens.create.locked');
+    }
+    if (maxActive !== undefined) {
+      await lockScope(tx, `device_tokens:${ctx.userId}`);
+      const active = await tx
+        .select({ id: deviceTokens.id, name: deviceTokens.name })
+        .from(deviceTokens)
+        .where(and(eq(deviceTokens.userId, ctx.userId), isNull(deviceTokens.revokedAt)))
+        .orderBy(asc(deviceTokens.createdAt), asc(deviceTokens.id))
+        .all();
+      // Room for the new one: the oldest go first.
+      for (const old of active.slice(0, Math.max(active.length - maxActive + 1, 0))) {
+        await tx
+          .update(deviceTokens)
+          .set({ revokedAt: now, updatedAt: now })
+          .where(and(eq(deviceTokens.id, old.id), isNull(deviceTokens.revokedAt)))
+          .run();
+        await audit(tx, 'device_token.revoked', {
+          userId: ctx.userId,
+          ...(opts.ip === undefined ? {} : { ip: opts.ip }),
+          detail: { id: old.id, name: old.name },
+        });
+      }
     }
     return { meta: await insertToken(tx, ctx, input.name, token, scopes, now), token };
   });

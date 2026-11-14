@@ -40,6 +40,20 @@ export async function confirmPassword(
   reply: FastifyReply,
   opts: { userId: string; password: string; action: string },
 ): Promise<boolean> {
+  return (await confirmedPasswordHash(req, reply, opts)) !== null;
+}
+
+/**
+ * confirmPassword, answering with the stored hash the password was proven against, or null
+ * (already answered 403). A caller that writes after the check can make the write conditional on
+ * that hash still being the user's, so a password change or reset that commits during the check
+ * wins (#539).
+ */
+export async function confirmedPasswordHash(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  opts: { userId: string; password: string; action: string },
+): Promise<string | null> {
   const db = req.server.db;
   const row = await db
     .select({ hash: users.passwordHash })
@@ -49,12 +63,12 @@ export async function confirmPassword(
   const peppers = req.server.config.peppers ?? NO_PEPPERS;
   const ok =
     row !== undefined && (await verifyPasswordWithUpgrade(row.hash, opts.password, peppers)).ok;
-  if (ok) return true;
+  if (ok) return row.hash;
   await audit(db, 'auth.reauth_failed', {
     userId: opts.userId,
     ip: req.ip,
     detail: { action: opts.action },
   });
   await reply.code(403).send({ error: { code: 'invalid_password' } });
-  return false;
+  return null;
 }
