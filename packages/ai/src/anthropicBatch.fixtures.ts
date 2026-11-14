@@ -126,3 +126,35 @@ export function liveMessage(text: string): Record<string, unknown> {
     },
   };
 }
+
+/**
+ * A succeeded line whose answer is a `json` tool call: how the reply comes back when the AI SDK
+ * asked for structured output through its forced `json` tool (a model it does not know to support
+ * native structured output: tl at 28b9731). The Messages reference's ToolUseBlock shape.
+ */
+export function succeededToolLine(
+  customId: string,
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  const line = succeededLine(customId, '', {
+    input_tokens: 140,
+    output_tokens: 52,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+  });
+  const message = (line.result as { message: Record<string, unknown> }).message;
+  message.content = [
+    { type: 'tool_use', id: 'toolu_01A09q90qw90lq917835lq9', name: 'json', input },
+  ];
+  message.stop_reason = 'tool_use';
+  return line;
+}
+
+/** The live call's answer in the SDK's `json` tool mode, for the equality test. */
+export function liveToolMessage(input: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...liveMessage(''),
+    content: [{ type: 'tool_use', id: 'toolu_01A09q90qw90lq917835lq9', name: 'json', input }],
+    stop_reason: 'tool_use',
+  };
+}

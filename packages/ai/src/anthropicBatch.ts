@@ -70,6 +70,9 @@ async function liveBody(
     // The capture's answer: expected.
   }
   if (body === null) throw new Error('Anthropic batch: the request body could not be built');
+  // Only the body is carried: a batch request has no headers of its own. Today the live call
+  // sends no anthropic-beta header for these requests; if a later SDK sends one, the batch would
+  // not carry it (tl at 28b9731), and the equality test would still pass, so look here then.
   return body;
 }
 
@@ -89,10 +92,21 @@ function resultItem(line: unknown): BatchResultItem | null {
       if (!isRecord(message) || !Array.isArray(message.content) || !isRecord(message.usage)) {
         return null;
       }
-      const text = message.content
-        .filter((b): b is Json => isRecord(b) && b.type === 'text' && typeof b.text === 'string')
-        .map((b) => b.text as string)
-        .join('');
+      // The answer, as the live call reads it. When the SDK asked through its forced `json` tool
+      // (a model it does not know to support native structured output: tl at 28b9731), the
+      // answer is that tool call's input; otherwise it is the text blocks, joined.
+      const tool = message.content.find(
+        (b): b is Json => isRecord(b) && b.type === 'tool_use' && b.name === 'json',
+      );
+      const text =
+        tool !== undefined
+          ? JSON.stringify(tool.input ?? null)
+          : message.content
+              .filter(
+                (b): b is Json => isRecord(b) && b.type === 'text' && typeof b.text === 'string',
+              )
+              .map((b) => b.text as string)
+              .join('');
       const u = message.usage;
       const cacheRead = count(u.cache_read_input_tokens);
       const cacheWrite = count(u.cache_creation_input_tokens);
@@ -124,7 +138,10 @@ function resultItem(line: unknown): BatchResultItem | null {
     case 'canceled':
       return { customId, kind: 'canceled' };
     default:
-      return null;
+      // A result this client does not know, for a request it can name: that one request errored,
+      // and is tried again in a later batch, rather than the whole batch held back (tl at
+      // 28b9731). A line that names no request is still an unexpected answer (results() throws).
+      return { customId, kind: 'errored', invalidRequest: false, detail: 'unrecognised_result' };
   }
 }
 

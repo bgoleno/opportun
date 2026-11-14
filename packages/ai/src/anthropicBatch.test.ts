@@ -11,8 +11,10 @@ import {
   expiredLine,
   jsonl,
   liveMessage,
+  liveToolMessage,
   messageBatch,
   succeededLine,
+  succeededToolLine,
 } from './anthropicBatch.fixtures';
 import { batchProviderFor, type BatchRequest } from './batch';
 import { resolvePolicy } from './policies';
@@ -261,12 +263,60 @@ describe('results (criterion 1)', () => {
   });
 
   it("never fetches a results_url a response names: the key goes only to the operator's base URL", async () => {
-    const { fetch, sent } = recordingFetch(() => new Response(jsonl([expiredLine(POSTING)])));
-    await client(fetch, { baseUrls: { anthropic: 'https://llm-gateway.example.com/v1' } }).results(
-      BATCH_ID,
+    // The batch, as the state reads it, names a results_url on another host (tl at 28b9731: the
+    // test must offer one for it to mean anything).
+    const { fetch, sent } = recordingFetch((url) =>
+      url.endsWith('/results')
+        ? new Response(jsonl([expiredLine(POSTING)]))
+        : json(
+            messageBatch('ended', {
+              results_url: `https://elsewhere.example.net/v1/messages/batches/${BATCH_ID}/results`,
+            }),
+          ),
     );
+    const c = client(fetch, { baseUrls: { anthropic: 'https://llm-gateway.example.com/v1' } });
+    expect(await c.state(BATCH_ID)).toBe('ended');
+    await c.results(BATCH_ID);
     expect(sent.map((s) => s.url)).toEqual([
+      `https://llm-gateway.example.com/v1/messages/batches/${BATCH_ID}`,
       `https://llm-gateway.example.com/v1/messages/batches/${BATCH_ID}/results`,
+    ]);
+    expect(sent.some((s) => s.url.includes('elsewhere.example.net'))).toBe(false);
+  });
+
+  it('a batch id with / ? or # stays one path segment, on the operator host (sec at 28b9731)', async () => {
+    const { fetch, sent } = recordingFetch(() => new Response(jsonl([expiredLine(POSTING)])));
+    await client(fetch).results('msgbatch_a/../b?x=1#y');
+    expect(sent.map((s) => s.url)).toEqual([
+      `${OFFICIAL_BASE_URLS.anthropic}/messages/batches/msgbatch_a%2F..%2Fb%3Fx%3D1%23y/results`,
+    ]);
+  });
+
+  it("a succeeded answer given as the SDK's json tool call is the answer's text (tl at 28b9731)", async () => {
+    const { fetch } = recordingFetch(
+      () => new Response(jsonl([succeededToolLine(POSTING, { score: 70, rationale: 'fits' })])),
+    );
+    expect(await client(fetch).results(BATCH_ID)).toEqual([
+      {
+        customId: POSTING,
+        kind: 'succeeded',
+        text: '{"score":70,"rationale":"fits"}',
+        usage: { input: 140, output: 52, cacheRead: 0, cacheWrite: 0 },
+      },
+    ]);
+  });
+
+  it('a line with a custom id but a result this client does not know is that request errored, not the batch', async () => {
+    const odd = { custom_id: 'posting_2', result: { type: 'paused_for_review' } };
+    const { fetch } = recordingFetch(() => new Response(jsonl([odd, expiredLine(POSTING)])));
+    expect(await client(fetch).results(BATCH_ID)).toEqual([
+      {
+        customId: 'posting_2',
+        kind: 'errored',
+        invalidRequest: false,
+        detail: 'unrecognised_result',
+      },
+      { customId: POSTING, kind: 'expired' },
     ]);
   });
 
@@ -292,8 +342,10 @@ describe('results (criterion 1)', () => {
     ]);
   });
 
-  it('a line that is not a result is an unexpected answer, not a lost posting', async () => {
-    const { fetch } = recordingFetch(() => new Response('{"custom_id":"x"}\nnot json\n'));
+  it('a line that names no request is an unexpected answer, not a lost posting', async () => {
+    const { fetch } = recordingFetch(
+      () => new Response('{"result":{"type":"expired"}}\nnot json\n'),
+    );
     await expect(client(fetch).results(BATCH_ID)).rejects.toThrow(/results/);
   });
 });
@@ -337,6 +389,41 @@ describe('the batch request is the live call (criterion 3)', () => {
     expect((params.system as { cache_control?: unknown }[])[0]!.cache_control).toEqual({
       type: 'ephemeral',
     });
+  });
+
+  it("in the SDK's json tool mode too (a model it does not know for native structured output)", async () => {
+    const OLD: ModelPolicy = {
+      provider: 'anthropic',
+      // One the SDK (@ai-sdk/anthropic 4.0.81, getModelCapabilities) asks through its json tool, as
+      // it does any id it does not know, a gateway alias among them.
+      model: 'claude-3-haiku-20240307',
+      maxOutputTokens: 4000,
+    };
+    const live = recordingFetch(() => json(liveToolMessage({ score: 70, rationale: 'fits' })));
+    const deps: AiDeps = {
+      getKey: async () => KEY,
+      policyFor: async () => OLD,
+      record: async () => {},
+      budget: { perTaskDailyUsd: 5 },
+      spentTodayUsd: async () => 0,
+      providerFetch: { fetch: live.fetch, allowLoopbackHttp: false },
+    };
+    await runStructured(deps, 'discovery.rank', OPTS);
+    expect(live.sent).toHaveLength(1);
+    const liveBody = live.sent[0]!.body as Record<string, unknown>;
+    // The live call asks through the SDK's json tool here, not output_config.
+    const tools = liveBody.tools as { name?: string }[] | undefined;
+    expect(tools?.map((t) => t.name)).toEqual(['json']);
+    expect(liveBody).toHaveProperty('tool_choice');
+    expect(liveBody).not.toHaveProperty('output_config');
+
+    const batch = recordingFetch(() => json(messageBatch('in_progress')));
+    await client(batch.fetch, {}, OLD).submit([
+      { customId: POSTING, request: structuredRequest(OLD, OPTS) },
+    ]);
+    const params = (batch.sent[0]!.body as { requests: { params: Record<string, unknown> }[] })
+      .requests[0]!.params;
+    expect(params).toEqual(liveBody);
   });
 
   it('building the params sends nothing and never hands the real key to the SDK', async () => {
