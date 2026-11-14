@@ -59,6 +59,14 @@ export const ATTR = {
   agentName: 'gen_ai.agent.name',
   tokenModality: 'gen_ai.token.modality',
   costEstimated: 'opportun.ai.cost.estimated',
+  // A batch's own (#509, tl's ruling on #509): its provider id, and how many requests it carried
+  // and how each ended. Tokens and cost use the usage keys above.
+  batchId: 'opportun.gen_ai.batch.id',
+  batchRequests: 'opportun.gen_ai.batch.requests',
+  batchSucceeded: 'opportun.gen_ai.batch.succeeded',
+  batchErrored: 'opportun.gen_ai.batch.errored',
+  batchExpired: 'opportun.gen_ai.batch.expired',
+  batchCanceled: 'opportun.gen_ai.batch.canceled',
 } as const;
 
 /** The Gen AI metrics (design 14.4), which the server records from each task_runs record. */
@@ -90,6 +98,13 @@ export const WIRE_PROVIDERS = ['anthropic', 'openai'] as const;
 
 /** The only operation a router call has. A workflow's parent span is the server's, not ours. */
 export const OPERATION_CHAT = 'chat';
+
+/**
+ * A batch's two operations (#509): sending its requests, and reading its results. The conventions
+ * name no batch operation, so these are Opportun's own values of gen_ai.operation.name.
+ */
+export const OPERATION_BATCH_SUBMIT = 'batch_submit';
+export const OPERATION_BATCH_COLLECT = 'batch_collect';
 
 /** The task name of a key check, which is not a task of the router (no budget, no ledger row). */
 export const KEY_CHECK_TASK = 'key_check';
@@ -321,4 +336,43 @@ function definedOnly(response: InferenceResponse): InferenceResponse {
   if (response.modelId !== undefined) out.modelId = response.modelId;
   if (response.finishReason !== undefined) out.finishReason = response.finishReason;
   return out;
+}
+
+// ---------------------------------------------------------------- the batch spans
+
+/**
+ * One span around a batch's submit or collect (#509 criterion 5): `{operation} {model}`, a client
+ * span with the wire provider, the provider and the model, and what `fn` adds. None for each
+ * request. A failure is an error span with the router's reason, never the error's text, as an
+ * inference span's is.
+ */
+export async function inBatchSpan<T>(
+  operation: typeof OPERATION_BATCH_SUBMIT | typeof OPERATION_BATCH_COLLECT,
+  policy: Pick<ModelPolicy, 'provider' | 'model'>,
+  fn: (set: (attributes: Attributes) => void) => Promise<T>,
+): Promise<T> {
+  const userId = userInContext();
+  const attributes: Attributes = {
+    [ATTR.operationName]: operation,
+    [ATTR.providerName]: wireProvider(policy.provider),
+    [ATTR.aiProvider]: policy.provider,
+    [ATTR.requestModel]: modelAttr(policy.model),
+  };
+  if (userId !== undefined) attributes[ATTR.userId] = userId;
+  const name = isModelId(policy.model) ? `${operation} ${policy.model}` : operation;
+  const span = trace
+    .getTracer(TRACER_NAME)
+    .startSpan(name, { kind: SpanKind.CLIENT, attributes }, context.active());
+  try {
+    const out = await context.with(trace.setSpan(context.active(), span), () =>
+      fn((more) => span.setAttributes(more)),
+    );
+    return out;
+  } catch (err) {
+    span.setAttribute(ATTR.errorType, 'provider_error');
+    span.setStatus({ code: SpanStatusCode.ERROR });
+    throw err;
+  } finally {
+    span.end();
+  }
 }
