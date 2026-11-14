@@ -9,6 +9,14 @@ when the milestone's work was merged.
 
 ## Unreleased
 
+- **The Publish image workflow runs in a `release` environment, so GitHub itself can limit
+  publishing to `main`.** Both of its jobs, `publish` and `release`, now declare `environment:
+release`. "Only from `main`" was otherwise enforced only by the workflow's own check, which runs
+  from the dispatched branch's checkout. A branch rule on the `release` environment, set in the
+  repository's settings, is the platform's own limit
+  ([#519](https://github.com/bgoleno/opportun/issues/519); PR
+  [#532](https://github.com/bgoleno/opportun/pull/532)).
+
 ## 0.4.0 (2026-11-14)
 
 This release includes everything in [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1),
