@@ -3,7 +3,9 @@
 [Guide home](README.md) · Previous: [Network](network.md)
 
 **Settings** has these sections: Account, Security, Profile, Role targets, Resume rules, AI,
-Integrations, Import/Export, Metrics and, for administrators, Users and Jobs. Profile, role targets and resume
+Integrations, Mail filters, Import/Export, Metrics, Telemetry and, for administrators, Users and
+Jobs. Anyone signed in can open Metrics and Telemetry; what each shows depends on whether you are
+an administrator. Profile, role targets and resume
 rules are covered in [Getting started](getting-started.md#first-run-setup) and
 [Resumes](resumes.md#the-tailoring-chat); Google and Gmail in [Resumes](resumes.md#connect-google)
 and [Inbox](inbox.md#connect-gmail).
@@ -68,7 +70,9 @@ cent; OpenAI keys are checked against the free model list. An OpenAI-compatible 
 without a model list cannot confirm its models, which shows as Model errors even when calls
 would work. These checks are not counted in **Usage** (under
 [Models and budgets](#models-and-budgets)) and do not count toward any budget: Opportun keeps
-no usage or cost record of them, so your provider's bill is the only place their cost shows.
+no usage or cost record of them, so your provider's bill is the only place their cost shows. With
+[collection](#telemetry) on, a key check does show in **AI traces** as a `key_check` call, with
+its tokens and no cost.
 
 ## Models and budgets
 
@@ -160,11 +164,16 @@ a capture that went on to rank the posting. Each row shows when it started, its 
 models, how long it took, the input and output tokens, the estimated cost, and whether it
 failed. You see only your own traces. An administrator sees only their own too.
 
-Filter the list by task, model, provider, status (OK or Error) and time range. A tailoring
+The list loads 50 at a time; **Load more** adds the next ones.
+
+Filter the list by task, model, provider, status (OK or Error) and time range (all kept traces,
+the last hour, 24 hours, 7 days or 30 days). The filters are in the page's address, so you can
+link to a filtered view. A tailoring
 chat's turns are grouped under **Tailoring chat** with the number of turns, and **Show only
 this conversation** lists that chat's turns on their own.
 
-Open a trace to see its waterfall: every step on one time axis, each nested under the step that
+Open a trace to see a summary (when it started, how long it took, what started it, a route or
+a job, its feature, models, tokens, estimated cost and number of steps) and its waterfall: every step on one time axis, each nested under the step that
 started it, with when it started and how long it ran. Select a step with the mouse, or move
 through the steps with the arrow keys (Home and End jump to the first and last), and its
 details appear below: its kind, status, task, model and provider, the prompt it used (by task
@@ -305,25 +314,46 @@ server itself; a snapshot on the same disk does not survive losing that disk.
 **Settings > Metrics** charts how Opportun is used and how it runs, from the instance's own
 store: nothing has to be exported, and no outside service is involved. You see the metrics of
 your own AI use. An administrator also sees the instance's: HTTP requests, background jobs,
-database statements and outbound requests. Nobody sees another user's.
+database statements, outbound requests and the telemetry items dropped by the catalogue check or
+a full buffer. Nobody sees another user's. Each metric in the list is marked **Yours** or
+**Instance**.
 
 The page lists every metric you can see, with what it measures and its unit. Narrow the list by
-name with **Search metrics**, or with **Carries attribute** to the metrics that record one, such
+name or description with **Search metrics**, or with **Carries attribute** to the metrics that record one, such
 as a route (`http.route`) or a job (`opportun.job.kind`). Select a metric to chart it:
 
 - **Statistic**: for a duration, the number of calls, the errors among them, the mean duration
   or the longest; for a count, its total.
 - **Time range**: the last hour, 6 hours, 24 hours, 7 days or 30 days, or a **Custom range**
-  with its own start and end. **Zoom in** halves the range and **Zoom out** doubles it. Points
-  are kept 30 days, minute by minute for the last 48 hours, so a range of a few hours inside
-  those 48 hours is drawn minute by minute, and a longer one hour by hour.
+  with its own **From** and **To**, which must lie inside the last 30 days. **Zoom in** halves
+  the range, down to 10 minutes, and **Zoom out** doubles it, up to 30 days. Points are kept 30
+  days, minute by minute for the last 48 hours: a range of up to 6 hours that starts inside those
+  48 hours is drawn from minute points, and any other from hour points. A chart has at most 180
+  steps, so on a long range each step covers more than one minute or hour.
 - **Break down by** draws one line per value of an attribute, such as one per route. The eight
   largest get a line each, and the rest are added up as **Other**.
-- **Filters** keep only the points with the values you choose, such as `POST` requests.
+- **Filters** keep only the points with the values you choose, such as `POST` requests. Each
+  attribute offers at most 100 values.
 
 Move the pointer along the chart to read the values at that time below it. With the keyboard,
 tab to the chart and use the arrow keys (Home and End jump to the ends, `+` and `-` zoom around
-the cursor). The same numbers are in the table under the chart, one row per step.
+the cursor). The same numbers are in the table under the chart, one row per step. The metric and
+the filters are in the page's address, so you can link to a view. If a range holds more points
+than one chart reads, the page asks for a shorter range or a filter.
+
+The metrics, with their units:
+
+| Metric                                        | Unit       | Who sees it   |
+| --------------------------------------------- | ---------- | ------------- |
+| `gen_ai.client.inference.duration`            | seconds    | you           |
+| `gen_ai.client.inference.usage.input_tokens`  | tokens     | you           |
+| `gen_ai.client.inference.usage.output_tokens` | tokens     | you           |
+| `opportun.gen_ai.usage.cost`                  | US dollars | you           |
+| `http.server.request.duration`                | seconds    | administrator |
+| `http.client.request.duration`                | seconds    | administrator |
+| `db.client.operation.duration`                | seconds    | administrator |
+| `opportun.job.duration`                       | seconds    | administrator |
+| `opportun.obs.dropped`                        | items      | administrator |
 
 ![The HTTP request metric over the last 24 hours, broken down by route, with the cursor reading out each route's calls at 10:00](images/settings-metrics.png)
 
@@ -338,8 +368,11 @@ collection is not available at all, and the page says that instead.
 administrator turns them on, and both apply at once, with no restart.
 
 - **Collection** records how Opportun runs, in its own database: HTTP requests, background
-  jobs, database statements, outbound requests and AI calls, as metrics and traces. The
-  **Metrics** and **AI traces** pages read it. It also writes an event record to the server's
+  jobs, database statements, outbound requests and AI calls, as metrics, and AI calls and what
+  they sit inside as traces. The **Metrics** and **AI traces** pages read it. The local store
+  keeps only AI traces: an HTTP request, job or outbound request is a metric, and is exported as
+  a span, but has no trace page. The switch is **Turn collection on** or **Turn collection off**,
+  asks for no password (nothing leaves the instance) and is recorded in the audit log. It also writes an event record to the server's
   log for every action in the audit log (a sign-in, an import, an AI key change and the like),
   and for each settings change, job run, discovery source run and error: what happened and
   who, never the details. Nothing leaves the instance.
@@ -389,12 +422,16 @@ scheme, host, port or, for OTLP, the header name clears it, so it cannot follow 
 somewhere else or go out in a header you did not choose for it.
 
 **Send a test** makes one request to the saved destination and says how it went: accepted,
-refused, timed out, a TLS failure, a refused credential, a redirect (which export never
-follows), or an error from the destination. If the destination is not allowed, it says why:
+refused (nothing listening at that address and port), timed out, a TLS failure, a refused
+credential, a redirect (which export never follows), a refusal or an error from the
+destination, or a failed connection. It needs a saved destination; export does not have to be on. If the destination is not allowed, it says why:
 for example that it is a private address and the server's operator has not set
 `OPPORTUN_TELEMETRY_ALLOW_PRIVATE`. It asks for your password too, and shares its limit of 10 tries in 15 minutes with the other
 password checks. Below the form, the card shows the last successful send, the last failure, and
-how many records were dropped in the last 24 hours (by a full buffer, for example).
+how many records were dropped in the last 24 hours, in a table of signal, reason and count. A
+record is dropped for a name or value outside the catalogue, a full buffer (2,048 records per
+signal), the cap of 2,000 live metric series, or a message withheld. The last success and failure
+are kept in memory, so after a restart the card says "none yet" until the next send.
 
 If export is on but cannot send at all, the card shows **Export is blocked: nothing is sent**,
 when it last tried and why. This happens, for example, when you saved a private address while
@@ -457,12 +494,13 @@ InfluxDB has no OTLP receiver, so Opportun writes line protocol to its `/api/v2/
 the host, the port (8086 by default), the **Organisation** and **Bucket** to write to, and an
 **API token** with write access to that bucket. Each metric becomes a measurement of the same
 name (`http.server.request.duration`), its attributes become tags, and a duration's `count`,
-`sum`, `min` and `max` become fields. InfluxDB receives metrics only.
+`sum`, `min` and `max` become fields, and a count (tokens, cost, dropped items) becomes one
+field named `value`. InfluxDB receives metrics only.
 
 ### OTLP
 
 Any endpoint that accepts OTLP over HTTP with protobuf, such as an OpenTelemetry Collector or a
-hosted service. On the card: type **OTLP**, the scheme, host and port (4318 is the usual one), an
+hosted service. It receives metrics, traces and event records. On the card: type **OTLP**, the scheme, host and port (4318 is the usual one), an
 optional **Base path** if the endpoint is not at the root (Opportun adds `/v1/metrics`,
 `/v1/traces` and `/v1/logs`), and, if the endpoint needs a key, the **Header name** and **Header
 value** it reads it from (for example `x-api-key`). gRPC is not supported.

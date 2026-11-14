@@ -588,8 +588,9 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
   apart.
 - NFR-PRV7: Telemetry collection is off by default, and with it off Opportun stores no
   telemetry. Telemetry export is a second switch, also off by default, and with it off
-  Opportun makes no outbound connection for telemetry. Only an admin can turn it on or change where it sends, with their
-  password confirmed again. The destination must be `https` at a public address, or, only
+  Opportun makes no outbound connection for telemetry. Only an admin can turn either switch on or change where export sends. Changing export needs
+  their password confirmed again; the collection switch does not, because nothing leaves the
+  instance. The destination must be `https` at a public address, or, only
   where the operator has allowed it in the environment, a loopback or private-network address,
   never a link-local or metadata address; it never follows a redirect, its URL never holds a
   credential, and its stored credential is cleared when the destination (its type, scheme, host, port or OTLP header name) changes. Every user of the instance
@@ -610,7 +611,8 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
 - NFR-OPS6: Versioned releases with migrations that run automatically and safely on
   upgrade; a downgrade/restore story documented.
 - NFR-OPS7: Observability stays within a stated budget (design section 14.11). With
-  collection off it costs one check per operation and writes nothing. With collection on it
+  collection off it costs one check per operation and records no telemetry (the hourly prune
+  job still runs, and the scheduler writes its job row). With collection on it
   does no IO on a request's path, writes in bounded batches, and its tables are capped in rows
   and in age. An export that fails is counted and shown, and never delays a request or a job.
   A test or benchmark shows each bound.
