@@ -357,8 +357,9 @@ ghosted)`. Stage history with timestamps is preserved. An opportunity can move t
 - FR-U5 (P0): Profile and role target management forms.
 - FR-U6 (P1): Discovery review queue and discovery prompt editor.
 - FR-U7 (P0): Settings: account, security (password, two-factor), profile, role
-  targets, resume rules, AI providers and model policies, integrations,
-  import/export, backups, and, for administrators, user management.
+  targets, resume rules, AI providers and model policies, integrations, mail filters,
+  import/export, backups, metrics, AI traces and telemetry (FR-T6, FR-T7, FR-T2), and, for
+  administrators, user management.
 - FR-U8 (P1): Keyboard-first triage (j/k navigation, single-key interested/dismiss).
 - FR-U9 (P2): Search funnel analytics: applications per week, response rate,
   time-in-stage, and outcomes by source and role target.
@@ -528,8 +529,9 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
 
 ### 6.2 Privacy (NFR-PRV)
 
-- NFR-PRV1: No telemetry, analytics, or phone-home by default. Any future opt-in
-  telemetry must be documented and off by default.
+- NFR-PRV1: No telemetry, analytics, or phone-home by default. Opt-in telemetry is allowed
+  only when it is documented and off by default: the existing ones are the collection and
+  export switches of NFR-PRV7.
 - NFR-PRV2: All personal data stays in the user's deployment except what the user
   explicitly sends to connected providers. The docs state plainly what each
   integration transmits.
@@ -596,8 +598,7 @@ Target: a reasonable OWASP ASVS Level 2 posture for a self-hosted single-team ap
   credential, and its stored credential is cleared when the destination (its type, scheme, host, port or OTLP header name) changes. Every user of the instance
   can see that export is on and what kind of data it sends, because export covers every
   user's telemetry. Collection and export are unavailable on the demo deployment. The user guide states what
-  is sent to each kind of destination. This is the opt-in telemetry NFR-PRV1 allows for:
-  NFR-PRV1 itself is unchanged.
+  is sent to each kind of destination. These two switches are the opt-in telemetry NFR-PRV1 allows for.
 
 ### 6.3 Platform, footprint, and operations (NFR-OPS)
 

@@ -649,7 +649,8 @@ Information architecture (FR-U):
   sources, runs, prompt editor with version diff (FR-U6).
 - **Network** `/network` (one contact at `/network/:id`; the old `/contacts` paths
   redirect here), **Settings** `/settings` (account, security, AI
-  providers + per-task models + budget, integrations, import/export, jobs, audit).
+  providers + per-task models + budget, integrations, mail filters, import/export, metrics and
+  telemetry, jobs, audit; the AI traces page is `/settings/traces`, reached from Metrics).
 
 SPA served by the same origin as the API; no third-party fonts or CDNs (CSP stays
 `self`). Light/dark/auto theming (FR-U10) via CSS custom properties and a
@@ -775,9 +776,9 @@ Rules that go with them:
 | ADR-13 | Match scoring (FR-R8) recreated as an internal AI task rather than embedding Resume-Matcher                                                                                                                                                               | Accepted 2026-10-15                                             |
 | ADR-14 | LAN-first access: plain HTTP over a private network is a supported path, TLS recommended but never required; nothing may assume a single canonical origin ([docs/adr/0014-lan-first-access.md](adr/0014-lan-first-access.md))                             | Accepted 2026-10-18                                             |
 | ADR-15 | Assisted apply instead of direct ATS submission: Opportun prepares and records, the user submits on the ATS site ([docs/adr/0015-assisted-apply.md](adr/0015-assisted-apply.md))                                                                          | Accepted 2026-10-28                                             |
-| ADR-16 | Observability by wrappers at five boundaries (routes, jobs, database, outbound requests, AI calls) with OpenTelemetry names, not auto-instrumentation and not a span per function (section 14.2)                                                          | Proposed 2026-11-10                                             |
-| ADR-17 | Telemetry has a local store in the app's own database and an export, each behind its own switch and both off by default; the in-app dashboards read only the local store (sections 14.1, 14.7, 14.10)                                                     | Proposed 2026-11-10                                             |
-| ADR-18 | Telemetry privacy by allowlist: only catalogued attribute keys with typed values are stored, logged or exported, checked in one gate at the sinks; export carries no user's row id, and no prompt or response content is stored for traces (section 14.8) | Proposed 2026-11-10                                             |
+| ADR-16 | Observability by wrappers at five boundaries (routes, jobs, database, outbound requests, AI calls) with OpenTelemetry names, not auto-instrumentation and not a span per function (section 14.2)                                                          | Accepted 2026-11-13 (owner decision); implemented 2026-11-11    |
+| ADR-17 | Telemetry has a local store in the app's own database and an export, each behind its own switch and both off by default; the in-app dashboards read only the local store (sections 14.1, 14.7, 14.10)                                                     | Accepted 2026-11-13 (owner decision); implemented 2026-11-11    |
+| ADR-18 | Telemetry privacy by allowlist: only catalogued attribute keys with typed values are stored, logged or exported, checked in one gate at the sinks; export carries no user's row id, and no prompt or response content is stored for traces (section 14.8) | Accepted 2026-11-13 (owner decision); implemented 2026-11-11    |
 
 Accepted decisions will move into `docs/adr/` as individual records once reviewed. A Proposed decision becomes Accepted when the owner accepts it.
 
@@ -805,6 +806,14 @@ not a list of what is left.
 
 Everything below describes the design in the present tense. It has shipped; see the status
 line above for how to read a difference.
+
+**The usage view (FR-T1)** is the one part of this feature that reads the usage ledger
+(`task_runs`, FR-A5) and not the telemetry store, so it works with collection off.
+`usageRollup` (`repos/taskRuns.ts`) sums each call's own `est_cost`, written when it ran, and
+groups by feature through `FEATURES` and `TASK_FEATURE` (`packages/ai/src/features.ts`): every
+feature in that order, each with every one of its tasks and zero where nothing ran, then an
+**Other** group for any task key no longer registered, so the features still add up to the
+ledger. A task lists one row per provider and model it ran on.
 
 Opportun measures itself with OpenTelemetry names and data shapes: metrics, traces and log
 records for HTTP routes, background jobs, database access, outbound requests and, most of
@@ -1084,6 +1093,10 @@ model call (a fetch, a parse) is an ordinary span, never `execute_tool`.
   requests run in a context that the database and outbound wrappers skip.
 
 ### 14.7 The local store
+
+The dashboards read this store: the metric charts at `/settings/metrics` and the AI trace list
+at `/settings/traces`, which is reached from the Metrics page's link and is not in the Settings
+navigation.
 
 Three tables, in both dialects. The base slice creates all of them, and the `jobs` column,
 in one migration pair, so no later slice adds a migration.

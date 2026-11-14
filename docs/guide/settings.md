@@ -408,7 +408,7 @@ Metrics leave every 60 seconds. Traces and event records leave in batches every 
 
 ### Setting it up
 
-Choose the **Destination type**, then the **Scheme**, **Host** and **Port**, and what the type
+The card starts with OTLP, https and port 4318. Choose the **Destination type**, then the **Scheme**, **Host** and **Port**, and what the type
 needs (see below). Opportun builds the address from these fields; you never enter a URL.
 Tick **Send telemetry to this destination** and **Save**. Saving asks for your password again,
 and is recorded in the audit log with the type and the kinds of data, never the host or the
@@ -507,8 +507,9 @@ value** it reads it from (for example `x-api-key`). gRPC is not supported.
 
 ### The catalogued names
 
-These are the only attribute names a record can carry. **Exported** says whether export sends
-the name; the others stay in the instance.
+These are the only attribute names a record can carry. **Exported** says whether export may send
+the name: some names appear only on the server's ordinary log lines, and export carries only
+event and error records as logs, so in practice they stay in the instance.
 
 <!-- catalog-keys:start -->
 

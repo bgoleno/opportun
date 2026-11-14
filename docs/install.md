@@ -372,7 +372,8 @@ chose it. Do not put a user name or password in the URL: such a URL is refused.
 
 **What the log holds.** Every log line, Opportun's own and any library's, passes through one
 filter before it is written: it keeps a fixed message and a few typed values (row ids, counts,
-codes), and nothing else. So a log line never holds a name, an email address, a phone number, a
+codes, and on the access line the client's address), and nothing else. The address is written
+to the log only: it is never stored in the telemetry tables or exported. So a log line never holds a name, an email address, a phone number, a
 company's name, a request's URL or query string, an error's message, or the server's host name.
 An error is written as its type and the code frames it passed through; a run of frames outside
 Opportun's code (a library's or Node's) is written as one fixed `at <external>`. A message the server
