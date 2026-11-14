@@ -210,8 +210,23 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
   const showOutcome = (o: Outcome, site?: CaptureSiteId): void => show(renderOutcome(o, site));
 
   /** Disables the buttons while `work` runs; a thrown error is shown, never swallowed. */
-  const busy = async (work: () => Promise<void>): Promise<void> => {
+  /**
+   * How many pieces of work are running: each busy(), and the open path while it decides (#403).
+   * Every button is disabled while any runs, and enabled again only when none does (tl at
+   * 21274b2), so no fill can start while other work runs, and work that ends never re-enables a
+   * button in the middle of another's.
+   */
+  let working = 0;
+  const hold = (): void => {
+    working += 1;
     for (const b of buttons) b.disabled = true;
+  };
+  const release = (): void => {
+    working -= 1;
+    if (working === 0) for (const b of buttons) b.disabled = false;
+  };
+  const busy = async (work: () => Promise<void>): Promise<void> => {
+    hold();
     status.textContent = '';
     report.replaceChildren();
     try {
@@ -219,7 +234,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     } catch {
       show({ tone: 'error', text: 'Something went wrong. Try again.' });
     } finally {
-      for (const b of buttons) b.disabled = false;
+      release();
     }
   };
 
@@ -643,6 +658,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
   // The Assisted apply section shows only over a Greenhouse posting tab: decided from the tab's
   // address, which the popup already knows; nothing in the page is read for it.
   void (async () => {
+    let holding = false;
     let opened: {
       tab: { id: number; url: string };
       posting: { board: string; jobId: string };
@@ -650,10 +666,13 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     try {
       const tab = await deps.activeTab();
       const posting = tab?.url === undefined ? null : greenhouseJobOf(tab.url);
-      // The Fill button is held disabled from before the section shows until the open path has
-      // decided whether it fills (#403, tl's blocking 1 at 650aaf7): a click and the open never
-      // run two fills at once. A disabled button takes no click, by mouse or keyboard.
-      if (posting !== null && tab?.url !== undefined) prefillButton.disabled = true;
+      // The open path holds the buttons from before the section shows until it has decided
+      // whether it fills (#403, tl's blocking 1 at 650aaf7 and at 21274b2): counted as work, so
+      // a click and the open never run two fills at once.
+      if (posting !== null && tab?.url !== undefined) {
+        hold();
+        holding = true;
+      }
       assist.hidden = posting === null;
       // Any https page may be a thank-you page; which one counts is the server's to say.
       confirm.hidden = tab?.url === undefined || !isHttpsPage(tab.url);
@@ -668,9 +687,9 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     try {
       if (opened !== null) await fillOnOpen(opened.tab, opened.posting);
     } finally {
-      // Released on every way out, a failure before the lookup included, so the button is never
-      // left held. (A fill the open started released it already, at the end of its busy().)
-      prefillButton.disabled = false;
+      // Released on every way out, a failure before the lookup included, so the buttons are never
+      // left held. A fill the open started counted as its own work, inside this hold.
+      if (holding) release();
     }
   })();
 

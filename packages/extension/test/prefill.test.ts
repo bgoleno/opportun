@@ -1142,6 +1142,88 @@ describe('#403: opening the popup on the handed-off posting fills it, once', () 
     expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false);
   });
 
+  // qa at 21274b2: the other window. Work that ends while the open's lookup is still out (Test
+  // connection, here) must not free Fill either.
+  it("another button's work ending during the open's lookup leaves Fill held: one fill", async () => {
+    let release: (r: FetchResponse) => void = () => undefined;
+    const held = new Promise<FetchResponse>((r) => {
+      release = r;
+    });
+    const s = setup({ current: () => held });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    // Test connection's work, which ends at once here (the harness refuses its request).
+    s.$('test').click();
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(true);
+    s.$('prefill').click();
+    release(first());
+    await vi.waitFor(() => expect(s.deps.runFill).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.deps.runFill).toHaveBeenCalledTimes(1);
+  });
+
+  // The count itself (tl's fix (a) at 21274b2): work that starts while the buttons are held, here
+  // the settings form submitted directly, which a user cannot do while Save is disabled, ends
+  // without freeing them while the open still decides.
+  it('work that ends while the open still decides frees no button: the count, not the last finally', async () => {
+    let release: (r: FetchResponse) => void = () => undefined;
+    const held = new Promise<FetchResponse>((r) => {
+      release = r;
+    });
+    const s = setup({ current: () => held });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    s.$('settings').dispatchEvent(new s.doc.defaultView!.Event('submit', { cancelable: true }));
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(true);
+    s.$('prefill').click();
+    release(first());
+    await vi.waitFor(() => expect(s.deps.runFill).toHaveBeenCalledTimes(1));
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.deps.runFill).toHaveBeenCalledTimes(1);
+  });
+
+  // tl at 21274b2: busy() was not exclusive, so another piece of work ending during the open's fill
+  // (Record, here) re-enabled Fill mid-fill. No fill may start while any work runs.
+  it("Record ending during the open's fill leaves Fill held: one fill, never two", async () => {
+    let releaseCurrent: (r: FetchResponse) => void = () => undefined;
+    const current = new Promise<FetchResponse>((r) => {
+      releaseCurrent = r;
+    });
+    let releaseConfirm: (r: FetchResponse) => void = () => undefined;
+    const confirmable = new Promise<FetchResponse>((r) => {
+      releaseConfirm = r;
+    });
+    const s = setup({ current: () => current });
+    const realGet = s.get.getMockImplementation()!;
+    s.get.mockImplementation(async (url, init) =>
+      url.includes('/connector/apply/confirmable?') ? confirmable : realGet(url, init),
+    );
+    // The open's fill stays in progress: runFill never answers in this test.
+    const fills: number[] = [];
+    s.deps.runFill = vi.fn(async () => {
+      fills.push(fills.length);
+      return new Promise<null>(() => undefined);
+    });
+    await mountPopup(s.doc, s.deps);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    // 1. While the open's lookup is out, Record is clicked.
+    s.$('record').click();
+    // 2. The open's lookup answers: its fill starts.
+    releaseCurrent(first());
+    await vi.waitFor(() => expect(fills).toHaveLength(1));
+    // 3. Record's lookup answers, so its work ends while the open's fill is still running.
+    releaseConfirm(json(404, { error: { code: 'feature_unavailable' } }));
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    // 4. Fill stays held, and a click on it starts nothing.
+    expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(true);
+    s.$('prefill').click();
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(fills).toHaveLength(1);
+  });
+
   it('after a later read on open, the button is free again and fills on a click', async () => {
     const s = setup({ current: first({ firstRead: false }) });
     await open(s);
