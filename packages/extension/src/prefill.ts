@@ -401,6 +401,7 @@ export const NOT_FILLED_WORDS = new Map<NotFilledReason, string>([
   ['several_options', 'more than one option is exactly "{value}": choose it on the form'],
   ['list_not_shown', "the form's list did not appear in time: choose it on the form"],
   ['not_confirmed', 'the form did not show the choice "{value}": check this field'],
+  ['page_changed', 'the page moved to another address while filling: check this field on the form'],
 ]);
 
 /** Always said after a fill: Opportun never submits. */
