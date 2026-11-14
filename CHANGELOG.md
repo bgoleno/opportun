@@ -141,6 +141,14 @@ when the milestone's work was merged.
   [#321](https://github.com/bgoleno/opportun/issues/321),
   [#323](https://github.com/bgoleno/opportun/issues/323),
   [#331](https://github.com/bgoleno/opportun/issues/331)).
+- **One user's failure in the nightly network board check no longer stops it for everyone
+  else.** If queuing one user's probes failed (a database error, a stored setting that does not
+  parse), every later user got no probes that night and the retry stopped at the same user. The
+  failure is now logged, with the user's id and the error's type only, never its message, and the
+  sweep goes on to the next user. The job's result counts the users it queued and the users that
+  failed
+  ([#515](https://github.com/bgoleno/opportun/issues/515); PR
+  [#525](https://github.com/bgoleno/opportun/pull/525)).
 - **Jobs queued at the same moment run in the order they were queued.** When several jobs were
   due at the same millisecond, which one ran first was left to the database and could differ
   between SQLite and Postgres. A tie on the time a job is due and was created is now broken by its
