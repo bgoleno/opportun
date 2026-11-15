@@ -119,12 +119,14 @@ export async function main({
     io.stderr(`${err.message} Nothing changed.`);
     return 1;
   }
-  await audit(db, 'demo.dedicated_account_created', { userId });
+  // Shown before the audit write (tl on #567, #570): the account and its mark have committed, so
+  // if that write fails, the account still has a password its owner can be given.
   io.stderr(
     `Created the dedicated demo account ${parsedEmail.data}. Its password is on stdout, shown ` +
       'this once: give it to its owner, who can change it in Settings.',
   );
   io.stdout(password);
+  await audit(db, 'demo.dedicated_account_created', { userId });
   return 0;
 }
 
