@@ -438,13 +438,17 @@ describe('the guards no other test pins (tl on #185)', () => {
     expect(file.statusCode).toBe(401);
   });
 
-  it('on the demo, every apply route is a 404, whatever the token holds', async () => {
+  // Since #545 the demo has these routes. On it, the visitor binding is for the seed's shared
+  // accounts only (decision 133; test/demoActorBinding.test.ts): an account like this one, made
+  // for one person, is given its attempts as anywhere (test/demoDedicatedAccounts.test.ts).
+  it('on a demo server, an account that is not one of the shared ones is given its attempt as anywhere', async () => {
     const { app, a } = await boot(ON);
     const s = await handedOffAttempt(app, a);
     const t = await token(a, ['apply:assist']);
     (app.config as { demo: boolean }).demo = true;
-    expect((await current(app, t, pageOf(s.ats))).statusCode).toBe(404);
-    expect((await snapshot(app, t, s.id)).statusCode).toBe(404);
+    const res = await current(app, t, pageOf(s.ats));
+    expect(res.statusCode).toBe(200);
+    expect(res.json().attempt.id).toBe(s.id);
   });
 
   it('with the feature off, the 404 comes before any token is looked at', async () => {

@@ -18,6 +18,7 @@ import { z } from 'zod';
 import type { Db } from '../db/client';
 import { opportunities, secrets } from '../db/schema';
 import { readKeyValidation } from '../lib/aiKeyValidate';
+import { isSharedDemoAccount } from '../lib/demoAccounts';
 import { appleMailState, gmailGranted } from '../lib/mailStatus';
 import { sessionCreatedAt } from '../lib/sessions';
 import type { UserCtx } from '../repos/base';
@@ -128,7 +129,9 @@ export async function onboardingRoutes(app: FastifyInstance): Promise<void> {
    */
   async function autoStart(req: FastifyRequest, ctx: UserCtx, anyKey: boolean, hasOpp: boolean) {
     const touchedAt = await userSettingUpdatedAt(db, ctx, TOUR_SETTING);
-    if (app.config.demo) {
+    // A shared demo account: an account made for one person on a demo server is a real one here
+    // too (decision 133).
+    if (isSharedDemoAccount(app.config, ctx.userId)) {
       if (touchedAt === null) return true;
       const signedInAt = await sessionCreatedAt(db, ctx, req.cookies.opportun_session ?? '');
       return signedInAt === null || touchedAt < signedInAt;

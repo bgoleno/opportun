@@ -165,21 +165,34 @@ describe('an apply:assist token across the upgrade (criterion 5)', () => {
   });
 });
 
-describe('the demo never has it (criterion 4)', () => {
+// Criterion 4 of #455 was "the demo never has it". Since #545 (slice 2 of #542) the demo has it,
+// with each attempt bound to the visitor who started it (test/demoActorBinding.test.ts), and the
+// same variable still turns it off there.
+describe('the demo follows the variable, since #545 (criterion 4, revised)', () => {
   it.each([
     ['unset', { OPPORTUN_DEMO: '1' }],
     ['1', { OPPORTUN_DEMO: '1', OPPORTUN_SUBMISSIONS: '1' }],
-  ])('with the variable %s', async (_n, env) => {
-    const { app, a } = await bootWith(env);
+  ])(
+    'with the variable %s: on, the apply:assist scope and the three schedules',
+    async (_n, env) => {
+      const { app, a } = await bootWith(env);
+      expect(app.config.demo).toBe(true);
+      expect(submissionsEnabled(app.config)).toBe(true);
+      const minted = await mint(a, ['apply:assist']);
+      expect(minted.statusCode, minted.body).toBe(201);
+      const routed = await current(app, minted.json().token as string, 'https://example.com/job');
+      expect(routed.statusCode, routed.body).toBe(200);
+      expect(await kinds(app)).toEqual(expect.arrayContaining([...SCHEDULES]));
+    },
+  );
+
+  it('with 0: off on the demo too, as anywhere', async () => {
+    const { app, a } = await bootWith({ OPPORTUN_DEMO: '1', ...OFF });
     expect(app.config.demo).toBe(true);
     expect(submissionsEnabled(app.config)).toBe(false);
     const minted = await mint(a, ['apply:assist']);
     expect(minted.statusCode, minted.body).toBe(422);
     expect(minted.json().error.code).toBe('scope_unavailable');
-    const capture = await mint(a, ['capture:push']);
-    expect(capture.statusCode, capture.body).toBe(201);
-    const routed = await current(app, capture.json().token as string, 'https://example.com/job');
-    expect(routed.statusCode, routed.body).toBe(404);
     const opp = await api(
       a,
       'GET',
