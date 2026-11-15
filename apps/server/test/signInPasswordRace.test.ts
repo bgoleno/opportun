@@ -248,3 +248,76 @@ describe('a change or reset that starts while a login holds the lock waits, then
     });
   }
 });
+
+// What a password change leaves, against a reset or a code step that waits on its lock
+// (tl on #571). The change parks inside its transaction, after it deleted the sessions.
+describe('a change holding the password lock (#561)', () => {
+  it("a reset that runs right after the change commits ends the changer's new session too", async () => {
+    const { app, a, b } = await boot();
+    const pause = pauseAt('auth.passwordChange.committed');
+    const changing = changeOwn(b);
+    await pause.reached;
+    expect((await resetBy(a, b)).statusCode).toBe(200);
+    pause.release();
+    const changed = await changing;
+    expect(changed.statusCode, changed.body).toBe(204);
+    expect(await rowsOf(app, b.userId)).toEqual([]);
+    const cookie = (changed.cookies as { name: string; value: string }[]).find(
+      (c) => c.name === 'opportun_session',
+    );
+    const me = await app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/me',
+      cookies: { opportun_session: cookie!.value },
+    });
+    expect(me.statusCode).toBe(401);
+  });
+
+  it("a reset waiting behind it ends the changer's new session too", async () => {
+    const { app, a, b } = await boot();
+    onSlowTransaction(() => undefined);
+    const pause = pauseAt('auth.passwordChange.locked');
+    const changing = changeOwn(b);
+    await pause.reached;
+    const resetting = resetBy(a, b);
+    expect(await settledOrWaiting(app, resetting, pause)).toBe('waiting');
+    pause.release();
+    const [changed, reset] = await Promise.all([changing, resetting]);
+    expect(changed.statusCode, changed.body).toBe(204);
+    expect(reset.statusCode, reset.body).toBe(200);
+    expect(await rowsOf(app, b.userId)).toEqual([]);
+    // The cookie the change handed out signs nobody in.
+    const cookie = (changed.cookies as { name: string; value: string }[]).find(
+      (c) => c.name === 'opportun_session',
+    );
+    expect(cookie?.value).toBeTruthy();
+    const me = await app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/me',
+      cookies: { opportun_session: cookie!.value },
+    });
+    expect(me.statusCode).toBe(401);
+  });
+
+  it('a code step that starts while it holds the lock finds its pending token gone', async () => {
+    const { app, b } = await boot();
+    onSlowTransaction(() => undefined);
+    const secret = await enable(b);
+    const started = await login(app, EMAIL.b);
+    const { pendingToken } = started.json() as { pendingToken: string };
+    const pause = pauseAt('auth.passwordChange.locked');
+    const changing = changeOwn(b);
+    await pause.reached;
+    const verifying = app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/verify',
+      payload: { pendingToken, code: totpCode(secret, Date.now() + 30_000) },
+    });
+    expect(await settledOrWaiting(app, verifying, pause)).toBe('waiting');
+    pause.release();
+    const [changed, verified] = await Promise.all([changing, verifying]);
+    expect(changed.statusCode, changed.body).toBe(204);
+    expect(verified.statusCode, verified.body).toBe(401);
+    expect((await rowsOf(app, b.userId)).map((r) => r.kind)).toEqual(['session']);
+  });
+});

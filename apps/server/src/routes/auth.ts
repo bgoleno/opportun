@@ -352,7 +352,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // The session, or the pending 2FA token, is written only while the hash just verified is
       // still the user's, under the lock a change and a reset take (#561): one that committed
       // since the check wins, and this login is refused as a wrong password would be. The
-      // rehash is the check itself, so it never puts back a password changed meanwhile.
+      // rehash is the check itself, so it never puts back a password changed meanwhile. Accepted
+      // (tl on #571): two logins at once on an unpeppered hash, the first rehashes it and the
+      // second is refused like a wrong password. That can happen only on the first sign-in after
+      // a pepper is set, and the second login succeeds when tried again.
       const written = await whilePasswordCurrent(
         db,
         user.id,
@@ -752,13 +755,19 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         // Every session and pending 2FA token, under the lock (#561): a sign-in that proved the
         // old password and holds the lock wrote before this, and is deleted here with the rest.
         await destroyAllSessions(tx, user.id);
-        return { revoked };
+        // This client's fresh session, in the same transaction (tl on #571): written after the
+        // commit, a reset that waited on the lock could run first and leave it standing.
+        const session = await createSession(tx, user.id, sessionMeta(req));
+        await racePoint('auth.passwordChange.locked');
+        return { revoked, session };
       });
       if (changed === undefined) return fail(reply, 403, 'invalid_current_password');
+      // The change has committed; a reset can run from here on (tl on #571).
+      await racePoint('auth.passwordChange.committed');
       const revokedDevices = changed.revoked;
       // Every existing session (other devices and this one) died with the change; this client
-      // gets a fresh one.
-      await startSession(req, reply, user.id);
+      // gets the fresh one written with it.
+      setSessionCookies(req, reply, changed.session);
       await audit(db, initial ? 'auth.password_set_initial' : 'auth.password_changed', {
         userId: user.id,
         ip: req.ip,
