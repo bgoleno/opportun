@@ -313,8 +313,20 @@ describe('a change holding the password lock (#561)', () => {
       url: '/api/v1/auth/2fa/verify',
       payload: { pendingToken, code: totpCode(secret, Date.now() + 30_000) },
     });
-    expect(await settledOrWaiting(app, verifying, pause)).toBe('waiting');
-    pause.release();
+    // Held while the change is: by the write gate on SQLite, and on Postgres by the row lock on
+    // its pending token, which the change has deleted and not yet committed. A row lock is not
+    // one settledOrWaiting counts, so this looks for the step not having finished instead.
+    let settled = false;
+    const mark = () => {
+      settled = true;
+    };
+    void verifying.then(mark, mark);
+    try {
+      await new Promise((r) => setTimeout(r, 300));
+      expect(settled).toBe(false);
+    } finally {
+      pause.release();
+    }
     const [changed, verified] = await Promise.all([changing, verifying]);
     expect(changed.statusCode, changed.body).toBe(204);
     expect(verified.statusCode, verified.body).toBe(401);
