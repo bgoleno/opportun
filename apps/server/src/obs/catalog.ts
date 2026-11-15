@@ -654,6 +654,7 @@ export const AUDIT_EVENTS = [
   'data.export',
   'data.import_queued',
   'data.linkedin_import_queued',
+  'demo.dedicated_account_created',
   'demo.reset',
   'device_token.created',
   'device_token.renamed',
