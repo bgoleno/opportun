@@ -39,6 +39,8 @@ import {
 } from '../repos/profile';
 import { submissionsEnabled } from '../config';
 import { audit } from '../lib/audit';
+import { isSharedDemoAccount } from '../lib/demoAccounts';
+import { sharedAssistedApplyOff } from '../lib/demoOwnData';
 import { HttpError } from '../lib/errors';
 import { applicationDetailsFor } from '../repos/applicationDetails';
 import { PromptVersionSchema } from './ai';
@@ -202,11 +204,16 @@ export async function profileRoutes(app: FastifyInstance): Promise<void> {
       // It reads the user's applications, so it follows assisted apply's switch as the
       // submission routes do (routes/submissions.ts): off, it does not exist (tl on #415).
       if (!submissionsEnabled(app.config)) throw new HttpError(404, 'feature_unavailable');
-      // On the demo there is nothing to offer: the profile and the account are the demo's own test
-      // data, and an earlier application can be another visitor's (#544, tl on #550). A demo
-      // draft starts empty for the same reason (repos/submissions.ts).
-      if (app.config.demo) return { values: [], leftOut: [] };
-      return applicationDetailsFor(db, app.requireUser(req), {
+      const ctx = app.requireUser(req);
+      if (sharedAssistedApplyOff(app.config, ctx.userId)) {
+        throw new HttpError(404, 'feature_unavailable');
+      }
+      // On a shared demo account there is nothing to offer: the profile and the account are the
+      // demo's own test data, and an earlier application can be another visitor's (#544, tl on
+      // #550). A shared account's draft starts empty for the same reason (repos/submissions.ts).
+      // An account made for one person on a demo server gets its own details (decision 133).
+      if (isSharedDemoAccount(app.config, ctx.userId)) return { values: [], leftOut: [] };
+      return applicationDetailsFor(db, ctx, {
         excluding: req.query.excluding ?? null,
       });
     },

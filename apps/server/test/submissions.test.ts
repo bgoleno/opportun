@@ -604,7 +604,9 @@ describe('AC4: another user’s submission is 404', () => {
   });
 });
 
-describe('AC5: with the flag off, or on the demo, every route is 404', () => {
+// The demo has these routes since #545 (slice 2 of #542), bound to each visitor
+// (test/demoActorBinding.test.ts), so it is no longer a row here.
+describe('AC5: with the flag off, every route is 404', () => {
   async function everyRoute(app: FastifyInstance, c: TestClient, oppId: string, id: string) {
     const resumeId = await seedResume(app, c);
     return await Promise.all([
@@ -619,7 +621,6 @@ describe('AC5: with the flag off, or on the demo, every route is 404', () => {
   it.each([
     ['the flag unset', {}],
     ['the flag off', { submissions: false }],
-    ['the demo, flag on', { submissions: true, demo: true }],
   ])('with %s', async (_n, config) => {
     const { app, a } = await boot(config);
     const oppId = await seedOpportunity(app, a);

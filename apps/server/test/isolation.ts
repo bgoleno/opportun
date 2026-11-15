@@ -2,7 +2,9 @@
 // resource it creates: each user creates, the other must get 404, and the owner still reads it.
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { expect, it } from 'vitest';
-import { settings } from '../src/db/schema';
+import { DEMO_USERS } from '../src/cli/seedDemoFixture';
+import { settings, users } from '../src/db/schema';
+import { hashPassword, NO_PEPPERS } from '../src/lib/passwords';
 import { REGISTRATION_OPEN_KEY } from '../src/lib/registration';
 import type { Config } from '../src/config';
 import { testApp, type TestAppOptions } from './helpers';
@@ -53,7 +55,11 @@ function client(app: FastifyInstance, res: Response): TestClient {
   };
 }
 
-/** Signs in an existing account through POST /auth/login (no 2FA). */
+/**
+ * Signs in an existing account through POST /auth/login (no 2FA). A second call for the same
+ * account is a second, separate session: what another person signed in to the same shared demo
+ * account holds (#545). Its own session cookie, so its own demo actor.
+ */
 export async function signIn(
   app: FastifyInstance,
   email: string,
@@ -66,6 +72,32 @@ export async function signIn(
   });
   if (res.statusCode !== 200) throw new Error(`sign in ${email}: ${res.statusCode} ${res.body}`);
   return client(app, res);
+}
+
+/**
+ * Signs in as one of the demo seed's pinned accounts (`DEMO_USERS[index]`): a shared demo account,
+ * where the demo's own-data rules and the visitor binding apply (decision 133). The user row is
+ * written directly with the test password, as the seed would, and then signed in through the
+ * route. A user registered the usual way is not pinned: on a demo server, that is an account made
+ * for one person, which behaves as on any instance.
+ */
+export async function sharedDemoUser(app: FastifyInstance, index: number): Promise<TestClient> {
+  const user = DEMO_USERS.at(index);
+  if (user === undefined) throw new Error(`no pinned demo user ${String(index)}`);
+  const now = Date.now();
+  await app.db
+    .insert(users)
+    .values({
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+      passwordHash: await hashPassword(PASSWORD, app.config.peppers ?? NO_PEPPERS),
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoNothing()
+    .run();
+  return await signIn(app, user.email);
 }
 
 async function register(app: FastifyInstance, email: string): Promise<TestClient> {

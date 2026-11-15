@@ -21,6 +21,7 @@ import { WORKDAY_HOST } from '../adapters/discoverySource';
 import { boardFromUrl } from '../jobs/atsDetect';
 import { atsJobRefOfUrl } from '../lib/atsJobRef';
 import { audit } from '../lib/audit';
+import { sameVisitor } from '../lib/demoOwnData';
 import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { isPageFetchProhibited } from '../lib/safeFetch';
@@ -459,6 +460,7 @@ export async function confirmableForPage(
   db: Db,
   ctx: UserCtx,
   pageUrl: string,
+  opts: { actor?: string | null } = {},
 ): Promise<ConfirmableResult> {
   const rows = await db
     .select({
@@ -476,7 +478,12 @@ export async function confirmableForPage(
       ),
     )
     .all();
-  const matching = rows.filter((r) => confirmationPageVerdict(pageUrl, r.row) === 'ok');
+  // On the demo, only the token's own visitor's attempts (#545).
+  const matching = rows.filter(
+    (r) =>
+      confirmationPageVerdict(pageUrl, r.row) === 'ok' &&
+      (opts.actor === undefined || sameVisitor(r.row.actor, opts.actor)),
+  );
   if (matching.some(({ row }) => row.status === 'handed_off')) {
     return { kind: 'none', reason: 'needs_submitted_first' };
   }

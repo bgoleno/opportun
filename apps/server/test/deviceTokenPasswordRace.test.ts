@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { deviceTokens } from '../src/db/schema';
 import { createDeviceToken } from '../src/lib/deviceTokens';
 import { useApi } from './api';
-import { PASSWORD, type TestClient } from './isolation';
+import { PASSWORD, sharedDemoUser, type TestClient } from './isolation';
 import { onSlowTransaction } from '../src/db/gate';
 import { pauseAt, settledOrWaiting } from './race';
 
@@ -110,21 +110,28 @@ describe('a token minted during a password change or reset is not created (#539)
   }
 
   // With the demo's cap (#550) in the same transaction, the hash is checked first (sec on #557):
-  // a mint refused for a changed password revokes none of the account's tokens to make room.
-  it('on the demo at the cap, a mint refused for a changed password revokes nothing', async () => {
-    const { app, a } = await boot({ demo: true, submissions: true });
+  // a mint refused for a changed password revokes none of the account's tokens to make room. The
+  // cap applies to the shared demo accounts only (decision 133, #545), so this is one of them.
+  const atTheCap = async () => {
+    const { app } = await boot({ demo: true, submissions: true });
+    const shared = await sharedDemoUser(app, 2);
     for (let i = 0; i < 20; i++) {
       await createDeviceToken(
         app.db,
-        { userId: a.userId, isAdmin: false },
+        { userId: shared.userId, isAdmin: false },
         {
           name: `t${i}`,
           scopes: ['capture:push'],
         },
       );
     }
-    const res = await mintDuring(a, async () => {
-      const changed = await a.request({
+    return { app, shared };
+  };
+
+  it('on the demo at the cap, a mint refused for a changed password revokes nothing', async () => {
+    const { app, shared } = await atTheCap();
+    const res = await mintDuring(shared, async () => {
+      const changed = await shared.request({
         method: 'POST',
         url: '/api/v1/auth/password',
         payload: { current: PASSWORD, next: NEW_PASSWORD },
@@ -132,7 +139,18 @@ describe('a token minted during a password change or reset is not created (#539)
       expect(changed.statusCode, changed.body).toBe(204);
     });
     expect(res.statusCode, res.body).toBe(403);
-    expect(await activeTokens(app, a)).toHaveLength(20);
+    expect(await activeTokens(app, shared)).toHaveLength(20);
+  });
+
+  it('on the demo at the cap, the same held mint with nothing in between revokes the oldest (the control)', async () => {
+    const { app, shared } = await atTheCap();
+    const res = await mintDuring(shared, async () => undefined);
+    expect(res.statusCode, res.body).toBe(201);
+    const active = await activeTokens(app, shared);
+    expect(active).toHaveLength(20);
+    expect(active.map((t) => t.name)).not.toContain('t0');
+    // The visitor is recorded on the token in the same transaction (#545).
+    expect(active.find((t) => t.name === 'Chrome')?.actor).toEqual(expect.any(String));
   });
 
   it('with nothing in between, the same held mint is created (the control)', async () => {
