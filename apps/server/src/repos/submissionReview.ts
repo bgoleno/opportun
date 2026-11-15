@@ -29,6 +29,7 @@ import { applicationSubmissions, auditLog } from '../db/schema';
 import { boardFromUrl } from '../jobs/atsDetect';
 import { atsJobRefOfUrl } from '../lib/atsJobRef';
 import { audit } from '../lib/audit';
+import { isSharedDemoAccount } from '../lib/demoAccounts';
 import { refuseFixtureData } from '../lib/demoOwnData';
 import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
@@ -297,9 +298,10 @@ export async function reviewSubmission(
     }
     const refresh = row.status === 'reviewed' && sameDigest;
     if (row.status !== 'draft' && !refresh) throw notNow(row, 'reviewed');
-    // On the demo nothing the demo itself holds is ever reviewed for sending: no seeded identity
-    // value in a field, and no resume, all of which are the demo's (#544). Under the lock.
-    if (cfg.demo) refuseFixtureData(row);
+    // On a shared demo account nothing the demo itself holds is ever reviewed for sending: no
+    // seeded identity value in a field, and no resume, all of which are the demo's (#544,
+    // decision 133). Under the lock.
+    if (isSharedDemoAccount(cfg, ctx.userId)) refuseFixtureData(row);
     // The resume snapshot (#115): review waits while it is pending, and refuses a failed one
     // until the user chooses the resume again. Ready, or unsupported (the user attaches a file
     // themselves, and the review shows that), may go ahead. Under the lock, like every check.

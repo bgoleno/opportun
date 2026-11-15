@@ -46,6 +46,11 @@ import {
 } from '../repos/submissionReview';
 import { detailView, unlinkConfirmation } from '../repos/submissionConfirm';
 import { contentDisposition } from './attachments';
+import { demoActorOf } from '../plugins/session';
+import { isSharedDemoAccount } from '../lib/demoAccounts';
+import { sharedAssistedApplyOff } from '../lib/demoOwnData';
+import { applicationSubmissions } from '../db/schema';
+import { and, eq } from 'drizzle-orm';
 import { DEFAULT_LIMIT, IdParams, MAX_LIMIT, pageOf } from './common';
 
 const CreateBody = z
@@ -177,10 +182,52 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
   const db = app.db;
 
-  // Off, or on the demo: no route here exists as far as a caller can tell (design 7.8).
-  app.addHook('onRequest', async () => {
+  // Off: no route here exists as far as a caller can tell (design 7.8). Also for a shared demo
+  // account while the operator has switched assisted apply off for those (decision 133).
+  app.addHook('onRequest', async (req) => {
     if (!submissionsEnabled(app.config)) {
       throw new HttpError(404, 'feature_unavailable');
+    }
+    if (req.userCtx !== null && sharedAssistedApplyOff(app.config, req.userCtx.userId)) {
+      throw new HttpError(404, 'feature_unavailable');
+    }
+  });
+  /** A shared demo account (lib/demoAccounts.ts): where the demo's own-data rules apply. */
+  const shared = (userId: string) => isSharedDemoAccount(app.config, userId);
+
+  // On a shared demo account an attempt is its visitor's (#545, sec's amendment on #542): everyone
+  // on the account may read it, and only the visitor who started it may change it. An account made
+  // for one person on a demo server is that person's alone: no binding (decision 133). The actor is
+  // written once, when the attempt is created, so reading it here, before the route, cannot race
+  // the route's own write. An attempt from before this (no actor) is changed by no one.
+  //
+  // Cancel is the one exception: any session on the account may cancel (tl on #566). A draft never
+  // expires and holds its opportunity's one live slot, so without it a draft whose session ended
+  // (a sign-out, a cleared cookie, a password change by anyone on the account) would block that
+  // opportunity for everyone until the reset. Cancel reveals nothing, and any visitor can already
+  // delete the opportunity, which takes the attempt with it, so this grants no new power.
+  app.addHook('preHandler', async (req) => {
+    if (req.method === 'GET') return;
+    const route = req.routeOptions.url ?? '';
+    if (!route.includes('/submissions/:id')) return;
+    if (route.endsWith('/submissions/:id/cancel')) return;
+    const id = (req.params as { id?: unknown }).id;
+    const ctx = req.userCtx;
+    if (typeof id !== 'string' || ctx === null || !shared(ctx.userId)) return;
+    const row = await db
+      .select({ actor: applicationSubmissions.actor })
+      .from(applicationSubmissions)
+      .where(and(eq(applicationSubmissions.id, id), eq(applicationSubmissions.userId, ctx.userId)))
+      .get();
+    // Not this account's: the route's own 404.
+    if (row === undefined) return;
+    if (row.actor === null || row.actor !== demoActorOf(req)) {
+      throw new HttpError(
+        403,
+        'not_your_application',
+        // The same words as the web's (components/apply/api.ts), which is what the visitor reads.
+        'This application was started in another session on this shared demo account. You can read it or cancel it; only that session can change it.',
+      );
     }
   });
 
@@ -201,7 +248,7 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
         app.requireUser(req),
         req.params.id,
         req.body,
-        { demo: app.config.demo },
+        { demo: shared(app.requireUser(req).userId), actor: demoActorOf(req) },
       );
       if (replayed) void reply.header('idempotent-replayed', 'true');
       return reply.code(replayed ? 200 : 201).send(submission);
@@ -244,7 +291,7 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       if (answeredInvalid(req, reply)) return reply;
       return updateSubmissionDraft(db, app.requireUser(req), req.params.id, req.body, {
-        demo: app.config.demo,
+        demo: shared(app.requireUser(req).userId),
       });
     },
   );
@@ -303,7 +350,7 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       if (answeredInvalid(req, reply)) return reply;
       return handoffSubmission(db, app.requireUser(req), req.params.id, {
-        demo: app.config.demo,
+        demo: shared(app.requireUser(req).userId),
       });
     },
   );

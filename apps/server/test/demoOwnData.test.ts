@@ -1,7 +1,6 @@
 // Assisted apply on the demo fills only the visitor's own data
-// (https://github.com/bgoleno/opportun/issues/544, slice 1 of #542). The demo's own submission
-// switch stays off until #545 binds each attempt to its visitor (sec on #544), so these tests turn
-// on the internal demoSubmissions flag to reach the rules built behind it.
+// (https://github.com/bgoleno/opportun/issues/544, slice 1 of #542). The switch is on for the
+// demo since #545, which binds each attempt to its visitor (test/demoActorBinding.test.ts).
 import { newId } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -12,7 +11,6 @@ import {
   DEMO_IDENTITY_VALUES,
   DEMO_USERS,
 } from '../src/cli/seedDemoFixture';
-import { submissionsEnabled } from '../src/config';
 import {
   applicationSubmissions,
   auditLog,
@@ -29,11 +27,20 @@ import { submissionDigest } from '../src/lib/submissionDigest';
 import { createOpportunity } from '../src/repos/opportunities';
 import { insertResume } from '../src/repos/resumes';
 import { useApi } from './api';
-import { PASSWORD, type TestClient } from './isolation';
+import { PASSWORD, sharedDemoUser, type TestClient } from './isolation';
 import { api, requisition } from './submissionFixtures';
 
 const boot = useApi();
-const ON_THE_DEMO = { demo: true, submissions: true, demoSubmissions: true } as const;
+const ON_THE_DEMO = { demo: true, submissions: true } as const;
+
+/**
+ * A demo server, signed in as one of the seed's pinned accounts: a shared demo account, where the
+ * own-data rules and the binding apply (decision 133). `a` is that shared account.
+ */
+async function bootShared(overrides: Record<string, unknown> = {}) {
+  const env = await boot({ ...ON_THE_DEMO, ...overrides });
+  return { ...env, a: await sharedDemoUser(env.app, 1) };
+}
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
 
 /** An opportunity on a recognised, confirmed Greenhouse posting, ready for a draft. */
@@ -98,9 +105,18 @@ async function handedOff(app: FastifyInstance, c: TestClient, fields: Record<str
   return { id, destinationUrl: row.destinationUrl };
 }
 
-/** A device token with the apply scope, made as the extension's pairing does. */
-async function applyToken(app: FastifyInstance, c: TestClient): Promise<string> {
-  return (await createDeviceToken(app.db, ctxOf(c), { name: 'x', scopes: ['apply:assist'] })).token;
+/**
+ * A device token with the apply scope, made as the extension's pairing does: through the route, by
+ * this visitor's session, so on the demo it is given this visitor's attempts (#545).
+ */
+async function applyToken(_app: FastifyInstance, c: TestClient): Promise<string> {
+  const res = await api(c, 'POST', '/device-tokens', {
+    name: 'Chrome',
+    scopes: ['apply:assist'],
+    password: PASSWORD,
+  });
+  expect(res.statusCode, res.body).toBe(201);
+  return res.json<{ token: string }>().token;
 }
 
 const current = (app: FastifyInstance, token: string, url: string) =>
@@ -110,34 +126,9 @@ const current = (app: FastifyInstance, token: string, url: string) =>
     headers: { authorization: `Bearer ${token}` },
   });
 
-describe('the switch stays off on the demo until #545 (sec on #544)', () => {
-  it('submissionsEnabled is off on the demo unless demoSubmissions is on, and on off the demo', () => {
-    expect(submissionsEnabled({ submissions: true, demo: true })).toBe(false);
-    expect(submissionsEnabled({ submissions: true, demo: true, demoSubmissions: true })).toBe(true);
-    expect(submissionsEnabled({ submissions: true, demo: false })).toBe(true);
-    // The off switch still wins on the demo.
-    expect(submissionsEnabled({ submissions: false, demo: true, demoSubmissions: true })).toBe(
-      false,
-    );
-  });
-
-  it('a demo deployment as configured (no demoSubmissions) has no submission routes', async () => {
-    const { app, a } = await boot({ demo: true, submissions: true });
-    const res = await create(a, await readyOpportunity(app, a));
-    expect(res.statusCode).toBe(404);
-    expect(res.json<{ error: { code: string } }>().error.code).toBe('feature_unavailable');
-    const mint = await api(a, 'POST', '/device-tokens', {
-      name: 'Chrome',
-      scopes: ['apply:assist'],
-      password: PASSWORD,
-    });
-    expect(mint.json<{ error: { code: string } }>().error.code).toBe('scope_unavailable');
-  });
-});
-
 describe('a demo draft starts empty, and is the visitor’s own (#544, criterion 2)', () => {
   it('GET /profile/application-details offers nothing on the demo (tl on #550)', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const now = Date.now();
     await app.db
       .insert(profiles)
@@ -149,7 +140,7 @@ describe('a demo draft starts empty, and is the visitor’s own (#544, criterion
   });
 
   it('nothing is prefilled, though the account has a profile', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const now = Date.now();
     await app.db
       .insert(profiles)
@@ -172,7 +163,7 @@ describe('a demo draft starts empty, and is the visitor’s own (#544, criterion
   });
 
   it('saveToProfile is refused on the demo, and neither the draft nor the profile changes', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const created = await create(a, await readyOpportunity(app, a));
     const id = created.json<{ id: string }>().id;
     const res = await api(a, 'PATCH', `/submissions/${id}`, {
@@ -190,7 +181,7 @@ describe('a demo draft starts empty, and is the visitor’s own (#544, criterion
 
 describe('a demo attempt may carry no resume (tl on #544)', () => {
   it('is created, reviewed and handed off with no resume, and no snapshot job runs', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const { id } = await handedOff(app, a, { fullName: 'Jane Visitor' });
     const row = (await app.db
       .select()
@@ -207,7 +198,7 @@ describe('a demo attempt may carry no resume (tl on #544)', () => {
   });
 
   it('/current sends the resume as an object of nulls, the shape the extension reads, and /snapshot is 404', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const { id, destinationUrl } = await handedOff(app, a, { fullName: 'Jane Visitor' });
     const token = await applyToken(app, a);
     const res = await current(app, token, destinationUrl);
@@ -254,7 +245,7 @@ describe('no resume on a demo attempt (#544, criterion 3; tl and sec on #550)', 
   const refusedResume = { code: 'resume_unavailable_on_demo', field: 'resume' };
 
   it('each kind is refused at create and at PATCH', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const all = await threeResumes(app, a);
     for (const [kind, resumeId] of Object.entries(all)) {
       const res = await create(a, await readyOpportunity(app, a), resumeId);
@@ -269,7 +260,7 @@ describe('no resume on a demo attempt (#544, criterion 3; tl and sec on #550)', 
   });
 
   it('each kind put on the attempt behind the server’s back is refused at review and at handoff', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const all = await threeResumes(app, a);
     const putOn = async (id: string, resumeId: string) =>
       await app.db
@@ -296,7 +287,7 @@ describe('no resume on a demo attempt (#544, criterion 3; tl and sec on #550)', 
   });
 
   it('a resume the server no longer holds, but whose copy is still on the attempt, is refused too', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const draft = await create(a, await readyOpportunity(app, a));
     const id = draft.json<{ id: string }>().id;
     // The resume row went (resume_id set null), and the attempt kept its copied facts.
@@ -322,7 +313,7 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
 
   for (const [field, value] of cases) {
     it(`review refuses ${field} = "${value}", naming the field`, async () => {
-      const { app, a } = await boot(ON_THE_DEMO);
+      const { app, a } = await bootShared();
       const draft = await create(a, await readyOpportunity(app, a));
       const id = draft.json<{ id: string }>().id;
       const patched = await api(a, 'PATCH', `/submissions/${id}`, { fields: { [field]: value } });
@@ -337,7 +328,7 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
   }
 
   it('review refuses the candidate’s name split over firstName and lastName (qa on #550)', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const draft = await create(a, await readyOpportunity(app, a));
     const id = draft.json<{ id: string }>().id;
     await api(a, 'PATCH', `/submissions/${id}`, {
@@ -352,7 +343,7 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
   });
 
   it('generic values identify nobody and are not refused', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const draft = await create(a, await readyOpportunity(app, a));
     const id = draft.json<{ id: string }>().id;
     await api(a, 'PATCH', `/submissions/${id}`, {
@@ -362,7 +353,7 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
   });
 
   it('a fixture value put back after review is refused at handoff and at /current', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const draft = await create(a, await readyOpportunity(app, a));
     const id = draft.json<{ id: string }>().id;
     await api(a, 'PATCH', `/submissions/${id}`, { fields: { fullName: 'Jane Visitor' } });
@@ -426,6 +417,9 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
     expect(fixtureField({ firstName: 'Avery' })).toBeNull();
     // Any address at the demo's own domain, listed or not, and a full-width form of a listed name.
     expect(isFixtureIdentity('email', 'someone-new@OPPORTUN-DEMO.example')).toBe(true);
+    // A subdomain of it too (qa on #550), and not a domain that merely ends in the same letters.
+    expect(isFixtureIdentity('email', 'x@mail.opportun-demo.example')).toBe(true);
+    expect(isFixtureIdentity('email', 'x@notopportun-demo.example')).toBe(false);
     expect(isFixtureIdentity('email', 'jane@example.com')).toBe(false);
     expect(isFixtureIdentity('fullName', 'Ａｖｅｒｙ Ｃｈｅｎ')).toBe(true);
     for (const v of DEMO_IDENTITY_VALUES) expect(isFixtureIdentity('any', v), v).toBe(true);
@@ -441,7 +435,7 @@ describe('device tokens: at most 20 active per demo account (sec; tl on #550)', 
     });
 
   it('the 21st mint leaves exactly 20 active: the oldest is revoked, and audited as a manual revoke is', async () => {
-    const { app, a } = await boot(ON_THE_DEMO);
+    const { app, a } = await bootShared();
     const made = [];
     for (let i = 0; i < 20; i++) {
       made.push(

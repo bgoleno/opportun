@@ -6,7 +6,8 @@ import { writeSetting } from '../src/lib/ai';
 import { GMAIL_SCOPES, writeTokens } from '../src/lib/google';
 import { useApi } from './api';
 import { queryOne } from './db';
-import type { TestClient } from './isolation';
+import { DEMO_USERS } from '../src/cli/seedDemoFixture';
+import { sharedDemoUser, type TestClient } from './isolation';
 
 const boot = useApi();
 const URL = '/api/v1/onboarding';
@@ -319,8 +320,11 @@ describe('demo instance', () => {
     expect(await get(a)).toMatchObject({ demo: false, autoStart: false });
   });
 
-  it('auto-starts on every sign-in, even for an account with data, until the tour is touched', async () => {
-    const { app, a } = await boot({ demo: true });
+  // The shared demo accounts (the seed's pinned ids, decision 133) are signed in to by many
+  // visitors, so each sign-in gets the tour.
+  it('a shared demo account: auto-starts on every sign-in, even with data, until the tour is touched', async () => {
+    const { app } = await boot({ demo: true });
+    const a = await sharedDemoUser(app, 1);
     await addOpportunity(a);
     expect(await get(a)).toMatchObject({ demo: true, autoStart: true });
 
@@ -332,7 +336,7 @@ describe('demo instance', () => {
 
     // A fresh sign-in gets it again, although the stored status is still completed.
     await nextMs();
-    const next = await signInAgain(app, 'isolation-a@example.com');
+    const next = await signInAgain(app, DEMO_USERS[1]!.email);
     const body = await get(next);
     expect(body.tour.status).toBe('completed');
     expect(body.autoStart).toBe(true);
@@ -341,11 +345,21 @@ describe('demo instance', () => {
   });
 
   it('a skip from the welcome screen also holds for the rest of the session only', async () => {
-    const { app, a } = await boot({ demo: true });
+    const { app } = await boot({ demo: true });
+    const a = await sharedDemoUser(app, 1);
     await putTour(a, { status: 'skipped', stepId: 'welcome' });
     expect((await get(a)).autoStart).toBe(false);
     await nextMs();
-    const next = await signInAgain(app, 'isolation-a@example.com');
+    const next = await signInAgain(app, DEMO_USERS[1]!.email);
     expect((await get(next)).autoStart).toBe(true);
+  });
+
+  // An account made for one person on a demo server is not shared (decision 133): its tour follows
+  // the real instance's rule (#545, criterion d).
+  it('a dedicated account on a demo server keeps the brand-new-account rule', async () => {
+    const { a } = await boot({ demo: true });
+    expect(await get(a)).toMatchObject({ demo: true, autoStart: true });
+    await addOpportunity(a);
+    expect((await get(a)).autoStart).toBe(false);
   });
 });
