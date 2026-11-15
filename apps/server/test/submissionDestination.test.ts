@@ -144,6 +144,15 @@ describe('a trailing ) (#549)', () => {
     expect(ref?.url).toBe(workday);
   });
 
+  // #562 (qa on #555): matched left to right, so a stray ) earlier in the query is not counted
+  // against a balanced (...) at the end.
+  it('a stray ) earlier in the query does not trim a balanced (d) at the end', () => {
+    const url = 'https://boards.greenhouse.io/examplecorp/jobs/1000002?a=)b&c=(d)';
+    expect(atsJobRefOfUrl(url)?.url).toBe(url);
+    expect(atsJobRefOfUrl(`${url})`)?.url).toBe(url);
+    expect(atsJobRefOfUrl(`${url}.`)?.url).toBe(url);
+  });
+
   it('a balanced (...) at the end is kept; one ) more than ( is dropped', () => {
     const balanced = 'https://boards.greenhouse.io/examplecorp/jobs/1000002?src=(newsletter)';
     expect(atsJobRefOfUrl(balanced)?.url).toBe(balanced);

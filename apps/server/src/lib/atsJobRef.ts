@@ -125,25 +125,28 @@ function fromBoardPath(board: AtsBoard, url: URL): Omit<AtsJobRef, 'url'> | null
  * always read it (sec at 23f3a37).
  */
 export function atsJobRefOfUrl(address: string): AtsJobRef | null {
-  // Dropped by a loop, not a regular expression, so it stays linear whatever the address holds.
-  // A `)` is trailing punctuation only while it closes no `(` (#549): a URL pasted out of "(...)"
+  // Dropped by loops, not a regular expression, so it stays linear whatever the address holds.
+  // A `)` is trailing punctuation only when it closes no `(` (#549): a URL pasted out of "(...)"
   // keeps its job id, and a Workday ".../San-Jose-CA-(Remote)/..." or a balanced "(...)" at the
-  // end stays as written. Counted once, then kept up to date as characters are dropped.
-  let raw = address;
-  let unmatched = 0;
-  for (const c of raw) {
-    if (c === '(') unmatched -= 1;
-    else if (c === ')') unmatched += 1;
+  // end stays as written. Matched left to right (#562), so a stray `)` earlier in the query is not
+  // counted against a balanced `(d)` at the end.
+  const strayClose = new Set<number>();
+  let open = 0;
+  for (let i = 0; i < address.length; i++) {
+    const c = address.charAt(i);
+    if (c === '(') open += 1;
+    else if (c === ')') {
+      if (open > 0) open -= 1;
+      else strayClose.add(i);
+    }
   }
-  for (;;) {
-    const last = raw[raw.length - 1];
-    if (last === undefined) break;
-    if ('.,;:!?'.includes(last)) raw = raw.slice(0, -1);
-    else if (last === ')' && unmatched > 0) {
-      raw = raw.slice(0, -1);
-      unmatched -= 1;
-    } else break;
+  let end = address.length;
+  while (end > 0) {
+    const last = address.charAt(end - 1);
+    if ('.,;:!?'.includes(last) || (last === ')' && strayClose.has(end - 1))) end -= 1;
+    else break;
   }
+  const raw = address.slice(0, end);
   let url: URL;
   try {
     url = new URL(raw);
