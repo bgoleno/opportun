@@ -400,6 +400,35 @@ describe('stdio MCP sources on the demo', () => {
     expect(row.statusDetail).toMatch(/SourceConfigError: stdio MCP sources do not run on the demo/);
   });
 
+  it('a stdio source switched back on, with no config change, still does not run on the demo', async () => {
+    const { app, a } = await boot({ demo: true });
+    const marker = join(tmpdir(), `opportun-mcp-demo-on-${a.userId}`);
+    rmSync(marker, { force: true });
+    onTestFinished(() => rmSync(marker, { force: true }));
+    const ctx = { userId: a.userId, isAdmin: true };
+    // Stored switched off, as one already there would be.
+    const src = await createSource(app.db, ctx, {
+      kind: 'mcp',
+      enabled: false,
+      config: stdioConfig('jobs', {
+        args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'x')`],
+      }),
+    });
+    // Switched on through the API: no config in the change, so the configure check is not asked.
+    const on = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/discovery/sources/${src.id}`,
+      payload: { enabled: true },
+    });
+    expect(on.statusCode, on.body).toBe(200);
+    await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: a.userId });
+    await app.jobs.drain();
+    expect(existsSync(marker)).toBe(false);
+    const row = await getSourceRow(app.db, ctx, src.id);
+    expect(row.status).toBe('error');
+    expect(row.statusDetail).toMatch(/SourceConfigError: stdio MCP sources do not run on the demo/);
+  });
+
   it('the administrator cannot add one, or change a source to one, on the demo', async () => {
     const { a } = await boot({ demo: true });
     const payload = { kind: 'mcp', config: stdioConfig('jobs') };
