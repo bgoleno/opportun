@@ -44,9 +44,11 @@ when the milestone's work was merged.
   stored posting address that ends in a stray `)`, pasted out of parentheses, keeps its job id
   again, while a `)` that closes a `(` in the address is kept
   ([#521](https://github.com/bgoleno/opportun/issues/521),
-  [#549](https://github.com/bgoleno/opportun/issues/549); PRs
+  [#549](https://github.com/bgoleno/opportun/issues/549),
+  [#562](https://github.com/bgoleno/opportun/issues/562); PRs
   [#538](https://github.com/bgoleno/opportun/pull/538),
-  [#555](https://github.com/bgoleno/opportun/pull/555)).
+  [#555](https://github.com/bgoleno/opportun/pull/555),
+  [#565](https://github.com/bgoleno/opportun/pull/565)).
 - **The Publish image workflow runs in a `release` environment, so GitHub itself can limit
   publishing to `main`.** Both of its jobs, `publish` and `release`, declare
   `environment: release`. "Only from `main`" was otherwise enforced only by the workflow's own
@@ -79,6 +81,22 @@ when the milestone's work was merged.
   person](docs/demo-deployment.md#a-dedicated-account-for-one-person)
   ([#563](https://github.com/bgoleno/opportun/issues/563); PR
   [#567](https://github.com/bgoleno/opportun/pull/567)).
+- **Assisted apply now works on the demo, with the visitor's own data only.** On the shared demo
+  accounts a draft starts empty, nothing is saved to the shared profile, an application carries
+  no resume (the visitor attaches their own on the employer's form), and the demo's own names and
+  addresses are refused. Each application is bound to the visitor (the session) who started it:
+  anyone on the account can read it or cancel it, and only that visitor can change, review or hand
+  it off, and only that visitor's device token is given it. A shared account keeps at most 20
+  active device tokens, the oldest revoked when another is made. Mail push stays available on the
+  demo. A dedicated demo account behaves like an account on any other instance. Two new operator
+  settings: `OPPORTUN_DEMO_TOKEN_CAP` (default 20, `0` for no cap) and
+  `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY` (default `1`, `0` turns assisted apply off for the shared
+  accounts only). See [Device tokens and assisted apply on the
+  demo](docs/demo-deployment.md#device-tokens-and-assisted-apply-on-the-demo)
+  ([#544](https://github.com/bgoleno/opportun/issues/544),
+  [#545](https://github.com/bgoleno/opportun/issues/545); PRs
+  [#550](https://github.com/bgoleno/opportun/pull/550),
+  [#566](https://github.com/bgoleno/opportun/pull/566)).
 
 ## 0.4.0 (2026-11-14)
 

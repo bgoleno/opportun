@@ -178,8 +178,7 @@ What it shows depends on where you are:
 **Create tailored copy** copies the base resume you picked, names it from your template (see
 [Resumes](resumes.md#create-a-tailored-copy)) and opens the copy's page to tailor it. **Mark as
 final** is the existing status change, in place: the button keeps its name, a toast says "Marked
-final", and a refused change says why inside the card. Where assisted apply is off, or on the
-demo, a Final copy shows "Ready to send." and **Record that you sent it**, and nothing of assisted
+final", and a refused change says why inside the card. Where assisted apply is off, a Final copy shows "Ready to send." and **Record that you sent it**, and nothing of assisted
 apply is named.
 
 **Sending a base resume as it is** (for example through a job site's own apply flow) takes the
@@ -244,7 +243,8 @@ Contacts who could refer you, ranked by the AI, and the asks you have made. See
 ### Assisted apply
 
 Assisted apply is on unless the person running your server turned it off (`OPPORTUN_SUBMISSIONS=0`,
-in the [install guide](../install.md#4-configuration-reference)), and it is never on the demo.
+in the [install guide](../install.md#4-configuration-reference)). On the demo it is on, and its
+shared accounts have extra limits ([demo deployment](../demo-deployment.md#device-tokens-and-assisted-apply-on-the-demo)).
 Where it is on, the opportunity has an **Assisted apply** panel beside the tabs. You can confirm
 only so many reviews in 24 hours; see
 [Applications and the review limit](settings.md#applications-and-the-review-limit).
