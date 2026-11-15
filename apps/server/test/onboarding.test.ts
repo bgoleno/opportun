@@ -116,6 +116,7 @@ describe('GET /onboarding', () => {
       },
       autoStart: true,
       demo: false,
+      sharedDemoAccount: false,
     });
   });
 
@@ -361,5 +362,16 @@ describe('demo instance', () => {
     expect(await get(a)).toMatchObject({ demo: true, autoStart: true });
     await addOpportunity(a);
     expect((await get(a)).autoStart).toBe(false);
+  });
+
+  // The web shows the shared-account warning, and the demo's resume step, from this field and not
+  // from `demo` (#546, decision 133): a dedicated account on a demo server sees neither.
+  it('reports sharedDemoAccount true for a shared account, false for a dedicated one and off the demo', async () => {
+    const demo = await boot({ demo: true });
+    const shared = await sharedDemoUser(demo.app, 1);
+    expect(await get(shared)).toMatchObject({ demo: true, sharedDemoAccount: true });
+    expect(await get(demo.a)).toMatchObject({ demo: true, sharedDemoAccount: false });
+    const real = await boot({ demo: false });
+    expect(await get(real.a)).toMatchObject({ demo: false, sharedDemoAccount: false });
   });
 });

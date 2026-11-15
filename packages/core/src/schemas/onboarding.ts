@@ -58,5 +58,11 @@ export const OnboardingSchema = z.object({
   autoStart: z.boolean(),
   /** The public demo instance (OPPORTUN_DEMO=1): a view-only tour, no checklist. */
   demo: z.boolean(),
+  /**
+   * One of the demo's shared accounts (the seed's pinned ids, decision 133): many visitors sign in
+   * to it. The web shows the shared-account warning and the demo's resume step from this, never
+   * from `demo`, so an account made for one person on a demo server sees neither (#546).
+   */
+  sharedDemoAccount: z.boolean(),
 });
 export type Onboarding = z.infer<typeof OnboardingSchema>;

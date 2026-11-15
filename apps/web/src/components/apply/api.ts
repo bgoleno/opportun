@@ -174,6 +174,13 @@ export function detailRows(
   return keys.map((key) => ({ key, label: detailLabel(key), value: values.get(key) ?? '' }));
 }
 
+/** On a shared demo account an application carries no resume (#544, #546): the server's words. */
+export const DEMO_NO_RESUME_TEXT =
+  'On the demo an application carries no resume: attach your own on the employer’s form.';
+/** The server's words for a value that came with the demo, after the field's label (#546). */
+export const DEMO_FIXTURE_TEXT =
+  'this value came with the demo. Enter your own, or leave the field empty.';
+
 /**
  * A refusal from the submission routes, in words. The server's error envelope carries the code
  * only (plugins/security.ts), so an ApiError's message is the code itself: never show it.
@@ -190,6 +197,14 @@ export function submissionErrorText(err: unknown): string {
     // words fit the visitor who started it too, once their session has ended (tl on #566).
     case 'not_your_application':
       return 'This application was started in another session on this shared demo account. You can read it or cancel it; only that session can change it.';
+    // A shared demo account (#544, #546): only the visitor's own values go on a form, and the
+    // server names the field that holds one of the demo's own (never the value).
+    case 'demo_fixture_value':
+      return `${refusedField(err)}: ${DEMO_FIXTURE_TEXT}`;
+    case 'resume_unavailable_on_demo':
+      return DEMO_NO_RESUME_TEXT;
+    case 'unavailable_on_demo':
+      return 'On the demo, details stay on this application and are not saved to the profile.';
     case 'resume_not_final':
       return 'Choose a finished resume: one marked Final.';
     case 'resume_not_found':
@@ -361,7 +376,8 @@ export function useSubmission(id: string) {
 export function useCreateSubmission(opportunityId: string) {
   const invalidate = useInvalidate(opportunityId);
   return useMutation({
-    mutationFn: (body: { idempotencyKey: string; resumeId: string }) =>
+    // No resumeId on a shared demo account (#546): the server refuses every resume there.
+    mutationFn: (body: { idempotencyKey: string; resumeId?: string }) =>
       api<SubmissionView>(`/opportunities/${enc(opportunityId)}/submissions`, {
         method: 'POST',
         body,
