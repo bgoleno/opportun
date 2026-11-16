@@ -17,7 +17,7 @@ import { jobs, taskRuns } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { RANK_WAITING_SWEEP_KIND, sweepWaitingResults } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { enqueue, readSchedules, removeSchedule, runNextJob } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import { createSource } from '../src/repos/discovery';
 import { writeDiscoveryBudget } from '../src/repos/discoveryBudget';
@@ -158,12 +158,27 @@ describe('item 1: a refused run counts as a call and an error, with no cost', ()
 
 describe('item 2: the hourly retry, with postings waiting', () => {
   /**
+   * The first day, a UTC midnight, never the real date
+   * (https://github.com/bgoleno/opportun/issues/580). A Monday, so the day of drains below would
+   * reach the week's first scheduled runs if any were left in. The app boots on it too, so what it
+   * queues at startup is due as on any day.
+   */
+  const MONDAY = Date.UTC(2026, 10, 16);
+  beforeEach(() => {
+    vi.useFakeTimers({ now: MONDAY + HOUR, toFake: ['Date'], shouldAdvanceTime: true });
+  });
+
+  /**
    * `count` postings waiting, because their first day's budget was spent, then the next day, when
    * the budget has room again. Only Date is faked, so jobs and the database run as usual.
    */
   async function waitingUntilTomorrow(app: FastifyInstance, c: TestClient, count: number) {
-    const today = Math.floor(Date.now() / DAY) * DAY;
+    const today = MONDAY;
     vi.useFakeTimers({ now: today + HOUR, toFake: ['Date'] });
+    // The test runs the sweep itself, so no schedule runs in its drains. With the server's schedules
+    // on, which of them fell inside the day moved with the real date: on a Monday the week's
+    // classifier refinement and board re-check ran too (#580, as #578 was for the dead-key sweep).
+    for (const { kind } of await readSchedules(app.db)) await removeSchedule(app.db, kind);
     await writeDiscoveryBudget(app.db, ctxOf(c), 0.02);
     await spend(app, c, 0.02);
     await discover(app, c, count);
