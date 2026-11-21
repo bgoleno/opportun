@@ -472,6 +472,30 @@ describe('through a crash at each step: sent once, scored once, costed once', ()
     expect(await rankRows(app, a)).toHaveLength(3);
     expect(fake!.sent).toHaveLength(1);
   });
+
+  // https://github.com/bgoleno/opportun/issues/597 (b): two collects of one batch at once. The
+  // first has read the results and not applied any when the second runs to the end; the first then
+  // finds every link taken (takeBatchLink) and applies nothing: each posting scored once, costed once.
+  it('two collects at once: the one that applies second applies nothing', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 2);
+    await submit(app, a);
+    fake!.end(1, succeeded(55));
+    const [batch] = await batchRows(app, a);
+    let second: Awaited<ReturnType<typeof collectRankBatch>> | undefined;
+    setRaceHook(async (p) => {
+      if (p !== 'rankBatch.results_read' || second !== undefined) return;
+      second = { status: 'not_in_flight' }; // marks the hook as used before the nested collect reaches it
+      second = await collectRankBatch(app.db, batch!.id, app.jobs.services);
+    });
+    const first = await collectRankBatch(app.db, batch!.id, app.jobs.services);
+    setRaceHook(undefined);
+    expect(second).toMatchObject({ status: 'collected', ranked: 2 });
+    expect(first).toMatchObject({ status: 'collected', ranked: 0 });
+    expect((await results(app, a)).map((r) => r.aiScore)).toEqual([55, 55]);
+    expect(await rankRows(app, a)).toHaveLength(2);
+  });
 });
 
 describe('a result that does not score the posting', () => {
