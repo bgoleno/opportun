@@ -184,6 +184,7 @@ export function TourOverlay(props: TourOverlayProps) {
     setDrawn({ ...spot, height: Math.max(0, bottom - spot.top) });
   }, [spot, docked, refs, props.stepKey]);
   const side = placement.split('-')[0] as Placement;
+  // eslint-disable-next-line security/detect-object-injection -- a typed placement side into a literal object
   const arrowSide = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' }[side];
 
   function onKeyDown(e: React.KeyboardEvent) {

@@ -69,6 +69,7 @@ export function parseArgs(argv: string[]): CliArgs {
     return Number(raw);
   };
   for (let i = 0; i < argv.length; i += 1) {
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     const arg = argv[i];
     if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--allow-undecryptable') args.allowUndecryptable = true;
