@@ -9,7 +9,7 @@ import { USER_CONTEXT_KEY } from '@opportun/ai';
 import { newId } from '@opportun/core';
 import { ROOT_CONTEXT } from '@opentelemetry/api';
 import { CronExpressionParser } from 'cron-parser';
-import { and, eq, inArray, like, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, like, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { isUniqueViolation, rawGet, type Db, type Exec } from '../db/client';
 import { claimNextJob, type ClaimedJob } from '../db/dialect';
@@ -538,7 +538,30 @@ export async function recoverStaleJobs(
       .where(and(eq(jobs.id, job.id), eq(jobs.status, 'running')))
       .run();
   }
-  return orphans.length;
+  // A pending row already at its limit is never claimed (claimJobSql), so it would sit for ever,
+  // and a schedule's row would stop its schedule (qa on #720). Main's recovery before #588 left
+  // such rows: an orphan put back with its attempts unchanged. Dead, saying why; a schedule then
+  // queues its next occurrence (safeMaterialize, after this).
+  const spent = await db
+    .select({ id: jobs.id, kind: jobs.kind, payload: jobs.payload })
+    .from(jobs)
+    .where(and(eq(jobs.status, 'pending'), gte(jobs.attempts, jobs.maxAttempts)))
+    .all();
+  for (const job of spent) {
+    await finish(
+      db,
+      job.id,
+      'dead',
+      now,
+      'pending at its attempt limit: it will not be claimed again',
+      withoutTransient(getJobHandler(job.kind), job.payload),
+    );
+    opts.log?.error(
+      { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
+      'a pending job at its attempt limit: dead',
+    );
+  }
+  return orphans.length + spent.length;
 }
 
 /** Puts back a claimed job that never ran: pending, unlocked, and its attempt not counted. */

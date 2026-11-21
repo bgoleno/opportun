@@ -1,7 +1,7 @@
 // Durable job runner (NFR-OPS4, design section 8): claim, retry with backoff, dead letters,
 // dedupe, graceful stop, the scheduler, and the /jobs API.
 import { newId } from '@opportun/core';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { Db } from '../src/db/client';
@@ -404,6 +404,41 @@ describe('job queue', () => {
       expect(await runNextJob(db, { now: () => now })).toBe(false);
       expect(await runNextJob(db, { now: () => row.runAt })).toBe(true);
       expect(seen).toEqual([id]);
+    });
+
+    // qa on #720: main's recovery put an orphan back to pending with its attempts unchanged, so an
+    // instance that hit #588 can hold pending rows at their limit. The claim now skips them; left
+    // there they would sit for ever, and a schedule's row would stop its schedule.
+    it('a pending row already at its limit is dead on recovery, and its schedule queues the next run', async () => {
+      const { db } = await freshDb();
+      let ran = 0;
+      registerJob({
+        kind: 'test.tick',
+        payloadSchema: z.object({}),
+        maxAttempts: 1,
+        run: async () => {
+          ran += 1;
+        },
+      });
+      const now = Date.UTC(2027, 0, 1, 0, 2);
+      await setSchedule(db, 'test.tick', { cron: '*/5 * * * *', enabled: true });
+      await materializeSchedules(db, now);
+      const [stuck] = await db.select().from(jobs).where(eq(jobs.kind, 'test.tick')).all();
+      await exec({ db }, `UPDATE jobs SET attempts = max_attempts WHERE id = ?`, stuck!.id);
+      await recoverStaleJobs(db, { now });
+      const row = await jobRow(db, stuck!.id);
+      expect(row).toMatchObject({ status: 'dead' });
+      expect(row.lastError).toMatch(/attempt limit/);
+      // Its schedule is free to queue the next occurrence, which runs.
+      await materializeSchedules(db, now);
+      const pending = await db
+        .select()
+        .from(jobs)
+        .where(and(eq(jobs.kind, 'test.tick'), eq(jobs.status, 'pending')))
+        .all();
+      expect(pending).toHaveLength(1);
+      expect(await runDueJobs(db, { now: () => pending[0]!.runAt })).toBe(1);
+      expect(ran).toBe(1);
     });
 
     it('the claim never takes a job whose attempts reached its limit', async () => {

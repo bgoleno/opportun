@@ -821,6 +821,8 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.job.id',
     'opportun.job.kind',
   ],
+  // qa on #720: one left pending at its limit by the recovery before #588.
+  'a pending job at its attempt limit: dead': ['opportun.job.id', 'opportun.job.kind'],
   // #618: a shared demo account's job whose account the nightly reset replaced.
   'job discarded: the demo reset replaced its account': ['opportun.job.id', 'opportun.job.kind'],
   'job held the demo reset gate to its limit; told to stop': [
