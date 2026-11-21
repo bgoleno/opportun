@@ -1,0 +1,10 @@
+# Keeps the image's base current (#619, the owner's decision there): deploy/Dockerfile pins
+# node:22-slim by digest, and Dependabot opens a pull request when a newer digest is published.
+# It goes through the same checks and review as any other pull request. The docker ecosystem
+# only: the npm lockfile is updated by hand, as before.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule:
+      interval: weekly

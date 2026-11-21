@@ -7,7 +7,8 @@
 
 # Every stage starts from node:22-slim, pinned by the digest of its multi-arch index (read
 # 2026-11-20), so a build from one commit starts from the same bytes on any day (#619). The tag
-# says what was pinned; the digest is what is pulled. To move to a newer node:22-slim, read the
+# says what was pinned; the digest is what is pulled. Dependabot (.github/dependabot.yml) opens a
+# pull request when a newer node:22-slim is published, reviewed like any other. By hand: read the
 # index digest (the Digest: line of `docker buildx imagetools inspect node:22-slim`) and replace
 # it in each FROM below.
 # apps/server/test/dockerfileBaseImage.test.ts holds every FROM to a digest.

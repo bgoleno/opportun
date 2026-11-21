@@ -104,3 +104,15 @@ test("the security label job runs the base branch's matcher, not the PR's", () =
   assert.match(check.text, /node base\/\.github\/scripts\/check-security-paths\.mjs/);
   assert.doesNotMatch(check.text, /node \.github\/scripts\/check-security-paths\.mjs/);
 });
+
+test("the image's base digest is kept current by Dependabot, for the Dockerfile only (#619)", () => {
+  // The owner's decision on #619: the docker ecosystem for deploy/, weekly, and nothing else, so
+  // digest bumps arrive as pull requests that go through review like any other.
+  const text = readFileSync(new URL('../dependabot.yml', import.meta.url), 'utf8');
+  const ecosystems = [...text.matchAll(/^\s*-\s*package-ecosystem:\s*["']?([\w-]+)/gm)].map(
+    (m) => m[1],
+  );
+  assert.deepEqual(ecosystems, ['docker']);
+  assert.match(text, /^\s*directory:\s*["']?\/deploy["']?\s*$/m);
+  assert.match(text, /^\s*interval:\s*["']?weekly["']?\s*$/m);
+});
