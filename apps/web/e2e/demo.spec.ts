@@ -12,6 +12,8 @@
 // tab never reaches a real ATS, and only fixtures are filled (the owner's decision 1: never a real
 // employer's form in a test).
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { join } from 'node:path';
 import {
   expect,
   test,
@@ -23,9 +25,19 @@ import { DEMO_DATA_DIR, DEMO_DB_ENV, DEMO_PASSWORDS, DEMO_URL } from '../playwri
 import {
   captureGreenhouseOpportunity,
   choose,
+  createOpportunity,
   registerBaseResume,
   stubOtherHosts,
 } from './helpers';
+
+// The server's own SQLite driver, for the one test-only write the reset test makes to the demo's
+// throwaway database (the demo project runs on SQLite only, DEMO_DB_ENV).
+const Database = createRequire(new URL('../../server/package.json', import.meta.url))(
+  'better-sqlite3',
+) as new (file: string) => {
+  prepare(sql: string): { run(...args: unknown[]): { changes: number } };
+  close(): void;
+};
 
 /** demo-user1, a shared account (seedDemoFixture's DEMO_USERS). */
 const SHARED = { email: 'demo-user1@opportun-demo.example', password: DEMO_PASSWORDS.user1 };
@@ -250,3 +262,140 @@ test('a dedicated account: assisted apply as on any instance, with its own resum
   await tab.close();
   await expect(page.getByText(/Opportun has not submitted anything/)).toBeVisible();
 });
+
+// https://github.com/bgoleno/opportun/issues/693: #671's notices and fixture phone, #586's tour and
+// checklist for a dedicated account, and the nightly reset (#638). The reset test stays last in
+// this file: it reseeds every shared account, which the tests above sign in to (workers: 1, so the
+// file runs in order).
+
+const FILES_NOTICE =
+  'This is a shared demo account. A file you attach here can be opened by everyone signed in to this account, and is deleted at the nightly reset.';
+const TWO_FACTOR_NOTICE =
+  'This is a shared demo account. Turning on two-factor sign-in here locks everyone else out of it until the nightly reset: they would need your authenticator to sign in.';
+
+/** A dedicated account, made as the operator makes one (docs/demo-deployment.md). */
+function dedicatedAccount(name: string): { email: string; password: string } {
+  const email = `e2e-dedicated-${Date.now()}-${Math.round(Math.random() * 1e6)}@example.com`;
+  const password = execFileSync(
+    'node',
+    ['--import', 'tsx', 'src/cli/createDemoAccount.ts', email, name],
+    {
+      cwd: '../server',
+      env: { ...process.env, ...DEMO_DB_ENV, DATA_DIR: DEMO_DATA_DIR, OPPORTUN_DEMO: '1' },
+      encoding: 'utf8',
+    },
+  ).trim();
+  return { email, password };
+}
+
+async function noticesShown(page: Page, id: string): Promise<{ files: number; twoFactor: number }> {
+  await page.goto(`/opportunities/${id}`);
+  await page.getByRole('tab', { name: 'Details' }).click();
+  await expect(page.getByText('Upload a file')).toBeVisible();
+  const files = await page.getByText(FILES_NOTICE).count();
+  await page.goto('/settings/security');
+  await expect(page.getByRole('heading', { name: /Two-factor/ }).first()).toBeVisible();
+  const twoFactor = await page.getByText(TWO_FACTOR_NOTICE).count();
+  return { files, twoFactor };
+}
+
+test('a shared account shows the attachment and two-factor notices, and refuses the demo phone by field (#671)', async ({
+  page,
+  playwright,
+}) => {
+  const user = { email: 'demo-user2@opportun-demo.example', password: DEMO_PASSWORDS.user2 };
+  await signIn(page, user.email, user.password);
+  const id = await captured(page, playwright, user.password);
+  expect(await noticesShown(page, id)).toEqual({ files: 1, twoFactor: 1 });
+  // A shared account keeps the demo's own tour: no setup checklist on the dashboard (#586).
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
+  await expect(page.getByText('Get set up')).toHaveCount(0);
+
+  // The seeded candidate's phone, written another way, is refused at the review, by field.
+  const panel = await applyOffered(page, id);
+  await panel.getByRole('link', { name: 'Apply on Greenhouse' }).click();
+  await page.getByRole('button', { name: 'Next: Details' }).click();
+  await page.getByLabel('Full name').fill('Jane Visitor');
+  await page.getByLabel('Email').fill('jane.visitor@example.com');
+  await page.getByLabel('Phone', { exact: true }).fill('+1 (415) 555-0134');
+  await page.getByRole('button', { name: 'Next: Review' }).click();
+  await page.getByRole('checkbox', { name: /I will press Submit myself/ }).check();
+  const blank = page.waitForEvent('popup');
+  await page.getByRole('button', { name: 'Confirm review and open boards.greenhouse.io' }).click();
+  const refused = page.getByRole('alert').filter({ hasText: 'Phone: this value came with' });
+  await expect(refused).toContainText('Nothing was opened.');
+  const refusedTab = await blank;
+  await expect.poll(() => refusedTab.isClosed(), { message: 'the blank tab is closed' }).toBe(true);
+});
+
+test('a dedicated account shows neither notice, and gets the normal setup checklist (#671, #586)', async ({
+  page,
+  playwright,
+}) => {
+  const { email, password } = dedicatedAccount('Jane Notices');
+  await signIn(page, email, password);
+  await expect(page.getByText('Get set up')).toBeVisible();
+  const id = await captured(page, playwright, password);
+  expect(await noticesShown(page, id)).toEqual({ files: 0, twoFactor: 0 });
+});
+
+test('the nightly reset reseeds the shared accounts and ends their sessions, and leaves a dedicated account as it was (#638)', async ({
+  page,
+  browser,
+}) => {
+  // A dedicated account with an opportunity of its own, signed in.
+  const dedicated = dedicatedAccount('Jane Keeps');
+  await signIn(page, dedicated.email, dedicated.password);
+  await createOpportunity(page, { company: 'Keepsake Labs', title: 'Kept Through The Reset' });
+
+  // A shared account's visitor adds an opportunity, and stays signed in.
+  const shared = { email: 'demo-user3@opportun-demo.example', password: DEMO_PASSWORDS.user3 };
+  const visitorContext = await browser.newContext({ baseURL: DEMO_URL });
+  try {
+    await stubOtherHosts(visitorContext, DEMO_URL);
+    const visitor = await visitorContext.newPage();
+    await signIn(visitor, shared.email, shared.password);
+    await createOpportunity(visitor, { company: 'Gone Corp', title: 'Cleared At The Reset' });
+    const seeded = await opportunityTitles(visitor);
+    expect(seeded).toContain('Cleared At The Reset');
+
+    // The nightly reset, now: the server's own queued demo.reset job made due (a test-only write
+    // to the demo's throwaway database; nothing in the app makes a reset run early).
+    const db = new Database(join(DEMO_DATA_DIR, 'opportun.db'));
+    try {
+      const changed = db
+        .prepare(`update jobs set run_at = ? where kind = 'demo.reset' and status = 'pending'`)
+        .run(Date.now()).changes;
+      expect(changed, 'the server queues its nightly reset').toBe(1);
+    } finally {
+      db.close();
+    }
+
+    // The visitor's session ends with it.
+    await expect
+      .poll(async () => (await visitor.request.get('/api/v1/auth/me')).status(), {
+        timeout: 90_000,
+        message: 'the shared session is ended by the reset',
+      })
+      .toBe(401);
+
+    // Signed in again: the seed's own opportunities, and none of the visitor's.
+    await signIn(visitor, shared.email, shared.password);
+    const after = await opportunityTitles(visitor);
+    expect(after).not.toContain('Cleared At The Reset');
+    expect(after.length).toBeGreaterThan(0);
+  } finally {
+    await visitorContext.close();
+  }
+
+  // The dedicated account: still signed in, with its own opportunity.
+  expect((await page.request.get('/api/v1/auth/me')).status()).toBe(200);
+  expect(await opportunityTitles(page)).toContain('Kept Through The Reset');
+});
+
+async function opportunityTitles(page: Page): Promise<string[]> {
+  const res = await page.request.get('/api/v1/opportunities?limit=200');
+  expect(res.status()).toBe(200);
+  return ((await res.json()) as { items: { title: string }[] }).items.map((o) => o.title);
+}
