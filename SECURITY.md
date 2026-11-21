@@ -302,13 +302,19 @@ since it was not a deliberate choice.)
 
   - a request's body must arrive within 20 seconds;
   - an AI call ends after 40 seconds;
-  - no hold lasts more than 50 seconds.
+  - no hold lasts more than 50 seconds;
+  - every AI call, and the tailoring chat's reply, also ends 5 seconds before its request's or
+    job's hold does, and a job is told to stop then too. So what the work writes after it (the
+    call's record, a result marked unavailable) still comes while it holds the gate, and the reset
+    then replaces it ([#684](https://github.com/bgoleno/opportun/issues/684), fixed in
+    [#704](https://github.com/bgoleno/opportun/pull/704); `currentHoldStop` in
+    `apps/server/src/lib/demoResetGate.ts`).
 
-  What it does not close: work that keeps running past its hold, such as a handler whose AI call
-  is still in flight when its request is ended, can still write after the reset into the
-  reseeded account. That write is the visitor's own, into an account every visitor can write to
-  anyway. It is tracked in [#684](https://github.com/bgoleno/opportun/issues/684). A seed run by
-  hand, and more than one server process on the database, are outside the gate. The details are
+  What it does not close: slow work in a request that is not an AI call, such as making a resume in
+  Google Docs or Reactive Resume, and work a handler leaves running after it has answered, can still
+  write after the reset into the reseeded account. That write is the visitor's own, into an account
+  every visitor can write to anyway. A seed run by hand, and more than one server process on the
+  database, are outside the gate. The details are
   in docs/demo-deployment.md, under "Nothing that began before the reset writes after it".
 
 - **Postgres TLS is encrypted but not verified by default.** For a Postgres host that is not
