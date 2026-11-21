@@ -145,7 +145,7 @@ export function normalizeLinkedinUrl(raw: string | null | undefined): string | n
     return null;
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-  // LinkedIn's own export names linkedin.com profiles; a row naming any other host is not one, so
+  // LinkedIn's own export names LinkedIn profiles; a row naming any other host is not one, so
   // it is stored with no link (#655).
   if (!isLinkedInHost(value)) return null;
   return `${url.protocol}//${url.host}${url.pathname}`.replace(/\/+$/, '').toLowerCase();

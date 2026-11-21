@@ -972,7 +972,7 @@ describe('network.csv, and contacts.csv from before the rename', () => {
       zip({ 'opportunities.csv': HEADER, 'network.csv': bad }),
     );
     expect(status.report?.errors).toEqual([
-      { line: 2, message: 'network.csv: linkedin_url must be a linkedin.com URL' },
+      { line: 2, message: 'network.csv: linkedin_url must be a LinkedIn profile URL' },
     ]);
   });
 

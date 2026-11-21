@@ -106,6 +106,7 @@ describe('network api', () => {
       'https://example.com/in/jane-doe',
       'https://linkedin.com.example.com/in/jane',
       'https://notlinkedin.com/in/jane',
+      'https://lnkd.in/abc123',
       'https://evil.example/https://www.linkedin.com/in/jane',
     ]) {
       const res = await a.request({

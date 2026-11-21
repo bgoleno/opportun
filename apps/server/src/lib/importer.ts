@@ -535,7 +535,7 @@ async function importContact(rec: CsvRecord, db: Db, ctx: UserCtx): Promise<Outc
   const linkedinUrl = httpUrl(get('linkedin_url'), 'linkedin_url');
   // A LinkedIn link on LinkedIn only (#655), as the contact form takes it.
   if (linkedinUrl !== null && !isLinkedInHost(linkedinUrl)) {
-    throw new RowError('linkedin_url must be a linkedin.com URL');
+    throw new RowError('linkedin_url must be a LinkedIn profile URL');
   }
   const company = optional(get('company'), 'company', 200);
   // Notes keep their inner line breaks; only the cell's outer whitespace is trimmed.

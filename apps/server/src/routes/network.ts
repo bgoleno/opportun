@@ -59,12 +59,11 @@ export const ContactReferralSchema = z.object({
 });
 const ContactDetailSchema = ContactSchema.extend({ referrals: z.array(ContactReferralSchema) });
 
-// A contact's LinkedIn link names a LinkedIn profile (#655, sec): http(s) on linkedin.com or one
+// A contact's LinkedIn link names a LinkedIn profile (#655, sec): http(s) on LinkedIn's domain or one
 // of its subdomains. A link already stored on another host is left as it is (it is metadata,
 // never fetched), and the next edit of the contact asks for a LinkedIn one.
 const LinkedInUrl = HttpUrl.refine(isLinkedInHost, {
-  message:
-    'LinkedIn profile URL: use a linkedin.com address, such as https://www.linkedin.com/in/your-name.',
+  message: 'LinkedIn profile URL: use the address of a profile on LinkedIn.',
 });
 
 const contactFields = {
