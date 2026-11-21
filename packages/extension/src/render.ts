@@ -4,7 +4,7 @@ import type { Outcome } from './api';
 import type { CaptureSiteId } from './canonical';
 
 export interface Rendered {
-  tone: 'success' | 'info' | 'error';
+  tone: 'success' | 'info' | 'warning' | 'error';
   text: string;
 }
 

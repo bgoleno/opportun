@@ -203,7 +203,14 @@ export interface OAuthWiring {
 export interface BuildOptions {
   logStream?: LogStream;
   /** The demo reset gate's limits (#618): tests set short ones; production uses the defaults. */
-  demoResetLimits?: { startMs?: number; holdMs?: number; streamMs?: number; aiCallMs?: number };
+  demoResetLimits?: {
+    startMs?: number;
+    holdMs?: number;
+    streamMs?: number;
+    aiCallMs?: number;
+    /** How long before a hold's bound its stop signal fires (#684). */
+    stopMarginMs?: number;
+  };
   /** Replaces the googleapis-backed client (tests inject a fake: no network). */
   google?: GoogleApi;
   /** Replaces the Google Docs document store. */
@@ -506,7 +513,15 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     demo: cfg.demo,
     rankBatchProvider: opts.rankBatchProvider ?? batchProviderFor,
     // The nightly reset's gate (#618): only a demo server resets, so only it has one.
-    ...(cfg.demo ? { demoResetGate: new DemoResetGate() } : {}),
+    ...(cfg.demo
+      ? {
+          demoResetGate: new DemoResetGate(
+            opts.demoResetLimits?.stopMarginMs === undefined
+              ? {}
+              : { stopMarginMs: opts.demoResetLimits.stopMarginMs },
+          ),
+        }
+      : {}),
   };
   app.decorate('jobs', {
     services,
@@ -632,7 +647,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       await api.register(connectorApplyRoutes);
       await api.register(networkRoutes);
       await api.register(referralRoutes);
-      // Assisted apply (#114): every route 404s with OPPORTUN_SUBMISSIONS=0, and on the demo.
+      // Assisted apply (#114): every route 404s with OPPORTUN_SUBMISSIONS=0, and for a shared demo
+      // account while the operator has it switched off for those (decision 133).
       await api.register(submissionRoutes);
       await api.register(obsSettingsRoutes);
       await api.register(obsTraceRoutes);

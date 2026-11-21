@@ -1,4 +1,5 @@
 // Registers every job handler. Imported once by the app.
+import { postingCheckJob } from '../lib/greenhouseEmbed';
 import { importJob } from '../lib/importer';
 import { linkedInImportJob } from '../lib/linkedinExport';
 import { atsDetectJob, atsReverifyJob } from './atsDetect';
@@ -69,6 +70,7 @@ registerJob(refineDiscoveryPromptJob);
 registerJob(leadResolveJob);
 registerJob(atsDetectJob);
 registerJob(atsReverifyJob);
+registerJob(postingCheckJob);
 registerJob(companySuggestJob);
 registerJob(companyBoardProbeJob);
 registerJob(networkProbeJob);

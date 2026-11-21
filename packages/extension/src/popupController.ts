@@ -32,6 +32,7 @@ import {
   parseServerUrl,
   isDeviceToken,
   saveSettings,
+  travelsUnencrypted,
   type Settings,
   type SettingsStorage,
 } from './settings';
@@ -95,6 +96,9 @@ const SERVER_URL_ERRORS = {
 } as const;
 const TOKEN_ERROR = 'Paste a device token (it starts with odt_).';
 const SERVER_CHANGED = 'Server changed: re-enter the token for the new server.';
+// #655: saved, but said plainly, since http on the local network carries the token in the clear.
+const SAVED_UNENCRYPTED =
+  'Settings saved. This address uses plain http: the token travels unencrypted on your network.';
 
 /**
  * The note left while the resume check runs (#191): which tab and posting, and since when. One
@@ -431,7 +435,11 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         return;
       }
       grantedPattern = pattern;
-      show({ tone: 'success', text: 'Settings saved.' });
+      show(
+        travelsUnencrypted(saved.settings.serverUrl)
+          ? { tone: 'warning', text: SAVED_UNENCRYPTED }
+          : { tone: 'success', text: 'Settings saved.' },
+      );
     });
   });
 

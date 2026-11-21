@@ -122,6 +122,35 @@ describe('popup settings', () => {
     expect(status(doc).textContent).toBe('Settings saved.');
   });
 
+  // #655 (sec): http is allowed only on this computer or the local network, but on the network
+  // the token still crosses it in the clear. The save goes through and says so.
+  it('saving a plain-http address on a local network name warns that the token is unencrypted', async () => {
+    const { doc, data, deps, $ } = setup();
+    await mountPopup(doc, deps);
+    $<HTMLInputElement>('server-url').value = 'http://nas.local:8080';
+    $<HTMLInputElement>('token').value = TOKEN;
+    await click($('save'), () => status(doc).textContent !== '');
+    expect(data).toEqual({ serverUrl: 'http://nas.local:8080', token: TOKEN });
+    expect(status(doc).dataset.tone).toBe('warning');
+    expect(status(doc).textContent).toBe(
+      'Settings saved. This address uses plain http: the token travels unencrypted on your network.',
+    );
+  });
+
+  it.each(['http://localhost:8080', 'http://127.0.0.1:8080'])(
+    'saving %s (this computer, not the network) needs no warning',
+    async (serverUrl) => {
+      const { doc, data, deps, $ } = setup();
+      await mountPopup(doc, deps);
+      $<HTMLInputElement>('server-url').value = serverUrl;
+      $<HTMLInputElement>('token').value = TOKEN;
+      await click($('save'), () => status(doc).textContent !== '');
+      expect(data).toEqual({ serverUrl, token: TOKEN });
+      expect(status(doc).dataset.tone).toBe('success');
+      expect(status(doc).textContent).toBe('Settings saved.');
+    },
+  );
+
   it('does not ask for a permission it already holds (issue #49)', async () => {
     // Chrome closes the popup whenever the host-permission prompt opens, so a save that
     // prompts needlessly throws the window away under the user.

@@ -23,6 +23,9 @@ export class MemFs implements FileSystem {
   async mkdir(path: string, mode: number): Promise<void> {
     this.dirs.set(path, mode);
   }
+  async permissions(path: string): Promise<number | null> {
+    return this.files.get(path)?.mode ?? null;
+  }
 }
 
 export class FakeClock implements Clock {
@@ -138,6 +141,9 @@ export function makeIo(overrides: Partial<ConnectorIo> = {}) {
     configDir: '/home/me/.config/opportun-connector',
     prompt: async () => {
       throw new Error('unexpected prompt');
+    },
+    readStdin: async () => {
+      throw new Error('unexpected read of stdin');
     },
     ...overrides,
   };

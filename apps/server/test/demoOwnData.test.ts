@@ -8,7 +8,9 @@ import { describe, expect, it } from 'vitest';
 import {
   DEMO_CANDIDATE_EMAIL,
   DEMO_CANDIDATE_NAME,
+  DEMO_CANDIDATE_PHONE,
   DEMO_IDENTITY_VALUES,
+  DEMO_RESUME_BASE_TEXT,
   DEMO_USERS,
 } from '../src/cli/seedDemoFixture';
 import {
@@ -309,7 +311,15 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
     ['email', account.email.toUpperCase()],
     ['fullName', `${DEMO_CANDIDATE_NAME.toLowerCase().replace(' ', '   ')}`],
     ['email', DEMO_CANDIDATE_EMAIL],
+    // #671: the seed's phone, punctuated another way: compared by its digits.
+    ['phone', '+1 (415) 555-0134'],
   ];
+
+  it('the seed carries a phone number, and it is one of the demo identity values (#671)', () => {
+    expect(DEMO_CANDIDATE_PHONE.replace(/\D/g, '')).toBe('14155550134');
+    expect(DEMO_RESUME_BASE_TEXT).toContain(DEMO_CANDIDATE_PHONE);
+    expect(DEMO_IDENTITY_VALUES).toContain(DEMO_CANDIDATE_PHONE);
+  });
 
   for (const [field, value] of cases) {
     it(`review refuses ${field} = "${value}", naming the field`, async () => {

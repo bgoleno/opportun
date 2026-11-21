@@ -7,6 +7,8 @@ in [docs/install.md, section 11](../../docs/install.md#11-apple-mail-macos).
 ```bash
 pnpm --filter @opportun/connector build     # -> dist/opportun-connector.js (self-contained)
 opportun-connector init                     # server, device token, mailboxes, lookback
+opportun-connector init --server <url> --token-file <path>   # scripted: a chmod 600 file
+pbpaste | opportun-connector init --server <url> --token-stdin  # or standard input
 opportun-connector sync                     # push new mail once
 opportun-connector watch [--interval 15]    # sync every N minutes until Ctrl-C
 ```
