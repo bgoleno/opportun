@@ -305,7 +305,10 @@ describe('inbox controls: bulk reject', () => {
     });
 
     const res = await bulkTriage(app.db, ctxOf(a.userId), {
-      ids: [m1, m2],
+      items: [
+        { id: m1, opportunityId: null },
+        { id: m2, opportunityId: null },
+      ],
       action: { kind: 'reject', reason: 'not_job_related' },
     });
     expect(res.succeeded).toBe(2);
@@ -342,7 +345,10 @@ describe('inbox controls: bulk reject', () => {
       .get();
 
     const res = await bulkTriage(app.db, ctxOf(a.userId), {
-      ids: [ours, theirs],
+      items: [
+        { id: ours, opportunityId: null },
+        { id: theirs, opportunityId: null },
+      ],
       action: { kind: 'reject', reason: 'not_job_related' },
     });
     expect(res.succeeded).toBe(1);
@@ -367,7 +373,11 @@ describe('inbox controls: bulk reject', () => {
     });
 
     const res = await bulkTriage(app.db, ctxOf(a.userId), {
-      ids: [m, m, m],
+      items: [
+        { id: m, opportunityId: null },
+        { id: m, opportunityId: null },
+        { id: m, opportunityId: null },
+      ],
       action: { kind: 'reject', reason: 'not_job_related' },
     });
     expect(res.succeeded).toBe(1);

@@ -37,7 +37,7 @@ export function RejectDialog(props: {
           pending={reject.isPending}
           onReject={(input) =>
             reject.mutate(
-              { id: props.comm.id, input },
+              { id: props.comm.id, input, expectedOpportunityId: props.comm.opportunityId ?? null },
               {
                 onSuccess: (result) => {
                   // "Removed" and "removed and blocked" are different promises; this message
