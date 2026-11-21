@@ -64,7 +64,9 @@ export function TourProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<Mode>({ kind: 'idle' });
   const [busy, setBusy] = useState(false);
   const data = onboarding.data;
-  const demo = data?.demo ?? false;
+  // The view-only demo tour is for the demo's shared accounts only (#576, decision 133): an
+  // account made for one person on a demo server gets the tour any instance would show.
+  const demo = data?.sharedDemoAccount ?? false;
   const checklist = data?.checklist ?? EMPTY_CHECKLIST;
 
   /** Where the tour itself sent the router; any other location means the user navigated. */

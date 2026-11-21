@@ -1,6 +1,7 @@
 // The dashboard's "Get set up" card (FR-U12): the three activation items, computed by the
 // server. The tour is a one-time event; this card is what gets people activated over several
-// sessions. Not shown on the demo instance, where there is nothing to set up.
+// sessions. Not shown on the demo's shared accounts, where there is nothing to set up; an
+// account made for one person on a demo server gets it as anywhere else (#576, decision 133).
 import { Link } from '@tanstack/react-router';
 import { Check, Circle } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -25,12 +26,12 @@ export function SetupChecklist() {
   const dismissMutate = dismiss.mutate;
 
   useEffect(() => {
-    if (!activatedUnseen || data?.demo !== false) return;
+    if (!activatedUnseen || data?.sharedDemoAccount !== false) return;
     setCelebrating(true);
     dismissMutate();
-  }, [activatedUnseen, data?.demo, dismissMutate]);
+  }, [activatedUnseen, data?.sharedDemoAccount, dismissMutate]);
 
-  if (data === undefined || data.demo) return null;
+  if (data === undefined || data.sharedDemoAccount) return null;
   const c = data.checklist;
 
   if (celebrating) {

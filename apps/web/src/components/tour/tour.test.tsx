@@ -380,9 +380,12 @@ describe('target fallbacks', () => {
 });
 
 describe('demo instance', () => {
-  it('runs view-only: no checklist, no setup items, no Do it now, done copy', async () => {
+  // The tour and the checklist decide on `sharedDemoAccount`, not on `demo` (#576, decision 133):
+  // a shared account is the view-only demo tour; an account made for one person on a demo server
+  // is a real account and gets the tour and checklist anywhere else would show.
+  it('a shared account runs view-only: no checklist, no setup items, no Do it now, done copy', async () => {
     const user = userEvent.setup();
-    const { api } = setup(onboarding({ autoStart: true, demo: true }));
+    const { api } = setup(onboarding({ autoStart: true, demo: true, sharedDemoAccount: true }));
     await (await findCard()).findByRole('heading', { name: "Let's get your search running" });
     expect(card().queryByRole('list', { name: /Setup:/ })).toBeNull();
     expect(screen.queryByText('Get set up')).toBeNull();
@@ -398,6 +401,78 @@ describe('demo instance', () => {
     expect(await card().findByText(/Your mail is connected/)).toBeInTheDocument();
     expect(card().queryByRole('button', { name: 'Set up Gmail' })).toBeNull();
     expect(card().queryByRole('button', { name: /Apple Mail/ })).toBeNull();
+  });
+
+  it('a dedicated account gets the normal tour: the setup items, the checklist step, Do it now (#576)', async () => {
+    const user = userEvent.setup();
+    const { api } = setup(onboarding({ autoStart: true, demo: true, sharedDemoAccount: false }));
+    await (await findCard()).findByRole('heading', { name: "Let's get your search running" });
+    expect(card().getByRole('list', { name: /Setup:/ })).toBeInTheDocument();
+
+    await user.click(card().getByRole('button', { name: 'Start the tour' }));
+    expect(
+      await card().findByRole('heading', { name: /Three steps to a working search/ }),
+    ).toBeInTheDocument();
+    expect(card().getByText('Step 1 of 9')).toBeInTheDocument();
+    expect(api.puts()[0]).toEqual({ status: 'in_progress', stepId: 'checklist' });
+
+    await user.click(card().getByRole('button', { name: 'Next' }));
+    expect(
+      await card().findByRole('heading', { name: /Bring your own AI key/ }),
+    ).toBeInTheDocument();
+    expect(card().getByRole('button', { name: 'Add my key' })).toBeInTheDocument();
+  });
+
+  it('a shared account has no setup checklist, and no activation is recorded for it', async () => {
+    const { api } = setup(
+      onboarding({
+        autoStart: true,
+        demo: true,
+        sharedDemoAccount: true,
+        checklist: {
+          ...NOTHING_DONE,
+          aiKey: true,
+          mail: true,
+          firstOpportunity: true,
+          activatedAt: 5,
+        },
+      }),
+    );
+    // The welcome card means /onboarding has answered and the page has rendered with it.
+    await findCard();
+    expect(screen.queryByText('Get set up')).toBeNull();
+    expect(screen.queryByText('Your pipeline now fills itself from your mail.')).toBeNull();
+    expect(api.calls.filter((c) => c.method === 'PATCH')).toEqual([]);
+  });
+
+  it('a dedicated account gets the setup checklist (#576)', async () => {
+    setup(onboarding({ demo: true, sharedDemoAccount: false }));
+    expect(await screen.findByText('Get set up')).toBeInTheDocument();
+    expect(screen.getByText('0 of 3 done')).toBeInTheDocument();
+  });
+
+  it('a dedicated account celebrates activation and records the dismissal (#576)', async () => {
+    const { api } = setup(
+      onboarding({
+        demo: true,
+        sharedDemoAccount: false,
+        checklist: {
+          ...NOTHING_DONE,
+          aiKey: true,
+          mail: true,
+          firstOpportunity: true,
+          activatedAt: 5,
+        },
+      }),
+    );
+    expect(
+      await screen.findByText('Your pipeline now fills itself from your mail.'),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(api.calls.filter((c) => c.method === 'PATCH').map((c) => c.body)).toEqual([
+        { dismissed: true },
+      ]),
+    );
   });
 });
 
