@@ -214,6 +214,55 @@ describe('#590 criterion 5: any input changed, a fresh ranking', () => {
     });
   }
 
+  // Each key input on its own (the cases above can change more than one): the model alone, with
+  // the rest of the policy as it was, and a new prompt version with the same text.
+  it('the model alone changes', async () => {
+    const { a } = await boot();
+    await addKey(a);
+    const s = await setup(a);
+    const policy = (model: string) =>
+      a.request({
+        method: 'PUT',
+        url: '/api/v1/ai/policies/referral.rationale',
+        payload: { provider: 'anthropic', model, maxOutputTokens: 1500 },
+      });
+    expect((await policy('claude-made-up-one')).statusCode).toBe(200);
+    const calls = rankAsSent();
+    await get(a, s.oppId);
+    await get(a, s.oppId);
+    expect(calls()).toBe(1);
+    expect((await policy('claude-made-up-two')).statusCode).toBe(200);
+    await get(a, s.oppId);
+    expect(calls()).toBe(2);
+  });
+
+  it('a new prompt version with the same text is a new prompt', async () => {
+    const { a } = await boot();
+    await addKey(a);
+    const s = await setup(a);
+    const calls = rankAsSent();
+    await get(a, s.oppId);
+    const list = await a.request({
+      method: 'GET',
+      url: '/api/v1/ai/prompts?taskKey=referral.rationale',
+    });
+    const active = (list.json() as { items: { body: string; isActive: boolean }[] }).items.find(
+      (p) => p.isActive,
+    )!;
+    const created = await a.request({
+      method: 'POST',
+      url: '/api/v1/ai/prompts',
+      payload: { taskKey: 'referral.rationale', body: active.body },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const id = (created.json() as { id: string }).id;
+    expect(
+      (await a.request({ method: 'POST', url: `/api/v1/ai/prompts/${id}/activate` })).statusCode,
+    ).toBe(200);
+    await get(a, s.oppId);
+    expect(calls()).toBe(2);
+  });
+
   it('one kept ranking per opportunity: a fresh one replaces it', async () => {
     const { app, a } = await boot();
     await addKey(a);
