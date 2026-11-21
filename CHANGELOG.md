@@ -119,10 +119,13 @@ when the milestone's work was merged.
   and starting again after an expired review carries nothing over. A value that came with the
   demo is refused by field name, for example "Email: this value came with the demo. Enter your
   own, or leave the field empty. Nothing was opened.", with a link back to the details step.
+  On the review step of an application with no resume, the tick no longer mentions one: "I have
+  read my answers, and I will press Submit myself on _host_."
   Dedicated demo accounts and instances that are not the demo see none of this
-  ([#546](https://github.com/bgoleno/opportun/issues/546); PR
-  [#575](https://github.com/bgoleno/opportun/pull/575)).
-
+  ([#546](https://github.com/bgoleno/opportun/issues/546),
+  [#577](https://github.com/bgoleno/opportun/issues/577); PRs
+  [#575](https://github.com/bgoleno/opportun/pull/575),
+  [#600](https://github.com/bgoleno/opportun/pull/600)).
 - **The extension's Greenhouse filler never clicks a list option inside a link or button, and it
   stops if the page moves.** An option with a link, button, label, area or summary between it
   and its list is now refused, since a click there would follow the link or press the control
@@ -141,6 +144,24 @@ when the milestone's work was merged.
   `invalid_credentials`) and the audit entry records `password_changed`
   ([#561](https://github.com/bgoleno/opportun/issues/561); PR
   [#571](https://github.com/bgoleno/opportun/pull/571)).
+- **A password reset also unlinks the account's sign-in providers.** The administrator's reset
+  (**Settings > Users**) and the command-line reset now unlink every Google, GitHub and LinkedIn
+  sign-in linked to the account, and say which ones: the temporary-password dialog names them,
+  and the command prints them on stderr (stdout is still the password alone), so a provider
+  someone else linked cannot sign in after the reset. Changing your own password keeps your
+  providers. A provider link, or a provider sign-in, that was in flight when the reset ran now
+  writes nothing ([#573](https://github.com/bgoleno/opportun/issues/573); PR
+  [#602](https://github.com/bgoleno/opportun/pull/602)).
+- **On the demo, an account made for one person gets the normal welcome tour and the "Get set
+  up" checklist.** The demo's shared accounts keep the view-only tour
+  ([#576](https://github.com/bgoleno/opportun/issues/576); PR
+  [#586](https://github.com/bgoleno/opportun/pull/586)).
+- **The security policy and the design documents now describe the demo's shared accounts.**
+  `SECURITY.md` lists what assisted apply allows on them and the trade-offs the owner accepted,
+  as a deliberate deviation, and the assisted apply design documents, the ADR and
+  `docs/design.md` no longer say it is off on the demo
+  ([#585](https://github.com/bgoleno/opportun/issues/585); PR
+  [#601](https://github.com/bgoleno/opportun/pull/601)).
 
 ## 0.4.0 (2026-11-14)
 
