@@ -357,7 +357,12 @@ function loadTrustedProxies(env: NodeJS.ProcessEnv): string[] {
 
 const PEPPER_MIN = 16;
 
-function loadPeppers(env: NodeJS.ProcessEnv): PepperSet {
+/**
+ * The password peppers from the environment, as the server loads them: the current secret under
+ * OPPORTUN_PEPPER_VERSION, and every earlier one. Exported for the CLIs that hash a password
+ * outside the server, so they stamp the version the server will verify with (#568).
+ */
+export function loadPeppers(env: NodeJS.ProcessEnv): PepperSet {
   const raw = env.OPPORTUN_PEPPER;
   if (raw === undefined || raw === '') return NO_PEPPERS;
   if (raw.length < PEPPER_MIN) {

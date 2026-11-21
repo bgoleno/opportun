@@ -2,8 +2,8 @@
 // https://github.com/bgoleno/opportun/issues/117). One opportunity at a time: no queue, no
 // "next opportunity", no counts framed as goals (design (a) 5).
 //
-// With the flag off, or on the demo, the submission routes answer 404 and this renders nothing
-// at all: no card, no teaser (#117 criterion 5).
+// With the flag off (or, on the demo, off for the shared accounts) the submission routes answer 404
+// and this renders nothing at all: no card, no teaser (#117 criterion 5).
 import { greenhouseJidOf } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
@@ -16,6 +16,7 @@ import {
   type ResumeSend,
 } from '@/components/resume/api';
 import { flowSentence, resumeFlowState } from '@/components/resume/resumeFlow';
+import { useSharedDemoAccount } from '@/components/tour/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -130,10 +131,13 @@ function notEligible(
   resumes: Resume[],
   attempts: readonly SubmissionView[],
   sends: readonly ResumeSend[],
+  sharedDemo: boolean,
 ): Refusal | null {
   const blocked = applyBlockedReason(opp);
   if (blocked !== null) return { text: blocked };
-  if (usableResumes(resumes, opp.id).length === 0) {
+  // A shared demo account applies with no resume at all (#544, #546): every resume on it is the
+  // demo's own, so none is needed to start, and none could be used.
+  if (!sharedDemo && usableResumes(resumes, opp.id).length === 0) {
     // The resume flow's state says what to do, in its words (#428), so this panel and the Resume
     // tab can never disagree about it.
     const state = resumeFlowState({
@@ -156,6 +160,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const submissions = useOpportunitySubmissions(opp.id);
   const resumes = useResumes();
   const sends = useOpportunitySends(opp.id);
+  const sharedDemo = useSharedDemoAccount();
   const reasonId = useId();
   const find = useFindPosting(opp.id);
   const [howOpen, setHowOpen] = useState(false);
@@ -169,7 +174,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   if (submissions.data === null || submissions.data === undefined) return null;
   // Nor before the resumes and the sends are in: the reason is chosen from them, and a base sent
   // as it is would read as B for a moment before H (tl on #431).
-  if (resumes.isPending || sends.isPending) return null;
+  if (resumes.isPending || sends.isPending || sharedDemo === undefined) return null;
   const items = submissions.data.items;
   const live = items.find(isLive);
   const latest = items[0];
@@ -193,12 +198,24 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
         opp={opp}
         // Offered only when the server would accept a new attempt, so it never leads to a refusal.
         canApplyAgain={
-          notEligible(opp, resumes.data?.items ?? [], items, sends.data?.items ?? []) === null
+          notEligible(
+            opp,
+            resumes.data?.items ?? [],
+            items,
+            sends.data?.items ?? [],
+            sharedDemo,
+          ) === null
         }
       />
     );
   } else {
-    const refusal = notEligible(opp, resumes.data?.items ?? [], items, sends.data?.items ?? []);
+    const refusal = notEligible(
+      opp,
+      resumes.data?.items ?? [],
+      items,
+      sends.data?.items ?? [],
+      sharedDemo,
+    );
     const reason = refusal?.text ?? null;
     const refusedLabel = opp.atsJobRef ? `Apply on ${ats}` : 'Apply on an ATS';
     body = (

@@ -20,6 +20,8 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
 import { FormError } from '@/components/FormError';
+import { SharedDemoNotice } from '@/components/SharedDemoNotice';
+import { useSharedDemoAccount } from '@/components/tour/api';
 import { useOpportunity } from '@/components/opportunity/api';
 import { useResumes, type Resume } from '@/components/resume/api';
 import { Badge } from '@/components/ui/badge';
@@ -37,6 +39,8 @@ import { usableResumes } from './ApplyPanel';
 import {
   atsLabel,
   clockTime,
+  DEMO_FIXTURE_TEXT,
+  DEMO_NO_RESUME_TEXT,
   hostOf,
   DETAIL_FIELDS,
   detailLabel,
@@ -85,6 +89,7 @@ export function ApplyPage({
   const opp = useOpportunity(opportunityId);
   const submissions = useOpportunitySubmissions(opportunityId);
   const heading = useRef<HTMLHeadingElement>(null);
+  const shared = useSharedDemoAccount() === true;
 
   // Moving between steps, and arriving, moves focus to the step's heading (design (g)), as
   // AppShell does. `loaded`: the heading exists only once both queries have answered.
@@ -128,6 +133,8 @@ export function ApplyPage({
       </div>
       <ApplyStepper current={step} openLabel={`Open ${ats}`} />
       <WillNotSubmitCallout host={host} />
+      {/* Where a visitor enters their own data, on a shared demo account only (#546). */}
+      {step !== 'open' ? <SharedDemoNotice /> : null}
       {step === 'resume' ? (
         <ResumeStep opp={o} live={live} items={items} />
       ) : live === undefined && items[0]?.failureReason === 'review_expired' ? (
@@ -144,7 +151,8 @@ export function ApplyPage({
             >
               resume step
             </Link>
-            : your details are kept.
+            {/* A shared demo account starts every draft empty (#546), so nothing is kept there. */}
+            {shared ? '.' : ': your details are kept.'}
           </span>
         </Notice>
       ) : live === undefined ? (
@@ -208,7 +216,10 @@ function ResumeStep({
 }) {
   const navigate = useNavigate();
   const resumes = useResumes();
-  const usable = usableResumes(resumes.data?.items ?? [], opp.id);
+  // A shared demo account (#544, #546): every resume on it is the demo's own, so none is offered
+  // and the draft starts with none. The visitor attaches their own on the employer's form.
+  const shared = useSharedDemoAccount();
+  const usable = shared === false ? usableResumes(resumes.data?.items ?? [], opp.id) : [];
   const fallback = usable.find((r) => r.opportunityId === opp.id) ?? usable[0];
   const [chosen, setChosen] = useState<string>(live?.resumeId ?? fallback?.id ?? '');
   // One key per attempt: a double click or a retry replays the same draft (M1a).
@@ -228,8 +239,13 @@ function ResumeStep({
     try {
       let cleared: string[] = [];
       if (live === undefined) {
-        const draft = await create.mutateAsync({ idempotencyKey, resumeId });
-        if (expired !== undefined) {
+        const draft = await create.mutateAsync({
+          idempotencyKey,
+          ...(shared === true ? {} : { resumeId }),
+        });
+        // Not on a shared demo account: the expired attempt there may be another visitor's, and
+        // a demo draft holds only what its own visitor typed into it (tl and sec's note, point 1).
+        if (expired !== undefined && shared !== true) {
           // Only what passes today's checks is carried over (#186): a value stored before a
           // check existed would refuse the whole copy. What is dropped is named on the next step.
           const entries = Object.entries(expired.fields);
@@ -247,7 +263,7 @@ function ResumeStep({
             });
           }
         }
-      } else if (live.resumeId !== resumeId) {
+      } else if (shared !== true && live.resumeId !== resumeId) {
         await patch.mutateAsync({ id: live.id, patch: { resumeId } });
       }
       await navigate({
@@ -258,6 +274,28 @@ function ResumeStep({
     } catch (err) {
       setError(submissionErrorText(err));
     }
+  }
+
+  // Which resumes to offer depends on the kind of account: wait for it, rather than show the
+  // demo's own resumes for a moment.
+  if (shared === undefined) return <p className="text-sm text-muted-foreground">Loading...</p>;
+  if (shared) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Your resume</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <p className="text-sm">{DEMO_NO_RESUME_TEXT}</p>
+          <FormError message={error} />
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => void next()} disabled={create.isPending || patch.isPending}>
+              Next: Details
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
   }
 
   return (
@@ -456,7 +494,11 @@ function DetailsStep({
   // What Opportun holds, with sources, and the profile as saved (#401). Either may be missing
   // (not loaded yet, or unreadable): the step then shows no source line and no tick, and works.
   const prefill = useApplicationDetails(live.id).data ?? null;
-  const profile = useProfile().data ?? null;
+  // A shared demo account (#546): its profile is the demo's own and the server refuses
+  // saveToProfile there, so nothing is compared with it and no tick is offered.
+  const shared = useSharedDemoAccount() === true;
+  const profileData = useProfile().data ?? null;
+  const profile = shared ? null : profileData;
   const [ticked, setTicked] = useState<ReadonlySet<ApplicationDetailKey>>(() => new Set());
   const valueOf = (key: string): string | undefined => new Map(Object.entries(fields)).get(key);
 
@@ -574,8 +616,9 @@ function DetailsStep({
         </CardHeader>
         <CardContent className="grid gap-4">
           <p className="text-sm text-muted-foreground">
-            Used to fill the form. Filled in from your profile where it has a value. Changes here
-            apply to this application only, unless you tick Save to my profile.
+            {shared
+              ? 'Used to fill the form. Nothing is filled in for you on this shared demo account: enter your own details. They stay on this application.'
+              : 'Used to fill the form. Filled in from your profile where it has a value. Changes here apply to this application only, unless you tick Save to my profile.'}
           </p>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {DETAIL_FIELDS.map((f) => {
@@ -737,6 +780,9 @@ type Banner =
   | { kind: 'rate'; until: number | null }
   | { kind: 'destination' }
   | { kind: 'changed' }
+  // A shared demo account (#546): the server refused a value that came with the demo, by field.
+  | { kind: 'fixture'; field: string }
+  | { kind: 'demoResume' }
   | { kind: 'error' };
 
 function ReviewStep({
@@ -758,6 +804,7 @@ function ReviewStep({
   const handoff = useHandoffSubmission(opp.id);
   const patch = usePatchSubmission(opp.id);
   const cancel = useCancelSubmission(opp.id);
+  const shared = useSharedDemoAccount() === true;
   const [ticked, setTicked] = useState(false);
   const [banner, setBanner] = useState<Banner | null>(null);
   const [hint, setHint] = useState<string | null>(null);
@@ -913,6 +960,11 @@ function ReviewStep({
       // The attempt moved on elsewhere (another tab, or the sweep closed an expired review):
       // the refreshed list shows where it stands.
       else if (code === 'invalid_transition' || code === 'conflict') setBanner({ kind: 'changed' });
+      // Review, handoff and the extension's read each refuse these on a shared demo account.
+      else if (code === 'demo_fixture_value') {
+        const field = err instanceof ApiError ? err.details.field : undefined;
+        setBanner({ kind: 'fixture', field: typeof field === 'string' ? field : '' });
+      } else if (code === 'resume_unavailable_on_demo') setBanner({ kind: 'demoResume' });
       else setBanner({ kind: 'error' });
     } finally {
       inFlight.current = false;
@@ -1070,6 +1122,12 @@ function ReviewStep({
         {banner?.kind === 'changed' ? (
           <FormError message="This application changed in another tab or window. Nothing was opened. The page now shows where it stands." />
         ) : null}
+        {banner?.kind === 'fixture' ? (
+          <FixtureRefused opportunityId={opp.id} field={banner.field} />
+        ) : null}
+        {banner?.kind === 'demoResume' ? (
+          <FormError message={`${DEMO_NO_RESUME_TEXT} Nothing was opened.`} />
+        ) : null}
         <FormError message={actionError} />
         {banner?.kind === 'error' ? (
           <FormError message="Could not save your review. Nothing was opened. Check your connection and try again." />
@@ -1096,10 +1154,17 @@ function ReviewStep({
       </ReviewSection>
 
       <ReviewSection title="Resume">
-        <p className="text-sm font-medium [overflow-wrap:anywhere]">
-          {live.resumeTitle ?? 'Resume'}
-        </p>
-        <SavedCopy live={live} where="review" />
+        {live.resumeId === null && shared ? (
+          // A shared demo account's attempt carries no resume (#544, #546).
+          <p className="text-sm">No resume. {DEMO_NO_RESUME_TEXT}</p>
+        ) : (
+          <>
+            <p className="text-sm font-medium [overflow-wrap:anywhere]">
+              {live.resumeTitle ?? 'Resume'}
+            </p>
+            <SavedCopy live={live} where="review" />
+          </>
+        )}
       </ReviewSection>
 
       <ReviewSection title="Your details">
@@ -1117,9 +1182,12 @@ function ReviewStep({
                 // A value stored before today's checks that fails them (#196): the extension will
                 // not fill it. Shown, never blocking: correcting it is an ordinary edit.
                 warning={
-                  submissionFieldProblem(Object.fromEntries([[r.key, r.value]])) === null
-                    ? undefined
-                    : "This will not be filled until you correct it: it no longer passes Opportun's checks."
+                  banner?.kind === 'fixture' && banner.field === r.key
+                    ? // The field the server refused on a shared demo account (#546).
+                      'This value came with the demo.'
+                    : submissionFieldProblem(Object.fromEntries([[r.key, r.value]])) === null
+                      ? undefined
+                      : "This will not be filled until you correct it: it no longer passes Opportun's checks."
                 }
               />
             ))}
@@ -1234,6 +1302,29 @@ function ReviewStep({
         }}
       />
     </div>
+  );
+}
+
+/**
+ * A shared demo account's refusal of a value that came with the demo (#546): which field, why,
+ * and the way back to change it. The server names the field, never the value.
+ */
+function FixtureRefused({ opportunityId, field }: { opportunityId: string; field: string }) {
+  const label = field === '' ? 'One of your details' : detailLabel(field);
+  return (
+    <Notice role="alert" label={`${label} came with the demo`}>
+      <span>
+        {label}: {DEMO_FIXTURE_TEXT} Nothing was opened.{' '}
+        <Link
+          to="/opportunities/$id/apply"
+          params={{ id: opportunityId }}
+          search={{ step: 'details' }}
+          className="text-primary underline-offset-4 hover:underline"
+        >
+          Change your details
+        </Link>
+      </span>
+    </Notice>
   );
 }
 
