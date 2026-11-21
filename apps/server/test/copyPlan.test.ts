@@ -72,6 +72,8 @@ describe('copy plan', () => {
       'mail_filter_rules',
       'task_runs',
       'network_contacts',
+      // The kept referral ranking (#590): after users and opportunities, the two it references.
+      'referral_rankings',
       // discovery_results moved below communications when it gained source_communication_id
       // (design D3b): a lead names the message it was parsed out of, so the message copies first.
       'communications',

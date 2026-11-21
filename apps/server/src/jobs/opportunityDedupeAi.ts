@@ -21,6 +21,13 @@
 // opportunities -- so one side is arbitrarily sent as "tracked" (opportunityIdA) and the other
 // as "candidate" (opportunityIdB); which one plays which role has no bearing on the outcome,
 // since "same role at the same company" does not depend on which side asked first.
+//
+// A row the sweep passes over without a decision (no prompt for its user, the AI unavailable, an
+// unrecognized ref, an unexpected error) has its updated_at moved to now, and the sweep takes the
+// pending rows least recently looked at first (https://github.com/bgoleno/opportun/issues/593). By
+// creation date alone, rows that stay pending came first on every run, so with 25 of them a newer
+// pair, another user's included, was never judged. Now every pending row gets its turn within
+// ceil(pending / 25) runs, and no run asks the model about more rows than before.
 import { AiUnavailableError, DedupeOutputSchema, renderPrompt, runStructured } from '@opportun/ai';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -97,9 +104,23 @@ export async function runOpportunityDedupeAi(
     })
     .from(opportunityDedupeCandidates)
     .where(eq(opportunityDedupeCandidates.decision, 'pending'))
-    .orderBy(asc(opportunityDedupeCandidates.createdAt))
+    .orderBy(asc(opportunityDedupeCandidates.updatedAt), asc(opportunityDedupeCandidates.createdAt))
     .limit(OPPORTUNITY_DEDUPE_AI_MAX_PER_RUN)
     .all();
+
+  /** This row was looked at and is still pending: it goes behind the rows not looked at yet. */
+  const passOver = async (id: string) => {
+    await db
+      .update(opportunityDedupeCandidates)
+      .set({ updatedAt: Date.now() })
+      .where(
+        and(
+          eq(opportunityDedupeCandidates.id, id),
+          eq(opportunityDedupeCandidates.decision, 'pending'),
+        ),
+      )
+      .run();
+  };
 
   let scanned = 0;
   let confirmed = 0;
@@ -116,7 +137,10 @@ export async function runOpportunityDedupeAi(
     if (tracked === undefined || candidate === undefined) continue;
 
     const prompt = await getActivePrompt(db, ctx, OPPORTUNITY_DEDUPE_AI_TASK);
-    if (prompt === undefined) continue;
+    if (prompt === undefined) {
+      await passOver(row.id);
+      continue;
+    }
 
     scanned += 1;
     let out: z.infer<typeof DedupeOutputSchema>;
@@ -137,9 +161,20 @@ export async function runOpportunityDedupeAi(
           { 'opportun.dedupe_candidate.id': row.id, 'error.type': err.reason },
           'opportunity dedupe AI unavailable',
         );
-        continue;
+      } else {
+        // One row's unexpected error is that row's (#593): the rest of the batch goes on, as the
+        // job's single attempt would otherwise skip it until tomorrow. The error's class only,
+        // never its message, which can quote the provider's answer (14.8).
+        sctx.log.warn(
+          {
+            'opportun.dedupe_candidate.id': row.id,
+            'error.type': err instanceof Error ? err.name : typeof err,
+          },
+          'opportunity dedupe AI call failed',
+        );
       }
-      throw err;
+      await passOver(row.id);
+      continue;
     }
 
     const now = Date.now();
@@ -154,12 +189,14 @@ export async function runOpportunityDedupeAi(
     );
     if (verdict === 'confirmed') confirmed += 1;
     else if (verdict === 'rejected') rejected += 1;
-    else
+    else {
       sctx.log.warn(
         // The ref is what the model returned: model output is never logged (14.8).
         { 'opportun.dedupe_candidate.id': row.id },
         'opportunity dedupe AI returned an unrecognized ref',
       );
+      await passOver(row.id);
+    }
   }
   return { scanned, confirmed, rejected };
 }

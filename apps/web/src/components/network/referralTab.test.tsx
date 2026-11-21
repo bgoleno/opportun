@@ -178,3 +178,55 @@ describe('ReferralsTab', () => {
     expect(screen.queryByRole('link', { name: 'Add a contact' })).toBeNull();
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/590 criterion 6: the ranking is kept, and Re-rank makes
+// a fresh one (one model call on the server) in its place.
+describe('ReferralsTab: Re-rank (#590)', () => {
+  const RANKED_AT = Date.UTC(2026, 10, 18, 14, 30);
+
+  it('says when the ranking was made, and Re-rank asks for a fresh one and shows it', async () => {
+    const fresh = {
+      ...CANDIDATES,
+      items: [
+        { ...CANDIDATES.items[1]!, rank: 1, rationale: 'Ranked again.' },
+        { ...CANDIDATES.items[0]!, rank: 2 },
+        CANDIDATES.items[2]!,
+      ],
+      rankedAt: RANKED_AT + 60_000,
+    };
+    const { calls } = mockApi({
+      'GET /opportunities/opp-1/referral-candidates': (call: ApiCall) =>
+        call.search.includes('refresh=true') ? fresh : { ...CANDIDATES, rankedAt: RANKED_AT },
+      'GET /opportunities/opp-1/referrals': { items: [], total: 0 },
+    });
+    renderWithProviders(<ReferralsTab opportunityId="opp-1" companyName="Initech" />);
+    const user = userEvent.setup();
+    await screen.findByRole('list', { name: 'Referral candidates' });
+    expect(screen.getByText(/^Ranked by AI/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Re-rank' }));
+    expect(await screen.findByText('Ranked again.')).toBeInTheDocument();
+    const reads = calls.filter((c) => c.path === '/opportunities/opp-1/referral-candidates');
+    expect(reads.filter((c) => c.search.includes('refresh=true'))).toHaveLength(1);
+    const items = within(screen.getByRole('list', { name: 'Referral candidates' })).getAllByRole(
+      'listitem',
+    );
+    expect(items[0]).toHaveTextContent('Jane Doe');
+  });
+
+  it('no Re-rank when the list is not ranked by AI', async () => {
+    mockApi({
+      'GET /opportunities/opp-1/referral-candidates': {
+        ...CANDIDATES,
+        items: CANDIDATES.items.map((i) => ({ ...i, rank: null, rationale: null })),
+        ranked: false,
+        aiUnavailable: 'no_key',
+        rankedAt: null,
+      },
+      'GET /opportunities/opp-1/referrals': { items: [], total: 0 },
+    });
+    renderWithProviders(<ReferralsTab opportunityId="opp-1" companyName="Initech" />);
+    await screen.findByRole('list', { name: 'Referral candidates' });
+    expect(screen.queryByRole('button', { name: 'Re-rank' })).toBeNull();
+  });
+});

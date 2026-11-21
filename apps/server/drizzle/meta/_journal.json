@@ -484,6 +484,13 @@
       "when": 1796500000000,
       "tag": "0068_submission_device_token_actor",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "6",
+      "when": 1796600000000,
+      "tag": "0069_referral_rankings",
+      "breakpoints": true
     }
   ]
 }
