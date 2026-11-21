@@ -1,0 +1,1 @@
+ALTER TABLE `opportunity_dedupe_candidates` ADD `ai_failures` integer DEFAULT 0 NOT NULL;

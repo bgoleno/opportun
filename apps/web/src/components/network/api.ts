@@ -1,6 +1,12 @@
 // The Network section's contacts (FR-C1) and referrals (FR-C3, C4): queries and mutations.
 import type { ReferralStatus } from '@opportun/core';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  type QueryClient,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { qk, type Page } from '@/lib/opportunities';
 
@@ -119,12 +125,26 @@ export function useContact(id: string) {
   });
 }
 
+/**
+ * After a contact is added, changed or deleted: the network list, and everything on an
+ * opportunity's Referrals tab built from contacts (#651). The candidates are kept ten minutes
+ * (useReferralCandidates), so without this the tab showed the contacts as they were. The server
+ * keys its kept ranking on the candidate set, so a changed set is ranked afresh on the next read.
+ */
+function contactsChanged(qc: QueryClient) {
+  return Promise.all([
+    qc.invalidateQueries({ queryKey: ck.network }),
+    qc.invalidateQueries({ queryKey: ['referral-candidates'] }),
+    qc.invalidateQueries({ queryKey: ['referrals'] }),
+  ]);
+}
+
 export function useCreateContact() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: ContactInput & { name: string }) =>
       api<Contact>('/network', { method: 'POST', body }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ck.network }),
+    onSuccess: () => contactsChanged(qc),
   });
 }
 
@@ -133,7 +153,7 @@ export function useUpdateContact(id: string) {
   return useMutation({
     mutationFn: (body: ContactInput) =>
       api<Contact>(`/network/${enc(id)}`, { method: 'PATCH', body }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ck.network }),
+    onSuccess: () => contactsChanged(qc),
   });
 }
 
@@ -141,7 +161,7 @@ export function useDeleteContact(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api<null>(`/network/${enc(id)}`, { method: 'DELETE' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ck.network }),
+    onSuccess: () => contactsChanged(qc),
   });
 }
 

@@ -13,7 +13,7 @@ import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
 import { isSharedDemoAdmin } from '../lib/demoSharedAdmin';
 import { racePoint } from '../lib/racePoints';
 import { revokeAllDeviceTokens } from '../lib/deviceTokens';
-import { resetUserPassword } from '../lib/passwordReset';
+import { resetPasswordIn, temporaryPassword as temporaryResetPassword } from '../lib/passwordReset';
 import {
   canRegister,
   isRegistrationOpen,
@@ -32,7 +32,7 @@ import {
 } from '../lib/passwords';
 import { whilePasswordCurrent, withPasswordLock } from '../lib/passwordLock';
 import { rateLimit } from '../lib/rateLimit';
-import { confirmPassword, reauthLimits } from '../lib/reauth';
+import { confirmedPasswordHash, confirmPassword, reauthLimits } from '../lib/reauth';
 import { consumePasswordSetGrant, sessionIdOf } from '../lib/oauthState';
 import { decryptSecret, encryptSecret } from '../lib/secretBox';
 import { createSession, destroyAllSessions, destroySession } from '../lib/sessions';
@@ -174,6 +174,33 @@ type PublicUserT = z.infer<typeof PublicUser>;
 
 function toPublic(u: typeof users.$inferSelect): PublicUserT {
   return { id: u.id, email: u.email, displayName: u.displayName, isAdmin: u.isAdmin };
+}
+
+/**
+ * The password just proven was changed or reset before the write that needed it (#620): 403
+ * password_changed, as a device token's creation answers the same race (lib/deviceTokens.ts), not
+ * invalid_password, since the password typed was right. Audited as a failed re-auth, with the
+ * reason (and, for an admin's reset, the account it was for).
+ */
+async function passwordChanged(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  userId: string,
+  action: string,
+  extra: Record<string, string> = {},
+) {
+  await audit(req.server.db, 'auth.reauth_failed', {
+    userId,
+    ip: req.ip,
+    detail: { action, reason: 'password_changed', ...extra },
+  });
+  return reply.code(403).send({
+    error: {
+      code: 'password_changed',
+      message:
+        'Your password changed while this was being checked. Sign in again and try once more.',
+    },
+  });
 }
 
 function fail(reply: FastifyReply, status: number, code: string) {
@@ -360,8 +387,16 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         db,
         user.id,
         user.passwordHash,
+        // Whether 2FA is on is read here, under the lock, not with the password above (#620): an
+        // activation that committed during the check gives a pending token, never a full session.
         async (tx) =>
-          user.totpEnabled
+          (
+            await tx
+              .select({ totpEnabled: users.totpEnabled })
+              .from(users)
+              .where(eq(users.id, user.id))
+              .get()
+          )?.totpEnabled === true
             ? {
                 kind: 'pending' as const,
                 pendingToken: await createPendingToken(tx, user.id, sessionMeta(req)),
@@ -515,12 +550,12 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req, reply) => {
       const ctx = requireUser(req);
-      const confirmed = await confirmPassword(req, reply, {
+      const verified = await confirmedPasswordHash(req, reply, {
         userId: ctx.userId,
         password: req.body.password,
         action: '2fa.enroll',
       });
-      if (!confirmed) return reply;
+      if (verified === null) return reply;
       const user = await db.select().from(users).where(eq(users.id, ctx.userId)).get();
       if (user === undefined) return fail(reply, 401, 'unauthorized');
       if (user.totpEnabled) return fail(reply, 409, 'already_enabled');
@@ -529,13 +564,18 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // the secret it verified.
       const secret = generateTotpSecret();
       await racePoint('twoFactor.enroll');
-      const stored = await db
-        .update(users)
-        .set({ totpSecret: encryptSecret(db, secret), updatedAt: Date.now() })
-        .where(and(eq(users.id, user.id), eq(users.totpEnabled, false)))
-        .returning({ id: users.id })
-        .get();
-      if (stored === undefined) return fail(reply, 409, 'already_enabled');
+      // Only while the password just proven is still the user's (#620): a change or reset that
+      // committed since the check wins, as for a sign-in (#561).
+      const written = await whilePasswordCurrent(db, user.id, verified, (tx) =>
+        tx
+          .update(users)
+          .set({ totpSecret: encryptSecret(db, secret), updatedAt: Date.now() })
+          .where(and(eq(users.id, user.id), eq(users.totpEnabled, false)))
+          .returning({ id: users.id })
+          .get(),
+      );
+      if (!written.current) return passwordChanged(req, reply, user.id, '2fa.enroll');
+      if (written.value === undefined) return fail(reply, 409, 'already_enabled');
       const url = otpauthUrl(secret, user.email);
       const qrDataUrl = await QRCode.toDataURL(url, { errorCorrectionLevel: 'M', margin: 1 });
       await audit(db, 'auth.2fa_enroll_started', { userId: user.id, ip: req.ip });
@@ -561,12 +601,12 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req, reply) => {
       const ctx = requireUser(req);
-      const confirmed = await confirmPassword(req, reply, {
+      const verified = await confirmedPasswordHash(req, reply, {
         userId: ctx.userId,
         password: req.body.password,
         action: '2fa.activate',
       });
-      if (!confirmed) return reply;
+      if (verified === null) return reply;
       const user = await db.select().from(users).where(eq(users.id, ctx.userId)).get();
       if (user === undefined) return fail(reply, 401, 'unauthorized');
       if (user.totpEnabled) return fail(reply, 409, 'already_enabled');
@@ -585,23 +625,28 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // Compare-and-set: enable only the secret this code was verified against, and only once.
       // A re-enroll in between (new secret) or a double submit (already on) misses: 409, and
       // no second set of recovery codes is handed out.
-      const activated = await db
-        .update(users)
-        .set({
-          totpEnabled: true,
-          totpRecovery: recoveryCodes.map(hashRecoveryCode),
-          totpLastStep: step,
-          updatedAt: Date.now(),
-        })
-        .where(
-          and(
-            eq(users.id, user.id),
-            eq(users.totpEnabled, false),
-            eq(users.totpSecret, user.totpSecret),
-          ),
-        )
-        .returning({ id: users.id })
-        .get();
+      // And only while the password just proven is still the user's (#620).
+      const written = await whilePasswordCurrent(db, user.id, verified, (tx) =>
+        tx
+          .update(users)
+          .set({
+            totpEnabled: true,
+            totpRecovery: recoveryCodes.map(hashRecoveryCode),
+            totpLastStep: step,
+            updatedAt: Date.now(),
+          })
+          .where(
+            and(
+              eq(users.id, user.id),
+              eq(users.totpEnabled, false),
+              eq(users.totpSecret, user.totpSecret as string),
+            ),
+          )
+          .returning({ id: users.id })
+          .get(),
+      );
+      if (!written.current) return passwordChanged(req, reply, user.id, '2fa.activate');
+      const activated = written.value;
       if (activated === undefined) {
         const now = await db
           .select({ enabled: users.totpEnabled })
@@ -950,12 +995,13 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // not be able to lock the real admin out by resetting it.
       if (targetId === ctx.userId) return fail(reply, 409, 'self_reset');
       // Before the target lookup, so a wrong password learns nothing about which ids exist.
-      const confirmed = await confirmPassword(req, reply, {
+      const verified = await confirmedPasswordHash(req, reply, {
         userId: ctx.userId,
         password: req.body.password,
         action: 'admin.reset_password',
       });
-      if (!confirmed) return reply;
+      if (verified === null) return reply;
+      await racePoint('admin.resetPassword.checked');
       // The shared demo admin resets pinned accounts only (#563), and is told so before any
       // lookup: a dedicated account's id is not confirmed or denied.
       if (isSharedDemoAdmin(app.config, ctx) && !SHARED_DEMO_IDS.has(targetId)) {
@@ -967,11 +1013,38 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         .where(eq(users.id, targetId))
         .get();
       if (target === undefined) return fail(reply, 404, 'not_found');
-      const { password: temporaryPassword, unlinkedProviders } = await resetUserPassword(
-        db,
-        target.id,
-        peppers,
-      );
+      const temporaryPassword = temporaryResetPassword();
+      const newHash = await hashPassword(temporaryPassword, peppers);
+      // The reset, only while the admin's own password just proven is still theirs (#620): one
+      // transaction holding both accounts' password locks, taken in one order (sorted), so two
+      // admins resetting each other cannot each hold one and wait on the other.
+      const unlinkedProviders = await withTransaction(db, async (tx) => {
+        for (const scope of [passwordScope(ctx.userId), passwordScope(target.id)].sort()) {
+          await lockScope(tx, scope);
+        }
+        const still = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.id, ctx.userId), eq(users.passwordHash, verified)))
+          .get();
+        if (still === undefined) return 'password_changed' as const;
+        // The account is looked up again under the lock: one deleted since gets no password.
+        const exists = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.id, target.id))
+          .get();
+        if (exists === undefined) return 'not_found' as const;
+        // Inside the lock, after the re-check (the race tests park here).
+        await racePoint('admin.resetPassword.locked');
+        return await resetPasswordIn(tx, target.id, newHash);
+      });
+      if (unlinkedProviders === 'password_changed') {
+        return passwordChanged(req, reply, ctx.userId, 'admin.reset_password', {
+          targetUserId: target.id,
+        });
+      }
+      if (unlinkedProviders === 'not_found') return fail(reply, 404, 'not_found');
       await audit(db, 'admin.password_reset', {
         userId: ctx.userId,
         ip: req.ip,
