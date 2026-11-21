@@ -123,6 +123,13 @@ export default defineConfig({
         OPPORTUN_DEMO_AI_KEY: 'sk-ant-e2e-not-a-real-key',
         // On, as unset would be: the one switch for everyone, the demo included (#545).
         OPPORTUN_SUBMISSIONS: '1',
+        // SQLite, named outright: a web server's command runs with this runner's own environment
+        // under these entries, and CI's postgres leg sets DB_DIALECT and DATABASE_URL for the
+        // whole job. Inherited, the seed went into the main server's Postgres database, whose
+        // admin registration then found the demo's users (registration_closed).
+        DB_DIALECT: 'sqlite',
+        DATABASE_URL: '',
+        DB_SSL: '',
       },
     },
   ],
