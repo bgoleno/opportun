@@ -1089,10 +1089,11 @@ Integrations > Extensions and Connectors shows when the connector last pushed. T
 received date of the newest accepted message in `~/.config/opportun-connector/state.json`
 and only moves it forward after the server accepts a batch; it re-reads the last five
 minutes each time to catch late-filed mail (the server ignores duplicates). Because that
-position only covers what was already read, re-running `init` with an added mailbox or a
-longer lookback window resets it (and says so), and the next sync re-reads the whole
-window; the server skips what it already has. Removing a mailbox or shortening the window
-keeps it. Delete `state.json` to force the same full re-read.
+position only covers what was already read, re-running `init` with an added mailbox, a
+longer lookback window or another server address resets it (and says so), and the next
+sync re-reads the whole window; the server skips what it already has. Removing a mailbox,
+shortening the window, or giving the same address again (a trailing slash makes no
+difference) keeps it. Delete `state.json` to force the same full re-read.
 
 **5. Run it in the background with launchd.** The template
 [`deploy/opportun-connector.plist`](../deploy/opportun-connector.plist) runs `watch` at
