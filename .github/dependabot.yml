@@ -14,3 +14,12 @@ updates:
     ignore:
       - dependency-name: node
         update-types: ['version-update:semver-major']
+
+  # The workflows' actions, each pinned to a full commit SHA (#728, sec's supply-chain review): a
+  # pin is never updated by itself, so a fix in an action reached CI only when someone bumped it by
+  # hand. Dependabot proposes the new commit, keeping the `# vN` comment beside it, as a pull
+  # request that goes through the same review as any other.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
