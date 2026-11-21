@@ -817,6 +817,11 @@ export const discoveryResults = sqliteTable(
     rankBatchId: text('rank_batch_id').references(() => rankBatches.id, { onDelete: 'set null' }),
     rankBatchBasis: text('rank_batch_basis'),
     rankBatchPromptId: text('rank_batch_prompt_id'),
+    /**
+     * How many times a sent batch handed this posting back with no result (#686): expired, a batch
+     * the provider no longer has, or none given. The third ends its wait (MAX_BATCH_RETURNS).
+     */
+    rankBatchReturns: integer('rank_batch_returns').notNull().default(0),
     resolution: text('resolution', { enum: RESOLUTIONS }).notNull(),
     /** ATS posting reference when resolved. */
     resolvedSourceRef: text('resolved_source_ref'),
