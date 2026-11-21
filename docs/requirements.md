@@ -430,7 +430,7 @@ demo (https://github.com/bgoleno/opportun/issues/455).
   automatically.
 - FR-X4 (P2): The browser extension may prefill the ATS form in the tab the user is
   viewing, on an explicit click. It never presses the form's submit control.
-- FR-X5 (P1): The feature is unavailable on the demo deployment.
+- FR-X5 (P1): On the demo deployment the shared accounts get the feature with each attempt bound to its visitor, resumes and saving to the profile refused, and the demo's own values refused; the operator can turn it off for them (https://github.com/bgoleno/opportun/issues/545).
 
 ### 5.12 Observability (FR-T)
 

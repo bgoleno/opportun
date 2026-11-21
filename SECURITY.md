@@ -86,7 +86,9 @@ with both `capture:push` and `apply:assist`.
   to, if any. It cannot enumerate or fetch records.
 - **`apply:assist`** (the capture extension, for assisted apply): stored application data.
   This is the only scope that reads stored records. It is available unless the operator turns
-  assisted apply off with `OPPORTUN_SUBMISSIONS=0`, and never on the demo. With it off, this
+  assisted apply off with `OPPORTUN_SUBMISSIONS=0`. On the demo it is on for the shared
+  accounts unless the operator sets `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY=0` (see the
+  deviation on the demo's shared accounts below). With it off, this
   scope cannot be created and its routes answer 404 whatever a token's scopes, so the two
   scopes above are all a device token can do. With it on, a token with this scope can:
   - read the application handed off to a posting it names: the field values and answers the
@@ -158,6 +160,28 @@ since it was not a deliberate choice.)
   or OpenAI call, key checks included, there. A URL with credentials in it is still refused, and redirects are
   still not followed. Any other origin, a user's own `openai_compatible` `baseUrl` among them,
   is checked as before.
+- **Assisted apply on the demo's shared accounts.** The public demo runs assisted apply on
+  its five shared logins (`demo-admin`, `demo-user1` to `demo-user4`), so everyone the owner
+  invites signs in to the same accounts, and visitors on one account can see and disturb each
+  other's applications until the nightly reset. The owner accepted this, with these limits
+  enforced by the server
+  ([#542](https://github.com/bgoleno/opportun/issues/542), [#545](https://github.com/bgoleno/opportun/issues/545)): a draft starts empty, and nothing is saved to the shared
+  profile, an application carries no resume (the visitor attaches their own on the employer's
+  form), and a value that came with the demo is refused. Each application is bound to the
+  visitor (the session) that started it. Everyone on the account can read it, and any visitor
+  can cancel it. Only that visitor can change, review or hand it off, and only that visitor's
+  device token is given it. What stays shared: editing an opportunity's posting address sends
+  a reviewed application on it back to draft, deleting the opportunity removes its
+  applications, and a `mail:push` confirmation can match any application on the account. A
+  shared account keeps at most 20 active device tokens (`OPPORTUN_DEMO_TOKEN_CAP`), the
+  oldest revoked when another is made, which can sign another visitor's extension out. Every
+  scope can be minted there, `mail:push` included, so mail one visitor connects can be read by
+  everyone on the account, behind the same warning as everything else entered there. The
+  nightly reset removes the accounts' tokens, applications and stored files. Opportun still
+  never submits an application. An account made for one person on a demo server behaves as on
+  any other instance, and `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY=0` turns the feature off for
+  the shared accounts only. The operator's settings are in
+  [docs/demo-deployment.md](docs/demo-deployment.md#device-tokens-and-assisted-apply-on-the-demo).
 - **Postgres TLS is encrypted but not verified by default.** For a Postgres host that is not
   loopback, `DB_SSL` defaults to `require`: the connection is encrypted, but the server
   certificate chain and hostname are not checked. An attacker positioned on the network
