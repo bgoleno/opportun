@@ -97,6 +97,7 @@ function splitRecord(record: string): string[] {
   let cell = '';
   let quoted = false;
   for (let i = 0; i < record.length; i++) {
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     const ch = record[i] as string;
     if (quoted) {
       if (ch !== '"') cell += ch;

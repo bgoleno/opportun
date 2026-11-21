@@ -298,6 +298,7 @@ function readSource(
     for (const name of spec.pk) {
       const kind = spec.columns.find((c) => c.name === name)?.kind ?? 'text';
       const site = { table: spec.name, column: name, rowKey: provisional };
+      // eslint-disable-next-line security/detect-object-injection -- a primary-key column name from the schema-derived table spec
       pkCells.set(name, fromSqlite(kind, r[name], site, { count: 0 }).cell);
     }
     const key = rowKey(spec, pkCells);
@@ -548,6 +549,7 @@ interface Rebuild {
 function rebuildSet(index: IndexRow[], tables: Map<string, SourceTable>): Rebuild {
   const owners = new Map<string, string>();
   for (const kind of SEARCH_KINDS) {
+    // eslint-disable-next-line security/detect-object-injection -- a kind from the SEARCH_KINDS constant list
     for (const row of tables.get(INDEXED[kind])?.rows ?? []) {
       owners.set(`${kind}\u0000${String(row.values.get('id'))}`, String(row.values.get('user_id')));
     }
@@ -579,6 +581,7 @@ async function rebuildIndex(
 ): Promise<void> {
   const byId = new Map<string, Map<string, SourceValue['param']>>();
   for (const kind of SEARCH_KINDS) {
+    // eslint-disable-next-line security/detect-object-injection -- a kind from the SEARCH_KINDS constant list
     for (const row of tables.get(INDEXED[kind])?.rows ?? []) {
       byId.set(`${kind}\u0000${String(row.values.get('id'))}`, row.values);
     }
@@ -1022,6 +1025,7 @@ async function verifyTarget(
     }
     for (const r of rows) {
       const cells = new Map(spec.columns.map((c) => [c.name, fromPg(c.kind, r[c.name])]));
+      // eslint-disable-next-line security/detect-object-injection -- a column name from the schema-derived table spec
       targetVault.push(...envelopesOf(spec, rowKey(spec, cells), (c) => r[c]));
     }
   }
@@ -1064,6 +1068,7 @@ async function jsonMismatches(session: PgSession, table: SourceTable): Promise<s
   if (json.length === 0 || table.rows.length === 0) return [];
   const pk = spec.pk.map((name) => {
     const i = spec.columns.findIndex((c) => c.name === name);
+    // eslint-disable-next-line security/detect-object-injection -- a typed column-kind key into a constant table, by numeric index
     return { name, i, cast: CASTS[spec.columns[i]?.kind ?? 'text'] };
   });
   const differing = json.map(() => [] as string[]);
@@ -1095,11 +1100,13 @@ async function jsonMismatches(session: PgSession, table: SourceTable): Promise<s
     for (const r of res.rows) {
       const key = table.rows[Number(r.r)]?.key ?? '?';
       json.forEach((_, i) => {
+        // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
         if (r[`d${i}`] === true) differing[i]?.push(key);
       });
     }
   }
   return json.flatMap((j, i) => {
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     const keys = differing[i] ?? [];
     return keys.length === 0
       ? []
@@ -1212,9 +1219,11 @@ export function formatReport(report: CopyReport): string {
     short(t.targetChecksum),
     report.dryRun ? 'planned' : t.ok ? 'ok' : 'MISMATCH',
   ]);
+  // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
   const widths = head.map((h, i) => Math.max(h.length, ...rows.map((r) => (r[i] ?? '').length)));
   const line = (cells: string[]) =>
     cells
+      // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
       .map((c, i) => (i === 0 || i >= 6 ? c.padEnd(widths[i] ?? 0) : c.padStart(widths[i] ?? 0)))
       .join('  ')
       .trimEnd();
