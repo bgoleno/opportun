@@ -71,6 +71,11 @@ export interface JobHandler<P> {
    * it. The rest of the payload stays, because the job row is the record that it ran.
    */
   transientPayloadKeys?: readonly string[];
+  /**
+   * The demo reset itself (#618): it takes the reset gate exclusively, so it must not hold its
+   * shared side as every other instance job does on a demo server (jobs/runner.ts).
+   */
+  takesDemoResetGateItself?: true;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- handlers carry their own payload types

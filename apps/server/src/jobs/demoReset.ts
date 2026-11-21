@@ -84,6 +84,7 @@ export const demoResetJob: JobHandler<Record<string, never>> = {
   kind: DEMO_RESET_JOB_KIND,
   payloadSchema: z.object({}).strict() as z.ZodType<Record<string, never>>,
   maxAttempts: 3,
+  takesDemoResetGateItself: true,
   async run(db, _payload, ctx) {
     const report = await runDemoResetGated(
       db,

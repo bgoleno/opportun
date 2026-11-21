@@ -3,6 +3,7 @@
 // never lands in the account the reset reseeds under the same pinned id. Each case parks the
 // other side at a race point, so the order is the test's, not the scheduler's.
 import { randomBytes } from 'node:crypto';
+import { connect } from 'node:net';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -15,7 +16,7 @@ import { enqueue, runDueJobs } from '../src/jobs/runner';
 import { DemoResetGate, DemoResetGateTimeout } from '../src/lib/demoResetGate';
 import { racePoint, setRaceHook } from '../src/lib/racePoints';
 import { testApp } from './helpers';
-import { signIn } from './isolation';
+import { signIn, type TestClient } from './isolation';
 
 afterEach(() => setRaceHook(undefined));
 
@@ -79,8 +80,11 @@ async function settled(p: Promise<unknown>): Promise<boolean> {
 }
 
 /** A demo server, seeded, with demo-user1 signed in: a shared account. */
-async function seededDemo() {
-  const { app, dataDir } = await testApp({ demo: true });
+async function seededDemo(limits?: { startMs?: number; holdMs?: number }) {
+  const { app, dataDir } = await testApp(
+    { demo: true },
+    limits === undefined ? {} : { build: { demoResetLimits: limits } },
+  );
   const env = demoEnv(dataDir);
   await runDemoResetGated(app.db, env, undefined);
   const gate = app.jobs.services.demoResetGate;
@@ -121,11 +125,41 @@ describe('DemoResetGate', () => {
   it('a retained hold is given back only when every reference is released, once each', async () => {
     const gate = new DemoResetGate();
     const hold = await gate.shared();
-    const kept = hold.retain();
+    const kept = hold.retain()!;
     hold.release();
     hold.release();
     expect(gate.held).toBe(1);
     kept.release();
+    expect(gate.held).toBe(0);
+  });
+
+  it('a hold given back stays given back: retain() then refuses, and the count never goes below 0', async () => {
+    const gate = new DemoResetGate();
+    const hold = await gate.shared();
+    hold.release();
+    expect(hold.ended).toBe(true);
+    expect(hold.retain()).toBeNull();
+    hold.release();
+    expect(gate.held).toBe(0);
+    // The gate still works for the next holder and the next reset.
+    const next = await gate.shared();
+    expect(gate.held).toBe(1);
+    next.release();
+    await gate.exclusive(async () => undefined, 20);
+  });
+
+  it('a hold never released is given back at its bound, and its holder is told', async () => {
+    const gate = new DemoResetGate();
+    let told = false;
+    const hold = await gate.shared({ limitMs: 20, onExpire: () => (told = true) });
+    let ran = false;
+    await gate.exclusive(async () => {
+      ran = true;
+    }, 2_000);
+    expect(ran).toBe(true);
+    expect(told).toBe(true);
+    expect(hold.ended).toBe(true);
+    expect(hold.retain()).toBeNull();
     expect(gate.held).toBe(0);
   });
 
@@ -325,6 +359,140 @@ describe("a shared account's job and the reset", () => {
     try {
       expect(app.jobs.services.demoResetGate).toBeUndefined();
     } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('no request holds the gate past the reset, whatever its client does', () => {
+  /** A signed-in request over a real socket, which the test can abort. */
+  async function overSocket(
+    app: Awaited<ReturnType<typeof seededDemo>>['app'],
+    visitor: TestClient,
+  ) {
+    const address = await app.listen({ port: 0, host: '127.0.0.1' });
+    const abort = new AbortController();
+    const response = fetch(`${address}/api/v1/device-tokens`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-csrf-token': visitor.csrf,
+        cookie: `opportun_session=${visitor.session}; opportun_csrf=${visitor.csrf}`,
+      },
+      body: JSON.stringify({ name: 'Chrome', scopes: ['capture:push'], password: PASSWORDS.user1 }),
+      signal: abort.signal,
+    }).catch(() => undefined);
+    return { abort: () => abort.abort(), response, address };
+  }
+
+  it('a request whose client goes away while waiting for the reset gives its place back', async () => {
+    const { app, env, gate, visitor } = await seededDemo();
+    try {
+      // Something holds the gate, so a reset waits, and a new request queues behind the reset.
+      const other = await gate.shared();
+      const reset = runDemoResetGated(app.db, env, gate);
+      expect(await settled(reset)).toBe(false);
+      const req = await overSocket(app, visitor);
+      await settle();
+      // Its client goes away while it waits.
+      req.abort();
+      await req.response;
+      other.release();
+      await reset;
+      // It got its place after the reset and gave it straight back.
+      await expect.poll(() => gate.held, { timeout: 2_000 }).toBe(0);
+      await runDemoResetGated(app.db, env, gate, { timeoutMs: 500 });
+    } finally {
+      app.server.closeAllConnections();
+      await app.close();
+    }
+  });
+
+  it('a client that goes away mid-handler: the hold stays until the handler is done, then the reset runs', async () => {
+    const { app, env, gate, visitor, userId } = await seededDemo();
+    try {
+      const park = parkAt('deviceTokens.create.passwordChecked');
+      setRaceHook(park.hook);
+      const req = await overSocket(app, visitor);
+      await park.arrived;
+      req.abort();
+      await req.response;
+      await settle();
+      expect(gate.held).toBe(1);
+      const reset = runDemoResetGated(app.db, env, gate);
+      expect(await settled(reset)).toBe(false);
+      expect(park.seen.resetInside, 'the reset waits outside the gate').toBe(false);
+      park.release();
+      await reset;
+      expect(park.seen.resetInside).toBe(true);
+      // The handler finished in the account it started in, and its token went with it.
+      expect(
+        await app.db.select().from(deviceTokens).where(eq(deviceTokens.userId, userId)).all(),
+      ).toEqual([]);
+    } finally {
+      app.server.closeAllConnections();
+      await app.close();
+    }
+  });
+
+  it('a request whose body never finishes arriving is ended, and a reset started meanwhile runs', async () => {
+    const { app, env, gate, visitor } = await seededDemo({ startMs: 100 });
+    try {
+      const address = await app.listen({ port: 0, host: '127.0.0.1' });
+      const { hostname, port } = new URL(address);
+      // Headers and a promised body of 1000 bytes, of which only a few ever come.
+      const socket = connect(Number(port), hostname);
+      const ended = new Promise<void>((r) => socket.once('close', () => r()));
+      socket.on('error', () => undefined);
+      socket.write(
+        [
+          'POST /api/v1/device-tokens HTTP/1.1',
+          `Host: ${hostname}`,
+          'Content-Type: application/json',
+          'Content-Length: 1000',
+          `X-CSRF-Token: ${visitor.csrf}`,
+          `Cookie: opportun_session=${visitor.session}; opportun_csrf=${visitor.csrf}`,
+          '',
+          '{"name":',
+        ].join('\r\n'),
+      );
+      await expect.poll(() => gate.held, { timeout: 2_000 }).toBe(1);
+      const reset = runDemoResetGated(app.db, env, gate, { timeoutMs: 5_000 });
+      await reset;
+      await ended;
+      expect(gate.held).toBe(0);
+    } finally {
+      app.server.closeAllConnections();
+      await app.close();
+    }
+  });
+
+  it('an instance job holds the gate too: the reset waits for it', async () => {
+    const { app, env, gate } = await seededDemo();
+    const KIND = 'test.demo_reset_instance';
+    try {
+      registerJob({
+        kind: KIND,
+        payloadSchema: z.object({}),
+        maxAttempts: 1,
+        async run() {
+          await racePoint('test.demo_reset_instance.parked');
+        },
+      });
+      await enqueue(app.db, KIND, {});
+      const park = parkAt('test.demo_reset_instance.parked');
+      setRaceHook(park.hook);
+      const drain = runDueJobs(app.db, { services: app.jobs.services });
+      await park.arrived;
+      const reset = runDemoResetGated(app.db, env, gate);
+      expect(await settled(reset)).toBe(false);
+      expect(park.seen.resetInside, 'the reset waits outside the gate').toBe(false);
+      park.release();
+      await drain;
+      await reset;
+      expect(park.seen.resetInside).toBe(true);
+    } finally {
+      unregisterJob(KIND);
       await app.close();
     }
   });

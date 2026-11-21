@@ -348,13 +348,15 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
     );
     return { outcome: 'dead', errorType: 'invalid_payload' };
   }
+  let holdExpired = false;
   const ctx: JobContext = {
     jobId: job.id,
     userId: job.userId,
     attempt: job.attempts,
     maxAttempts: job.maxAttempts,
     services: opts.services ?? {},
-    stopping: opts.stopping ?? (() => false),
+    // Also true once its hold on the demo reset's gate reached its bound (below): stop.
+    stopping: () => holdExpired || (opts.stopping?.() ?? false),
     async setResult(value) {
       await db
         .update(jobs)
@@ -366,15 +368,29 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
   // Computed before the run, from the payload as stored: a handler is free to mutate what it
   // was given, and what must not outlive the job is what the row holds.
   const transient = withoutTransient(handler, job.payload);
-  // A shared demo account's job holds the reset's gate for the whole run (#618): it finishes
-  // before the nightly reset starts, or waits for it. Once it holds it, its row must still be
-  // there: the reset deletes those accounts' jobs with them, so a job claimed before the reset is
-  // discarded without running, and writes nothing into the account reseeded under the same id.
+  // On a demo server a job holds the reset's gate for its whole run (#618), so it finishes before
+  // the nightly reset starts, or waits for it: a shared demo account's job, and an instance job,
+  // whose per-user work (the prompt refinements, say) can reach those accounts (tl on #618). Not
+  // the reset itself, nor a job of any other account. Once it holds it, its row must still be
+  // there: the reset deletes the shared accounts' jobs with them, so a job claimed before the reset
+  // is discarded without running, and writes nothing into the account reseeded under the same id.
+  // A hold has a bound (lib/demoResetGate.ts): past it the job is told to stop (ctx.stopping).
   const gate = opts.services?.demoResetGate;
-  const hold =
-    gate !== undefined && job.userId !== null && SHARED_DEMO_IDS.has(job.userId)
-      ? await gate.shared()
-      : undefined;
+  const gated =
+    gate !== undefined &&
+    handler.takesDemoResetGateItself !== true &&
+    (job.userId === null || SHARED_DEMO_IDS.has(job.userId));
+  const hold = gated
+    ? await gate.shared({
+        onExpire: () => {
+          holdExpired = true;
+          log?.warn(
+            { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
+            'job held the demo reset gate to its limit; told to stop',
+          );
+        },
+      })
+    : undefined;
   try {
     if (hold !== undefined) {
       const still = await db.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, job.id)).get();

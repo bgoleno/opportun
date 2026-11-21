@@ -200,6 +200,8 @@ export interface OAuthWiring {
 
 export interface BuildOptions {
   logStream?: LogStream;
+  /** The demo reset gate's limits (#618): tests set short ones; production uses the defaults. */
+  demoResetLimits?: { startMs?: number; holdMs?: number; streamMs?: number };
   /** Replaces the googleapis-backed client (tests inject a fake: no network). */
   google?: GoogleApi;
   /** Replaces the Google Docs document store. */
@@ -531,7 +533,20 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   });
   // Before the session plugin, so a request's session lookup is inside its hold (#618).
   if (services.demoResetGate !== undefined) {
-    await app.register(demoResetHoldPlugin, { gate: services.demoResetGate });
+    await app.register(demoResetHoldPlugin, {
+      gate: services.demoResetGate,
+      ...(opts.demoResetLimits?.startMs === undefined
+        ? {}
+        : { startLimitMs: opts.demoResetLimits.startMs }),
+      ...(opts.demoResetLimits?.holdMs === undefined
+        ? {}
+        : { holdLimitMs: opts.demoResetLimits.holdMs }),
+      ...(opts.demoResetLimits?.streamMs === undefined
+        ? {}
+        : { streamLimitMs: opts.demoResetLimits.streamMs }),
+    });
+  } else {
+    app.decorate('demoStreamLimitMs', undefined);
   }
   await app.register(sessionPlugin, { demo: cfg.demo });
 

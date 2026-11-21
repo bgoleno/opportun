@@ -585,9 +585,11 @@ On a shared account, enforced by the server:
   account back as it was seeded. To do it sooner, `demo-admin` can reset that account's password
   under Settings → Users, which also turns two-factor sign-in off (it shows a new password; tell
   the visitors, or run the seed again, `seedDemo.ts`, to restore the shared ones). If it is
-  `demo-admin` itself that was locked, run the seed from the host:
-  `docker compose ... exec opportun node --import tsx src/cli/seedDemo.ts`, which restores every
-  shared account and its seeded password.
+  `demo-admin` itself that was locked, run the seed from the host with the server stopped, so no
+  request or job is in flight while it reseeds (the nightly reset waits for them; the command does
+  not): `docker compose ... stop opportun`, then
+  `docker compose ... run --rm opportun node --import tsx src/cli/seedDemo.ts`, then
+  `docker compose ... up -d`. It restores every shared account and its seeded password.
 - **What is connected for resumes is everyone's.** A Google account connected on a shared account
   (with the OAuth client saved for it), or a Reactive Resume, is used by everyone signed in to the
   account until the reset: their resumes are made in it. The Google and Reactive Resume cards say

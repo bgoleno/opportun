@@ -20,9 +20,16 @@ vi.mock('../../../packages/ai/src/providers', async (importOriginal) => {
 const newGoogle = (): FakeGoogle =>
   fakeGoogle({ [BASE_DOC_ID]: { title: 'Jane Base Resume', text: BASE_TEXT } });
 let google: FakeGoogle;
+/** A test that needs a short demo stream limit sets it before boot (#618). */
+let demoStreamMs: number | undefined;
 const boot = useApi(() => {
   google = newGoogle();
-  return { build: { google } };
+  return {
+    build: {
+      google,
+      ...(demoStreamMs === undefined ? {} : { demoResetLimits: { streamMs: demoStreamMs } }),
+    },
+  };
 });
 
 beforeEach(() => {
@@ -964,5 +971,50 @@ describe('the demo reset gate and the streamed reply (#618)', () => {
     // The aborted client's socket can stay open on the server, and app.close() would wait for
     // it (CI's Node did, for the hook's whole 30 s): close it here.
     app.server.closeAllConnections();
+  });
+
+  it('a reply that runs past the demo limit is ended, its text saved, and the hold given back', async () => {
+    demoStreamMs = 150;
+    const { app, a } = await boot({ demo: true }).finally(() => (demoStreamMs = undefined));
+    const gate = app.jobs.services.demoResetGate!;
+    const { sessionId } = await setup(a);
+    vi.mocked(createLanguageModel).mockReturnValue(
+      new MockLanguageModelV4({
+        doStream: async ({ abortSignal }) => {
+          const parts: LanguageModelV4StreamPart[] = [
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: 'A long answer' },
+          ];
+          return {
+            stream: new ReadableStream<LanguageModelV4StreamPart>({
+              async pull(controller) {
+                const part = parts.shift();
+                if (part !== undefined) {
+                  controller.enqueue(part);
+                  return;
+                }
+                // A provider still answering: only the abort ends it.
+                await new Promise<void>((resolve) =>
+                  abortSignal?.addEventListener('abort', () => resolve()),
+                );
+                controller.error(abortSignal?.reason ?? new Error('aborted'));
+              },
+            }),
+          };
+        },
+      }),
+    );
+    const res = await send(a, sessionId, 'Tell me everything');
+    expect(res.statusCode).toBe(200);
+    const events = sseEvents(res.body);
+    expect(events.at(-1)?.type).toBe('error');
+    // What it had is kept, marked incomplete, and nothing holds the gate.
+    const row = (await queryOne(
+      app,
+      'SELECT transcript FROM tailoring_sessions WHERE id = ?',
+      sessionId,
+    )) as { transcript: string };
+    expect(row.transcript).toContain('A long answer');
+    expect(gate.held).toBe(0);
   });
 });

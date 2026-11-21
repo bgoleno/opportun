@@ -818,6 +818,12 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   ],
   // #618: a shared demo account's job whose account the nightly reset replaced.
   'job discarded: the demo reset replaced its account': ['opportun.job.id', 'opportun.job.kind'],
+  'job held the demo reset gate to its limit; told to stop': [
+    'opportun.job.id',
+    'opportun.job.kind',
+  ],
+  'a request held the demo reset gate to its limit; ended': [],
+  'a request held the demo reset gate too long before its handler; ended': [],
   'demo reset waited too long for requests or jobs in flight; not reset, will retry': [
     'opportun.count.holders',
   ],

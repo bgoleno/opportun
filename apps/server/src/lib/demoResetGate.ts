@@ -2,21 +2,30 @@
 // on #618). The nightly reset deletes the shared demo accounts and reseeds them under the same
 // pinned ids, so a write that began before it (a request authenticated a moment earlier, a job
 // claimed before it) would land in the fresh account. This gate keeps the two apart:
-//   - every authenticated request on a demo server holds the shared side, from before its session
-//     or token is looked up until its response is closed (app.ts, demoResetHold);
-//   - a job of a shared demo account holds it around its run (jobs/runner.ts), and once it holds
-//     it the runner checks the job's row is still there (the reset deletes those users' jobs);
+//   - every request with a session or a token on a demo server holds the shared side, from before
+//     its session or token is looked up until its handler has finished
+//     (plugins/demoResetHold.ts);
+//   - a job holds it around its run (jobs/runner.ts): a shared demo account's job, which then
+//     checks its row is still there (the reset deletes those users' jobs), and an instance job,
+//     whose per-user work may reach those accounts; the reset itself does not;
 //   - the reset holds the exclusive side around seedDemo (jobs/demoReset.ts).
 // So a request or a job either finishes before the reset starts, or waits for it and then finds
 // its session, token or row gone. Writer-preferring: once the reset waits, new holders wait behind
 // it, or a steady stream of visitors would hold it off. Its wait is bounded (EXCLUSIVE_TIMEOUT_MS):
 // on timeout the reset fails, and retries later, rather than let an old write land.
 //
+// Every hold also has a hard upper bound below that wait (HOLD_LIMIT_MS): one that is never given
+// back, through a path nobody foresaw, still cannot stall the reset. A hold that reaches it is
+// given back, and its holder is told (onExpire), so it can stop what it was doing.
+//
 // In process: one server process per database, as docs/install.md requires (one instance; the job
 // runner and the write gate assume it too). Off the demo there is no gate, and nothing waits.
 
 /** How long the reset waits for the holders before it gives up (and retries later, tl). */
 export const EXCLUSIVE_TIMEOUT_MS = 60_000;
+
+/** The most any one hold lasts: below the reset's wait, so no single holder outlasts it. */
+export const HOLD_LIMIT_MS = 50_000;
 
 export class DemoResetGateTimeout extends Error {
   constructor() {
@@ -27,11 +36,21 @@ export class DemoResetGateTimeout extends Error {
 /**
  * A hold on the shared side. release() is idempotent. retain() adds a reference to the same hold,
  * never a new acquire (which could wait behind a waiting reset that waits for this hold): the
- * hold is given back when every reference is released.
+ * hold is given back when every reference is released, or at its bound. Once given back it stays
+ * given back: retain() then refuses (returns null), so nothing counts on a hold it no longer has.
  */
 export interface Hold {
   release(): void;
-  retain(): Hold;
+  retain(): Hold | null;
+  /** Whether the hold has been given back (every reference released, or its bound reached). */
+  readonly ended: boolean;
+}
+
+export interface SharedOptions {
+  /** The hold's upper bound; HOLD_LIMIT_MS unless a test sets another. */
+  limitMs?: number;
+  /** Called once when the bound gives the hold back, so the holder can stop. */
+  onExpire?: () => void;
 }
 
 export class DemoResetGate {
@@ -45,17 +64,29 @@ export class DemoResetGate {
   private drained: (() => void) | null = null;
 
   /** Takes the shared side; waits while the reset runs or waits. */
-  async shared(): Promise<Hold> {
+  async shared(opts: SharedOptions = {}): Promise<Hold> {
     if (this.writing) {
       await new Promise<void>((resolve) => this.readers.push(resolve));
     }
     this.holders += 1;
     let refs = 0;
+    let ended = false;
     const leave = () => {
+      if (ended) return;
+      ended = true;
+      clearTimeout(bound);
       this.holders -= 1;
       if (this.holders === 0) this.drained?.();
     };
-    const reference = (): Hold => {
+    const bound = setTimeout(() => {
+      if (ended) return;
+      leave();
+      opts.onExpire?.();
+    }, opts.limitMs ?? HOLD_LIMIT_MS);
+    // Never what keeps the process alive.
+    bound.unref?.();
+    const reference = (): Hold | null => {
+      if (ended) return null;
       refs += 1;
       let released = false;
       return {
@@ -66,9 +97,12 @@ export class DemoResetGate {
           if (refs === 0) leave();
         },
         retain: reference,
+        get ended() {
+          return ended;
+        },
       };
     };
-    return reference();
+    return reference()!;
   }
 
   /**
