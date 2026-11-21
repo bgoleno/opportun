@@ -31,8 +31,8 @@ server turned it off, on the demo too (where they can also turn it off for its s
 only); where it is off, the card and the limit do not show (the operator's setting is in the
 [install guide](../install.md#4-configuration-reference)).
 
-- **The limit** is 10 unless the person running the server set another value, which can be at most 25. You can lower yours up to that value and press **Save limit**; **Use the server's limit**
-  takes yours away. If the server's limit is later set below yours, the server's applies, and the
+- **The limit** is 10 unless the person running the server set another value, which can be at most 25. You can set yours to any whole number from 1 up to the server's limit and press **Save
+  limit**; **Use the server's limit** takes yours away. If the server's limit is later set below yours, the server's applies, and the
   card says so.
 - **What counts:** each application you confirm a review for (**Confirm review and open**), once,
   however many times you confirm it. Deleting an opportunity does not give a place back.
