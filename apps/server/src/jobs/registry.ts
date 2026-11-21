@@ -33,8 +33,8 @@ export interface JobServices {
   submissions: boolean;
   /** OPPORTUN_DEMO=1: this is the demo server, whose administrator is a shared login. */
   demo: boolean;
-  /** Finds a provider's ranking batch client (#441): batchProviderFor, which has none yet, or a
-   *  fake in tests. Absent means batchProviderFor. */
+  /** Finds a provider's ranking batch client (#441): batchProviderFor (Anthropic's, #509, and
+   *  OpenAI's, #510), or a fake in tests. Absent means batchProviderFor. */
   rankBatchProvider: (target: Parameters<typeof batchProviderFor>[0]) => BatchProvider | null;
 }
 
