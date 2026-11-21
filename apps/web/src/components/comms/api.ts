@@ -350,16 +350,24 @@ function syncInFlight(status: GmailStatus | undefined, since: number | undefined
 
 export function useGmailStatus() {
   const qc = useQueryClient();
-  const query = useQuery({
+  return useQuery({
     queryKey: ck.gmail,
     queryFn: () => api<GmailStatus>('/integrations/gmail'),
     // Read again while a sync's mail is on its way, then stop (#645).
     refetchInterval: (q) =>
       syncInFlight(q.state.data, qc.getQueryData<number>(SYNC_WATCH_KEY)) ? SYNC_POLL_MS : false,
   });
-  // Each new answer can mean new or newly classified mail: the lists and their counts are read
-  // again, so they show without a reload or a tab switch.
-  const { data } = query;
+}
+
+/**
+ * Each new Gmail status can mean new or newly classified mail: the message lists and their counts
+ * are read again, so they show without a reload or a tab switch (#645). Called once, by the
+ * Inbox's sync control, never by every reader of the status: each row's Open original reads it
+ * too, and one refresh per reader cost (rows + 1) times the list reads (qa on #668).
+ */
+export function useGmailSyncRefresh() {
+  const qc = useQueryClient();
+  const { data } = useGmailStatus();
   const seen = useRef<string | null>(null);
   useEffect(() => {
     if (data === undefined) return;
@@ -369,7 +377,6 @@ export function useGmailStatus() {
     }
     seen.current = now;
   }, [data, qc]);
-  return query;
 }
 
 export function useGmailSync() {

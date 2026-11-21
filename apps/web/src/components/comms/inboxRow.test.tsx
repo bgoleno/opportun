@@ -353,6 +353,97 @@ describe('Inbox', () => {
 // https://github.com/bgoleno/opportun/issues/645: after Sync now the Inbox keeps reading while the sync
 // runs and its messages are classified, so the new mail, the counts and "Synced ..." show without a
 // reload, and it stops once nothing is left to wait for.
+// qa on #668: every row's Open original reads the Gmail status too, and each copy re-read the
+// lists on a change, so one new status cost (rows + 1) times the list reads. The lists are read
+// once per change, whatever the number of rows.
+describe('Inbox Sync now: a sync that never reports (#645, qa)', () => {
+  it('stops asking after two minutes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let clicked = false;
+      const { calls } = mockApi({
+        'GET /integrations/gmail': () => ({
+          status: 200,
+          body: {
+            connected: true,
+            lastSyncAt: 1,
+            count: 0,
+            status: clicked ? 'running' : 'ok',
+            lookbackDays: 180,
+            accountEmail: null,
+            pendingClassify: 0,
+          },
+        }),
+        'GET /communications': { items: [], total: 0 },
+        'POST /integrations/gmail/sync': () => {
+          clicked = true;
+          return { status: 202, body: { jobId: 'job-1' } };
+        },
+      });
+      const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+      renderWithProviders(<Inbox />);
+      await user.click(await screen.findByRole('button', { name: /Sync now/ }));
+      const reads = () => calls.filter((c) => c.path === '/integrations/gmail').length;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(reads()).toBeGreaterThan(5);
+      await vi.advanceTimersByTimeAsync(100_000);
+      const atCap = reads();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reads()).toBe(atCap);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('Inbox: one status change reads the lists once, however many rows (#645, qa)', () => {
+  it('five rows on screen cost no more list reads than none', async () => {
+    let count = 0;
+    const readsFor = async (rows: number) => {
+      const items = Array.from({ length: rows }, (_, i) => ({
+        ...BASE,
+        id: `r${i}`,
+        subject: `row ${i}`,
+        opportunityId: null,
+        needsReview: true,
+      }));
+      const { calls } = mockApi({
+        'GET /integrations/gmail': () => ({
+          status: 200,
+          body: {
+            connected: true,
+            lastSyncAt: 1,
+            count: count,
+            status: 'ok',
+            lookbackDays: 180,
+            accountEmail: 'me@gmail.test',
+            pendingClassify: 0,
+          },
+        }),
+        'GET /communications': { items, total: items.length },
+      });
+      const view = renderWithProviders(<Inbox />);
+      if (rows > 0) await screen.findByText('row 0');
+      else await screen.findByRole('button', { name: /Sync now/ });
+      await waitFor(() => expect(calls.some((c) => c.path === '/integrations/gmail')).toBe(true));
+      const lists = () => calls.filter((c) => c.path === '/communications').length;
+      // Let the first reads settle, then one new status answer.
+      await new Promise((r) => setTimeout(r, 50));
+      const before = lists();
+      count += 1;
+      await view.queryClient.invalidateQueries({ queryKey: ['integrations', 'gmail'] });
+      await new Promise((r) => setTimeout(r, 100));
+      const used = lists() - before;
+      view.unmount();
+      return used;
+    };
+    const none = await readsFor(0);
+    const five = await readsFor(5);
+    expect(none).toBeGreaterThan(0);
+    expect(five).toBe(none);
+  });
+});
+
 describe('Inbox Sync now (#645)', () => {
   it('shows the new mail and the new sync time without a reload, then stops asking', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
