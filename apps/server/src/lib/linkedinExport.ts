@@ -9,6 +9,7 @@
 // (external_id: conversation id plus a hash of the row, thread_key: conversation id, snippet and
 // no body), and each new message queues comms.classify carrying the text. The rows are applied by
 // a job with the pack importer's report shape, so re-importing the same export changes nothing.
+import { isLinkedInHost } from './linkedinHost';
 import { createHash } from 'node:crypto';
 import { and, eq, inArray } from 'drizzle-orm';
 import { unzipSync } from 'fflate';
@@ -131,8 +132,8 @@ function cellOf(rec: CsvRecord, column: Map<string, number>) {
 const orNull = (s: string, max: number): string | null => (s === '' ? null : truncateText(s, max));
 
 /**
- * A profile URL as a stable key: http(s) only (anything else is dropped, it is metadata and
- * never fetched), lowercased, without query, fragment or trailing slash.
+ * A profile URL as a stable key: http(s) on a LinkedIn host only (anything else is dropped, it is
+ * metadata and never fetched), lowercased, without query, fragment or trailing slash.
  */
 export function normalizeLinkedinUrl(raw: string | null | undefined): string | null {
   const value = (raw ?? '').trim();
@@ -144,6 +145,9 @@ export function normalizeLinkedinUrl(raw: string | null | undefined): string | n
     return null;
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  // LinkedIn's own export names linkedin.com profiles; a row naming any other host is not one, so
+  // it is stored with no link (#655).
+  if (!isLinkedInHost(value)) return null;
   return `${url.protocol}//${url.host}${url.pathname}`.replace(/\/+$/, '').toLowerCase();
 }
 
