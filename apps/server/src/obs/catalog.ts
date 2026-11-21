@@ -816,6 +816,13 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.job.attempt',
     'opportun.job.max_attempts',
   ],
+  // #588: a job that ended the process at its last attempt is not run again on the next start.
+  'a job left running at its last attempt when the process ended: dead': [
+    'opportun.job.id',
+    'opportun.job.kind',
+  ],
+  // qa on #720: one left pending at its limit by the recovery before #588.
+  'a pending job at its attempt limit: dead': ['opportun.job.id', 'opportun.job.kind'],
   // #618: a shared demo account's job whose account the nightly reset replaced.
   'job discarded: the demo reset replaced its account': ['opportun.job.id', 'opportun.job.kind'],
   'job held the demo reset gate to its limit; told to stop': [
@@ -890,6 +897,9 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.rank_batch.id',
     'opportun.count.unmatched',
   ],
+  'ranking batch cleanup: what the batch holds could not be read; read at the cleanup': [
+    'opportun.rank_batch.id',
+  ],
   'could not read the message again; classifying on the snippet': [
     'opportun.communication.id',
     'opportun.mail.channel',
@@ -900,6 +910,7 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   // AI
   'opportunity dedupe AI unavailable': ['opportun.dedupe_candidate.id', 'error.type'],
   'opportunity dedupe AI call failed': ['opportun.dedupe_candidate.id', 'error.type'],
+  'opportunity dedupe AI pass failed on a row': ['opportun.dedupe_candidate.id', 'error.type'],
   'opportunity dedupe AI returned an unrecognized ref': ['opportun.dedupe_candidate.id'],
   'failed to record a streamed AI call': [ATTR.aiTask],
   'could not read the base resume': ['opportun.resume.id'],

@@ -1,0 +1,1 @@
+ALTER TABLE "opportunity_dedupe_candidates" ADD COLUMN "ai_failures" bigint DEFAULT 0 NOT NULL;

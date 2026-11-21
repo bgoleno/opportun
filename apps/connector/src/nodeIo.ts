@@ -4,7 +4,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
@@ -67,6 +67,14 @@ function appendToRotatingLog(path: string, line: string, limits: LogLimits): voi
 // Paths below come from the user's config directory, never from mail content.
 /* eslint-disable security/detect-non-literal-fs-filename */
 export const nodeFs: FileSystem = {
+  async permissions(path) {
+    try {
+      return (await stat(path)).mode & 0o777;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  },
   async readText(path) {
     try {
       return await readFile(path, 'utf8');
@@ -160,6 +168,22 @@ export const nodeClock: Clock = {
     }),
 };
 
+/** Far more than a device token: init --token-stdin reads no further. */
+const STDIN_LIMIT = 4096;
+
+/** Standard input to its end, or its first STDIN_LIMIT bytes (checkToken refuses what's left). */
+export async function nodeReadStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    chunks.push(b);
+    size += b.length;
+    if (size >= STDIN_LIMIT) break;
+  }
+  return Buffer.concat(chunks).subarray(0, STDIN_LIMIT).toString('utf8');
+}
+
 /** A terminal prompt; `secret` answers are not echoed. */
 export const nodePrompt: Prompt = async (question, opts = {}) => {
   let muted = false;
@@ -208,5 +232,6 @@ export function nodeIo(
     random: Math.random,
     configDir,
     prompt: nodePrompt,
+    readStdin: nodeReadStdin,
   };
 }

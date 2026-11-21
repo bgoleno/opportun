@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "35182d54-25e7-4f25-b17a-e6d534bc67ed",
+  "id": "b7da7742-7305-4ebe-a125-4272b5b6ff5d",
   "prevId": "c9057ae4-a239-4354-8713-82c722ca8a5e",
   "tables": {
     "activities": {
@@ -3657,6 +3657,14 @@
           "notNull": false,
           "autoincrement": false
         },
+        "ai_failures": {
+          "name": "ai_failures",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
         "created_at": {
           "name": "created_at",
           "type": "integer",
@@ -5083,13 +5091,6 @@
         "used_at": {
           "name": "used_at",
           "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "revoked_reason": {
-          "name": "revoked_reason",
-          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

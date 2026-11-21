@@ -239,6 +239,7 @@ export function claimJobSql(
           excludeKinds.map((k) => sql`${k}`),
           sql`, `,
         )})`;
+  // A job whose attempts reached its limit is never claimed (#588), whatever left it pending.
   // `id` breaks a tie on run_at and created_at (jobs queued in one millisecond, #465): a job id is
   // a UUIDv7 (newId), monotonic within a process, so id order is enqueue order. Its lowercase hex
   // sorts the same on both dialects. Without it SQLite gave rowid order and Postgres any order.
@@ -246,7 +247,8 @@ export function claimJobSql(
     UPDATE jobs
        SET status = 'running', locked_by = ${workerId}, locked_at = ${now},
            attempts = attempts + 1, updated_at = ${now}
-     WHERE id = (SELECT id FROM jobs WHERE status = 'pending' AND run_at <= ${now}${skip}
+     WHERE id = (SELECT id FROM jobs WHERE status = 'pending' AND run_at <= ${now}
+                    AND attempts < max_attempts${skip}
                   ORDER BY run_at, created_at, id LIMIT 1${lock})
     RETURNING id, kind, payload, attempts, max_attempts, user_id, trace_context`;
 }

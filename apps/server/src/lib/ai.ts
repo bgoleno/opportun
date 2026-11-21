@@ -1,6 +1,7 @@
 // Wires the IO-free router in @opportun/ai to this server: keys from the secrets vault,
 // per-user policy overrides and budget from settings, and the task_runs ledger. One AiDeps
 // is built per request for the signed-in user, so every AI call is user-scoped.
+import { currentHoldStop } from './demoResetGate';
 import {
   AiUnavailableError,
   ATTR,
@@ -395,6 +396,7 @@ export async function buildAiDeps(
     process.env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1';
   const fetches = providerFetchesFor(allowLoopbackHttp, baseUrls, resolveOverrides.get(db));
   const limit = callLimits.get(db);
+  const stop = currentHoldStop();
   return {
     getKey: async (provider) =>
       override === undefined ? getProviderKey(db, ctx, provider) : override.getKey(provider),
@@ -412,6 +414,9 @@ export async function buildAiDeps(
     userId: ctx.userId,
     // One deadline per call, retries included (the router makes it: tl on #670).
     ...(limit === undefined ? {} : { callTimeLimitMs: limit }),
+    // On a demo server, the stop of the reset gate's hold this runs under (#684): built in a
+    // handler or a job, so the call ends while that request or job still holds the gate.
+    ...(stop === undefined ? {} : { stopSignal: stop }),
     budget: await readBudget(db, ctx),
     spentTodayUsd: async (task) => await spentTodayUsd(db, ctx, task),
     providerFetch: {

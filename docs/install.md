@@ -1015,7 +1015,8 @@ When it cannot settle that, it changes nothing and flags the opportunity for you
   source, enter it in the extension's Settings: https anywhere, or plain http on a private
   network (localhost, a `.local`, `.lan` or `.home.arpa` name, a name with no dots, or a
   private address such as `192.168.x.x`). Add the token, Save, allow the access prompt for your
-  server, then **Test connection**.
+  server, then **Test connection**. Saving a plain-http address on your network (anything but
+  this computer) warns that the token crosses the network unencrypted; the save still works.
 - **Limits**: on LinkedIn, profiles (`/in/<name>`) and job pages (`/jobs/view/<id>`, or the
   jobs search view with a job selected) only; feeds, search results and company pages are
   refused. On Indeed (`www.indeed.com` only, not the country sites), a job page
@@ -1073,11 +1074,25 @@ name (`Recruiting`) matches that mailbox in every account and On My Mac, and
 an empty batch to check the token and prints the server's answer. Re-run `init` at any
 time; it offers your current answers as defaults and keeps the token if you press Enter.
 Every answer can also be given as a flag (`opportun-connector --help`). `init` asks for
-the server, the token, the mailboxes and the days only when you give none of `--server`,
-`--token`, `--mailbox` and `--days`; once you give any of them, it asks only for the server,
-token or mailboxes you left out, and the days keep their saved value (else 180). `--interval`
-is never asked: it keeps its saved value (else 15) unless you pass it. Prefer the prompt
-for the token, since a flag can end up in your shell history.
+the server, the token, the mailboxes and the days only when you give none of `--server`, a
+token flag (`--token`, `--token-file` or `--token-stdin`), `--mailbox` and `--days`; once you
+give any of them, it asks only for the server, token or mailboxes you left out, and the days
+keep their saved value (else 180). `--interval` is never asked: unless you pass it, it keeps
+its saved value (else 15).
+
+To set the connector up from a script, pass the token from a file or from standard input,
+never on the command line:
+
+```bash
+# A file only you can read (init refuses one that others can read: chmod 600 it):
+opportun-connector init --server https://jobs.example.com --token-file ~/opportun-token
+# Or standard input, for example straight from the clipboard:
+pbpaste | opportun-connector init --server https://jobs.example.com --token-stdin
+```
+
+With `--token-stdin`, `--server` is required (the prompts would read standard input too), and
+the mailboxes default to the saved ones, or `Inbox`. `--token <token>` still works for older
+scripts, but a token typed in a flag stays in your shell history.
 
 **4. Sync.**
 

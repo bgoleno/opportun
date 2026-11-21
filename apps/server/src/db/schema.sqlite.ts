@@ -512,6 +512,12 @@ export const opportunityDedupeCandidates = sqliteTable(
     decision: text('decision', { enum: DEDUPE_CANDIDATE_DECISIONS }).notNull(),
     /** Null while decision is 'pending'. */
     decidedBy: text('decided_by', { enum: DEDUPE_CANDIDATE_DECIDED_BY }),
+    /**
+     * How many AI passes failed on this pending row (#687): an unexpected error, or a ref the
+     * model made up. At OPPORTUNITY_DEDUPE_AI_MAX_FAILURES the pass stops sending it to the model,
+     * and it waits for the user. Not counted: the AI being unavailable for its user.
+     */
+    aiFailures: integer('ai_failures').notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -817,6 +823,11 @@ export const discoveryResults = sqliteTable(
     rankBatchId: text('rank_batch_id').references(() => rankBatches.id, { onDelete: 'set null' }),
     rankBatchBasis: text('rank_batch_basis'),
     rankBatchPromptId: text('rank_batch_prompt_id'),
+    /**
+     * How many times a sent batch handed this posting back with no result (#686): expired, a batch
+     * the provider no longer has, or none given. The third ends its wait (MAX_BATCH_RETURNS).
+     */
+    rankBatchReturns: integer('rank_batch_returns').notNull().default(0),
     resolution: text('resolution', { enum: RESOLUTIONS }).notNull(),
     /** ATS posting reference when resolved. */
     resolvedSourceRef: text('resolved_source_ref'),

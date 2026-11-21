@@ -1,5 +1,5 @@
 {
-  "id": "2e63f039-5584-44d5-b27a-78e683b1b10e",
+  "id": "9845c73c-c155-4602-8991-2f402b04405a",
   "prevId": "b54a37a1-5200-47e8-99cc-b735d9be4492",
   "version": "7",
   "dialect": "postgresql",
@@ -4003,6 +4003,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "ai_failures": {
+          "name": "ai_failures",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "created_at": {
           "name": "created_at",
           "type": "bigint",
@@ -5523,12 +5530,6 @@
         "used_at": {
           "name": "used_at",
           "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revoked_reason": {
-          "name": "revoked_reason",
-          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
