@@ -200,7 +200,7 @@ contact, is kept per user and opportunity, so reopening the tab does not make an
 
 What this does not do yet: when a contact is deleted, the kept row for an opportunity still holds
 that contact's reason until the opportunity is ranked again. It is never shown, but it is still
-stored. That is tracked in [#694](https://github.com/bgoleno/opportun/issues/694).
+stored. That is tracked in [#710](https://github.com/bgoleno/opportun/issues/710).
 
 ## Deliberate deviations
 
