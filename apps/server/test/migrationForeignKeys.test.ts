@@ -33,7 +33,6 @@ function fkKey(table: string, column: string, foreignTable: string): string {
 function expectedForeignKeys(): Map<string, FkClauses> {
   const expected = new Map<string, FkClauses>();
   for (const exportName of TABLE_EXPORTS) {
-    // eslint-disable-next-line security/detect-object-injection -- exportName is from TABLE_EXPORTS, not external input
     const table = sqliteTables[exportName] as SQLiteTable;
     const { name, foreignKeys } = getTableConfig(table);
     for (const fk of foreignKeys) {

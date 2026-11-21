@@ -206,6 +206,7 @@ export const DEMO_SEED_ACK_KEY = 'OPPORTUN_DEMO_SEED_ACK';
  * running compose.yml alone never has it, no matter what an operator's own .env says.
  */
 function requireDemoOverlay(env: NodeJS.ProcessEnv): void {
+  // eslint-disable-next-line security/detect-object-injection -- the DEMO_SEED_ACK_KEY constant
   if (env[DEMO_SEED_ACK_KEY] !== '1') {
     throw new DemoOverlayNotAckedError(
       `${DEMO_SEED_ACK_KEY} is not set to 1. deploy/compose.demo.yml sets this itself; it is ` +
@@ -613,7 +614,9 @@ async function seedOneUserResumes(
     .run();
 
   for (let i = 0; i < DEMO_TAILORED_RESUMES.length; i++) {
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     const tailored = DEMO_TAILORED_RESUMES[i]!;
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     const written = files.tailored[i]!;
     const attachmentId = derivedId(`${tailored.id}:attachment`, userIndex);
     const resumeId = derivedId(tailored.id, userIndex);
@@ -726,7 +729,9 @@ export async function seedDemo(
         .filter((p): p is string => p !== null);
       const deleted = await deleteExistingDemoUsers(tx, userIds);
       for (let i = 0; i < DEMO_USERS.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
         const user = DEMO_USERS[i]!;
+        // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
         await seedOneUserAccount(tx, user, i === 0, passwordHashes[i]!, now);
         const ctx = ctxFor(user.id, i === 0);
         const counts = await seedOneUserData(db, tx, ctx, i, creds.aiApiKey, now);

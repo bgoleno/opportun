@@ -134,6 +134,7 @@ export function JobsCard() {
                       )}
                     >
                       <span className="text-xs font-medium text-muted-foreground">
+                        {/* eslint-disable-next-line security/detect-object-injection -- a status from the STATUS_ORDER constant list */}
                         {STATUS_LABEL[s]}
                       </span>
                       <span className="text-2xl font-semibold tabular-nums">{n}</span>
@@ -180,6 +181,7 @@ export function JobsCard() {
                           </TableCell>
                           <TableCell>
                             <div className="grid gap-0.5">
+                              {/* eslint-disable-next-line security/detect-object-injection -- a typed display status */}
                               <Badge variant={STATUS_VARIANT[status]}>{STATUS_LABEL[status]}</Badge>
                               {j.lastError === null ? null : (
                                 <span className="max-w-64 truncate text-xs text-destructive">

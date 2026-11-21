@@ -384,12 +384,14 @@ export function loadPeppers(env: NodeJS.ProcessEnv): PepperSet {
     if (value.length < PEPPER_MIN) {
       throw new ConfigError(`${key} must be at least ${PEPPER_MIN} characters`);
     }
+    // eslint-disable-next-line security/detect-object-injection -- an integer parsed from the OPPORTUN_PEPPER_V<n> name (1 to 4 digits)
     secrets[v] = value;
   }
   // Rotating without keeping the previous secret strands every hash made under it, which is
   // the failure #5 exists to prevent. Refuse at boot rather than one locked-out login at a
   // time: every version below the current one must still be supplied.
   for (let v = 1; v < current; v += 1) {
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     if (secrets[v] === undefined) {
       throw new ConfigError(
         `OPPORTUN_PEPPER_VERSION is ${current}, so OPPORTUN_PEPPER_V${v} must supply the pepper that version ${v} hashes were made with, or those accounts can never log in`,
