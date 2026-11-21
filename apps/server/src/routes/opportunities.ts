@@ -21,8 +21,14 @@ import {
   transitionOpportunity,
   updateOpportunity,
 } from '../repos/opportunities';
-import { resolvePostingAtsJobRef } from '../lib/greenhouseEmbed';
-import { findCompanyByName } from '../repos/companies';
+import {
+  checkEmbeddedGreenhouse,
+  EMBED_CHECK_BUDGET_MS,
+  POSTING_CHECK_KIND,
+  postingCheckKey,
+  setCheckedPostingRef,
+} from '../lib/greenhouseEmbed';
+import { enqueue } from '../jobs/runner';
 import { search, SEARCH_KINDS } from '../repos/search';
 import { HttpUrl, IdParams, listQuery, optionalText, pageOf } from './common';
 
@@ -162,25 +168,37 @@ export async function opportunityRoutes(app: FastifyInstance): Promise<void> {
     async (req) => {
       const ctx = app.requireUser(req);
       const { id } = req.params;
-      // A new posting link on a company's own page (`?gh_jid=`) is checked on Greenhouse's API
-      // before the write, outside its transaction (#398): one request per known board, and none
-      // for any other link or one whose job already has a verified identity.
+      // The save is written first, in the order saves arrive, with the identity the keeping rule
+      // gives (#685: of two overlapping saves the later one sent is stored, whichever check ends
+      // last). A new link on a company's own page (`?gh_jid=`) is then checked on Greenhouse's
+      // API, outside any transaction (#398): one request per known board of the company the save
+      // ends with (#598), none for any other link or a job already identified.
       const url = req.body.postingUrl;
-      if (url === undefined) return updateOpportunity(db, ctx, id, req.body);
-      const current = await getOpportunity(db, ctx, id);
-      if (url === current.postingUrl) return updateOpportunity(db, ctx, id, req.body);
-      // The boards of the company this save ends with (#598): a new company name is matched as
-      // the write will match it, without creating it here. A name not yet known has no board.
-      const { companyName } = req.body;
-      const companyId =
-        companyName === undefined
-          ? current.companyId
-          : ((await findCompanyByName(db, ctx, companyName))?.id ?? null);
-      const atsJobRef = await resolvePostingAtsJobRef(db, ctx, { ...current, companyId }, url, {
-        fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId),
-        log: req.log,
-      });
-      return updateOpportunity(db, ctx, id, req.body, { atsJobRef });
+      const written = await updateOpportunity(db, ctx, id, req.body);
+      if (url == null || written.atsJobRef != null) return written;
+      const found = await checkEmbeddedGreenhouse(
+        db,
+        ctx,
+        written,
+        url,
+        { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log },
+        Date.now(),
+        EMBED_CHECK_BUDGET_MS,
+      );
+      if (found.ref !== null) {
+        // Only while the link is still this one: a later save's link is never overwritten.
+        await setCheckedPostingRef(db, ctx, id, url, found.ref);
+      } else if (found.undecided) {
+        // Out of time, or a board gave no answer: a background check finishes it (#685).
+        await enqueue(
+          db,
+          POSTING_CHECK_KIND,
+          { opportunityId: id, link: url },
+          { userId: ctx.userId, dedupeKey: postingCheckKey(id, url) },
+        );
+      }
+      // The row as it now is (tl on #685): a later save's, if one landed meanwhile.
+      return await getOpportunity(db, ctx, id);
     },
   );
 
