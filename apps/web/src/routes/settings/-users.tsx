@@ -1,5 +1,6 @@
 // Settings > Users (admins only): every account on the instance, the password reset of last
-// resort (it also turns off the account's two-factor sign-in), and the registration toggle.
+// resort (it also turns off the account's two-factor sign-in and unlinks its sign-in providers),
+// and the registration toggle.
 // Both change who can sign in, so both re-ask for the admin's own password (a stolen session
 // cookie alone is not enough, issue #10).
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -29,6 +30,7 @@ import {
 } from '@/components/ui/table';
 import { toast } from '@/components/ui/toast';
 import { api, errorMessage, isForbidden, NOT_AVAILABLE_TO_ACCOUNT } from '@/lib/api';
+import { OAUTH_PROVIDERS, providerLabel, type OAuthProvider } from '@/lib/oauth';
 import { relativeTime } from './-devices';
 import { PasswordDialog, passwordError } from './-twoFactor';
 
@@ -57,17 +59,25 @@ export function UsersCard({ currentUserId }: { currentUserId: string }) {
   const qc = useQueryClient();
   const users = useQuery(usersQuery);
   const [target, setTarget] = useState<AdminUser | null>(null);
-  const [issued, setIssued] = useState<{ user: AdminUser; password: string } | null>(null);
+  const [issued, setIssued] = useState<{
+    user: AdminUser;
+    password: string;
+    unlinkedProviders: string[];
+  } | null>(null);
 
   /** Resolves to an error message for the password dialog to show, or null on success. */
   async function reset(u: AdminUser, password: string): Promise<string | null> {
     try {
-      const res = await api<{ temporaryPassword: string }>(
+      const res = await api<{ temporaryPassword: string; unlinkedProviders: string[] }>(
         `/admin/users/${encodeURIComponent(u.id)}/reset-password`,
         { method: 'POST', body: { password } },
       );
       setTarget(null);
-      setIssued({ user: u, password: res.temporaryPassword });
+      setIssued({
+        user: u,
+        password: res.temporaryPassword,
+        unlinkedProviders: res.unlinkedProviders,
+      });
       void qc.invalidateQueries({ queryKey: usersQuery.queryKey });
       return null;
     } catch (err) {
@@ -150,13 +160,14 @@ export function UsersCard({ currentUserId }: { currentUserId: string }) {
         onOpenChange={(open) => {
           if (!open) setTarget(null);
         }}
-        description={`Reset the password for ${target?.displayName ?? ''}? This sets a new temporary password, signs them out everywhere, revokes their device tokens and turns off their two-factor sign-in. You will see the temporary password once, to hand over yourself. Enter your own password to continue.`}
+        description={`Reset the password for ${target?.displayName ?? ''}? This sets a new temporary password, signs them out everywhere, revokes their device tokens, unlinks their sign-in providers and turns off their two-factor sign-in. You will see the temporary password once, to hand over yourself. Enter your own password to continue.`}
         onConfirm={async (password) => (target === null ? null : await reset(target, password))}
       />
       {issued === null ? null : (
         <TemporaryPasswordDialog
           user={issued.user}
           password={issued.password}
+          unlinkedProviders={issued.unlinkedProviders}
           onDone={() => setIssued(null)}
         />
       )}
@@ -164,8 +175,24 @@ export function UsersCard({ currentUserId }: { currentUserId: string }) {
   );
 }
 
+/** "A", "A and B", "A, B and C". */
+function listOf(items: string[]): string {
+  return items.length <= 1
+    ? (items[0] ?? '')
+    : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
 /** The temporary password, shown once: closing the dialog forgets it. */
-function TemporaryPasswordDialog(props: { user: AdminUser; password: string; onDone: () => void }) {
+function TemporaryPasswordDialog(props: {
+  user: AdminUser;
+  password: string;
+  /** What the reset unlinked (#573), so the admin can tell them to link it again. */
+  unlinkedProviders: string[];
+  onDone: () => void;
+}) {
+  const unlinked = props.unlinkedProviders.map((p) =>
+    (OAUTH_PROVIDERS as readonly string[]).includes(p) ? providerLabel(p as OAuthProvider) : p,
+  );
   async function copy() {
     try {
       await navigator.clipboard.writeText(props.password);
@@ -188,6 +215,12 @@ function TemporaryPasswordDialog(props: { user: AdminUser; password: string; onD
             Give this to {props.user.displayName} over a channel you trust. It is not stored or
             shown again; they should change it under Settings, Security after signing in.
           </DialogDescription>
+          {unlinked.length === 0 ? null : (
+            <p className="text-sm text-muted-foreground">
+              The reset unlinked their sign-in with {listOf(unlinked)}: they can link{' '}
+              {unlinked.length === 1 ? 'it' : 'them'} again under Settings, Security.
+            </p>
+          )}
         </DialogHeader>
         <div className="grid gap-1">
           <Label htmlFor="temporary-password">

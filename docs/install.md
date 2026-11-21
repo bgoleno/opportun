@@ -684,12 +684,17 @@ you@example.com` in `apps/server`, with the same values as the server). It sets 
   everywhere, and prints the password once to your terminal; it is not logged or stored
   anywhere else. Sign in with it and change it under Settings. An unknown email changes
   nothing and exits with an error. The reset also revokes every device token the account
-  has (connectors and the capture extension need a new one), since a reset is also how you
-  recover from a compromised account, and it turns off two-factor sign-in for that
-  account: it is the recovery of last resort for someone who lost both their
-  authenticator and their recovery codes, who then re-enrolls under Settings → Security.
-  An administrator can do the same from Settings → Users (Reset password), which shows
-  the temporary password once; administrators cannot reset their own account this way
+  has (connectors and the capture extension need a new one) and unlinks every sign-in
+  provider (Google, GitHub, LinkedIn) linked to it, since a reset is also how you recover
+  from a compromised account: a provider someone else linked must not sign in after it.
+  The command names the providers it unlinked on stderr (stdout carries only the
+  password); link the ones that are yours again under Settings → Security after signing
+  in. It also turns off two-factor sign-in for that account: it is the recovery of last
+  resort for someone who lost both their authenticator and their recovery codes, who then
+  re-enrolls under Settings → Security. Changing your own password under Settings keeps
+  your linked providers. An administrator can do the same reset from Settings → Users
+  (Reset password), which shows the temporary password once and names the providers it
+  unlinked; administrators cannot reset their own account this way
   (see [section 12](#12-users-and-registration)).
 
 ### Clearing message text left from before encrypted classification
@@ -1160,9 +1165,10 @@ right after it. Administrators manage the instance under **Settings > Users**:
   Settings → Security.
 - **Users**: every account on the instance. **Reset password** gives a member a new random
   temporary password, shown once for you to hand over on a channel you trust. It signs that
-  member out everywhere, revokes their device tokens and turns off their two-factor sign-in,
-  so it is also the recovery path for someone who lost both their authenticator and their
-  recovery codes. An administrator cannot reset their own account here; use the command-line
+  member out everywhere, revokes their device tokens, unlinks their sign-in providers (the
+  dialog names them, so they can link theirs again) and turns off their two-factor sign-in,
+  so it is also the recovery path for a compromised account and for someone who lost both
+  their authenticator and their recovery codes. An administrator cannot reset their own account here; use the command-line
   reset in [section 6](#6-upgrades-and-backups) instead.
 - **Sign-in providers**: see [section 14](#14-sign-in-with-google-github-or-linkedin).
 
