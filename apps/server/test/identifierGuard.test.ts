@@ -7,7 +7,7 @@
 // The terms here are made up: no real withheld term appears in this file, its fixtures or its
 // output.
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -55,6 +55,13 @@ function scan(files: Record<string, string>, terms: string) {
   git(dir, 'init', '-q');
   for (const [path, text] of Object.entries(files)) writeFileSync(join(dir, path), text);
   git(dir, 'add', '.');
+  // The step runs the scan script from the checkout (#619). The throwaway repository gets a copy
+  // that is not added, so the scan, which reads tracked files only, never reads it.
+  mkdirSync(join(dir, '.github', 'scripts'), { recursive: true });
+  copyFileSync(
+    join(ROOT, '.github', 'scripts', 'identifier-guard.mjs'),
+    join(dir, '.github', 'scripts', 'identifier-guard.mjs'),
+  );
   const r = spawnSync('bash', ['-e', '-c', SCAN], {
     cwd: dir,
     encoding: 'utf8',
@@ -111,6 +118,25 @@ describe('the identifier guard does not publish a withheld term (#520)', () => {
       .filter((l) => !l.trim().startsWith('#'))
       .join('\n');
     expect(commands).not.toMatch(/\bset\s+-[a-wyz]*x|set\s+-o\s+xtrace|\bbash\s+-[a-z]*x/);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/619, from sec's audit: the allow list dropped every
+  // line holding an allowed word, so a term on the same line went through; and the terms were
+  // split by an unquoted shell expansion, so a term holding a glob character expanded against the
+  // working directory. Both failed against the shell scan this step used to run.
+  it('a line holding an allowed word and a withheld term is still flagged', () => {
+    const { status, lines } = scan(
+      { 'notes.txt': `first\nfrom RHEL to the ${TERMS[0]} cluster\n` },
+      TERMS[0]!,
+    );
+    expect(status).toBe(1);
+    expect(lines).toContain('notes.txt:2');
+  });
+
+  it('a term holding a glob character is that character, not the names of the files', () => {
+    const { status, lines } = scan({ 'a.txt': 'nothing\n', 'b.txt': 'still nothing\n' }, '*');
+    expect(status).toBe(0);
+    expect(lines.filter((l) => MASK.test(l))).toEqual(['::add-mask::*']);
   });
 
   it('a clean tree passes and prints no term', () => {

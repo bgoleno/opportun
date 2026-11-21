@@ -430,6 +430,21 @@ role targets and your default prompt are untouched. **Reset to default** goes ba
 
 _Every prompt is visible and versioned. Edits apply to one role target._
 
+### Where a ranking batch's text sits
+
+Batch ranking is not offered in Settings yet. When it is, postings are ranked many at a time,
+through your AI provider's batch service, instead of one call each. A batch holds what a live
+ranking call sends: each posting's text and the ranking prompt with your role target. The
+provider keeps it, and its answers, until Opportun has read and applied the results. Then
+Opportun removes them:
+
+- **Anthropic:** the batch is deleted. Anthropic keeps a batch's results for 29 days at most.
+- **OpenAI:** the file of requests and the files of results are deleted. If OpenAI refuses,
+  Opportun tries again for a while. Failing that, OpenAI deletes the result files a week after
+  they were made, and the file of requests after 30 days.
+
+As with any call, the provider's own policy for data sent through its API applies too.
+
 ## Dismissal learning
 
 Your dismissal reasons are not wasted. Once a week (Wednesdays), for each role target with at

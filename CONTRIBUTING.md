@@ -49,6 +49,11 @@ not strict, so a branch that is behind but passes still merges.
 required now that the repository is public; a fork or a private copy that made it required
 would have a check that never reports, and every pull request there would be unmergeable.
 
+The image's base, `node:22-slim` in `deploy/Dockerfile`, is pinned by digest. Dependabot
+(`.github/dependabot.yml`, the docker ecosystem for `deploy/`, weekly) opens a pull request when
+a newer digest is published. It goes through the same checks and review as any other pull
+request before it is merged.
+
 Merge with the script, which respects the required checks:
 
 ```sh
