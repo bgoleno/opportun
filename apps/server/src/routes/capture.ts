@@ -25,7 +25,12 @@ import { buildAiDeps, expiredKeyHint } from '../lib/ai';
 import { CAPTURE_SLOT, captureUserLimit, withCaptureSlot } from '../lib/captureLimit';
 import { HttpError } from '../lib/errors';
 import { sanitizeDescriptionText, sanitizePosting } from '../lib/postingSanitize';
-import { FetchBlockedError, isPageFetchProhibited, type safeFetch } from '../lib/safeFetch';
+import {
+  FetchBlockedError,
+  isPageFetchProhibited,
+  type safeFetch,
+  keyedFetch,
+} from '../lib/safeFetch';
 import type { UserCtx } from '../repos/base';
 import {
   ensureChannelSource,
@@ -241,7 +246,11 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
         // Checked before any fetch or AI call, so a bad resultId costs nothing.
         if (resultId !== undefined) await capturableLead(db, ctx, resultId);
         const text =
-          req.body.text ?? (await fetchPageText(app.jobs.services.sourceFetch, url as string));
+          req.body.text ??
+          (await fetchPageText(
+            keyedFetch(app.jobs.services.sourceFetch, ctx.userId),
+            url as string,
+          ));
         const posting = toPosting(await extract(db, ctx, url, text), url, text);
         if (resultId !== undefined) {
           const resolved = await resolveLeadInPlace(db, ctx, resultId, posting);

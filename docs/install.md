@@ -1072,7 +1072,11 @@ name (`Recruiting`) matches that mailbox in every account and On My Mac, and
 `~/.config/opportun-connector/config.json`, readable only by you (0600). `init` then sends
 an empty batch to check the token and prints the server's answer. Re-run `init` at any
 time; it offers your current answers as defaults and keeps the token if you press Enter.
-Every answer can also be given as a flag (`opportun-connector --help`); prefer the prompt
+Every answer can also be given as a flag (`opportun-connector --help`). `init` asks for
+the server, the token, the mailboxes and the days only when you give none of `--server`,
+`--token`, `--mailbox` and `--days`; once you give any of them, it asks only for the server,
+token or mailboxes you left out, and the days keep their saved value (else 180). `--interval`
+is never asked: it keeps its saved value (else 15) unless you pass it. Prefer the prompt
 for the token, since a flag can end up in your shell history.
 
 **4. Sync.**
@@ -1089,10 +1093,11 @@ Integrations > Extensions and Connectors shows when the connector last pushed. T
 received date of the newest accepted message in `~/.config/opportun-connector/state.json`
 and only moves it forward after the server accepts a batch; it re-reads the last five
 minutes each time to catch late-filed mail (the server ignores duplicates). Because that
-position only covers what was already read, re-running `init` with an added mailbox or a
-longer lookback window resets it (and says so), and the next sync re-reads the whole
-window; the server skips what it already has. Removing a mailbox or shortening the window
-keeps it. Delete `state.json` to force the same full re-read.
+position only covers what was already read, re-running `init` with an added mailbox, a
+longer lookback window or another server address resets it (and says so), and the next
+sync re-reads the whole window; the server skips what it already has. Removing a mailbox,
+shortening the window, or giving the same address again (a trailing slash makes no
+difference) keeps it. Delete `state.json` to force the same full re-read.
 
 **5. Run it in the background with launchd.** The template
 [`deploy/opportun-connector.plist`](../deploy/opportun-connector.plist) runs `watch` at

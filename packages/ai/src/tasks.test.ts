@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-object-injection -- the tests index the registry by TaskKey */
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_POLICIES } from './policies';

@@ -36,7 +36,10 @@ Commands:
   sync     Push new mail once
   watch    Sync every few minutes until interrupted (Ctrl-C)
 
-Options for init (anything left out is asked for):
+Options for init. With none of --server, --token, --mailbox or --days, every value is
+asked for except the interval. If you give any of them, a value you leave out is asked
+for only when it is the server, the token or the mailboxes; the days and the interval keep
+their saved value, or the default:
   --server <url>      Opportun server address, https://...
   --token <token>     Device token with the mail:push scope (odt_...). Prefer the
                       prompt: a flag can end up in shell history.
@@ -72,6 +75,19 @@ function widens(prev: ConnectorConfig, next: ConnectorConfig): boolean {
   return (
     next.lookbackDays > prev.lookbackDays || next.mailboxes.some((m) => !known.has(m.toLowerCase()))
   );
+}
+
+/**
+ * Whether two saved server addresses are the same server: compared as the connector stores them
+ * (normalizeServerUrl), so a trailing slash or the host's case is not a new server. A stored
+ * address that no longer normalizes counts as different.
+ */
+function sameServer(prev: string, next: string): boolean {
+  try {
+    return normalizeServerUrl(prev) === next;
+  } catch {
+    return false;
+  }
 }
 
 const mailboxList = (s: string): string[] =>
@@ -148,14 +164,20 @@ async function init(io: ConnectorIo, args: string[]): Promise<ExitCode> {
   const config: ConnectorConfig = { serverUrl, token, mailboxes, lookbackDays, intervalMinutes };
   await saveConfig(io, config);
   io.stdout(`Saved ${configFiles(io.configDir).config} (readable only by you).`);
-  if (existing !== null && widens(existing, config)) {
+  // The cursor is how far the old server got (#650): another server has none of that mail.
+  const otherServer = existing !== null && !sameServer(existing.serverUrl, config.serverUrl);
+  if (existing !== null && (otherServer || widens(existing, config))) {
     // The cursor only covers what was read before: older mail in a new mailbox, or in the
-    // longer window, would never be reached from it.
+    // longer window, or anything at all for a server that was never sent it, would never be
+    // reached from it.
     await saveState(io, { cursor: null });
     io.stdout(
-      'You added a mailbox or lengthened the lookback window, so the sync position was ' +
-        'reset: the next sync re-reads the whole lookback window (the server skips ' +
-        'messages it already has).',
+      (otherServer
+        ? 'The server address changed, so the sync position was reset: the next sync ' +
+          're-reads the whole lookback window and sends it to the new server.'
+        : 'You added a mailbox or lengthened the lookback window, so the sync position was ' +
+          'reset: the next sync re-reads the whole lookback window') +
+        ' (the server skips messages it already has).',
     );
   }
 
