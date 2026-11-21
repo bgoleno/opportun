@@ -90,21 +90,27 @@ export interface Config {
    * OPPORTUN_SUBMISSIONS (assisted apply, https://github.com/bgoleno/opportun/issues/79): the
    * application submission routes. On by default since the owner's decision on
    * https://github.com/bgoleno/opportun/issues/455: unset, empty or 1 is on, 0 is off, and any other
-   * value refuses to start (loadSubmissions). The demo never has them, whatever this says
-   * (submissionsEnabled). They were off by default until then, first until the outcome milestone
+   * value refuses to start (loadSubmissions). The demo has them too since #545, bound to each
+   * visitor (submissionsEnabled). They were off by default until then, first until the outcome milestone
    * (M2a, #118, closed with its follow-up job) so that no submission marked "submitted" went
    * without a follow-up. loadConfig always sets this; a Config built without it (as tests do) is
    * off.
    */
   submissions?: boolean;
   /**
-   * Assisted apply on the demo (https://github.com/bgoleno/opportun/issues/542). Not read from the
-   * environment: off, so the demo still has no submission routes, until the attempt is bound to
-   * the visitor whose data it holds (#545, slice 2). Until then one visitor could hand off and
-   * fill another's data on a shared account, so main never holds a demo with this on and no
-   * binding (sec on #544). The own-data rules of slice 1 (#544) are built and tested behind it.
+   * OPPORTUN_DEMO_TOKEN_CAP (decision 133, tl and sec on #542): the most active device tokens one
+   * shared demo account keeps; minting past it revokes the oldest. Default 20, 0 means no cap,
+   * anything else not a whole number refuses to start. Only the shared accounts (the seed's pinned
+   * ids, lib/demoAccounts.ts) have a cap; an account made for one person on a demo server does not.
+   * A Config built without it (as tests do) has the default.
    */
-  demoSubmissions?: boolean;
+  demoTokenCap?: number;
+  /**
+   * OPPORTUN_DEMO_SHARED_ASSISTED_APPLY (decision 133): 0 turns assisted apply off for the shared
+   * demo accounts only, leaving it as OPPORTUN_SUBMISSIONS says for everyone else. Unset, empty or
+   * 1 is on, anything else refuses to start. A Config built without it (as tests do) is on.
+   */
+  demoSharedAssistedApply?: boolean;
   /**
    * OPPORTUN_DAILY_REVIEW_CAP (assisted apply M1c, https://github.com/bgoleno/opportun/issues/116):
    * the most application reviews one user may make in a rolling 24 hours on this deployment.
@@ -264,6 +270,34 @@ function loadSubmissions(env: NodeJS.ProcessEnv): boolean {
   );
 }
 
+/** The default for OPPORTUN_DEMO_TOKEN_CAP, the shared demo accounts' token cap. */
+export const DEFAULT_DEMO_TOKEN_CAP = 20;
+
+function loadDemoTokenCap(env: NodeJS.ProcessEnv): number {
+  const raw = env.OPPORTUN_DEMO_TOKEN_CAP;
+  if (raw === undefined || raw === '') return DEFAULT_DEMO_TOKEN_CAP;
+  if (!/^(0|[1-9][0-9]{0,5})$/.test(raw)) {
+    throw new ConfigError(
+      `OPPORTUN_DEMO_TOKEN_CAP must be a whole number of device tokens per shared demo account (0 for no cap), or unset for ${String(DEFAULT_DEMO_TOKEN_CAP)}, got: ${JSON.stringify(raw)}`,
+    );
+  }
+  return Number(raw);
+}
+
+function loadDemoSharedAssistedApply(env: NodeJS.ProcessEnv): boolean {
+  const raw = env.OPPORTUN_DEMO_SHARED_ASSISTED_APPLY;
+  if (raw === undefined || raw === '' || raw === '1') return true;
+  if (raw === '0') return false;
+  throw new ConfigError(
+    `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY must be 0 (assisted apply off for the shared demo accounts) or 1 (on), or unset for on, got: ${JSON.stringify(raw)}`,
+  );
+}
+
+/** The shared demo accounts' token cap, or none (0, or not a shared account). */
+export function demoTokenCap(cfg: Pick<Config, 'demoTokenCap'>): number {
+  return cfg.demoTokenCap ?? DEFAULT_DEMO_TOKEN_CAP;
+}
+
 function loadHost(env: NodeJS.ProcessEnv): string {
   const raw = env.OPPORTUN_HOST;
   if (raw === undefined || raw === '') return '127.0.0.1';
@@ -323,7 +357,12 @@ function loadTrustedProxies(env: NodeJS.ProcessEnv): string[] {
 
 const PEPPER_MIN = 16;
 
-function loadPeppers(env: NodeJS.ProcessEnv): PepperSet {
+/**
+ * The password peppers from the environment, as the server loads them: the current secret under
+ * OPPORTUN_PEPPER_VERSION, and every earlier one. Exported for the CLIs that hash a password
+ * outside the server, so they stamp the version the server will verify with (#568).
+ */
+export function loadPeppers(env: NodeJS.ProcessEnv): PepperSet {
   const raw = env.OPPORTUN_PEPPER;
   if (raw === undefined || raw === '') return NO_PEPPERS;
   if (raw.length < PEPPER_MIN) {
@@ -494,14 +533,13 @@ export function loadDbConfig(env: NodeJS.ProcessEnv = process.env): DbConfig {
 }
 
 /**
- * Whether the application submission routes exist on this deployment: OPPORTUN_SUBMISSIONS is
- * not 0 (loadSubmissions), and not on the demo, which holds shared fixture accounts (design Part A
- * section 7.8), unless demoSubmissions is on (never, until #545: see its comment).
+ * Whether the application submission routes exist on this deployment: OPPORTUN_SUBMISSIONS is not
+ * 0 (loadSubmissions). The demo too, since #545 (slice 2 of #542): there each attempt is bound to
+ * the visitor who started it, and fills only their own data (#544). The binding and the switch
+ * came in one change, so the demo is never on without it (sec on #544).
  */
-export function submissionsEnabled(
-  cfg: Pick<Config, 'submissions' | 'demo' | 'demoSubmissions'>,
-): boolean {
-  return cfg.submissions === true && (!cfg.demo || cfg.demoSubmissions === true);
+export function submissionsEnabled(cfg: Pick<Config, 'submissions'>): boolean {
+  return cfg.submissions === true;
 }
 
 /** Reads and validates configuration. Throws a ConfigError naming the offending variable. */
@@ -523,6 +561,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     db: loadDbConfig(env),
     demo: env.OPPORTUN_DEMO === '1',
     submissions: loadSubmissions(env),
+    demoTokenCap: loadDemoTokenCap(env),
+    demoSharedAssistedApply: loadDemoSharedAssistedApply(env),
     dailyReviewCap: loadDailyReviewCap(env),
     aiAllowLoopbackHttp: env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1',
     telemetryAllowPrivate: env.OPPORTUN_TELEMETRY_ALLOW_PRIVATE === '1',

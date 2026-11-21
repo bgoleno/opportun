@@ -2,7 +2,7 @@
 // as an app decorator. Registered after the security plugin, so forged unsafe requests are
 // rejected by CSRF before any session lookup.
 import { createHash } from 'node:crypto';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { DEMO_USERS } from '../cli/seedDemoFixture';
 import '../lib/deviceTokens';
@@ -38,6 +38,20 @@ const DEMO_ACTOR_LABELS: ReadonlyMap<string, string> = new Map(
 
 function sessionKey(token: string): string {
   return createHash('sha256').update(`actor:${token}`).digest('hex').slice(0, 10);
+}
+
+/**
+ * The demo visitor behind a signed-in request: `<account>.<session key>`, the value the access
+ * log's actor header carries. Null without a session. On the demo an application attempt and a
+ * device token record it, and only that visitor may act on the attempt (#545, slice 2 of #542):
+ * two people on one shared account hold different sessions, so different actors, and a new
+ * sign-in is a new actor. Off the demo nothing reads it.
+ */
+export function demoActorOf(req: FastifyRequest): string | null {
+  const token = req.cookies.opportun_session;
+  if (req.userCtx === null || token === undefined || token.length === 0) return null;
+  const account = DEMO_ACTOR_LABELS.get(req.userCtx.userId) ?? 'demo-other';
+  return `${account}.${sessionKey(token)}`;
 }
 
 async function session(app: FastifyInstance, opts: SessionOptions): Promise<void> {
@@ -88,11 +102,8 @@ async function session(app: FastifyInstance, opts: SessionOptions): Promise<void
     // the life of the session and changes on the next sign-in. Off outside the demo: a real
     // install's users should not be named in response headers.
     app.addHook('onSend', async (req, reply, payload) => {
-      const token = req.cookies.opportun_session;
-      if (req.userCtx !== null && token !== undefined && token.length > 0) {
-        const account = DEMO_ACTOR_LABELS.get(req.userCtx.userId) ?? 'demo-other';
-        void reply.header(ACTOR_HEADER, `${account}.${sessionKey(token)}`);
-      }
+      const actor = demoActorOf(req);
+      if (actor !== null) void reply.header(ACTOR_HEADER, actor);
       return payload;
     });
   }

@@ -26,6 +26,8 @@ export interface DeviceCtx extends UserCtx {
   isAdmin: false;
   tokenId: string;
   scopes: DeviceTokenScope[];
+  /** The demo visitor who minted the token (#545), or null (off the demo, or minted before). */
+  actor: string | null;
 }
 
 declare module 'fastify' {
@@ -57,9 +59,6 @@ export function hashDeviceToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-/** The most active (unrevoked) tokens one demo account keeps (sec on #542 and #544). */
-export const DEMO_MAX_ACTIVE_TOKENS = 20;
-
 /**
  * Creates a token for the caller; the plaintext is returned here and nowhere else, ever.
  *
@@ -81,14 +80,15 @@ export async function createDeviceToken(
   db: Db,
   ctx: UserCtx,
   input: { name: string; scopes: DeviceTokenScope[] },
-  opts: { passwordHash?: string; maxActive?: number; ip?: string } = {},
+  opts: { passwordHash?: string; maxActive?: number; ip?: string; actor?: string | null } = {},
 ): Promise<{ meta: DeviceTokenMeta; token: string }> {
   const token = DEVICE_TOKEN_PREFIX + randomBytes(32).toString('base64url');
   const now = Date.now();
   const scopes = [...new Set(input.scopes)];
   const { passwordHash, maxActive } = opts;
+  const actor = opts.actor ?? null;
   if (passwordHash === undefined && maxActive === undefined) {
-    return { meta: await insertToken(db, ctx, input.name, token, scopes, now), token };
+    return { meta: await insertToken(db, ctx, input.name, token, scopes, now, actor), token };
   }
   // The cap (#550), then the insert, in whichever transaction holds the write.
   const write = async (tx: Exec) => {
@@ -114,7 +114,7 @@ export async function createDeviceToken(
         });
       }
     }
-    return { meta: await insertToken(tx, ctx, input.name, token, scopes, now), token };
+    return { meta: await insertToken(tx, ctx, input.name, token, scopes, now, actor), token };
   };
   if (passwordHash === undefined) return await withTransaction(db, write);
   // Only while the hash the password was proven against is still the user's, under the lock a
@@ -140,6 +140,7 @@ async function insertToken(
   token: string,
   scopes: DeviceTokenScope[],
   now: number,
+  actor: string | null,
 ): Promise<DeviceTokenMeta> {
   return await db
     .insert(deviceTokens)
@@ -149,6 +150,7 @@ async function insertToken(
       name,
       tokenHash: hashDeviceToken(token),
       scopes,
+      actor,
       createdAt: now,
       updatedAt: now,
     })
@@ -248,6 +250,7 @@ export async function authenticateDeviceToken(
       scopes: deviceTokens.scopes,
       lastUsedAt: deviceTokens.lastUsedAt,
       revokedAt: deviceTokens.revokedAt,
+      actor: deviceTokens.actor,
     })
     .from(deviceTokens)
     .where(eq(deviceTokens.tokenHash, hashDeviceToken(token)))
@@ -260,7 +263,13 @@ export async function authenticateDeviceToken(
   }
   return {
     ok: true,
-    ctx: { userId: row.userId, isAdmin: false, tokenId: row.id, scopes: row.scopes },
+    ctx: {
+      userId: row.userId,
+      isAdmin: false,
+      tokenId: row.id,
+      scopes: row.scopes,
+      actor: row.actor,
+    },
   };
 }
 

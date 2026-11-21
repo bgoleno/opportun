@@ -186,6 +186,10 @@ export function submissionErrorText(err: unknown): string {
     case 'invalid_transition':
     case 'conflict':
       return 'This application changed in another tab or window. The page now shows where it stands.';
+    // A shared demo account (#545): only the session that started an attempt may change it. The
+    // words fit the visitor who started it too, once their session has ended (tl on #566).
+    case 'not_your_application':
+      return 'This application was started in another session on this shared demo account. You can read it or cancel it; only that session can change it.';
     case 'resume_not_final':
       return 'Choose a finished resume: one marked Final.';
     case 'resume_not_found':

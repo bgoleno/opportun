@@ -21,11 +21,19 @@ import {
 import type { FastifyInstance, onRequestAsyncHookHandler } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { and, eq } from 'drizzle-orm';
 import { submissionsEnabled } from '../config';
+import { applicationSubmissions } from '../db/schema';
 import { audit } from '../lib/audit';
-import { refuseFixtureData } from '../lib/demoOwnData';
-import { deviceRoute, requireDevice, requireDeviceToken } from '../lib/deviceTokens';
-import { HttpError } from '../lib/errors';
+import { isSharedDemoAccount } from '../lib/demoAccounts';
+import { refuseFixtureData, sameVisitor, sharedAssistedApplyOff } from '../lib/demoOwnData';
+import {
+  deviceRoute,
+  requireDevice,
+  requireDeviceToken,
+  type DeviceCtx,
+} from '../lib/deviceTokens';
+import { HttpError, notFound } from '../lib/errors';
 import { rateLimit } from '../lib/rateLimit';
 import { confirmableForPage, confirmFromPage, hostOf } from '../repos/submissionConfirm';
 import { handedOffForPage, handedOffSnapshot, markPrefillRead } from '../repos/submissions';
@@ -151,6 +159,28 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
     keyFn: (req) => requireDevice(req).tokenId,
   });
 
+  // On a shared demo account a device token is given only the attempts its own visitor started
+  // (#545): another visitor's on the same account is, to this token, not there (404, or no match).
+  // Switched off for the shared accounts (decision 133): as if the feature were off, 404.
+  app.addHook('preHandler', async (req) => {
+    const ctx = req.deviceCtx;
+    if (ctx !== null && sharedAssistedApplyOff(app.config, ctx.userId)) {
+      throw new HttpError(404, 'feature_unavailable');
+    }
+  });
+  const shared = (ctx: DeviceCtx) => isSharedDemoAccount(app.config, ctx.userId);
+  const visitorOf = (ctx: DeviceCtx): { actor?: string | null } =>
+    shared(ctx) ? { actor: ctx.actor } : {};
+  async function refuseOtherVisitors(ctx: DeviceCtx, id: string): Promise<void> {
+    if (!shared(ctx)) return;
+    const row = await db
+      .select({ actor: applicationSubmissions.actor })
+      .from(applicationSubmissions)
+      .where(and(eq(applicationSubmissions.id, id), eq(applicationSubmissions.userId, ctx.userId)))
+      .get();
+    if (row !== undefined && !sameVisitor(row.actor, ctx.actor)) throw notFound();
+  }
+
   api.get(
     '/connector/apply/current',
     {
@@ -160,7 +190,7 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
     },
     async (req) => {
       const ctx = requireDevice(req);
-      const found = await handedOffForPage(db, ctx, req.query.url);
+      const found = await handedOffForPage(db, ctx, req.query.url, visitorOf(ctx));
       // Since #403 the popup makes this read whenever it opens over a Greenhouse posting, not only
       // on its button: so this audit row, and one of the token's reads, now also mean "the popup
       // was opened there", a miss included.
@@ -180,7 +210,7 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
       // On the demo, the last check before anything leaves for the form: a seeded identity value,
       // or any resume, put back behind the server's back is never sent, and nothing is marked
       // read (#544). The refusal names the field.
-      if (app.config.demo) refuseFixtureData(row);
+      if (shared(ctx)) refuseFixtureData(row);
       const firstRead = await markPrefillRead(db, ctx, row.id);
       // Each stored field through the rule the PATCH uses (core's submissionFieldProblem): a
       // value that fails it is left out, and only its key is named (#196, tl's ruling).
@@ -229,6 +259,7 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
     { ...deviceRoute('apply:assist'), onRequest: authenticate, schema: { params: IdParams } },
     async (req, reply) => {
       const ctx = requireDevice(req);
+      await refuseOtherVisitors(ctx, req.params.id);
       const { row, file } = await handedOffSnapshot(db, ctx, req.params.id);
       await audit(db, 'submission.snapshot_downloaded', {
         userId: ctx.userId,
@@ -256,7 +287,7 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
     },
     async (req) => {
       const ctx = requireDevice(req);
-      const found = await confirmableForPage(db, ctx, req.query.url);
+      const found = await confirmableForPage(db, ctx, req.query.url, visitorOf(ctx));
       await audit(db, 'submission.confirmable_read', {
         userId: ctx.userId,
         ip: req.ip,
@@ -295,6 +326,7 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
     },
     async (req) => {
       const ctx = requireDevice(req);
+      await refuseOtherVisitors(ctx, req.params.id);
       const { row, recorded } = await confirmFromPage(db, ctx, req.params.id, req.body, {
         tokenId: ctx.tokenId,
         ip: req.ip,

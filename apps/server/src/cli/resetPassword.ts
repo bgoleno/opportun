@@ -13,23 +13,14 @@ import '../unsetEmptyAiBaseUrls';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { eq } from 'drizzle-orm';
-import { loadDbConfig, loadSqliteDir } from '../config';
+import { loadDbConfig, loadPeppers, loadSqliteDir } from '../config';
 import { closeDatabase, connectDatabase, type Db } from '../db/client';
 import { users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { resetUserPassword } from '../lib/passwordReset';
-import { NO_PEPPERS, pepperSet, type PepperSet } from '../lib/passwords';
+import { NO_PEPPERS, type PepperSet } from '../lib/passwords';
 
 export { temporaryPassword } from '../lib/passwordReset';
-
-/**
- * The CLI is handed one pepper string, which is the current one, so it builds the single-entry
- * set that version 1 names. A deployment mid-rotation runs the reset with its CURRENT pepper
- * and OPPORTUN_PEPPER_VERSION; the resulting hash is stamped and verifies normally.
- */
-function toPepperSet(pepper: string, version = 1): PepperSet {
-  return pepper === '' ? NO_PEPPERS : pepperSet(version, { [version]: pepper });
-}
 
 export interface CliIo {
   stdout(line: string): void;
@@ -40,8 +31,11 @@ export interface ResetPasswordArgs {
   db: Db;
   email: string | undefined;
   io?: CliIo;
-  /** OPPORTUN_PEPPER of the server this database belongs to ('' when none). */
-  pepper?: string;
+  /**
+   * The server's peppers, loaded from its environment as the server loads them (loadPeppers), so
+   * the hash is stamped with the current OPPORTUN_PEPPER_VERSION (#568). None when unset.
+   */
+  peppers?: PepperSet;
 }
 
 const USAGE = 'Usage: node --import tsx src/cli/resetPassword.ts <email>';
@@ -56,7 +50,7 @@ export async function main({
   db,
   email,
   io = processIo,
-  pepper = '',
+  peppers = NO_PEPPERS,
 }: ResetPasswordArgs): Promise<number> {
   const normalized = email?.trim().toLowerCase() ?? '';
   if (normalized === '') {
@@ -72,7 +66,7 @@ export async function main({
     io.stderr(`No user with email ${normalized}; nothing changed.`);
     return 1;
   }
-  const password = await resetUserPassword(db, user.id, toPepperSet(pepper));
+  const password = await resetUserPassword(db, user.id, peppers);
   await audit(db, 'auth.password_reset_cli', { userId: user.id });
   io.stdout(password);
   return 0;
@@ -94,8 +88,9 @@ if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
     const handle = await connectDatabase({ dataDir, sqliteDir, db: loadDbConfig(process.env) });
     const { db } = handle;
     try {
-      // The same pepper the server hashes with, or the temporary password would not verify.
-      return await main({ db, email: process.argv[2], pepper: process.env.OPPORTUN_PEPPER ?? '' });
+      // The same peppers the server hashes with, current version included, or the temporary
+      // password would be stamped with a version whose secret the server does not hold (#568).
+      return await main({ db, email: process.argv[2], peppers: loadPeppers(process.env) });
     } finally {
       await closeDatabase(handle);
     }

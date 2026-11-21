@@ -160,6 +160,8 @@ export const deviceTokens = sqliteTable(
     lastUsedAt: integer('last_used_at'),
     /** Set on revoke; a revoked token fails on its very next request. */
     revokedAt: integer('revoked_at'),
+    /** The demo visitor who minted the token (#545): it is given only their attempts. Null off the demo. */
+    actor: text('actor'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -1062,6 +1064,12 @@ export const applicationSubmissions = sqliteTable(
     status: text('status', { enum: SUBMISSION_STATUSES }).notNull().default('draft'),
     /** Client-generated per attempt: a repeated create returns the same row. */
     idempotencyKey: text('idempotency_key').notNull(),
+    /**
+     * The demo visitor who started the attempt (plugins/session.ts demoActorOf, #545): only they
+     * may edit, review, hand off or otherwise act on it, and only their device token is given it.
+     * Null off the demo, where nothing reads it.
+     */
+    actor: text('actor'),
     /** The immutable resume snapshot, and what it was, kept even if the attachment goes. */
     resumeAttachmentId: text('resume_attachment_id').references(() => attachments.id, {
       onDelete: 'set null',

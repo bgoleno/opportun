@@ -1161,16 +1161,17 @@ describe('review usage and the user’s own cap (#130)', () => {
     expect((await usage(a)).json()).toMatchObject({ used: 2, cap: 3, userCap: 3 });
   });
 
-  it.each([
-    ['the flag off', { submissions: false }],
-    ['the demo, flag on', { submissions: true, demo: true }],
-  ] as const)('with %s, neither route exists', async (_n, cfg) => {
-    const { a } = await boot(cfg);
-    for (const res of [await usage(a), await setCap(a, 3)]) {
-      expect(res.statusCode).toBe(404);
-      expect(res.json().error.code).toBe('feature_unavailable');
-    }
-  });
+  // The demo has them since #545 (slice 2 of #542), so it is no longer a row here.
+  it.each([['the flag off', { submissions: false }]] as const)(
+    'with %s, neither route exists',
+    async (_n, cfg) => {
+      const { a } = await boot(cfg);
+      for (const res of [await usage(a), await setCap(a, 3)]) {
+        expect(res.statusCode).toBe(404);
+        expect(res.json().error.code).toBe('feature_unavailable');
+      }
+    },
+  );
 });
 
 describe('the user’s own cap: its audit entry and its lock (#160)', () => {
