@@ -3,7 +3,10 @@
 // in what order, how many requests, and what is recorded.
 import { describe, expect, it } from 'vitest';
 import type { safeFetch } from '../src/lib/safeFetch';
+import { eq } from 'drizzle-orm';
+import { discoverySources, opportunities } from '../src/db/schema';
 import {
+  EMBED_CHECK_BUDGET_MS,
   knownGreenhouseTokens,
   MAX_TOKENS_TRIED,
   resolvePostingAtsJobRef,
@@ -102,7 +105,8 @@ describe('the boards asked about a gh_jid link (#398 criterion 1)', () => {
     });
     const tokens = await knownGreenhouseTokens(app.db, ctx, opp);
     expect(MAX_TOKENS_TRIED).toBe(3);
-    expect(tokens).toEqual(['detected', 'fromsource', 'fromopportunity']);
+    // The other opportunities newest first (#598): the Writer's board, queued after the Designer's.
+    expect(tokens).toEqual(['detected', 'fromsource', 'fourthboard']);
   });
 
   it('a company with no known board: no token, and no request', async () => {
@@ -257,5 +261,141 @@ describe('resolvePostingAtsJobRef: an identity already verified costs no request
     );
     expect(next?.externalId).toBe('42');
     expect(gh.asked).toHaveLength(1);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/598: the boards asked are the company the save ends
+// with, in a defined order, and the whole check in one save is bounded.
+describe('#598: which company, which order, and how long', () => {
+  const patch = (c: TestClient, id: string, payload: Record<string, unknown>) =>
+    c.request({ method: 'PATCH', url: `/api/v1/opportunities/${id}`, payload });
+
+  it("a PATCH that changes the company and the link asks the new company's boards", async () => {
+    const { app, a } = await boot();
+    const { ctx, opp } = await company(app, a, 'oldboard');
+    await createCompany(app.db, ctx, {
+      name: 'Other Corp',
+      atsKind: 'ats_greenhouse',
+      atsRef: 'newboard',
+      atsVerifiedAt: Date.now(),
+    });
+    const gh = greenhouse({ newboard: ['8136554'], oldboard: ['8136554'] });
+    app.jobs.services.sourceFetch = gh.sctx.fetch;
+    const res = await patch(a, opp.id, { companyName: 'Other Corp', postingUrl: CAREERS });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(gh.asked).toEqual(['https://boards-api.greenhouse.io/v1/boards/newboard/jobs/8136554']);
+    expect(res.json<{ atsJobRef: { org: string } | null }>().atsJobRef?.org).toBe('newboard');
+  });
+
+  it('a PATCH to a company not yet known asks nothing: it has no board', async () => {
+    const { app, a } = await boot();
+    const { opp } = await company(app, a, 'oldboard');
+    const gh = greenhouse({ oldboard: ['8136554'] });
+    app.jobs.services.sourceFetch = gh.sctx.fetch;
+    const res = await patch(a, opp.id, { companyName: 'Brand New Inc', postingUrl: CAREERS });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(gh.asked).toEqual([]);
+    expect(res.json<{ atsJobRef: unknown }>().atsJobRef).toBeNull();
+  });
+
+  it('sources and other opportunities are asked newest first, whatever order the rows were written in', async () => {
+    const { app, a } = await boot();
+    const { ctx, co, opp } = await company(app, a, null);
+    const older = await createSource(app.db, ctx, {
+      kind: 'ats_greenhouse',
+      config: { org: 'oldersource' },
+      companyId: co.id,
+    });
+    const newer = await createSource(app.db, ctx, {
+      kind: 'ats_greenhouse',
+      config: { org: 'newersource' },
+      companyId: co.id,
+    });
+    await app.db
+      .update(discoverySources)
+      .set({ createdAt: 1000 })
+      .where(eq(discoverySources.id, older.id))
+      .run();
+    await app.db
+      .update(discoverySources)
+      .set({ createdAt: 2000 })
+      .where(eq(discoverySources.id, newer.id))
+      .run();
+    expect(await knownGreenhouseTokens(app.db, ctx, opp)).toEqual(['newersource', 'oldersource']);
+
+    await app.db.delete(discoverySources).where(eq(discoverySources.companyId, co.id)).run();
+    const sibling = async (title: string, org: string, createdAt: number) => {
+      const o = await createOpportunity(app.db, ctx, {
+        companyName: 'Example Corp',
+        title,
+        sourceKind: 'manual',
+      });
+      await setPostingState(app.db, ctx, o.id, {
+        postingState: 'confirmed',
+        postingStateDetail: null,
+        atsJobRef: {
+          kind: 'ats_greenhouse',
+          org,
+          externalId: '1',
+          url: `https://job-boards.greenhouse.io/${org}/jobs/1`,
+        },
+      });
+      await app.db.update(opportunities).set({ createdAt }).where(eq(opportunities.id, o.id)).run();
+    };
+    // Written oldest first: read in table order, the oldest would be asked first.
+    await sibling('Designer', 'oldestboard', 1000);
+    await sibling('Writer', 'middleboard', 2000);
+    await sibling('Analyst', 'newestboard', 3000);
+    expect(await knownGreenhouseTokens(app.db, ctx, opp)).toEqual([
+      'newestboard',
+      'middleboard',
+      'oldestboard',
+    ]);
+  });
+
+  it('the whole check has one time budget: once it is spent, nothing more is asked and there is no identity', async () => {
+    const { app, a } = await boot();
+    const { ctx, co, opp } = await company(app, a, 'first');
+    await createSource(app.db, ctx, {
+      kind: 'ats_greenhouse',
+      config: { org: 'second' },
+      companyId: co.id,
+    });
+    await createSource(app.db, ctx, {
+      kind: 'ats_greenhouse',
+      config: { org: 'third' },
+      companyId: co.id,
+    });
+    // Every board hangs: an answer comes only when the request's own time limit ends it, as
+    // safeFetch's timeout does. Without a limit it would hang this long.
+    const timeouts: (number | undefined)[] = [];
+    const fetch = (async (_url: string, init?: { timeoutMs?: number }) => {
+      timeouts.push(init?.timeoutMs);
+      await new Promise((r) => setTimeout(r, init?.timeoutMs ?? 400));
+      throw new Error('timeout');
+    }) as unknown as typeof safeFetch;
+    const started = Date.now();
+    const ref = await verifyEmbeddedGreenhouse(
+      app.db,
+      ctx,
+      opp,
+      CAREERS,
+      { fetch, log: { warn: () => {} } as never },
+      Date.now(),
+      80,
+    );
+    expect(ref).toBeNull();
+    // Well under the 1.2 s three unbounded checks take here, with room for a slow database.
+    expect(Date.now() - started).toBeLessThan(700);
+    // Each request gets what is left of the budget, never more, and none after it is spent.
+    expect(timeouts.length).toBeGreaterThanOrEqual(1);
+    expect(timeouts.every((t) => t !== undefined && t > 0 && t <= 80)).toBe(true);
+    expect(timeouts.reduce<number>((sum, t) => sum + (t ?? 0), 0)).toBeLessThanOrEqual(
+      80 + timeouts.length * 5,
+    );
+  });
+
+  it('a save waits 5 s at most for the boards, by default', () => {
+    expect(EMBED_CHECK_BUDGET_MS).toBe(5000);
   });
 });
