@@ -627,3 +627,84 @@ describe('popup text', () => {
     }
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/653: a capture that saved something links to it.
+describe('Open in Opportun after a capture (#653)', () => {
+  const ID = '0192f1d2-7c3a-7b4e-9a1b-2c3d4e5f6a7b';
+  const link = (doc: Document) => doc.getElementById('open-result') as HTMLAnchorElement;
+  const capture = async (body?: unknown) => {
+    const s = setup({ stored: SAVED, ...(body === undefined ? {} : { body }) });
+    await mountPopup(s.doc, s.deps);
+    await click(s.$('capture'), () => status(s.doc).dataset.tone === 'success');
+    return s;
+  };
+
+  it('a job capture links to its opportunity, in a new tab', async () => {
+    const { doc } = await capture({
+      kind: 'job',
+      resultId: 'r1',
+      duplicate: false,
+      refined: false,
+      opportunityId: ID,
+      stage: 'interested',
+    });
+    expect(link(doc).hidden).toBe(false);
+    expect(link(doc).textContent).toBe('Open in Opportun');
+    expect(link(doc).getAttribute('href')).toBe(`${SERVER}/opportunities/${ID}`);
+    expect(link(doc).getAttribute('target')).toBe('_blank');
+    expect(link(doc).getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  it('a profile capture links to its contact', async () => {
+    const { doc } = await capture({
+      kind: 'profile',
+      contactId: ID,
+      created: true,
+      refined: false,
+    });
+    expect(link(doc).hidden).toBe(false);
+    expect(link(doc).getAttribute('href')).toBe(`${SERVER}/network/${ID}`);
+  });
+
+  it('an older server that sends no id gets the text of today, and no link', async () => {
+    const { doc } = await capture({
+      kind: 'job',
+      resultId: 'r1',
+      duplicate: false,
+      refined: false,
+    });
+    expect(status(doc).textContent).toBe('Captured to Opportun.');
+    expect(link(doc).hidden).toBe(true);
+    expect(link(doc).getAttribute('href')).toBeNull();
+  });
+
+  for (const odd of ['../settings', 'a b', 'x?y=1', '', 'a'.repeat(101)]) {
+    it(`an id that is not an id (${JSON.stringify(odd.slice(0, 12))}) gets no link`, async () => {
+      const { doc } = await capture({
+        kind: 'job',
+        resultId: 'r1',
+        duplicate: false,
+        refined: false,
+        opportunityId: odd,
+        stage: 'interested',
+      });
+      expect(link(doc).hidden).toBe(true);
+      expect(link(doc).getAttribute('href')).toBeNull();
+    });
+  }
+
+  it('the link goes away when the next action starts', async () => {
+    const s = await capture();
+    expect(link(s.doc).hidden).toBe(false);
+    s.$<HTMLButtonElement>('test').click();
+    await vi.waitFor(() => expect(link(s.doc).hidden).toBe(true));
+    expect(link(s.doc).getAttribute('href')).toBeNull();
+  });
+
+  it('a capture the server refused shows no link', async () => {
+    const s = setup({ stored: SAVED, status: 500, body: {} });
+    await mountPopup(s.doc, s.deps);
+    await click(s.$('capture'), () => status(s.doc).dataset.tone === 'error');
+    expect(link(s.doc).hidden).toBe(true);
+  });
+});

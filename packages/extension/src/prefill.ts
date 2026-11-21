@@ -219,8 +219,31 @@ export function toBase64(bytes: Uint8Array): string {
 }
 
 /** The resume copy, none to attach, or a refusal that stops the whole fill. */
+/**
+ * Why the resume copy was not attached (#653), told in the fill report in place of the filler's
+ * plain "attach your resume yourself". Set by the popup from the download, never by the filler.
+ */
+export type ResumeMiss = 'resume_preparing' | 'resume_not_downloaded' | 'resume_unusable';
+export const RESUME_MISSES: readonly ResumeMiss[] = [
+  'resume_preparing',
+  'resume_not_downloaded',
+  'resume_unusable',
+];
+
+/** `why` is null when there is nothing more to say: no copy was chosen, or it was deleted. */
 export type ResumeResult =
-  { kind: 'file'; base64: string } | { kind: 'none' } | { kind: 'review_stale' };
+  | { kind: 'file'; base64: string }
+  | { kind: 'none'; why: ResumeMiss | null }
+  | { kind: 'review_stale' };
+
+/** The reason for a snapshot state that is not ready (#653), the same from /current and a 409. */
+function missOfState(state: unknown, filename: string | null): ResumeMiss | null {
+  if (state === 'pending') return 'resume_preparing';
+  if (state === 'failed') return 'resume_unusable';
+  // Unsupported is also the state of an application with no resume chosen: no file name then.
+  if (state === 'unsupported' && filename !== null && filename !== '') return 'resume_unusable';
+  return null;
+}
 
 /**
  * The attempt's resume copy as base64, or none whenever it cannot be attached as exactly that
@@ -234,19 +257,18 @@ export async function fetchResume(
   settings: Settings,
   attempt: PrefillAttempt,
 ): Promise<ResumeResult> {
-  const none = { kind: 'none' } as const;
+  const none = (why: ResumeMiss | null) => ({ kind: 'none', why }) as const;
   const { snapshotState, filename, bytes } = attempt.resume;
-  if (snapshotState !== 'ready' || filename === null || filename === '' || bytes === null) {
-    return none;
-  }
-  if (bytes <= 0 || bytes > MAX_RESUME_BYTES) return none;
+  if (snapshotState !== 'ready') return none(missOfState(snapshotState, filename));
+  if (filename === null || filename === '' || bytes === null) return none(null);
+  if (bytes <= 0 || bytes > MAX_RESUME_BYTES) return none('resume_unusable');
   const res = await get(
     fetch,
     settings,
     `${settings.serverUrl}${APPLY_PATH}/${encodeURIComponent(attempt.id)}/snapshot`,
     'application/pdf',
   );
-  if (res === null) return none;
+  if (res === null) return none('resume_not_downloaded');
   if (res.status === 409) {
     let body: unknown;
     try {
@@ -255,22 +277,23 @@ export async function fetchResume(
       body = undefined;
     }
     const error = isRecord(body) && isRecord(body.error) ? body.error : {};
-    return error.code === 'review_stale' ? { kind: 'review_stale' } : none;
+    if (error.code === 'review_stale') return { kind: 'review_stale' };
+    return none(missOfState(error.snapshotState, filename));
   }
-  if (res.status !== 200 || res.arrayBuffer === undefined) return none;
+  if (res.status !== 200 || res.arrayBuffer === undefined) return none('resume_not_downloaded');
   if (!(res.headers.get('content-type') ?? '').toLowerCase().startsWith('application/pdf')) {
-    return none;
+    return none('resume_unusable');
   }
   let data: Uint8Array;
   try {
     data = new Uint8Array(await res.arrayBuffer());
   } catch {
-    return none;
+    return none('resume_not_downloaded');
   }
-  if (data.length !== bytes) return none;
+  if (data.length !== bytes) return none('resume_unusable');
   // "%PDF-": the file is what the form is told it is.
   const magic = [0x25, 0x50, 0x44, 0x46, 0x2d];
-  if (!magic.every((b, i) => data.at(i) === b)) return none;
+  if (!magic.every((b, i) => data.at(i) === b)) return none('resume_unusable');
   return { kind: 'file', base64: toBase64(data) };
 }
 
@@ -410,6 +433,16 @@ export const NOT_FILLED_WORDS = new Map<NotFilledReason, string>([
     'more than one question or answer has this label, so it was not filled: answer it on the form',
   ],
   ['attach_yourself', 'attach your resume yourself'],
+  // Why the copy was not attached (#653): set by the popup from the download.
+  [
+    'resume_preparing',
+    'the copy is still being prepared: try again in a minute, or attach your resume yourself',
+  ],
+  [
+    'resume_not_downloaded',
+    'the copy could not be downloaded from Opportun: try again, or attach your resume yourself',
+  ],
+  ['resume_unusable', 'the copy in Opportun is not a usable PDF: attach your resume yourself'],
   ['attach_file_yourself', 'attach this file yourself'],
   [
     'withheld',

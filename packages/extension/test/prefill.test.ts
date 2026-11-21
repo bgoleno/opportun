@@ -332,19 +332,88 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
     expect(listed(s, 'Not filled in')).toContain('Resume: attach your resume yourself');
   });
 
-  for (const [why, snapshot] of [
-    ['refused (409)', json(409, { error: { code: 'snapshot_not_ready' } })],
-    ['no longer handed off (404)', json(404, { error: { code: 'not_found' } })],
-    ['not a PDF', pdf(PDF, 'text/html')],
-    ['not the announced size', pdf(PDF.slice(0, 10))],
-    ['without the PDF signature', pdf(new TextEncoder().encode('<html>placeholder....</html>'))],
+  // Each says why (#653): still being prepared, could not be downloaded, or not usable.
+  const PREPARING =
+    'Resume: the copy is still being prepared: try again in a minute, or attach your resume yourself';
+  const NOT_DOWNLOADED =
+    'Resume: the copy could not be downloaded from Opportun: try again, or attach your resume yourself';
+  const UNUSABLE = 'Resume: the copy in Opportun is not a usable PDF: attach your resume yourself';
+  for (const [why, snapshot, words] of [
+    [
+      'refused (409) without a state',
+      json(409, { error: { code: 'snapshot_not_ready' } }),
+      'Resume: attach your resume yourself',
+    ],
+    [
+      'refused (409) while still being prepared',
+      json(409, { error: { code: 'snapshot_not_ready', snapshotState: 'pending' } }),
+      PREPARING,
+    ],
+    [
+      'refused (409) as failed',
+      json(409, { error: { code: 'snapshot_not_ready', snapshotState: 'failed' } }),
+      UNUSABLE,
+    ],
+    [
+      'refused (409) as deleted',
+      json(409, { error: { code: 'snapshot_not_ready', snapshotState: 'deleted' } }),
+      'Resume: attach your resume yourself',
+    ],
+    ['no longer handed off (404)', json(404, { error: { code: 'not_found' } }), NOT_DOWNLOADED],
+    ['a server error (503)', json(503, { error: { code: 'unavailable' } }), NOT_DOWNLOADED],
+    ['not a PDF', pdf(PDF, 'text/html'), UNUSABLE],
+    ['not the announced size', pdf(PDF.slice(0, 10)), UNUSABLE],
+    [
+      'without the PDF signature',
+      pdf(new TextEncoder().encode('<html>placeholder....</html>')),
+      UNUSABLE,
+    ],
   ] as const) {
-    it(`a copy that is ${why} is not attached: attach it yourself`, async () => {
+    it(`a copy that is ${why} is not attached, and the report says why`, async () => {
       const s = setup({ snapshot });
       await clickFill(s);
       expect(s.plans[0]!.resume).toBeNull();
       expect((s.page.doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(0);
-      expect(listed(s, 'Not filled in')).toContain('Resume: attach your resume yourself');
+      expect(listed(s, 'Not filled in')).toContain(words);
+    });
+  }
+
+  it('a download that fails on the network is not attached: it could not be downloaded (#653)', async () => {
+    const s = setup({});
+    const get = s.get.getMockImplementation()!;
+    s.get.mockImplementation(async (url, init) => {
+      if (url.endsWith('/snapshot')) throw new TypeError('Failed to fetch');
+      return get(url, init);
+    });
+    await clickFill(s);
+    expect(s.plans[0]!.resume).toBeNull();
+    expect(listed(s, 'Not filled in')).toContain(NOT_DOWNLOADED);
+  });
+
+  it('a body that cannot be read is not attached: it could not be downloaded (#653)', async () => {
+    const broken = { ...pdf(), arrayBuffer: async () => Promise.reject(new TypeError('network')) };
+    const s = setup({ snapshot: broken as FetchResponse });
+    await clickFill(s);
+    expect(s.plans[0]!.resume).toBeNull();
+    expect(listed(s, 'Not filled in')).toContain(NOT_DOWNLOADED);
+  });
+
+  for (const [state, filename, words] of [
+    ['pending', 'Jane-Resume.pdf', PREPARING],
+    ['failed', 'Jane-Resume.pdf', UNUSABLE],
+    ['unsupported', 'Jane-Resume.docx', UNUSABLE],
+  ] as const) {
+    it(`a copy whose state is ${state} is never fetched, and the report says why (#653)`, async () => {
+      const s = setup({
+        current: json(200, {
+          attempt: attempt({ resume: { snapshotState: state, filename, bytes: null } }),
+          reason: null,
+        }),
+      });
+      await clickFill(s);
+      expect(s.get).toHaveBeenCalledTimes(1);
+      expect(s.plans[0]!.resume).toBeNull();
+      expect(listed(s, 'Not filled in')).toContain(words);
     });
   }
 

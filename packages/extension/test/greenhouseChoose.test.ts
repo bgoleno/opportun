@@ -11,7 +11,7 @@ import {
   type FillReport,
 } from '../src/greenhouseFill';
 import { isFillReport } from '../src/fillReport';
-import { NOT_FILLED_WORDS } from '../src/prefill';
+import { NOT_FILLED_WORDS, RESUME_MISSES } from '../src/prefill';
 import {
   BOARD,
   EDUCATION,
@@ -1235,6 +1235,9 @@ describe('the popup accepts every report the filler can give', () => {
   it('a report with each not-filled reason the popup has words for', () => {
     expect(NOT_FILLED_WORDS.size).toBeGreaterThan(0);
     for (const reason of NOT_FILLED_WORDS.keys()) {
+      // The popup sets these itself, from the download (#653): a report from the tab that
+      // claims one is not the filler's.
+      const fromPopup = (RESUME_MISSES as readonly string[]).includes(reason);
       expect(
         isFillReport({
           ok: true,
@@ -1244,8 +1247,9 @@ describe('the popup accepts every report the filler can give', () => {
           resume: null,
         }),
         reason,
-      ).toBe(true);
+      ).toBe(!fromPopup);
     }
+    expect(RESUME_MISSES.every((r) => NOT_FILLED_WORDS.has(r))).toBe(true);
   });
 
   it('each stop the filler returns, and nothing else', () => {

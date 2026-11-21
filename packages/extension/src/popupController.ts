@@ -106,6 +106,8 @@ const KEEP_OPEN =
   'Keep this window open until the report shows (up to a few seconds for each list).';
 /** While the filler runs: it waits for each list it chooses in (#402 slice 2, tl's rule 4). */
 export const FILLING = `Filling in the form. ${KEEP_OPEN}`;
+/** An opportunity's or contact's id as the server makes them (UUIDs), for the result link. */
+const RESULT_ID = /^[A-Za-z0-9_-]{1,100}$/;
 /**
  * While a fill started by opening the popup runs (#403 slice 2, sec's condition 4): what is being
  * filled, said before the report, with the same advice as FILLING.
@@ -209,12 +211,34 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
   const assist = element<HTMLElement>(doc, 'assist');
   const confirm = element<HTMLElement>(doc, 'confirm');
   const report = element<HTMLElement>(doc, 'prefill-report');
+  const openResult = element<HTMLAnchorElement>(doc, 'open-result');
 
   const show = ({ tone, text }: Rendered): void => {
     status.dataset.tone = tone;
     status.textContent = text;
   };
   const showOutcome = (o: Outcome, site?: CaptureSiteId): void => show(renderOutcome(o, site));
+  const hideResultLink = (): void => {
+    openResult.hidden = true;
+    openResult.removeAttribute('href');
+  };
+  /**
+   * "Open in Opportun" after a capture that saved something (#653): its opportunity or contact
+   * page, on the server the capture went to (it serves the app too). Only an id of the server's
+   * own form is put in the address, so nothing it sends can lead the link elsewhere; an older
+   * server that sends no id gets no link.
+   */
+  const showResultLink = (s: Settings, o: Outcome): void => {
+    const target =
+      o.kind === 'job' && o.opportunityId !== undefined
+        ? { path: 'opportunities', id: o.opportunityId }
+        : o.kind === 'profile'
+          ? { path: 'network', id: o.contactId }
+          : null;
+    if (target === null || !RESULT_ID.test(target.id)) return;
+    openResult.href = `${s.serverUrl}/${target.path}/${target.id}`;
+    openResult.hidden = false;
+  };
 
   /** Disables the buttons while `work` runs; a thrown error is shown, never swallowed. */
   /**
@@ -236,6 +260,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     hold();
     status.textContent = '';
     report.replaceChildren();
+    hideResultLink();
     try {
       await work();
     } catch {
@@ -395,7 +420,9 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         showOutcome({ kind: normalized.error }, site);
         return;
       }
-      showOutcome(await postCapture(deps.fetch, s, normalized.payload), site);
+      const outcome = await postCapture(deps.fetch, s, normalized.payload);
+      showOutcome(outcome, site);
+      showResultLink(s, outcome);
     });
   });
 
@@ -486,11 +513,18 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     }
     // The resume: confirmed here, not in the page (tl and sec on #187). Look for its name a
     // bounded number of times; if it never shows, take back exactly our file.
+    // With no copy to attach, the filler can only say "attach your resume yourself"; the popup
+    // knows why, from the download (#653).
+    const why = resume.kind === 'none' ? resume.why : null;
     const report = {
       ...filled,
       chosen: [...filled.chosen],
       filled: [...filled.filled],
-      notFilled: [...filled.notFilled],
+      notFilled: filled.notFilled.map((n) =>
+        why !== null && n.label === 'Resume' && n.reason === 'attach_yourself'
+          ? { ...n, reason: why }
+          : n,
+      ),
     };
     if (filled.resume !== null) {
       show({ tone: 'info', text: RESUME_CHECKING });
