@@ -48,7 +48,11 @@ async function configure(admin: TestClient, name: 'google' | 'github' | 'linkedi
   const res = await admin.request({
     method: 'PUT',
     url: `/api/v1/admin/oauth-providers/${name}`,
-    payload: { clientId: `${name}-client-id`, clientSecret: CLIENT_SECRET },
+    payload: {
+      clientId: `${name}-client-id`,
+      clientSecret: CLIENT_SECRET,
+      password: ADMIN_PASSWORD,
+    },
   });
   expect(res.statusCode).toBe(200);
   return res;
@@ -179,7 +183,11 @@ describe('oauth provider configuration (admin)', () => {
   it('removes a provider configuration', async () => {
     const { a } = await boot();
     await configure(a, 'google');
-    const del = await a.request({ method: 'DELETE', url: '/api/v1/admin/oauth-providers/google' });
+    const del = await a.request({
+      method: 'DELETE',
+      url: '/api/v1/admin/oauth-providers/google',
+      payload: { password: ADMIN_PASSWORD },
+    });
     expect(del.statusCode).toBe(204);
     const one = await a.request({ method: 'GET', url: '/api/v1/admin/oauth-providers/google' });
     expect(one.json()).toMatchObject({ configured: false });
@@ -193,10 +201,18 @@ describe('oauth provider configuration (admin)', () => {
       {
         method: 'PUT' as const,
         url: '/api/v1/admin/oauth-providers/google',
-        payload: { clientId: 'x', clientSecret: 'y' },
+        payload: { clientId: 'x', clientSecret: 'y', password: ADMIN_PASSWORD },
       },
-      { method: 'DELETE' as const, url: '/api/v1/admin/oauth-providers/google' },
-      { method: 'POST' as const, url: '/api/v1/admin/oauth-providers/google/import' },
+      {
+        method: 'DELETE' as const,
+        url: '/api/v1/admin/oauth-providers/google',
+        payload: { password: ADMIN_PASSWORD },
+      },
+      {
+        method: 'POST' as const,
+        url: '/api/v1/admin/oauth-providers/google/import',
+        payload: { password: ADMIN_PASSWORD },
+      },
     ]) {
       const res = await b.request(req);
       expect(res.statusCode, `${req.method} ${req.url}`).toBe(403);
@@ -209,7 +225,7 @@ describe('oauth provider configuration (admin)', () => {
       method: 'PUT',
       url: '/api/v1/admin/oauth-providers/google',
       cookies: { opportun_session: a.session, opportun_csrf: a.csrf },
-      payload: { clientId: 'x', clientSecret: 'y' },
+      payload: { clientId: 'x', clientSecret: 'y', password: ADMIN_PASSWORD },
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().error.code).toBe('csrf');
@@ -220,7 +236,7 @@ describe('oauth provider configuration (admin)', () => {
     const res = await a.request({
       method: 'PUT',
       url: '/api/v1/admin/oauth-providers/facebook',
-      payload: { clientId: 'x', clientSecret: 'y' },
+      payload: { clientId: 'x', clientSecret: 'y', password: ADMIN_PASSWORD },
     });
     expect(res.statusCode).toBe(400);
   });
@@ -271,6 +287,7 @@ describe('oauth provider configuration (admin)', () => {
     const res = await a.request({
       method: 'POST',
       url: '/api/v1/admin/oauth-providers/google/import',
+      payload: { password: ADMIN_PASSWORD },
     });
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toMatchObject({ provider: 'google', configured: true });
@@ -291,7 +308,11 @@ describe('oauth provider configuration (admin)', () => {
     const apart = await a.request({ method: 'GET', url: '/api/v1/admin/oauth-providers/google' });
     expect(apart.json().sharesIntegrationClient).toBe(false);
 
-    await a.request({ method: 'POST', url: '/api/v1/admin/oauth-providers/google/import' });
+    await a.request({
+      method: 'POST',
+      url: '/api/v1/admin/oauth-providers/google/import',
+      payload: { password: ADMIN_PASSWORD },
+    });
     const shared = await a.request({ method: 'GET', url: '/api/v1/admin/oauth-providers/google' });
     expect(shared.json().sharesIntegrationClient).toBe(true);
 
@@ -306,6 +327,7 @@ describe('oauth provider configuration (admin)', () => {
     const res = await a.request({
       method: 'POST',
       url: '/api/v1/admin/oauth-providers/google/import',
+      payload: { password: ADMIN_PASSWORD },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json().error.code).toBe('integration_client_missing');
@@ -316,6 +338,7 @@ describe('oauth provider configuration (admin)', () => {
     const res = await a.request({
       method: 'POST',
       url: '/api/v1/admin/oauth-providers/github/import',
+      payload: { password: ADMIN_PASSWORD },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json().error.code).toBe('import_unsupported');
@@ -328,6 +351,7 @@ describe('oauth provider configuration (admin)', () => {
     const res = await a.request({
       method: 'POST',
       url: '/api/v1/admin/oauth-providers/google/import',
+      payload: { password: ADMIN_PASSWORD },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json().error.code).toBe('integration_client_missing');
