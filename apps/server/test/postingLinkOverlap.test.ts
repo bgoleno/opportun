@@ -8,7 +8,11 @@
 import { eq } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import { jobs, opportunities } from '../src/db/schema';
-import { POSTING_CHECK_KIND, verifyEmbeddedGreenhouse } from '../src/lib/greenhouseEmbed';
+import {
+  POSTING_CHECK_KIND,
+  setCheckedPostingRef,
+  verifyEmbeddedGreenhouse,
+} from '../src/lib/greenhouseEmbed';
 import type { safeFetch } from '../src/lib/safeFetch';
 import { createCompany } from '../src/repos/companies';
 import { createSource } from '../src/repos/discovery';
@@ -306,5 +310,43 @@ describe('an unchanged link is not checked again (#685)', () => {
     expect(asked).toBeGreaterThan(0);
     expect((await patch(a, opp.id, link('7101'))).statusCode).toBe(200);
     expect(gh.asked.length).toBe(asked);
+  });
+});
+
+// qa on #714: two guards that no test above tells apart, since each covers for the other.
+describe('an identity already set is never replaced by a later check (#685)', () => {
+  it('the conditional write leaves an identity already set alone', async () => {
+    const { app, a } = await boot();
+    const { ctx, opp } = await companyWithBoards(app, a, ['board']);
+    app.jobs.services.sourceFetch = greenhouse(() => 'fail').fetch;
+    await patch(a, opp.id, link('7101'));
+    const chosen = { kind: 'ats_greenhouse', org: 'chosen', externalId: '7101' } as never;
+    await app.db
+      .update(opportunities)
+      .set({ atsJobRef: chosen })
+      .where(eq(opportunities.id, opp.id))
+      .run();
+    const other = { kind: 'ats_greenhouse', org: 'other', externalId: '7101' } as never;
+    expect(await setCheckedPostingRef(app.db, ctx, opp.id, link('7101'), other)).toBe(false);
+    expect((await stored(app, opp.id)).atsJobRef).toMatchObject({ org: 'chosen' });
+  });
+
+  it('a queued check for a link identified since asks no board', async () => {
+    const { app, a } = await boot();
+    const { opp } = await companyWithBoards(app, a, ['board']);
+    const gh = greenhouse(() => 'fail');
+    app.jobs.services.sourceFetch = gh.fetch;
+    await patch(a, opp.id, link('7101'));
+    const [queued] = await checks(app);
+    const chosen = { kind: 'ats_greenhouse', org: 'chosen', externalId: '7101' } as never;
+    await app.db
+      .update(opportunities)
+      .set({ atsJobRef: chosen })
+      .where(eq(opportunities.id, opp.id))
+      .run();
+    const asked = gh.asked.length;
+    await runQueuedJob(app, queued!.id);
+    expect(gh.asked.length).toBe(asked);
+    expect((await stored(app, opp.id)).atsJobRef).toMatchObject({ org: 'chosen' });
   });
 });
