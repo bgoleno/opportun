@@ -384,6 +384,8 @@ export async function streamChat(
     promptVersion?: number;
     /** The tailoring session id, for the span. Never made up here. */
     conversationId?: string;
+    /** Ends the stream early (the AI SDK's abortSignal): its onAbort records the run. */
+    abortSignal?: AbortSignal;
   },
 ): Promise<ChatStreamResult> {
   const { run, model, policy, apiKey } = await prepare(deps, task, {
@@ -412,6 +414,7 @@ export async function streamChat(
       model,
       system: opts.system,
       messages: opts.messages,
+      ...(opts.abortSignal === undefined ? {} : { abortSignal: opts.abortSignal }),
       maxRetries: SDK_MAX_RETRIES,
       telemetry: SDK_TELEMETRY_OFF,
       ...callSettings(policy),
