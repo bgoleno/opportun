@@ -148,6 +148,7 @@ export const sessions = pgTable(
     kind: text('kind', { enum: SESSION_KINDS }).notNull().default('session'),
     failedAttempts: int('failed_attempts').notNull().default(0),
     usedAt: int('used_at'),
+    revokedReason: text('revoked_reason', { enum: ['password_changed'] }),
     createdAt: createdAt(),
   },
   (t) => [index('sessions_user_id_idx').on(t.userId)],

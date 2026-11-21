@@ -746,7 +746,7 @@ describe('oauth login', () => {
 });
 
 describe('oauth state', () => {
-  it('a forged state is 403, audited, and never reaches the token endpoint', async () => {
+  it('a forged state lands on the sign-in page, audited, and never reaches the token endpoint', async () => {
     const { a, app } = await boot();
     await configure(a, 'github');
     const s = await start(app, 'github', 'login');
@@ -758,8 +758,9 @@ describe('oauth state', () => {
       { code: provider.issue(GH_ATTACKER), state: tampered },
       { [OAUTH_COOKIE]: s.binding },
     );
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error.code).toBe('bad_state');
+    // An app page, not a raw JSON 403 (#662).
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe('/login?oauth=not_completed');
     expect(await events(app, 'auth.oauth_bad_state')).toHaveLength(1);
     expect(provider.calls).toHaveLength(0);
   });
@@ -771,14 +772,14 @@ describe('oauth state', () => {
     const s = await start(app, 'github', 'login');
     const code = provider.issue({ id: '666', email: 'attacker@example.com', emailVerified: true });
     const res = await callback(app, 'github', { code, state: s.state }, {});
-    expect(res.statusCode).toBe(403);
+    expect(res.headers.location).toBe('/login?oauth=not_completed');
     const other = await callback(
       app,
       'github',
       { code, state: s.state },
       { [OAUTH_COOKIE]: 'someone-elses-binding-value-aaaaaaaaaaaaaaa' },
     );
-    expect(other.statusCode).toBe(403);
+    expect(other.headers.location).toBe('/login?oauth=not_completed');
     expect(provider.calls).toHaveLength(0);
   });
 
@@ -801,7 +802,7 @@ describe('oauth state', () => {
       { code: provider.issue({ id: '5', email: A_EMAIL, emailVerified: true }), state: s.state },
       cookies,
     );
-    expect(replay.statusCode).toBe(403);
+    expect(replay.headers.location).toBe('/login?oauth=not_completed');
     expect(await events(app, 'auth.oauth_bad_state')).toHaveLength(1);
   });
 
@@ -816,7 +817,7 @@ describe('oauth state', () => {
       { code: provider.issue(GH_ATTACKER), state: s.state },
       { [OAUTH_COOKIE]: s.binding },
     );
-    expect(cross.statusCode).toBe(403);
+    expect(cross.headers.location).toBe('/login?oauth=not_completed');
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       const late = await start(app, 'github', 'login');
@@ -827,7 +828,7 @@ describe('oauth state', () => {
         { code: provider.issue(GH_ATTACKER), state: late.state },
         { [OAUTH_COOKIE]: late.binding },
       );
-      expect(res.statusCode).toBe(403);
+      expect(res.headers.location).toBe('/login?oauth=not_completed');
     } finally {
       vi.useRealTimers();
     }
@@ -845,8 +846,29 @@ describe('oauth state', () => {
       { code, state: s.state },
       { [OAUTH_COOKIE]: s.binding, opportun_session: b.session },
     );
-    expect(res.statusCode).toBe(403);
+    // b is signed in: the page that says so is b's own Security page (#662).
+    expect(res.headers.location).toBe('/settings/security?oauth=not_completed');
     expect(await oauthRows(app)).toEqual([]);
+    expect(await events(app, 'auth.oauth_bad_state')).toHaveLength(1);
+  });
+
+  it('a link finished after the session that started it ended lands on the sign-in page (#662)', async () => {
+    const { a, app } = await boot();
+    await configure(a, 'github');
+    const s = await start(app, 'github', 'link', a);
+    const code = provider.issue({ id: '13', email: 'x@example.com', emailVerified: true });
+    // Signed out meanwhile: the browser has its binding cookie, and no session.
+    const res = await callback(
+      app,
+      'github',
+      { code, state: s.state },
+      { [OAUTH_COOKIE]: s.binding },
+    );
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe('/login?oauth=not_completed');
+    expect(await oauthRows(app)).toEqual([]);
+    expect(await events(app, 'auth.oauth_bad_state')).toHaveLength(1);
+    expect(provider.calls).toHaveLength(0);
   });
 
   it('never logs the code or state of a callback', async () => {
@@ -1298,7 +1320,7 @@ describe('first password for an account created by OAuth sign-in (rulings R3, M-
       { code: provider.issue(FRESH), state },
       { [OAUTH_COOKIE]: cookieOf(started, OAUTH_COOKIE)!.value, opportun_session: s2.session },
     );
-    expect(crossed.statusCode).toBe(403);
+    expect(crossed.headers.location).toBe('/settings/security?oauth=not_completed');
     // s1's grant survived s2's refused attempt and still works, once.
     const fromS1 = await s1.request('POST', '/api/v1/auth/password', { next: NEXT });
     expect(fromS1.statusCode).toBe(204);
@@ -1466,7 +1488,7 @@ describe('state binding cookie', () => {
         },
         OVER_HTTPS,
       );
-      expect(tossed.statusCode).toBe(403);
+      expect(tossed.headers.location).toBe('/login?oauth=not_completed');
       const ok = await callback(
         app,
         'github',

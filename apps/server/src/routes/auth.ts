@@ -45,6 +45,7 @@ import {
   hashRecoveryCode,
   pendingTokenOwner,
   pendingTokenStored,
+  takeRevokedPending,
   redeemPendingToken,
 } from '../lib/twoFactor';
 import { clearCsrfCookie, isSecureRequest, issueCsrfCookie } from '../plugins/security';
@@ -454,7 +455,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           ? await createSession(tx, userId, sessionMeta(req))
           : null,
       );
-      if (session === null) return fail(reply, 401, 'invalid_pending');
+      if (session === null) {
+        // A change or reset since the claim (#662): say so, rather than that it took too long.
+        const changed = await takeRevokedPending(db, pendingToken);
+        return fail(reply, 401, changed ? 'password_changed' : 'invalid_pending');
+      }
       setSessionCookies(req, reply, session);
       await audit(db, 'auth.2fa_verified', { userId, ip: req.ip, detail: { method } });
       if (method === 'recovery') {

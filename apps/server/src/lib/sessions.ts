@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import type { Db, Exec } from '../db/client';
 import { sessions, users } from '../db/schema';
 import type { UserCtx } from '../repos/base';
@@ -130,7 +130,17 @@ export async function sessionStored(exec: Exec, id: string, userId: string): Pro
 }
 
 /** Every sessions row the user has, pending 2FA tokens included. Inside a change's or reset's
- *  locked transaction (#561), so a sign-in that holds that lock writes before it, or not at all. */
+ *  locked transaction (#561), so a sign-in that holds that lock writes before it, or not at all.
+ *  A pending token is marked, not deleted (#662): it can never be claimed again, and its code step
+ *  answers password_changed rather than invalid_pending. It still expires as before. */
 export async function destroyAllSessions(db: Exec, userId: string): Promise<void> {
-  await db.delete(sessions).where(eq(sessions.userId, userId)).run();
+  await db
+    .delete(sessions)
+    .where(and(eq(sessions.userId, userId), ne(sessions.kind, 'pending_2fa')))
+    .run();
+  await db
+    .update(sessions)
+    .set({ revokedReason: 'password_changed', usedAt: Date.now() })
+    .where(and(eq(sessions.userId, userId), eq(sessions.kind, 'pending_2fa')))
+    .run();
 }

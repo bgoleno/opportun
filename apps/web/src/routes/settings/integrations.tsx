@@ -31,7 +31,10 @@ import { OriginWarning, requiredOrigin } from './-googleOrigin';
 import { ReactiveResumeSettings } from './-reactiveResume';
 
 const Search = z.object({
-  google: z.enum(['denied', 'error', 'session', 'unavailable']).optional().catch(undefined),
+  google: z
+    .enum(['denied', 'error', 'session', 'unavailable', 'not_completed'])
+    .optional()
+    .catch(undefined),
 });
 
 export const Route = createFileRoute('/settings/integrations')({
@@ -61,7 +64,7 @@ function IntegrationsSettings() {
 export function GoogleCard({
   flash,
 }: {
-  flash: 'denied' | 'error' | 'session' | 'unavailable' | undefined;
+  flash: 'denied' | 'error' | 'session' | 'unavailable' | 'not_completed' | undefined;
 }) {
   const status = useGoogleStatus();
   const qc = useQueryClient();
@@ -113,6 +116,9 @@ export function GoogleCard({
           <FormError message="Google sent you back, but this address had no login session: the connect flow must start and finish on the same address. You are logged in here now, so click Connect Google account again." />
         ) : flash === 'unavailable' ? (
           <FormError message="Something went wrong checking you were signed in. Try again in a moment." />
+        ) : flash === 'not_completed' ? (
+          // A callback whose state did not verify (#662).
+          <FormError message="The Google connection was not completed: it was out of date, already used, or started in another session. Click Connect Google account to try again." />
         ) : null}
         {status.isPending ? (
           <p className="text-sm text-muted-foreground">Loading...</p>
