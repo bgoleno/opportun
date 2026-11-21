@@ -188,26 +188,18 @@ export function setProviderResolveOverride(db: Db, resolve: ResolveHost): void {
 }
 
 /**
- * A time limit on every AI provider request for one app's database (#656): set on a demo server
- * only (app.ts). There a request that runs on holds the demo reset's gate for as long as it runs
- * (lib/demoResetGate.ts), so each is aborted below the gate's hold bound, and its caller gets the
- * usual AI-unavailable outcome (the AI SDK reports the abort as a provider failure). Unset
- * elsewhere: no limit, as before.
+ * A time limit on every AI call for one app's database (#656): set on a demo server only
+ * (app.ts). There a call that runs on holds the demo reset's gate for as long as it runs
+ * (lib/demoResetGate.ts), so it is aborted below the gate's hold bound, and its caller gets the
+ * usual AI-unavailable outcome (the AI SDK reports the abort as a provider failure). It is one
+ * deadline for the whole call, its retries included (AiDeps.callTimeLimitMs; tl on #670): a limit
+ * per request would let a provider answering 503 slowly keep a call going three times as long.
+ * Unset elsewhere: no limit, as before.
  */
 const callLimits = new WeakMap<Db, number>();
 
 export function setAiCallLimit(db: Db, ms: number): void {
   callLimits.set(db, ms);
-}
-
-/** `fetch` with a time limit on each request, added to any signal the caller passed. */
-function withTimeLimit(f: typeof fetch, ms: number | undefined): typeof fetch {
-  if (ms === undefined) return f;
-  return ((input, init) => {
-    const limit = AbortSignal.timeout(ms);
-    const signal = init?.signal == null ? limit : AbortSignal.any([init.signal, limit]);
-    return f(input, { ...init, signal });
-  }) as typeof fetch;
 }
 
 /**
@@ -418,11 +410,13 @@ export async function buildAiDeps(
     },
     // The user of every call: on its span (user.id), and what keeps one user per trace (14.6).
     userId: ctx.userId,
+    // One deadline per call, retries included (the router makes it: tl on #670).
+    ...(limit === undefined ? {} : { callTimeLimitMs: limit }),
     budget: await readBudget(db, ctx),
     spentTodayUsd: async (task) => await spentTodayUsd(db, ctx, task),
     providerFetch: {
-      fetch: withTimeLimit(fetches.strict, limit),
-      officialFetch: withTimeLimit(fetches.official, limit),
+      fetch: fetches.strict,
+      officialFetch: fetches.official,
       allowLoopbackHttp,
       baseUrls,
     },

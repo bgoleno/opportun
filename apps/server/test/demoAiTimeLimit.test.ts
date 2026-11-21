@@ -68,6 +68,36 @@ describe('an AI call on a demo server has a time limit (#656)', () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
+  it('the limit is one deadline for the whole call, its retries included (tl on #670)', async () => {
+    // Each request answers 503 after 150 ms, under the limit, and the SDK retries a 503: with a
+    // limit per request the call would run three of them (450 ms and more); one deadline ends it.
+    limitMs = 250;
+    const { app, a } = await boot({ demo: true });
+    await addKey(a);
+    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 150);
+        init?.signal?.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(init.signal?.reason ?? new Error('aborted'));
+        });
+      });
+      return new Response(
+        JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'busy' } }),
+        { status: 503, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const deps = await buildAiDeps(app.db, { userId: a.userId, isAdmin: false });
+    const started = Date.now();
+    await expect(runStructured(deps, 'discovery.rank', OPTS)).rejects.toBeInstanceOf(
+      AiUnavailableError,
+    );
+    // Within the one deadline (and the SDK's backoff between tries), not three requests' worth.
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
   it('on a demo server, a call that answers within the limit is unchanged', async () => {
     limitMs = 2_000;
     const { app, a } = await boot({ demo: true });
