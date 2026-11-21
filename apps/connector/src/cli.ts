@@ -36,7 +36,10 @@ Commands:
   sync     Push new mail once
   watch    Sync every few minutes until interrupted (Ctrl-C)
 
-Options for init (anything left out is asked for):
+Options for init. With none of --server, --token, --mailbox or --days, every value is
+asked for except the interval. If you give any of them, a value you leave out is asked
+for only when it is the server, the token or the mailboxes; the days and the interval keep
+their saved value, or the default:
   --server <url>      Opportun server address, https://...
   --token <token>     Device token with the mail:push scope (odt_...). Prefer the
                       prompt: a flag can end up in shell history.
