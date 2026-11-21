@@ -31,8 +31,11 @@ export const MAX_BATCH_BODY_BYTES = 10 * MB;
 /** The request itself: the body cap plus room for JSON escaping and headers of 100 messages. */
 const ROUTE_BODY_LIMIT = 12 * MB;
 
-/** The adapters/mailProvider InboundMessage shape. Long strings are cut by upsertInbound. */
-const InboundMessageSchema = z.object({
+/**
+ * The adapters/mailProvider InboundMessage shape. Long strings are cut by upsertInbound. Exported
+ * for the parity test with the connector's own caps (test/clientLimitsParity.test.ts, #649).
+ */
+export const InboundMessageSchema = z.object({
   externalId: z.string().min(1).max(1024),
   threadKey: z.string().max(1024),
   from: z.string().max(4096),

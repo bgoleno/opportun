@@ -274,6 +274,7 @@ export function createGoogleDocsStore(db: Db, conn: GoogleConn, api: GoogleApi):
       const results: ResumeEditResult[] = edits.map((_edit, index) => ({
         index,
         outcome:
+          // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
           (response.replies?.[index]?.replaceAllText?.occurrencesChanged ?? 0) > 0
             ? ('applied' as const)
             : ('already_consumed' as const),

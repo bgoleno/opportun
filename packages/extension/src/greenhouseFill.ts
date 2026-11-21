@@ -46,7 +46,16 @@ export interface FillPlan {
   /** Standard fields, by the form's own element id, with the reviewed value. */
   standard: { id: string; name: string; value: string }[];
   /** Questions matched by their label, normalised; any one of `labels` matches. */
-  questions: { labels: string[]; name: string; value: string }[];
+  questions: {
+    labels: string[];
+    name: string;
+    value: string;
+    /**
+     * A detail whose label a reviewed answer took (prefill.ts, #595): its question was filled with
+     * the answer, so when none of its other labels is on the form it is not reported as missing.
+     */
+    covered?: boolean;
+  }[];
   /**
    * Lists chosen in by the form's own control id (#402 slice 2): `country` (the phone's country
    * code), `candidate-location`, `school--0` and `degree--0`, with the reviewed value.
@@ -274,12 +283,13 @@ export async function fillGreenhouseForm(
     const list = listId === '' ? null : doc.getElementById(listId);
     if (shell === null || list === null) return null;
     if (list.getAttribute('role') !== 'listbox' || !shell.contains(list)) return null;
-    // Never one that is, or sits inside, a link or a control under the listbox (#537, sec's
-    // audit #524): a click there would follow the link or press the control. In upper case: an
-    // SVG link's tagName is "a", and it follows its link too (sec at 7b7f5b3).
+    // Never one that is, or sits inside, a link or a control (#537, sec's audit #524): a click
+    // there would follow the link or press the control. In upper case: an SVG link's tagName is
+    // "a", and it follows its link too (sec at 7b7f5b3). All the way up, not only to the listbox
+    // (#620): a list inside a link or a label is clicked through it just the same.
     return Array.from(list.querySelectorAll('[role="option"]')).filter((o) => {
       if (o.closest('[role="listbox"]') !== list) return false;
-      for (let at: Element | null = o; at !== null && at !== list; at = at.parentElement) {
+      for (let at: Element | null = o; at !== null; at = at.parentElement) {
         const tag = at.tagName.toUpperCase();
         if (['A', 'AREA', 'BUTTON', 'INPUT', 'LABEL', 'SUMMARY'].includes(tag)) return false;
       }
@@ -528,7 +538,9 @@ export async function fillGreenhouseForm(
     if (!used.has(`s${i}`)) notFilled.push({ label: s.name, reason: 'no_matching_question' });
   });
   plan.questions.forEach((q, i) => {
-    if (!used.has(`q${i}`)) notFilled.push({ label: q.name, reason: 'no_matching_question' });
+    if (!used.has(`q${i}`) && q.covered !== true) {
+      notFilled.push({ label: q.name, reason: 'no_matching_question' });
+    }
   });
   // A withheld field the form does not ask for is still listed, by its name.
   (plan.withheld ?? []).forEach((w, i) => {
@@ -941,12 +953,13 @@ export function greenhouseListHelpers(doc: Document, form: Element) {
     const list = listId === '' ? null : doc.getElementById(listId);
     if (shell === null || list === null) return null;
     if (list.getAttribute('role') !== 'listbox' || !shell.contains(list)) return null;
-    // Never one that is, or sits inside, a link or a control under the listbox (#537, sec's
-    // audit #524): a click there would follow the link or press the control. In upper case: an
-    // SVG link's tagName is "a", and it follows its link too (sec at 7b7f5b3).
+    // Never one that is, or sits inside, a link or a control (#537, sec's audit #524): a click
+    // there would follow the link or press the control. In upper case: an SVG link's tagName is
+    // "a", and it follows its link too (sec at 7b7f5b3). All the way up, not only to the listbox
+    // (#620): a list inside a link or a label is clicked through it just the same.
     return Array.from(list.querySelectorAll('[role="option"]')).filter((o) => {
       if (o.closest('[role="listbox"]') !== list) return false;
-      for (let at: Element | null = o; at !== null && at !== list; at = at.parentElement) {
+      for (let at: Element | null = o; at !== null; at = at.parentElement) {
         const tag = at.tagName.toUpperCase();
         if (['A', 'AREA', 'BUTTON', 'INPUT', 'LABEL', 'SUMMARY'].includes(tag)) return false;
       }

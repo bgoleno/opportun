@@ -341,14 +341,18 @@ function bestWindow(hits: Hit[]): { first: number; last: number } {
   let hi = 0;
   let best = { score: -1, first: 0, last: 0 };
   for (let k = 0; k < hits.length; k++) {
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     const s = hits[k]!.from;
     if (k > 0 && hits[k - 1]!.from === s) continue; // same start, same window
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     while (hits[lo]!.from < s) lo += 1;
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     while (hi < hits.length && hits[hi]!.from < s + n) hi += 1;
     const phrases = new Set<number>();
     let inside = 0;
     let last = s;
     for (let j = lo; j < hi; j++) {
+      // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
       const h = hits[j]!;
       if (h.to >= s + n) continue; // starts inside, ends past the window
       inside += 1;
@@ -384,7 +388,9 @@ export function pgSnippet(text: string, q: string): string {
   }
   const end = Math.min(tokens.length, start + n) - 1;
   const atEnd = complete && end === tokens.length - 1;
+  // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
   const from = start === 0 ? 0 : (tokens[start]?.start ?? 0);
+  // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
   const to = atEnd ? text.length : (tokens[end]?.end ?? text.length);
   let out = start === 0 ? '' : SNIPPET_ELLIPSIS;
   let at = from;

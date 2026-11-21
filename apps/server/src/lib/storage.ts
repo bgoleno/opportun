@@ -572,7 +572,9 @@ export function readOperatorBytesAt(
  */
 export function readOperatorTree(absPath: string, maxBytes = Infinity): Record<string, Uint8Array> {
   if (!isAbsolute(absPath)) return {};
-  const out: Record<string, Uint8Array> = {};
+  // No prototype, so a file named `__proto__` (or `constructor`) is a key like any other: on a
+  // plain object, assigning out['__proto__'] would set the prototype and lose the file.
+  const out = Object.create(null) as Record<string, Uint8Array>;
   let total = 0;
   const walk = (dir: string, prefix: string): void => {
     let entries;
@@ -592,6 +594,7 @@ export function readOperatorTree(absPath: string, maxBytes = Infinity): Record<s
         if (total > maxBytes) {
           throw new Error(`operator tree too large: ${absPath} exceeds ${maxBytes} bytes`);
         }
+        // eslint-disable-next-line security/detect-object-injection -- file names from an operator-controlled directory, not user input, into a null-prototype object
         out[name] = bytes;
       }
     }

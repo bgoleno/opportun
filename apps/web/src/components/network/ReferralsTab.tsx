@@ -51,7 +51,8 @@ const linkClass = 'font-medium text-primary underline-offset-4 hover:underline';
 
 function aiNote(reason: string): string {
   if (reason === 'no_key') return 'no AI key is set up';
-  if (reason === 'over_budget') return "today's AI budget is used up";
+  // The router's reason for a spent daily budget (packages/ai types.ts), passed through (#651).
+  if (reason === 'budget_exceeded') return "today's AI budget is used up";
   return 'AI is unavailable right now';
 }
 

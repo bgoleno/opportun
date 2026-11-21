@@ -5,7 +5,7 @@
 // recovery codes can get back in and re-enroll (plan Review Focus 3).
 import { randomBytes } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
-import { lockScope, withTransaction, type Db } from '../db/client';
+import { lockScope, withTransaction, type Db, type Exec } from '../db/client';
 import { deviceTokens, oauthAccounts, users } from '../db/schema';
 import { hashPassword, NO_PEPPERS, passwordScope, type PepperSet } from './passwords';
 import { destroyAllSessions } from './sessions';
@@ -31,7 +31,24 @@ export async function resetUserPassword(
 ): Promise<PasswordReset> {
   const password = temporaryPassword();
   const passwordHash = await hashPassword(password, peppers);
-  const unlinked = await withTransaction(db, async (tx) => {
+  const unlinkedProviders = await withTransaction(db, (tx) =>
+    resetPasswordIn(tx, userId, passwordHash),
+  );
+  return { password, unlinkedProviders };
+}
+
+/**
+ * The reset's writes, in the caller's transaction: the new hash, 2FA off, every device token
+ * revoked, every session and pending token ended, every provider unlinked. Answers the providers
+ * unlinked, sorted. For a caller that must hold another lock in the same transaction (an admin's
+ * reset, under the admin's own password lock, #620).
+ */
+export async function resetPasswordIn(
+  tx: Exec,
+  userId: string,
+  passwordHash: string,
+): Promise<string[]> {
+  const unlinked = await (async () => {
     // The lock a token minted after a password check takes (#539): see passwordScope.
     await lockScope(tx, passwordScope(userId));
     await tx
@@ -55,6 +72,6 @@ export async function resetUserPassword(
       .where(eq(oauthAccounts.userId, userId))
       .returning({ provider: oauthAccounts.provider })
       .all();
-  });
-  return { password, unlinkedProviders: unlinked.map((r) => r.provider).sort() };
+  })();
+  return unlinked.map((r) => r.provider).sort();
 }
