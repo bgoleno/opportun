@@ -14,7 +14,7 @@ import { onSlowTransaction } from '../src/db/gate';
 import { discoveryResults, discoveryRuns, jobs, opportunities } from '../src/db/schema';
 import { drainWaitingResults } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { enqueue } from '../src/jobs/runner';
 import { resolveCapture } from '../src/lib/captureResolve';
 import type { UserCtx } from '../src/repos/base';
 import { createCompany } from '../src/repos/companies';
@@ -24,6 +24,7 @@ import { useApi } from './api';
 import { sqliteOnly } from './db';
 import type { TestClient } from './isolation';
 import { heldApart, pauseAt, settledOrWaiting } from './race';
+import { runQueuedJob } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -73,13 +74,13 @@ async function boardWithThePosting(app: FastifyInstance, c: TestClient): Promise
 }
 
 async function runBoard(app: FastifyInstance, c: TestClient, sourceId: string): Promise<void> {
-  await enqueue(
+  const queued = await enqueue(
     app.db,
     DISCOVERY_RUN_KIND,
     { sourceId },
     { dedupeKey: `${DISCOVERY_RUN_KIND}:${sourceId}`, userId: c.userId },
   );
-  await runNextJob(app.db, { services: app.jobs.services });
+  await runQueuedJob(app, queued);
 }
 
 const capture = (app: FastifyInstance, c: TestClient, over: Partial<NormalizedPosting> = {}) =>

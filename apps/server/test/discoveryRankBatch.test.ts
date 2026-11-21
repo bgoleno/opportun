@@ -29,6 +29,7 @@ import { drainWaitingResults, sweepWaitingResults } from '../src/jobs/discoveryR
 import { DISCOVERY_RUN_KIND, rankAnyway, rankBelowCut } from '../src/jobs/discoveryRun';
 import {
   collectRankBatch,
+  RANK_BATCH_CLEANUP_KIND,
   RANK_BATCH_COLLECT_KIND,
   RANK_BATCH_SEND_KIND,
   setRankBatching,
@@ -89,6 +90,14 @@ class FakeBatches implements BatchProvider {
   }
   async results(batchId: string): Promise<BatchResultItem[]> {
     return this.answers.get(batchId) ?? [];
+  }
+  /** Every batch id cleanup was asked to remove, in order (#634). */
+  cleaned: string[] = [];
+  /** Thrown by every cleanup call while set: a refused delete. */
+  cleanupError: Error | null = null;
+  async cleanup(batchId: string): Promise<void> {
+    if (this.cleanupError !== null) throw this.cleanupError;
+    this.cleaned.push(batchId);
   }
   /** Ends the nth batch sent (1-based), each request answered by `answer`. */
   end(n: number, answer: (r: BatchRequest) => BatchResultItem | null): void {
@@ -1341,5 +1350,69 @@ describe('two users batching (sec)', () => {
     const [batchA] = await batchRows(app, a);
     await app.db.delete(rankBatches).where(eq(rankBatches.id, batchA!.id)).run();
     expect((await results(app, a))[0]!.rankBatchId).toBeNull();
+  });
+});
+
+// #634: once a batch's results are applied, what the provider keeps of it is removed, by a job of
+// its own: a refused removal is retried later and never holds up or undoes the results.
+describe("the provider's copy of a collected batch (#634)", () => {
+  async function collected(app: FastifyInstance, c: TestClient) {
+    await batching(app, c);
+    await discover(app, c, 1);
+    expect(await submit(app, c)).toMatchObject({ status: 'submitted' });
+    fake!.end(1, succeeded(77));
+    expect(await collect(app, c)).toMatchObject({ status: 'collected', ranked: 1 });
+    return fake!.sent[0]!.batchId;
+  }
+  const cleanupJobs = (app: FastifyInstance) =>
+    app.db.select().from(jobs).where(eq(jobs.kind, RANK_BATCH_CLEANUP_KIND)).all();
+
+  it('the collect queues a cleanup, which removes the batch at the provider', async () => {
+    const { app, a } = await boot();
+    const providerId = await collected(app, a);
+    const [job] = await cleanupJobs(app);
+    expect(job).toMatchObject({ status: 'pending', userId: a.userId });
+    expect(fake!.cleaned).toEqual([]);
+    await app.jobs.drain();
+    expect(fake!.cleaned).toEqual([providerId]);
+    expect((await cleanupJobs(app))[0]).toMatchObject({ status: 'done' });
+  });
+
+  it('a refused removal is retried later, and the applied results stay as they are', async () => {
+    const { app, a } = await boot();
+    const providerId = await collected(app, a);
+    const [r] = await results(app, a);
+    fake!.cleanupError = new Error('OpenAI batch delete: HTTP 500');
+    await app.jobs.drain();
+    const [job] = await cleanupJobs(app);
+    expect(job).toMatchObject({ status: 'pending', attempts: 1 });
+    expect(job!.runAt).toBeGreaterThan(Date.now());
+    expect(job!.lastError).toMatch(/HTTP 500/);
+    // The ranking it applied is untouched.
+    expect(await getResult(app.db, ctxOf(a), r!.id)).toMatchObject({ aiScore: 77 });
+    // Later, the provider answers again: removed.
+    fake!.cleanupError = null;
+    vi.setSystemTime(job!.runAt + 1);
+    await app.jobs.drain();
+    expect(fake!.cleaned).toEqual([providerId]);
+  });
+
+  it('a batch the provider no longer has queues no cleanup', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    await submit(app, a);
+    fake!.forget(1);
+    expect(await collect(app, a)).toMatchObject({ status: 'gone' });
+    expect(await cleanupJobs(app)).toEqual([]);
+  });
+
+  it("a cleanup for another user's batch removes nothing", async () => {
+    const { app, a, b } = await boot();
+    await collected(app, a);
+    const [job] = await cleanupJobs(app);
+    await app.db.update(jobs).set({ userId: b.userId }).where(eq(jobs.id, job!.id)).run();
+    await app.jobs.drain();
+    expect(fake!.cleaned).toEqual([]);
   });
 });

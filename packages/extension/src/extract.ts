@@ -64,6 +64,7 @@ export function extractPage(markers: ExtractMarkers, doc: Document = document): 
   // "LinkedIn Learning") is untouched; only a line that IS one of them, or ends with one of
   // them, cuts. See @opportun/core/linkedinMarkers for which patterns rely on that exactness
   // and why (in particular: never loosen `similar jobs` into a substring match).
+  // eslint-disable-next-line security/detect-non-literal-regexp -- the constant patterns the popup passes from /core linkedinMarkers
   const trailingNoiseMarkers = markers.trailingNoisePatterns.map((p) => new RegExp(p, 'i'));
 
   const lines = raw.split('\n');

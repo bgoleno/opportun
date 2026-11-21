@@ -314,6 +314,9 @@ export async function runStructured<T>(
     promptVersion: opts.promptVersion,
   });
   const request = structuredRequest(policy, opts);
+  // One deadline for the whole call, every try and the SDK's own retries in it (tl on #670).
+  const deadline =
+    deps.callTimeLimitMs === undefined ? undefined : AbortSignal.timeout(deps.callTimeLimitMs);
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     let output: T;
@@ -327,6 +330,7 @@ export async function runStructured<T>(
           prompt: request.prompt,
           output: Output.object({ schema: request.schema }),
           maxRetries: SDK_MAX_RETRIES,
+          ...(deadline === undefined ? {} : { abortSignal: deadline }),
           telemetry: SDK_TELEMETRY_OFF,
           maxOutputTokens: request.maxOutputTokens,
           ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
@@ -384,6 +388,8 @@ export async function streamChat(
     promptVersion?: number;
     /** The tailoring session id, for the span. Never made up here. */
     conversationId?: string;
+    /** Ends the stream early (the AI SDK's abortSignal): its onAbort records the run. */
+    abortSignal?: AbortSignal;
   },
 ): Promise<ChatStreamResult> {
   const { run, model, policy, apiKey } = await prepare(deps, task, {
@@ -407,11 +413,17 @@ export async function streamChat(
   };
 
   run.attempts = 1;
+  // The caller's own signal and the deps' one deadline for the call (#656), whichever ends first.
+  const deadline =
+    deps.callTimeLimitMs === undefined ? undefined : AbortSignal.timeout(deps.callTimeLimitMs);
+  const signals = [opts.abortSignal, deadline].filter((s): s is AbortSignal => s !== undefined);
+  const abortSignal = signals.length <= 1 ? signals[0] : AbortSignal.any(signals);
   return run.span.run(() =>
     streamText<ToolSet>({
       model,
       system: opts.system,
       messages: opts.messages,
+      ...(abortSignal === undefined ? {} : { abortSignal }),
       maxRetries: SDK_MAX_RETRIES,
       telemetry: SDK_TELEMETRY_OFF,
       ...callSettings(policy),

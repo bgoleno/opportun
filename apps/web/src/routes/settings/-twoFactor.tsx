@@ -1,6 +1,7 @@
 // Settings > Security: optional TOTP two-factor sign-in (FR-S3). Enrollment shows the QR the
 // server rendered (a data: URL; the CSP allows data: images for exactly this) and the setup
 // key, then the recovery codes exactly once.
+import { SharedDemoNotice } from '@/components/SharedDemoNotice';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Copy } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
@@ -77,6 +78,8 @@ export function TwoFactorCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
+        {/* One visitor's two-factor sign-in locks the others out of a shared account (#671). */}
+        {enabled ? null : <SharedDemoNotice about="twoFactor" />}
         {status.isError ? <FormError message={errorMessage(status.error)} /> : null}
         {enabled ? (
           <>

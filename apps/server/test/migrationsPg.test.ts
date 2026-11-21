@@ -116,6 +116,7 @@ describe('migrateLockedPg (recorded fake)', () => {
   it('a migration that throws leaves no bookkeeping row and surfaces the driver error', async () => {
     const failing = (baselineStatements[3] ?? '').trim();
     const { pool, committed, asPool } = migratingPool({
+      // eslint-disable-next-line security/detect-non-literal-regexp -- a fixture's own statement, escaped on this line
       failOn: new RegExp(`^${failing.slice(0, 30).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
     });
     const err = await migrateLockedPg(asPool).then(

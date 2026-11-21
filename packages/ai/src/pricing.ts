@@ -158,10 +158,17 @@ function overridePrice(value: number | undefined): number | undefined {
 /**
  * A provider's batch price, as a share of its live price, applied to input, output and both cache
  * rates alike (tl's design on #358, point 11): one multiplier for each provider that has batches,
- * not a second rate for each model. Anthropic's Message Batches cost half. A provider with no
- * entry has no batches here.
+ * not a second rate for each model. A provider with no entry has no batches here.
+ *   - Anthropic: Message Batches cost half.
+ *   - OpenAI (#510): the Batch API has a "50% cost discount compared to synchronous APIs"
+ *     (https://developers.openai.com/api/docs/guides/batch, read 2026-11-20), and the Batch
+ *     columns of https://developers.openai.com/api/docs/pricing are half the Standard ones,
+ *     cached input included. Not the background-mode discount on that page, a different thing.
  */
-const BATCH_MULTIPLIER = new Map<string, number>([['anthropic', 0.5]]);
+const BATCH_MULTIPLIER = new Map<string, number>([
+  ['anthropic', 0.5],
+  ['openai', 0.5],
+]);
 
 export function batchMultiplier(provider: string): number | undefined {
   return BATCH_MULTIPLIER.get(provider);

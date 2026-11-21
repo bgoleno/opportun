@@ -1,7 +1,9 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
+import { useCreateContact, useDeleteContact, useUpdateContact } from './api';
 import { ReferralsTab } from './ReferralsTab';
 
 const candidate = (over: Record<string, unknown>) => ({
@@ -176,5 +178,176 @@ describe('ReferralsTab', () => {
     expect(await screen.findByText('No contacts at Initech.')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'import your LinkedIn export' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Add a contact' })).toBeNull();
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/590 criterion 6: the ranking is kept, and Re-rank makes
+// a fresh one (one model call on the server) in its place.
+describe('ReferralsTab: Re-rank (#590)', () => {
+  const RANKED_AT = Date.UTC(2026, 10, 18, 14, 30);
+
+  it('says when the ranking was made, and Re-rank asks for a fresh one and shows it', async () => {
+    const fresh = {
+      ...CANDIDATES,
+      items: [
+        { ...CANDIDATES.items[1]!, rank: 1, rationale: 'Ranked again.' },
+        { ...CANDIDATES.items[0]!, rank: 2 },
+        CANDIDATES.items[2]!,
+      ],
+      rankedAt: RANKED_AT + 60_000,
+    };
+    const { calls } = mockApi({
+      'GET /opportunities/opp-1/referral-candidates': (call: ApiCall) =>
+        call.search.includes('refresh=true') ? fresh : { ...CANDIDATES, rankedAt: RANKED_AT },
+      'GET /opportunities/opp-1/referrals': { items: [], total: 0 },
+    });
+    renderWithProviders(<ReferralsTab opportunityId="opp-1" companyName="Initech" />);
+    const user = userEvent.setup();
+    await screen.findByRole('list', { name: 'Referral candidates' });
+    expect(screen.getByText(/^Ranked by AI/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Re-rank' }));
+    expect(await screen.findByText('Ranked again.')).toBeInTheDocument();
+    const reads = calls.filter((c) => c.path === '/opportunities/opp-1/referral-candidates');
+    expect(reads.filter((c) => c.search.includes('refresh=true'))).toHaveLength(1);
+    const items = within(screen.getByRole('list', { name: 'Referral candidates' })).getAllByRole(
+      'listitem',
+    );
+    expect(items[0]).toHaveTextContent('Jane Doe');
+  });
+
+  it('no Re-rank when the list is not ranked by AI', async () => {
+    mockApi({
+      'GET /opportunities/opp-1/referral-candidates': {
+        ...CANDIDATES,
+        items: CANDIDATES.items.map((i) => ({ ...i, rank: null, rationale: null })),
+        ranked: false,
+        aiUnavailable: 'no_key',
+        rankedAt: null,
+      },
+      'GET /opportunities/opp-1/referrals': { items: [], total: 0 },
+    });
+    renderWithProviders(<ReferralsTab opportunityId="opp-1" companyName="Initech" />);
+    await screen.findByRole('list', { name: 'Referral candidates' });
+    expect(screen.queryByRole('button', { name: 'Re-rank' })).toBeNull();
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/651: the candidates were kept for ten minutes and the
+// contact hooks refreshed only the network list, so "No contacts at X", then Add a contact, then
+// back still said "No contacts at X", and a deleted contact kept its Ask button.
+describe('ReferralsTab: fresh after a contact changes (#651)', () => {
+  function Harness({ act }: { act: 'create' | 'update' | 'delete' }) {
+    const [view, setView] = useState<'tab' | 'network'>('tab');
+    const create = useCreateContact();
+    const update = useUpdateContact('c-jane');
+    const remove = useDeleteContact('c-jane');
+    if (view === 'tab') {
+      return (
+        <>
+          <button type="button" onClick={() => setView('network')}>
+            To the network
+          </button>
+          <ReferralsTab opportunityId="opp-1" companyName="Initech" />
+        </>
+      );
+    }
+    const done = { onSuccess: () => setView('tab') };
+    return (
+      <button
+        type="button"
+        onClick={() =>
+          act === 'create'
+            ? create.mutate({ name: 'Jane Doe', company: 'Initech' }, done)
+            : act === 'update'
+              ? update.mutate({ name: 'Jane Smith' }, done)
+              : remove.mutate(undefined, done)
+        }
+      >
+        Save the contact
+      </button>
+    );
+  }
+
+  const jane = candidate({ contactId: 'c-jane', name: 'Jane Doe', strength: 2 });
+  const serve = (items: unknown[]) => ({
+    items,
+    total: items.length,
+    ranked: false,
+    aiUnavailable: null,
+  });
+
+  async function roundTrip(
+    act: 'create' | 'update' | 'delete',
+    before: unknown[],
+    after: unknown[],
+  ) {
+    let items = before;
+    mockApi({
+      'GET /opportunities/opp-1/referral-candidates': () => ({ status: 200, body: serve(items) }),
+      'GET /opportunities/opp-1/referrals': { items: [], total: 0 },
+      'GET /network': { items: [], total: 0 },
+      'POST /network': () => {
+        items = after;
+        return { status: 201, body: { id: 'c-jane', name: 'Jane Doe' } };
+      },
+      'PATCH /network/c-jane': () => {
+        items = after;
+        return { status: 200, body: { id: 'c-jane', name: 'Jane Smith' } };
+      },
+      'DELETE /network/c-jane': () => {
+        items = after;
+        return { status: 204, body: null };
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<Harness act={act} />);
+    return user;
+  }
+
+  it('add a contact at the company, then back: the tab shows them', async () => {
+    const user = await roundTrip('create', [], [jane]);
+    expect(await screen.findByText(/No contacts at Initech/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'To the network' }));
+    await user.click(await screen.findByRole('button', { name: 'Save the contact' }));
+    expect(await screen.findByRole('button', { name: /^Ask Jane Doe/ })).toBeInTheDocument();
+    expect(screen.queryByText(/No contacts at Initech/)).toBeNull();
+  });
+
+  it('rename a contact, then back: the tab shows the new name', async () => {
+    const user = await roundTrip('update', [jane], [{ ...jane, name: 'Jane Smith' }]);
+    expect(await screen.findByRole('button', { name: /^Ask Jane Doe/ })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'To the network' }));
+    await user.click(await screen.findByRole('button', { name: 'Save the contact' }));
+    expect(await screen.findByRole('button', { name: /^Ask Jane Smith/ })).toBeInTheDocument();
+  });
+
+  it('delete a contact, then back: their Ask button is gone', async () => {
+    const user = await roundTrip('delete', [jane], []);
+    expect(await screen.findByRole('button', { name: /^Ask Jane Doe/ })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'To the network' }));
+    await user.click(await screen.findByRole('button', { name: 'Save the contact' }));
+    expect(await screen.findByText(/No contacts at Initech/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Ask Jane Doe/ })).toBeNull();
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/651 (qa): the router's reason for a spent daily budget
+// is budget_exceeded (packages/ai types.ts, router.ts), passed through as aiUnavailable. The tab
+// looked for over_budget, so a spent budget read "AI is unavailable right now".
+describe('ReferralsTab: a spent AI budget says so (#651)', () => {
+  it('budget_exceeded reads as the budget being used up', async () => {
+    mockApi({
+      'GET /opportunities/opp-1/referral-candidates': {
+        items: [candidate({ contactId: 'c-lee', name: 'Lee Park' })],
+        total: 1,
+        ranked: false,
+        aiUnavailable: 'budget_exceeded',
+      },
+      'GET /opportunities/opp-1/referrals': { items: [], total: 0 },
+    });
+    renderWithProviders(<ReferralsTab opportunityId="opp-1" companyName="Initech" />);
+    expect(await screen.findByText(/today's AI budget is used up/)).toBeInTheDocument();
+    expect(screen.queryByText(/AI is unavailable right now/)).toBeNull();
   });
 });

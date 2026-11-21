@@ -383,12 +383,14 @@ export function ExtensionSetupDialog({
                   </p>
                 ) : null}
                 <ol className="ml-5 list-decimal text-sm">
+                  {/* eslint-disable-next-line security/detect-object-injection -- a target id from the server's fixed target list, with a fallback */}
                   {(INSTALL_STEPS[targetId] ?? []).map((line) => (
                     <li key={line} className="py-0.5">
                       {line}
                     </li>
                   ))}
                 </ol>
+                {/* eslint-disable-next-line security/detect-object-injection -- a target id from the server's fixed target list */}
                 <p className="text-xs text-muted-foreground">{TARGET_CAVEAT[targetId]}</p>
               </Step>
 

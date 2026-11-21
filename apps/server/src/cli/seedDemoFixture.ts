@@ -587,14 +587,19 @@ export const DEMO_RESUME_BASE_SUMMARY =
   'tooling and developer-facing APIs. Comfortable owning a project from design through ' +
   'production, and partnering closely with product on roadmap.';
 
-/** The invented candidate's own name and email, as the resume text gives them. */
+/** The invented candidate's own name, email and phone, as the resume text gives them. */
 export const DEMO_CANDIDATE_NAME = 'Avery Chen';
 export const DEMO_CANDIDATE_EMAIL = 'avery.chen@opportun-demo.example';
+/**
+ * A phone in the 555-01xx range set aside for fiction (#671): so the demo's fixture refusal of a
+ * phone (compared by its digits) has a seeded value to refuse.
+ */
+export const DEMO_CANDIDATE_PHONE = '+1 415 555 0134';
 
 export const DEMO_RESUME_BASE_TEXT = [
   DEMO_CANDIDATE_NAME,
   'Senior Software Engineer',
-  `${DEMO_CANDIDATE_EMAIL} | Remote (US)`,
+  `${DEMO_CANDIDATE_EMAIL} | ${DEMO_CANDIDATE_PHONE} | Remote (US)`,
   '',
   'Summary',
   DEMO_RESUME_BASE_SUMMARY,
@@ -779,7 +784,7 @@ export const DEMO_MATCH_REPORTS: readonly DemoMatchReport[] = [
  * Every value the seed gives an identity field, for the demo's fixture backstop
  * (https://github.com/bgoleno/opportun/issues/544): an application filled on the demo never
  * carries the demo's own test data. The five accounts' emails and display names, and the
- * invented candidate's name and email. The seed writes no profile, phone or links. Generic values
+ * invented candidate's name, email and phone. The seed writes no profile or links. Generic values
  * ("Remote (US)", "Senior Software Engineer") identify nobody and are not listed.
  * test/demoOwnData.test.ts fails when the seed gains an identity value this list lacks.
  */
@@ -787,4 +792,5 @@ export const DEMO_IDENTITY_VALUES: readonly string[] = [
   ...DEMO_USERS.flatMap((u) => [u.email, u.displayName]),
   DEMO_CANDIDATE_NAME,
   DEMO_CANDIDATE_EMAIL,
+  DEMO_CANDIDATE_PHONE,
 ];

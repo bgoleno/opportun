@@ -1,7 +1,8 @@
 import type { CommChannel } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { ArrowDownWideNarrow, ArrowUpWideNarrow, RefreshCw } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FormError } from '@/components/FormError';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
@@ -15,6 +16,7 @@ import {
   channelLabel,
   useBulkTriage,
   useGmailStatus,
+  useGmailSyncRefresh,
   useGmailSync,
   useInbox,
   type InboxFilters,
@@ -192,29 +194,38 @@ function FilterBar({
   );
 }
 
-function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
+function BulkBar({
+  rows,
+  onDone,
+}: {
+  rows: { id: string; opportunityId: string | null }[];
+  onDone: () => void;
+}) {
+  const ids = rows.map((r) => r.id);
   const bulk = useBulkTriage();
   const [reason, setReason] = useState<RejectionReason>(BULK_REASONS[0]?.value ?? 'other');
-  const reject = () => {
-    bulk.mutate(
-      { ids, action: { kind: 'reject', reason } },
-      {
-        onSuccess: (res) => {
-          toast({
-            title: `${res.succeeded} rejected`,
-            description:
-              res.skipped > 0 ? `${res.skipped} skipped (not yours or already gone).` : undefined,
-          });
-          onDone();
-        },
-        onError: (err) =>
-          toast({
-            title: 'Bulk reject failed',
-            description: errorMessage(err),
-            variant: 'destructive',
-          }),
-      },
-    );
+  // Asked first (#647): a reject wipes the messages' subject, snippet and body for good.
+  const [confirming, setConfirming] = useState(false);
+  const count = `${ids.length} message${ids.length === 1 ? '' : 's'}`;
+  const reject = async () => {
+    // mutateAsync: the dialog stays open with the failure in it (ConfirmDialog), not a toast.
+    // Each message goes with the link it was seen under (#666): a changed one is left alone.
+    const res = await bulk.mutateAsync({
+      items: rows.map((r) => ({ id: r.id, opportunityId: r.opportunityId })),
+      action: { kind: 'reject', reason },
+    });
+    const notes = [
+      res.skipped > 0 ? `${res.skipped} skipped (not yours or already gone).` : null,
+      // Linked or moved in another tab or session since they were selected (#666).
+      res.changed > 0
+        ? `${res.changed} ${res.changed === 1 ? 'was' : 'were'} changed elsewhere and left as ${res.changed === 1 ? 'it is' : 'they are'}.`
+        : null,
+    ].filter((n): n is string => n !== null);
+    toast({
+      title: `${res.succeeded} rejected`,
+      description: notes.length === 0 ? undefined : notes.join(' '),
+    });
+    onDone();
   };
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm">
@@ -231,9 +242,18 @@ function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
           </option>
         ))}
       </Select>
-      <Button type="button" size="sm" onClick={reject} disabled={bulk.isPending}>
+      <Button type="button" size="sm" onClick={() => setConfirming(true)} disabled={bulk.isPending}>
         {bulk.isPending ? 'Rejecting...' : `Reject ${ids.length}`}
       </Button>
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={`Reject ${count}?`}
+        description={`Rejecting removes the subject, snippet and body of ${ids.length === 1 ? 'this message' : `these ${count}`} for good. This cannot be undone.`}
+        confirmLabel={`Reject ${ids.length}`}
+        confirmVariant="destructive"
+        onConfirm={reject}
+      />
       <Button type="button" variant="ghost" size="sm" onClick={onDone} disabled={bulk.isPending}>
         Clear
       </Button>
@@ -261,6 +281,21 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
   useEffect(() => {
     setSelected(new Set());
   }, [filters.q, filters.sender, filters.channel, filters.order]);
+  // And a row that leaves the list any other way (linked or reclassified from its own buttons, or
+  // gone on a refetch) leaves the selection (#647): only rows on screen are ever selected.
+  const onScreen = useMemo(() => new Set((data?.items ?? []).map((c) => c.id)), [data]);
+  useEffect(() => {
+    setSelected((prev) => {
+      const kept = [...prev].filter((id) => onScreen.has(id));
+      return kept.length === prev.size ? prev : new Set(kept);
+    });
+  }, [onScreen]);
+  // What the bar acts on is filtered too, so not even the render before the effect can reject a
+  // row that is gone.
+  // Each with the link it is shown under, which the reject is checked against (#666).
+  const actOn = (data?.items ?? [])
+    .filter((c) => selected.has(c.id))
+    .map((c) => ({ id: c.id, opportunityId: c.opportunityId ?? null }));
 
   // The blocked view has no message content and no row-level actions, so it is not selectable
   // and shows no triage controls.
@@ -290,7 +325,7 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
         />
       ) : null}
 
-      {selectable && selected.size > 0 ? <BulkBar ids={[...selected]} onDone={clear} /> : null}
+      {selectable && actOn.length > 0 ? <BulkBar rows={actOn} onDone={clear} /> : null}
 
       {error ? (
         <FormError message={errorMessage(error)} />
@@ -320,6 +355,8 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
 }
 
 function SyncControl() {
+  // The one place the lists follow the status (#645): not in useGmailStatus, which every row reads.
+  useGmailSyncRefresh();
   const status = useGmailStatus();
   const sync = useGmailSync();
   if (status.isPending || status.isError) return null;
