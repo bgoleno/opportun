@@ -177,21 +177,30 @@ function toPublic(u: typeof users.$inferSelect): PublicUserT {
 }
 
 /**
- * The password just proven was changed or reset before the write that needed it (#620): answered
- * as a wrong password is (403 invalid_password), and audited as a failed re-auth, with the reason.
+ * The password just proven was changed or reset before the write that needed it (#620): 403
+ * password_changed, as a device token's creation answers the same race (lib/deviceTokens.ts), not
+ * invalid_password, since the password typed was right. Audited as a failed re-auth, with the
+ * reason (and, for an admin's reset, the account it was for).
  */
 async function passwordChanged(
   req: FastifyRequest,
   reply: FastifyReply,
   userId: string,
   action: string,
+  extra: Record<string, string> = {},
 ) {
   await audit(req.server.db, 'auth.reauth_failed', {
     userId,
     ip: req.ip,
-    detail: { action, reason: 'password_changed' },
+    detail: { action, reason: 'password_changed', ...extra },
   });
-  return fail(reply, 403, 'invalid_password');
+  return reply.code(403).send({
+    error: {
+      code: 'password_changed',
+      message:
+        'Your password changed while this was being checked. Sign in again and try once more.',
+    },
+  });
 }
 
 function fail(reply: FastifyReply, status: number, code: string) {
@@ -1018,11 +1027,24 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           .from(users)
           .where(and(eq(users.id, ctx.userId), eq(users.passwordHash, verified)))
           .get();
-        return still === undefined ? null : await resetPasswordIn(tx, target.id, newHash);
+        if (still === undefined) return 'password_changed' as const;
+        // The account is looked up again under the lock: one deleted since gets no password.
+        const exists = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.id, target.id))
+          .get();
+        if (exists === undefined) return 'not_found' as const;
+        // Inside the lock, after the re-check (the race tests park here).
+        await racePoint('admin.resetPassword.locked');
+        return await resetPasswordIn(tx, target.id, newHash);
       });
-      if (unlinkedProviders === null) {
-        return passwordChanged(req, reply, ctx.userId, 'admin.reset_password');
+      if (unlinkedProviders === 'password_changed') {
+        return passwordChanged(req, reply, ctx.userId, 'admin.reset_password', {
+          targetUserId: target.id,
+        });
       }
+      if (unlinkedProviders === 'not_found') return fail(reply, 404, 'not_found');
       await audit(db, 'admin.password_reset', {
         userId: ctx.userId,
         ip: req.ip,
