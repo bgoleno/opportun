@@ -31,6 +31,15 @@ export const DEMO_PASSWORDS = {
   user4: 'e2e demo user4 password',
 } as const;
 
+/**
+ * The demo server's database, SQLite, named outright. A web server's command, and a CLI a test
+ * runs, get this runner's own environment under their entries, and CI's postgres leg sets
+ * DB_DIALECT and DATABASE_URL for the whole job. Inherited, the demo seed went into the main
+ * server's Postgres database, whose admin registration then found the demo's users
+ * (registration_closed). Everything that opens the demo's database spreads this.
+ */
+export const DEMO_DB_ENV = { DB_DIALECT: 'sqlite', DATABASE_URL: '', DB_SSL: '' } as const;
+
 /** The server's env-gated fakes, the same on both servers. */
 const FAKES = {
   LOG_LEVEL: 'warn',
@@ -123,13 +132,7 @@ export default defineConfig({
         OPPORTUN_DEMO_AI_KEY: 'sk-ant-e2e-not-a-real-key',
         // On, as unset would be: the one switch for everyone, the demo included (#545).
         OPPORTUN_SUBMISSIONS: '1',
-        // SQLite, named outright: a web server's command runs with this runner's own environment
-        // under these entries, and CI's postgres leg sets DB_DIALECT and DATABASE_URL for the
-        // whole job. Inherited, the seed went into the main server's Postgres database, whose
-        // admin registration then found the demo's users (registration_closed).
-        DB_DIALECT: 'sqlite',
-        DATABASE_URL: '',
-        DB_SSL: '',
+        ...DEMO_DB_ENV,
       },
     },
   ],

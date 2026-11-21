@@ -19,7 +19,7 @@ import {
   type Page,
   type PlaywrightWorkerArgs,
 } from '@playwright/test';
-import { DEMO_DATA_DIR, DEMO_PASSWORDS, DEMO_URL } from '../playwright.config';
+import { DEMO_DATA_DIR, DEMO_DB_ENV, DEMO_PASSWORDS, DEMO_URL } from '../playwright.config';
 import {
   captureGreenhouseOpportunity,
   choose,
@@ -208,7 +208,7 @@ test('a dedicated account: assisted apply as on any instance, with its own resum
     ['--import', 'tsx', 'src/cli/createDemoAccount.ts', email, 'Jane Dedicated'],
     {
       cwd: '../server',
-      env: { ...process.env, DATA_DIR: DEMO_DATA_DIR, OPPORTUN_DEMO: '1' },
+      env: { ...process.env, ...DEMO_DB_ENV, DATA_DIR: DEMO_DATA_DIR, OPPORTUN_DEMO: '1' },
       encoding: 'utf8',
     },
   ).trim();
