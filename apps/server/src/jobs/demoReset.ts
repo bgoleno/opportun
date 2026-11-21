@@ -72,7 +72,7 @@ export async function runDemoResetGated(
   } catch (err) {
     if (err instanceof DemoResetGateTimeout) {
       opts.log?.warn(
-        { 'opportun.demo_reset.holders': gate.held },
+        { 'opportun.count.holders': gate.held },
         'demo reset waited too long for requests or jobs in flight; not reset, will retry',
       );
     }

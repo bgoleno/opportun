@@ -245,6 +245,7 @@ export const ATTRIBUTES = {
   'opportun.count.described': int,
   'opportun.count.deferred': int,
   'opportun.count.skipped': int,
+  'opportun.count.holders': int,
   'opportun.count.truncated': int,
   'opportun.count.read': int,
   'opportun.count.set': int,
@@ -814,6 +815,11 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.job.kind',
     'opportun.job.attempt',
     'opportun.job.max_attempts',
+  ],
+  // #618: a shared demo account's job whose account the nightly reset replaced.
+  'job discarded: the demo reset replaced its account': ['opportun.job.id', 'opportun.job.kind'],
+  'demo reset waited too long for requests or jobs in flight; not reset, will retry': [
+    'opportun.count.holders',
   ],
   'healthz database check failed': [],
   'healthz queue lag check failed': [],
