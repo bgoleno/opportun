@@ -1,5 +1,6 @@
 // Client-side types, labels and calls for opportunities and their lifecycle. Shapes
 // mirror the /api/v1 responses (apps/server/src/routes/opportunities.ts, activities.ts).
+import { hashKey, type QueryClient } from '@tanstack/react-query';
 import {
   canTransition,
   OPPORTUNITY_STAGES,
@@ -258,11 +259,51 @@ export const qk = {
   opportunities: ['opportunities'] as const,
   opportunityList: (params: Record<string, string | number | undefined>) =>
     ['opportunities', params] as const,
+  /** The pipeline's whole list: every opportunity, walked page by page (useAllOpportunities). */
+  allOpportunities: ['opportunities', { scope: 'all' }] as const,
   opportunity: (id: string) => ['opportunity', id] as const,
   timeline: (id: string) => ['opportunity', id, 'timeline'] as const,
   nextSteps: (id: string) => ['opportunity', id, 'next-steps'] as const,
   attachments: (id: string) => ['opportunity', id, 'attachments'] as const,
 };
+
+/** Puts the server's copy of one opportunity into every cached list and its own query. */
+export function storeOpportunity(qc: QueryClient, updated: OpportunityView): void {
+  qc.setQueriesData<Page<OpportunityView>>({ queryKey: qk.opportunities }, (old) =>
+    old === undefined
+      ? old
+      : { ...old, items: old.items.map((o) => (o.id === updated.id ? updated : o)) },
+  );
+  qc.setQueryData(qk.opportunity(updated.id), updated);
+}
+
+/**
+ * Refreshes every opportunity list after a stage change or a reorder, except the pipeline's whole
+ * list (https://github.com/bgoleno/opportun/issues/589). Refetching that one walks every page of
+ * the user's opportunities, closed and dismissed included, so one drag on a large board cost
+ * dozens of requests. It needs no refetch: the change already wrote the server's answer into it
+ * (storeOpportunity), or, for a reorder, the order the server applied in one transaction.
+ */
+export function invalidateListsAfterChange(qc: QueryClient): Promise<void> {
+  const whole = hashKey(qk.allOpportunities);
+  return qc.invalidateQueries({
+    queryKey: qk.opportunities,
+    predicate: (query) => query.queryHash !== whole,
+  });
+}
+
+/**
+ * After a change the server refused: its current copy of that one opportunity, into every list
+ * (#589), so the board shows the server's state from one request rather than a walk of every page.
+ * If even that fails, every list is refreshed, as before.
+ */
+export async function refreshOpportunity(qc: QueryClient, id: string): Promise<void> {
+  try {
+    storeOpportunity(qc, await api<OpportunityView>(`/opportunities/${encodeURIComponent(id)}`));
+  } catch {
+    await qc.invalidateQueries({ queryKey: qk.opportunities });
+  }
+}
 
 const dateFmt = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' });
 const dateTimeFmt = new Intl.DateTimeFormat(undefined, {
