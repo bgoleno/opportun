@@ -496,6 +496,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     log: app.log,
     env: opts.env ?? process.env,
     submissions: submissionsEnabled(cfg),
+    demo: cfg.demo,
     rankBatchProvider: opts.rankBatchProvider ?? batchProviderFor,
     // The nightly reset's gate (#618): only a demo server resets, so only it has one.
     ...(cfg.demo ? { demoResetGate: new DemoResetGate() } : {}),

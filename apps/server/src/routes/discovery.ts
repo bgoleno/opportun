@@ -773,7 +773,9 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     '/discovery/sources',
     { schema: { body: SourceCreate, response: { 201: SourceSchema } } },
     async (req, reply) =>
-      reply.code(201).send(await createSource(db, app.requireUser(req), req.body)),
+      reply
+        .code(201)
+        .send(await createSource(db, app.requireUser(req), req.body, { demo: app.config.demo })),
   );
 
   api.get(
@@ -785,7 +787,10 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
   api.patch(
     '/discovery/sources/:id',
     { schema: { params: IdParams, body: SourcePatch, response: { 200: SourceSchema } } },
-    async (req) => await updateSource(db, app.requireUser(req), req.params.id, req.body),
+    async (req) =>
+      await updateSource(db, app.requireUser(req), req.params.id, req.body, {
+        demo: app.config.demo,
+      }),
   );
 
   api.delete(

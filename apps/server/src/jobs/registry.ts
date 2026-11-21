@@ -35,6 +35,8 @@ export interface JobServices {
   /** Assisted apply is on (config submissionsEnabled: on unless OPPORTUN_SUBMISSIONS=0, never on
    *  the demo, #455); mail ingest matches confirmations only then (#119). */
   submissions: boolean;
+  /** OPPORTUN_DEMO=1: this is the demo server, whose administrator is a shared login. */
+  demo: boolean;
   /** Finds a provider's ranking batch client (#441): batchProviderFor, which has none yet, or a
    *  fake in tests. Absent means batchProviderFor. */
   rankBatchProvider: (target: Parameters<typeof batchProviderFor>[0]) => BatchProvider | null;
