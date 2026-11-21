@@ -581,7 +581,8 @@ async function stubCompanies(page: Page): Promise<void> {
     if (new URL(route.request().url()).searchParams.get('showDenied') === 'true') {
       items.push(row('stub-net-d', { status: 'denied', atsKind: 'none' }, 'not_found'));
     }
-    await route.fulfill({ json: { items } });
+    // Paged since #591, as the server answers: one page holds them all.
+    await route.fulfill({ json: { items, total: items.length } });
   });
   // One confirmed industry, its reason unbroken: the fit line on the rows above (#300).
   await page.route(/\/api\/v1\/discovery\/industry-profile$/, async (route) => {
