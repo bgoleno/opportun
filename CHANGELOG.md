@@ -123,6 +123,25 @@ when the milestone's work was merged.
   ([#546](https://github.com/bgoleno/opportun/issues/546); PR
   [#575](https://github.com/bgoleno/opportun/pull/575)).
 
+- **The extension's Greenhouse filler never clicks a list option inside a link or button, and it
+  stops if the page moves.** An option with a link, button, label, area or summary between it
+  and its list is now refused, since a click there would follow the link or press the control
+  (an SVG link included). The filler also reads the page's address again before it writes each
+  list, and after each list's options load. If the page has moved to another address, it writes
+  nothing more, and the popup names the list it was on and every list after it: "the page moved
+  to another address while filling: check this field on the form"
+  ([#537](https://github.com/bgoleno/opportun/issues/537); PR
+  [#560](https://github.com/bgoleno/opportun/pull/560)).
+- **A sign-in whose password was checked just before a password change or reset is refused.**
+  Before, a sign-in that was between checking your password and starting its session when you
+  changed the password (or an administrator reset it) could still start a session that outlived
+  the change. The session, or the pending two-factor step, is now written only while that password is
+  still the current one, and a change or reset ends every session and pending two-factor step in
+  its own transaction. A refused sign-in answers as for a wrong password (401
+  `invalid_credentials`) and the audit entry records `password_changed`
+  ([#561](https://github.com/bgoleno/opportun/issues/561); PR
+  [#571](https://github.com/bgoleno/opportun/pull/571)).
+
 ## 0.4.0 (2026-11-14)
 
 This release includes everything in [v0.3.1](https://github.com/bgoleno/opportun/releases/tag/v0.3.1),
