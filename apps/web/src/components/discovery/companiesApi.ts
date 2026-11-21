@@ -292,7 +292,7 @@ const NETWORK_PAGE = 200;
  * Every page of the user's network, each company once: a company added while the pages are read
  * shifts the later rows by one, and the row it pushes over would otherwise show twice.
  */
-async function fetchNetworkCompanies(showDenied: boolean): Promise<Page<NetworkCompany>> {
+export async function fetchNetworkCompanies(showDenied: boolean): Promise<Page<NetworkCompany>> {
   const byId = new Map<string, NetworkCompany>();
   const denied = showDenied ? '&showDenied=true' : '';
   for (let offset = 0; ; offset += NETWORK_PAGE) {

@@ -9,7 +9,12 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { mockApi, renderWithProviders } from '@/test/render';
 import { CompaniesManager } from './CompaniesManager';
-import type { CompanyView, IndustryRow, NetworkCompany } from './companiesApi';
+import {
+  fetchNetworkCompanies,
+  type CompanyView,
+  type IndustryRow,
+  type NetworkCompany,
+} from './companiesApi';
 import { closeSplit, knowLine } from './RecommendedRow';
 
 const NOW = Date.now();
@@ -976,6 +981,19 @@ describe('#591: every company across the pages, and a probe polls its own rows',
     const reads = calls.filter((c) => c.path === '/discovery/network-companies');
     expect(reads.map((c) => new URLSearchParams(c.search).get('offset'))).toEqual(['0', '200']);
     expect(reads.every((c) => new URLSearchParams(c.search).get('limit') === '200')).toBe(true);
+  });
+
+  // The screen's merge keys rows by id as well; the walk's own result is what the poll patches.
+  it('the walk itself holds each company once, the shifted row included', async () => {
+    mockApi({
+      'GET /discovery/network-companies': (c: { search: string }) =>
+        Number(new URLSearchParams(c.search).get('offset') ?? '0') === 0
+          ? { items: many(0, 200), total: 203 }
+          : { items: many(199, 203), total: 203 },
+    });
+    const walked = await fetchNetworkCompanies(true);
+    expect(walked.total).toBe(203);
+    expect(walked.items.map((i) => i.company.id)).toEqual(many(0, 203).map((i) => i.company.id));
   });
 
   it('while a probe runs, the poll asks for that company only, and stops when it lands', async () => {
