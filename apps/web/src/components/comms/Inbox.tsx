@@ -283,8 +283,10 @@ function Pager({
   total: number;
   onPage: (page: number) => void;
 }) {
-  const first = page * pageSize + 1;
-  const last = page * pageSize + shown;
+  // Never past the total: while the next page loads, the page before is still on screen, and
+  // its rows counted from the new page read ahead ("401–600 of 450": #646's review).
+  const last = Math.min(page * pageSize + shown, total);
+  const first = Math.min(page * pageSize + 1, last);
   return (
     <nav aria-label="Message pages" className="flex flex-wrap items-center gap-2 text-sm">
       <span className="tabular-nums text-muted-foreground">
@@ -338,7 +340,7 @@ function InboxList({
     channel: channel === '' ? undefined : channel,
     order,
   };
-  const { data, error, isPending } = useInbox(tab, filters, page, pageSize);
+  const { data, error, isPending, isPlaceholderData } = useInbox(tab, filters, page, pageSize);
   // What was asked for, not what is being typed: the list on screen answers the debounced values.
   const filtered =
     (filters.q ?? '').trim() !== '' ||
@@ -354,11 +356,13 @@ function InboxList({
   }, [filters.q, filters.sender, filters.channel, filters.order]);
   // A page left empty (its last messages rejected or linked away) steps back to the last page
   // that has any, rather than showing the tab's empty message with messages still in it.
+  // Only on the page's own answer, never on the page before still shown while it loads (tl).
   useEffect(() => {
+    if (isPlaceholderData) return;
     if (data !== undefined && page > 0 && data.items.length === 0 && data.total > 0) {
       setPage(Math.max(0, Math.ceil(data.total / pageSize) - 1));
     }
-  }, [data, page, pageSize]);
+  }, [data, isPlaceholderData, page, pageSize]);
   // And a row that leaves the list any other way (linked or reclassified from its own buttons, or
   // gone on a refetch) leaves the selection (#647): only rows on screen are ever selected.
   const onScreen = useMemo(() => new Set((data?.items ?? []).map((c) => c.id)), [data]);

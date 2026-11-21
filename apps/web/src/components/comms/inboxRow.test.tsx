@@ -757,3 +757,81 @@ describe('Inbox: a tab over one page (#646)', () => {
     expect(await screen.findByText('Showing 1–2 of 5')).toBeInTheDocument();
   });
 });
+
+// Refs #646, its review (qa, tl): while the next page loads, the page before stays on screen
+// (keepPreviousData), and the pager read ahead past the total ("Showing 401-600 of 450"); and the
+// step-back for an emptied page must not act on those placeholder rows.
+describe('Inbox paging while the next page loads (#646 review)', () => {
+  const ALL = Array.from({ length: 5 }, (_, i) => ({
+    ...BASE,
+    id: `m${i + 1}`,
+    subject: `message ${i + 1}`,
+    opportunityId: null,
+    needsReview: true,
+  }));
+
+  it('the range never reads past the total, even with the page before still on screen', async () => {
+    const user = userEvent.setup();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    mockApi({
+      'GET /communications': async (call: { search: string }) => {
+        const params = new URLSearchParams(call.search);
+        const limit = Number(params.get('limit'));
+        const offset = Number(params.get('offset') ?? 0);
+        if (offset === 4) await held;
+        return {
+          status: 200,
+          body: { items: ALL.slice(offset, offset + limit), total: ALL.length },
+        };
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 3');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    // The last page is loading: messages 3 and 4 are still shown.
+    expect(await screen.findByText('Showing 5–5 of 5')).toBeInTheDocument();
+    expect(screen.queryByText(/of 5$/)?.textContent).not.toMatch(/5–6/);
+    release();
+    expect(await screen.findByText('message 5')).toBeInTheDocument();
+    expect(screen.getByText('Showing 5–5 of 5')).toBeInTheDocument();
+  });
+
+  it('a page still loading is not stepped back from, even when the rows on screen run out', async () => {
+    const user = userEvent.setup();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let rows = ALL;
+    const { calls } = mockApi({
+      'GET /communications': async (call: { search: string }) => {
+        const params = new URLSearchParams(call.search);
+        const limit = Number(params.get('limit'));
+        const offset = Number(params.get('offset') ?? 0);
+        if (offset === 2 && rows.length === 0) await held;
+        return {
+          status: 200,
+          body: { items: rows.slice(offset, offset + limit), total: rows.length },
+        };
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    const { queryClient } = renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 3');
+    const pageReads = () =>
+      calls.filter((c) => c.path === '/communications' && /limit=2&offset=0/.test(c.search)).length;
+    const before = pageReads();
+    // Everything leaves the tab; page 2 refetches, and its answer is held.
+    rows = [];
+    void queryClient.invalidateQueries();
+    await new Promise((r) => setTimeout(r, 50));
+    // While page 2 is still loading, the list does not jump back to page 1 on its own.
+    expect(pageReads()).toBe(before);
+    release();
+    expect(await screen.findByText('Nothing needs review.')).toBeInTheDocument();
+  });
+});
