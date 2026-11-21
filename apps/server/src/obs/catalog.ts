@@ -816,6 +816,13 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.job.attempt',
     'opportun.job.max_attempts',
   ],
+  // #588: a job that ended the process at its last attempt is not run again on the next start.
+  'a job left running at its last attempt when the process ended: dead': [
+    'opportun.job.id',
+    'opportun.job.kind',
+  ],
+  // qa on #720: one left pending at its limit by the recovery before #588.
+  'a pending job at its attempt limit: dead': ['opportun.job.id', 'opportun.job.kind'],
   // #618: a shared demo account's job whose account the nightly reset replaced.
   'job discarded: the demo reset replaced its account': ['opportun.job.id', 'opportun.job.kind'],
   'job held the demo reset gate to its limit; told to stop': [
