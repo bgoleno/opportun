@@ -284,6 +284,8 @@ describe('Record confirmation page against a server that never answers (#648)', 
     );
     expect(record.disabled).toBe(false);
     expect(s.doc.activeElement).toBe(record);
+    // Record writes: the post may have reached the server (sec on #713).
+    expect(s.$('status').textContent).toMatch(/check Opportun before you try again/);
     expect(s.posts).toEqual([]);
   });
 });

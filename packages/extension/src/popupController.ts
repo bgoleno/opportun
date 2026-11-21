@@ -120,6 +120,12 @@ export const ACTION_TIMEOUT_MS = 30_000;
 const TIMED_OUT =
   'The server did not answer within 30 seconds. Check that it is running and reachable, then try again.';
 /**
+ * For an action that writes (Capture, Record): the request may have reached the server before the
+ * limit, so a retry could save it twice (sec on #713).
+ */
+const TIMED_OUT_MAY_HAVE_SAVED =
+  'The server did not answer within 30 seconds. It may still have saved this: check Opportun before you try again.';
+/**
  * While a fill started by opening the popup runs (#403 slice 2, sec's condition 4): what is being
  * filled, said before the report, with the same advice as FILLING.
  */
@@ -247,7 +253,10 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
    * so the requests below read it to be cut off at the action's time limit. At the limit, a request
    * still waiting is aborted; when none is (the filler is running in the page, say), the action is
    * only marked expired, and the next request it starts is cut at once. So the timeout is shown
-   * only when a request was cut, never over a fill that finished (tl on #713).
+   * only when a request was cut, never over a fill that finished (tl on #713). The lookup a popup
+   * makes as it opens never runs inside an action: it holds every button while it decides, so no
+   * action starts meanwhile, and its own requests go out unlimited here, with its own bound
+   * (OPEN_LOOKUP_MS; sec on #713).
    */
   let action: { controller: AbortController; expired: boolean; waiting: number } | undefined;
   const limited = async <T>(call: (signal: AbortSignal | undefined) => Promise<T>): Promise<T> => {
@@ -290,7 +299,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
    */
   const busy = async (
     work: () => Promise<void>,
-    opts: { working?: string; button?: HTMLButtonElement } = {},
+    opts: { working?: string; button?: HTMLButtonElement; writes?: boolean } = {},
   ): Promise<void> => {
     hold();
     status.dataset.tone = 'info';
@@ -314,7 +323,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       action = undefined;
       if (controller.signal.aborted) {
         report.replaceChildren();
-        show({ tone: 'error', text: TIMED_OUT });
+        show({ tone: 'error', text: opts.writes === true ? TIMED_OUT_MAY_HAVE_SAVED : TIMED_OUT });
       }
       release();
       opts.button?.focus();
@@ -481,7 +490,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         }
         showOutcome(await postCapture(fetch, s, normalized.payload), site);
       },
-      { working: 'Capturing…', button: captureButton },
+      { working: 'Capturing…', button: captureButton, writes: true },
     );
   });
 
@@ -544,6 +553,9 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       show(renderPrefillStop({ kind: 'resume_timeout' }));
       return;
     }
+    // The action's limit cut the download (#648): its "none" is not "no resume", so nothing is
+    // filled, and busy says the server did not answer (qa on #713).
+    if (action?.controller.signal.aborted === true) return;
     if (resume.kind === 'review_stale') {
       show(renderPrefillStop({ kind: 'none', reason: 'review_stale' }));
       return;
@@ -712,7 +724,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         });
         show(renderConfirmation(sent, `${found.opportunityTitle} at ${found.companyName}`));
       },
-      { working: 'Recording the confirmation page…', button: recordButton },
+      { working: 'Recording the confirmation page…', button: recordButton, writes: true },
     );
   });
 

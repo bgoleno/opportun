@@ -1430,4 +1430,39 @@ describe('Fill in this application against a server that never answers (#648)', 
     expect(s.$('status').textContent).not.toMatch(/did not answer/);
     expect(s.$('prefill-report').textContent).toContain('First Name');
   });
+
+  it('a resume download cut at the limit fills nothing, and says the server did not answer (qa on #713)', async () => {
+    const s = setup({});
+    await mountPopup(s.doc, s.deps);
+    await settleOpen(s);
+    const answer = s.get.getMockImplementation()!;
+    s.get.mockImplementation((url, init) =>
+      url.endsWith('/snapshot')
+        ? new Promise((_resolve, reject) => {
+            if (init.signal?.aborted === true) reject(new Error('aborted'));
+            init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+          })
+        : answer(url, init),
+    );
+    let end: () => void = () => undefined;
+    const ended = new Promise<void>((r) => {
+      end = r;
+    });
+    s.deps.limit = vi.fn(async () => {
+      await ended;
+    });
+    const fill = s.$('prefill') as HTMLButtonElement;
+    fill.click();
+    // The download is out, and the server says nothing until the limit.
+    await vi.waitFor(() =>
+      expect(s.get.mock.calls.some(([url]) => url.endsWith('/snapshot'))).toBe(true),
+    );
+    end();
+    await vi.waitFor(() =>
+      expect(s.$('status').textContent).toMatch(/did not answer within 30 seconds/),
+    );
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    expect(s.plans).toEqual([]);
+    expect(fill.disabled).toBe(false);
+  });
 });

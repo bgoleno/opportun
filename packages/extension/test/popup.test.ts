@@ -666,11 +666,11 @@ describe('popup actions that wait on the server (#648)', () => {
   });
 
   it.each([
-    ['capture', 'Capturing…'],
-    ['test', 'Testing the connection…'],
+    ['capture', 'Capturing…', /It may still have saved this: check Opportun before you try again/],
+    ['test', 'Testing the connection…', /Check that it is running and reachable/],
   ] as const)(
     'the %s button says it is working at once, and a server that never answers ends in an error',
-    async (id, working) => {
+    async (id, working, says) => {
       const { doc, deps, $ } = setup({ stored: SAVED });
       deps.fetch = hangingFetch;
       const l = limit();
@@ -681,6 +681,10 @@ describe('popup actions that wait on the server (#648)', () => {
       button.click();
       await vi.waitFor(() => expect(status(doc).textContent).toBe(working));
       expect(buttons(doc).every((b) => b.disabled)).toBe(true);
+      // Chrome takes focus from a disabled button; happy-dom neither does nor lets blur() do it,
+      // so focus goes elsewhere here (qa on #713).
+      doc.getElementById('server-url')!.focus();
+      expect(doc.activeElement).not.toBe(button);
       // The request is out, and the server says nothing.
       await vi.waitFor(() => expect(hangingFetch).toHaveBeenCalled());
       l.end();
@@ -688,6 +692,7 @@ describe('popup actions that wait on the server (#648)', () => {
         expect(status(doc).textContent).toMatch(/did not answer within 30 seconds/),
       );
       expect(status(doc).dataset.tone).toBe('error');
+      expect(status(doc).textContent).toMatch(says);
       expect(buttons(doc).every((b) => !b.disabled)).toBe(true);
       // Focus is back on the button that was used.
       expect(doc.activeElement).toBe(button);
