@@ -502,6 +502,29 @@ describe('the resume page strip: finished steps as links (#596)', () => {
     expect(within(list).getAllByRole('link')).toHaveLength(1);
   });
 
+  // qa on #609: the base was sent as it is, then "Tailor again" made this copy and it was marked
+  // Final. The strip shows the copy's own steps, so they describe the copy, not the send: Finish is
+  // this page (plain), not a link to the base.
+  it('on the page of a copy "Tailor again" made after the base was sent, only Base is a link', async () => {
+    setup({
+      page: copy({ status: 'final' }),
+      sends: [{ ...SEND, resumeId: 'base', resumeTitle: 'Jane base', resumeKind: 'base' }],
+    });
+    const region = await strip();
+    await waitFor(() => expect(currentStep(region)).toMatch(/^4 Apply/));
+    const list = within(region).getByRole('list', { name: 'Resume steps' });
+    expect(
+      within(list)
+        .getAllByRole('link')
+        .map((l) => l.getAttribute('href')),
+    ).toEqual(['/resumes/base']);
+    expect(
+      within(list)
+        .getByText(/^3 Finish/)
+        .closest('a'),
+    ).toBeNull();
+  });
+
   // The strip uses the tab's live region (flowAnnouncer.test.tsx has the repeat and the clearing):
   // a message is a node of its own, not text set into the region.
   it('its live region says a message as a node of its own', async () => {

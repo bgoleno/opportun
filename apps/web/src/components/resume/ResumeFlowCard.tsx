@@ -92,17 +92,21 @@ const NO_LINKS: StepLinks = new Map();
  * base itself, sent as it is), Tailor and Finish the copy (Finish the base when it went as it
  * is; Tailor then made nothing), Apply the application. A recorded send has no page of its own,
  * and a target that is not known is not guessed: those steps stay plain.
+ *
+ * `about` is the resume the steps shown are about, where that is not the state's own: the base
+ * sent as it is (the tab's branch of B), or the copy "Tailor again" made, whose page shows that
+ * copy's steps while the opportunity is done (qa on #609: Finish named the base sent before it).
  */
 export function stepLinks(
   state: ResumeFlowState,
   resumes: readonly Resume[],
   opportunityId: string,
-  asIsBase?: Resume,
+  about?: Resume,
 ): StepLinks {
   const byId = (id: string | null | undefined) =>
     id === null || id === undefined ? undefined : resumes.find((r) => r.id === id);
   const made =
-    asIsBase ??
+    about ??
     ('resume' in state ? state.resume : undefined) ??
     (state.state === 'H' ? byId(state.send?.resumeId) : undefined) ??
     ('attempt' in state ? byId(state.attempt?.resumeId) : undefined);

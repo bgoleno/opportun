@@ -230,7 +230,17 @@ function StripLoaded({ resume, opp }: { resume: Resume; opp: OpportunityView }) 
           <FlowSteps
             current={view.step}
             links={
-              flow.state === undefined ? undefined : stepLinks(flow.state, flow.resumes, opp.id)
+              flow.state === undefined
+                ? undefined
+                : stepLinks(
+                    flow.state,
+                    flow.resumes,
+                    opp.id,
+                    // On the page of the copy "Tailor again" made, its own steps are shown.
+                    flow.state.state === 'H' && flow.state.again?.id === resume.id
+                      ? resume
+                      : undefined,
+                  )
             }
             here={resume.id}
           />
