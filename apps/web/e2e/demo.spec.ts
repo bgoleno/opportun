@@ -12,6 +12,7 @@
 // tab never reaches a real ATS, and only fixtures are filled (the owner's decision 1: never a real
 // employer's form in a test).
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import {
@@ -275,7 +276,7 @@ const TWO_FACTOR_NOTICE =
 
 /** A dedicated account, made as the operator makes one (docs/demo-deployment.md). */
 function dedicatedAccount(name: string): { email: string; password: string } {
-  const email = `e2e-dedicated-${Date.now()}-${Math.round(Math.random() * 1e6)}@example.com`;
+  const email = `e2e-dedicated-${Date.now()}-${randomBytes(4).toString('hex')}@example.com`;
   const password = execFileSync(
     'node',
     ['--import', 'tsx', 'src/cli/createDemoAccount.ts', email, name],
