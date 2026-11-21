@@ -1,5 +1,6 @@
 // The Network section's contacts (FR-C1). The company is written by name and mapped to the caller's company
 // (find-or-create); linkedinUrl is stored as metadata and never fetched (C-1).
+import { isLinkedInHost } from '../lib/linkedinHost';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -58,10 +59,17 @@ export const ContactReferralSchema = z.object({
 });
 const ContactDetailSchema = ContactSchema.extend({ referrals: z.array(ContactReferralSchema) });
 
+// A contact's LinkedIn link names a LinkedIn profile (#655, sec): http(s) on LinkedIn's domain or one
+// of its subdomains. A link already stored on another host is left as it is (it is metadata,
+// never fetched), and the next edit of the contact asks for a LinkedIn one.
+const LinkedInUrl = HttpUrl.refine(isLinkedInHost, {
+  message: 'LinkedIn profile URL: use the address of a profile on LinkedIn.',
+});
+
 const contactFields = {
   name: z.string().trim().min(1).max(200),
   emails: z.array(z.email().max(320)).max(20),
-  linkedinUrl: HttpUrl.nullish(),
+  linkedinUrl: LinkedInUrl.nullish(),
   /** The current company's name; null clears it. */
   company: optionalText(200),
   history: z.array(HistoryEntry).max(50),

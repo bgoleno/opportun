@@ -85,6 +85,51 @@ describe('network api', () => {
     expect(gone.statusCode).toBe(404);
   });
 
+  // #655 (sec): a contact's LinkedIn link names a LinkedIn profile, so it is accepted on LinkedIn's
+  // own hosts only, and any other host is refused with a message the form shows.
+  it('a LinkedIn link is accepted on LinkedIn hosts only, and refused elsewhere naming the field', async () => {
+    const { a } = await boot();
+    for (const good of [
+      'https://www.linkedin.com/in/jane-doe',
+      'https://linkedin.com/in/jane-doe',
+      'https://uk.linkedin.com/in/jane-doe',
+      'http://www.LinkedIn.com/in/jane-doe',
+    ]) {
+      const res = await a.request({
+        method: 'POST',
+        url: '/api/v1/network',
+        payload: { name: 'X', linkedinUrl: good },
+      });
+      expect(res.statusCode, good).toBe(201);
+    }
+    for (const bad of [
+      'https://example.com/in/jane-doe',
+      'https://linkedin.com.example.com/in/jane',
+      'https://notlinkedin.com/in/jane',
+      'https://lnkd.in/abc123',
+      'https://evil.example/https://www.linkedin.com/in/jane',
+    ]) {
+      const res = await a.request({
+        method: 'POST',
+        url: '/api/v1/network',
+        payload: { name: 'X', linkedinUrl: bad },
+      });
+      expect(res.statusCode, bad).toBe(400);
+      const issue = res.json<{ error: { issues: { path: string[]; message: string }[] } }>().error
+        .issues[0]!;
+      expect(issue.path).toContain('linkedinUrl');
+      expect(issue.message).toMatch(/LinkedIn profile URL/);
+    }
+    // A PATCH too.
+    const created = await createContact(a, { name: 'Y' });
+    const patched = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/network/${created.id}`,
+      payload: { linkedinUrl: 'https://example.com/jane' },
+    });
+    expect(patched.statusCode).toBe(400);
+  });
+
   it('validates input: strength 1-3, http(s) linkedin url, emails', async () => {
     const { a } = await boot();
     for (const bad of [

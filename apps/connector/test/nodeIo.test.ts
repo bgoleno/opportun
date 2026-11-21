@@ -1,11 +1,11 @@
 // nodeIo's rotating log file (#21): launchd's StandardOutPath/StandardErrorPath append to one
 // file forever, with no cap, because watch() never exits to let an external rotator reopen it.
 // nodeIo owns the file itself instead, so it can rotate without anyone else's cooperation.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { nodeIo } from '../src/nodeIo';
+import { nodeFs, nodeIo } from '../src/nodeIo';
 
 describe('nodeIo rotating log file', () => {
   let dir: string;
@@ -62,5 +62,28 @@ describe('nodeIo rotating log file', () => {
     io.stdout('new line after upgrade');
     expect(readFileSync(`${path}.1`, 'utf8')).toBe(inherited);
     expect(readFileSync(path, 'utf8')).toBe('new line after upgrade\n');
+  });
+});
+
+describe('nodeFs.permissions (#655: init --token-file)', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'opportun-connector-perm-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('gives a file its permission bits, and null for one that is not there', async () => {
+    const own = join(dir, 'own');
+    const shared = join(dir, 'shared');
+    writeFileSync(own, 'x', { mode: 0o600 });
+    writeFileSync(shared, 'x');
+    chmodSync(shared, 0o644);
+    expect(await nodeFs.permissions(own)).toBe(0o600);
+    expect(await nodeFs.permissions(shared)).toBe(0o644);
+    expect(await nodeFs.permissions(join(dir, 'nope'))).toBeNull();
   });
 });
