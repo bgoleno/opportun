@@ -1,0 +1,63 @@
+# Labels a pull request `security` when it changes a security-sensitive path (#63; the list is
+# .github/scripts/security-paths.mjs, and CONTRIBUTING.md names its areas).
+#
+# On pull_request_target, not pull_request (#663, sec and tl on #642): on pull_request a workflow
+# runs as the PR has it, so a PR could edit this job, or the matcher it runs, out of its own run.
+# pull_request_target runs this file and the code it checks out as the BASE branch has them. A PR
+# that edits this file, security.yml or the matcher is labelled by the base copy, and those files
+# are on the list, so such a PR is always labelled.
+#
+# pull_request_target gets a token that can write, so this job runs no code from the PR at all:
+# its one checkout is the base commit, the PR's changed paths come from the API (gh pr diff), and
+# nothing the PR controls (its title, body or branch) is expanded into a script. The PR's own copy
+# of the matcher is unit-tested on pull_request in security.yml, with no write permission.
+name: Security label
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  label-security-sensitive:
+    name: Label security-sensitive changes
+    runs-on: ubuntu-latest
+    permissions:
+      # Read the base commit, and add a label to the pull request: nothing else.
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The base commit, never the PR's head or merge ref (see above).
+          ref: ${{ github.event.pull_request.base.sha }}
+          # Nothing here pushes with git: the token is not left in .git/config (#619).
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Check the PR's changed paths against the security-sensitive glob list
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          matches="$(gh pr diff "$PR_NUMBER" --name-only --repo "$GITHUB_REPOSITORY" \
+            | node .github/scripts/check-security-paths.mjs)"
+          echo "matches<<SECURITY_PATHS_EOF" >> "$GITHUB_OUTPUT"
+          echo "$matches" >> "$GITHUB_OUTPUT"
+          echo "SECURITY_PATHS_EOF" >> "$GITHUB_OUTPUT"
+          if [ -n "$matches" ]; then
+            echo "::notice::Security-sensitive paths changed:"
+            echo "$matches" | sed 's/^/::notice::  /'
+          fi
+
+      - name: Apply the security label
+        if: steps.check.outputs.matches != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr edit "$PR_NUMBER" --add-label security --repo "$GITHUB_REPOSITORY"
