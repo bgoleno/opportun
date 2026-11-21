@@ -256,7 +256,8 @@ describe('state (criterion 1)', () => {
     ['completed', 'ended'],
     ['failed', 'ended'],
     ['expired', 'ended'],
-    ['cancelling', 'ended'],
+    // #686: a batch still cancelling may write more output; its files are final once cancelled.
+    ['cancelling', 'in_progress'],
     ['cancelled', 'ended'],
   ] as const)('status %s is %s', async (status, expected) => {
     const { fetch, sent } = recordingFetch(() => json(batchObject(status as Status)));
@@ -514,6 +515,17 @@ describe('cleanup: the batch files removed once the results are applied (#634)',
       ...FILES.map((id) => `DELETE ${BASE}/files/${id}`),
     ]);
     for (const s of sent) expect(s.headers.authorization).toBe(`Bearer ${KEY}`);
+  });
+
+  it('the ids read at the collect (cleanupRefs) are deleted without asking the batch again (#686)', async () => {
+    const read = deletes((id) => json({ id, deleted: true }));
+    const refs = await client(read.fetch).cleanupRefs(BATCH_ID);
+    expect(refs).toEqual(FILES);
+    const { fetch, sent } = deletes((id) => json({ id, deleted: true }));
+    await client(fetch).cleanup(BATCH_ID, refs);
+    expect(sent.map((s) => `${s.method} ${s.url}`)).toEqual(
+      FILES.map((id) => `DELETE ${BASE}/files/${id}`),
+    );
   });
 
   it('a file already gone counts as removed', async () => {

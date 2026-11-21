@@ -209,6 +209,20 @@ describe('connections LinkedIn itself stripped of every identity field (issue #1
   });
 });
 
+describe('a connection URL on another host (#655)', () => {
+  it('keeps the connection with no LinkedIn link: only linkedin.com links are stored', () => {
+    const csv =
+      'First Name,Last Name,URL,Email Address,Company,Position,Connected On\r\n' +
+      'Jordan,Example,https://example.com/in/jordan,,Initech,,01 Jan 2024\r\n' +
+      'Sam,Example,https://uk.linkedin.com/in/sam,,Initech,,01 Jan 2024\r\n';
+    const { rows } = parseConnections(csv);
+    expect(rows.map((r) => [r.name, r.linkedinUrl])).toEqual([
+      ['Jordan Example', null],
+      ['Sam Example', 'https://uk.linkedin.com/in/sam'],
+    ]);
+  });
+});
+
 describe('POST /imports/linkedin', () => {
   it('imports connections as contacts and messages as linkedin communications', async () => {
     const { app, a } = await boot();

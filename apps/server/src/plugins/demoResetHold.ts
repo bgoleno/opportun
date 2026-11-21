@@ -11,12 +11,14 @@
 //   - before the handler starts (the body still arriving, say), only START_LIMIT_MS: past it the
 //     request is ended and gives its place back, and its handler never runs;
 //   - once the reply is handed over, nothing: a client that reads it slowly holds nothing;
-//   - and every hold's hard bound (HOLD_LIMIT_MS), whatever happens.
+//   - and every hold's hard bound (HOLD_LIMIT_MS), whatever happens; the handler runs with the
+//     hold's stop signal (lib/demoResetGate.ts, #684), so its AI calls end before that bound,
+//     however long the request took to start.
 // A request that ends while it waits for the gate (its client gone) gives its place back as soon as
 // it gets it: the release is attached before the wait, never after.
 import type { FastifyInstance, FastifyReply, FastifyRequest, RouteHandlerMethod } from 'fastify';
 import fp from 'fastify-plugin';
-import type { DemoResetGate, Hold } from '../lib/demoResetGate';
+import { runWithHoldStop, type DemoResetGate, type Hold } from '../lib/demoResetGate';
 import { HttpError } from '../lib/errors';
 
 /** How long a request may hold the gate before its handler starts. */
@@ -118,7 +120,8 @@ async function demoResetHold(app: FastifyInstance, opts: DemoResetHoldOptions): 
       const ref = req.demoResetHoldLost ? null : hold.retain();
       if (ref === null) throw new HttpError(503, 'try_again', 'Try again in a moment.');
       try {
-        return await handler.call(this, req, reply);
+        // Its AI calls and streamed replies end on the hold's stop signal (#684).
+        return await runWithHoldStop(hold.signal, () => handler.call(this, req, reply));
       } finally {
         ref.release();
       }

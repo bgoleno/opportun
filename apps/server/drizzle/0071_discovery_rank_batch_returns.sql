@@ -1,0 +1,1 @@
+ALTER TABLE `discovery_results` ADD `rank_batch_returns` integer DEFAULT 0 NOT NULL;
