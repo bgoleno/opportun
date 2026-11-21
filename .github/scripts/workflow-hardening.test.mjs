@@ -116,3 +116,13 @@ test("the image's base digest is kept current by Dependabot, for the Dockerfile 
   assert.match(text, /^\s*directory:\s*["']?\/deploy["']?\s*$/m);
   assert.match(text, /^\s*interval:\s*["']?weekly["']?\s*$/m);
 });
+
+test('Dependabot never proposes a new major node for the image (#683)', () => {
+  // It opened node 22 -> 26 (#675) against .nvmrc 22. The runtime's major follows .nvmrc and is
+  // changed on purpose; Dependabot keeps the digest and minor or patch updates within it.
+  const text = readFileSync(new URL('../dependabot.yml', import.meta.url), 'utf8');
+  assert.match(
+    text,
+    /ignore:\s*\n\s*-\s*dependency-name:\s*["']?node["']?\s*\n\s*update-types:\s*\[\s*["']version-update:semver-major["']\s*\]/,
+  );
+});
