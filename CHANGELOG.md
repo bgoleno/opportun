@@ -119,10 +119,13 @@ when the milestone's work was merged.
   and starting again after an expired review carries nothing over. A value that came with the
   demo is refused by field name, for example "Email: this value came with the demo. Enter your
   own, or leave the field empty. Nothing was opened.", with a link back to the details step.
+  On the review step of an application with no resume, the tick no longer mentions one: "I have
+  read my answers, and I will press Submit myself on _host_."
   Dedicated demo accounts and instances that are not the demo see none of this
-  ([#546](https://github.com/bgoleno/opportun/issues/546); PR
-  [#575](https://github.com/bgoleno/opportun/pull/575)).
-
+  ([#546](https://github.com/bgoleno/opportun/issues/546),
+  [#577](https://github.com/bgoleno/opportun/issues/577); PRs
+  [#575](https://github.com/bgoleno/opportun/pull/575),
+  [#600](https://github.com/bgoleno/opportun/pull/600)).
 - **The extension's Greenhouse filler never clicks a list option inside a link or button, and it
   stops if the page moves.** An option with a link, button, label, area or summary between it
   and its list is now refused, since a click there would follow the link or press the control
@@ -141,6 +144,99 @@ when the milestone's work was merged.
   `invalid_credentials`) and the audit entry records `password_changed`
   ([#561](https://github.com/bgoleno/opportun/issues/561); PR
   [#571](https://github.com/bgoleno/opportun/pull/571)).
+- **A password reset also unlinks the account's sign-in providers.** The administrator's reset
+  (**Settings > Users**) and the command-line reset now unlink every Google, GitHub and LinkedIn
+  sign-in linked to the account, and say which ones: the temporary-password dialog names them,
+  and the command prints them on stderr (stdout is still the password alone), so a provider
+  someone else linked cannot sign in after the reset. Changing your own password keeps your
+  providers. A provider link, or a provider sign-in, that was in flight when the reset ran now
+  writes nothing ([#573](https://github.com/bgoleno/opportun/issues/573); PR
+  [#602](https://github.com/bgoleno/opportun/pull/602)).
+- **On the demo, an account made for one person gets the normal welcome tour and the "Get set
+  up" checklist.** The demo's shared accounts keep the view-only tour
+  ([#576](https://github.com/bgoleno/opportun/issues/576); PR
+  [#586](https://github.com/bgoleno/opportun/pull/586)).
+- **The security policy and the design documents now describe the demo's shared accounts.**
+  `SECURITY.md` lists what assisted apply allows on them and the trade-offs the owner accepted,
+  as a deliberate deviation, and the assisted apply design documents, the ADR and
+  `docs/design.md` no longer say it is off on the demo
+  ([#585](https://github.com/bgoleno/opportun/issues/585); PR
+  [#601](https://github.com/bgoleno/opportun/pull/601)).
+- **Resume flow: forms opened in place take focus and can be cancelled, every step change is
+  announced, and finished steps link to what they made.** The forms for registering a base resume
+  and for recording that you sent something focus their first field, and **Cancel** closes one and
+  returns focus to the button that opened it. A change of place is announced once, a repeat of
+  the same message included, and the message clears after a few seconds. A finished step links to
+  what it made
+  ([#596](https://github.com/bgoleno/opportun/issues/596); PR
+  [#609](https://github.com/bgoleno/opportun/pull/609)).
+- **Moving or reordering a card on the pipeline board no longer downloads every opportunity
+  again, so drags stay quick on a large board.** A stage change or a reorder now refreshes the
+  other lists and leaves the board's own list as it is
+  ([#589](https://github.com/bgoleno/opportun/issues/589); PR
+  [#621](https://github.com/bgoleno/opportun/pull/621)).
+- **Companies: the network list is paged on the server, and a running board check refreshes only
+  its own row instead of the whole list.** `GET /discovery/network-companies` takes `limit` (default
+  50, at most 200) and `offset` and returns `items` and `total`, and the screen walks the pages. The
+  order is unchanged ([#591](https://github.com/bgoleno/opportun/issues/591); PR
+  [#624](https://github.com/bgoleno/opportun/pull/624)).
+- **The password-reset and demo-account commands refuse, changing nothing, when their pepper
+  version is not the one the server last started with.** Before, after a pepper rotation, a run with
+  only the new secret set printed a password that could not sign in, having already ended the
+  user's sessions and revoked their device tokens. The refusal names the variables to set and says
+  a rotation needs a server restart first. The server records the version it runs with on every
+  start ([#606](https://github.com/bgoleno/opportun/issues/606); PR
+  [#627](https://github.com/bgoleno/opportun/pull/627)).
+- **On the Metrics page, choosing "Last 30 days" and then a custom range no longer refuses that
+  range with "Points are kept 30 days" when it was picked late in a minute.** A start the page
+  filled in is clamped to the last 30 days, and a start you typed past 30 days is still refused
+  ([#614](https://github.com/bgoleno/opportun/issues/614); PR
+  [#628](https://github.com/bgoleno/opportun/pull/628)).
+- **Run now on a paused board source that follows a company says to follow the company.** Following
+  a company is what switches its source on, so the message now says to follow it on the Companies
+  tab (or, if you already do, to turn on the source's Enabled box). Other sources keep the old
+  message ([#599](https://github.com/bgoleno/opportun/issues/599); PR
+  [#629](https://github.com/bgoleno/opportun/pull/629)).
+- **On the demo, stdio MCP discovery sources cannot be configured or run.** Creating one, or
+  changing a source to one, is refused (403 `mcp_stdio_unavailable_on_demo`), and a stored one stops
+  with "stdio MCP sources do not run on the demo" before anything starts. An https MCP source is
+  unchanged, and so is everything off the demo (PR
+  [#631](https://github.com/bgoleno/opportun/pull/631)).
+- **On a demo server, a shared demo account's data export leaves the request address out of its
+  audit rows** (PR [#636](https://github.com/bgoleno/opportun/pull/636)).
+- **The guide and the demo page walk a demo visitor through trying assisted apply with their own
+  details.** The acceptance checks and design section 7.8 describe it as built, and a browser test
+  runs it on a seeded demo server up to the handoff
+  ([#547](https://github.com/bgoleno/opportun/issues/547); PR
+  [#622](https://github.com/bgoleno/opportun/pull/622)).
+- **On the demo's shared accounts, the Google and Reactive Resume cards say what connecting means
+  there, and nothing that began before the nightly reset can write into the reseeded accounts.**
+  The notices and docs for resumes, backups and two-factor sign-in on shared accounts are updated to
+  match ([#618](https://github.com/bgoleno/opportun/issues/618); PR
+  [#638](https://github.com/bgoleno/opportun/pull/638)).
+- **The security label on pull requests also catches** changes to assisted apply submissions, the
+  extension's filler and popup, deployment files, the board probe, the AI clients, the demo
+  boundary, export and import, file storage and the observability settings, and `CONTRIBUTING.md`
+  names them all ([#610](https://github.com/bgoleno/opportun/issues/610); PR
+  [#639](https://github.com/bgoleno/opportun/pull/639)).
+- **The timing-attack and unsafe-regex lint rules are now errors, after the existing warnings were
+  triaged** ([#587](https://github.com/bgoleno/opportun/issues/587); PR
+  [#612](https://github.com/bgoleno/opportun/pull/612)).
+- **Batch ranking gains an OpenAI client, still behind the hidden setting.** Nothing is visible yet:
+  it was written from OpenAI's documentation with no real call, and stays hidden until the owner's
+  check ([#510](https://github.com/bgoleno/opportun/issues/510); PR
+  [#632](https://github.com/bgoleno/opportun/pull/632)).
+- **Docs: a Jobs section in the Settings guide, nine retaken screenshots, and a statement that only
+  the latest release is supported.** The Jobs section explains the Jobs card's statuses and
+  retries. The screenshots show the Settings side menu with Metrics and Telemetry and the tailored
+  copy's header. `SECURITY.md` and `CONTRIBUTING.md` say that fixes land on `main` first and only
+  the latest tagged release is supported
+  ([#604](https://github.com/bgoleno/opportun/issues/604),
+  [#608](https://github.com/bgoleno/opportun/issues/608),
+  [#611](https://github.com/bgoleno/opportun/issues/611); PRs
+  [#607](https://github.com/bgoleno/opportun/pull/607),
+  [#613](https://github.com/bgoleno/opportun/pull/613),
+  [#616](https://github.com/bgoleno/opportun/pull/616)).
 
 ## 0.4.0 (2026-11-14)
 
