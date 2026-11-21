@@ -777,6 +777,72 @@ describe('the expiry sweeper', () => {
     });
     expect((await rowOf(app, recent.id))?.status).toBe('handed_off');
     expect(await auditEvents(app, a, 'submission.abandoned')).toHaveLength(2);
+
+    // https://github.com/bgoleno/opportun/issues/597 (f): a second run changes nothing and adds no
+    // audit entry, the rows and the log as the first run left them.
+    const rowsAfterFirst = await Promise.all(
+      [expired, fresh, idle, recent].map((r) => rowOf(app, r.id)),
+    );
+    expect(await sweepSubmissions(app.db, now)).toBe(0);
+    expect(await Promise.all([expired, fresh, idle, recent].map((r) => rowOf(app, r.id)))).toEqual(
+      rowsAfterFirst,
+    );
+    expect(await auditEvents(app, a, 'submission.abandoned')).toHaveLength(2);
+  });
+
+  // #597 (f): the sweep reads the due rows, then changes each in its own transaction. A review
+  // extended in between (its expiry moved past `now`) is no longer due, and is not abandoned: the
+  // update checks the expiry again. The extension is written right after the sweep's read returns.
+  it('a review extended between the sweep’s read and its update is not abandoned', async () => {
+    const { app, a } = await boot(ON);
+    const r = await reviewed(app, a);
+    const now = Date.now();
+    await app.db
+      .update(applicationSubmissions)
+      .set({ reviewExpiresAt: now - 1 })
+      .where(eq(applicationSubmissions.id, r.id))
+      .run();
+    const { sweepSubmissions } = await import('../src/repos/submissionReview');
+    // The part of the select chain the sweep's read uses: select().from().where().all().
+    type Read = { all: () => Promise<unknown[]> };
+    type Filtered = { where: (...w: unknown[]) => Read };
+    type Chain = { from: (...f: unknown[]) => Filtered };
+    const realSelect = app.db.select.bind(app.db) as unknown as (...a: unknown[]) => Chain;
+    let armed = true;
+    const select = vi.spyOn(app.db, 'select').mockImplementation(((...args: unknown[]) => {
+      const query = realSelect(...args);
+      if (!armed) return query;
+      armed = false;
+      const from = query.from.bind(query);
+      query.from = (...f: unknown[]) => {
+        const q = from(...f);
+        const where = q.where.bind(q);
+        q.where = (...w: unknown[]) => {
+          const q2 = where(...w);
+          const all = q2.all.bind(q2);
+          q2.all = async () => {
+            const due = await all();
+            await app.db
+              .update(applicationSubmissions)
+              .set({ reviewExpiresAt: now + REVIEW_TTL_MS })
+              .where(eq(applicationSubmissions.id, r.id))
+              .run();
+            return due;
+          };
+          return q2;
+        };
+        return q;
+      };
+      return query;
+    }) as never);
+    try {
+      expect(await sweepSubmissions(app.db, now)).toBe(0);
+    } finally {
+      select.mockRestore();
+    }
+    expect(armed).toBe(false);
+    expect(await rowOf(app, r.id)).toMatchObject({ status: 'reviewed', failureReason: null });
+    expect(await auditEvents(app, a, 'submission.abandoned')).toHaveLength(0);
   });
 });
 
