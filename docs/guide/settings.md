@@ -27,8 +27,9 @@ with https:// (or http://), and a name one line of plain text.
 Where [assisted apply](pipeline.md#assisted-apply) is on, **Settings > Profile** has an
 **Applications** card with **Reviews allowed per 24 hours**: how many applications you can
 confirm a review for in a rolling 24 hours. Assisted apply is on unless the person running your
-server turned it off, and it is never on the demo; where it is off, the card and the limit do not
-show (the operator's setting is in the [install guide](../install.md#4-configuration-reference)).
+server turned it off, on the demo too (where they can also turn it off for its shared accounts
+only); where it is off, the card and the limit do not show (the operator's setting is in the
+[install guide](../install.md#4-configuration-reference)).
 
 - **The limit** is 10 unless the person running the server set another value, which can be at most 25. You can lower yours up to that value and press **Save limit**; **Use the server's limit**
   takes yours away. If the server's limit is later set below yours, the server's applies, and the

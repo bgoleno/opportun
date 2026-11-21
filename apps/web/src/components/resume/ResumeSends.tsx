@@ -3,7 +3,7 @@
 // A send is a record, not an attachment: the resume itself does not change.
 import { Link } from '@tanstack/react-router';
 import { Trash2 } from 'lucide-react';
-import { useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { FormError } from '@/components/FormError';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -44,6 +44,7 @@ export function RecordSendFields({
   quiet = false,
   onStart,
   onFail,
+  focusOnOpen = false,
 }: {
   opportunityId: string;
   resume: Resume;
@@ -55,8 +56,16 @@ export function RecordSendFields({
    */
   onStart?: () => void;
   onFail?: () => void;
+  /** Focus "Sent via" as the form appears, in place of the button that opened it (#596). */
+  focusOnOpen?: boolean;
 }) {
   const record = useRecordSend(opportunityId);
+  const viaField = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (focusOnOpen) viaField.current?.focus();
+    // On mount only: the form is opened once, and a re-render must not pull focus back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [via, setVia] = useState('');
   const [day, setDay] = useState(todayIso());
   const viaId = useId();
@@ -95,6 +104,7 @@ export function RecordSendFields({
       <div className="grid gap-2">
         <Label htmlFor={viaId}>Sent via</Label>
         <Input
+          ref={viaField}
           id={viaId}
           value={via}
           maxLength={300}

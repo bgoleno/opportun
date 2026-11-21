@@ -319,7 +319,9 @@ Application settings (read by the server process):
 | `DB_POOL_MAX`                                      | `10`                                           | Postgres connection pool size                                                                                                                                                                                                                                                                                                            |
 | `DB_SSL`                                           | `disable` for localhost, else `require`        | Postgres TLS: `disable`, `require` (encrypted, certificate not verified) or `verify-full` (certificate and host checked); `sslmode` in the URL is honored when unset                                                                                                                                                                     |
 | `OPPORTUN_DEMO`                                    | (unset)                                        | `1` declares this deployment the invitation-only demo instance; see **Demo mode** below                                                                                                                                                                                                                                                  |
-| `OPPORTUN_SUBMISSIONS`                             | (unset: on)                                    | Assisted apply. Unset, empty or `1` is on; `0` turns it off (`OPPORTUN_SUBMISSIONS=0` in `deploy/.env`, then `docker compose up -d`). Any other value, `false` included, stops the server from starting. Never on the demo; see [Assisted apply](guide/pipeline.md#assisted-apply)                                                       |
+| `OPPORTUN_SUBMISSIONS`                             | (unset: on)                                    | Assisted apply. Unset, empty or `1` is on; `0` turns it off (`OPPORTUN_SUBMISSIONS=0` in `deploy/.env`, then `docker compose up -d`). Any other value, `false` included, stops the server from starting. On the demo too, limited on its shared accounts: see [Assisted apply](guide/pipeline.md#assisted-apply)                         |
+| `OPPORTUN_DEMO_TOKEN_CAP`                          | (unset: 20)                                    | Demo servers only: the most active device tokens one shared demo account keeps; minting past it revokes the oldest. `0` means no cap; a value that is not a whole number stops the server from starting. See [section 16](#16-demo-deployment)                                                                                           |
+| `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY`              | (unset: on)                                    | Demo servers only: `0` turns assisted apply off for the shared demo accounts only; unset, empty or `1` is on. Any other value stops the server from starting. See [section 16](#16-demo-deployment)                                                                                                                                      |
 | `OPPORTUN_DAILY_REVIEW_CAP`                        | `10`                                           | Assisted apply: most applications one user can confirm a review for in a rolling 24 hours, 1 to 25, digits only; anything else stops the server from starting. Users can lower theirs, never raise it; see [Settings](guide/settings.md#applications-and-the-review-limit)                                                               |
 | `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`           | (unset: the official API)                      | Send every Anthropic or OpenAI call to a proxy or gateway you run instead; see **AI provider requests** below                                                                                                                                                                                                                            |
 | `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP`                  | (unset)                                        | `1` lets an OpenAI-compatible endpoint use plain http on `localhost`, `127.0.0.1` or `[::1]` (a local Ollama or LM Studio)                                                                                                                                                                                                               |
@@ -398,8 +400,12 @@ guess passwords. Keep it outside the database, like the master key (for example
 `openssl rand -hex 32` into the server's environment). Accounts created before you set
 it keep working: each one is re-hashed with the pepper the next time its owner signs in.
 **Removing the pepper still breaks every peppered hash**, and the only way back in is a
-password reset per account. Pass the same value to the reset CLI (it reads
-`OPPORTUN_PEPPER` from its environment). On a Compose deployment, set it in `deploy/.env`,
+password reset per account. The CLIs that set a password (the reset, and a demo's dedicated
+account) read the pepper from their own environment, so a run from source needs every pepper
+variable the server has: `OPPORTUN_PEPPER`, `OPPORTUN_PEPPER_VERSION` and each
+`OPPORTUN_PEPPER_V<N>` (`docker compose exec` inherits the server's). A run whose version is not
+the one the server last started with refuses and changes nothing: after a rotation, restart the
+server before running one. On a Compose deployment, set it in `deploy/.env`,
 which is outside the `data/` volume; make sure every later `docker compose up -d` runs
 against a compose file that passes it through, or the server comes back up with no pepper
 and the peppered hashes stop verifying.
@@ -679,7 +685,8 @@ opportun-YYYYMMDD-HHmm.dump` (the same `DATABASE_URL` as the server). Same guara
 - **Lost password**: from `deploy/`, run
   `docker compose exec opportun node --import tsx src/cli/resetPassword.ts you@example.com`
   (from source: `DATA_DIR=... SQLITE_DIR=... node --import tsx src/cli/resetPassword.ts
-you@example.com` in `apps/server`, with the same values as the server). It sets a new
+you@example.com` in `apps/server`, with the same values as the server: the database settings
+  and every `OPPORTUN_PEPPER*` variable, see "Password pepper" above). It sets a new
   random temporary password, signs that user out
   everywhere, and prints the password once to your terminal; it is not logged or stored
   anywhere else. Sign in with it and change it under Settings. An unknown email changes
@@ -1412,3 +1419,16 @@ On a demo server, an account for one person, not shared and not reset, comes fro
 `src/cli/createDemoAccount.ts <email> <display name>`, which prints its password once. The demo's
 shared admin has no power over it. See
 [A dedicated account for one person](demo-deployment.md#a-dedicated-account-for-one-person).
+
+Assisted apply is on for the demo. On its shared accounts (the five seeded logins) it fills only a
+visitor's own details, with no resume, and binds each application to the visitor who started it.
+A dedicated account has none of these limits. Two settings apply to the shared accounts only:
+
+- `OPPORTUN_DEMO_TOKEN_CAP`: the most active device tokens one shared account keeps. Minting past
+  it revokes the oldest. Default `20`, and `0` means no cap. Any other value that is not a whole
+  number stops the server from starting.
+- `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY`: `0` turns assisted apply off for the shared accounts
+  only. Unset, empty or `1` is on; any other value stops the server from starting.
+
+`OPPORTUN_SUBMISSIONS=0` still turns it off for everyone. See
+[Device tokens and assisted apply on the demo](demo-deployment.md#device-tokens-and-assisted-apply-on-the-demo).

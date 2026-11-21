@@ -122,13 +122,13 @@ export async function choose(scope: Page | Locator, label: string, option: strin
  * Creates a device token with the browser-capture scope through Settings, as a user setting up
  * the extension does, so a test can post a captured page the way the extension would.
  */
-export async function createCaptureToken(page: Page): Promise<string> {
+export async function createCaptureToken(page: Page, password = PASSWORD): Promise<string> {
   await page.goto('/settings/integrations');
   await page.getByRole('button', { name: 'Create token' }).click();
   const dialog = page.getByRole('dialog', { name: 'Create a device token' });
   await dialog.getByLabel('Name').fill('Chrome extension');
   await dialog.getByRole('checkbox', { name: /^Browser capture/ }).setChecked(true);
-  await dialog.getByLabel('Current password').fill(PASSWORD);
+  await dialog.getByLabel('Current password').fill(password);
   await dialog.getByRole('button', { name: 'Create' }).click();
   const shown = page.getByRole('dialog', { name: 'Copy your device token' });
   const token = await shown.getByLabel('Device token').inputValue();
@@ -143,9 +143,9 @@ const STUB = '<!doctype html><title>Stub ATS</title><h1>Stub application form</h
  * the machine: a handoff's new tab never reaches a real ATS (Opportun never submits; the e2e
  * never even visits).
  */
-export async function stubOtherHosts(context: BrowserContext): Promise<void> {
+export async function stubOtherHosts(context: BrowserContext, base = BASE_URL): Promise<void> {
   await context.route(
-    (url) => !url.href.startsWith(BASE_URL),
+    (url) => !url.href.startsWith(base),
     (route) => route.fulfill({ status: 200, contentType: 'text/html', body: STUB }),
   );
 }
@@ -169,9 +169,10 @@ export async function registerBaseResume(page: Page, docId: string): Promise<voi
 export async function captureGreenhouseOpportunity(
   page: Page,
   playwright: PlaywrightWorkerArgs['playwright'],
+  server: { baseURL: string; password: string } = { baseURL: BASE_URL, password: PASSWORD },
 ): Promise<string> {
-  const token = await createCaptureToken(page);
-  const extension = await playwright.request.newContext({ baseURL: BASE_URL });
+  const token = await createCaptureToken(page, server.password);
+  const extension = await playwright.request.newContext({ baseURL: server.baseURL });
   try {
     const res = await extension.post('/api/v1/connector/capture', {
       headers: { authorization: `Bearer ${token}` },

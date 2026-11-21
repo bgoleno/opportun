@@ -22,6 +22,7 @@ import {
   type DiscoverySource,
 } from '../src/adapters/discoverySource';
 import { companies, discoveryResults, jobs, taskRuns } from '../src/db/schema';
+import { suggestCompanies } from '../src/jobs/companySuggest';
 import { tagCompanies } from '../src/jobs/companyTags';
 import { DISCOVERY_RANK_KIND, rankResult } from '../src/jobs/discoveryRank';
 import {
@@ -33,10 +34,12 @@ import {
 } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND, FIRST_RUN_RANK_CAP } from '../src/jobs/discoveryRun';
 import { rankBudgetHasRoom } from '../src/jobs/rankBudget';
+import { suggestIndustries } from '../src/lib/industryProfile';
 import { enqueue, runNextJob } from '../src/jobs/runner';
 import { setRaceHook } from '../src/lib/racePoints';
 import type { UserCtx } from '../src/repos/base';
 import { createCompany } from '../src/repos/companies';
+import { createRoleTarget } from '../src/repos/profile';
 import { countWaitingResults, createSource, listResults } from '../src/repos/discovery';
 import {
   discoverySpentTodayUsd,
@@ -356,6 +359,41 @@ describe('#299: the other covered tasks use the budget up to 100%', () => {
     // One call of 20 (the batch), then the budget is spent: the other 5 wait for tomorrow.
     expect(run).toMatchObject({ tagged: 20, calls: 1, stopped: 'budget_exceeded' });
     expect(await spentToday(app, a)).toBe(BUDGET_USD);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/597 (e): the reserve holds back ranking only. With a
+  // company waiting for a tag and spend between ranking's line and the budget, company.suggest and
+  // the industry profile still make their call (#315).
+  async function pastTheLine(app: FastifyInstance, c: TestClient) {
+    await writeDiscoveryBudget(app.db, ctxOf(c), BUDGET_USD);
+    await suggested(app, c, 'Waiting For A Tag');
+    await rankCalls(app, c, WHOLE - 1);
+    expect(await spentToday(app, c)).toBeLessThan(BUDGET_USD);
+    expect(await rankBudgetHasRoom(app.db, ctxOf(c))).toBe(false);
+  }
+
+  it('company.suggest goes ahead past the ranking line while a company waits for a tag', async () => {
+    const { app, a } = await boot();
+    await pastTheLine(app, a);
+    vi.mocked(runStructured).mockResolvedValue({ suggestions: [] } as never);
+    expect(await suggestCompanies(app.db, ctxOf(a))).toMatchObject({ status: 'suggested' });
+    expect(vi.mocked(runStructured).mock.calls.map(([, task]) => task)).toEqual([
+      'company.suggest',
+    ]);
+  });
+
+  it('the industry profile goes ahead past the ranking line while a company waits for a tag', async () => {
+    const { app, a } = await boot();
+    await pastTheLine(app, a);
+    await createRoleTarget(app.db, ctxOf(a), {
+      name: 'Platform',
+      titleFamily: 'Staff Engineer',
+      industries: ['Payments'],
+      keywords: ['ledger'],
+    } as never);
+    vi.mocked(runStructured).mockResolvedValue({ industries: [] } as never);
+    await expect(suggestIndustries(app.db, ctxOf(a), null)).resolves.toBeDefined();
+    expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(1);
   });
 });
 

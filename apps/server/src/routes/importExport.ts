@@ -10,6 +10,7 @@ import { JOB_STATUSES, jobs } from '../db/schema';
 import { enqueue } from '../jobs/runner';
 import { audit } from '../lib/audit';
 import { HttpError, notFound } from '../lib/errors';
+import { isSharedDemoAccount } from '../lib/demoAccounts';
 import { buildExport, zipStream } from '../lib/exporter';
 import {
   IMPORT_JOB_KIND,
@@ -190,7 +191,10 @@ export async function importExportRoutes(app: FastifyInstance): Promise<void> {
   api.get('/export', async (req, reply) => {
     const ctx = requireUser(req);
     const now = Date.now();
-    const entries = await buildExport(db, ctx, now);
+    // A shared demo account's trail holds other visitors' addresses: the export leaves them out.
+    const entries = await buildExport(db, ctx, now, {
+      withoutRequestAddresses: isSharedDemoAccount(app.config, ctx.userId),
+    });
     await audit(db, 'data.export', { userId: ctx.userId, ip: req.ip });
     return reply
       .header('content-type', 'application/zip')

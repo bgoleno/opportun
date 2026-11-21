@@ -519,8 +519,10 @@ docker compose ... exec opportun node --import tsx src/cli/createDemoAccount.ts 
 
 It prints the account's password on stdout, once, and nowhere else (not to the logs or the audit
 trail). Give it to its owner, who can change it under Settings. The command refuses, and changes
-nothing, off a demo server (`OPPORTUN_DEMO` not `1`), before the first seed, and for an email
-already in use.
+nothing, off a demo server (`OPPORTUN_DEMO` not `1`), before the first seed, for an email already
+in use, and when its pepper version is not the one the server last started with. Run from source
+rather than through `docker compose exec`, it needs the server's `OPPORTUN_PEPPER`,
+`OPPORTUN_PEPPER_VERSION` and each `OPPORTUN_PEPPER_V<N>` (`docs/install.md`, "Password pepper").
 
 A dedicated account:
 
@@ -586,6 +588,28 @@ Two settings change the limits for the shared accounts, with these defaults:
 
 `OPPORTUN_SUBMISSIONS=0` still turns assisted apply off for everyone. The nightly reset removes every
 shared account's tokens, applications and stored files.
+
+### Try assisted apply: what to tell a visitor
+
+A visitor tries assisted apply on a real job they choose, with their own details, and submits it
+themselves if they mean to apply. The demo's own opportunities are invented, so none of them has a
+form to fill. In short, for a shared account:
+
+1. Sign in, add the job (**New opportunity** with its posting link, then **Find posting** on its
+   Details tab, or capture it with the extension), and move it to Interested.
+2. Under **Settings > Integrations > Extensions and Connectors**, download the extension from the
+   demo (it already knows the demo's address), load it unpacked, and pair it with an **Assisted
+   apply** token, in the same session as the application.
+3. **Apply on** _ATS_: no resume (attach your own on the form), your own details typed in (the
+   step starts empty), then review. A value that came with the demo is refused, by field.
+4. **Confirm review and open**, then on the form's tab open the extension, which fills what was
+   reviewed. Check it, attach your resume, and press the site's own Submit, or close the tab.
+
+Tell them that anything entered on a shared account is visible to everyone signed in to it until
+the nightly reset, as the warning on each step says. A dedicated account applies as on any server.
+The guide's [Try assisted apply on the demo](guide/pipeline.md#try-assisted-apply-on-the-demo)
+has the same steps for the visitor, and `docs/demo-acceptance.md` section 9 has the checks for this
+host.
 
 ## Hard constraints on anything added to this deployment
 

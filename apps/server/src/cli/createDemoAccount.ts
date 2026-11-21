@@ -9,9 +9,11 @@
 // account's password to stdout, once. Nothing else: the password never goes to a log, a file, the
 // audit trail or stderr. Registration is never opened, not even for the insert.
 //
-// Refuses (touching nothing) off a demo server, on a demo not yet seeded, and for an email already
-// in use. Run it against the same DATA_DIR (and, on Postgres, the same DB_DIALECT and DATABASE_URL)
-// and the same OPPORTUN_PEPPER as the server (in Docker: docker compose exec).
+// Refuses (touching nothing) off a demo server, on a demo not yet seeded, for an email already in
+// use, and when its pepper version is not the one the server last started with (#606). Run it
+// against the same DATA_DIR (and, on Postgres, the same DB_DIALECT and DATABASE_URL) and the same
+// pepper variables as the server: OPPORTUN_PEPPER, OPPORTUN_PEPPER_VERSION and every
+// OPPORTUN_PEPPER_V<N> (in Docker, docker compose exec inherits them).
 // First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
 import '../unsetEmptyAiBaseUrls';
 import { resolve } from 'node:path';
@@ -25,6 +27,7 @@ import { audit } from '../lib/audit';
 import { writeDedicatedMark } from '../lib/demoDedicated';
 import { temporaryPassword } from '../lib/passwordReset';
 import { hashPassword } from '../lib/passwords';
+import { stalePepperProblem } from '../lib/pepperVersion';
 import { insertUserRow } from '../lib/registration';
 import { DEMO_MARKER_KEY } from './seedDemo';
 import type { CliIo } from './resetPassword';
@@ -73,8 +76,16 @@ export async function main({
     io.stderr('OPPORTUN_DEMO is not set to 1: a dedicated demo account is for a demo server only.');
     return 1;
   }
+  const peppers = loadPeppers(env);
+  // Before the hash and the transaction: a pepper version that is not the server's would make an
+  // account that cannot sign in and keeps its email (#606). A restart in between is accepted.
+  const stale = await stalePepperProblem(db, peppers);
+  if (stale !== null) {
+    io.stderr(`${stale} Nothing changed.`);
+    return 1;
+  }
   const password = temporaryPassword();
-  const passwordHash = await hashPassword(password, loadPeppers(env));
+  const passwordHash = await hashPassword(password, peppers);
   const now = Date.now();
   let userId: string;
   try {

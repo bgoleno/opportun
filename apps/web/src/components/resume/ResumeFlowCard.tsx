@@ -7,7 +7,7 @@
 // disagree. One filled button, the next action; a quiet second action under it. After an action
 // here, focus moves to the new state's sentence and a polite live region says it.
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from 'react';
 import {
   applyBlockedReason,
   attemptPlace,
@@ -35,6 +35,7 @@ import {
   type Resume,
   type ResumeSend,
 } from './api';
+import { FlowAnnouncement, useFlowAnnouncer } from './flowAnnouncer';
 import { GoogleConnectHint, RegisterDocCard, StatusBadge } from './ResumeList';
 import { RecordSendFields } from './ResumeSends';
 import { resumeFlowState, type ResumeFlowState } from './resumeFlow';
@@ -77,28 +78,136 @@ export function useResumeFlow(opp: OpportunityView) {
   return { state, error, resumes, sends: sendItems, assisted };
 }
 
+/** Where a finished step links back to: what it made (#596, tl on #400's note). */
+export type StepLink =
+  | { kind: 'resume'; id: string; title: string }
+  | { kind: 'attempt'; opportunityId: string; step: 'details' | 'review' | 'open'; ats: string };
+
+export type StepLinks = ReadonlyMap<1 | 2 | 3 | 4, StepLink>;
+
+const NO_LINKS: StepLinks = new Map();
+
+/**
+ * What each finished step made, for its link (#596): Base the base the copy came from (or the
+ * base itself, sent as it is), Tailor and Finish the copy (Finish the base when it went as it
+ * is; Tailor then made nothing), Apply the application. A recorded send has no page of its own,
+ * and a target that is not known is not guessed: those steps stay plain.
+ *
+ * `about` is the resume the steps shown are about, where that is not the state's own: the base
+ * sent as it is (the tab's branch of B), or the copy "Tailor again" made, whose page shows that
+ * copy's steps while the opportunity is done (qa on #609: Finish named the base sent before it).
+ */
+export function stepLinks(
+  state: ResumeFlowState,
+  resumes: readonly Resume[],
+  opportunityId: string,
+  about?: Resume,
+): StepLinks {
+  const byId = (id: string | null | undefined) =>
+    id === null || id === undefined ? undefined : resumes.find((r) => r.id === id);
+  const made =
+    about ??
+    ('resume' in state ? state.resume : undefined) ??
+    (state.state === 'H' ? byId(state.send?.resumeId) : undefined) ??
+    ('attempt' in state ? byId(state.attempt?.resumeId) : undefined);
+  const link = (r: Resume | undefined): StepLink | undefined =>
+    r === undefined ? undefined : { kind: 'resume', id: r.id, title: r.title };
+  const links = new Map<1 | 2 | 3 | 4, StepLink>();
+  if (made !== undefined) {
+    const tailored = made.kind === 'tailored';
+    const base = tailored ? link(byId(made.parentResumeId)) : link(made);
+    if (base !== undefined) links.set(1, base);
+    if (tailored) links.set(2, link(made)!);
+    links.set(3, link(made)!);
+  }
+  if (state.state === 'H' && state.attempt !== undefined) {
+    const ats = atsLabel(state.attempt.atsKind);
+    links.set(4, {
+      kind: 'attempt',
+      opportunityId,
+      step: attemptPlace(state.attempt, ats).step,
+      ats,
+    });
+  }
+  return links;
+}
+
+const stepLinkClass =
+  'rounded-full underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+
 /** The steps, the current one outlined and named, ApplyStepper's look (#400 note). Shared
- *  with the resume page's strip (#447). */
-export function FlowSteps({ current }: { current: Step }) {
+ *  with the resume page's strip (#447). A finished step links to what it made (#596), except
+ *  where that is `here`, the resume whose page this is. */
+export function FlowSteps({
+  current,
+  links = NO_LINKS,
+  here,
+}: {
+  current: Step;
+  links?: StepLinks;
+  here?: string;
+}) {
   const at = current === 'done' ? STEP_LABELS.length + 1 : current;
   return (
     <>
       <ol aria-label="Resume steps" className="hidden flex-wrap items-center gap-2 text-sm sm:flex">
-        {STEP_LABELS.map((label, i) => (
-          <li
-            key={label}
-            aria-current={i + 1 === at ? 'step' : undefined}
-            className={cn(
-              'rounded-full border px-3 py-1',
-              i + 1 === at
-                ? 'border-primary font-medium text-foreground'
-                : 'border-border text-muted-foreground',
-            )}
-          >
-            {i + 1} {label}
-            {i + 1 < at ? <span className="sr-only"> (completed)</span> : null}
-          </li>
-        ))}
+        {STEP_LABELS.map((label, i) => {
+          const n = (i + 1) as 1 | 2 | 3 | 4;
+          const finished = n < at;
+          const target = finished ? links.get(n) : undefined;
+          const shown =
+            target === undefined || (target.kind === 'resume' && target.id === here)
+              ? undefined
+              : target;
+          // The name says where it goes: "1 Base (completed): Jane base" (tl on #596).
+          const text = (
+            <>
+              {n} {label}
+              {/* The space outside the span: an accessible name drops a span's leading space. */}
+              {finished ? (
+                <>
+                  {' '}
+                  <span className="sr-only">(completed)</span>
+                </>
+              ) : null}
+              {shown === undefined ? null : (
+                <span className="sr-only">
+                  :{' '}
+                  {shown.kind === 'resume' ? shown.title : `your application through ${shown.ats}`}
+                </span>
+              )}
+            </>
+          );
+          return (
+            <li
+              key={label}
+              aria-current={n === at ? 'step' : undefined}
+              className={cn(
+                'rounded-full border px-3 py-1',
+                n === at
+                  ? 'border-primary font-medium text-foreground'
+                  : 'border-border text-muted-foreground',
+              )}
+            >
+              {shown === undefined ? (
+                text
+              ) : shown.kind === 'resume' ? (
+                <Link className={stepLinkClass} to="/resumes/$id" params={{ id: shown.id }}>
+                  {text}
+                </Link>
+              ) : (
+                <Link
+                  className={stepLinkClass}
+                  to="/opportunities/$id/apply"
+                  params={{ id: shown.opportunityId }}
+                  search={{ step: shown.step }}
+                >
+                  {text}
+                </Link>
+              )}
+            </li>
+          );
+        })}
       </ol>
       {/* Phone width: one short line in place of the four (#400 note). */}
       <p className="text-sm text-muted-foreground sm:hidden">
@@ -123,13 +232,16 @@ export function Quiet({
   onClick,
   disabled = false,
   children,
+  ref,
 }: {
   onClick: () => void;
   disabled?: boolean;
   children: ReactNode;
+  ref?: Ref<HTMLButtonElement>;
 }) {
   return (
     <button
+      ref={ref}
       type="button"
       className={cn(quietClass, 'disabled:cursor-not-allowed disabled:opacity-50')}
       onClick={onClick}
@@ -149,6 +261,8 @@ interface View {
   /** What the live region says after an action leads here. */
   next: string;
   body: ReactNode;
+  /** Where its finished steps link back to (#596). */
+  links: StepLinks;
 }
 
 /** The base for "Tailor again" (tl on #440, ruling 6). */
@@ -215,7 +329,11 @@ export function ResumeFlowCard({
   const sentenceRef = useRef<HTMLHeadingElement>(null);
   // What an action here did ("Marked final."), until the view it leads to is shown.
   const done = useRef<string | null>(null);
-  const [announced, setAnnounced] = useState('');
+  const announcer = useFlowAnnouncer();
+  // The button that opened a form in place (Register, Record): Cancel gives focus back to it,
+  // since the form took its place and focus would otherwise fall to the page (#596).
+  const opener = useRef<HTMLButtonElement>(null);
+  const giveBack = useRef(false);
 
   const [asIs, setAsIs] = useState(false);
   const [registering, setRegistering] = useState(false);
@@ -234,16 +352,30 @@ export function ResumeFlowCard({
   const recordSend = {
     onStart: () => startAction('Recorded as sent.'),
     onFail: actionFailed,
+    focusOnOpen: true,
   };
+  function closeForm() {
+    giveBack.current = true;
+    setRegistering(false);
+    setRecording(false);
+  }
+  const cancel = <Quiet onClick={closeForm}>Cancel</Quiet>;
 
   const view = flow.state === undefined ? undefined : viewFor(flow.state);
+
+  useEffect(() => {
+    // After Cancel, once the opening button is back.
+    if (!giveBack.current || registering || recording) return;
+    giveBack.current = false;
+    opener.current?.focus();
+  }, [registering, recording]);
 
   useEffect(() => {
     // A form opened in one place is not carried into the next.
     setRecording(false);
     setRegistering(false);
     if (view === undefined || done.current === null) return;
-    setAnnounced(`${done.current} ${view.next}`);
+    announcer.announce(`${done.current} ${view.next}`);
     done.current = null;
     sentenceRef.current?.focus();
     // Only a change of place moves focus, never a re-render in the same place.
@@ -251,6 +383,13 @@ export function ResumeFlowCard({
   }, [view?.key]);
 
   function viewFor(state: ResumeFlowState): View {
+    const bases = flow.resumes.filter((r) => r.kind === 'base' && r.archivedAt === null);
+    const base = bases.find((b) => b.id === (chosenBase || bases[0]?.id || ''));
+    const asIsBase = state.state === 'B' && asIs ? base : undefined;
+    return { ...placeFor(state), links: stepLinks(state, flow.resumes, opp.id, asIsBase) };
+  }
+
+  function placeFor(state: ResumeFlowState): Omit<View, 'links'> {
     const ats = atsLabel(opp.atsJobRef?.kind ?? '');
     const bases = flow.resumes.filter((r) => r.kind === 'base' && r.archivedAt === null);
     const baseId = chosenBase || bases[0]?.id || '';
@@ -265,12 +404,16 @@ export function ResumeFlowCard({
           body: (
             <>
               {registering ? (
-                <RegisterDocCard
-                  onStart={() => startAction('Base resume registered.')}
-                  onFail={actionFailed}
-                />
+                <>
+                  <RegisterDocCard
+                    onStart={() => startAction('Base resume registered.')}
+                    onFail={actionFailed}
+                    focusOnOpen
+                  />
+                  {cancel}
+                </>
               ) : (
-                <Button className={primaryClass} onClick={() => setRegistering(true)}>
+                <Button ref={opener} className={primaryClass} onClick={() => setRegistering(true)}>
                   Register a base resume
                 </Button>
               )}
@@ -357,6 +500,8 @@ export function ResumeFlowCard({
               recording={recording}
               onRecord={() => setRecording(true)}
               recordSend={recordSend}
+              opener={opener}
+              cancel={cancel}
             />
           ),
         };
@@ -370,9 +515,12 @@ export function ResumeFlowCard({
           body: (
             <>
               {recording ? (
-                <RecordSendFields {...recordSend} opportunityId={opp.id} resume={state.resume} />
+                <>
+                  <RecordSendFields {...recordSend} opportunityId={opp.id} resume={state.resume} />
+                  {cancel}
+                </>
               ) : (
-                <Button className={primaryClass} onClick={() => setRecording(true)}>
+                <Button ref={opener} className={primaryClass} onClick={() => setRecording(true)}>
                   Record that you sent it
                 </Button>
               )}
@@ -417,9 +565,14 @@ export function ResumeFlowCard({
               </Link>
             ) : again !== undefined ? (
               recording ? (
-                <RecordSendFields {...recordSend} opportunityId={opp.id} resume={again} quiet />
+                <>
+                  <RecordSendFields {...recordSend} opportunityId={opp.id} resume={again} quiet />
+                  {cancel}
+                </>
               ) : (
-                <Quiet onClick={() => setRecording(true)}>Record that you sent {again.title}</Quiet>
+                <Quiet ref={opener} onClick={() => setRecording(true)}>
+                  Record that you sent {again.title}
+                </Quiet>
               )
             ) : from !== undefined ? (
               <TailorAgain base={from} opportunityId={opp.id} />
@@ -431,7 +584,7 @@ export function ResumeFlowCard({
 
   /** The base-as-is branch of B (#400 note, tl on #440, ruling 4): nothing is stored but the
    *  base's status and a send. */
-  function asIsView(base: Resume, bases: Resume[], ats: string): View {
+  function asIsView(base: Resume, bases: Resume[], ats: string): Omit<View, 'links'> {
     const usable = base.status === 'final' || base.status === 'submitted';
     const leave = (
       <Quiet
@@ -482,11 +635,16 @@ export function ResumeFlowCard({
               recording={recording}
               onRecord={() => setRecording(true)}
               recordSend={recordSend}
+              opener={opener}
+              cancel={cancel}
             />
           ) : recording ? (
-            <RecordSendFields {...recordSend} opportunityId={opp.id} resume={base} />
+            <>
+              <RecordSendFields {...recordSend} opportunityId={opp.id} resume={base} />
+              {cancel}
+            </>
           ) : (
-            <Button className={primaryClass} onClick={() => setRecording(true)}>
+            <Button ref={opener} className={primaryClass} onClick={() => setRecording(true)}>
               Record that you sent it
             </Button>
           )}
@@ -509,7 +667,7 @@ export function ResumeFlowCard({
           <p className="text-sm text-muted-foreground">Loading...</p>
         ) : (
           <>
-            <FlowSteps current={view.step} />
+            <FlowSteps current={view.step} links={view.links} />
             <h3
               ref={sentenceRef}
               tabIndex={-1}
@@ -520,9 +678,7 @@ export function ResumeFlowCard({
             <div className="grid gap-3">{view.body}</div>
           </>
         )}
-        <p role="status" aria-live="polite" className="sr-only">
-          {announced}
-        </p>
+        <FlowAnnouncement value={announcer.value} />
       </CardContent>
     </Card>
   );
@@ -723,13 +879,18 @@ function ApplyOrRecord({
   recording,
   onRecord,
   recordSend,
+  opener,
+  cancel,
 }: {
   opp: OpportunityView;
   ats: string;
   resume: Resume;
   recording: boolean;
   onRecord: () => void;
-  recordSend: { onStart: () => void; onFail: () => void };
+  recordSend: { onStart: () => void; onFail: () => void; focusOnOpen: boolean };
+  /** The flow's opener ref and Cancel (#596). */
+  opener: Ref<HTMLButtonElement>;
+  cancel: ReactNode;
 }) {
   return (
     <>
@@ -739,9 +900,14 @@ function ApplyOrRecord({
         </Link>
       </Button>
       {recording ? (
-        <RecordSendFields {...recordSend} opportunityId={opp.id} resume={resume} quiet />
+        <>
+          <RecordSendFields {...recordSend} opportunityId={opp.id} resume={resume} quiet />
+          {cancel}
+        </>
       ) : (
-        <Quiet onClick={onRecord}>Record that you sent it yourself</Quiet>
+        <Quiet ref={opener} onClick={onRecord}>
+          Record that you sent it yourself
+        </Quiet>
       )}
     </>
   );

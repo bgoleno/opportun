@@ -23,6 +23,8 @@ import {
 import { setAiOverride, type AiOverride } from './lib/ai';
 import { bindVaultKey } from './lib/secretBox';
 import { OAUTH_PROVIDERS, oauthCallbackPath } from './lib/oauthProviders';
+import { NO_PEPPERS } from './lib/passwords';
+import { recordPepperVersion } from './lib/pepperVersion';
 import type { DocumentStore } from './adapters/documentStore';
 import { createGoogleDocsStore } from './adapters/googleDocs';
 import { createLocalFileStore } from './adapters/localFile';
@@ -400,6 +402,9 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     createReactiveResumeStore({ fetch: rrFetch, config: (ctx) => readRrConfig(db, ctx) }),
   );
   app.decorate('localFileStore', createLocalFileStore({ storage, db }));
+  // The pepper version this server runs with, on every boot (0 without a pepper), for the CLIs that
+  // set a password: they refuse a different one (#606). The number only, never a secret.
+  await recordPepperVersion(db, (cfg.peppers ?? NO_PEPPERS).current);
   // Nightly backup unless an operator already changed or disabled the schedule.
   await seedSchedule(db, BACKUP_JOB_KIND, BACKUP_CRON);
   // Before that backup, not after (issue #170): a bad result gets a date, not a guess, and
@@ -494,6 +499,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     log: app.log,
     env: opts.env ?? process.env,
     submissions: submissionsEnabled(cfg),
+    demo: cfg.demo,
     rankBatchProvider: opts.rankBatchProvider ?? batchProviderFor,
   };
   app.decorate('jobs', {

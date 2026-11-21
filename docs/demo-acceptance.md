@@ -182,6 +182,58 @@ reset in §3, at minimum).
       visible by looking, not something only noticed when the data unexpectedly stops resetting
       (the #270 lesson this requirement exists to avoid repeating).
 
+## 9. Assisted apply
+
+On since [#542](https://github.com/bgoleno/opportun/issues/542) (its slices #544, #545, #546 and
+#547, all on `main`). What a shared account may do is in
+[docs/demo-deployment.md](demo-deployment.md#device-tokens-and-assisted-apply-on-the-demo), and
+the visitor's walkthrough is in the guide's
+[Try assisted apply on the demo](guide/pipeline.md#try-assisted-apply-on-the-demo). The automated
+run of the same path, against a seeded demo server and a stub form, is `apps/web/e2e/demo.spec.ts`.
+These boxes are for the deployed host, with the extension downloaded from it.
+
+**Use a real posting whose form you will not send, or one you mean to apply to with your own
+details.** Nothing below presses the employer's Submit, and nothing below may put the demo's own
+names, addresses or resumes on a real form (the owner's decision 1 on #542).
+
+### A shared account (demo-user1 to demo-user4)
+
+- [ ] Settings > Integrations > Extensions and Connectors offers the extension's download, and
+      the downloaded extension, loaded unpacked, pairs with an **Assisted apply** token minted
+      there with the account's shared password.
+- [ ] An opportunity made from a real Greenhouse posting link (New opportunity, then Find posting
+      on its Details tab, then moved to Interested) offers **Apply on Greenhouse**, with no Final
+      resume needed.
+- [ ] The resume step offers none of the account's resumes and says "On the demo an application
+      carries no resume: attach your own on the employer’s form."
+- [ ] **Your details** starts empty, has no **Save to my profile** ticks, and shows the warning
+      "This is a shared demo account. Anything you enter here is visible to others using it, and
+      is cleared at the nightly reset." So do Settings > Profile and its application details.
+- [ ] With the account's own display name (for example "Demo User 1") as Full name, **Confirm
+      review and open** is refused naming Full name ("this value came with the demo"), and no tab
+      opens.
+- [ ] With your own details instead, it opens the posting's Greenhouse form in a new tab, and the
+      extension, opened on that tab, fills your details and attaches no resume. Close the tab
+      without submitting, or submit it yourself if you mean to apply.
+- [ ] Signed in to the same account in a second browser (another visitor), the application is
+      readable on the opportunity, but changing it says "This application was started in another
+      session on this shared demo account", and an extension paired in that second session is not
+      given it.
+- [ ] After the next nightly reset, the application and both tokens are gone, and the extension
+      paired before it is signed out (its next read gets 401).
+
+### A dedicated account
+
+- [ ] `createDemoAccount.ts` (see
+      [A dedicated account for one person](demo-deployment.md#a-dedicated-account-for-one-person))
+      prints a password that signs the account in.
+- [ ] The account sees no shared-account warning anywhere, and is offered the normal tour and the
+      Get set up checklist ([#576](https://github.com/bgoleno/opportun/issues/576)).
+- [ ] Applying works as on any instance: the resume step offers its own Final resume, **Your
+      details** starts filled from its account and profile, with **Save to my profile** ticks,
+      and the review opens the form.
+- [ ] After the next nightly reset, the account, its application and its token are still there.
+
 ## What this checklist does not cover
 
 Whether the demo is reachable at all — DNS, a certificate, the host existing — is #232's
