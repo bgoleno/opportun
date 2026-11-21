@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
@@ -54,10 +54,11 @@ describe('ConfirmDialog', () => {
     expect(screen.queryByText('Delete this thing?')).not.toBeInTheDocument();
   });
 
-  // https://github.com/bgoleno/opportun/issues/678 (qa's B1): while the action was in flight,
-  // Cancel, Escape and a backdrop click still closed the dialog, so a failure was shown nowhere.
-  // It now stays open until the action settles, and its outcome is shown in it.
-  it('cannot be closed while its action is in flight, and then shows the outcome', async () => {
+  // https://github.com/bgoleno/opportun/issues/678 (qa's B1, tl's review): while the action was in
+  // flight, Cancel, Escape and a backdrop click closed the dialog and its failure was shown
+  // nowhere. It stays closable (a request has no time limit, so a dialog that could not be left
+  // could trap the user), and a failure that lands after it was left is reported in a toast.
+  it('can always be left, even in flight, and a failure that lands afterwards is still reported', async () => {
     const user = userEvent.setup();
     let fail!: (err: Error) => void;
     const pending = new Promise<void>((_, reject) => {
@@ -65,18 +66,26 @@ describe('ConfirmDialog', () => {
     });
     renderWithProviders(<Harness onConfirm={() => pending} />);
     await user.click(await screen.findByRole('button', { name: 'Delete' }));
-    const dialog = screen.getByRole('dialog');
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
-    // Escape is the dialog's cancel event; it is refused, not let through to close.
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    expect(cancel).toBeEnabled();
     const escape = new Event('cancel', { cancelable: true });
-    dialog.dispatchEvent(escape);
-    expect(escape.defaultPrevented).toBe(true);
-    // A click on the backdrop (the dialog element itself) does not close it either.
-    fireEvent.click(dialog);
-    expect(screen.getByText('Delete this thing?')).toBeInTheDocument();
+    screen.getByRole('dialog').dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(false);
+    await user.click(cancel);
+    await waitFor(() => expect(screen.queryByText('Delete this thing?')).not.toBeInTheDocument());
     fail(new ApiError(500, 'internal'));
+    expect(await screen.findByText('Delete failed')).toBeInTheDocument();
+    expect(screen.getByText('Request failed (internal).')).toBeInTheDocument();
+  });
+
+  it('a failure while it is still open stays in it, with no toast', async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <Harness onConfirm={() => Promise.reject(new ApiError(500, 'internal'))} />,
+    );
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Request failed (internal).');
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    expect(screen.queryByText('Delete failed')).toBeNull();
   });
 
   it('closes on Escape when nothing is in flight', async () => {
