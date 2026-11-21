@@ -47,6 +47,18 @@ async function findByName(exec: Exec, ctx: UserCtx, name: string): Promise<Compa
 }
 
 /**
+ * The company `name` names for this user, or undefined: the same match findOrCreateCompany makes,
+ * without creating anything. For a check that runs before the write that may create it (#598).
+ */
+export async function findCompanyByName(
+  db: Db,
+  ctx: UserCtx,
+  name: string,
+): Promise<Company | undefined> {
+  return await findByName(db, ctx, name);
+}
+
+/**
  * Core of findOrCreateCompany for use inside an open transaction (name kept from the sync
  * era). There is no unique index on (user_id, lower(name)) (live data may hold case
  * variants), so the check-then-insert holds the user's scope lock, in whatever transaction

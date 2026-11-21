@@ -67,6 +67,8 @@ export interface ReferralCandidate {
 export interface ReferralCandidates extends Page<ReferralCandidate> {
   ranked: boolean;
   aiUnavailable: string | null;
+  /** When the ranking shown was made: a kept one keeps its time (#590). Null when unranked. */
+  rankedAt?: number | null;
 }
 
 export interface OpportunityReferral {
@@ -147,8 +149,19 @@ export function useReferralCandidates(oppId: string) {
   return useQuery({
     queryKey: ck.candidates(oppId),
     queryFn: () => api<ReferralCandidates>(`/opportunities/${enc(oppId)}/referral-candidates`),
-    // Ranking calls the model: keep the answer for the session unless something changes.
+    // The server keeps the ranking (#590), so a read costs no model call while nothing changed;
+    // this only spares the request within a session.
     staleTime: 10 * 60_000,
+  });
+}
+
+/** Re-rank (#590): a fresh ranking, one model call, kept in place of the one before. */
+export function useReRankReferrals(oppId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api<ReferralCandidates>(`/opportunities/${enc(oppId)}/referral-candidates?refresh=true`),
+    onSuccess: (data) => qc.setQueryData(ck.candidates(oppId), data),
   });
 }
 

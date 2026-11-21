@@ -22,6 +22,7 @@ import {
   updateOpportunity,
 } from '../repos/opportunities';
 import { resolvePostingAtsJobRef } from '../lib/greenhouseEmbed';
+import { findCompanyByName } from '../repos/companies';
 import { search, SEARCH_KINDS } from '../repos/search';
 import { HttpUrl, IdParams, listQuery, optionalText, pageOf } from './common';
 
@@ -168,7 +169,14 @@ export async function opportunityRoutes(app: FastifyInstance): Promise<void> {
       if (url === undefined) return updateOpportunity(db, ctx, id, req.body);
       const current = await getOpportunity(db, ctx, id);
       if (url === current.postingUrl) return updateOpportunity(db, ctx, id, req.body);
-      const atsJobRef = await resolvePostingAtsJobRef(db, ctx, current, url, {
+      // The boards of the company this save ends with (#598): a new company name is matched as
+      // the write will match it, without creating it here. A name not yet known has no board.
+      const { companyName } = req.body;
+      const companyId =
+        companyName === undefined
+          ? current.companyId
+          : ((await findCompanyByName(db, ctx, companyName))?.id ?? null);
+      const atsJobRef = await resolvePostingAtsJobRef(db, ctx, { ...current, companyId }, url, {
         fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId),
         log: req.log,
       });
