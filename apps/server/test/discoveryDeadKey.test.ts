@@ -12,7 +12,7 @@ import { discoveryResults, jobs, taskRuns } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { RANK_WAITING_SWEEP_KIND, sweepWaitingResults } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { enqueue, readSchedules, removeSchedule, runNextJob } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import { createSource, setRankDeferred } from '../src/repos/discovery';
 import { useApi } from './api';
@@ -51,10 +51,28 @@ const posting = (i: number): NormalizedPosting => ({
   externalId: `gh-${i}`,
 });
 
-/** `count` postings of this user's waiting, with an Anthropic key, on a day with budget. */
-async function waiting(app: FastifyInstance, c: TestClient, count: number): Promise<number> {
-  const today = Math.floor(Date.now() / DAY) * DAY;
+/** A Monday: from its next day, the day of sweeps holds the weekly company suggestions (#578). */
+const MONDAY = Date.UTC(2026, 10, 16);
+/** A week of start days, Sunday 2026-11-15 to Saturday 2026-11-21, so every weekday is covered. */
+const A_WEEK = Array.from({ length: 7 }, (_, i) => Date.UTC(2026, 10, 15 + i));
+
+/**
+ * `count` postings of this user's waiting, with an Anthropic key, on a day with budget. The clock
+ * starts at `today` (a UTC midnight), never at the real date, so the test is the same any day
+ * (https://github.com/bgoleno/opportun/issues/578).
+ */
+async function waiting(
+  app: FastifyInstance,
+  c: TestClient,
+  count: number,
+  today: number = MONDAY,
+): Promise<number> {
   vi.useFakeTimers({ now: today + HOUR, toFake: ['Date'] });
+  // The test runs the sweep itself, so no schedule runs in its drains. With the server's schedules
+  // on, a day of drains also ran whatever falls due that day: from a Monday (UTC), the weekly
+  // company suggestions (Tuesday 08:00, server time), which made a second call with the same key
+  // (https://github.com/bgoleno/opportun/issues/578). The stop is the ranking's, not every task's.
+  for (const { kind } of await readSchedules(app.db)) await removeSchedule(app.db, kind);
   registerSource({
     kind: 'ats_lever',
     async *fetchPostings() {
@@ -128,32 +146,35 @@ const cards = async (app: FastifyInstance, c: TestClient) =>
     .all();
 
 describe('#261: the hourly sweep with a dead key', () => {
-  it('a 401: one call, then none across a whole day of sweeps, and every card says why', async () => {
-    const { app, a } = await boot();
-    const at = await waiting(app, a, 5);
-    answering(401);
+  it.each(A_WEEK.map((d) => [new Date(d).toISOString().slice(0, 10), d] as const))(
+    'a 401: one call, then none across a whole day of sweeps, and every card says why (from %s)',
+    async (_day, today) => {
+      const { app, a } = await boot();
+      const at = await waiting(app, a, 5, today);
+      answering(401);
 
-    expect(await sweepAt(app, at)).toEqual({ queued: 1 });
-    expect(fetchStub).toHaveBeenCalledOnce();
-    expect(await errorRows(app, a)).toBe(1);
+      expect(await sweepAt(app, at)).toEqual({ queued: 1 });
+      expect(fetchStub).toHaveBeenCalledOnce();
+      expect(await errorRows(app, a)).toBe(1);
 
-    for (let h = 1; h <= 24; h++) {
-      expect(await sweepAt(app, at + h * HOUR)).toEqual({ queued: 0 });
-    }
-    expect(fetchStub).toHaveBeenCalledOnce();
-    expect(await errorRows(app, a)).toBe(1);
+      for (let h = 1; h <= 24; h++) {
+        expect(await sweepAt(app, at + h * HOUR)).toEqual({ queued: 0 });
+      }
+      expect(fetchStub).toHaveBeenCalledOnce();
+      expect(await errorRows(app, a)).toBe(1);
 
-    const rows = await cards(app, a);
-    expect(rows).toHaveLength(5);
-    for (const r of rows) {
-      expect(r).toMatchObject({
-        reason: 'key_rejected',
-        score: null,
-        deferred: expect.any(Number),
-        disposition: 'pending',
-      });
-    }
-  });
+      const rows = await cards(app, a);
+      expect(rows).toHaveLength(5);
+      for (const r of rows) {
+        expect(r).toMatchObject({
+          reason: 'key_rejected',
+          score: null,
+          deferred: expect.any(Number),
+          disposition: 'pending',
+        });
+      }
+    },
+  );
 
   it('a 403 is not a dead key: the sweep keeps trying, up to three calls each', async () => {
     const { app, a } = await boot();
