@@ -1,3 +1,4 @@
+import { SharedDemoNotice } from '@/components/SharedDemoNotice';
 import { Download, ExternalLink, Paperclip, Trash2 } from 'lucide-react';
 import { useRef, useState, type ChangeEvent } from 'react';
 import { useOpportunitySubmissions } from '@/components/apply/api';
@@ -42,7 +43,7 @@ import {
 /** Mirrors the server's upload cap (apps/server/src/routes/attachments.ts). */
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
-function Attachments({ opportunityId }: { opportunityId: string }) {
+export function Attachments({ opportunityId }: { opportunityId: string }) {
   const { data, error } = useAttachments(opportunityId);
   const upload = useUploadAttachment(opportunityId);
   const remove = useDeleteAttachment(opportunityId);
@@ -112,6 +113,8 @@ function Attachments({ opportunityId }: { opportunityId: string }) {
           ))}
         </ul>
         <FormError message={uploadError} />
+        {/* What an attached file means on a shared demo account (#671, decision 133). */}
+        <SharedDemoNotice about="files" />
         <div>
           <input
             ref={input}

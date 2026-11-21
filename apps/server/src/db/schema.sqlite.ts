@@ -506,6 +506,12 @@ export const opportunityDedupeCandidates = sqliteTable(
     decision: text('decision', { enum: DEDUPE_CANDIDATE_DECISIONS }).notNull(),
     /** Null while decision is 'pending'. */
     decidedBy: text('decided_by', { enum: DEDUPE_CANDIDATE_DECIDED_BY }),
+    /**
+     * How many AI passes failed on this pending row (#687): an unexpected error, or a ref the
+     * model made up. At OPPORTUNITY_DEDUPE_AI_MAX_FAILURES the pass stops sending it to the model,
+     * and it waits for the user. Not counted: the AI being unavailable for its user.
+     */
+    aiFailures: integer('ai_failures').notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
