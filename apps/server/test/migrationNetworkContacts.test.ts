@@ -73,6 +73,8 @@ const LATER_COLUMNS_DEFAULT_ZERO = new Set([
   'companies.board_probe_failed_nights',
   // No vendor stops yet for it either (#518).
   'companies.board_probe_stops',
+  // No posting handed back by a ranking batch yet (#686).
+  'discovery_results.rank_batch_returns',
 ]);
 
 function onlyEarlierColumns(
