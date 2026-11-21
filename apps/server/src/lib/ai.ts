@@ -188,6 +188,29 @@ export function setProviderResolveOverride(db: Db, resolve: ResolveHost): void {
 }
 
 /**
+ * A time limit on every AI provider request for one app's database (#656): set on a demo server
+ * only (app.ts). There a request that runs on holds the demo reset's gate for as long as it runs
+ * (lib/demoResetGate.ts), so each is aborted below the gate's hold bound, and its caller gets the
+ * usual AI-unavailable outcome (the AI SDK reports the abort as a provider failure). Unset
+ * elsewhere: no limit, as before.
+ */
+const callLimits = new WeakMap<Db, number>();
+
+export function setAiCallLimit(db: Db, ms: number): void {
+  callLimits.set(db, ms);
+}
+
+/** `fetch` with a time limit on each request, added to any signal the caller passed. */
+function withTimeLimit(f: typeof fetch, ms: number | undefined): typeof fetch {
+  if (ms === undefined) return f;
+  return ((input, init) => {
+    const limit = AbortSignal.timeout(ms);
+    const signal = init?.signal == null ? limit : AbortSignal.any([init.signal, limit]);
+    return f(input, { ...init, signal });
+  }) as typeof fetch;
+}
+
+/**
  * Whether the caller can run AI tasks at all: they stored an ai_api_key (any provider), or
  * the end-to-end mock redirects every call. Says nothing about budget or the key's health.
  */
@@ -379,6 +402,7 @@ export async function buildAiDeps(
     opts.allowLoopbackHttp ??
     process.env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1';
   const fetches = providerFetchesFor(allowLoopbackHttp, baseUrls, resolveOverrides.get(db));
+  const limit = callLimits.get(db);
   return {
     getKey: async (provider) =>
       override === undefined ? getProviderKey(db, ctx, provider) : override.getKey(provider),
@@ -397,8 +421,8 @@ export async function buildAiDeps(
     budget: await readBudget(db, ctx),
     spentTodayUsd: async (task) => await spentTodayUsd(db, ctx, task),
     providerFetch: {
-      fetch: fetches.strict,
-      officialFetch: fetches.official,
+      fetch: withTimeLimit(fetches.strict, limit),
+      officialFetch: withTimeLimit(fetches.official, limit),
       allowLoopbackHttp,
       baseUrls,
     },
