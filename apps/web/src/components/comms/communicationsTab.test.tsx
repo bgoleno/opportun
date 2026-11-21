@@ -61,8 +61,17 @@ const nth = (i: number) =>
   message(`m${String(i).padStart(3, '0')}`, `Message ${i}`, T0 + i * 60_000);
 
 /**
+ * The size of a page as these tests' server answers it. The real server's cap is 200 (the tab asks
+ * for `limit=200`, checked below), but the tab's paging depends only on what each page holds and
+ * the total it reports, never on the page's size. At 200 rows a page, each over-cap test spent
+ * about a second rendering in jsdom, and ten times that on a loaded host, close to the 15 s limit
+ * (https://github.com/bgoleno/opportun/issues/581). Pages of 5 cross the same page split.
+ */
+const PAGE = 5;
+
+/**
  * As the server answers: `thread` (oldest first) as it is at the time of the call, ordered,
- * then the page at `offset`, with the thread's total then.
+ * then the page at `offset` (at most `PAGE` of them), with the thread's total then.
  */
 function serveFrom(thread: () => CommunicationView[]) {
   return (call: ApiCall) => {
@@ -70,7 +79,7 @@ function serveFrom(thread: () => CommunicationView[]) {
     const oldest = [...thread()];
     const ordered = q.get('order') === 'oldest' ? oldest : oldest.reverse();
     const offset = Number(q.get('offset') ?? '0');
-    const limit = Number(q.get('limit') ?? '50');
+    const limit = Math.min(Number(q.get('limit') ?? '50'), PAGE);
     return { items: ordered.slice(offset, offset + limit), total: oldest.length };
   };
 }
@@ -154,45 +163,47 @@ describe('CommunicationsTab order (#394)', () => {
   });
 });
 
-// https://github.com/bgoleno/opportun/issues/422: over the server's 200 cap, the tab says how
-// many it shows of how many, and shows the rest on request; switching order never shows the
-// held page re-sorted as if it were the other order's.
+// https://github.com/bgoleno/opportun/issues/422: over the server's cap (one page; `PAGE` here),
+// the tab says how many it shows of how many, and shows the rest on request; switching order
+// never shows the held page re-sorted as if it were the other order's.
 describe('CommunicationsTab over the cap (#422)', () => {
-  const COUNT = 205;
+  const COUNT = 7;
   const LONG = Array.from({ length: COUNT }, (_, i) => nth(i));
   const serve = serveFrom(() => LONG);
 
   const shown = () =>
     within(screen.getByRole('list', { name: 'Linked messages' })).getAllByRole('listitem');
 
-  it('says it shows the newest 200 of 205, and "Show 5 more" shows the rest', async () => {
+  it('says it shows the newest 5 of 7, and "Show 2 more" shows the rest', async () => {
     const api = mockApi({ 'GET /communications': serve });
     const user = userEvent.setup();
     renderWithProviders(<CommunicationsTab opportunityId="opp-1" />);
-    expect(await screen.findByText('Showing the newest 200 of 205 messages.')).toBeInTheDocument();
-    expect(shown()).toHaveLength(200);
-    expect(shown()[0]).toHaveTextContent('Message 204');
-    await user.click(screen.getByRole('button', { name: 'Show 5 more' }));
+    expect(await screen.findByText('Showing the newest 5 of 7 messages.')).toBeInTheDocument();
+    expect(shown()).toHaveLength(PAGE);
+    expect(shown()[0]).toHaveTextContent('Message 6');
+    await user.click(screen.getByRole('button', { name: 'Show 2 more' }));
     await waitFor(() => expect(shown()).toHaveLength(COUNT));
     expect(shown().at(-1)).toHaveTextContent('Message 0');
     expect(screen.queryByText(/Showing the/)).toBeNull();
     expect(screen.queryByRole('button', { name: /Show \d+ more/ })).toBeNull();
-    const offsets = api.calls
+    const asked = api.calls
       .filter((c) => c.path === '/communications')
-      .map((c) => new URLSearchParams(c.search).get('offset') ?? '0');
-    expect(offsets).toEqual(['0', '200']);
+      .map((c) => new URLSearchParams(c.search));
+    expect(asked.map((q) => q.get('offset') ?? '0')).toEqual(['0', '5']);
+    // Each page is asked for at the server's cap: the server, not this tab, makes it smaller.
+    expect(asked.map((q) => q.get('limit'))).toEqual(['200', '200']);
   });
 
-  it('oldest first says so: the oldest 200 of 205', async () => {
+  it('oldest first says so: the oldest 5 of 7', async () => {
     mockApi({ 'GET /communications': serve });
     const user = userEvent.setup();
     renderWithProviders(<CommunicationsTab opportunityId="opp-1" />);
     await user.click(await screen.findByRole('button', { name: 'Sorted newest first' }));
-    expect(await screen.findByText('Showing the oldest 200 of 205 messages.')).toBeInTheDocument();
+    expect(await screen.findByText('Showing the oldest 5 of 7 messages.')).toBeInTheDocument();
     expect(shown()[0]).toHaveTextContent('Message 0');
   });
 
-  it('while the other order loads, it says so, and never shows the held 200 re-sorted', async () => {
+  it('while the other order loads, it says so, and never shows the held page re-sorted', async () => {
     let release: () => void = () => {};
     const held = new Promise<void>((r) => (release = r));
     mockApi({
@@ -203,10 +214,10 @@ describe('CommunicationsTab over the cap (#422)', () => {
     });
     const user = userEvent.setup();
     renderWithProviders(<CommunicationsTab opportunityId="opp-1" />);
-    await screen.findByText('Showing the newest 200 of 205 messages.');
+    await screen.findByText('Showing the newest 5 of 7 messages.');
     await user.click(screen.getByRole('button', { name: 'Sorted newest first' }));
     expect(await screen.findByText('Loading the oldest messages...')).toBeInTheDocument();
-    // Not the newest 200 turned round: Message 5 would lead them.
+    // Not the newest 5 turned round: Message 2 would lead them.
     expect(screen.queryByRole('list', { name: 'Linked messages' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Sorted oldest first' })).toBeInTheDocument();
     release();
@@ -214,27 +225,27 @@ describe('CommunicationsTab over the cap (#422)', () => {
     expect(screen.queryByText('Loading the oldest messages...')).toBeNull();
   });
 
-  it('"Show N more" offers at most one page: 450 says 200, then 50', async () => {
+  // The button offers the tab's own page, 200, at most: here with 202 left, then 197.
+  it('"Show N more" offers at most one page: 202 left says 200, then 197', async () => {
     mockApi({
-      'GET /communications': serveFrom(() => Array.from({ length: 450 }, (_, i) => nth(i))),
+      'GET /communications': serveFrom(() => Array.from({ length: 207 }, (_, i) => nth(i))),
     });
     const user = userEvent.setup();
     renderWithProviders(<CommunicationsTab opportunityId="opp-1" />);
-    expect(await screen.findByText('Showing the newest 200 of 450 messages.')).toBeInTheDocument();
+    expect(await screen.findByText('Showing the newest 5 of 207 messages.')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Show 200 more' }));
-    expect(await screen.findByText('Showing the newest 400 of 450 messages.')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Show 50 more' }));
-    await waitFor(() => expect(shown()).toHaveLength(450));
+    expect(await screen.findByText('Showing the newest 10 of 207 messages.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show 197 more' })).toBeInTheDocument();
   });
 
   it("keeps a keyboard user's place: when the button goes, focus is on the first added message", async () => {
     mockApi({ 'GET /communications': serve });
     const user = userEvent.setup();
     renderWithProviders(<CommunicationsTab opportunityId="opp-1" />);
-    (await screen.findByRole('button', { name: 'Show 5 more' })).focus();
+    (await screen.findByRole('button', { name: 'Show 2 more' })).focus();
     await user.keyboard('{Enter}');
     await waitFor(() => expect(shown()).toHaveLength(COUNT));
-    expect(screen.getByRole('listitem', { name: 'Message 4' })).toHaveFocus();
+    expect(screen.getByRole('listitem', { name: 'Message 1' })).toHaveFocus();
   });
 
   it('leaves focus where the user moved it while the last page was on its way', async () => {
@@ -248,7 +259,7 @@ describe('CommunicationsTab over the cap (#422)', () => {
     });
     const user = userEvent.setup();
     renderWithProviders(<CommunicationsTab opportunityId="opp-1" />);
-    (await screen.findByRole('button', { name: 'Show 5 more' })).focus();
+    (await screen.findByRole('button', { name: 'Show 2 more' })).focus();
     await user.keyboard('{Enter}');
     const toggle = screen.getByRole('button', { name: 'Sorted newest first' });
     toggle.focus();
@@ -286,46 +297,46 @@ describe('CommunicationsTab when the thread changes between pages (#422)', () =>
     return { repeats, stop: () => observer.disconnect() };
   }
 
-  it('a message linked between the pages: 206 different messages, the new one first', async () => {
-    let thread = Array.from({ length: 205 }, (_, i) => nth(i));
+  it('a message linked between the pages: 8 different messages, the new one first', async () => {
+    let thread = Array.from({ length: 7 }, (_, i) => nth(i));
     const api = mockApi({ 'GET /communications': serveFrom(() => thread) });
     const user = userEvent.setup();
     const watch = watchForRepeats();
     renderWithProviders(<CommunicationsTab opportunityId="opp-1" />);
-    expect(await screen.findByText('Showing the newest 200 of 205 messages.')).toBeInTheDocument();
-    // Linked from elsewhere: the page at offset 200 now answers a total of 206 and begins with
-    // Message 5, the last row of the first page.
-    thread = [...thread, nth(205)];
-    await user.click(screen.getByRole('button', { name: 'Show 5 more' }));
-    await waitFor(() => expect(names()).toHaveLength(206));
-    await waitFor(() => expect(names()[0]).toBe('Message 205'));
+    expect(await screen.findByText('Showing the newest 5 of 7 messages.')).toBeInTheDocument();
+    // Linked from elsewhere: the page at offset 5 now answers a total of 8 and begins with
+    // Message 2, the last row of the first page.
+    thread = [...thread, nth(7)];
+    await user.click(screen.getByRole('button', { name: 'Show 2 more' }));
+    await waitFor(() => expect(names()).toHaveLength(8));
+    await waitFor(() => expect(names()[0]).toBe('Message 7'));
     watch.stop();
-    expect(new Set(names()).size).toBe(206);
+    expect(new Set(names()).size).toBe(8);
     expect(names().at(-1)).toBe('Message 0');
     expect([...watch.repeats]).toEqual([]);
     expect(screen.queryByText(/Showing the/)).toBeNull();
     expect(screen.queryByRole('button', { name: /Show \d+ more/ })).toBeNull();
-    // The held pages were asked for again, from the start: 0, 200, then 0 and 200.
+    // The held pages were asked for again, from the start: 0, 5, then 0 and 5.
     const offsets = api.calls
       .filter((c) => c.path === '/communications')
       .map((c) => new URLSearchParams(c.search).get('offset') ?? '0');
-    expect(offsets).toEqual(['0', '200', '0', '200']);
+    expect(offsets).toEqual(['0', '5', '0', '5']);
   });
 
   it('a message unlinked between the pages: none skipped', async () => {
-    let thread = Array.from({ length: 205 }, (_, i) => nth(i));
+    let thread = Array.from({ length: 7 }, (_, i) => nth(i));
     mockApi({ 'GET /communications': serveFrom(() => thread) });
     const user = userEvent.setup();
     renderWithProviders(<CommunicationsTab opportunityId="opp-1" />);
-    expect(await screen.findByText('Showing the newest 200 of 205 messages.')).toBeInTheDocument();
-    // Message 100 is unlinked: the page at offset 200 now starts at Message 3, a row late, so
-    // Message 4 would be skipped.
-    thread = thread.filter((m) => m.subject !== 'Message 100');
-    await user.click(screen.getByRole('button', { name: 'Show 5 more' }));
-    await waitFor(() => expect(names()).toContain('Message 4'));
-    await waitFor(() => expect(names()).not.toContain('Message 100'));
-    expect(names()).toHaveLength(204);
-    expect(new Set(names()).size).toBe(204);
+    expect(await screen.findByText('Showing the newest 5 of 7 messages.')).toBeInTheDocument();
+    // Message 4 is unlinked: the page at offset 5 now starts at Message 0, a row late, so
+    // Message 1 would be skipped.
+    thread = thread.filter((m) => m.subject !== 'Message 4');
+    await user.click(screen.getByRole('button', { name: 'Show 2 more' }));
+    await waitFor(() => expect(names()).toContain('Message 1'));
+    await waitFor(() => expect(names()).not.toContain('Message 4'));
+    expect(names()).toHaveLength(6);
+    expect(new Set(names()).size).toBe(6);
     expect(screen.queryByText(/Showing the/)).toBeNull();
     expect(screen.queryByRole('button', { name: /Show \d+ more/ })).toBeNull();
   });
@@ -333,7 +344,7 @@ describe('CommunicationsTab when the thread changes between pages (#422)', () =>
   // A thread that keeps changing must not make the tab ask again and again: one refetch for
   // each set of totals it sees (tl on #446).
   it('a thread whose pages keep disagreeing is fetched again once, not again and again', async () => {
-    const thread = Array.from({ length: 205 }, (_, i) => nth(i));
+    const thread = Array.from({ length: 7 }, (_, i) => nth(i));
     const serve = serveFrom(() => thread);
     const api = mockApi({
       // Page 2 always answers a total one higher than page 1's, as if a message were linked
@@ -349,20 +360,20 @@ describe('CommunicationsTab when the thread changes between pages (#422)', () =>
     });
     const user = userEvent.setup();
     renderWithProviders(<CommunicationsTab opportunityId="opp-1" />);
-    await screen.findByText('Showing the newest 200 of 205 messages.');
-    await user.click(screen.getByRole('button', { name: 'Show 5 more' }));
+    await screen.findByText('Showing the newest 5 of 7 messages.');
+    await user.click(screen.getByRole('button', { name: 'Show 2 more' }));
     const offsets = () =>
       api.calls
         .filter((c) => c.path === '/communications')
         .map((c) => new URLSearchParams(c.search).get('offset') ?? '0');
-    await waitFor(() => expect(offsets()).toEqual(['0', '200', '0', '200']));
+    await waitFor(() => expect(offsets()).toEqual(['0', '5', '0', '5']));
     // Settled: no fifth request follows.
     await new Promise((r) => setTimeout(r, 200));
-    expect(offsets()).toEqual(['0', '200', '0', '200']);
+    expect(offsets()).toEqual(['0', '5', '0', '5']);
   });
 
   it('while a missing message is on its way, the line says one is missing', async () => {
-    let thread = Array.from({ length: 205 }, (_, i) => nth(i));
+    let thread = Array.from({ length: 7 }, (_, i) => nth(i));
     let release: () => void = () => {};
     const held = new Promise<void>((r) => (release = r));
     const serve = serveFrom(() => thread);
@@ -377,14 +388,14 @@ describe('CommunicationsTab when the thread changes between pages (#422)', () =>
     });
     const user = userEvent.setup();
     renderWithProviders(<CommunicationsTab opportunityId="opp-1" />);
-    await screen.findByText('Showing the newest 200 of 205 messages.');
-    thread = [...thread, nth(205)];
-    await user.click(screen.getByRole('button', { name: 'Show 5 more' }));
-    // 205 different messages held (Message 5 once), of the newest total, 206.
-    expect(await screen.findByText('Showing the newest 205 of 206 messages.')).toBeInTheDocument();
+    await screen.findByText('Showing the newest 5 of 7 messages.');
+    thread = [...thread, nth(7)];
+    await user.click(screen.getByRole('button', { name: 'Show 2 more' }));
+    // 7 different messages held (Message 2 once), of the newest total, 8.
+    expect(await screen.findByText('Showing the newest 7 of 8 messages.')).toBeInTheDocument();
     expect(new Set(names()).size).toBe(names().length);
     release();
-    await waitFor(() => expect(names()[0]).toBe('Message 205'));
+    await waitFor(() => expect(names()[0]).toBe('Message 7'));
     expect(screen.queryByText(/Showing the/)).toBeNull();
   });
 });
