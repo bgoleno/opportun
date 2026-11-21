@@ -153,6 +153,8 @@ export function useInbox(view: InboxTab, filters: InboxFilters = {}) {
 export interface BulkTriageResult {
   succeeded: number;
   skipped: number;
+  /** Linked differently since the user saw them (#666); left untouched. */
+  changed: number;
 }
 
 // Reject only: bulk reclassify is not exposed server-side (see routes/communications.ts).
@@ -162,8 +164,11 @@ export type BulkAction = { kind: 'reject'; reason: RejectPayload['reason']; note
 export function useBulkTriage() {
   const refresh = useRefresh();
   return useMutation({
-    mutationFn: (v: { ids: string[]; action: BulkAction }) =>
-      api<BulkTriageResult>('/communications/bulk', { method: 'POST', body: v }),
+    // Each message with the link it was seen under (#666): the server leaves a changed one alone.
+    mutationFn: (v: {
+      items: { id: string; opportunityId: string | null }[];
+      action: BulkAction;
+    }) => api<BulkTriageResult>('/communications/bulk', { method: 'POST', body: v }),
     onSettled: refresh,
   });
 }
@@ -287,8 +292,12 @@ export interface RejectResult {
 export function useReject() {
   const refresh = useRefresh();
   return useMutation({
-    mutationFn: (v: { id: string; input: RejectPayload }) =>
-      api<RejectResult>(`/communications/${enc(v.id)}/reject`, { method: 'POST', body: v.input }),
+    // With the link the message was seen under (#666): the server refuses if it changed since.
+    mutationFn: (v: { id: string; input: RejectPayload; expectedOpportunityId: string | null }) =>
+      api<RejectResult>(`/communications/${enc(v.id)}/reject`, {
+        method: 'POST',
+        body: { ...v.input, expectedOpportunityId: v.expectedOpportunityId },
+      }),
     onSettled: refresh,
   });
 }

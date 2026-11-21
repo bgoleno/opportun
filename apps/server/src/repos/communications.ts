@@ -432,7 +432,8 @@ export type BulkAction = {
 };
 
 export interface BulkTriageInput {
-  ids: readonly string[];
+  /** Each message with the link the user saw it under (#666): a changed one is left alone. */
+  items: readonly { id: string; opportunityId: string | null }[];
   action: BulkAction;
 }
 
@@ -441,6 +442,8 @@ export interface BulkTriageResult {
   succeeded: number;
   /** Distinct ids that were not the caller's (or no longer exist); left untouched. */
   skipped: number;
+  /** Distinct messages linked differently since the user saw them (#666); left untouched. */
+  changed: number;
 }
 
 /**
@@ -459,22 +462,29 @@ export async function bulkTriage(
 ): Promise<BulkTriageResult> {
   let succeeded = 0;
   let skipped = 0;
-  for (const id of new Set(input.ids)) {
+  let changed = 0;
+  // De-duplicated by id: the first entry for an id is the one acted on.
+  const seen = new Map<string, string | null>();
+  for (const item of input.items) if (!seen.has(item.id)) seen.set(item.id, item.opportunityId);
+  for (const [id, expectedOpportunityId] of seen) {
     try {
       await rejectCommunication(db, ctx, id, {
         reason: input.action.reason,
         note: input.action.note ?? null,
+        expectedOpportunityId,
       });
       succeeded += 1;
     } catch (err) {
       if (err instanceof HttpError && err.statusCode === 404) {
         skipped += 1;
+      } else if (err instanceof HttpError && err.code === 'message_changed') {
+        changed += 1;
       } else {
         throw err;
       }
     }
   }
-  return { succeeded, skipped };
+  return { succeeded, skipped, changed };
 }
 
 /** Messages waiting for the user's review (the dashboard triage count). */
