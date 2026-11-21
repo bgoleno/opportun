@@ -10,7 +10,7 @@
 // was about: subject, snippet, body, and the search-index rows that would otherwise keep the
 // text findable after the row stopped showing it.
 import { newId, parseMailPattern } from '@opportun/core';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { withTransaction } from '../db/client';
 import { communications, dismissalFeedback } from '../db/schema';
@@ -30,6 +30,12 @@ export interface RejectInput {
   shareNote?: boolean | undefined;
   /** Add a deny rule so this sender is never fetched again. */
   neverIngest?: 'address' | 'domain' | undefined;
+  /**
+   * The opportunity the message was linked to when the user chose to reject it (null: unlinked).
+   * The reject goes through only if that is still its link (#666): a message another session
+   * linked meanwhile is not erased. Required, so no caller can skip the check.
+   */
+  expectedOpportunityId: string | null;
 }
 
 /** Why `neverIngest` was asked for but a deny rule could not be put in force. */
@@ -104,8 +110,11 @@ export async function rejectCommunication(
 
   if (row.rejectedAt === null) {
     const now = Date.now();
-    await withTransaction(db, async (tx) => {
-      await tx
+    const erased = await withTransaction(db, async (tx) => {
+      // The condition is in the erasing UPDATE itself, not a read before it (tl on #666): a link
+      // that commits first leaves this updating nothing, and on Postgres a concurrent one waits
+      // on the row and the WHERE is checked again, so there is no window between check and erase.
+      const updated = await tx
         .update(communications)
         .set({
           subject: null,
@@ -119,8 +128,19 @@ export async function rejectCommunication(
           proposedTransition: null,
           updatedAt: now,
         })
-        .where(and(eq(communications.userId, ctx.userId), eq(communications.id, id)))
-        .run();
+        .where(
+          and(
+            eq(communications.userId, ctx.userId),
+            eq(communications.id, id),
+            isNull(communications.rejectedAt),
+            input.expectedOpportunityId === null
+              ? isNull(communications.opportunityId)
+              : eq(communications.opportunityId, input.expectedOpportunityId),
+          ),
+        )
+        .returning({ id: communications.id })
+        .all();
+      if (updated.length === 0) return false;
       // The row no longer carries the text, so an index entry for it would be a searchable
       // copy of something the user asked to be rid of.
       await removeFromIndex(tx, ctx, 'communication', id);
@@ -131,14 +151,24 @@ export async function rejectCommunication(
           userId: ctx.userId,
           kind: 'rejection',
           communicationId: id,
-          opportunityId: row.opportunityId,
+          opportunityId: input.expectedOpportunityId,
           reason: input.reason,
           note: input.note?.slice(0, NOTE_MAX) ?? null,
           shareNote: input.shareNote === true,
           at: now,
         })
         .run();
+      return true;
     });
+    if (!erased) {
+      // Changed since the user saw it (linked elsewhere, or relinked): left exactly as it is,
+      // and no block is added on the strength of a reject that did not happen.
+      throw new HttpError(
+        409,
+        'message_changed',
+        'This message was linked or moved somewhere else since you saw it, so it was left as it is.',
+      );
+    }
   }
 
   if (input.neverIngest === undefined) return { blocked: null };

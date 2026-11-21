@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest';
 import { communications, dismissalFeedback } from '../src/db/schema';
 import { ingestInbound } from '../src/jobs/mailIngest';
 import { createRule, listRules } from '../src/repos/mailFilters';
+import { bulkTriage } from '../src/repos/communications';
+import { createOpportunity } from '../src/repos/opportunities';
 import { rejectCommunication } from '../src/repos/reject';
 import { search } from '../src/repos/search';
 import { useApi } from './api';
@@ -57,6 +59,7 @@ describe('rejectCommunication', () => {
     expect((await rowById(app, a.userId, id)).subject).toBe('Superbill');
 
     await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
       reason: 'medical_or_personal',
     });
 
@@ -79,7 +82,10 @@ describe('rejectCommunication', () => {
       (await search(app.db, ctxOf(a.userId), 'Superbill', { limit: 10, offset: 0 })).items,
     ).toHaveLength(1);
 
-    await rejectCommunication(app.db, ctxOf(a.userId), id, { reason: 'financial' });
+    await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
+      reason: 'financial',
+    });
 
     const hits = await search(app.db, ctxOf(a.userId), 'Superbill', { limit: 10, offset: 0 });
     expect(hits.items).toHaveLength(0);
@@ -90,6 +96,7 @@ describe('rejectCommunication', () => {
     const id = await ingest(app, a.userId, 'billing@clinic-a.example', 'Superbill');
 
     await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
       reason: 'medical_or_personal',
       note: 'this is my chiropractor',
     });
@@ -111,6 +118,7 @@ describe('rejectCommunication', () => {
     const id = await ingest(app, a.userId, 'x@agency-c.example', 'Role');
 
     await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
       reason: 'wrong_role',
       note: 'wrong seniority',
       shareNote: true,
@@ -129,6 +137,7 @@ describe('rejectCommunication', () => {
     const id = await ingest(app, a.userId, 'billing@clinic-a.example', 'Superbill');
 
     const result = await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
       reason: 'medical_or_personal',
       neverIngest: 'domain',
     });
@@ -145,6 +154,7 @@ describe('rejectCommunication', () => {
     const id = await ingest(app, a.userId, 'billing@clinic-a.example', 'Superbill');
 
     await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
       reason: 'medical_or_personal',
       neverIngest: 'address',
     });
@@ -158,7 +168,10 @@ describe('rejectCommunication', () => {
     const { app, a } = await boot();
     const id = await ingest(app, a.userId, 'x@agency-c.example', 'Role');
 
-    const result = await rejectCommunication(app.db, ctxOf(a.userId), id, { reason: 'spam' });
+    const result = await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
+      reason: 'spam',
+    });
 
     expect(result).toEqual({ blocked: null });
   });
@@ -175,6 +188,7 @@ describe('rejectCommunication', () => {
     );
 
     const result = await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
       reason: 'wrong_company',
       neverIngest: 'domain',
     });
@@ -199,6 +213,7 @@ describe('rejectCommunication', () => {
     expect(disabled.enabled).toBe(false);
 
     const result = await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
       reason: 'medical_or_personal',
       neverIngest: 'domain',
     });
@@ -215,11 +230,15 @@ describe('rejectCommunication', () => {
     // First call rejects the message without asking for a block at all -- standing in for a
     // first attempt whose block step failed for a real reason and was never retried, since
     // from the idempotency guard's point of view the two situations are indistinguishable.
-    const first = await rejectCommunication(app.db, ctxOf(a.userId), id, { reason: 'spam' });
+    const first = await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
+      reason: 'spam',
+    });
     expect(first).toEqual({ blocked: null });
     expect(await listRules(app.db, ctxOf(a.userId))).toHaveLength(0);
 
     const retried = await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
       reason: 'spam',
       neverIngest: 'domain',
     });
@@ -241,7 +260,10 @@ describe('rejectCommunication', () => {
     const { app, a } = await boot();
     const id = await ingest(app, a.userId, 'x@agency-c.example', 'Role');
 
-    await rejectCommunication(app.db, ctxOf(a.userId), id, { reason: 'wrong_role' });
+    await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
+      reason: 'wrong_role',
+    });
 
     expect(await listRules(app.db, ctxOf(a.userId))).toHaveLength(0);
   });
@@ -250,8 +272,14 @@ describe('rejectCommunication', () => {
     const { app, a } = await boot();
     const id = await ingest(app, a.userId, 'x@agency-c.example', 'Role');
 
-    await rejectCommunication(app.db, ctxOf(a.userId), id, { reason: 'spam' });
-    await rejectCommunication(app.db, ctxOf(a.userId), id, { reason: 'spam' });
+    await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
+      reason: 'spam',
+    });
+    await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
+      reason: 'spam',
+    });
 
     const fb = await app.db
       .select()
@@ -266,14 +294,20 @@ describe('rejectCommunication', () => {
     const id = await ingest(app, a.userId, 'x@agency-c.example', 'Role');
 
     await expect(
-      rejectCommunication(app.db, ctxOf(b.userId), id, { reason: 'spam' }),
+      rejectCommunication(app.db, ctxOf(b.userId), id, {
+        expectedOpportunityId: null,
+        reason: 'spam',
+      }),
     ).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it('keeps a rejected message out of every inbox view', async () => {
     const { app, a } = await boot();
     const id = await ingest(app, a.userId, 'x@agency-c.example', 'Role');
-    await rejectCommunication(app.db, ctxOf(a.userId), id, { reason: 'spam' });
+    await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      expectedOpportunityId: null,
+      reason: 'spam',
+    });
 
     const { listCommunications } = await import('../src/repos/communications');
     const page = { limit: 50, offset: 0 };
@@ -303,5 +337,93 @@ describe('rejectCommunication', () => {
       'rejected as wrong_role: too junior',
     ]);
     expect(lines.join(' ')).not.toContain('chiropractor');
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/666 (qa): with two sessions on one account, a reject
+// confirmed in one could erase a message the other had just linked. A reject now goes through only
+// if the message's link is still the one the user saw, checked in the erasing UPDATE itself.
+describe('a reject takes only messages still linked as the user saw them (#666)', () => {
+  const linkTo = async (app: FastifyInstance, userId: string, id: string) => {
+    const opp = await createOpportunity(app.db, ctxOf(userId), {
+      companyName: 'Initech',
+      title: 'Staff Engineer',
+      sourceKind: 'manual',
+    });
+    await app.db
+      .update(communications)
+      .set({ opportunityId: opp.id })
+      .where(eq(communications.id, id))
+      .run();
+    return opp.id;
+  };
+
+  it('two sessions: a message linked since it was selected is left byte-identical, the other is rejected', async () => {
+    const { app, a } = await boot();
+    await allowSender(app, a.userId, 'recruiter@acme.example');
+    const first = await ingest(app, a.userId, 'recruiter@acme.example', 'Linked elsewhere');
+    const second = await ingest(app, a.userId, 'recruiter@acme.example', 'Really reject me');
+    // Session 1 selected both while they were unlinked; session 2 links the first meanwhile.
+    await linkTo(app, a.userId, first);
+    const before = JSON.stringify(await rowById(app, a.userId, first));
+    const result = await bulkTriage(app.db, ctxOf(a.userId), {
+      items: [
+        { id: first, opportunityId: null },
+        { id: second, opportunityId: null },
+      ],
+      action: { kind: 'reject', reason: 'spam' },
+    });
+    expect(result).toEqual({ succeeded: 1, skipped: 0, changed: 1 });
+    expect(JSON.stringify(await rowById(app, a.userId, first))).toBe(before);
+    expect((await rowById(app, a.userId, second)).rejectedAt).not.toBeNull();
+    expect((await rowById(app, a.userId, second)).subject).toBeNull();
+  });
+
+  it('a single reject with a stale link is refused, and the message is untouched', async () => {
+    const { app, a } = await boot();
+    await allowSender(app, a.userId, 'recruiter@acme.example');
+    const id = await ingest(app, a.userId, 'recruiter@acme.example', 'Linked elsewhere');
+    await linkTo(app, a.userId, id);
+    const before = JSON.stringify(await rowById(app, a.userId, id));
+    await expect(
+      rejectCommunication(app.db, ctxOf(a.userId), id, {
+        reason: 'spam',
+        expectedOpportunityId: null,
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'message_changed' });
+    expect(JSON.stringify(await rowById(app, a.userId, id))).toBe(before);
+  });
+
+  it('a deliberate reject of a linked message, with its link, still goes through', async () => {
+    const { app, a } = await boot();
+    await allowSender(app, a.userId, 'recruiter@acme.example');
+    const id = await ingest(app, a.userId, 'recruiter@acme.example', 'On the Linked tab');
+    const oppId = await linkTo(app, a.userId, id);
+    await rejectCommunication(app.db, ctxOf(a.userId), id, {
+      reason: 'spam',
+      expectedOpportunityId: oppId,
+    });
+    const row = await rowById(app, a.userId, id);
+    expect(row.rejectedAt).not.toBeNull();
+    expect(row.subject).toBeNull();
+  });
+
+  it('the routes require the link the user saw', async () => {
+    const { app, a } = await boot();
+    await allowSender(app, a.userId, 'recruiter@acme.example');
+    const id = await ingest(app, a.userId, 'recruiter@acme.example', 'Needs the field');
+    const single = await a.request({
+      method: 'POST',
+      url: `/api/v1/communications/${id}/reject`,
+      payload: { reason: 'spam' },
+    });
+    expect(single.statusCode).toBe(400);
+    const bulk = await a.request({
+      method: 'POST',
+      url: '/api/v1/communications/bulk',
+      payload: { ids: [id], action: { kind: 'reject', reason: 'spam' } },
+    });
+    expect(bulk.statusCode).toBe(400);
+    expect((await rowById(app, a.userId, id)).rejectedAt).toBeNull();
   });
 });

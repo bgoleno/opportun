@@ -380,10 +380,54 @@ describe('gmail sync', () => {
       lookbackDays: 180,
       // The other user's mailbox address is not theirs to learn either.
       accountEmail: null,
+      // Nor how many of the other user's messages are being classified (#645).
+      pendingClassify: 0,
     });
     expect(await rows(app, b.userId)).toHaveLength(0);
     const statusA = await a.request({ method: 'GET', url: '/api/v1/integrations/gmail' });
     expect(statusA.json()).toMatchObject({ connected: true, count: 2 });
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/645: the status says how many of the user's messages are
+// still being classified, so the Inbox can keep reading until the new mail has its place.
+describe('the status counts the classifications still to run (#645)', () => {
+  it("counts this user's pending and running classify jobs, not done ones or another user's", async () => {
+    const { app, a, b } = await setup();
+    const later = Date.now() + 3_600_000;
+    for (let n = 0; n < 3; n++) {
+      await enqueue(
+        app.db,
+        CLASSIFY_JOB_KIND,
+        { communicationId: `c-${n}` },
+        { userId: a.userId, runAt: later },
+      );
+    }
+    await enqueue(
+      app.db,
+      CLASSIFY_JOB_KIND,
+      { communicationId: 'c-b' },
+      { userId: b.userId, runAt: later },
+    );
+    const done = await enqueue(
+      app.db,
+      CLASSIFY_JOB_KIND,
+      { communicationId: 'c-done' },
+      { userId: a.userId, runAt: later },
+    );
+    await app.db.update(jobs).set({ status: 'done' }).where(eq(jobs.id, done)).run();
+    const running = await enqueue(
+      app.db,
+      CLASSIFY_JOB_KIND,
+      { communicationId: 'c-run' },
+      { userId: a.userId, runAt: later },
+    );
+    await app.db.update(jobs).set({ status: 'running' }).where(eq(jobs.id, running)).run();
+    const status = await a.request({ method: 'GET', url: '/api/v1/integrations/gmail' });
+    expect(status.json()).toMatchObject({ pendingClassify: 4 });
+    await app.db.update(jobs).set({ status: 'done' }).where(eq(jobs.kind, CLASSIFY_JOB_KIND)).run();
+    const after = await a.request({ method: 'GET', url: '/api/v1/integrations/gmail' });
+    expect(after.json()).toMatchObject({ pendingClassify: 0 });
   });
 });
 

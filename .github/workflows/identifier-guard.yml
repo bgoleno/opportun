@@ -15,50 +15,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Nothing here pushes with git: the token is not left in .git/config (#619).
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .nvmrc
       - name: Scan for withheld identifiers
         env:
           TERMS: ${{ secrets.BLOCKED_IDENTIFIERS }}
+        # The scan, its masking and its matching are in .github/scripts/identifier-guard.mjs, with
+        # tests beside it (#619): the terms are never expanded by a shell, and the log shows only
+        # masks and file:line. Nothing in this step may run with set -x.
         run: |
-          if [ -z "${TERMS// /}" ]; then
-            echo "::warning::BLOCKED_IDENTIFIERS secret is not set; identifier guard skipped."
-            exit 0
-          fi
-          # The job log is public, and Actions masks the secret's whole value, not each term in
-          # it. So every term is masked before anything else is printed, and a hit is reported as
-          # file:line only, never the term or the matching line (#520). A mask matches the term
-          # only as the secret spells it and the scan ignores case, so a path that holds any term
-          # in any case is not printed either: only its line number is. Nothing in this step may
-          # run with set -x, which would echo each term as it is used.
-          for t in $TERMS; do echo "::add-mask::$t"; done
-          where() {
-            cut -d: -f1,2 | head -5 | while IFS= read -r loc; do
-              path=${loc%:*}
-              for u in $TERMS; do
-                if printf '%s' "$path" | grep -qiF -- "$u"; then
-                  path='(a file whose name holds a withheld term)'
-                  break
-                fi
-              done
-              printf '%s:%s\n' "$path" "${loc##*:}"
-            done
-          }
-          # Innocuous substrings that legitimately contain a blocked term (a city name, a
-          # camelCase identifier, a dependency hash). Expand as real false positives appear.
-          allow='francisco|withpepper|withpeople|rhel'
-          bad=0
-          for t in $TERMS; do
-            # Letters-only terms match on word boundaries so a short term does not fire inside
-            # a longer word; anything with punctuation or digits is matched as a literal.
-            if printf '%s' "$t" | grep -qE '^[A-Za-z]+$'; then
-              hits=$(git grep -niIE -- "(^|[^A-Za-z])${t}([^A-Za-z]|\$)" -- . ':!pnpm-lock.yaml' 2>/dev/null | grep -viE "$allow" || true)
-            else
-              hits=$(git grep -niIF -- "$t" -- . ':!pnpm-lock.yaml' 2>/dev/null || true)
-            fi
-            if [ -n "$hits" ]; then
-              echo "::error::withheld identifier present; remove it from these places:"
-              printf '%s\n' "$hits" | where
-              bad=1
-            fi
-          done
-          if [ "$bad" -ne 0 ]; then exit 1; fi
-          echo "Identifier guard: clean."
+          node .github/scripts/identifier-guard.mjs
