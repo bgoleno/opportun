@@ -127,14 +127,26 @@ function validConfig(kind: SourceKind, config: Record<string, unknown>): Record<
   return parsed.data;
 }
 
+/** Where a source is being configured: on the demo server (OPPORTUN_DEMO=1) or not. */
+export interface SourceWriteOpts {
+  demo?: boolean;
+}
+
 /**
  * An MCP stdio source runs a command the user typed on the server (ADR-12). In a shared install
- * only the administrator may configure one; any user may use an https MCP server.
+ * only the administrator may configure one; any user may use an https MCP server. On the demo,
+ * whose administrator is a shared login, none is configured at all; jobs/discoveryRun.ts refuses
+ * to run one there too.
  */
-function assertMayConfigure(ctx: UserCtx, kind: SourceKind, config: Record<string, unknown>): void {
-  if (kind === 'mcp' && config.transport === 'stdio' && !ctx.isAdmin) {
-    throw new HttpError(403, 'mcp_stdio_admin_only');
-  }
+function assertMayConfigure(
+  ctx: UserCtx,
+  kind: SourceKind,
+  config: Record<string, unknown>,
+  opts: SourceWriteOpts,
+): void {
+  if (kind !== 'mcp' || config.transport !== 'stdio') return;
+  if (opts.demo === true) throw new HttpError(403, 'mcp_stdio_unavailable_on_demo');
+  if (!ctx.isAdmin) throw new HttpError(403, 'mcp_stdio_admin_only');
 }
 
 function assertCron(cron: string | null | undefined): void {
@@ -215,9 +227,10 @@ export async function createSource(
   db: Exec,
   ctx: UserCtx,
   input: SourceInput,
+  opts: SourceWriteOpts = {},
 ): Promise<DiscoverySourceRow> {
   const config = validConfig(input.kind, input.config ?? {});
-  assertMayConfigure(ctx, input.kind, config);
+  assertMayConfigure(ctx, input.kind, config, opts);
   assertCron(input.scheduleCron);
   const created = await withTransaction(db, async (tx) => {
     await assertOwned(tx, ctx, input);
@@ -278,11 +291,12 @@ export async function updateSource(
   ctx: UserCtx,
   id: string,
   patch: SourcePatch,
+  opts: SourceWriteOpts = {},
 ): Promise<DiscoverySourceRow> {
   const updated = await withTransaction(db, async (tx) => {
     const current = await getSourceRow(tx, ctx, id);
     const config = patch.config === undefined ? undefined : validConfig(current.kind, patch.config);
-    if (config !== undefined) assertMayConfigure(ctx, current.kind, config);
+    if (config !== undefined) assertMayConfigure(ctx, current.kind, config, opts);
     assertCron(patch.scheduleCron);
     await assertOwned(tx, ctx, patch);
     await tx

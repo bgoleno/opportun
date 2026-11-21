@@ -459,15 +459,18 @@ export async function insertLeads(
 /**
  * A stdio MCP source spawns its owner's command on the server; only an administrator may
  * configure one (repos/discovery). Re-checked at run time, so a source created by an account
- * that is no longer an administrator (or written some other way) never spawns anything.
+ * that is no longer an administrator (or written some other way) never spawns anything. On the
+ * demo, whose administrator is a shared login, none runs, whoever owns it.
  */
 async function assertMayRun(
   db: Db,
   userId: string,
   kind: string,
   config: Record<string, unknown>,
+  demo: boolean,
 ): Promise<void> {
   if (kind !== 'mcp' || config.transport !== 'stdio') return;
+  if (demo) throw new SourceConfigError('stdio MCP sources do not run on the demo');
   const owner = await db
     .select({ isAdmin: users.isAdmin })
     .from(users)
@@ -508,8 +511,9 @@ export async function runDiscoverySource(
   ctx: UserCtx,
   sourceId: string,
   sctx: SourceContext,
-  /** The discovery.run job this is, so it does not count itself as the run in progress. */
-  opts: { jobId?: string } = {},
+  /** The discovery.run job this is, so it does not count itself as the run in progress; and
+   *  whether this is the demo server (JobServices.demo). */
+  opts: { jobId?: string; demo: boolean },
 ): Promise<DiscoveryRunOutcome> {
   let source;
   try {
@@ -573,7 +577,7 @@ export async function runDiscoverySource(
   // known, and a failed attempt sends nothing, so retries cannot add up past the cap.
   const firstRun = isBoardSource(source.kind) && !(await hasSucceededRun(db, ctx, source.id));
   try {
-    await assertMayRun(db, source.userId, source.kind, config);
+    await assertMayRun(db, source.userId, source.kind, config, opts.demo);
     const adapter = getSource(source.kind);
     const runSctx: SourceContext = {
       ...sctx,
@@ -677,7 +681,11 @@ export const discoveryRunJob: JobHandler<z.infer<typeof PayloadSchema>> = {
     };
     // The discovery_run workflow (design 14.5): its lead_resolve and rank jobs continue it.
     const outcome = await workflow('discovery_run', { userId: user.userId }, () =>
-      runDiscoverySource(db, user, payload.sourceId, sctx, { jobId: ctx.jobId }),
+      runDiscoverySource(db, user, payload.sourceId, sctx, {
+        jobId: ctx.jobId,
+        // Required, never defaulted: a context without it refuses to run, not runs as if off it.
+        demo: requireService(ctx, 'demo'),
+      }),
     );
     if (outcome.status === 'done') {
       await ctx.setResult({ status: outcome.status, runId: outcome.runId, stats: outcome.stats });
