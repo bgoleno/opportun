@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { Window } from 'happy-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from '../src/api';
 import type { CaptureSiteId } from '../src/canonical';
 import { extractIndeedJob, type ExtractResult, type RawPage } from '../src/extract';
@@ -14,7 +14,7 @@ import {
   viewjobPage,
 } from './fixtures/indeedPages';
 import { load, type FixturePage } from './fixtures/pages';
-import { mountPopup, type PopupDeps } from '../src/popupController';
+import { ACTION_TIMEOUT_MS, mountPopup, type PopupDeps } from '../src/popupController';
 import { renderOutcome } from '../src/render';
 import type { SettingsStorage } from '../src/settings';
 
@@ -104,6 +104,9 @@ const status = (doc: Document) => doc.getElementById('status')!;
 
 async function click(el: HTMLElement, done: () => boolean) {
   el.click();
+  // The action has ended once its button is back (#648: the status line shows a working line
+  // at once, so a status that is not empty is no longer the end).
+  await vi.waitFor(() => expect((el as HTMLButtonElement).disabled).toBe(false));
   await vi.waitFor(() => expect(done()).toBe(true));
 }
 
@@ -625,5 +628,141 @@ describe('popup text', () => {
       expect(text).toContain(LOCATION);
       expect(hint).toContain(LOCATION);
     }
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/648: an action shows that it is working at once, a
+// server that never answers ends in an error with the buttons back, focus returns to the button
+// used, the fill report is announced, and an invalid address or token marks its own field.
+describe('popup actions that wait on the server (#648)', () => {
+  /** A fetch that never answers: it ends only when the popup gives up on it. */
+  const hangingFetch = vi.fn<FetchLike>(
+    (_url, init) =>
+      new Promise((_resolve, reject) => {
+        // As fetch does: an already-aborted signal rejects at once.
+        if (init.signal?.aborted === true) reject(new Error('aborted'));
+        init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      }),
+  );
+  /** The popup's action limit, ended when the test says so. */
+  function limit() {
+    let end: () => void = () => undefined;
+    const ended = new Promise<void>((r) => {
+      end = r;
+    });
+    const fn = vi.fn(async (ms: number) => {
+      expect(ms).toBe(ACTION_TIMEOUT_MS);
+      await ended;
+    });
+    return { fn, end: () => end() };
+  }
+  const buttons = (doc: Document) =>
+    ['capture', 'prefill', 'record', 'save', 'test'].map(
+      (id) => doc.getElementById(id) as HTMLButtonElement,
+    );
+
+  beforeEach(() => {
+    hangingFetch.mockClear();
+  });
+
+  it.each([
+    ['capture', 'Capturing…'],
+    ['test', 'Testing the connection…'],
+  ] as const)(
+    'the %s button says it is working at once, and a server that never answers ends in an error',
+    async (id, working) => {
+      const { doc, deps, $ } = setup({ stored: SAVED });
+      deps.fetch = hangingFetch;
+      const l = limit();
+      deps.limit = l.fn;
+      await mountPopup(doc, deps);
+      const button = $<HTMLButtonElement>(id);
+      button.focus();
+      button.click();
+      await vi.waitFor(() => expect(status(doc).textContent).toBe(working));
+      expect(buttons(doc).every((b) => b.disabled)).toBe(true);
+      // The request is out, and the server says nothing.
+      await vi.waitFor(() => expect(hangingFetch).toHaveBeenCalled());
+      l.end();
+      await vi.waitFor(() =>
+        expect(status(doc).textContent).toMatch(/did not answer within 30 seconds/),
+      );
+      expect(status(doc).dataset.tone).toBe('error');
+      expect(buttons(doc).every((b) => !b.disabled)).toBe(true);
+      // Focus is back on the button that was used.
+      expect(doc.activeElement).toBe(button);
+    },
+  );
+
+  it('a request started after the limit, while the page was read, is cut at once (tl on #713)', async () => {
+    const { doc, deps, $ } = setup({ stored: SAVED });
+    deps.fetch = hangingFetch;
+    const l = limit();
+    deps.limit = l.fn;
+    let release: (() => void) | undefined;
+    const extract = deps.runExtract;
+    deps.runExtract = vi.fn(async (...args: Parameters<PopupDeps['runExtract']>) => {
+      await new Promise<void>((r) => {
+        release = r;
+      });
+      return extract(...args);
+    });
+    await mountPopup(doc, deps);
+    const button = $<HTMLButtonElement>('capture');
+    button.click();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    // The limit ends while only the page is being read: no request is waiting yet.
+    l.end();
+    await new Promise((r) => setTimeout(r, 20));
+    release!();
+    await vi.waitFor(() =>
+      expect(status(doc).textContent).toMatch(/did not answer within 30 seconds/),
+    );
+    expect(hangingFetch).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(false);
+  });
+
+  it('focus returns to the button after an action that the server answered', async () => {
+    const { doc, deps, $ } = setup({ stored: SAVED });
+    await mountPopup(doc, deps);
+    const button = $<HTMLButtonElement>('capture');
+    button.focus();
+    await click(button, () => !button.disabled && status(doc).textContent !== 'Capturing…');
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+    expect(doc.activeElement).toBe(button);
+  });
+
+  it('the fill report is a live region, so what was filled is announced', () => {
+    const { doc } = setup();
+    const report = doc.getElementById('prefill-report')!;
+    expect(report.getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('an invalid address marks its own field, and a good save clears it', async () => {
+    const { doc, deps, $ } = setup();
+    await mountPopup(doc, deps);
+    const server = $<HTMLInputElement>('server-url');
+    server.value = 'not a url';
+    $<HTMLInputElement>('token').value = TOKEN;
+    await click($('save'), () => status(doc).textContent !== '');
+    expect(server.getAttribute('aria-invalid')).toBe('true');
+    expect(server.getAttribute('aria-describedby')).toBe('status');
+    expect($('token').getAttribute('aria-invalid')).toBeNull();
+    server.value = SERVER;
+    await click($('save'), () => status(doc).textContent === 'Settings saved.');
+    expect(server.getAttribute('aria-invalid')).toBeNull();
+    expect(server.getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('an invalid token marks its own field', async () => {
+    const { doc, deps, $ } = setup();
+    await mountPopup(doc, deps);
+    $<HTMLInputElement>('server-url').value = SERVER;
+    const token = $<HTMLInputElement>('token');
+    token.value = 'not-a-token';
+    await click($('save'), () => status(doc).textContent !== '');
+    expect(token.getAttribute('aria-invalid')).toBe('true');
+    expect(token.getAttribute('aria-describedby')).toBe('status');
+    expect($('server-url').getAttribute('aria-invalid')).toBeNull();
   });
 });
