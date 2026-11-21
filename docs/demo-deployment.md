@@ -596,11 +596,27 @@ On a shared account, enforced by the server:
   (with the OAuth client saved for it), or a Reactive Resume, is used by everyone signed in to the
   account until the reset: their resumes are made in it. The Google and Reactive Resume cards say
   so ([#618](https://github.com/bgoleno/opportun/issues/618)). The reset removes the connection.
-- **Nothing that began before the reset writes after it.** A request already in when the reset
-  starts finishes first; one that comes during it waits, and then finds its session or token gone;
-  a job of a shared account that was waiting is dropped without running. The reset waits at most a
-  minute for requests and jobs to finish; if some are still in, it resets nothing, and the job
-  tries again a little later (#618).
+- **Nothing that began before the reset writes after it, within limits** (#618, #656). A request
+  already in when the reset starts finishes first; one that comes during it waits, and then finds
+  its session or token gone; a job of a shared account that was waiting is dropped without running,
+  and a job of the server's own (not one account's) finishes first. The reset waits at most a minute for requests and
+  jobs to finish; if some are still in, it resets nothing, and the job tries again a little later.
+  So that no single request or job can hold it off:
+  - a request's body must arrive within 20 seconds;
+  - an AI call is ended after 40 seconds, and the tailoring chat's reply too (its text so far is
+    kept); the visitor sees what they would when the AI provider fails;
+  - nothing holds the reset off for more than 50 seconds: past that, a request is ended, and a job
+    is told to stop.
+
+  What this does not cover:
+  - **A handler or job still running past those 50 seconds** (one that ignores the stop, or work
+    that does not end when its request does) can still write after the reset, into the account
+    reseeded under the same id. The limits above make that a slow, rare case, not a closed one.
+  - **A seed run by hand** (`seedDemo.ts`) is a separate process the gate does not see: run it with
+    the server stopped (see above).
+  - **More than one server process** on the same database: the gate is in the process, as the
+    install guide's single instance assumes.
+
 - **At most 20 active device tokens per account.** Minting past it revokes the account's oldest
   token, which can sign another visitor's extension out. Every scope can be minted, `mail:push`
   included, by the owner's decision: a visitor's own mail in a shared account is visible to the other
