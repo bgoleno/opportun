@@ -172,3 +172,68 @@ describe('opportunity.dedupe AI pass', () => {
     expect(stillPending).toHaveLength(3);
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/593: a sweep took the 25 oldest pending rows, so rows
+// that stay pending (the AI unavailable for their user) came first on every run and a newer pair
+// was never judged; and one unexpected model error ended the whole batch.
+describe('opportunity.dedupe AI pass: rows that stay pending (#593)', () => {
+  const DAY = 86_400_000;
+
+  it('a newer pending pair is decided within two runs behind a full batch of rows that stay pending', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { app, a, b } = await boot();
+      let now = Date.UTC(2026, 10, 1, 7, 15);
+      vi.setSystemTime(now);
+      // b's pairs first: OPPORTUNITY_DEDUPE_AI_MAX_PER_RUN of them, the AI never available for b.
+      for (let i = 0; i < OPPORTUNITY_DEDUPE_AI_MAX_PER_RUN; i++) {
+        await createOpp(b, `Stuckco ${i} Robotics`, `Senior Product Manager ${i}`);
+        await createOpp(b, `Stuckco ${i} Robotics, Inc.`, `Product Manager II ${i}`);
+      }
+      vi.setSystemTime((now += 60_000));
+      await seedPending(app, a);
+      vi.mocked(runStructured).mockImplementation(async (...args: unknown[]) => {
+        const system = (args[2] as { system?: string } | undefined)?.system ?? '';
+        if (system.includes('Stuckco')) throw new AiUnavailableError('no_key');
+        return { duplicateOfRef: null, confidence: 0.8, reason: 'Different team.' } as never;
+      });
+
+      const calls: number[] = [];
+      for (let run = 0; run < 2; run++) {
+        vi.setSystemTime((now += DAY));
+        vi.mocked(runStructured).mockClear();
+        await runOpportunityDedupeAi(app.db, { log });
+        calls.push(vi.mocked(runStructured).mock.calls.length);
+      }
+
+      expect(await decisionRow(app, a.userId)).toEqual({ decision: 'rejected', decidedBy: 'ai' });
+      // No run asks the model about more rows than before.
+      for (const n of calls) expect(n).toBeLessThanOrEqual(OPPORTUNITY_DEDUPE_AI_MAX_PER_RUN);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("one row's unexpected error leaves that row pending and the rest of the batch goes on", async () => {
+    const { app, a } = await boot();
+    await createOpp(a, 'Acme Robotics', 'Senior Product Manager');
+    await createOpp(a, 'Acme Robotics, Inc.', 'Product Manager II');
+    await createOpp(a, 'Acme 2 Robotics', 'Senior Product Manager 2');
+    await createOpp(a, 'Acme 2 Robotics, Inc.', 'Product Manager II 2');
+    const pending = async () =>
+      (await queryAll(
+        app,
+        "SELECT id FROM opportunity_dedupe_candidates WHERE user_id = ? AND decision = 'pending'",
+        a.userId,
+      )) as { id: string }[];
+    expect(await pending()).toHaveLength(2);
+    vi.mocked(runStructured)
+      .mockRejectedValueOnce(new Error('the provider answered something unexpected'))
+      .mockResolvedValueOnce({ duplicateOfRef: null, confidence: 0.8, reason: 'Different.' });
+
+    const outcome = await runOpportunityDedupeAi(app.db, { log });
+
+    expect(outcome).toEqual({ scanned: 2, confirmed: 0, rejected: 1 });
+    expect(await pending()).toHaveLength(1);
+  });
+});
