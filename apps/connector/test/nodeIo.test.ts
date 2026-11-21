@@ -65,25 +65,25 @@ describe('nodeIo rotating log file', () => {
   });
 });
 
-describe('nodeFs.permissions (#655: init --token-file)', () => {
+describe('nodeFs.readTextAndMode (#699: one open, its mode and its text)', () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'opportun-connector-perm-'));
+    dir = mkdtempSync(join(tmpdir(), 'opportun-connector-read-'));
   });
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('gives a file its permission bits, and null for one that is not there', async () => {
+  it('gives the text and the permission bits of the one file it opened, and null for none', async () => {
     const own = join(dir, 'own');
+    writeFileSync(own, 'odt_x\n', { mode: 0o600 });
+    expect(await nodeFs.readTextAndMode(own)).toEqual({ text: 'odt_x\n', mode: 0o600 });
     const shared = join(dir, 'shared');
-    writeFileSync(own, 'x', { mode: 0o600 });
-    writeFileSync(shared, 'x');
+    writeFileSync(shared, 'y');
     chmodSync(shared, 0o644);
-    expect(await nodeFs.permissions(own)).toBe(0o600);
-    expect(await nodeFs.permissions(shared)).toBe(0o644);
-    expect(await nodeFs.permissions(join(dir, 'nope'))).toBeNull();
+    expect(await nodeFs.readTextAndMode(shared)).toEqual({ text: 'y', mode: 0o644 });
+    expect(await nodeFs.readTextAndMode(join(dir, 'nope'))).toBeNull();
   });
 });

@@ -106,11 +106,10 @@ const mailboxList = (s: string): string[] =>
  * is, since a token there is as good as a password for pushing mail.
  */
 async function tokenFromFile(io: ConnectorIo, path: string): Promise<string> {
-  const mode = await io.fs.permissions(path);
-  const text = mode === null ? null : await io.fs.readText(path);
-  if (mode === null || text === null) {
-    throw new ConnectorError(`No token file at ${path}.`, EXIT.USAGE);
-  }
+  // One open for both (#699, sec on #695): the mode checked is the mode of the file read.
+  const file = await io.fs.readTextAndMode(path);
+  if (file === null) throw new ConnectorError(`No token file at ${path}.`, EXIT.USAGE);
+  const { text, mode } = file;
   if ((mode & 0o077) !== 0) {
     throw new ConnectorError(
       `${path} can be read by others (mode ${mode.toString(8)}). A token file must be yours ` +

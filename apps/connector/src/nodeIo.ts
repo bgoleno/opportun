@@ -4,7 +4,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
-import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
@@ -67,12 +67,20 @@ function appendToRotatingLog(path: string, line: string, limits: LogLimits): voi
 // Paths below come from the user's config directory, never from mail content.
 /* eslint-disable security/detect-non-literal-fs-filename */
 export const nodeFs: FileSystem = {
-  async permissions(path) {
+  async readTextAndMode(path) {
+    let handle;
     try {
-      return (await stat(path)).mode & 0o777;
+      handle = await open(path, 'r');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw err;
+    }
+    try {
+      // The mode of the file this handle has open, not of whatever the path names by now.
+      const mode = (await handle.stat()).mode & 0o777;
+      return { text: await handle.readFile('utf8'), mode };
+    } finally {
+      await handle.close();
     }
   },
   async readText(path) {

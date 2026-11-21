@@ -29,8 +29,11 @@ export interface FileSystem {
   writeText(path: string, text: string, mode: number): Promise<void>;
   /** Creates the directory (and parents) and sets its mode. */
   mkdir(path: string, mode: number): Promise<void>;
-  /** The file's permission bits (0o777 at most), or null when it does not exist. */
-  permissions(path: string): Promise<number | null>;
+  /**
+   * The file's text and permission bits (0o777 at most), both from the one file it opened, or
+   * null when there is none (#699: a check of one file and a read of another cannot happen).
+   */
+  readTextAndMode(path: string): Promise<{ text: string; mode: number } | null>;
 }
 
 export interface FetchInit {

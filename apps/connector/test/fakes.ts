@@ -23,8 +23,9 @@ export class MemFs implements FileSystem {
   async mkdir(path: string, mode: number): Promise<void> {
     this.dirs.set(path, mode);
   }
-  async permissions(path: string): Promise<number | null> {
-    return this.files.get(path)?.mode ?? null;
+  async readTextAndMode(path: string): Promise<{ text: string; mode: number } | null> {
+    const file = this.files.get(path);
+    return file === undefined ? null : { text: file.text, mode: file.mode };
   }
 }
 
