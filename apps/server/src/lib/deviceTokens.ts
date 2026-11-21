@@ -7,12 +7,12 @@ import { newId } from '@opportun/core';
 import { and, asc, desc, eq, isNull } from 'drizzle-orm';
 import type { FastifyReply, FastifyRequest, preHandlerAsyncHookHandler } from 'fastify';
 import { lockScope, withTransaction, type Db, type Exec } from '../db/client';
-import { deviceTokens, users, type DeviceTokenScope } from '../db/schema';
+import { deviceTokens, type DeviceTokenScope } from '../db/schema';
 import { DEVICE_AUTH_MARK } from '../plugins/security';
 import type { UserCtx } from '../repos/base';
 import { audit } from './audit';
 import { HttpError, notFound, unauthorized } from './errors';
-import { passwordScope } from './passwords';
+import { whilePasswordCurrent } from './passwordLock';
 import { racePoint } from './racePoints';
 
 export const DEVICE_TOKEN_PREFIX = 'odt_';
@@ -90,28 +90,8 @@ export async function createDeviceToken(
   if (passwordHash === undefined && maxActive === undefined) {
     return { meta: await insertToken(db, ctx, input.name, token, scopes, now, actor), token };
   }
-  return await withTransaction(db, async (tx) => {
-    if (passwordHash !== undefined) {
-      await lockScope(tx, passwordScope(ctx.userId));
-      // After the lock, never before it (tl on #557): read before, the hash could be replaced
-      // between this check and the insert by a change that the lock would otherwise have held.
-      // The comparison is the query's: the user's row with the verified hash, or none.
-      const stillCurrent = await tx
-        .select({ id: users.id })
-        .from(users)
-        .where(and(eq(users.id, ctx.userId), eq(users.passwordHash, passwordHash)))
-        .get();
-      if (stillCurrent === undefined) {
-        throw new HttpError(
-          403,
-          'password_changed',
-          'Your password changed while this was being checked. Sign in again and try once more.',
-        );
-      }
-      // Holding the lock, the hash still current: a change or reset now waits for this insert,
-      // and then revokes it with the rest (test/deviceTokenPasswordRace.test.ts parks here).
-      await racePoint('deviceTokens.create.locked');
-    }
+  // The cap (#550), then the insert, in whichever transaction holds the write.
+  const write = async (tx: Exec) => {
     if (maxActive !== undefined) {
       await lockScope(tx, `device_tokens:${ctx.userId}`);
       const active = await tx
@@ -135,7 +115,22 @@ export async function createDeviceToken(
       }
     }
     return { meta: await insertToken(tx, ctx, input.name, token, scopes, now, actor), token };
+  };
+  if (passwordHash === undefined) return await withTransaction(db, write);
+  // Only while the hash the password was proven against is still the user's, under the lock a
+  // change and a reset take (#539, lib/passwordLock.ts). The race point is inside the lock, after
+  // the check (test/deviceTokenPasswordRace.test.ts parks there).
+  const created = await whilePasswordCurrent(db, ctx.userId, passwordHash, write, {
+    point: 'deviceTokens.create.locked',
   });
+  if (!created.current) {
+    throw new HttpError(
+      403,
+      'password_changed',
+      'Your password changed while this was being checked. Sign in again and try once more.',
+    );
+  }
+  return created.value;
 }
 
 async function insertToken(
