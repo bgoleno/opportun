@@ -16,7 +16,12 @@ import { taskRuns } from '../src/db/schema';
 import { runDemoResetGated } from '../src/jobs/demoReset';
 import { registerJob, unregisterJob } from '../src/jobs/registry';
 import { enqueue, runDueJobs } from '../src/jobs/runner';
-import { currentHoldStop, DemoResetGate, runWithHoldStop } from '../src/lib/demoResetGate';
+import {
+  currentHoldStop,
+  DemoResetGate,
+  HOLD_LIMIT_MS,
+  runWithHoldStop,
+} from '../src/lib/demoResetGate';
 import { REFERRAL_TASK } from '../src/routes/referrals';
 import { testApp } from './helpers';
 import { signIn } from './isolation';
@@ -149,10 +154,48 @@ describe("a hold's stop signal (#684)", () => {
     await vi.waitFor(() => expect(hold.ended).toBe(true));
   });
 
-  it('with no margin left, the stop comes with the bound', async () => {
+  it('a margin as long as the hold stops it at once, while it is still held', async () => {
     const gate = new DemoResetGate({ stopMarginMs: 1_000 });
-    const hold = await gate.shared({ limitMs: 50 });
-    await vi.waitFor(() => expect(hold.signal.aborted).toBe(true), { timeout: 500 });
+    const hold = await gate.shared({ limitMs: 500 });
+    await vi.waitFor(() => expect(hold.signal.aborted).toBe(true), { timeout: 100 });
+    expect(hold.ended).toBe(false);
+  });
+
+  it("a gated job is told to stop (ctx.stopping) at its hold's stop signal, before the bound (tl on #704)", async () => {
+    const { app } = await testApp({ demo: true });
+    const KIND = 'test.demo_hold_stopping';
+    // The stop comes 50 ms in, the bound 50 s in: whatever the job sees is the signal's doing.
+    const gate = new DemoResetGate({ stopMarginMs: HOLD_LIMIT_MS - 50 });
+    const seen: { stoppedAfterMs: number | null; heldThen: number } = {
+      stoppedAfterMs: null,
+      heldThen: -1,
+    };
+    try {
+      registerJob({
+        kind: KIND,
+        payloadSchema: z.object({}),
+        maxAttempts: 1,
+        async run(_db, _payload, ctx) {
+          const started = Date.now();
+          while (Date.now() - started < 2_000) {
+            if (ctx.stopping()) {
+              seen.stoppedAfterMs = Date.now() - started;
+              seen.heldThen = gate.held;
+              return;
+            }
+            await new Promise((r) => setTimeout(r, 10));
+          }
+        },
+      });
+      await enqueue(app.db, KIND, {});
+      await runDueJobs(app.db, { services: { ...app.jobs.services, demoResetGate: gate } });
+      expect(seen.stoppedAfterMs, 'told to stop').not.toBeNull();
+      expect(seen.stoppedAfterMs!).toBeLessThan(1_000);
+      expect(seen.heldThen, 'while it still holds the gate').toBe(1);
+    } finally {
+      unregisterJob(KIND);
+      await app.close();
+    }
   });
 
   it("a demo job's run sees its hold's stop signal; a job with no hold sees none", async () => {

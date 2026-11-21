@@ -21,14 +21,15 @@
 // Each hold also has a stop signal (Hold.signal, #684), aborted a margin (stopMarginMs) before its
 // bound. The holder's work runs with it as the current one (runWithHoldStop: the request's handler,
 // a job's run), and every AI call and streamed reply takes it into its own deadline (lib/ai.ts
-// buildAiDeps): so the slow part of a request, which is all the AI's, ends while the request still
-// holds the gate, and what its handler writes then (the call's task run, a failed outcome) comes
-// before the reset, which replaces it. A request's body time and AI time no longer add up past the
-// bound (20 s + 40 s > 50 s was the gap, sec on #684).
+// buildAiDeps), and a job's ctx.stopping turns true on it (jobs/runner.ts). So a request's or a
+// job's AI work ends while it still holds the gate, and what it writes then (the call's task run,
+// a failed outcome) comes before the reset, which replaces it. A request's body time and AI time
+// no longer add up past the bound (20 s + 40 s > 50 s was the gap, sec on #684).
 //
-// What that leaves: a holder that ignores the signal and the stop (no AI call or stream does), and
-// work that outlives its handler (a promise left running), can still write after the bound, so
-// after the reset, into the account reseeded under the same id. docs/demo-deployment.md says so.
+// What that leaves: slow work in a request that is not an AI call (a resume made in Google Docs or
+// Reactive Resume, tl on #704), a job that ignores ctx.stopping, and work that outlives its handler
+// (a promise left running) can still write after the bound, so after the reset, into the account
+// reseeded under the same id. docs/demo-deployment.md says so.
 //
 // In process: one server process per database, as docs/install.md requires (one instance; the job
 // runner and the write gate assume it too). Off the demo there is no gate, and nothing waits.
@@ -136,7 +137,8 @@ export class DemoResetGate {
     };
     const bound = setTimeout(() => {
       if (ended) return;
-      // With no margin left, the stop comes with the bound.
+      // A safeguard: the stop timer has fired by now (a margin as long as the hold fires it at
+      // once), so this only matters if that timer was somehow late.
       if (!stop.signal.aborted) stop.abort(new Error('demo reset: the hold has ended'));
       leave();
       opts.onExpire?.();

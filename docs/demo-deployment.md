@@ -614,16 +614,18 @@ On a shared account, enforced by the server:
     50 seconds), every AI call and the chat's reply also end 5 seconds before the request's or the
     job's 50 seconds are up. So what the request or job writes after it (the AI call's record, a
     result marked unavailable) comes while it still holds the reset off, and the reset then replaces
-    it.
+    it. This stop applies whether or not a reset is running: on a demo server no AI call in a
+    request or a job runs past 45 seconds of it.
 
   These time limits apply to every account on a demo server, a dedicated one included: the server
   sets them before it looks up whose request it is.
 
   What this does not cover:
-  - **Slow work that is not an AI call**: AI calls and the chat's reply end on the stop, but other
-    slow work in a request or a job, or work a handler leaves running after it has answered, does
-    not, and can still write after the reset, into the account reseeded under the same id. A
-    request's other work is database reads and writes, which take well under those 5 seconds.
+  - **Slow work that is not an AI call**: AI calls and the chat's reply end on the stop, and a job
+    is told to stop then too, but other slow work in a request is not stopped: making a resume in
+    Google Docs or Reactive Resume (Apply on a suggestion), which a shared account can connect, is
+    one. Such work, or work a handler leaves running after it has answered, can still write after
+    the reset, into the account reseeded under the same id.
   - **A seed run by hand** (`seedDemo.ts`) is a separate process the gate does not see: run it with
     the server stopped (see above).
   - **More than one server process** on the same database: the gate is in the process, as the
