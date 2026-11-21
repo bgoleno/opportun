@@ -519,8 +519,10 @@ docker compose ... exec opportun node --import tsx src/cli/createDemoAccount.ts 
 
 It prints the account's password on stdout, once, and nowhere else (not to the logs or the audit
 trail). Give it to its owner, who can change it under Settings. The command refuses, and changes
-nothing, off a demo server (`OPPORTUN_DEMO` not `1`), before the first seed, and for an email
-already in use.
+nothing, off a demo server (`OPPORTUN_DEMO` not `1`), before the first seed, for an email already
+in use, and when its pepper version is not the one the server last started with. Run from source
+rather than through `docker compose exec`, it needs the server's `OPPORTUN_PEPPER`,
+`OPPORTUN_PEPPER_VERSION` and each `OPPORTUN_PEPPER_V<N>` (`docs/install.md`, "Password pepper").
 
 A dedicated account:
 

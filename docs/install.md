@@ -398,8 +398,12 @@ guess passwords. Keep it outside the database, like the master key (for example
 `openssl rand -hex 32` into the server's environment). Accounts created before you set
 it keep working: each one is re-hashed with the pepper the next time its owner signs in.
 **Removing the pepper still breaks every peppered hash**, and the only way back in is a
-password reset per account. Pass the same value to the reset CLI (it reads
-`OPPORTUN_PEPPER` from its environment). On a Compose deployment, set it in `deploy/.env`,
+password reset per account. The CLIs that set a password (the reset, and a demo's dedicated
+account) read the pepper from their own environment, so a run from source needs every pepper
+variable the server has: `OPPORTUN_PEPPER`, `OPPORTUN_PEPPER_VERSION` and each
+`OPPORTUN_PEPPER_V<N>` (`docker compose exec` inherits the server's). A run whose version is not
+the one the server last started with refuses and changes nothing: after a rotation, restart the
+server before running one. On a Compose deployment, set it in `deploy/.env`,
 which is outside the `data/` volume; make sure every later `docker compose up -d` runs
 against a compose file that passes it through, or the server comes back up with no pepper
 and the peppered hashes stop verifying.
@@ -679,7 +683,8 @@ opportun-YYYYMMDD-HHmm.dump` (the same `DATABASE_URL` as the server). Same guara
 - **Lost password**: from `deploy/`, run
   `docker compose exec opportun node --import tsx src/cli/resetPassword.ts you@example.com`
   (from source: `DATA_DIR=... SQLITE_DIR=... node --import tsx src/cli/resetPassword.ts
-you@example.com` in `apps/server`, with the same values as the server). It sets a new
+you@example.com` in `apps/server`, with the same values as the server: the database settings
+  and every `OPPORTUN_PEPPER*` variable, see "Password pepper" above). It sets a new
   random temporary password, signs that user out
   everywhere, and prints the password once to your terminal; it is not logged or stored
   anywhere else. Sign in with it and change it under Settings. An unknown email changes
