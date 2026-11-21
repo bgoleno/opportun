@@ -27,7 +27,15 @@ export const SHARED_DEMO_GOOGLE_WARNING =
 export const SHARED_DEMO_DOCUMENTS_WARNING =
   'This is a shared demo account. A Reactive Resume connected here, with its address and key, is used by everyone signed in to this account until the nightly reset: their new resumes go to it, and Opportun reads and edits theirs in it.';
 
-type About = 'entries' | 'mail' | 'google' | 'documents';
+/** A file attached on a shared account (#671): everyone on it can open it until the reset. */
+export const SHARED_DEMO_FILES_WARNING =
+  'This is a shared demo account. A file you attach here can be opened by everyone signed in to this account, and is deleted at the nightly reset.';
+
+/** Two-factor sign-in turned on by one visitor of a shared account locks the others out (#671). */
+export const SHARED_DEMO_TWO_FACTOR_WARNING =
+  'This is a shared demo account. Turning on two-factor sign-in here locks everyone else out of it until the nightly reset: they would need your authenticator to sign in.';
+
+type About = 'entries' | 'mail' | 'google' | 'documents' | 'files' | 'twoFactor';
 
 function warningFor(about: About): string {
   switch (about) {
@@ -37,6 +45,10 @@ function warningFor(about: About): string {
       return SHARED_DEMO_GOOGLE_WARNING;
     case 'documents':
       return SHARED_DEMO_DOCUMENTS_WARNING;
+    case 'files':
+      return SHARED_DEMO_FILES_WARNING;
+    case 'twoFactor':
+      return SHARED_DEMO_TWO_FACTOR_WARNING;
     case 'entries':
       return SHARED_DEMO_WARNING;
   }
