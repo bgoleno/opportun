@@ -216,12 +216,19 @@ export function createOpenAiBatchProvider(target: {
     return batch;
   }
 
-  /** A file's lines, parsed; a line that is not JSON is kept as undefined for the caller. */
+  /**
+   * A file's lines, parsed; a line that is not JSON is kept as undefined for the caller. A file
+   * OpenAI no longer has (404: past its expiry, OUTPUT_EXPIRES_SECONDS, or deleted) has no lines:
+   * its requests then have no result, and the collect job returns them to waiting, as expired
+   * ones (tl on #657). Throwing instead would keep the batch in flight, and the user's next one
+   * unsent, for ever.
+   */
   async function fileLines(fileId: string, what: string): Promise<unknown[]> {
     const res = await doFetch(`${base}/files/${id(fileId)}/content`, {
       method: 'GET',
       headers: auth,
     });
+    if (res.status === 404) return [];
     if (!res.ok) throw refused(what, res.status);
     const out: unknown[] = [];
     for (const raw of (await res.text()).split('\n')) {
@@ -281,7 +288,14 @@ export function createOpenAiBatchProvider(target: {
           output_expires_after: { anchor: 'created_at', seconds: OUTPUT_EXPIRES_SECONDS },
         }),
       });
-      if (!res.ok) throw refused('submit', res.status);
+      if (!res.ok) {
+        // No batch will read it: the uploaded requests go too (tl on #657), best effort, and the
+        // refusal is what the caller hears either way. Kept otherwise, the 30-day default ends it.
+        await doFetch(`${base}/files/${id(file.id)}`, { method: 'DELETE', headers: auth }).catch(
+          () => undefined,
+        );
+        throw refused('submit', res.status);
+      }
       const batch = (await res.json()) as unknown;
       if (!isRecord(batch) || typeof batch.id !== 'string') {
         throw new Error('OpenAI batch submit: an unexpected answer');

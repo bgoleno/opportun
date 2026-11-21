@@ -191,6 +191,34 @@ describe('submit (criteria 1 and 2)', () => {
     expect(sent).toHaveLength(0);
   });
 
+  it('a refused batch create deletes the file it uploaded, and still throws naming the status', async () => {
+    const { fetch, sent } = recordingFetch((url, init) => {
+      if (url.endsWith('/files') && init.method === 'POST') return json(fileObject());
+      if (url.endsWith('/batches')) return json({ error: { message: 'quota' } }, 429);
+      if (init.method === 'DELETE') return json({ id: INPUT_FILE_ID, deleted: true });
+      throw new Error(`not a documented endpoint: ${init.method} ${url}`);
+    });
+    await expect(client(fetch).submit([request(POSTING)])).rejects.toThrow(
+      'OpenAI batch submit: HTTP 429',
+    );
+    expect(sent.map((s) => `${s.method} ${s.url}`)).toEqual([
+      `POST ${BASE}/files`,
+      `POST ${BASE}/batches`,
+      `DELETE ${BASE}/files/${INPUT_FILE_ID}`,
+    ]);
+  });
+
+  it('a delete that fails after a refused create still throws the create refusal', async () => {
+    const { fetch } = recordingFetch((url, init) => {
+      if (url.endsWith('/files') && init.method === 'POST') return json(fileObject());
+      if (url.endsWith('/batches')) return json({ error: { message: 'quota' } }, 429);
+      throw new Error('network down');
+    });
+    await expect(client(fetch).submit([request(POSTING)])).rejects.toThrow(
+      'OpenAI batch submit: HTTP 429',
+    );
+  });
+
   it.each(['upload', 'submit'])(
     'a refused %s names the status, never the key or the provider text',
     async (step) => {
@@ -392,6 +420,23 @@ describe('results (criterion 1)', () => {
       .results(BATCH_ID)
       .catch(() => undefined);
     for (const s of sent) expect(new URL(s.url).host).toBe(new URL(BASE).host);
+  });
+
+  it('a result file OpenAI no longer has (404, past its expiry) is read as no results: those requests wait again', async () => {
+    const { fetch } = recordingFetch((url) => {
+      if (url === `${BASE}/batches/${BATCH_ID}`) return json(batchObject('completed'));
+      if (url === `${BASE}/files/${OUTPUT_FILE_ID}/content`) {
+        return json({ error: { message: 'No such File object' } }, 404);
+      }
+      if (url === `${BASE}/files/${ERROR_FILE_ID}/content`) {
+        return new Response(jsonl([expiredLine('posting_2')]));
+      }
+      throw new Error(`not a documented endpoint: ${url}`);
+    });
+    // No throw, so the collect job ends the batch, and every posting with no result waits again.
+    expect(await client(fetch).results(BATCH_ID)).toEqual([
+      { customId: 'posting_2', kind: 'expired' },
+    ]);
   });
 
   it('a refused file read names the status, never the key', async () => {
