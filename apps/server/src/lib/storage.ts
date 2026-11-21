@@ -592,6 +592,7 @@ export function readOperatorTree(absPath: string, maxBytes = Infinity): Record<s
         if (total > maxBytes) {
           throw new Error(`operator tree too large: ${absPath} exceeds ${maxBytes} bytes`);
         }
+        // eslint-disable-next-line security/detect-object-injection -- file names from an operator-controlled directory, not user input
         out[name] = bytes;
       }
     }

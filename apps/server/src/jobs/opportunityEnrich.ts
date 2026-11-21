@@ -174,6 +174,7 @@ function asciiWords(name: string): string[] {
 }
 
 function sameWords(a: string[], b: string[]): boolean {
+  // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
   return a.length > 0 && a.length === b.length && a.every((w, i) => w === b[i]);
 }
 

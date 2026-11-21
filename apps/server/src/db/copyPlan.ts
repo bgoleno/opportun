@@ -79,7 +79,9 @@ export class CopyDataError extends Error {
 /** Every schema table (TABLE_EXPORTS order), checked against its Postgres twin. */
 export function tableSpecs(): TableSpec[] {
   return TABLE_EXPORTS.map((exportName) => {
+    // eslint-disable-next-line security/detect-object-injection -- a table name from the TABLE_EXPORTS constant list
     const config = getTableConfig(sqliteTables[exportName] as SQLiteTable);
+    // eslint-disable-next-line security/detect-object-injection -- a table name from the TABLE_EXPORTS constant list
     const twin = pgTableConfig(pgTables[exportName]);
     const columns = config.columns.map((c) => {
       const kind = SQLITE_KINDS[c.columnType];
@@ -108,6 +110,7 @@ export function tableSpecs(): TableSpec[] {
       const target = getTableConfig(ref.foreignTable).name;
       if (target === config.name) {
         ref.columns.forEach((col, i) => {
+          // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
           selfRefs.push({ column: col.name, references: ref.foreignColumns[i]?.name ?? 'id' });
         });
       } else {
@@ -165,6 +168,7 @@ export function parentsFirst<T>(
   const out: T[] = [];
   const queue = rows.filter((r) => waiting.get(idOf(r)) === 0);
   for (let i = 0; i < queue.length; i += 1) {
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     const row = queue[i] as T;
     out.push(row);
     for (const child of children.get(idOf(row)) ?? []) {
@@ -224,6 +228,7 @@ export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   const entries = Object.keys(value)
     .sort()
+    // eslint-disable-next-line security/detect-object-injection -- a read by the object's own keys (Object.keys)
     .map((k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`);
   return `{${entries.join(',')}}`;
 }

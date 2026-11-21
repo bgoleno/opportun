@@ -68,6 +68,7 @@ export function pgLiteral(column: PgColumn, value: unknown): string {
 export function seedStatements(sqlite: Sqlite): string[] {
   const out: string[] = [];
   for (const name of TABLE_EXPORTS) {
+    // eslint-disable-next-line security/detect-object-injection -- a table name from the TABLE_EXPORTS constant list
     const cfg = getTableConfig(pg[name] as PgTable);
     // A table added by a migration after the baseline does not exist in a database migrated
     // to the baseline head, and by definition seeds no rows there. Without this, adding any

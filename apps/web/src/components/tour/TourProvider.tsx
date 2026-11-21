@@ -336,6 +336,7 @@ export function TourProvider({ children }: { children: ReactNode }) {
     pill = (
       <ResumePill
         step={stepIndex(id)}
+        // eslint-disable-next-line security/detect-object-injection -- a typed checklist key
         done={item !== undefined && checklist[item]}
         busy={busy}
         onResume={() => {

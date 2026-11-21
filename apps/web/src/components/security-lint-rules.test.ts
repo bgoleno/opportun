@@ -22,6 +22,10 @@ const ERROR_RULES = [
     'security/detect-unsafe-regex',
     'export const repeated = (text: string): boolean => /^(a+)+$/.test(text);\n',
   ],
+  [
+    'security/detect-object-injection',
+    'export function put(o: Record<string, unknown>, key: string, v: unknown): void {\n  o[key] = v;\n}\n',
+  ],
 ] as const;
 
 // One source file per package, and a server test file, which has config blocks of its own. The
@@ -46,10 +50,18 @@ async function severityOf(rule: string, code: string, path: string): Promise<num
   return result?.messages.find((m) => m.ruleId === rule)?.severity;
 }
 
+/**
+ * Rules eslint.config.js turns off for test files, on purpose: tests index their own fixture and
+ * schema objects by keys they define (#587). Everywhere else they are errors.
+ */
+const OFF_IN_TESTS: ReadonlySet<string> = new Set(['security/detect-object-injection']);
+const isTestPath = (path: string) => path.includes('/test/') || /\.test\.tsx?$/.test(path);
+
 describe('triaged eslint-plugin-security rules are errors (#587)', () => {
   for (const [rule, code] of ERROR_RULES) {
-    it.each(PATHS)(`${rule} fails a new hit in %s`, async (path) => {
-      expect(await severityOf(rule, code, path)).toBe(2);
+    it.each(PATHS)(`${rule} is enforced as configured in %s`, async (path) => {
+      const expected = OFF_IN_TESTS.has(rule) && isTestPath(path) ? undefined : 2;
+      expect(await severityOf(rule, code, path)).toBe(expected);
     });
   }
 });

@@ -477,6 +477,7 @@ export function startRunner(
   const activeByKind = new Map<string, number>();
   const atCap = (): string[] =>
     [...activeByKind.entries()]
+      // eslint-disable-next-line security/detect-object-injection -- job kinds are server constants, and a missing one falls back to no cap
       .filter(([kind, n]) => n >= (limits[kind] ?? Number.POSITIVE_INFINITY))
       .map(([kind]) => kind);
 
