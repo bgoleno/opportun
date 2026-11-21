@@ -41,6 +41,9 @@ export const EXPORT_EXCLUDED_TABLES: readonly string[] = [
   // Ranking batches in flight with the AI provider (#441): queue state like jobs, meaningless in
   // another instance, which could never collect them. A posting's rank_batch_id stays, as an id.
   'rank_batches',
+  // The kept referral ranking (#590): derived from the contacts and the opportunity, and made again
+  // on the next open of the tab, like search_index.
+  'referral_rankings',
 ];
 
 type UserTable = DbTable & { userId: DbColumn };
