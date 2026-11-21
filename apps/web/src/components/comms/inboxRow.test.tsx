@@ -358,15 +358,32 @@ describe('Inbox Sync now (#645)', () => {
     try {
       const T0 = Date.UTC(2026, 10, 20, 9, 0);
       const T1 = Date.UTC(2026, 10, 21, 10, 30);
-      let phase = 0; // 0 before the click; then running, synced with 1 to classify, all done
-      const status = () =>
-        phase === 0
-          ? { connected: true, lastSyncAt: T0, count: 0, status: 'ok', pendingClassify: 0 }
-          : phase === 1
-            ? { connected: true, lastSyncAt: T0, count: 0, status: 'running', pendingClassify: 0 }
-            : phase === 2
-              ? { connected: true, lastSyncAt: T1, count: 1, status: 'ok', pendingClassify: 1 }
-              : { connected: true, lastSyncAt: T1, count: 1, status: 'ok', pendingClassify: 0 };
+      // Before the click, the last sync was T0. After it, the status reads: running, then synced
+      // with 1 message still to classify, then all done. The message is in the list only once
+      // the status has said it is classified, so a poll that stops early never shows it.
+      let clicked = false;
+      let readsAfter = 0;
+      let classified = false;
+      const status = () => {
+        if (!clicked) {
+          return { connected: true, lastSyncAt: T0, count: 0, status: 'ok', pendingClassify: 0 };
+        }
+        readsAfter += 1;
+        if (readsAfter === 1) {
+          return {
+            connected: true,
+            lastSyncAt: T0,
+            count: 0,
+            status: 'running',
+            pendingClassify: 0,
+          };
+        }
+        if (readsAfter === 2) {
+          return { connected: true, lastSyncAt: T1, count: 1, status: 'ok', pendingClassify: 1 };
+        }
+        classified = true;
+        return { connected: true, lastSyncAt: T1, count: 1, status: 'ok', pendingClassify: 0 };
+      };
       const fresh = {
         ...BASE,
         id: 'new1',
@@ -375,16 +392,15 @@ describe('Inbox Sync now (#645)', () => {
         needsReview: true,
       };
       const { calls } = mockApi({
-        'GET /integrations/gmail': () => {
-          const s = status();
-          if (phase > 0 && phase < 3) phase += 1;
-          // Wrapped: the payload's own `status` would read as the HTTP status.
-          return { status: 200, body: { ...s, lookbackDays: 180, accountEmail: null } };
-        },
+        // Wrapped: the payload's own `status` would read as the HTTP status.
+        'GET /integrations/gmail': () => ({
+          status: 200,
+          body: { ...status(), lookbackDays: 180, accountEmail: null },
+        }),
         'GET /communications': () =>
-          phase >= 3 ? { items: [fresh], total: 1 } : { items: [], total: 0 },
+          classified ? { items: [fresh], total: 1 } : { items: [], total: 0 },
         'POST /integrations/gmail/sync': () => {
-          phase = 1;
+          clicked = true;
           return { status: 202, body: { jobId: 'job-1' } };
         },
       });
