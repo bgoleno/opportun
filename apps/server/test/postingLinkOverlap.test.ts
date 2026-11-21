@@ -116,6 +116,32 @@ describe('overlapping posting-link saves: the last one sent is stored (#685 crit
     // The earlier save answers with the row as it now is, the later link (tl on #685).
     expect(earlierRes.json<{ postingUrl: string }>().postingUrl).toBe(link('7102'));
   });
+
+  it("an earlier save's identity is never put on a later link that no board holds", async () => {
+    const { app, a } = await boot();
+    const { opp } = await companyWithBoards(app, a, ['board']);
+    let answerFirst!: () => void;
+    const firstHeld = new Promise<'yes'>((r) => (answerFirst = () => r('yes')));
+    let firstAsked!: () => void;
+    const firstReached = new Promise<void>((r) => (firstAsked = r));
+    app.jobs.services.sourceFetch = greenhouse((_token, jid) => {
+      if (jid === '7101') {
+        firstAsked();
+        return firstHeld;
+      }
+      return 'no';
+    }).fetch;
+
+    const earlier = patch(a, opp.id, link('7101'));
+    await firstReached;
+    expect((await patch(a, opp.id, link('7102'))).statusCode).toBe(200);
+    answerFirst();
+    expect((await earlier).statusCode).toBe(200);
+
+    const row = await stored(app, opp.id);
+    expect(row.postingUrl).toBe(link('7102'));
+    expect(row.atsJobRef).toBeNull();
+  });
 });
 
 describe('each board gets its own share of the check budget (#685 criterion 2)', () => {
