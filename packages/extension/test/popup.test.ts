@@ -701,6 +701,15 @@ describe('Open in Opportun after a capture (#653)', () => {
     expect(link(s.doc).getAttribute('href')).toBeNull();
   });
 
+  it('the link goes away on a Save that is refused before any action starts (qa on #717)', async () => {
+    const s = await capture();
+    expect(link(s.doc).hidden).toBe(false);
+    s.$<HTMLInputElement>('server-url').value = 'not a url';
+    await click(s.$('save'), () => status(s.doc).dataset.tone === 'error');
+    expect(link(s.doc).hidden).toBe(true);
+    expect(link(s.doc).getAttribute('href')).toBeNull();
+  });
+
   it('a capture the server refused shows no link', async () => {
     const s = setup({ stored: SAVED, status: 500, body: {} });
     await mountPopup(s.doc, s.deps);

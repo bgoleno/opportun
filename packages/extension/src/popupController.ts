@@ -311,6 +311,8 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    // The last capture's link is not this Save's result, whatever happens next (qa on #717).
+    hideResultLink();
     // Everything is validated synchronously: the permission prompt must open inside the click
     // gesture (no await before it), and it should not open for input that cannot be saved.
     const server = parseServerUrl(serverInput.value);

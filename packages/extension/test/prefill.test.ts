@@ -317,11 +317,12 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
     expect(serialized).not.toContain(SERVER);
   });
 
-  it('a snapshot that is not ready is never fetched, and the report says to attach it yourself', async () => {
+  it('an attempt with no resume chosen fetches nothing, and the report says to attach it yourself', async () => {
+    // What the server sends for an attempt with no resume (connectorApply.ts): all nulls.
     const s = setup({
       current: json(200, {
         attempt: attempt({
-          resume: { snapshotState: 'unsupported', filename: null, bytes: null },
+          resume: { snapshotState: null, filename: null, bytes: null },
         }),
         reason: null,
       }),
@@ -350,8 +351,14 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
       PREPARING,
     ],
     [
+      // An export that failed (a deleted resume, say) is not "not a usable PDF" (qa on #717).
       'refused (409) as failed',
       json(409, { error: { code: 'snapshot_not_ready', snapshotState: 'failed' } }),
+      'Resume: attach your resume yourself',
+    ],
+    [
+      'refused (409) as unsupported',
+      json(409, { error: { code: 'snapshot_not_ready', snapshotState: 'unsupported' } }),
       UNUSABLE,
     ],
     [
@@ -399,9 +406,10 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
   });
 
   for (const [state, filename, words] of [
-    ['pending', 'Jane-Resume.pdf', PREPARING],
-    ['failed', 'Jane-Resume.pdf', UNUSABLE],
-    ['unsupported', 'Jane-Resume.docx', UNUSABLE],
+    // As the server sends them: a file name only with 'ready' (qa on #717).
+    ['pending', null, PREPARING],
+    ['failed', null, 'Resume: attach your resume yourself'],
+    ['unsupported', null, UNUSABLE],
   ] as const) {
     it(`a copy whose state is ${state} is never fetched, and the report says why (#653)`, async () => {
       const s = setup({

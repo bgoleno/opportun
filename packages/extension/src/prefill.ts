@@ -218,7 +218,6 @@ export function toBase64(bytes: Uint8Array): string {
   return btoa(out);
 }
 
-/** The resume copy, none to attach, or a refusal that stops the whole fill. */
 /**
  * Why the resume copy was not attached (#653), told in the fill report in place of the filler's
  * plain "attach your resume yourself". Set by the popup from the download, never by the filler.
@@ -230,18 +229,26 @@ export const RESUME_MISSES: readonly ResumeMiss[] = [
   'resume_unusable',
 ];
 
-/** `why` is null when there is nothing more to say: no copy was chosen, or it was deleted. */
+/**
+ * The resume copy, none to attach, or a refusal that stops the whole fill. `why` is null when
+ * there is nothing more to say: no resume was chosen, its export failed, or it was deleted.
+ */
 export type ResumeResult =
   | { kind: 'file'; base64: string }
   | { kind: 'none'; why: ResumeMiss | null }
   | { kind: 'review_stale' };
 
-/** The reason for a snapshot state that is not ready (#653), the same from /current and a 409. */
-function missOfState(state: unknown, filename: string | null): ResumeMiss | null {
+/**
+ * The reason for a snapshot state that is not ready (#653), the same from /current and a 409.
+ * The server names the file only when the state is `ready`, and an attempt with no resume chosen
+ * has no state at all (null), so `unsupported` always means a chosen resume with no PDF copy
+ * (qa on #717). `failed` is an export that failed (a resume deleted meanwhile, say), which "not
+ * a usable PDF" would not describe, so it says nothing more. A handed-off attempt is never
+ * `pending` or `failed` today: those two are only defensive.
+ */
+function missOfState(state: unknown): ResumeMiss | null {
   if (state === 'pending') return 'resume_preparing';
-  if (state === 'failed') return 'resume_unusable';
-  // Unsupported is also the state of an application with no resume chosen: no file name then.
-  if (state === 'unsupported' && filename !== null && filename !== '') return 'resume_unusable';
+  if (state === 'unsupported') return 'resume_unusable';
   return null;
 }
 
@@ -259,7 +266,7 @@ export async function fetchResume(
 ): Promise<ResumeResult> {
   const none = (why: ResumeMiss | null) => ({ kind: 'none', why }) as const;
   const { snapshotState, filename, bytes } = attempt.resume;
-  if (snapshotState !== 'ready') return none(missOfState(snapshotState, filename));
+  if (snapshotState !== 'ready') return none(missOfState(snapshotState));
   if (filename === null || filename === '' || bytes === null) return none(null);
   if (bytes <= 0 || bytes > MAX_RESUME_BYTES) return none('resume_unusable');
   const res = await get(
@@ -278,7 +285,7 @@ export async function fetchResume(
     }
     const error = isRecord(body) && isRecord(body.error) ? body.error : {};
     if (error.code === 'review_stale') return { kind: 'review_stale' };
-    return none(missOfState(error.snapshotState, filename));
+    return none(missOfState(error.snapshotState));
   }
   if (res.status !== 200 || res.arrayBuffer === undefined) return none('resume_not_downloaded');
   if (!(res.headers.get('content-type') ?? '').toLowerCase().startsWith('application/pdf')) {
