@@ -178,9 +178,8 @@ What it shows depends on where you are:
 **Create tailored copy** copies the base resume you picked, names it from your template (see
 [Resumes](resumes.md#create-a-tailored-copy)) and opens the copy's page to tailor it. **Mark as
 final** is the existing status change, in place: the button keeps its name, a toast says "Marked
-final", and a refused change says why inside the card. Where assisted apply is off, or on the
-demo, a Final copy shows "Ready to send." and **Record that you sent it**, and nothing of assisted
-apply is named.
+final", and a refused change says why inside the card. Where assisted apply is off, a Final copy
+shows "Ready to send." and **Record that you sent it**, and nothing of assisted apply is named.
 
 **Sending a base resume as it is** (for example through a job site's own apply flow) takes the
 same steps without a copy. If the base is not Final yet, the card offers **Mark** _base_ **as
@@ -244,15 +243,17 @@ Contacts who could refer you, ranked by the AI, and the asks you have made. See
 ### Assisted apply
 
 Assisted apply is on unless the person running your server turned it off (`OPPORTUN_SUBMISSIONS=0`,
-in the [install guide](../install.md#4-configuration-reference)), and it is never on the demo.
+in the [install guide](../install.md#4-configuration-reference)). It is on for the demo too, with
+limits on its shared accounts: see [Try assisted apply on the demo](#try-assisted-apply-on-the-demo).
 Where it is on, the opportunity has an **Assisted apply** panel beside the tabs. You can confirm
 only so many reviews in 24 hours; see
 [Applications and the review limit](settings.md#applications-and-the-review-limit).
 Before you apply, it offers **Apply on _ATS_** when the posting is confirmed and is on a
 recognised application system (Greenhouse, Lever or Ashby; Workday as a handoff only), its stage
-is Interested, Preparing or Applied, and you have a resume marked Final. When one of these is
-missing, the panel says which. **Apply** takes you through the resume, your details and your
-answers, then one review of everything. **Confirm review and open** opens the real application
+is Interested, Preparing or Applied, and you have a resume marked Final (not on a shared demo
+account, where an application carries no resume). When one of these is missing, the panel says
+which. **Apply** takes you through the resume, your details and your answers, then one review of
+everything. **Confirm review and open** opens the real application
 form in a new tab. Opportun never submits anything: you press the site's own Submit button.
 
 A Greenhouse job can sit on the company's own careers page, with a link that ends in
@@ -266,7 +267,9 @@ and the review opens that board's page for the job, never the careers page.
 
 #### Your details when you apply
 
-The **Details** step opens already filled with what Opportun holds for you, field by field:
+The **Details** step opens already filled with what Opportun holds for you, field by field (on a
+shared demo account it starts empty, with nothing to save to the profile: see
+[Try assisted apply on the demo](#try-assisted-apply-on-the-demo)):
 
 1. your profile: **Settings > Profile**, and its **Application details** card for first and
    last name, phone country code, school, degree, how you heard about the role, LinkedIn
@@ -320,6 +323,43 @@ confirmed), and **View application**. For an application with no confirmation ye
 happened since. **Apply again** stays available as a link, with one line on when to use it: only
 if the first application did not go through, or the employer asked you to. The apply flow then
 asks for the reason.
+
+#### Try assisted apply on the demo
+
+The demo has two kinds of account:
+
+- **A shared account**, one of the logins the demo's owner hands out: everyone invited signs in to
+  the same few accounts, and they are reset every night.
+- **A dedicated account**, made by the demo's owner for one person. It works as on any server
+  (everything in this section above applies), and it is not reset.
+
+On a shared account, assisted apply fills a real application with your own details only, never
+with the demo's invented ones:
+
+1. **Add the job you want to apply to.** The demo's own opportunities are invented, so none of them
+   has a real form. Create an opportunity with the job's posting link (**New opportunity**) and
+   press **Find posting** on its Details tab (see [Find a posting](#find-a-posting)), or capture
+   it with the [browser extension](browser-extension.md). Move it to Interested. The panel offers
+   **Apply on** _ATS_ once the posting is confirmed on a recognised application system.
+2. **Set up the browser extension** under **Settings > Integrations > Extensions and Connectors**:
+   download it from the demo, load it in your browser, and pair it with a token that has the
+   **Assisted apply** permission (see [Browser extension](browser-extension.md#setting-it-up)).
+   Pair it in the session you apply from: an extension paired in an earlier sign-in is not given
+   your new application.
+3. **Apply.** The resume step attaches none: every resume on a shared account is the demo's own,
+   so you attach your own on the employer's form. **Your details** starts empty: type in your
+   own. Nothing is saved to the profile, so the step has no **Save to my profile** ticks.
+4. **Review and open.** A value that came with the demo (such as the account's own name or email)
+   is refused here, by field: "_Field_: this value came with the demo. Enter your own, or leave the
+   field empty. Nothing was opened." **Change your details** takes you back to fix it.
+5. **Fill and submit on the form's tab,** with the extension, as in
+   [Finish on the application site](#finish-on-the-application-site). Attach your own resume there,
+   and press the site's Submit yourself.
+
+A shared account is shared: a plain warning on each step where you enter something says so.
+Everyone signed in to it can read your application until the nightly reset clears it, and any of
+them can cancel it. Only you (your session) can change, review or hand it off, and only your
+extension is given it.
 
 ## Find a posting
 
