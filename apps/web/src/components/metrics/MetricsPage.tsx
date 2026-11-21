@@ -294,19 +294,26 @@ function MetricView({ metric: m }: { metric: MetricInfo }) {
     setCustom(zoom({ from, to }, direction, Date.now(), center));
 
   const applyCustom = () => {
-    const f = new Date(draft.from).getTime();
-    const t = new Date(draft.to).getTime();
+    // A field that still shows what the page filled in (from a preset, a zoom or the last Apply)
+    // stands for the exact time behind it, not its whole minute: the range it came from was
+    // inside the 30 days when it was chosen, and only the clock has moved since (#614). Read
+    // against the clock alone, a "Last 30 days" chosen at hh:mm:59.900 started 59.9 s too early
+    // for its own Apply a moment later. Such a start is clamped below, never refused; a start the
+    // user typed is still held to the 30 days.
+    const fromUnchanged = draft.from === toLocalInput(from);
+    const f = fromUnchanged ? from : new Date(draft.from).getTime();
+    const t = draft.to === toLocalInput(to) ? to : new Date(draft.to).getTime();
     const now = Date.now();
     if (!Number.isFinite(f) || !Number.isFinite(t)) return setRangeError('Enter both times.');
     if (t <= f) return setRangeError('That range ends before it starts.');
     if (f >= now) return setRangeError('That range starts in the future.');
-    // The inputs hold whole minutes, so a range shown as the last 30 days can start up to a
-    // minute earlier than that: allow the minute, then keep the range inside what is kept.
-    if (t - f > MAX_SPAN_MS + MINUTE || f < now - MAX_SPAN_MS - MINUTE) {
+    // A typed start holds whole minutes, so allow the minute; then keep the range inside what is
+    // kept.
+    if (t - f > MAX_SPAN_MS + MINUTE || (!fromUnchanged && f < now - MAX_SPAN_MS - MINUTE)) {
       return setRangeError('Points are kept 30 days: choose a range inside the last 30 days.');
     }
-    const to = Math.min(t, now);
-    setCustom({ from: Math.max(f, now - MAX_SPAN_MS, to - MAX_SPAN_MS), to });
+    const end = Math.min(t, now);
+    setCustom({ from: Math.max(f, now - MAX_SPAN_MS, end - MAX_SPAN_MS), to: end });
   };
 
   const label = statLabel(stat, m.unit);
