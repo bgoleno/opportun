@@ -20,14 +20,35 @@ when the milestone's work was merged.
   password reset already revoked every device token
   ([#523](https://github.com/bgoleno/opportun/issues/523); PR
   [#536](https://github.com/bgoleno/opportun/pull/536)).
+- **Hardening from the 2026-11-13 audit: two more address ranges blocked, tidier per-host rate
+  buckets, a pinned scanner action, and a Compose proxy note.** The outbound fetch guard now
+  blocks the local-use NAT64 range `64:ff9b:1::/48` and treats an IPv4-mapped IPv6 address it
+  cannot unwrap as private, so such a spelling no longer passes as public. A request whose wait
+  timed out gives its per-host slot back, and the per-host buckets are keyed on the host in
+  lower case without a trailing dot and are dropped once their slot has passed. In CI, the OSV
+  scanner action is pinned to a commit, and a test fails if any workflow action is not. The
+  [install guide](docs/install.md#3-exposing-to-the-internet) now explains that where
+  Docker's userland proxy makes the connection (Docker Desktop on macOS or Windows, rootless
+  Docker, and IPv6 clients on some setups), Caddy sees one client address, so the per-IP sign-in
+  limits are shared by everyone and the per-account limits still apply. For a server many people
+  sign in to, run Docker Engine as root on Linux and reach it over IPv4
+  ([#524](https://github.com/bgoleno/opportun/issues/524); PR
+  [#551](https://github.com/bgoleno/opportun/pull/551)).
 - **Assisted apply reads the job of a handoff address or a confirmation page from its own path
   only.** An address for a posting on a job board, and the page recorded as an application's
   confirmation, now name their job from the address's path (or its `gh_jid` where the path names
   none), never from another address that appears in its query string. An address whose path names
   another job is refused, and a confirmation page for another job is not recorded. This was always
-  the intent, and nothing the extension fills changes
-  ([#521](https://github.com/bgoleno/opportun/issues/521); PR
-  [#538](https://github.com/bgoleno/opportun/pull/538)).
+  the intent, and nothing the extension fills changes. A Workday address with parentheses in its
+  path, such as `(Remote)`, now names its job too, so assisted apply recognises it, and a
+  stored posting address that ends in a stray `)`, pasted out of parentheses, keeps its job id
+  again, while a `)` that closes a `(` in the address is kept
+  ([#521](https://github.com/bgoleno/opportun/issues/521),
+  [#549](https://github.com/bgoleno/opportun/issues/549),
+  [#562](https://github.com/bgoleno/opportun/issues/562); PRs
+  [#538](https://github.com/bgoleno/opportun/pull/538),
+  [#555](https://github.com/bgoleno/opportun/pull/555),
+  [#565](https://github.com/bgoleno/opportun/pull/565)).
 - **The Publish image workflow runs in a `release` environment, so GitHub itself can limit
   publishing to `main`.** Both of its jobs, `publish` and `release`, declare
   `environment: release`. "Only from `main`" was otherwise enforced only by the workflow's own
@@ -35,6 +56,91 @@ when the milestone's work was merged.
   environment, set in the repository's settings, is the platform's own limit
   ([#519](https://github.com/bgoleno/opportun/issues/519); PR
   [#532](https://github.com/bgoleno/opportun/pull/532)).
+- **The browser extension says so when it cannot fetch your resume in 30 seconds, and a closed
+  window's fill cannot be doubled.** Before, the popup could stay blank while it downloaded the
+  resume copy from your server. It now shows that it is filling, and past 30 seconds it fills
+  nothing and says "Your resume could not be fetched from your server in time. Try again.
+  Nothing was filled." A fill left running in a page by a popup you closed is now noticed: a
+  second fill writes nothing and says to wait a few seconds for the earlier one to finish
+  ([#531](https://github.com/bgoleno/opportun/issues/531); PR
+  [#556](https://github.com/bgoleno/opportun/pull/556)).
+- **A device token cannot be created while your password is being changed or reset.** A token
+  made at the same moment as a password change (with its devices signed out) or an administrator
+  or command-line reset could survive it. The creation is now refused, with `password_changed`,
+  if the password it was checked against is no longer the current one, so a token cannot outlive
+  the change ([#539](https://github.com/bgoleno/opportun/issues/539); PR
+  [#557](https://github.com/bgoleno/opportun/pull/557)).
+- **Demo servers can have a dedicated account for one person, out of the shared demo admin's
+  reach.** On a demo server, `createDemoAccount.ts <email> <display name>` makes an ordinary
+  account, prints its password once, and marks it so the nightly reset leaves it and its data
+  alone. The command always prints the new password, even if writing its audit entry fails
+  afterwards. The shared `demo-admin` is an administrator only for the user list, the pepper list,
+  password resets, and the jobs list and its retry, and only for the five seeded accounts: it
+  cannot reset or reach a dedicated account, open registration, or change other instance-wide
+  settings, which now say "This setting covers the whole instance and is not available to this
+  account." See [A dedicated account for one
+  person](docs/demo-deployment.md#a-dedicated-account-for-one-person)
+  ([#563](https://github.com/bgoleno/opportun/issues/563),
+  [#570](https://github.com/bgoleno/opportun/issues/570); PRs
+  [#567](https://github.com/bgoleno/opportun/pull/567),
+  [#574](https://github.com/bgoleno/opportun/pull/574)).
+- **The command-line password reset now works after a pepper rotation.** With a rotated pepper
+  (`OPPORTUN_PEPPER_VERSION` 2 or later, the earlier secret in `OPPORTUN_PEPPER_V1`), the reset
+  used to stamp the new password as version 1 under the new secret, so the password it printed
+  never signed in and the account stayed locked out. The reset, and the demo's
+  `createDemoAccount.ts`, now hash with the same pepper set the server loads, so the password
+  they print signs in
+  ([#568](https://github.com/bgoleno/opportun/issues/568); PR
+  [#569](https://github.com/bgoleno/opportun/pull/569)).
+- **Assisted apply now works on the demo, with the visitor's own data only.** On the shared demo
+  accounts a draft starts empty, nothing is saved to the shared profile, an application carries
+  no resume (the visitor attaches their own on the employer's form), and the demo's own names and
+  addresses are refused. Each application is bound to the visitor (the session) who started it:
+  anyone on the account can read it or cancel it, and only that visitor can change, review or hand
+  it off, and only that visitor's device token is given it. A shared account keeps at most 20
+  active device tokens, the oldest revoked when another is made. Mail push stays available on the
+  demo. A dedicated demo account behaves like an account on any other instance. Two new operator
+  settings: `OPPORTUN_DEMO_TOKEN_CAP` (default 20, `0` for no cap) and
+  `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY` (default `1`, `0` turns assisted apply off for the shared
+  accounts only). See [Device tokens and assisted apply on the
+  demo](docs/demo-deployment.md#device-tokens-and-assisted-apply-on-the-demo)
+  ([#544](https://github.com/bgoleno/opportun/issues/544),
+  [#545](https://github.com/bgoleno/opportun/issues/545); PRs
+  [#550](https://github.com/bgoleno/opportun/pull/550),
+  [#566](https://github.com/bgoleno/opportun/pull/566)).
+- **On the demo's shared accounts, the apply steps, Settings > Profile and the mail connectors
+  warn that what you enter is visible to others.** The warning says "This is a shared demo
+  account. Anything you enter here is visible to others using it, and is cleared at the nightly
+  reset." It shows on the Apply page's resume, details and review steps and on Settings > Profile
+  and its Application details card. The Apple Mail and Gmail connector cards say that email a
+  connected mailbox brings in can be read by everyone signed in to the account until the nightly
+  reset, and can mark an application there confirmed. The resume step offers no resume (attach
+  your own on the employer's form), the details step offers no **Save to my profile** ticks,
+  and starting again after an expired review carries nothing over. A value that came with the
+  demo is refused by field name, for example "Email: this value came with the demo. Enter your
+  own, or leave the field empty. Nothing was opened.", with a link back to the details step.
+  Dedicated demo accounts and instances that are not the demo see none of this
+  ([#546](https://github.com/bgoleno/opportun/issues/546); PR
+  [#575](https://github.com/bgoleno/opportun/pull/575)).
+
+- **The extension's Greenhouse filler never clicks a list option inside a link or button, and it
+  stops if the page moves.** An option with a link, button, label, area or summary between it
+  and its list is now refused, since a click there would follow the link or press the control
+  (an SVG link included). The filler also reads the page's address again before it writes each
+  list, and after each list's options load. If the page has moved to another address, it writes
+  nothing more, and the popup names the list it was on and every list after it: "the page moved
+  to another address while filling: check this field on the form"
+  ([#537](https://github.com/bgoleno/opportun/issues/537); PR
+  [#560](https://github.com/bgoleno/opportun/pull/560)).
+- **A sign-in whose password was checked just before a password change or reset is refused.**
+  Before, a sign-in that was between checking your password and starting its session when you
+  changed the password (or an administrator reset it) could still start a session that outlived
+  the change. The session, or the pending two-factor step, is now written only while that password is
+  still the current one, and a change or reset ends every session and pending two-factor step in
+  its own transaction. A refused sign-in answers as for a wrong password (401
+  `invalid_credentials`) and the audit entry records `password_changed`
+  ([#561](https://github.com/bgoleno/opportun/issues/561); PR
+  [#571](https://github.com/bgoleno/opportun/pull/571)).
 
 ## 0.4.0 (2026-11-14)
 
