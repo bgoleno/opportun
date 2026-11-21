@@ -37,9 +37,10 @@ import {
   sweepRankBatches,
   cleanupPendingRankBatches,
   enqueueRankBatchCleanup,
+  rankBatchCleanupJob,
 } from '../src/jobs/rankBatch';
 import { rankBudgetHasRoom } from '../src/jobs/rankBudget';
-import { DEFAULT_KIND_LIMITS, enqueue } from '../src/jobs/runner';
+import { backoffMs, DEFAULT_KIND_LIMITS, enqueue } from '../src/jobs/runner';
 import { budgetKey, writeSetting } from '../src/lib/ai';
 import { setRaceHook } from '../src/lib/racePoints';
 import type { UserCtx } from '../src/repos/base';
@@ -1494,6 +1495,14 @@ describe("the provider's copy of a collected batch (#634)", () => {
     });
     expect(fake!.cleaned).toEqual([providerId]);
     expect((await cleanupJobs(app))[0]).toMatchObject({ status: 'done' });
+  });
+
+  it('a cleanup is tried six times over about half an hour, as the discovery guide says (#686)', () => {
+    expect(rankBatchCleanupJob.maxAttempts).toBe(6);
+    // The waits after the first five tries, with no jitter: 1, 2, 4, 8 and 16 minutes.
+    const waits = [1, 2, 3, 4, 5].map((attempts) => backoffMs(attempts, () => 0));
+    expect(waits).toEqual([1, 2, 4, 8, 16].map((m) => m * 60_000));
+    expect(waits.reduce((a, b) => a + b, 0)).toBe(31 * 60_000);
   });
 
   it('cleanups run one at a time (tl on #686)', () => {

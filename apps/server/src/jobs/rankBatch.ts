@@ -690,7 +690,9 @@ export const rankBatchCollectJob: JobHandler<z.infer<typeof CollectPayload>> = {
 export const rankBatchCleanupJob: JobHandler<RankBatchCleanup> = {
   kind: RANK_BATCH_CLEANUP_KIND,
   payloadSchema: CleanupPayload,
-  // Tried for a while: a key put back, or a provider that answers again, still removes it.
+  // Tried for a while: a key put back, or a provider that answers again, still removes it. Six
+  // tries over about 31 minutes with the runner's backoff (1, 2, 4, 8 and 16 minutes apart), as
+  // the discovery guide says (#686: test/discoveryRankBatch.test.ts pins it).
   maxAttempts: 6,
   async run(db, payload, ctx) {
     await ctx.setResult(await cleanupRankBatch(db, payload, ctx.services));
