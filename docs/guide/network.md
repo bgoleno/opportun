@@ -19,7 +19,8 @@ _Contacts imported from a LinkedIn data export, each mapped to a company._
 
 Open a contact to edit their details: current company, emails, LinkedIn profile URL, how well
 you know them (acquaintance, know well, close), tags and notes. The page also lists the
-referral asks you have made of them and their company history.
+referral asks you have made of them and their company history. The LinkedIn profile URL must
+be a `linkedin.com` address; Opportun stores it as a link and never opens it itself.
 
 ## Import your LinkedIn export
 

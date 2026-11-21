@@ -134,6 +134,85 @@ describe('init', () => {
     });
   });
 
+  // #655 (sec): a token in a flag lands in shell history; a file or stdin does not.
+  describe('the token from a file or stdin', () => {
+    const FLAGS = ['--server', 'https://opportun.example', '--mailbox', 'Inbox'];
+
+    it('reads --token-file, a file only you can read, trimming its newline', async () => {
+      const f = scriptedFetch([ok()]);
+      const { io, fs } = makeIo({ fetch: f.fetch });
+      await fs.writeText('/home/me/token', `${TOKEN}\n`, 0o600);
+      expect(await main(['init', ...FLAGS, '--token-file', '/home/me/token'], io)).toBe(EXIT.OK);
+      expect((await loadConfig(io)).token).toBe(TOKEN);
+      expect(f.calls).toHaveLength(1);
+    });
+
+    it('refuses a token file others can read, saying how to fix it, before writing anything', async () => {
+      const { io, fs, err } = makeIo();
+      await fs.writeText('/home/me/token', TOKEN, 0o644);
+      fs.writes = [];
+      const code = await main(['init', ...FLAGS, '--token-file', '/home/me/token'], io);
+      expect(code).toBe(EXIT.USAGE);
+      expect(err.join('\n')).toContain('chmod 600 /home/me/token');
+      expect(fs.writes).toEqual([]);
+    });
+
+    it('refuses a token file that is not there', async () => {
+      const { io, fs, err } = makeIo();
+      const code = await main(['init', ...FLAGS, '--token-file', '/home/me/nope'], io);
+      expect(code).toBe(EXIT.USAGE);
+      expect(err.join('\n')).toMatch(/No token file at \/home\/me\/nope/);
+      expect(fs.writes).toEqual([]);
+    });
+
+    it('reads --token-stdin', async () => {
+      const f = scriptedFetch([ok()]);
+      const { io } = makeIo({ fetch: f.fetch, readStdin: async () => `  ${TOKEN}\n` });
+      expect(await main(['init', ...FLAGS, '--token-stdin'], io)).toBe(EXIT.OK);
+      expect((await loadConfig(io)).token).toBe(TOKEN);
+    });
+
+    it('--token-stdin needs --server: stdin carries the token, so nothing can be asked', async () => {
+      const { io, fs, err } = makeIo({ readStdin: async () => TOKEN });
+      const code = await main(['init', '--mailbox', 'Inbox', '--token-stdin'], io);
+      expect(code).toBe(EXIT.USAGE);
+      expect(err.join('\n')).toMatch(/--token-stdin needs --server/);
+      expect(fs.writes).toEqual([]);
+    });
+
+    it('--token-stdin without --mailbox uses the saved mailboxes, or Inbox, without asking', async () => {
+      const { io } = makeIo({ fetch: scriptedFetch([ok()]).fetch, readStdin: async () => TOKEN });
+      expect(
+        await main(['init', '--server', 'https://opportun.example', '--token-stdin'], io),
+      ).toBe(EXIT.OK);
+      expect((await loadConfig(io)).mailboxes).toEqual(['Inbox']);
+    });
+
+    it('takes one token source only', async () => {
+      const { io, fs, err } = makeIo({ readStdin: async () => TOKEN });
+      await fs.writeText('/home/me/token', TOKEN, 0o600);
+      fs.writes = [];
+      for (const extra of [
+        ['--token', TOKEN, '--token-stdin'],
+        ['--token', TOKEN, '--token-file', '/home/me/token'],
+        ['--token-file', '/home/me/token', '--token-stdin'],
+      ]) {
+        expect(await main(['init', ...FLAGS, ...extra], io), extra.join(' ')).toBe(EXIT.USAGE);
+      }
+      expect(err.join('\n')).toMatch(/one of --token, --token-file or --token-stdin/);
+      expect(fs.writes).toEqual([]);
+    });
+
+    it('the help shows the file and stdin as the way to pass a token, and --token with its caveat', async () => {
+      const { io, out } = makeIo();
+      expect(await main(['--help'], io)).toBe(EXIT.OK);
+      const help = out.join('\n');
+      expect(help).toContain('--token-file <path>');
+      expect(help).toContain('--token-stdin');
+      expect(help).toMatch(/--token <token>[\s\S]*shell history/);
+    });
+  });
+
   // #650: a cursor is the old server's position. A different server has none of that mail, so
   // init with another address starts the next sync from the start of the lookback window.
   describe('the sync cursor and the server address (#650)', () => {
