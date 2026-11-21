@@ -163,29 +163,16 @@ jobs:
             MPL-2.0, Unlicense, AFL-2.1, Python-2.0, Zlib
           allow-dependencies-licenses: pkg:npm/caniuse-lite, pkg:npm/mdn-data
 
-  label-security-sensitive:
-    # Issue #63: #47 landed issue #5's fix under a PR description that said it touched no
-    # passwords, and #5 then stayed open for a month because nothing linked them. This is not a
-    # body-vs-diff parser (a body claim doesn't have to be dishonest to go stale, same as #47's
-    # branch renaming its own scope mid-flight): it is a static, deterministic path list,
-    # starting from the areas CONTRIBUTING.md names as security-sensitive (auth, crypto,
-    # adapters, fetchers, the extension's permissions, the CI workflows), plus files outside
-    # those areas that handle a credential or run a destructive or merge step (where the
-    # connector, the extension and the web app type, keep, send or show a credential, the
-    # config that loads the keys, the audit trail, the merge procedure, the destroy script). The
-    # full list is .github/scripts/security-paths.mjs. It is applied with no regard for what the
-    # PR's title or body claims.
-    #
-    # Honest limit: this surfaces the mismatch, it does not block the merge or force a review.
-    # It would have caught #47 because `security` showing up on a PR titled "feat(mail): ..." is
-    # a one-glance catch, which is exactly the glance that did not happen. A label only works if
-    # someone looks at it.
-    name: Label security-sensitive changes
+  ci-scripts:
+    # The CI scripts' own tests: the security path matcher, the identifier guard's matching, the
+    # workflow checks and the publish script (#63, #619). Nothing in the root `pnpm test` runs
+    # them. This tests the PR's copy; the label itself is applied by security-label.yml on
+    # pull_request_target with the base branch's copy, so a PR cannot drop its own label (#663).
+    name: Unit-test the CI scripts
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -196,42 +183,5 @@ jobs:
         with:
           node-version-file: .nvmrc
 
-      # The matching logic lives in a plain module precisely so it has a test of its own,
-      # separate from this workflow: security-paths.test.mjs pins it against the real file list
-      # from #47 (must match) and from a real, unrelated web-only PR (must not). Nothing here is
-      # covered by the root `pnpm test`, which only recurses into apps/* and packages/*, so this
-      # step is what actually runs it in CI.
-      - name: Unit-test the path matcher
+      - name: Unit-test the CI scripts
         run: node --test .github/scripts/*.test.mjs
-
-      # The label is decided by the base branch's matcher, checked out on its own (#619): a PR
-      # that edits security-paths.mjs or the script must not be able to drop its own label. The
-      # PR's copy is still unit-tested above; it decides labels once it is merged. A PR that edits
-      # the matcher is labelled by the base copy anyway, since the matcher's files are on its list.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: base
-          # Nothing here pushes with git: the token is not left in .git/config (#619).
-          persist-credentials: false
-
-      - name: Check the PR's changed paths against the security-sensitive glob list
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          matches="$(gh pr diff "${{ github.event.pull_request.number }}" --name-only \
-            | node base/.github/scripts/check-security-paths.mjs)"
-          echo "matches<<SECURITY_PATHS_EOF" >> "$GITHUB_OUTPUT"
-          echo "$matches" >> "$GITHUB_OUTPUT"
-          echo "SECURITY_PATHS_EOF" >> "$GITHUB_OUTPUT"
-          if [ -n "$matches" ]; then
-            echo "::notice::Security-sensitive paths changed:"
-            echo "$matches" | sed 's/^/::notice::  /'
-          fi
-
-      - name: Apply the security label
-        if: steps.check.outputs.matches != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh pr edit "${{ github.event.pull_request.number }}" --add-label security
