@@ -196,7 +196,13 @@ describe('GET /opportunities/:id/referral-candidates', () => {
     const opp = await createOpp(a, 'Nobody Corp');
     await createContact(a, { name: 'Ana Ruiz', company: 'Globex' });
     const res = await candidates(a, opp.id);
-    expect(res).toEqual({ items: [], total: 0, ranked: false, aiUnavailable: null });
+    expect(res).toEqual({
+      items: [],
+      total: 0,
+      ranked: false,
+      aiUnavailable: null,
+      rankedAt: null,
+    });
     expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
   });
 

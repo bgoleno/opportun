@@ -12,11 +12,12 @@ import { discoveryResults, jobs, taskRuns } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { RANK_WAITING_SWEEP_KIND, sweepWaitingResults } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
-import { enqueue, readSchedules, removeSchedule, runNextJob } from '../src/jobs/runner';
+import { enqueue, readSchedules, removeSchedule } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import { createSource, setRankDeferred } from '../src/repos/discovery';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { runQueuedJob } from './runQueuedJob';
 
 const boot = useApi();
 const ctxOf = (c: TestClient): UserCtx => ({ userId: c.userId, isAdmin: false });
@@ -84,8 +85,13 @@ async function waiting(
     config: { org: 'initech' },
     roleTargetId: null,
   });
-  await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: c.userId });
-  await runNextJob(app.db, { services: app.jobs.services });
+  const queued = await enqueue(
+    app.db,
+    DISCOVERY_RUN_KIND,
+    { sourceId: src.id },
+    { userId: c.userId },
+  );
+  await runQueuedJob(app, queued);
   await app.db.delete(jobs).where(eq(jobs.kind, DISCOVERY_RANK_KIND)).run();
   const rows = await app.db
     .select({ id: discoveryResults.id })

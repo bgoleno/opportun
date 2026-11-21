@@ -14,7 +14,7 @@ import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { enqueueRankWaiting, RANK_WAITING_KIND } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import { registerJob } from '../src/jobs/registry';
-import { enqueue, runNextJob, startRunner } from '../src/jobs/runner';
+import { enqueue, startRunner } from '../src/jobs/runner';
 import { TITLE_VARIANTS_KIND } from '../src/jobs/titleVariants';
 import type { UserCtx } from '../src/repos/base';
 import { createSource, setRankDeferred, setWaitingNoKey } from '../src/repos/discovery';
@@ -22,6 +22,7 @@ import { DEFAULT_DISCOVERY_DAILY_USD } from '../src/repos/discoveryBudget';
 import { createRoleTarget } from '../src/repos/profile';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { runQueuedJob } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -86,8 +87,14 @@ async function backlog(app: FastifyInstance, ctx: UserCtx): Promise<void> {
     config: { org: `initech-${ctx.userId}` },
     roleTargetId: null,
   });
-  await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: ctx.userId });
-  await runNextJob(app.db, { services: app.jobs.services });
+  const runId = await enqueue(
+    app.db,
+    DISCOVERY_RUN_KIND,
+    { sourceId: src.id },
+    { userId: ctx.userId },
+  );
+  // This run, not whatever else is due first (#615).
+  await runQueuedJob(app, runId);
   await app.db.delete(jobs).where(eq(jobs.kind, DISCOVERY_RANK_KIND)).run();
   const rows = await app.db
     .select({ id: discoveryResults.id })
@@ -225,7 +232,7 @@ describe('#260: drains leave a worker free, at the default worker count', () => 
       await anotherUser(app, 4),
     ];
     for (const ctx of everyone) await backlog(app, ctx);
-    // After every backlog: backlog's runNextJob would otherwise pick up a queued drain.
+    // After every backlog, so no drain is queued while a backlog runs its discovery run.
     for (const ctx of everyone) await enqueueRankWaiting(app.db, ctx);
 
     let ranOther = false;
@@ -283,5 +290,19 @@ describe('#260: drains leave a worker free, at the default worker count', () => 
       .where(and(eq(jobs.kind, RANK_WAITING_KIND), inArray(jobs.status, ['pending', 'running'])))
       .all();
     expect(unfinished).toEqual([]);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/615: backlog() ran whatever job was due first, not the
+// discovery run it had just queued. On the real clock a seeded schedule can come due mid-test (the
+// Postgres leg of #607 failed so at 02:07 UTC), and the helper then found no results.
+describe('#615: backlog() runs the discovery run it queued, whatever else is due', () => {
+  it('a job due before it stays queued, and the run is the one that ran', async () => {
+    const { app } = await boot();
+    const ctx = await anotherUser(app, 1);
+    const earlier = await enqueue(app.db, OTHER_KIND, {}, { runAt: LONG_AGO });
+    await backlog(app, ctx);
+    const other = await app.db.select().from(jobs).where(eq(jobs.id, earlier)).get();
+    expect(other).toMatchObject({ status: 'pending', runAt: LONG_AGO, attempts: 0 });
   });
 });
