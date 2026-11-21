@@ -4,6 +4,7 @@
 //   - POST {base}/messages/batches              submit
 //   - GET  {base}/messages/batches/{id}         state
 //   - GET  {base}/messages/batches/{id}/results results, as JSON Lines
+//   - DELETE {base}/messages/batches/{id}       cleanup, once the results are applied (#634)
 // Built as every provider client here is (#334, #344): the server's explicit fetch and the
 // operator's base URL, never the environment and never a global fetch; the key only in x-api-key,
 // and never in an error, a log or a span. Written against Anthropic's API reference (see
@@ -235,6 +236,18 @@ export function createAnthropicBatchProvider(target: {
         items.push(item);
       }
       return items;
+    },
+
+    async cleanup(batchId) {
+      // Deleting the batch takes its results with it; otherwise Anthropic keeps them 29 days
+      // (#634; the batch-processing guide). Allowed once processing has ended, which it has: this
+      // runs after the results were read. Gone already is removed.
+      const res = await doFetch(`${batches}/${encodeURIComponent(batchId)}`, {
+        method: 'DELETE',
+        headers: headers(false),
+      });
+      if (res.status === 404) return;
+      if (!res.ok) throw refused('delete', res.status);
     },
   };
 }

@@ -73,13 +73,13 @@ import {
   RankOutputSchema,
   storeRankOutput,
 } from './discoveryRank';
-import { RANK_BATCH_COLLECT_KIND } from './discoveryKinds';
+import { RANK_BATCH_CLEANUP_KIND, RANK_BATCH_COLLECT_KIND } from './discoveryKinds';
 import { enqueueRankBatchSubmit, rankBatchClient, RANK_BATCH_SEND_KIND } from './rankBatchClient';
 import { rankBudgetHasRoom, rankBudgetRoomUsd } from './rankBudget';
 import { requireService, type JobHandler, type JobServices } from './registry';
 import { enqueue } from './runner';
 
-export { RANK_BATCH_COLLECT_KIND, RANK_BATCH_SEND_KIND };
+export { RANK_BATCH_CLEANUP_KIND, RANK_BATCH_COLLECT_KIND, RANK_BATCH_SEND_KIND };
 
 export const RANK_BATCH_SWEEP_KIND = 'discovery.rank_batch_sweep';
 export const RANK_BATCH_SWEEP_CRON = '*/10 * * * *';
@@ -512,7 +512,42 @@ export async function collectRankBatch(
   // As after a live call that got through: the key works.
   if (counts.ranked > 0) await clearWaitingKeyReasons(db, ctx);
   await takeWaiting(db, ctx, batching);
+  // The results are applied: what the provider keeps of the batch goes now (#634), in a job of its
+  // own, so a refused removal is retried later and holds up nothing here.
+  await enqueue(
+    db,
+    RANK_BATCH_CLEANUP_KIND,
+    { batchId: batch.id },
+    { dedupeKey: `${RANK_BATCH_CLEANUP_KIND}:${batch.id}`, userId: batch.userId },
+  );
   return { status: 'collected', ...counts };
+}
+
+/**
+ * Removes the provider's copy of a collected batch (#634): BatchProvider.cleanup, with the user's
+ * key and the policy the batch was sent with. Throws when it cannot (no key now, or a refused
+ * delete), so the job retries with the runner's backoff; after its last attempt the runner logs
+ * it dead, and the provider's own expiry is what is left (the discovery guide says how long).
+ */
+export async function cleanupRankBatch(
+  db: Db,
+  batchId: string,
+  services: Partial<JobServices>,
+  opts: { userId?: string } = {},
+): Promise<{ status: 'removed' | 'nothing_to_remove' }> {
+  const batch = await getBatch(db, batchId);
+  if (
+    batch === undefined ||
+    batch.providerBatchId === null ||
+    (opts.userId !== undefined && opts.userId !== batch.userId)
+  ) {
+    return { status: 'nothing_to_remove' };
+  }
+  const ctx: UserCtx = { userId: batch.userId, isAdmin: false };
+  const client = await rankBatchClient(db, ctx, services, batch.policy as unknown as ModelPolicy);
+  if (client === null) throw new Error('rank batch cleanup: no batch client for this user now');
+  await client.provider.cleanup(batch.providerBatchId);
+  return { status: 'removed' };
 }
 
 /** Whether a sent batch is due for a look: every 10 minutes for its first hour, then every 30. */
@@ -566,6 +601,19 @@ export const rankBatchCollectJob: JobHandler<z.infer<typeof CollectPayload>> = {
     await ctx.setResult(
       // A job with no user matches no batch, so it does nothing.
       await collectRankBatch(db, payload.batchId, ctx.services, { userId: ctx.userId ?? '' }),
+    );
+  },
+};
+
+export const rankBatchCleanupJob: JobHandler<z.infer<typeof CollectPayload>> = {
+  kind: RANK_BATCH_CLEANUP_KIND,
+  payloadSchema: CollectPayload,
+  // Tried for a while: a key put back, or a provider that answers again, still removes it.
+  maxAttempts: 6,
+  async run(db, payload, ctx) {
+    await ctx.setResult(
+      // A job with no user matches no batch, so it does nothing.
+      await cleanupRankBatch(db, payload.batchId, ctx.services, { userId: ctx.userId ?? '' }),
     );
   },
 };

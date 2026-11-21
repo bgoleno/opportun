@@ -18,7 +18,12 @@ import { titleVariantsJob, titleVariantsSweepJob } from './titleVariants';
 import { demoResetJob } from './demoReset';
 import { discoveryRankJob } from './discoveryRank';
 import { rankWaitingJob, rankWaitingSweepJob } from './discoveryRankWaiting';
-import { rankBatchCollectJob, rankBatchSubmitJob, rankBatchSweepJob } from './rankBatch';
+import {
+  rankBatchCleanupJob,
+  rankBatchCollectJob,
+  rankBatchSubmitJob,
+  rankBatchSweepJob,
+} from './rankBatch';
 import { discoveryRunJob } from './discoveryRun';
 import { jobPruneJob } from './jobPrune';
 import { leadResolveJob } from './leadResolve';
@@ -58,6 +63,7 @@ registerJob(rankWaitingJob);
 registerJob(rankWaitingSweepJob);
 registerJob(rankBatchSubmitJob);
 registerJob(rankBatchCollectJob);
+registerJob(rankBatchCleanupJob);
 registerJob(rankBatchSweepJob);
 registerJob(refineDiscoveryPromptJob);
 registerJob(leadResolveJob);
