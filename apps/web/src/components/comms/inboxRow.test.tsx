@@ -649,6 +649,34 @@ describe('Inbox: a failed Ignore, and a filter that matches nothing (#652)', () 
     expect(screen.queryByText('Nothing needs review.')).toBeNull();
   });
 
+  // qa on #706: a sender or a source alone counts as a filter too, not just a keyword.
+  it.each([
+    ['a sender', 'sender='],
+    ['a source', 'channel='],
+  ])('%s that matches nothing says so too', async (_what, param) => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /communications': (call: { search: string }) => ({
+        status: 200,
+        body: call.search.includes(param)
+          ? { items: [], total: 0 }
+          : { items: [{ ...BASE, id: 'nr1', subject: 'needs_review subject' }], total: 1 },
+      }),
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    renderWithProviders(<Inbox />);
+    await screen.findByText('needs_review subject');
+    if (param === 'sender=') {
+      await user.type(screen.getByLabelText('Sender'), 'nobody@nowhere.example');
+    } else {
+      const source = screen.getByLabelText('Source') as HTMLSelectElement;
+      const option = [...source.options].find((o) => o.value !== '')!;
+      await user.selectOptions(source, option.value);
+    }
+    expect(await screen.findByText('No messages match these filters.')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing needs review.')).toBeNull();
+  });
+
   it('with no filter set, an empty tab still says its own empty text', async () => {
     mockApi({
       'GET /communications': { items: [], total: 0 },
