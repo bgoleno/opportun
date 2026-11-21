@@ -186,3 +186,112 @@ describe('a list is reported once (#435, and slice 2 of #402)', () => {
     }
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/595 (a): the plan listed the heard-from detail and a
+// reviewed answer to the same question, so the filler found two matches, reported the question
+// ambiguous and left it empty. The reviewed answer is what the user confirmed for that question.
+describe('a reviewed answer to the "How did you hear" question wins over the detail (#595)', () => {
+  it.each([
+    ['How did you hear about this role?', 'How did you hear about this role?'],
+    // The filler compares labels without regard to case or spacing; so does this.
+    ['How did you hear about this role?', '  how did you hear about  this role? '],
+  ])(
+    'the question "%s" with an answer under "%s" is filled once, with the answer',
+    async (label, answered) => {
+      const page = loadForm(withTextQuestion(label), { timers: 'manual' });
+      const plan = JSON.parse(
+        JSON.stringify(
+          buildPlan(
+            { ...attempt(DETAILS), answers: [{ label: answered, value: 'A former colleague' }] },
+            { board: BOARD, jobId: JOB_ID },
+            null,
+          ),
+        ),
+      ) as ReturnType<typeof buildPlan>;
+      const run = fillGreenhouseForm(plan, page.doc);
+      let done = false;
+      void run.then(() => {
+        done = true;
+      });
+      let seen: number[] = [];
+      while (!done) {
+        await new Promise((r) => setTimeout(r, 50));
+        const stale = page.timers.ids().filter((id) => seen.includes(id));
+        seen = page.timers.ids();
+        if (stale.length > 0) page.timers.fire(stale);
+      }
+      const report = await run;
+      if (!report.ok) throw new Error(`not filled: ${report.reason}`);
+      expect(valueOf(page.doc, 'question_9000105')).toBe('A former colleague');
+      expect(report.filled).toContain(label);
+      expect(report.notFilled.filter((n) => n.reason === 'ambiguous')).toEqual([]);
+      // Nor is the detail reported as not filled under its own name: the question it is for was
+      // filled, with the answer (qa on #674).
+      expect(
+        report.notFilled.filter((n) => n.label === 'How did you hear about this role?'),
+      ).toEqual([]);
+    },
+  );
+
+  it('two heard-from questions, one answered in review: the answer fills that one, the detail the other (qa on #674)', async () => {
+    // "About us" is a text question here; the form's own list of that name is renamed first.
+    const html = withTextQuestion('How did you hear about this role?').replace(
+      'What is your placeholder notice period?',
+      'How did you hear about us?',
+    );
+    const page = loadForm(html, { timers: 'manual' });
+    const plan = JSON.parse(
+      JSON.stringify(
+        buildPlan(
+          {
+            ...attempt(DETAILS),
+            answers: [{ label: 'How did you hear about this role?', value: 'A former colleague' }],
+          },
+          { board: BOARD, jobId: JOB_ID },
+          null,
+        ),
+      ),
+    ) as ReturnType<typeof buildPlan>;
+    const run = fillGreenhouseForm(plan, page.doc);
+    let done = false;
+    void run.then(() => {
+      done = true;
+    });
+    let seen: number[] = [];
+    while (!done) {
+      await new Promise((r) => setTimeout(r, 50));
+      const stale = page.timers.ids().filter((id) => seen.includes(id));
+      seen = page.timers.ids();
+      if (stale.length > 0) page.timers.fire(stale);
+    }
+    const report = await run;
+    if (!report.ok) throw new Error(`not filled: ${report.reason}`);
+    expect(valueOf(page.doc, 'question_9000105')).toBe('A former colleague');
+    expect(valueOf(page.doc, 'question_9000104')).toBe('LinkedIn');
+    expect(report.notFilled.filter((n) => n.label.startsWith('How did you hear'))).toEqual([]);
+  });
+
+  it('a reviewed answer to another question leaves the detail to fill this one', () => {
+    const plan = JSON.parse(
+      JSON.stringify(
+        buildPlan(
+          {
+            ...attempt(DETAILS),
+            answers: [{ label: 'Why do you want to work here?', value: 'The platform team.' }],
+          },
+          { board: BOARD, jobId: JOB_ID },
+          null,
+        ),
+      ),
+    ) as ReturnType<typeof buildPlan>;
+    // The detail, under all five of its labels, is still in the plan.
+    expect(
+      plan.questions.find((q) => q.name === 'How did you hear about this role?')?.labels,
+    ).toEqual(HEARD_LABELS);
+  });
+
+  it('with no reviewed answer to it, the detail still fills the question', async () => {
+    const { doc } = await fill(withTextQuestion('How did you hear about this role?'));
+    expect(valueOf(doc, 'question_9000105')).toBe('LinkedIn');
+  });
+});

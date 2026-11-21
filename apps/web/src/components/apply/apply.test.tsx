@@ -525,6 +525,30 @@ describe('#404: after applying, the panel leads with the outcome', () => {
     );
   });
 
+  // #595: the last-attempt line had its own branch for an attempt that applied, which could not
+  // be reached: such an attempt always leads the panel as the outcome. What shows is the outcome,
+  // once; the last-attempt line now only says a review expired.
+  it.each(['submitted', 'confirmed', 'unknown', 'rejected'] as const)(
+    'a latest attempt that is %s shows as the outcome, once',
+    async (status) => {
+      renderPanel([applied({ status })]);
+      await screen.findByText(`You applied on ${formatDate(sentOn)} through Greenhouse.`, {
+        exact: false,
+      });
+      expect(screen.getAllByRole('link', { name: 'View application' })).toHaveLength(1);
+    },
+  );
+
+  it('a latest attempt whose review expired, with none applied, says so above the Apply button', async () => {
+    renderPanel([submission({ status: 'abandoned', failureReason: 'review_expired' })]);
+    expect(
+      await screen.findByText(
+        'Your last review expired before the form was opened. Starting again keeps your details and answers.',
+      ),
+    ).toBeVisible();
+    expect(screen.queryByRole('link', { name: 'View application' })).toBeNull();
+  });
+
   it('Submitted: the follow-up questions still show', async () => {
     renderPanel([applied({})]);
     expect(await screen.findByRole('button', { name: /I saw a confirmation/ })).toBeInTheDocument();
@@ -1079,7 +1103,22 @@ describe('#416: the next step names the extension only where it can fill this fo
     ],
   ];
 
-  /** Renders a step once its token list has been read, so a missing line is a decision. */
+  /**
+   * Whether the page asks for the token list at all: only for a form the extension fills (a
+   * Greenhouse job on Greenhouse's own hosts, not one proven from a gh_jid link). Elsewhere no
+   * token could make the extension fill it, so the list is not read (#595).
+   */
+  const asksForTokens = (sub: SubmissionView, opp: Partial<OpportunityView> = {}) =>
+    sub.atsKind === 'ats_greenhouse' &&
+    ['boards.greenhouse.io', 'job-boards.greenhouse.io'].includes(
+      new URL(sub.destinationUrl).hostname,
+    ) &&
+    opp.atsJobRef?.verifiedVia !== 'gh_jid';
+
+  /**
+   * Renders a step once its token list has been read, so a missing line is a decision. Where the
+   * list is not needed, it checks that the list was never asked for.
+   */
   async function renderAfterTokens(
     step: 'review' | 'open',
     tokens: unknown,
@@ -1091,8 +1130,15 @@ describe('#416: the next step names the extension only where it can fill this fo
       'GET /device-tokens': tokens,
     });
     const out = renderStep(step);
-    await waitFor(() => expect(calls(api.calls, 'GET', '/device-tokens')).toHaveLength(1));
+    if (asksForTokens(sub, opp)) {
+      await waitFor(() => expect(calls(api.calls, 'GET', '/device-tokens')).toHaveLength(1));
+    }
     await screen.findByRole('heading', { level: 1 });
+    if (!asksForTokens(sub, opp)) {
+      // Let every query the page starts go out before saying none of them was the token list.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls(api.calls, 'GET', '/device-tokens')).toHaveLength(0);
+    }
     return out;
   }
 
