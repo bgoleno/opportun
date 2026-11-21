@@ -8,13 +8,15 @@ import { useCallback, useState, type ReactNode } from 'react';
 import { toast } from '@/components/ui/toast';
 import {
   changeStage,
+  invalidateListsAfterChange,
   qk,
+  refreshOpportunity,
   reopenTargets,
   stageErrorMessage,
   stageRefusal,
   stageTargets,
+  storeOpportunity,
   type OpportunityView,
-  type Page,
   type StageChange,
 } from '@/lib/opportunities';
 import { StageReasonDialog, type ReasonKind, type ReasonResult } from './StageReasonDialog';
@@ -69,28 +71,24 @@ export function useStageFlow(): StageFlow {
   const mutation = useMutation({
     mutationFn: (v: { id: string; change: StageChange }) => changeStage(v.id, v.change),
     onMutate: ({ id, change }) => setOverrides((o) => new Map(o).set(id, change.to)),
-    onSuccess: (updated) => {
-      qc.setQueriesData<Page<OpportunityView>>({ queryKey: qk.opportunities }, (old) =>
-        old === undefined
-          ? old
-          : { ...old, items: old.items.map((o) => (o.id === updated.id ? updated : o)) },
-      );
-      qc.setQueryData(qk.opportunity(updated.id), updated);
-    },
+    onSuccess: (updated) => storeOpportunity(qc, updated),
     onError: (err) =>
       toast({
         title: 'Stage not changed',
         description: stageErrorMessage(err),
         variant: 'destructive',
       }),
-    onSettled: async (_data, _err, { id }) => {
+    onSettled: async (_data, err, { id }) => {
       setOverrides((o) => {
         const next = new Map(o);
         next.delete(id);
         return next;
       });
+      // The lists hold the server's copy of this opportunity: its answer on success, or, when it
+      // refused the move, a fresh read of that one row (#589). Neither walks the board's pages.
       await Promise.all([
-        qc.invalidateQueries({ queryKey: qk.opportunities }),
+        err === null ? Promise.resolve() : refreshOpportunity(qc, id),
+        invalidateListsAfterChange(qc),
         qc.invalidateQueries({ queryKey: qk.opportunity(id) }),
         qc.invalidateQueries({ queryKey: qk.dashboard }),
       ]);

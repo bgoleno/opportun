@@ -108,6 +108,7 @@ export async function verifyPasswordWithUpgrade(
 
   if (version !== 0) {
     const secret = peppers.byVersion.get(version);
+    // eslint-disable-next-line security/detect-possible-timing-attacks -- whether a pepper exists for a public version number; argon2 compares the password
     if (secret === undefined) {
       await pad();
       return { ok: false, rehash: false };

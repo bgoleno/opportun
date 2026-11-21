@@ -203,7 +203,8 @@ export const stepIndex = (id: TourStepId): number => TOUR_STEPS.findIndex((s) =>
 
 /**
  * Whether a step is passed through silently: only step 1, when the checklist card it points at
- * is hidden (all done, dismissed, or the demo, which has no checklist). The count never changes.
+ * is hidden (all done, dismissed, or a shared demo account, which has no checklist). The count
+ * never changes. `demo` here is `sharedDemoAccount` (#576), not the instance's `demo` flag.
  */
 export function isPassedThrough(id: TourStepId, c: Checklist, demo: boolean): boolean {
   return id === 'checklist' && (demo || allDone(c) || c.dismissed);

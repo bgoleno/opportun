@@ -445,6 +445,38 @@ describe('Run now on a paused source (#297)', () => {
   });
 });
 
+// https://github.com/bgoleno/opportun/issues/599: a board source that came from following a company
+// runs while that company is followed; following and unfollowing switch its Enabled box, so the
+// way back is the follow.
+describe('Run now on a paused company board source (#599)', () => {
+  it('says to follow the company, since following it is what switches the source on', async () => {
+    const user = userEvent.setup();
+    const BOARD = source({
+      id: 's-co',
+      config: { org: 'hooli' },
+      enabled: false,
+      companyId: 'co-hooli',
+    });
+    mockApi({
+      ...base,
+      'GET /discovery/sources': { items: [BOARD], total: 1 },
+      'POST /discovery/sources/s-co/run': () => ({
+        status: 409,
+        body: { error: { code: 'source_disabled' } },
+      }),
+    });
+    renderWithProviders(<SourcesManager />);
+    await user.click(await screen.findByRole('button', { name: 'Run Greenhouse hooli now' }));
+    expect(await screen.findByText('Run not started')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This source reads a company's job board, and runs while you follow that company. Follow it on the Companies tab (if you already follow it, turn on its Enabled box), then run it.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/This source is paused\. Turn on its Enabled box/)).toBeNull();
+  });
+});
+
 describe('Run now during a run of the same source (#269)', () => {
   it('a 409 run_in_progress says a run is already going and to look at its history', async () => {
     const user = userEvent.setup();

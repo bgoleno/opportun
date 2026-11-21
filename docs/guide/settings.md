@@ -27,8 +27,9 @@ with https:// (or http://), and a name one line of plain text.
 Where [assisted apply](pipeline.md#assisted-apply) is on, **Settings > Profile** has an
 **Applications** card with **Reviews allowed per 24 hours**: how many applications you can
 confirm a review for in a rolling 24 hours. Assisted apply is on unless the person running your
-server turned it off, and it is never on the demo; where it is off, the card and the limit do not
-show (the operator's setting is in the [install guide](../install.md#4-configuration-reference)).
+server turned it off, on the demo too (where they can also turn it off for its shared accounts
+only); where it is off, the card and the limit do not show (the operator's setting is in the
+[install guide](../install.md#4-configuration-reference)).
 
 - **The limit** is 10 unless the person running the server set another value, which can be at most 25. You can lower yours up to that value and press **Save limit**; **Use the server's limit**
   takes yours away. If the server's limit is later set below yours, the server's applies, and the
@@ -241,8 +242,10 @@ Administrators see **Settings > Users**:
 
 - **Users**: everyone on the instance, their role, whether two-factor is on, and when they
   joined. **Reset password** gives a member a temporary password, shown once. It signs them
-  out everywhere, revokes their device tokens and turns off their two-factor sign-in. You
-  cannot reset your own account this way.
+  out everywhere, revokes their device tokens, unlinks their Google, GitHub or LinkedIn
+  sign-in, and turns off their two-factor sign-in. The dialog with the temporary password
+  names the providers it unlinked, so the member can link theirs again under
+  **Settings > Security**. You cannot reset your own account this way.
   Both this and opening or closing registration ask for your own password.
 - **Password pepper**: shown only when a pepper is configured (see
   [install guide section 4](../install.md#4-configuration-reference)). Names any account that
@@ -288,6 +291,35 @@ under **Settings > Integrations > Extensions and Connectors**:
   cuts the device off on its next request.
 
 The Extensions and Connectors card is pictured in [Inbox](inbox.md#connect-gmail).
+
+## Jobs
+
+Administrators see **Settings > Jobs**, a read-only list of the background work on the instance:
+Gmail sync, classification, backups, the attachment sweep, discovery runs and the rest all share
+one queue, and this page shows it so you can tell whether something is stuck without reading the
+server's logs. Other users who open the page are told that only an administrator can see the
+queue.
+
+- **The list** shows the 200 most recently changed jobs, newest first, and refreshes itself every
+  five seconds. Each row has the job's kind (and the user it runs for, when it runs for one), its
+  status, its last error if there is one, its attempts out of the most it may make, when it is
+  due and when it last changed.
+- **The status counts** above the list are for those 200 jobs. Press one to show only that
+  status, and press it again to show all.
+  - **Queued**: waiting for its time, not yet tried.
+  - **Running**: a worker has it.
+  - **Retrying**: it has been tried at least once and is waiting to try again.
+  - **Dead**: it failed on every attempt, or was cancelled before it ran; its last error says why.
+  - **Done**: finished.
+- **Overdue** is shown beside the due time of a queued or retrying job whose time has already
+  passed. A worker should have started it by now, so it is the sign that something is stuck, not
+  just waiting its turn.
+- **A failed job tries again by itself.** The wait doubles with each attempt, from about 30
+  seconds up to an hour, and the job is marked Dead once it has used all its attempts.
+- **A dead job has no button on this page.** The server has an administrator-only route,
+  `POST /api/v1/jobs/{id}/retry`, that puts a dead job back in the queue with a fresh set of
+  attempts and records the retry in the audit log. It answers 409 if the job is not dead, or if
+  another queued or running job already has the same key.
 
 ## Import and export
 
@@ -545,6 +577,7 @@ event and error records as logs, so in practice they stay in the instance.
 | `opportun.count.described`              | whole number             | yes      |
 | `opportun.count.deferred`               | whole number             | yes      |
 | `opportun.count.skipped`                | whole number             | yes      |
+| `opportun.count.holders`                | whole number             | yes      |
 | `opportun.count.truncated`              | whole number             | yes      |
 | `opportun.count.read`                   | whole number             | yes      |
 | `opportun.count.returned`               | whole number             | yes      |

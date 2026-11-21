@@ -64,7 +64,10 @@ describe('UsersCard', () => {
     const user = userEvent.setup();
     const { calls } = mockApi({
       'GET /admin/users': { items: USERS },
-      'POST /admin/users/member-1/reset-password': { temporaryPassword: TEMP },
+      'POST /admin/users/member-1/reset-password': {
+        temporaryPassword: TEMP,
+        unlinkedProviders: [],
+      },
     });
     renderWithProviders(<UsersCard currentUserId="admin-1" />);
     await user.click(await screen.findByRole('button', { name: 'Reset password for Bob Member' }));
@@ -72,6 +75,8 @@ describe('UsersCard', () => {
     expect(confirm).toHaveTextContent(/Bob Member/);
     expect(confirm).toHaveTextContent(/signs them out everywhere/);
     expect(confirm).toHaveTextContent(/two-factor/i);
+    // #573: a reset is compromise recovery, so it unlinks every sign-in provider too.
+    expect(confirm).toHaveTextContent(/unlinks their sign-in providers/);
     // Nothing is sent until the admin has typed their own password (issue #10).
     await user.click(within(confirm).getByRole('button', { name: 'Continue' }));
     expect(await within(confirm).findByText('Enter your current password.')).toBeInTheDocument();
@@ -96,6 +101,44 @@ describe('UsersCard', () => {
     expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ password: ADMIN_PASSWORD });
     // The admin's own password does not outlive the dialog either.
     expect(document.body.innerHTML).not.toContain(ADMIN_PASSWORD);
+  });
+
+  it('names the sign-in providers the reset unlinked, so the admin can have them linked again', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /admin/users': { items: USERS },
+      'POST /admin/users/member-1/reset-password': {
+        temporaryPassword: TEMP,
+        unlinkedProviders: ['github', 'google'],
+      },
+    });
+    renderWithProviders(<UsersCard currentUserId="admin-1" />);
+    await user.click(await screen.findByRole('button', { name: 'Reset password for Bob Member' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Confirm your password' });
+    await user.type(within(confirm).getByLabelText('Current password'), ADMIN_PASSWORD);
+    await user.click(within(confirm).getByRole('button', { name: 'Continue' }));
+    const shown = await screen.findByRole('dialog', { name: 'Temporary password' });
+    expect(shown).toHaveTextContent(
+      'The reset unlinked their sign-in with GitHub and Google: they can link them again under Settings, Security.',
+    );
+  });
+
+  it('says nothing about providers when the account had none linked', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /admin/users': { items: USERS },
+      'POST /admin/users/member-1/reset-password': {
+        temporaryPassword: TEMP,
+        unlinkedProviders: [],
+      },
+    });
+    renderWithProviders(<UsersCard currentUserId="admin-1" />);
+    await user.click(await screen.findByRole('button', { name: 'Reset password for Bob Member' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Confirm your password' });
+    await user.type(within(confirm).getByLabelText('Current password'), ADMIN_PASSWORD);
+    await user.click(within(confirm).getByRole('button', { name: 'Continue' }));
+    const shown = await screen.findByRole('dialog', { name: 'Temporary password' });
+    expect(shown).not.toHaveTextContent(/unlinked/);
   });
 
   it('keeps the dialog open with an inline message for a wrong password, and shows no temporary password', async () => {

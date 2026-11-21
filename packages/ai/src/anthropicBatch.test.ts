@@ -88,16 +88,14 @@ const request = (customId: string): BatchRequest => ({
 });
 
 describe('batchProviderFor (criterion 1)', () => {
-  it('has a client for an Anthropic policy, and none for any other provider', () => {
+  it('has a client for an Anthropic policy, and none for an OpenAI-compatible one', () => {
     const target = (policy: ModelPolicy) => ({
       policy,
       apiKey: KEY,
       providerFetch: { fetch: globalThis.fetch, allowLoopbackHttp: false },
     });
     expect(batchProviderFor(target(SONNET))).not.toBeNull();
-    expect(
-      batchProviderFor(target({ provider: 'openai', model: 'gpt-5', maxOutputTokens: 2000 })),
-    ).toBeNull();
+    // OpenAI's own client is #510's (openaiBatch.test.ts).
     expect(
       batchProviderFor(
         target({
