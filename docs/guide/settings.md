@@ -305,8 +305,8 @@ queue.
   status, and press it again to show all.
   - **Queued**: waiting for its time, not yet tried.
   - **Running**: a worker has it.
-  - **Retrying**: it failed at least once and is waiting to try again.
-  - **Dead**: it failed on every attempt and was given up on.
+  - **Retrying**: it has been tried at least once and is waiting to try again.
+  - **Dead**: it failed on every attempt, or was cancelled before it ran; its last error says why.
   - **Done**: finished.
 - **Overdue** is shown beside the due time of a queued or retrying job whose time has already
   passed. A worker should have started it by now, so it is the sign that something is stuck, not
