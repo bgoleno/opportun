@@ -5,6 +5,7 @@
 // the `import` job. Re-running a pack is idempotent: opportunities upsert by
 // dedupeKey(company, title, location), stages only move forward along the chain, and
 // notes, applications, resumes and contacts are matched before anything is added.
+import { isLinkedInHost } from './linkedinHost';
 import {
   dedupeKey,
   DISMISS_REASONS,
@@ -532,6 +533,10 @@ async function importContact(rec: CsvRecord, db: Db, ctx: UserCtx): Promise<Outc
   const email = optional(get('email').toLowerCase(), 'email', 320);
   if (email !== null && !EMAIL.test(email)) throw new RowError('email is not an email address');
   const linkedinUrl = httpUrl(get('linkedin_url'), 'linkedin_url');
+  // A LinkedIn link on LinkedIn only (#655), as the contact form takes it.
+  if (linkedinUrl !== null && !isLinkedInHost(linkedinUrl)) {
+    throw new RowError('linkedin_url must be a LinkedIn profile URL');
+  }
   const company = optional(get('company'), 'company', 200);
   // Notes keep their inner line breaks; only the cell's outer whitespace is trimmed.
   const notes = optional(get('notes'), 'notes', 10_000);
