@@ -233,7 +233,9 @@ describe('a save that ran out of time leaves a job to finish the check (#685 cri
 // Each still ends with its identity: in its response, or once its queued check has run.
 describe('concurrent saves to one host each end with their identity (#685 criterion 2)', () => {
   it('four saves at once, each needing its third board', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    // Only the clock is faked (qa on #714): the database driver keeps its own real timers, so
+    // its connection timeout cannot fire on a jumped clock. The host below moves the clock.
+    vi.useFakeTimers({ toFake: ['Date'] });
     try {
       const { app, a } = await boot();
       const { ctx } = await companyWithBoards(app, a, ['b1', 'b2', 'b3']);
@@ -247,21 +249,39 @@ describe('concurrent saves to one host each end with their identity (#685 criter
           }),
         );
       }
-      // One request at a time, a second each; a request whose turn would end past its own time
-      // limit fails when the limit ends, as safeFetch's does.
+      // One request at a time, a second each: a request takes the next free second of the host,
+      // and one whose turn would end past its own time limit fails when the limit ends, as
+      // safeFetch's does. The clock moves to when each request ends, never back.
+      const moveTo = (t: number) => {
+        if (t > Date.now()) vi.setSystemTime(t);
+      };
       let hostFreeAt = Date.now();
+      // The four saves are at once: none is served until each has asked its first board, so all
+      // four budgets start at the same moment (the database writes before them take turns).
+      let arrived = 0;
+      let allHere!: () => void;
+      const together = new Promise<void>((r) => (allHere = r));
       const fetch = (async (url: string, init?: { timeoutMs?: number }) => {
         const m = JOB.exec(url);
         if (m === null) throw new Error(`unexpected request: ${url}`);
         const [, token, jid] = m as unknown as [string, string, string];
+        if (token === 'b1' && arrived < opps.length) {
+          arrived += 1;
+          if (arrived === opps.length) allHere();
+          await together;
+        }
         const start = Date.now();
         const end = Math.max(start, hostFreeAt) + 1000;
-        if (init?.timeoutMs !== undefined && end - start > init.timeoutMs) {
-          await new Promise((r) => setTimeout(r, init.timeoutMs));
+        const timesOut = init?.timeoutMs !== undefined && end - start > init.timeoutMs;
+        // The slot is taken before anything else runs, so the next request queues behind it.
+        if (!timesOut) hostFreeAt = end;
+        // Let the other saves' requests line up, as they would at the host.
+        await new Promise((r) => setImmediate(r));
+        if (timesOut) {
+          moveTo(start + init!.timeoutMs!);
           throw new Error('timeout');
         }
-        hostFreeAt = end;
-        await new Promise((r) => setTimeout(r, end - start));
+        moveTo(end);
         const held = token === 'b3';
         return {
           status: held ? 200 : 404,
@@ -271,20 +291,12 @@ describe('concurrent saves to one host each end with their identity (#685 criter
       }) as unknown as typeof safeFetch;
       app.jobs.services.sourceFetch = fetch;
 
-      const saves = opps.map((o, i) => patch(a, o.id, link(`700${i + 1}`)));
-      let settled = false;
-      const all = Promise.all(saves).finally(() => (settled = true));
-      while (!settled) await vi.advanceTimersByTimeAsync(250);
-      for (const res of await all) expect(res.statusCode, res.body).toBe(200);
-      // More than the budgets cover: not every save could finish in its 5 s.
+      const results = await Promise.all(opps.map((o, i) => patch(a, o.id, link(`700${i + 1}`))));
+      for (const res of results) expect(res.statusCode, res.body).toBe(200);
+      // Twelve seconds of the host asked for at once: not every save could finish in its 5 s.
       const queued = await checks(app);
       expect(queued.length).toBeGreaterThan(0);
-      for (const job of queued) {
-        let done = false;
-        const running = runQueuedJob(app, job.id).finally(() => (done = true));
-        while (!done) await vi.advanceTimersByTimeAsync(250);
-        await running;
-      }
+      for (const job of queued) await runQueuedJob(app, job.id);
       for (const [i, o] of opps.entries()) {
         expect((await stored(app, o.id)).atsJobRef).toMatchObject({
           org: 'b3',
