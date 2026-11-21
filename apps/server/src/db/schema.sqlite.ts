@@ -1278,6 +1278,8 @@ export const jobs = sqliteTable(
       .on(t.kind, t.dedupeKey)
       .where(sql`${t.dedupeKey} IS NOT NULL AND ${t.status} IN ('pending', 'running')`),
     index('jobs_user_id_idx').on(t.userId),
+    // The jobs list's order (#592: Settings > Jobs polls it).
+    index('jobs_updated_at_idx').on(t.updatedAt, t.id),
   ],
 );
 
