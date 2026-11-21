@@ -4,11 +4,19 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from 'node:fs';
-import { chmod, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, constants, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
-import type { Clock, ConnectorIo, FetchLike, FileSystem, OsascriptRunner, Prompt } from './types';
+import {
+  TOKEN_FILE_LIMIT,
+  type Clock,
+  type ConnectorIo,
+  type FetchLike,
+  type FileSystem,
+  type OsascriptRunner,
+  type Prompt,
+} from './types';
 
 /** osascript output ceiling: a page of 100 messages at 500k characters is far below it. */
 const MAX_OSASCRIPT_OUTPUT = 512 * 1024 * 1024;
@@ -70,15 +78,19 @@ export const nodeFs: FileSystem = {
   async readTextAndMode(path) {
     let handle;
     try {
-      handle = await open(path, 'r');
+      // Non-blocking, so a FIFO's open returns at once instead of waiting for a writer.
+      handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw err;
     }
     try {
-      // The mode of the file this handle has open, not of whatever the path names by now.
-      const mode = (await handle.stat()).mode & 0o777;
-      return { text: await handle.readFile('utf8'), mode };
+      // The mode, kind and size of the file this handle has open, not of whatever the path
+      // names by now; read only when it is a regular file small enough to be a token file.
+      const st = await handle.stat();
+      const out = { isFile: st.isFile(), size: st.size, mode: st.mode & 0o777 };
+      const readable = out.isFile && out.size <= TOKEN_FILE_LIMIT;
+      return { ...out, text: readable ? await handle.readFile('utf8') : null };
     } finally {
       await handle.close();
     }
@@ -177,7 +189,7 @@ export const nodeClock: Clock = {
 };
 
 /** Far more than a device token: init --token-stdin reads no further. */
-const STDIN_LIMIT = 4096;
+const STDIN_LIMIT = TOKEN_FILE_LIMIT;
 
 /** Standard input to its end, or its first STDIN_LIMIT bytes (checkToken refuses what's left). */
 export async function nodeReadStdin(): Promise<string> {
