@@ -4,7 +4,13 @@ import { useMemo } from 'react';
 import { z } from 'zod';
 import { toast } from '@/components/ui/toast';
 import { api } from '@/lib/api';
-import { qk, type DashboardData, type OpportunityView, type Page } from '@/lib/opportunities';
+import {
+  invalidateListsAfterChange,
+  qk,
+  type DashboardData,
+  type OpportunityView,
+  type Page,
+} from '@/lib/opportunities';
 
 /** The API's page cap; the pipeline needs every opportunity, so it walks the pages. */
 const PAGE = 200;
@@ -24,7 +30,7 @@ export async function fetchAllOpportunities(): Promise<Page<OpportunityView>> {
 
 export function useAllOpportunities() {
   return useQuery({
-    queryKey: qk.opportunityList({ scope: 'all' }),
+    queryKey: qk.allOpportunities,
     queryFn: fetchAllOpportunities,
   });
 }
@@ -73,7 +79,9 @@ export function useReorderOpportunities() {
         variant: 'destructive',
       });
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: qk.opportunities }),
+    // Not this board's own list (#589): on success it already holds the order the server applied
+    // in one transaction, and on failure the snapshot restored above, since nothing was saved.
+    onSettled: () => invalidateListsAfterChange(qc),
   });
   return mutation.mutate;
 }
