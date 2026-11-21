@@ -194,7 +194,14 @@ function FilterBar({
   );
 }
 
-function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
+function BulkBar({
+  rows,
+  onDone,
+}: {
+  rows: { id: string; opportunityId: string | null }[];
+  onDone: () => void;
+}) {
+  const ids = rows.map((r) => r.id);
   const bulk = useBulkTriage();
   const [reason, setReason] = useState<RejectionReason>(BULK_REASONS[0]?.value ?? 'other');
   // Asked first (#647): a reject wipes the messages' subject, snippet and body for good.
@@ -202,11 +209,21 @@ function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
   const count = `${ids.length} message${ids.length === 1 ? '' : 's'}`;
   const reject = async () => {
     // mutateAsync: the dialog stays open with the failure in it (ConfirmDialog), not a toast.
-    const res = await bulk.mutateAsync({ ids, action: { kind: 'reject', reason } });
+    // Each message goes with the link it was seen under (#666): a changed one is left alone.
+    const res = await bulk.mutateAsync({
+      items: rows.map((r) => ({ id: r.id, opportunityId: r.opportunityId })),
+      action: { kind: 'reject', reason },
+    });
+    const notes = [
+      res.skipped > 0 ? `${res.skipped} skipped (not yours or already gone).` : null,
+      // Linked or moved in another tab or session since they were selected (#666).
+      res.changed > 0
+        ? `${res.changed} ${res.changed === 1 ? 'was' : 'were'} changed elsewhere and left as ${res.changed === 1 ? 'it is' : 'they are'}.`
+        : null,
+    ].filter((n): n is string => n !== null);
     toast({
       title: `${res.succeeded} rejected`,
-      description:
-        res.skipped > 0 ? `${res.skipped} skipped (not yours or already gone).` : undefined,
+      description: notes.length === 0 ? undefined : notes.join(' '),
     });
     onDone();
   };
@@ -275,7 +292,10 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
   }, [onScreen]);
   // What the bar acts on is filtered too, so not even the render before the effect can reject a
   // row that is gone.
-  const actOn = [...selected].filter((id) => onScreen.has(id));
+  // Each with the link it is shown under, which the reject is checked against (#666).
+  const actOn = (data?.items ?? [])
+    .filter((c) => selected.has(c.id))
+    .map((c) => ({ id: c.id, opportunityId: c.opportunityId ?? null }));
 
   // The blocked view has no message content and no row-level actions, so it is not selectable
   // and shows no triage controls.
@@ -305,7 +325,7 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
         />
       ) : null}
 
-      {selectable && actOn.length > 0 ? <BulkBar ids={actOn} onDone={clear} /> : null}
+      {selectable && actOn.length > 0 ? <BulkBar rows={actOn} onDone={clear} /> : null}
 
       {error ? (
         <FormError message={errorMessage(error)} />

@@ -335,7 +335,7 @@ describe('Inbox', () => {
         total: 1,
       },
       'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
-      'POST /communications/bulk': { succeeded: 1, skipped: 0 },
+      'POST /communications/bulk': { succeeded: 1, skipped: 0, changed: 0 },
     });
     renderWithProviders(<Inbox />);
     await screen.findByText('pick me');
@@ -346,10 +346,36 @@ describe('Inbox', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Reject 1 message?' });
     await user.click(within(dialog).getByRole('button', { name: 'Reject 1' }));
     await waitFor(() => expect(posts(calls, '/communications/bulk')).toHaveLength(1));
+    // With the link each was seen under (#666): the server leaves a changed one alone.
     expect(posts(calls, '/communications/bulk')[0]?.body).toMatchObject({
-      ids: ['nr1'],
+      items: [{ id: 'nr1', opportunityId: null }],
       action: { kind: 'reject' },
     });
+  });
+
+  it('says when selected messages were changed elsewhere and left as they are (#666)', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /communications': {
+        items: [
+          { ...BASE, id: 'nr1', subject: 'one', opportunityId: null, needsReview: true },
+          { ...BASE, id: 'nr2', subject: 'two', opportunityId: null, needsReview: true },
+        ],
+        total: 2,
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+      'POST /communications/bulk': { succeeded: 1, skipped: 0, changed: 1 },
+    });
+    renderWithProviders(<Inbox />);
+    await screen.findByText('one');
+    for (const box of screen.getAllByRole('checkbox', { name: /Select message from/ })) {
+      await user.click(box);
+    }
+    await user.click(await screen.findByRole('button', { name: /^Reject 2/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reject 2 messages?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 2' }));
+    expect(await screen.findByText('1 rejected')).toBeInTheDocument();
+    expect(screen.getByText(/1 was changed elsewhere and left as it is\./)).toBeInTheDocument();
   });
 });
 
@@ -553,7 +579,9 @@ describe('Inbox bulk Reject (#647)', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Reject 1 message?' });
     await user.click(within(dialog).getByRole('button', { name: 'Reject 1' }));
     await waitFor(() => expect(posts(calls, '/communications/bulk')).toHaveLength(1));
-    expect(posts(calls, '/communications/bulk')[0]?.body).toMatchObject({ ids: ['nr2'] });
+    expect(posts(calls, '/communications/bulk')[0]?.body).toMatchObject({
+      items: [{ id: 'nr2', opportunityId: null }],
+    });
   });
 
   it('asks first, says how many and that it is for good, and Cancel rejects nothing', async () => {
