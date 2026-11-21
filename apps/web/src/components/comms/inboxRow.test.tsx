@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { formatDateTime } from '@/lib/opportunities';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import type { CommunicationView } from './api';
 import { Inbox } from './Inbox';
@@ -356,8 +357,9 @@ describe('Inbox Sync now (#645)', () => {
   it('shows the new mail and the new sync time without a reload, then stops asking', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      const T0 = Date.UTC(2026, 10, 20, 9, 0);
-      const T1 = Date.UTC(2026, 10, 21, 10, 30);
+      // Relative to the clock, never fixed: the poll compares the sync's time with the click's.
+      const T0 = Date.now() - 24 * 60 * 60 * 1000;
+      let T1 = 0;
       // Before the click, the last sync was T0. After it, the status reads: running, then synced
       // with 1 message still to classify, then all done. The message is in the list only once
       // the status has said it is classified, so a poll that stops early never shows it.
@@ -379,6 +381,7 @@ describe('Inbox Sync now (#645)', () => {
           };
         }
         if (readsAfter === 2) {
+          T1 = Date.now();
           return { connected: true, lastSyncAt: T1, count: 1, status: 'ok', pendingClassify: 1 };
         }
         classified = true;
@@ -411,7 +414,7 @@ describe('Inbox Sync now (#645)', () => {
       await user.click(screen.getByRole('button', { name: /Sync now/ }));
       for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(3000);
       expect(await screen.findByText('A brand new message')).toBeInTheDocument();
-      expect(screen.getByText(new RegExp(`^Synced `))).not.toHaveTextContent(/9:00/);
+      expect(screen.getByText(/^Synced /)).toHaveTextContent(formatDateTime(T1));
       const reads = () => calls.filter((c) => c.path === '/integrations/gmail').length;
       const settled = reads();
       await vi.advanceTimersByTimeAsync(15000);
