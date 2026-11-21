@@ -192,18 +192,34 @@ function FilterBar({
   );
 }
 
-function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
+function BulkBar({
+  rows,
+  onDone,
+}: {
+  rows: { id: string; opportunityId: string | null }[];
+  onDone: () => void;
+}) {
+  const ids = rows.map((r) => r.id);
   const bulk = useBulkTriage();
   const [reason, setReason] = useState<RejectionReason>(BULK_REASONS[0]?.value ?? 'other');
   const reject = () => {
     bulk.mutate(
-      { ids, action: { kind: 'reject', reason } },
+      {
+        items: rows.map((r) => ({ id: r.id, opportunityId: r.opportunityId })),
+        action: { kind: 'reject', reason },
+      },
       {
         onSuccess: (res) => {
+          const notes = [
+            res.skipped > 0 ? `${res.skipped} skipped (not yours or already gone).` : null,
+            // Linked or moved in another tab or session since they were selected (#666).
+            res.changed > 0
+              ? `${res.changed} ${res.changed === 1 ? 'was' : 'were'} changed elsewhere and left as ${res.changed === 1 ? 'it is' : 'they are'}.`
+              : null,
+          ].filter((n): n is string => n !== null);
           toast({
             title: `${res.succeeded} rejected`,
-            description:
-              res.skipped > 0 ? `${res.skipped} skipped (not yours or already gone).` : undefined,
+            description: notes.length === 0 ? undefined : notes.join(' '),
           });
           onDone();
         },
@@ -290,7 +306,14 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
         />
       ) : null}
 
-      {selectable && selected.size > 0 ? <BulkBar ids={[...selected]} onDone={clear} /> : null}
+      {selectable && selected.size > 0 ? (
+        <BulkBar
+          rows={(data?.items ?? [])
+            .filter((c) => selected.has(c.id))
+            .map((c) => ({ id: c.id, opportunityId: c.opportunityId ?? null }))}
+          onDone={clear}
+        />
+      ) : null}
 
       {error ? (
         <FormError message={errorMessage(error)} />

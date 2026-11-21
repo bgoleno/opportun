@@ -37,7 +37,8 @@ const COMM: CommunicationView = {
 };
 
 async function reject(result: unknown) {
-  mockApi({ 'POST /communications/c1/reject': result });
+  const api = mockApi({ 'POST /communications/c1/reject': result });
+  lastCalls = api.calls;
   const onOpenChange = vi.fn();
   renderWithProviders(<RejectDialog comm={COMM} open onOpenChange={onOpenChange} />);
   const user = userEvent.setup();
@@ -49,7 +50,20 @@ async function reject(result: unknown) {
   return onOpenChange;
 }
 
+let lastCalls: { method: string; path: string; body: unknown }[] = [];
+
 describe('RejectDialog', () => {
+  // https://github.com/bgoleno/opportun/issues/666: the link the message was seen under goes with
+  // the reject, so the server leaves it alone if another session linked it meanwhile.
+  it('sends the link the message was seen under', async () => {
+    await reject({ blocked: null });
+    await screen.findByText('Rejected and removed');
+    const post = lastCalls.find(
+      (c) => c.method === 'POST' && c.path === '/communications/c1/reject',
+    );
+    expect(post?.body).toMatchObject({ expectedOpportunityId: null });
+  });
+
   it('says "blocked" only once the server confirms a deny rule is active', async () => {
     const onOpenChange = await reject({ blocked: true });
     expect(await screen.findByText('Rejected, removed, and blocked')).toBeInTheDocument();
