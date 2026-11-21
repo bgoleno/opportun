@@ -138,6 +138,12 @@ export interface AiDeps {
    */
   callTimeLimitMs?: number;
   /**
+   * Ends every call made with these deps when it aborts, whatever its own limit: on a demo server
+   * the stop signal of the reset gate's hold the call runs under (#684), so a call ends while its
+   * request or job still holds the gate. Unset, nothing else ends a call.
+   */
+  stopSignal?: AbortSignal;
+  /**
    * The user the call is for: an opaque row id, put on the call's span as `user.id`. When it is not
    * the user in the trace context, the call starts a trace of its own (design 14.6), so a job that
    * works through every user's rows makes one trace per user. Absent: no `user.id`.

@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { isUniqueViolation, rawGet, runCount, type Db, type Exec } from '../db/client';
 import { claimNextJob, type ClaimedJob } from '../db/dialect';
 import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
+import { runWithHoldStop } from '../lib/demoResetGate';
 import { HttpError } from '../lib/errors';
 import { jobs, settings } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
@@ -360,14 +361,18 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
     return { outcome: 'dead', errorType: 'invalid_payload' };
   }
   let holdExpired = false;
+  // The hold's stop signal (#684), once the job holds the gate: set below.
+  const held: { stop?: AbortSignal } = {};
   const ctx: JobContext = {
     jobId: job.id,
     userId: job.userId,
     attempt: job.attempts,
     maxAttempts: job.maxAttempts,
     services: servicesFor(opts.services ?? {}, job.userId),
-    // Also true once its hold on the demo reset's gate reached its bound (below): stop.
-    stopping: () => holdExpired || (opts.stopping?.() ?? false),
+    // Also true once its hold on the demo reset's gate is about to end (its stop signal, the
+    // margin before the bound: tl on #704), or has: a job that loops stops before its AI calls
+    // all fail at once and it writes their failures.
+    stopping: () => holdExpired || held.stop?.aborted === true || (opts.stopping?.() ?? false),
     async setResult(value) {
       await db
         .update(jobs)
@@ -402,6 +407,7 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
         },
       })
     : undefined;
+  if (hold !== undefined) held.stop = hold.signal;
   try {
     if (hold !== undefined) {
       const still = await db.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, job.id)).get();
@@ -413,7 +419,9 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
         return { outcome: 'discarded' };
       }
     }
-    return await runHandler(db, job, opts, handler, parsed.data, ctx, transient);
+    const run = () => runHandler(db, job, opts, handler, parsed.data, ctx, transient);
+    // Its AI calls end on the hold's stop signal, before the bound (#684).
+    return await (hold === undefined ? run() : runWithHoldStop(hold.signal, run));
   } finally {
     hold?.release();
   }
