@@ -21,7 +21,7 @@ import { keyedFetch } from '../lib/safeFetch';
 import { contextFromTraceparent, currentTraceparent, isCollecting, obs } from '../obs';
 import { OTHER } from '../obs/catalog';
 import { errorType } from '../obs/outbound';
-import { RANK_WAITING_KIND } from './discoveryKinds';
+import { RANK_BATCH_CLEANUP_KIND, RANK_WAITING_KIND } from './discoveryKinds';
 import { finishInterruptedRuns } from './interruptedRuns';
 import { getJobHandler, type JobContext, type JobHandler, type JobServices } from './registry';
 
@@ -71,6 +71,9 @@ export const DEFAULT_KIND_LIMITS: Readonly<Record<string, number>> = {
   // after another and a vendor's 429 cancels the rest before any of them starts.
   'company.network_probe': 1,
   [RANK_WAITING_KIND]: 2,
+  // A batch's provider cleanup (#686, tl): one at a time on the instance, so a provider that hangs
+  // ties up one worker, not all of them.
+  [RANK_BATCH_CLEANUP_KIND]: 1,
 };
 
 function envWorkers(): number {
@@ -105,7 +108,7 @@ export interface EnqueueOptions {
 }
 
 async function insertJob(
-  db: Db,
+  db: Exec,
   kind: string,
   payload: unknown,
   opts: EnqueueOptions,
@@ -175,7 +178,8 @@ async function insertJob(
  * that holds the same kind + dedupeKey.
  */
 export async function enqueue(
-  db: Db,
+  // A transaction too (#686): a job queued with the write that calls for it, so neither lands alone.
+  db: Exec,
   kind: string,
   payload: unknown,
   opts: EnqueueOptions = {},
