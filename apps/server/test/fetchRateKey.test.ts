@@ -3,6 +3,7 @@
 // shares a vendor host between users. safeFetch's own fairness is tested in safeFetch.test.ts.
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { createReactiveResumeStore } from '../src/adapters/reactiveResume';
 import { registerJob, requireService, unregisterJob } from '../src/jobs/registry';
 import { enqueue } from '../src/jobs/runner';
 import type { SafeFetchOptions } from '../src/lib/safeFetch';
@@ -55,5 +56,20 @@ describe('the rate key a fetch is made under (#617)', () => {
     });
     expect(rec.seen.length).toBeGreaterThan(0);
     expect(rec.seen.every((o) => o.rateKey === a.userId)).toBe(true);
+  });
+
+  it("a user's Reactive Resume calls go under that user's key (tl on #667)", async () => {
+    const rec = recording();
+    const store = createReactiveResumeStore({
+      fetch: rec.fetch as never,
+      config: async () => ({ baseUrl: 'https://rr.example.com', apiKey: 'placeholder-key' }),
+    });
+    await store
+      .readText({ userId: 'user-a', isAdmin: false }, 'resume-placeholder-01')
+      .catch(() => undefined);
+    await store
+      .readText({ userId: 'user-b', isAdmin: false }, 'resume-placeholder-02')
+      .catch(() => undefined);
+    expect(rec.seen.map((o) => o.rateKey)).toEqual(['user-a', 'user-b']);
   });
 });

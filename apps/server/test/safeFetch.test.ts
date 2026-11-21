@@ -511,7 +511,7 @@ describe('safeFetch per-host buckets, shared fairly (#617)', () => {
   });
 
   it("a request whose deadline passes while it waits behind its own key's slots ends rate_wait, sending nothing", async () => {
-    const { h, sent, settle } = clocked();
+    const { h, sent, settle, advanceTo } = clocked();
     const fetch = createSafeFetch(h);
     const held = Array.from({ length: RATE_KEY_SLOTS + 1 }, (_, i) =>
       fetch(`https://boards-api.greenhouse.io/a/${i}`, { ...GH, rateKey: 'user-a' }),
@@ -524,7 +524,10 @@ describe('safeFetch per-host buckets, shared fairly (#617)', () => {
     });
     expect(await reason(late)).toBe('rate_wait');
     expect(sent.map((s) => s.path)).not.toContain('/a/late');
-    void held;
+    // Let the held ones go out and settle here, so none is left pending past this test (tl on #667).
+    for (let t = 1000; t <= RATE_KEY_SLOTS * 1000; t += 1000) await advanceTo(t);
+    await Promise.all(held);
+    expect(sent.map((s) => s.path).sort()).toEqual(held.map((_, i) => `/a/${i}`).sort());
   });
 });
 

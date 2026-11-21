@@ -505,9 +505,11 @@ export async function runNetworkProbe(
     // Told to slow down, or no answer at all (slowDownGuard): the night stops, and nothing is
     // recorded for this company, not a failed night and not "no board" (sec's criterion 12, and
     // tl's ruling on #462). It is picked again on a later night.
-    // This company's own request stopped the vendor for every user tonight, so it is parked out
-    // of the pick for a while (#518, tl's design). Only here: a probe that skipped an already
-    // stopped vendor (above) neither parks nor unparks it. Its board stays as it was, and so do its
+    // This company's own request was told to slow down, or got no answer, so it is parked out of
+    // the pick for a while (#518, tl's design), whether or not it stopped the vendor for every
+    // user: past the user's budget (#617) the stop is the user's night only, and the company is
+    // parked all the same. Only here: a probe that skipped an already stopped vendor (above), or
+    // only waited locally, neither parks nor unparks it. Its board stays as it was, and so do its
     // failed nights.
     if (guard.slowedDown()) {
       const stops = Number(company.stops) + 1;

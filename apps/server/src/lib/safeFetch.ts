@@ -112,7 +112,10 @@ export const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 export const DEFAULT_TIMEOUT_MS = 15_000;
 export const MAX_REDIRECTS = 3;
 const BUCKET_INTERVAL_MS = 1000;
-/** Slots of one host a single rate key may hold ahead at once (see SafeFetchOptions.rateKey). */
+/**
+ * Slots of one host a single rate key may hold ahead at once (see SafeFetchOptions.rateKey). With
+ * n keys active on a host, a new request waits at most about n * RATE_KEY_SLOTS intervals.
+ */
 export const RATE_KEY_SLOTS = 3;
 
 /**
@@ -454,6 +457,8 @@ export function createSafeFetch(deps: SafeFetchDeps) {
 
   async function takeToken(rawHost: string, rateKey: string, signal: AbortSignal): Promise<void> {
     const host = normalizeHost(rawHost);
+    // A deadline already passed (a redirect hop that took the rest of it): nothing to wait for.
+    if (signal.aborted) throw new FetchBlockedError('rate_wait', host);
     const slot = `${host}\u0000${rateKey}`;
     try {
       await holdSlot(slot, signal);
