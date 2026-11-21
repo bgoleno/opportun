@@ -607,3 +607,37 @@ describe('Inbox bulk Reject (#647)', () => {
     expect(screen.getByText('2 selected')).toBeInTheDocument();
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/678 criterion 3 (qa on #672): with only unlinked rows
+// in the bulk tests, a bar that always sent null links passed. A linked row sends its link.
+describe('Inbox bulk Reject sends each row its own link (#678)', () => {
+  it('a linked row goes with its opportunity, an unlinked one with null', async () => {
+    const user = userEvent.setup();
+    const { calls } = mockApi({
+      'GET /communications': {
+        items: [
+          { ...BASE, id: 'l1', subject: 'linked one', opportunityId: 'opp-7' },
+          { ...BASE, id: 'u1', subject: 'unlinked one', opportunityId: null },
+        ],
+        total: 2,
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+      'POST /communications/bulk': { succeeded: 2, skipped: 0, changed: 0 },
+    });
+    renderWithProviders(<Inbox initialTab="linked" />);
+    await screen.findByText('linked one');
+    for (const box of screen.getAllByRole('checkbox', { name: /Select message from/ })) {
+      await user.click(box);
+    }
+    await user.click(await screen.findByRole('button', { name: /^Reject 2/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reject 2 messages?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 2' }));
+    await waitFor(() => expect(posts(calls, '/communications/bulk')).toHaveLength(1));
+    expect(posts(calls, '/communications/bulk')[0]?.body).toMatchObject({
+      items: [
+        { id: 'l1', opportunityId: 'opp-7' },
+        { id: 'u1', opportunityId: null },
+      ],
+    });
+  });
+});
