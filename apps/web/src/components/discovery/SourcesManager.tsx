@@ -86,11 +86,17 @@ function scheduleText(s: DiscoverySource): string {
 }
 
 /** What the toast says when the server refuses Run now: its reason, in words (#297). */
-function runNowRefusal(err: unknown): string {
+function runNowRefusal(err: unknown, s: DiscoverySource): string {
   if (err instanceof ApiError && err.code === 'source_not_runnable') {
     return 'This source cannot be run on demand: its postings arrive on their own.';
   }
   if (err instanceof ApiError && err.code === 'source_disabled') {
+    // A board source that came from following a company (FR-D5) is switched on and off by the
+    // follow: following or unfollowing the company resets its Enabled box, so the box alone is
+    // not the way back (#599).
+    if (s.companyId !== null) {
+      return "This source reads a company's job board, and runs while you follow that company. Follow it on the Companies tab (if you already follow it, turn on its Enabled box), then run it.";
+    }
     return 'This source is paused. Turn on its Enabled box, then run it.';
   }
   // A run of this source is going already (#269), so a second would only read the board twice.
@@ -151,7 +157,7 @@ export function SourcesManager() {
       onError: (err) =>
         toast({
           title: 'Run not started',
-          description: runNowRefusal(err),
+          description: runNowRefusal(err, s),
           variant: 'destructive',
         }),
     });

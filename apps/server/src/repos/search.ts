@@ -91,6 +91,7 @@ function fold(token: string): string {
 function* tokenStream(text: string): Generator<SearchToken> {
   for (const m of text.matchAll(TOKEN)) {
     const token = fold(m[0]);
+    // eslint-disable-next-line security/detect-possible-timing-attacks -- an empty-string check on a search token, which is no secret
     if (token !== '') yield { token, start: m.index, end: m.index + m[0].length };
   }
 }

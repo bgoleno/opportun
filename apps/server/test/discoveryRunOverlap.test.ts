@@ -155,10 +155,13 @@ const startRun = (app: FastifyInstance) => runNextJob(app.db, { services: app.jo
  * second one: two of these at once are the overlap #267's ingest lock has to hold against.
  */
 const runDirectly = (app: FastifyInstance, c: TestClient, sourceId: string) =>
-  runDiscoverySource(app.db, ctxOf(c), sourceId, {
-    fetch: app.jobs.services.sourceFetch!,
-    log: app.log,
-  });
+  runDiscoverySource(
+    app.db,
+    ctxOf(c),
+    sourceId,
+    { fetch: app.jobs.services.sourceFetch!, log: app.log },
+    { demo: app.jobs.services.demo === true },
+  );
 
 const statusesOf = async (app: FastifyInstance, ids: string[]) =>
   (await app.db.select().from(jobs).where(inArray(jobs.id, ids)).all()).map((r) => r.result);

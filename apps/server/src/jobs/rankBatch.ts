@@ -15,8 +15,9 @@
 //   validation and storing; an invalid request is a failed ranking; anything else, and a batch the
 //   provider no longer has, puts the posting back to wait for a later batch.
 //
-// No provider has a batch client in this slice: batchProviderFor finds none, so with the setting on
-// every ranking is still made live, and the submit job hands any waiting posting to the live drain.
+// Anthropic (#509) and OpenAI on its own API (#510) have a batch client; for any other provider
+// batchProviderFor finds none, so with the setting on its rankings are still made live, and the
+// submit job hands any waiting posting to the live drain. The setting itself stays hidden (#511).
 import {
   batchRunRecord,
   estimateBatchRequestUsd,

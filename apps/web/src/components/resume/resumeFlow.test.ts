@@ -315,6 +315,29 @@ describe('resumeFlowState: a Submitted copy counts as sent, newest or not (#516)
     ).toMatchObject({ state: 'C', resume: newer });
   });
 
+  // https://github.com/bgoleno/opportun/issues/597 (a): with two Submitted copies, H names the newer
+  // one, whichever order the list holds them in (newestSubmitted, qa's R3 on #528).
+  it.each([
+    ['older first', (older: Resume, newest: Resume) => [BASE, older, newest]],
+    ['newer first', (older: Resume, newest: Resume) => [BASE, newest, older]],
+  ])('two Submitted copies (%s): H names the newer Submitted one', (_order, list) => {
+    const older = submitted;
+    const newerSubmitted = resume({ id: 'sub2', status: 'submitted', createdAt: 4 });
+    const draft = resume({ id: 'new', status: 'draft', createdAt: 5 });
+    expect(
+      resumeFlowState(input({ resumes: [...list(older, newerSubmitted), draft] })),
+    ).toMatchObject({
+      state: 'H',
+      step: 'done',
+      resume: newerSubmitted,
+      again: draft,
+    });
+    expect(resumeFlowState(input({ resumes: list(older, newerSubmitted) }))).toMatchObject({
+      state: 'H',
+      resume: newerSubmitted,
+    });
+  });
+
   it("the panel's sentence names the newer Draft copy, as for any H with again", () => {
     const newer = resume({ id: 'new', title: 'Acme second try', status: 'draft', createdAt: 5 });
     expect(flowSentence(resumeFlowState(input({ resumes: [BASE, submitted, newer] })))).toBe(

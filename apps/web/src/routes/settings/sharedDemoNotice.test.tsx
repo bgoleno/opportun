@@ -6,10 +6,15 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { GoogleStatus } from '@/components/resume/api';
-import { SHARED_DEMO_MAIL_WARNING, SHARED_DEMO_WARNING } from '@/components/SharedDemoNotice';
+import {
+  SHARED_DEMO_DOCUMENTS_WARNING,
+  SHARED_DEMO_GOOGLE_WARNING,
+  SHARED_DEMO_MAIL_WARNING,
+  SHARED_DEMO_WARNING,
+} from '@/components/SharedDemoNotice';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { DevicesCard } from './-devices';
-import { GmailCard } from './integrations';
+import { GmailCard, GoogleCard, ReactiveResumeCard } from './integrations';
 import { ProfileSettings } from './profile';
 
 const onboarding = (sharedDemoAccount: boolean) => ({
@@ -140,5 +145,58 @@ describe('#546: where mail is connected, on a shared demo account', () => {
     await answered(api);
     expect(screen.queryByRole('status', { name: 'Shared demo account' })).toBeNull();
     expect(screen.queryByText(SHARED_DEMO_MAIL_WARNING)).toBeNull();
+  });
+});
+
+// #618, criterion 1 (decision 133: a notice, not a refusal): what a visitor connects for resumes on
+// a shared account is everyone's on it until the reset. Google: their Drive, through the OAuth
+// client saved here. Reactive Resume: the store new resumes go to.
+describe('#618: where resumes are stored, on a shared demo account', () => {
+  const stores = {
+    'GET /integrations/google': GOOGLE,
+    'GET /integrations/reactive-resume': {
+      baseUrl: null,
+      keySet: false,
+      connected: false,
+      targetVersions: ['6.0'],
+    },
+    'GET /settings/document-store': { store: 'google' },
+  };
+
+  it('the Google card says the connected Drive is used by everyone on the account', async () => {
+    mockApi({ ...onboarding(true), ...stores });
+    renderWithProviders(<GoogleCard flash={undefined} />);
+    await screen.findByRole('heading', { name: 'Google' });
+    const notice = await within(card('Google')).findByRole('status', {
+      name: 'Shared demo account',
+    });
+    expect(notice).toHaveTextContent(SHARED_DEMO_GOOGLE_WARNING);
+    expect(notice).toHaveTextContent(/Drive/);
+    expect(notice).toHaveTextContent(/nightly reset/);
+  });
+
+  it('the Reactive Resume card says the store gets everyone’s new resumes', async () => {
+    mockApi({ ...onboarding(true), ...stores });
+    renderWithProviders(<ReactiveResumeCard />);
+    await screen.findByRole('heading', { name: 'Reactive Resume' });
+    const notice = await within(card('Reactive Resume')).findByRole('status', {
+      name: 'Shared demo account',
+    });
+    expect(notice).toHaveTextContent(SHARED_DEMO_DOCUMENTS_WARNING);
+    expect(notice).toHaveTextContent(/new resumes/);
+  });
+
+  it('a dedicated account sees neither', async () => {
+    const api = mockApi({ ...onboarding(false), ...stores });
+    renderWithProviders(
+      <>
+        <GoogleCard flash={undefined} />
+        <ReactiveResumeCard />
+      </>,
+    );
+    await screen.findByRole('heading', { name: 'Google' });
+    await screen.findByRole('heading', { name: 'Reactive Resume' });
+    await answered(api);
+    expect(screen.queryByRole('status', { name: 'Shared demo account' })).toBeNull();
   });
 });

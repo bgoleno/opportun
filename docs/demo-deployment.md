@@ -362,10 +362,17 @@ touch a volume; there is no safe reason to need the wider command at all on this
 ## Backups
 
 No script outside the app itself backs up the demo host, and that is intentional: the demo
-wipes and reseeds every account and all of its data at 04:30 server time, right after the app's
-own 03:00 nightly job (`docs/install.md`), so nothing accumulates on this host that is worth
-preserving from one day to the next. A day's demo activity is gone at the reset regardless of
-whether anything backed it up first. **That reasoning is the thing that should stop someone
+wipes and reseeds the five shared accounts at 04:30 server time, right after the app's own 03:00
+nightly backup (`docs/install.md`), so nothing accumulates in them that is worth preserving from
+one day to the next.
+
+**What a visitor entered outlives the reset in the app's own backups.** The 03:00 backup is a
+copy of the whole database, shared accounts included, and the app keeps the 14 newest. So what a
+visitor entered on a shared account during a day (their details, an uploaded resume, mail a
+connected mailbox brought in) is in the backups for up to 14 days after the reset that removed it
+from the app. To clear it sooner, delete the older snapshots (and their manifests) from the
+`backups` folder of the data directory on the host; the app has no button for it. A dedicated
+account's data is in them too, as on any instance. **That reasoning is the thing that should stop someone
 "fixing" the absence of a backup script here by adding a plain `cp` of `opportun.db` to a cron
 job later** — there is nothing on this host worth the risk a `cp` carries.
 
@@ -519,8 +526,10 @@ docker compose ... exec opportun node --import tsx src/cli/createDemoAccount.ts 
 
 It prints the account's password on stdout, once, and nowhere else (not to the logs or the audit
 trail). Give it to its owner, who can change it under Settings. The command refuses, and changes
-nothing, off a demo server (`OPPORTUN_DEMO` not `1`), before the first seed, and for an email
-already in use.
+nothing, off a demo server (`OPPORTUN_DEMO` not `1`), before the first seed, for an email already
+in use, and when its pepper version is not the one the server last started with. Run from source
+rather than through `docker compose exec`, it needs the server's `OPPORTUN_PEPPER`,
+`OPPORTUN_PEPPER_VERSION` and each `OPPORTUN_PEPPER_V<N>` (`docs/install.md`, "Password pepper").
 
 A dedicated account:
 
@@ -572,6 +581,26 @@ On a shared account, enforced by the server:
     editing the opportunity's posting address sends a reviewed application back to draft, deleting
     the opportunity removes its applications, and a `mail:push` confirmation can match any
     application on the account.
+- **One visitor can lock the others out until the reset.** Changing a shared account's password,
+  or turning on its two-factor sign-in, ends every other visitor's session on it, and they cannot
+  sign in again: they do not have the new password or the authenticator. The nightly reset puts the
+  account back as it was seeded. To do it sooner, `demo-admin` can reset that account's password
+  under Settings → Users, which also turns two-factor sign-in off (it shows a new password; tell
+  the visitors, or run the seed again, `seedDemo.ts`, to restore the shared ones). If it is
+  `demo-admin` itself that was locked, run the seed from the host with the server stopped, so no
+  request or job is in flight while it reseeds (the nightly reset waits for them; the command does
+  not): `docker compose ... stop opportun`, then
+  `docker compose ... run --rm opportun node --import tsx src/cli/seedDemo.ts`, then
+  `docker compose ... up -d`. It restores every shared account and its seeded password.
+- **What is connected for resumes is everyone's.** A Google account connected on a shared account
+  (with the OAuth client saved for it), or a Reactive Resume, is used by everyone signed in to the
+  account until the reset: their resumes are made in it. The Google and Reactive Resume cards say
+  so ([#618](https://github.com/bgoleno/opportun/issues/618)). The reset removes the connection.
+- **Nothing that began before the reset writes after it.** A request already in when the reset
+  starts finishes first; one that comes during it waits, and then finds its session or token gone;
+  a job of a shared account that was waiting is dropped without running. The reset waits at most a
+  minute for requests and jobs to finish; if some are still in, it resets nothing, and the job
+  tries again a little later (#618).
 - **At most 20 active device tokens per account.** Minting past it revokes the account's oldest
   token, which can sign another visitor's extension out. Every scope can be minted, `mail:push`
   included, by the owner's decision: a visitor's own mail in a shared account is visible to the other
@@ -586,6 +615,28 @@ Two settings change the limits for the shared accounts, with these defaults:
 
 `OPPORTUN_SUBMISSIONS=0` still turns assisted apply off for everyone. The nightly reset removes every
 shared account's tokens, applications and stored files.
+
+### Try assisted apply: what to tell a visitor
+
+A visitor tries assisted apply on a real job they choose, with their own details, and submits it
+themselves if they mean to apply. The demo's own opportunities are invented, so none of them has a
+form to fill. In short, for a shared account:
+
+1. Sign in, add the job (**New opportunity** with its posting link, then **Find posting** on its
+   Details tab, or capture it with the extension), and move it to Interested.
+2. Under **Settings > Integrations > Extensions and Connectors**, download the extension from the
+   demo (it already knows the demo's address), load it unpacked, and pair it with an **Assisted
+   apply** token, in the same session as the application.
+3. **Apply on** _ATS_: no resume (attach your own on the form), your own details typed in (the
+   step starts empty), then review. A value that came with the demo is refused, by field.
+4. **Confirm review and open**, then on the form's tab open the extension, which fills what was
+   reviewed. Check it, attach your resume, and press the site's own Submit, or close the tab.
+
+Tell them that anything entered on a shared account is visible to everyone signed in to it until
+the nightly reset, as the warning on each step says. A dedicated account applies as on any server.
+The guide's [Try assisted apply on the demo](guide/pipeline.md#try-assisted-apply-on-the-demo)
+has the same steps for the visitor, and `docs/demo-acceptance.md` section 9 has the checks for this
+host.
 
 ## Hard constraints on anything added to this deployment
 

@@ -2,7 +2,7 @@
 // Settings > Integrations) and list every resume.
 import { Link } from '@tanstack/react-router';
 import { Search, Trash2 } from 'lucide-react';
-import { useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FormError } from '@/components/FormError';
 import { Badge } from '@/components/ui/badge';
@@ -81,6 +81,7 @@ export function RegisterDocCard({
   quiet = false,
   onStart,
   onFail,
+  focusOnOpen = false,
 }: {
   opportunityId?: string;
   /** An outline button: on the Resume tab, the flow above it has the one filled button (#440). */
@@ -88,8 +89,19 @@ export function RegisterDocCard({
   /** Told as a resume is submitted, and again if it fails, for the resume flow's focus (#440). */
   onStart?: () => void;
   onFail?: () => void;
+  /**
+   * Focus the link field as the card appears: the resume flow opens it in place of the button
+   * that was focused, which would leave focus on the page itself (#596).
+   */
+  focusOnOpen?: boolean;
 } = {}) {
   const create = useCreateResume();
+  const linkField = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (focusOnOpen) linkField.current?.focus();
+    // On mount only: the card is opened once, and a re-render must not pull focus back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // One id per card: the Resume tab can show the base card and the attaching one together (#440).
   const docRefId = useId();
   const pref = useDocumentStore();
@@ -179,6 +191,7 @@ export function RegisterDocCard({
             <div className="grid gap-2">
               <Label htmlFor={docRefId}>{rr ? 'Reactive Resume link' : 'Google Doc link'}</Label>
               <Input
+                ref={linkField}
                 id={docRefId}
                 value={docRef}
                 maxLength={500}

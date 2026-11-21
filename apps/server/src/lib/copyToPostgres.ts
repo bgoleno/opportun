@@ -1159,11 +1159,13 @@ function verifyVault(
       continue;
     }
     const other = target.get(id);
+    // eslint-disable-next-line security/detect-possible-timing-attacks -- a presence check on a digest, not a comparison of secrets
     if (hash === undefined) {
       if (other !== undefined) bad.push(`${id} decrypts only in the target`);
       continue;
     }
     if (other === undefined) bad.push(`${id} does not decrypt in the target`);
+    // eslint-disable-next-line security/detect-possible-timing-attacks -- an operator CLI comparing digests of its own two databases; no caller can time it
     else if (other !== hash) bad.push(`${id} decrypts to different plaintext`);
     else verified += 1;
   }

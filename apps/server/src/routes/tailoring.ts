@@ -294,6 +294,11 @@ export async function tailoringRoutes(app: FastifyInstance): Promise<void> {
       if (session.acceptedAt !== null) throw new HttpError(409, 'session_closed');
       if (streaming.has(sessionId)) throw new HttpError(409, 'reply_in_progress');
       streaming.add(sessionId);
+      // On a demo server this handler holds the reset's gate while it runs (plugins/demoResetHold.ts),
+      // and a hold has a bound: the reply is ended before it, and what it has so far is saved while
+      // the gate is still held (#618). No limit elsewhere.
+      const limit = req.demoResetHold === null ? undefined : app.demoStreamLimitMs;
+      const abortSignal = limit === undefined ? undefined : AbortSignal.timeout(limit);
       try {
         // One turn is the tailoring_chat workflow (design 14.5): its trace is the user's, and the
         // session is the conversation (gen_ai.conversation.id, local only).
@@ -322,6 +327,7 @@ export async function tailoringRoutes(app: FastifyInstance): Promise<void> {
                 messages,
                 promptId,
                 conversationId: sessionId,
+                ...(abortSignal === undefined ? {} : { abortSignal }),
               });
             } catch (err) {
               if (err instanceof AiUnavailableError) {

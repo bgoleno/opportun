@@ -78,6 +78,7 @@ export function normalizeDefault(raw: unknown): string | number | undefined {
   if (quoted !== null) return (quoted[1] ?? '').replaceAll("''", "'");
   if (/^true$/i.test(v)) return 1;
   if (/^false$/i.test(v)) return 0;
+  // eslint-disable-next-line security/detect-unsafe-regex -- one optional group behind a literal dot, so no ambiguous repetition; linear
   if (/^-?\d+(\.\d+)?$/.test(v)) return Number(v);
   return v;
 }
