@@ -803,37 +803,52 @@ describe('the expiry sweeper', () => {
       .where(eq(applicationSubmissions.id, r.id))
       .run();
     const { sweepSubmissions } = await import('../src/repos/submissionReview');
-    // The part of the select chain the sweep's read uses: select().from().where().all().
+    // The part of the select chain the sweep's read uses: select().from().where().all(). Each step
+    // is wrapped in a Proxy, not patched: Postgres's query builder has read-only methods.
     type Read = { all: () => Promise<unknown[]> };
     type Filtered = { where: (...w: unknown[]) => Read };
     type Chain = { from: (...f: unknown[]) => Filtered };
     const realSelect = app.db.select.bind(app.db) as unknown as (...a: unknown[]) => Chain;
+    /** `target` with its method `name` replaced by `wrap(the real one, bound to it)`. */
+    const swap = <T extends object, K extends keyof T & string>(
+      target: T,
+      name: K,
+      wrap: (real: T[K]) => T[K],
+    ): T =>
+      new Proxy(target, {
+        get(t, p, r) {
+          const v = Reflect.get(t, p, r) as unknown;
+          if (typeof v !== 'function') return v;
+          const bound = (v as (...a: unknown[]) => unknown).bind(t);
+          return p === name ? wrap(bound as T[K]) : bound;
+        },
+      });
     let armed = true;
     const select = vi.spyOn(app.db, 'select').mockImplementation(((...args: unknown[]) => {
       const query = realSelect(...args);
       if (!armed) return query;
       armed = false;
-      const from = query.from.bind(query);
-      query.from = (...f: unknown[]) => {
-        const q = from(...f);
-        const where = q.where.bind(q);
-        q.where = (...w: unknown[]) => {
-          const q2 = where(...w);
-          const all = q2.all.bind(q2);
-          q2.all = async () => {
-            const due = await all();
-            await app.db
-              .update(applicationSubmissions)
-              .set({ reviewExpiresAt: now + REVIEW_TTL_MS })
-              .where(eq(applicationSubmissions.id, r.id))
-              .run();
-            return due;
-          };
-          return q2;
-        };
-        return q;
-      };
-      return query;
+      return swap(
+        query,
+        'from',
+        (from) =>
+          (...f: unknown[]) =>
+            swap(
+              from(...f),
+              'where',
+              (where) =>
+                (...w: unknown[]) =>
+                  swap(where(...w), 'all', (all) => async () => {
+                    const due = await all();
+                    await app.db
+                      .update(applicationSubmissions)
+                      .set({ reviewExpiresAt: now + REVIEW_TTL_MS })
+                      .where(eq(applicationSubmissions.id, r.id))
+                      .run();
+                    return due;
+                  }),
+            ),
+      );
     }) as never);
     try {
       expect(await sweepSubmissions(app.db, now)).toBe(0);
