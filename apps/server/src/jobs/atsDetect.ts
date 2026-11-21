@@ -668,7 +668,9 @@ export async function detectAts(
       }
     } catch (err) {
       if (!(err instanceof FetchBlockedError)) throw err;
-      if (err.reason === 'timeout') {
+      // A deadline that passed, with the request out or still waiting for its host's token
+      // (rate_wait, #617): nothing was learned about the page, so it is tried again.
+      if (err.reason === 'timeout' || err.reason === 'rate_wait') {
         throw new AtsDetectTransientError('the careers page timed out; retrying');
       }
       // Refused by policy (prohibited host, private address, non-https, oversized): final.
