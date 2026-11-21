@@ -243,14 +243,28 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     }
   };
   /**
-   * The signal of the action running now (#648). Only one runs at a time (every button is held
-   * while one does), so the requests below read it to be cut off at the action's time limit.
+   * The action running now (#648). Only one runs at a time (every button is held while one does),
+   * so the requests below read it to be cut off at the action's time limit. At the limit, a request
+   * still waiting is aborted; when none is (the filler is running in the page, say), the action is
+   * only marked expired, and the next request it starts is cut at once. So the timeout is shown
+   * only when a request was cut, never over a fill that finished (tl on #713).
    */
-  let actionSignal: AbortSignal | undefined;
+  let action: { controller: AbortController; expired: boolean; waiting: number } | undefined;
+  const limited = async <T>(call: (signal: AbortSignal | undefined) => Promise<T>): Promise<T> => {
+    const a = action;
+    if (a === undefined) return call(undefined);
+    if (a.expired) a.controller.abort();
+    a.waiting += 1;
+    try {
+      return await call(a.controller.signal);
+    } finally {
+      a.waiting -= 1;
+    }
+  };
   const fetch: FetchLike = (url, init) =>
-    deps.fetch(url, actionSignal === undefined ? init : { ...init, signal: actionSignal });
+    limited((signal) => deps.fetch(url, signal === undefined ? init : { ...init, signal }));
   const get: GetLike = (url, init) =>
-    deps.get(url, actionSignal === undefined ? init : { ...init, signal: actionSignal });
+    limited((signal) => deps.get(url, signal === undefined ? init : { ...init, signal }));
   const showOutcome = (o: Outcome, site?: CaptureSiteId): void => show(renderOutcome(o, site));
 
   /** Disables the buttons while `work` runs; a thrown error is shown, never swallowed. */
@@ -283,10 +297,13 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     status.textContent = opts.working ?? '';
     report.replaceChildren();
     const controller = new AbortController();
-    actionSignal = controller.signal;
+    const current = { controller, expired: false, waiting: 0 };
+    action = current;
     let done = false;
     void (deps.limit ?? (() => new Promise<void>(() => undefined)))(ACTION_TIMEOUT_MS).then(() => {
-      if (!done) controller.abort();
+      if (done) return;
+      current.expired = true;
+      if (current.waiting > 0) controller.abort();
     });
     try {
       await work();
@@ -294,7 +311,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       show({ tone: 'error', text: 'Something went wrong. Try again.' });
     } finally {
       done = true;
-      actionSignal = undefined;
+      action = undefined;
       if (controller.signal.aborted) {
         report.replaceChildren();
         show({ tone: 'error', text: TIMED_OUT });

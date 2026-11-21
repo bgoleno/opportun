@@ -1399,4 +1399,35 @@ describe('Fill in this application against a server that never answers (#648)', 
     expect(s.doc.activeElement).toBe(fill);
     expect(s.plans).toEqual([]);
   });
+
+  it('a limit that ends while the page is filled, with no request waiting, keeps the fill report (tl on #713)', async () => {
+    const s = setup({});
+    await mountPopup(s.doc, s.deps);
+    await settleOpen(s);
+    let finish: (() => void) | undefined;
+    const run = s.deps.runFill;
+    s.deps.runFill = vi.fn(async (tabId: number, plan: FillPlan) => {
+      await new Promise<void>((r) => {
+        finish = r;
+      });
+      return run(tabId, plan);
+    });
+    let end: () => void = () => undefined;
+    const ended = new Promise<void>((r) => {
+      end = r;
+    });
+    s.deps.limit = vi.fn(async () => {
+      await ended;
+    });
+    const fill = s.$('prefill') as HTMLButtonElement;
+    fill.click();
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    // Every request is answered; only the filler, in the page, is still running.
+    end();
+    await new Promise((r) => setTimeout(r, 20));
+    finish!();
+    await vi.waitFor(() => expect(fill.disabled).toBe(false));
+    expect(s.$('status').textContent).not.toMatch(/did not answer/);
+    expect(s.$('prefill-report').textContent).toContain('First Name');
+  });
 });

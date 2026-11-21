@@ -694,6 +694,34 @@ describe('popup actions that wait on the server (#648)', () => {
     },
   );
 
+  it('a request started after the limit, while the page was read, is cut at once (tl on #713)', async () => {
+    const { doc, deps, $ } = setup({ stored: SAVED });
+    deps.fetch = hangingFetch;
+    const l = limit();
+    deps.limit = l.fn;
+    let release: (() => void) | undefined;
+    const extract = deps.runExtract;
+    deps.runExtract = vi.fn(async (...args: Parameters<PopupDeps['runExtract']>) => {
+      await new Promise<void>((r) => {
+        release = r;
+      });
+      return extract(...args);
+    });
+    await mountPopup(doc, deps);
+    const button = $<HTMLButtonElement>('capture');
+    button.click();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    // The limit ends while only the page is being read: no request is waiting yet.
+    l.end();
+    await new Promise((r) => setTimeout(r, 20));
+    release!();
+    await vi.waitFor(() =>
+      expect(status(doc).textContent).toMatch(/did not answer within 30 seconds/),
+    );
+    expect(hangingFetch).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(false);
+  });
+
   it('focus returns to the button after an action that the server answered', async () => {
     const { doc, deps, $ } = setup({ stored: SAVED });
     await mountPopup(doc, deps);
