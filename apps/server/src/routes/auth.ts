@@ -30,6 +30,7 @@ import {
   passwordScope,
   verifyPasswordWithUpgrade,
 } from '../lib/passwords';
+import { whilePasswordCurrent, withPasswordLock } from '../lib/passwordLock';
 import { rateLimit } from '../lib/rateLimit';
 import { confirmPassword, reauthLimits } from '../lib/reauth';
 import { consumePasswordSetGrant, sessionIdOf } from '../lib/oauthState';
@@ -43,6 +44,7 @@ import {
   generateRecoveryCodes,
   hashRecoveryCode,
   pendingTokenOwner,
+  pendingTokenStored,
   redeemPendingToken,
 } from '../lib/twoFactor';
 import { clearCsrfCookie, isSecureRequest, issueCsrfCookie } from '../plugins/security';
@@ -187,13 +189,22 @@ export async function startUserSession(
   reply: FastifyReply,
   userId: string,
 ): Promise<void> {
-  const db = req.server.db;
-  const secure = isSecureRequest(req);
+  setSessionCookies(req, reply, await createSession(req.server.db, userId, sessionMeta(req)));
+}
+
+/** What a new session or pending 2FA token records of the request that made it. */
+function sessionMeta(req: FastifyRequest): { ip: string; userAgent?: string } {
   const ua = req.headers['user-agent'];
-  const { token, expiresAt } = await createSession(db, userId, {
-    ip: req.ip,
-    ...(ua === undefined ? {} : { userAgent: ua }),
-  });
+  return { ip: req.ip, ...(ua === undefined ? {} : { userAgent: ua }) };
+}
+
+/** The cookies for a session already written (createSession), possibly inside a transaction. */
+function setSessionCookies(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  { token, expiresAt }: { token: string; expiresAt: number },
+): void {
+  const secure = isSecureRequest(req);
   reply.setCookie(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
@@ -333,37 +344,60 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         });
         return fail(reply, 401, 'invalid_credentials');
       }
+      // The password is proven; a change or reset can commit from here on (#561).
+      await racePoint('auth.login.passwordChecked');
+      // A hash from before the pepper was set gets a peppered one now that we have the password.
+      const upgraded = rehash ? await hashPassword(password, peppers) : undefined;
+      if (upgraded !== undefined) await racePoint('auth.loginRehash');
+      // The session, or the pending 2FA token, is written only while the hash just verified is
+      // still the user's, under the lock a change and a reset take (#561): one that committed
+      // since the check wins, and this login is refused as a wrong password would be. The
+      // rehash is the check itself, so it never puts back a password changed meanwhile. Accepted
+      // (tl on #571): two logins at once on an unpeppered hash, the first rehashes it and the
+      // second is refused like a wrong password. That can happen only on the first sign-in after
+      // a pepper is set, and the second login succeeds when tried again.
+      const written = await whilePasswordCurrent(
+        db,
+        user.id,
+        user.passwordHash,
+        async (tx) =>
+          user.totpEnabled
+            ? {
+                kind: 'pending' as const,
+                pendingToken: await createPendingToken(tx, user.id, sessionMeta(req)),
+              }
+            : {
+                kind: 'session' as const,
+                session: await createSession(tx, user.id, sessionMeta(req)),
+              },
+        { ...(upgraded === undefined ? {} : { rehashTo: upgraded }), point: 'auth.login.locked' },
+      );
+      if (!written.current) {
+        // The wrong-password path: the same answer, the same budget (emailLimit keeps the token
+        // it spent), and the same audit event, with the reason.
+        await audit(db, 'auth.login_failed', {
+          userId: user.id,
+          ip: req.ip,
+          detail: { email, reason: 'password_changed' },
+        });
+        return fail(reply, 401, 'invalid_credentials');
+      }
       // The password factor passed: give back the token emailLimit spent above. That bucket
       // exists to cap wrong-password guesses against one account from a distributed attacker
       // (issue #333); a correct password is the opposite of what it is meant to catch, and
       // charging it the same way lets a client that merely retries a successful login (a flaky
       // network, a broken session-refresh loop) lock its own legitimate user out with zero wrong
-      // passwords. Refunded here, before the 2FA branch below, so a password that is correct but
-      // still needs a 2FA code is refunded too -- the password factor already passed either way.
+      // passwords. Refunded for a password that is correct but still needs a 2FA code too: the
+      // password factor already passed either way.
       await emailLimit.refund(req);
-      if (rehash) {
-        // A hash from before the pepper was set: store a peppered one now that we have the
-        // password. Only over the hash just verified: a password changed while this login was
-        // in flight must not be put back.
-        const upgraded = await hashPassword(password, peppers);
-        await racePoint('auth.loginRehash');
-        await db
-          .update(users)
-          .set({ passwordHash: upgraded, updatedAt: Date.now() })
-          .where(and(eq(users.id, user.id), eq(users.passwordHash, user.passwordHash)))
-          .run();
-      }
-      if (user.totpEnabled) {
+      if (written.value.kind === 'pending') {
         // The password factor passed; no session until the code step (POST /auth/2fa/verify).
-        const ua = req.headers['user-agent'];
-        const pendingToken = await createPendingToken(db, user.id, {
-          ip: req.ip,
-          ...(ua === undefined ? {} : { userAgent: ua }),
-        });
         await audit(db, 'auth.2fa_challenge', { userId: user.id, ip: req.ip });
-        return reply.code(200).send({ requires2fa: true, pendingToken });
+        return reply
+          .code(200)
+          .send({ requires2fa: true, pendingToken: written.value.pendingToken });
       }
-      await startSession(req, reply, user.id);
+      setSessionCookies(req, reply, written.value.session);
       await audit(db, 'auth.login', { userId: user.id, ip: req.ip });
       return reply.code(200).send({ user: toPublic(user) });
     },
@@ -409,9 +443,19 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         return fail(reply, 401, 'invalid_code');
       }
       const { userId, method } = result;
+      // The code is proven; a change or reset can commit from here on (#561).
+      await racePoint('auth.2faVerify.redeemed');
       const user = await db.select().from(users).where(eq(users.id, userId)).get();
       if (user === undefined) return fail(reply, 401, 'invalid_pending');
-      await startSession(req, reply, user.id);
+      // The session is written only while the pending token is still stored, under the password
+      // lock: a change or reset deletes every one of the user's under the same lock (#561).
+      const session = await withPasswordLock(db, userId, async (tx) =>
+        (await pendingTokenStored(tx, pendingToken))
+          ? await createSession(tx, userId, sessionMeta(req))
+          : null,
+      );
+      if (session === null) return fail(reply, 401, 'invalid_pending');
+      setSessionCookies(req, reply, session);
       await audit(db, 'auth.2fa_verified', { userId, ip: req.ip, detail: { method } });
       if (method === 'recovery') {
         await audit(db, 'auth.2fa_recovery_used', {
@@ -708,13 +752,22 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         if (row === undefined) return undefined;
         const revoked =
           req.body.revokeDeviceTokens === true ? await revokeAllDeviceTokens(tx, user.id) : 0;
-        return { revoked };
+        // Every session and pending 2FA token, under the lock (#561): a sign-in that proved the
+        // old password and holds the lock wrote before this, and is deleted here with the rest.
+        await destroyAllSessions(tx, user.id);
+        // This client's fresh session, in the same transaction (tl on #571): written after the
+        // commit, a reset that waited on the lock could run first and leave it standing.
+        const session = await createSession(tx, user.id, sessionMeta(req));
+        await racePoint('auth.passwordChange.locked');
+        return { revoked, session };
       });
       if (changed === undefined) return fail(reply, 403, 'invalid_current_password');
+      // The change has committed; a reset can run from here on (tl on #571).
+      await racePoint('auth.passwordChange.committed');
       const revokedDevices = changed.revoked;
-      // Every existing session (other devices and this one) dies; this client gets a fresh token.
-      await destroyAllSessions(db, user.id);
-      await startSession(req, reply, user.id);
+      // Every existing session (other devices and this one) died with the change; this client
+      // gets the fresh one written with it.
+      setSessionCookies(req, reply, changed.session);
       await audit(db, initial ? 'auth.password_set_initial' : 'auth.password_changed', {
         userId: user.id,
         ip: req.ip,

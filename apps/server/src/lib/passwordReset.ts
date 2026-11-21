@@ -41,7 +41,8 @@ export async function resetUserPassword(
       .set({ revokedAt: now, updatedAt: now })
       .where(and(eq(deviceTokens.userId, userId), isNull(deviceTokens.revokedAt)))
       .run();
+    // Every session and pending 2FA token, under the lock (#561): see the password change.
+    await destroyAllSessions(tx, userId);
   });
-  await destroyAllSessions(db, userId);
   return password;
 }
