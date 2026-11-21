@@ -78,6 +78,20 @@ export async function runQueuedJob(
  * source's, with its user) is left alone. Not restored: the test's app is its own.
  */
 export async function holdInstanceSchedules(app: FastifyInstance): Promise<void> {
+  // One hold at a time per app (#677): tests call this from several claims at once, and on
+  // Postgres two of these multi-row UPDATEs locking the same rows in different orders deadlocked.
+  const turn = (holding.get(app) ?? Promise.resolve()).then(() => holdOnce(app));
+  // The next caller waits for this one, whether it held or threw.
+  holding.set(
+    app,
+    turn.catch(() => undefined),
+  );
+  await turn;
+}
+
+const holding = new WeakMap<FastifyInstance, Promise<void>>();
+
+async function holdOnce(app: FastifyInstance): Promise<void> {
   const keys = (await readSchedules(app.db))
     .filter((s) => s.userId === null)
     .map((s) => `${SCHEDULE_PREFIX}${s.kind}`);
