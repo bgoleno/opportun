@@ -13,6 +13,7 @@ import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { isUniqueViolation, rawGet, runCount, type Db, type Exec } from '../db/client';
 import { claimNextJob, type ClaimedJob } from '../db/dialect';
+import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
 import { HttpError } from '../lib/errors';
 import { jobs, settings } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
@@ -263,7 +264,8 @@ function errorText(err: unknown): string {
 
 /** How a run ended, for the job metric and span (#343). */
 interface JobOutcome {
-  outcome: 'done' | 'retry' | 'dead';
+  /** discarded: a shared demo account's job whose account the nightly reset replaced (#618). */
+  outcome: 'done' | 'retry' | 'dead' | 'discarded';
   /** A class or code (14.8): `no_handler`, `invalid_payload`, or the thrown error's. */
   errorType?: string;
 }
@@ -357,13 +359,15 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
     );
     return { outcome: 'dead', errorType: 'invalid_payload' };
   }
+  let holdExpired = false;
   const ctx: JobContext = {
     jobId: job.id,
     userId: job.userId,
     attempt: job.attempts,
     maxAttempts: job.maxAttempts,
     services: servicesFor(opts.services ?? {}, job.userId),
-    stopping: opts.stopping ?? (() => false),
+    // Also true once its hold on the demo reset's gate reached its bound (below): stop.
+    stopping: () => holdExpired || (opts.stopping?.() ?? false),
     async setResult(value) {
       await db
         .update(jobs)
@@ -375,8 +379,60 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
   // Computed before the run, from the payload as stored: a handler is free to mutate what it
   // was given, and what must not outlive the job is what the row holds.
   const transient = withoutTransient(handler, job.payload);
+  // On a demo server a job holds the reset's gate for its whole run (#618), so it finishes before
+  // the nightly reset starts, or waits for it: a shared demo account's job, and an instance job,
+  // whose per-user work (the prompt refinements, say) can reach those accounts (tl on #618). Not
+  // the reset itself, nor a job of any other account. Once it holds it, its row must still be
+  // there: the reset deletes the shared accounts' jobs with them, so a job claimed before the reset
+  // is discarded without running, and writes nothing into the account reseeded under the same id.
+  // A hold has a bound (lib/demoResetGate.ts): past it the job is told to stop (ctx.stopping).
+  const gate = opts.services?.demoResetGate;
+  const gated =
+    gate !== undefined &&
+    handler.takesDemoResetGateItself !== true &&
+    (job.userId === null || SHARED_DEMO_IDS.has(job.userId));
+  const hold = gated
+    ? await gate.shared({
+        onExpire: () => {
+          holdExpired = true;
+          log?.warn(
+            { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
+            'job held the demo reset gate to its limit; told to stop',
+          );
+        },
+      })
+    : undefined;
   try {
-    await handler.run(db, parsed.data, ctx);
+    if (hold !== undefined) {
+      const still = await db.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, job.id)).get();
+      if (still === undefined) {
+        log?.warn(
+          { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
+          'job discarded: the demo reset replaced its account',
+        );
+        return { outcome: 'discarded' };
+      }
+    }
+    return await runHandler(db, job, opts, handler, parsed.data, ctx, transient);
+  } finally {
+    hold?.release();
+  }
+}
+
+/** The handler's run, and the row's end: done, retried later, or dead. */
+async function runHandler(
+  db: Db,
+  job: ClaimedJob,
+  opts: RunOptions,
+  handler: JobHandler<unknown>,
+  payload: unknown,
+  ctx: JobContext,
+  transient: unknown,
+): Promise<JobOutcome> {
+  const now = opts.now ?? Date.now;
+  const log = opts.services?.log;
+  try {
+    await handler.run(db, payload, ctx);
   } catch (err) {
     const at = now();
     // #345: catalogued keys (design 14.9); the error reduces to its type and frames in the log.

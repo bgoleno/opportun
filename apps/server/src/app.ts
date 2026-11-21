@@ -12,6 +12,7 @@ import { configureGateWatchdog, gateHeldError } from './db/gate';
 import { SCHEMA_DIALECT } from './db/schema';
 import { obsHttpPlugin } from './plugins/obsHttp';
 import { securityPlugin } from './plugins/security';
+import { demoResetHoldPlugin } from './plugins/demoResetHold';
 import { sessionPlugin } from './plugins/session';
 import {
   createGoogleConn,
@@ -49,6 +50,7 @@ import { JOB_PRUNE_CRON, JOB_PRUNE_JOB_KIND } from './jobs/jobPrune';
 import { OBS_PRUNE_CRON, OBS_PRUNE_JOB_KIND } from './jobs/obsPrune';
 import { stopObs } from './obs';
 import { startObsFromSettings } from './obs/config';
+import { DemoResetGate } from './lib/demoResetGate';
 import { loggerOptions } from './obs/log';
 import { obsMetricRoutes } from './routes/obsMetrics';
 import { obsSettingsRoutes } from './routes/obsSettings';
@@ -200,6 +202,8 @@ export interface OAuthWiring {
 
 export interface BuildOptions {
   logStream?: LogStream;
+  /** The demo reset gate's limits (#618): tests set short ones; production uses the defaults. */
+  demoResetLimits?: { startMs?: number; holdMs?: number; streamMs?: number };
   /** Replaces the googleapis-backed client (tests inject a fake: no network). */
   google?: GoogleApi;
   /** Replaces the Google Docs document store. */
@@ -501,6 +505,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     submissions: submissionsEnabled(cfg),
     demo: cfg.demo,
     rankBatchProvider: opts.rankBatchProvider ?? batchProviderFor,
+    // The nightly reset's gate (#618): only a demo server resets, so only it has one.
+    ...(cfg.demo ? { demoResetGate: new DemoResetGate() } : {}),
   };
   app.decorate('jobs', {
     services,
@@ -530,6 +536,23 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     await stopObs(db);
     await closeDatabase(dbHandle);
   });
+  // Before the session plugin, so a request's session lookup is inside its hold (#618).
+  if (services.demoResetGate !== undefined) {
+    await app.register(demoResetHoldPlugin, {
+      gate: services.demoResetGate,
+      ...(opts.demoResetLimits?.startMs === undefined
+        ? {}
+        : { startLimitMs: opts.demoResetLimits.startMs }),
+      ...(opts.demoResetLimits?.holdMs === undefined
+        ? {}
+        : { holdLimitMs: opts.demoResetLimits.holdMs }),
+      ...(opts.demoResetLimits?.streamMs === undefined
+        ? {}
+        : { streamLimitMs: opts.demoResetLimits.streamMs }),
+    });
+  } else {
+    app.decorate('demoStreamLimitMs', undefined);
+  }
   await app.register(sessionPlugin, { demo: cfg.demo });
 
   const typed = app.withTypeProvider<ZodTypeProvider>();

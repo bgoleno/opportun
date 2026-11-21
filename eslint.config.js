@@ -155,6 +155,16 @@ export default defineConfig(
   tseslint.configs.recommended,
   security.configs.recommended,
   {
+    // https://github.com/bgoleno/opportun/issues/587: each eslint-plugin-security rule becomes an
+    // error once its warnings are triaged (fixed, or disabled on the line with the reason it is
+    // safe), so a new hit fails `pnpm verify` instead of joining a pile nobody reads. The other
+    // rules follow as their own triage lands.
+    rules: {
+      'security/detect-possible-timing-attacks': 'error',
+      'security/detect-unsafe-regex': 'error',
+    },
+  },
+  {
     languageOptions: {
       globals: { ...globals.node },
     },

@@ -99,9 +99,10 @@ describe('one request builder for the live call and a batch', () => {
 });
 
 describe('the batch multiplier in the price table', () => {
-  it('Anthropic batches cost half; no other provider has batches yet', () => {
+  it('Anthropic and OpenAI batches cost half; no other provider has batches', () => {
     expect(batchMultiplier('anthropic')).toBe(0.5);
-    expect(batchMultiplier('openai')).toBeUndefined();
+    expect(batchMultiplier('openai')).toBe(0.5);
+    expect(batchMultiplier('openai_compatible')).toBeUndefined();
     expect(batchMultiplier('openai-compatible')).toBeUndefined();
   });
 
@@ -223,10 +224,10 @@ describe('the run record of a batch result', () => {
   });
 });
 
-// Anthropic has a client since #509 (anthropicBatch.test.ts); every other provider still has none.
+// Anthropic has a client since #509 (anthropicBatch.test.ts) and OpenAI on its own API since #510
+// (openaiBatch.test.ts); OpenAI at another base URL and an OpenAI-compatible endpoint have none.
 describe('a provider without a batch client', () => {
   it.each([
-    ['openai', { provider: 'openai', model: 'gpt-5', maxOutputTokens: 2000 } as ModelPolicy],
     [
       'openai_compatible',
       {
