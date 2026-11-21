@@ -188,6 +188,21 @@ export function setProviderResolveOverride(db: Db, resolve: ResolveHost): void {
 }
 
 /**
+ * A time limit on every AI call for one app's database (#656): set on a demo server only
+ * (app.ts). There a call that runs on holds the demo reset's gate for as long as it runs
+ * (lib/demoResetGate.ts), so it is aborted below the gate's hold bound, and its caller gets the
+ * usual AI-unavailable outcome (the AI SDK reports the abort as a provider failure). It is one
+ * deadline for the whole call, its retries included (AiDeps.callTimeLimitMs; tl on #670): a limit
+ * per request would let a provider answering 503 slowly keep a call going three times as long.
+ * Unset elsewhere: no limit, as before.
+ */
+const callLimits = new WeakMap<Db, number>();
+
+export function setAiCallLimit(db: Db, ms: number): void {
+  callLimits.set(db, ms);
+}
+
+/**
  * Whether the caller can run AI tasks at all: they stored an ai_api_key (any provider), or
  * the end-to-end mock redirects every call. Says nothing about budget or the key's health.
  */
@@ -379,6 +394,7 @@ export async function buildAiDeps(
     opts.allowLoopbackHttp ??
     process.env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1';
   const fetches = providerFetchesFor(allowLoopbackHttp, baseUrls, resolveOverrides.get(db));
+  const limit = callLimits.get(db);
   return {
     getKey: async (provider) =>
       override === undefined ? getProviderKey(db, ctx, provider) : override.getKey(provider),
@@ -394,6 +410,8 @@ export async function buildAiDeps(
     },
     // The user of every call: on its span (user.id), and what keeps one user per trace (14.6).
     userId: ctx.userId,
+    // One deadline per call, retries included (the router makes it: tl on #670).
+    ...(limit === undefined ? {} : { callTimeLimitMs: limit }),
     budget: await readBudget(db, ctx),
     spentTodayUsd: async (task) => await spentTodayUsd(db, ctx, task),
     providerFetch: {

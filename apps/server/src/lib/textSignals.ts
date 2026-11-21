@@ -80,6 +80,7 @@ const escape = (term: string): string => term.replace(/[.*+?^${}()|[\]\\]/g, '\\
 /** One regex for a whole list, built once: `\b(?:term|term)` with `\b` closing a word term. */
 function compile(terms: readonly TextTerm[]): RegExp {
   const parts = terms.map((t) => escape(t.name) + (t.mode === 'word' ? '\\b' : ''));
+  // eslint-disable-next-line security/detect-non-literal-regexp -- a fixed term list, each term escaped above
   return new RegExp(`\\b(?:${parts.join('|')})`, 'i');
 }
 
