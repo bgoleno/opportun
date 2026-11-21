@@ -487,3 +487,51 @@ describe('the resume page: "Change status" (#447)', () => {
     );
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/596: finished steps link to what they made, except
+// where that is the page you are on.
+describe('the resume page strip: finished steps as links (#596)', () => {
+  it("on a Final copy's own page, Base links to its base, and Tailor and Finish stay plain", async () => {
+    setup({ page: copy({ status: 'final' }) });
+    const region = await strip();
+    await waitFor(() => expect(currentStep(region)).toMatch(/^4 Apply/));
+    const list = within(region).getByRole('list', { name: 'Resume steps' });
+    expect(
+      within(list).getByRole('link', { name: '1 Base (completed): Jane base' }),
+    ).toHaveAttribute('href', '/resumes/base');
+    expect(within(list).getAllByRole('link')).toHaveLength(1);
+  });
+
+  // The strip uses the tab's live region (flowAnnouncer.test.tsx has the repeat and the clearing):
+  // a message is a node of its own, not text set into the region.
+  it('its live region says a message as a node of its own', async () => {
+    let status: Resume['status'] = 'in_review';
+    const page = copy({ status });
+    const { user } = setup({
+      page,
+      extra: {
+        // Wrapped: a resume's own `status` would read as the HTTP status.
+        [`GET /resumes/${page.id}`]: () => ({ status: 200, body: copy({ status }) }),
+        'GET /resumes': (call: ApiCall) => {
+          const items = call.search.includes('kind=base')
+            ? [BASE]
+            : call.search.includes('opportunityId')
+              ? [copy({ status })]
+              : [BASE, copy({ status })];
+          return { items, total: items.length };
+        },
+        'PATCH /resumes/copy': (call: ApiCall) => {
+          status = (call.body as { status: Resume['status'] }).status;
+          return { status: 200, body: copy({ status }) };
+        },
+      },
+    });
+    const region = await strip();
+    const live = within(region).getByRole('status');
+    await waitFor(() => expect(primary(region)).toHaveAccessibleName('Mark as final'));
+    await user.click(primary(region));
+    await waitFor(() => expect(live).toHaveTextContent('Marked final. Next: apply.'));
+    const first = live.firstElementChild;
+    expect(first).not.toBeNull();
+  });
+});

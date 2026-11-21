@@ -7,7 +7,7 @@
 // tailored, "Apply on <ATS>" once assisted apply can start, and otherwise the way back to the
 // opportunity, where what is still owed happens.
 import { Link } from '@tanstack/react-router';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { attemptPlace } from '@/components/apply/ApplyPanel';
 import { atsLabel } from '@/components/apply/api';
 import { useOpportunity } from '@/components/opportunity/api';
@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button';
 import { errorMessage } from '@/lib/api';
 import type { OpportunityView } from '@/lib/opportunities';
 import type { Resume } from './api';
+import { FlowAnnouncement, useFlowAnnouncer } from './flowAnnouncer';
 import {
   FlowSteps,
   MarkFinal,
@@ -24,6 +25,7 @@ import {
   quietClass,
   ScoreAgain,
   sentSentence,
+  stepLinks,
   useResumeFlow,
   type Step,
 } from './ResumeFlowCard';
@@ -53,7 +55,7 @@ function StripLoaded({ resume, opp }: { resume: Resume; opp: OpportunityView }) 
   const sentenceRef = useRef<HTMLHeadingElement>(null);
   // As on the tab: set as an action starts, cleared if it fails, said when the place changes.
   const done = useRef<string | null>(null);
-  const [announced, setAnnounced] = useState('');
+  const announcer = useFlowAnnouncer();
 
   const followed = opportunityResume(flow.resumes, opp.id);
   const mine = followed?.id === resume.id;
@@ -61,7 +63,7 @@ function StripLoaded({ resume, opp }: { resume: Resume; opp: OpportunityView }) 
 
   useEffect(() => {
     if (view === undefined || done.current === null) return;
-    setAnnounced(`${done.current} ${view.next}`);
+    announcer.announce(`${done.current} ${view.next}`);
     done.current = null;
     sentenceRef.current?.focus();
     // Only a change of place moves focus, never a re-render in the same place.
@@ -225,7 +227,13 @@ function StripLoaded({ resume, opp }: { resume: Resume; opp: OpportunityView }) 
         <NotFollowed followed={followed} opportunityId={opp.id} />
       ) : view !== undefined ? (
         <>
-          <FlowSteps current={view.step} />
+          <FlowSteps
+            current={view.step}
+            links={
+              flow.state === undefined ? undefined : stepLinks(flow.state, flow.resumes, opp.id)
+            }
+            here={resume.id}
+          />
           <h2
             ref={sentenceRef}
             tabIndex={-1}
@@ -236,9 +244,7 @@ function StripLoaded({ resume, opp }: { resume: Resume; opp: OpportunityView }) 
           {view.action}
         </>
       ) : null}
-      <p role="status" aria-live="polite" className="sr-only">
-        {announced}
-      </p>
+      <FlowAnnouncement value={announcer.value} />
     </section>
   );
 }
