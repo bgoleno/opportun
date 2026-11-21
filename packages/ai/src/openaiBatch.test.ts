@@ -161,6 +161,9 @@ describe('submit (criteria 1 and 2)', () => {
       input_file_id: INPUT_FILE_ID,
       endpoint: '/v1/responses',
       completion_window: '24h',
+      // #634: the output and error files expire a week after they are made, if cleanup cannot
+      // remove them first.
+      output_expires_after: { anchor: 'created_at', seconds: 7 * 24 * 60 * 60 },
     });
     // Nothing else carries the key: not a line, not the batch's body.
     expect(JSON.stringify(lines)).not.toContain(KEY);
@@ -186,6 +189,34 @@ describe('submit (criteria 1 and 2)', () => {
     await expect(client(fetch).submit([request('')])).rejects.toThrow(/custom id/);
     await expect(client(fetch).submit([])).rejects.toThrow(/1 to 50,000/);
     expect(sent).toHaveLength(0);
+  });
+
+  it('a refused batch create deletes the file it uploaded, and still throws naming the status', async () => {
+    const { fetch, sent } = recordingFetch((url, init) => {
+      if (url.endsWith('/files') && init.method === 'POST') return json(fileObject());
+      if (url.endsWith('/batches')) return json({ error: { message: 'quota' } }, 429);
+      if (init.method === 'DELETE') return json({ id: INPUT_FILE_ID, deleted: true });
+      throw new Error(`not a documented endpoint: ${init.method} ${url}`);
+    });
+    await expect(client(fetch).submit([request(POSTING)])).rejects.toThrow(
+      'OpenAI batch submit: HTTP 429',
+    );
+    expect(sent.map((s) => `${s.method} ${s.url}`)).toEqual([
+      `POST ${BASE}/files`,
+      `POST ${BASE}/batches`,
+      `DELETE ${BASE}/files/${INPUT_FILE_ID}`,
+    ]);
+  });
+
+  it('a delete that fails after a refused create still throws the create refusal', async () => {
+    const { fetch } = recordingFetch((url, init) => {
+      if (url.endsWith('/files') && init.method === 'POST') return json(fileObject());
+      if (url.endsWith('/batches')) return json({ error: { message: 'quota' } }, 429);
+      throw new Error('network down');
+    });
+    await expect(client(fetch).submit([request(POSTING)])).rejects.toThrow(
+      'OpenAI batch submit: HTTP 429',
+    );
   });
 
   it.each(['upload', 'submit'])(
@@ -391,6 +422,23 @@ describe('results (criterion 1)', () => {
     for (const s of sent) expect(new URL(s.url).host).toBe(new URL(BASE).host);
   });
 
+  it('a result file OpenAI no longer has (404, past its expiry) is read as no results: those requests wait again', async () => {
+    const { fetch } = recordingFetch((url) => {
+      if (url === `${BASE}/batches/${BATCH_ID}`) return json(batchObject('completed'));
+      if (url === `${BASE}/files/${OUTPUT_FILE_ID}/content`) {
+        return json({ error: { message: 'No such File object' } }, 404);
+      }
+      if (url === `${BASE}/files/${ERROR_FILE_ID}/content`) {
+        return new Response(jsonl([expiredLine('posting_2')]));
+      }
+      throw new Error(`not a documented endpoint: ${url}`);
+    });
+    // No throw, so the collect job ends the batch, and every posting with no result waits again.
+    expect(await client(fetch).results(BATCH_ID)).toEqual([
+      { customId: 'posting_2', kind: 'expired' },
+    ]);
+  });
+
   it('a refused file read names the status, never the key', async () => {
     const { fetch } = recordingFetch((url) =>
       url.endsWith(`/batches/${BATCH_ID}`)
@@ -443,6 +491,71 @@ describe('the batch request is the live call (criterion 3)', () => {
     // The upload and the batch: the body was built without a request leaving.
     expect(sent).toHaveLength(2);
     expect(JSON.stringify(await uploadedLines(sent))).not.toContain(KEY);
+  });
+});
+
+describe('cleanup: the batch files removed once the results are applied (#634)', () => {
+  const FILES = [INPUT_FILE_ID, OUTPUT_FILE_ID, ERROR_FILE_ID];
+  /** A completed batch; each file DELETE answered by `answer`. */
+  function deletes(answer: (fileId: string) => Response) {
+    return recordingFetch((url, init) => {
+      if (url === `${BASE}/batches/${BATCH_ID}`) return json(batchObject('completed'));
+      const m = /\/files\/([^/]+)$/.exec(url);
+      if (m !== null && init.method === 'DELETE') return answer(decodeURIComponent(m[1]!));
+      throw new Error(`not a documented endpoint: ${init.method} ${url}`);
+    });
+  }
+
+  it('deletes the input, output and error files, with the key, on the operator host', async () => {
+    const { fetch, sent } = deletes((id) => json({ id, object: 'file', deleted: true }));
+    await client(fetch).cleanup(BATCH_ID);
+    expect(sent.map((s) => `${s.method} ${s.url}`)).toEqual([
+      `GET ${BASE}/batches/${BATCH_ID}`,
+      ...FILES.map((id) => `DELETE ${BASE}/files/${id}`),
+    ]);
+    for (const s of sent) expect(s.headers.authorization).toBe(`Bearer ${KEY}`);
+  });
+
+  it('a file already gone counts as removed', async () => {
+    const { fetch } = deletes(() => json({ error: { message: 'No such File object' } }, 404));
+    await expect(client(fetch).cleanup(BATCH_ID)).resolves.toBeUndefined();
+  });
+
+  it('a refused delete still tries the others, then throws naming the status, never the key', async () => {
+    const { fetch, sent } = deletes((id) =>
+      id === INPUT_FILE_ID
+        ? json({ error: { message: `bad key ${KEY}` } }, 500)
+        : json({ id, deleted: true }),
+    );
+    const err = await client(fetch)
+      .cleanup(BATCH_ID)
+      .then(
+        () => null,
+        (e: unknown) => e as Error,
+      );
+    expect(err?.message).toBe('OpenAI batch delete: HTTP 500');
+    expect(String(err?.stack)).not.toContain(KEY);
+    expect(sent.filter((s) => s.method === 'DELETE')).toHaveLength(3);
+  });
+
+  it('a batch the provider no longer has has nothing to remove', async () => {
+    const { fetch, sent } = recordingFetch(() => json({ error: { message: 'No batch' } }, 404));
+    await client(fetch).cleanup(BATCH_ID);
+    expect(sent).toHaveLength(1);
+  });
+
+  it('a batch with no output or error file deletes only its input', async () => {
+    const { fetch, sent } = recordingFetch((url, init) =>
+      url.endsWith(`/batches/${BATCH_ID}`)
+        ? json(batchObject('failed', { output_file_id: null, error_file_id: null }))
+        : init.method === 'DELETE'
+          ? json({ deleted: true })
+          : json({}, 500),
+    );
+    await client(fetch).cleanup(BATCH_ID);
+    expect(sent.filter((s) => s.method === 'DELETE').map((s) => s.url)).toEqual([
+      `${BASE}/files/${INPUT_FILE_ID}`,
+    ]);
   });
 });
 

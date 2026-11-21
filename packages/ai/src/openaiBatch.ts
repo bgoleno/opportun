@@ -5,6 +5,7 @@
 //   - POST {base}/batches                 the batch, on the live call's endpoint, in 24 hours
 //   - GET  {base}/batches/{id}            state
 //   - GET  {base}/files/{id}/content      the output file and the error file
+//   - DELETE {base}/files/{id}            cleanup: the three files, once the results are applied (#634)
 // Built as every provider client here is (#334, #344): the server's explicit fetch and the
 // operator's base URL, never the environment and never a global fetch; the key only in the
 // Authorization header, and never in an error, a log or a span. Written against OpenAI's
@@ -40,6 +41,16 @@ export const COMPLETION_WINDOW = '24h';
 
 /** The guide's limit: a batch holds at most this many requests. */
 export const MAX_BATCH_REQUESTS = 50_000;
+
+/**
+ * How long OpenAI keeps a batch's output and error files when cleanup cannot remove them (#634):
+ * the create reference's `output_expires_after`, from the file's creation, 1 hour to 30 days, 30
+ * by default. A week leaves the collect job, which looks every 30 minutes, days to read them even
+ * while a key is missing, and bounds what stays at OpenAI if every delete fails. The input file
+ * keeps OpenAI's default for `purpose=batch`, 30 days: it must outlive the 24-hour window, and the
+ * upload's own expiry is a multipart field whose encoding the reference does not show.
+ */
+export const OUTPUT_EXPIRES_SECONDS = 7 * 24 * 60 * 60;
 
 /** The key the SDK is given while it builds a request's body: never a real key (see liveBody). */
 const PLACEHOLDER_KEY = 'sk-placeholder-for-a-batch-body';
@@ -205,12 +216,19 @@ export function createOpenAiBatchProvider(target: {
     return batch;
   }
 
-  /** A file's lines, parsed; a line that is not JSON is kept as undefined for the caller. */
+  /**
+   * A file's lines, parsed; a line that is not JSON is kept as undefined for the caller. A file
+   * OpenAI no longer has (404: past its expiry, OUTPUT_EXPIRES_SECONDS, or deleted) has no lines:
+   * its requests then have no result, and the collect job returns them to waiting, as expired
+   * ones (tl on #657). Throwing instead would keep the batch in flight, and the user's next one
+   * unsent, for ever.
+   */
   async function fileLines(fileId: string, what: string): Promise<unknown[]> {
     const res = await doFetch(`${base}/files/${id(fileId)}/content`, {
       method: 'GET',
       headers: auth,
     });
+    if (res.status === 404) return [];
     if (!res.ok) throw refused(what, res.status);
     const out: unknown[] = [];
     for (const raw of (await res.text()).split('\n')) {
@@ -267,9 +285,17 @@ export function createOpenAiBatchProvider(target: {
           input_file_id: file.id,
           endpoint,
           completion_window: COMPLETION_WINDOW,
+          output_expires_after: { anchor: 'created_at', seconds: OUTPUT_EXPIRES_SECONDS },
         }),
       });
-      if (!res.ok) throw refused('submit', res.status);
+      if (!res.ok) {
+        // No batch will read it: the uploaded requests go too (tl on #657), best effort, and the
+        // refusal is what the caller hears either way. Kept otherwise, the 30-day default ends it.
+        await doFetch(`${base}/files/${id(file.id)}`, { method: 'DELETE', headers: auth }).catch(
+          () => undefined,
+        );
+        throw refused('submit', res.status);
+      }
       const batch = (await res.json()) as unknown;
       if (!isRecord(batch) || typeof batch.id !== 'string') {
         throw new Error('OpenAI batch submit: an unexpected answer');
@@ -327,6 +353,27 @@ export function createOpenAiBatchProvider(target: {
       // counts as expired (criterion 1). Its ids would be the input file's, but the documentation
       // does not say a `batch` input file may be downloaded, so this does not ask for it.
       return items;
+    },
+
+    async cleanup(batchId) {
+      // The batch's three files, deleted (DELETE /files/{id}, the files reference): the requests
+      // (the input file) and the results (output and error). The batch object itself cannot be
+      // deleted. Each is tried even when another is refused, and gone already is removed.
+      const batch = await getBatch(batchId);
+      if (batch === 'gone') return;
+      const ids = [batch.input_file_id, batch.output_file_id, batch.error_file_id].filter(
+        (v): v is string => typeof v === 'string' && v !== '',
+      );
+      let refusal: Error | null = null;
+      for (const fileId of ids) {
+        const res = await doFetch(`${base}/files/${id(fileId)}`, {
+          method: 'DELETE',
+          headers: auth,
+        });
+        if (res.status === 404 || res.ok) continue;
+        refusal ??= refused('delete', res.status);
+      }
+      if (refusal !== null) throw refusal;
     },
   };
 }
