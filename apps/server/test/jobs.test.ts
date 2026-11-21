@@ -351,6 +351,74 @@ describe('job queue', () => {
     expect(row.lockedBy).toBeNull();
   });
 
+  // #588: a job that kills the process (out of memory mid-import, say) was put back to pending on
+  // every start with no attempts check, and the claim never compared attempts with the limit, so it
+  // ran again on each start: a crash loop.
+  describe('a job left running by a process that died (#588)', () => {
+    function crashing(seen: string[]) {
+      registerJob({
+        kind: 'test.echo',
+        payloadSchema: z.object({}),
+        maxAttempts: 3,
+        run: async (_db, _payload, ctx) => {
+          seen.push(ctx.jobId);
+        },
+      });
+    }
+    /** As a process that died mid-run leaves it: running, locked, `attempts` already counted. */
+    async function orphan(db: Db, id: string, attempts: number) {
+      await exec(
+        { db },
+        `UPDATE jobs SET status = 'running', locked_by = 'gone', locked_at = 1, attempts = ? WHERE id = ?`,
+        attempts,
+        id,
+      );
+    }
+
+    it('at its last attempt it is dead on recovery, saying it was orphaned, and never runs again', async () => {
+      const { db } = await freshDb();
+      const seen: string[] = [];
+      crashing(seen);
+      const id = await enqueue(db, 'test.echo', {});
+      await orphan(db, id, 3);
+      await recoverStaleJobs(db);
+      const row = await jobRow(db, id);
+      expect(row).toMatchObject({ status: 'dead', lockedBy: null, attempts: 3 });
+      expect(row.lastError).toMatch(/orphaned/);
+      expect(await runDueJobs(db)).toBe(0);
+      expect(seen).toEqual([]);
+    });
+
+    it('with attempts left it waits out the normal backoff before it runs again', async () => {
+      const { db } = await freshDb();
+      const seen: string[] = [];
+      crashing(seen);
+      const id = await enqueue(db, 'test.echo', {});
+      await orphan(db, id, 1);
+      const now = 1_800_000_000_000;
+      await recoverStaleJobs(db, { now, random: () => 0 });
+      const row = await jobRow(db, id);
+      expect(row).toMatchObject({ status: 'pending', lockedBy: null, attempts: 1 });
+      expect(row.runAt).toBe(now + backoffMs(1, () => 0));
+      // Not straight away: only once the backoff has passed.
+      expect(await runNextJob(db, { now: () => now })).toBe(false);
+      expect(await runNextJob(db, { now: () => row.runAt })).toBe(true);
+      expect(seen).toEqual([id]);
+    });
+
+    it('the claim never takes a job whose attempts reached its limit', async () => {
+      const { db } = await freshDb();
+      const seen: string[] = [];
+      crashing(seen);
+      const spent = await enqueue(db, 'test.echo', {});
+      await exec({ db }, `UPDATE jobs SET attempts = max_attempts WHERE id = ?`, spent);
+      const fresh = await enqueue(db, 'test.echo', {});
+      expect(await runDueJobs(db)).toBe(1);
+      expect(seen).toEqual([fresh]);
+      expect(await jobRow(db, spent)).toMatchObject({ status: 'pending', attempts: 3 });
+    });
+  });
+
   it('reports queue lag as the age of the oldest due pending job', async () => {
     const { db } = await freshDb();
     const now = 1_800_000_000_000;
@@ -741,11 +809,11 @@ describe('DEFAULT_KIND_LIMITS (issue #260)', () => {
 
 describe('job runner concurrency', () => {
   /** A handler that reports when it starts and blocks until released. */
-  function gate(kind: string, started: string[], release: Promise<void>) {
+  function gate(kind: string, started: string[], release: Promise<void>, maxAttempts = 1) {
     registerJob({
       kind,
       payloadSchema: z.object({}).passthrough(),
-      maxAttempts: 1,
+      maxAttempts,
       run: async () => {
         started.push(kind);
         await release;
@@ -962,8 +1030,9 @@ describe('job runner concurrency', () => {
         started: string[],
         onError?: (err: unknown) => void,
         beforeAnswer?: () => void,
+        maxAttempts = 1,
       ): Promise<string> {
-        gate('test.par.a', started, Promise.resolve());
+        gate('test.par.a', started, Promise.resolve(), maxAttempts);
         const id = await enqueue(db, 'test.par.a', {});
         const claim = pauseAt('jobs.claim');
         const runner = startRunner(db, {
@@ -1012,13 +1081,21 @@ describe('job runner concurrency', () => {
               throw new Error('write failed');
             });
           },
+          // Its claim counted an attempt that never ran, and the next start cannot tell it from a
+          // run the process died in (#588): with attempts left it comes back after the backoff,
+          // and at its last it would be dead as an orphan. Two here, so it comes back.
+          2,
         );
         vi.restoreAllMocks();
         expect(started).toEqual([]);
         expect(errors).toHaveLength(1);
         expect((await jobRow(db, id)).status).toBe('running');
 
-        const next = startRunner(db, { workers: 2, intervalMs: 5 });
+        // The next start recovers it at the clock's first reading (startup's first step), and its
+        // claims come after the backoff that recovery gives it.
+        let readings = 0;
+        const clock = () => (readings++ === 0 ? Date.now() : Date.now() + 3_600_000);
+        const next = startRunner(db, { workers: 2, intervalMs: 5, now: clock });
         await until(() => started.length === 1);
         await next.stop();
         expect((await jobRow(db, id)).status).toBe('done');

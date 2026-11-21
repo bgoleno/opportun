@@ -489,13 +489,56 @@ export async function runDueJobs(db: Db, opts: RunOptions = {}): Promise<number>
  * Single-process deployment: anything still `running` when a runner starts was orphaned by
  * a crash or kill, so it goes back to `pending` (its attempt stays counted).
  */
-export async function recoverStaleJobs(db: Db): Promise<number> {
-  return await runCount(
-    db
+export async function recoverStaleJobs(
+  db: Db,
+  opts: { now?: number; random?: () => number; log?: JobServices['log'] } = {},
+): Promise<number> {
+  const now = opts.now ?? Date.now();
+  const orphans = await db
+    .select({
+      id: jobs.id,
+      kind: jobs.kind,
+      payload: jobs.payload,
+      attempts: jobs.attempts,
+      maxAttempts: jobs.maxAttempts,
+    })
+    .from(jobs)
+    .where(eq(jobs.status, 'running'))
+    .all();
+  for (const job of orphans) {
+    // #588: a job that ended the process (out of memory mid-import, say) was put back on every
+    // start whatever its attempts, so it ran again each time: a crash loop. At its last attempt it
+    // is dead, as a job that threw there would be (its transient payload fields dropped the same).
+    if (job.attempts >= job.maxAttempts) {
+      await finish(
+        db,
+        job.id,
+        'dead',
+        now,
+        `orphaned: the process ended while its last attempt (${job.attempts} of ${job.maxAttempts}) ran`,
+        withoutTransient(getJobHandler(job.kind), job.payload),
+      );
+      opts.log?.error(
+        { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
+        'a job left running at its last attempt when the process ended: dead',
+      );
+      continue;
+    }
+    // With attempts left it waits out the backoff a failure would have given it (#588), rather
+    // than run at once on a start that may follow the very crash it caused.
+    await db
       .update(jobs)
-      .set({ status: 'pending', lockedBy: null, lockedAt: null, updatedAt: Date.now() })
-      .where(eq(jobs.status, 'running')),
-  );
+      .set({
+        status: 'pending',
+        lockedBy: null,
+        lockedAt: null,
+        runAt: now + backoffMs(job.attempts, opts.random),
+        updatedAt: now,
+      })
+      .where(and(eq(jobs.id, job.id), eq(jobs.status, 'running')))
+      .run();
+  }
+  return orphans.length;
 }
 
 /** Puts back a claimed job that never ran: pending, unlocked, and its attempt not counted. */
@@ -627,7 +670,11 @@ export function startRunner(
   // follows immediately, so no run begins before the interrupted ones are ended.
   const startup = (async () => {
     try {
-      await recoverStaleJobs(db);
+      await recoverStaleJobs(db, {
+        now: clock(),
+        ...(opts.random === undefined ? {} : { random: opts.random }),
+        ...(opts.services?.log === undefined ? {} : { log: opts.services.log }),
+      });
       await finishInterruptedRuns(db);
       await safeMaterialize(db, clock(), opts);
     } catch (err) {
