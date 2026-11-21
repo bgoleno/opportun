@@ -147,6 +147,7 @@ export async function onboardingRoutes(app: FastifyInstance): Promise<void> {
       checklist: items,
       autoStart: await autoStart(req, ctx, anyKey, items.firstOpportunity),
       demo: app.config.demo,
+      sharedDemoAccount: isSharedDemoAccount(app.config, ctx.userId),
     };
   });
 

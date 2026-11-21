@@ -6,7 +6,7 @@
 // none, still refuses.
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { eq, like } from 'drizzle-orm';
+import { eq, like, sql } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { main as createDemoAccount } from '../src/cli/createDemoAccount';
 import {
@@ -17,7 +17,7 @@ import {
   type SeedDemoCredentials,
 } from '../src/cli/seedDemo';
 import { DEMO_USERS } from '../src/cli/seedDemoFixture';
-import type { Db } from '../src/db/client';
+import { rawRun, type Db } from '../src/db/client';
 import { companies, settings, users } from '../src/db/schema';
 import { DEDICATED_MARK_PREFIX, dedicatedMarkKey } from '../src/lib/demoDedicated';
 import { verifyPassword } from '../src/lib/passwords';
@@ -114,6 +114,19 @@ describe('the dedicated account CLI (#563)', () => {
       .where(eq(settings.key, dedicatedMarkKey(row.id)))
       .get();
     expect(mark).toMatchObject({ userId: null, value: { userId: row.id } });
+  });
+
+  // tl on #567 (#570): the account and its mark have committed by the audit write, so a failure
+  // there must not leave an account whose password nobody was shown.
+  it('shows the password even when the audit write fails after the account is made', async () => {
+    await seedDemo(db, CREDS, undefined, ENV);
+    await rawRun(db, sql`DROP TABLE audit_log`);
+    const c = capture();
+    await expect(createDemoAccount({ db, env: ENV, ...JOURNALIST, io: c.io })).rejects.toThrow();
+    const row = await db.select().from(users).where(eq(users.email, JOURNALIST.email)).get();
+    expect(row).toBeDefined();
+    expect(c.out).toHaveLength(1);
+    expect(await verifyPassword(row!.passwordHash, c.out[0]!)).toBe(true);
   });
 
   it('never opens registration, and its rows match a registered account on everything else', async () => {
@@ -242,6 +255,23 @@ describe('the nightly reset with a dedicated account (#563)', () => {
         key: dedicatedMarkKey('stray-user'),
         userId: null,
         value: { userId: row.id },
+        updatedAt: Date.now(),
+      })
+      .run();
+    await expect(seedDemo(db, CREDS, undefined, ENV)).rejects.toThrow(UnexpectedUsersError);
+  });
+
+  // tl on #567 (#570): a mark counts only under its own key. A row under another key that names
+  // the user is not that user's mark, whatever its value says.
+  it("refuses when the only row naming a user is under another account's key", async () => {
+    await seedDemo(db, CREDS, undefined, ENV);
+    await addUnmarkedUser('stray-user', 'stray@example.com');
+    await db
+      .insert(settings)
+      .values({
+        key: dedicatedMarkKey('someone-else'),
+        userId: null,
+        value: { userId: 'stray-user' },
         updatedAt: Date.now(),
       })
       .run();

@@ -48,3 +48,14 @@ export function useDismissChecklist() {
 export function doneCount(c: Checklist): number {
   return [c.aiKey, c.mail, c.firstOpportunity].filter(Boolean).length;
 }
+
+/**
+ * Whether the signed-in account is one of the demo's shared accounts (#546, decision 133):
+ * undefined until `/onboarding` has answered. A failed read counts as not shared, so the screens
+ * stay usable; what keeps the demo's own data off a form is the server's refusal, not this.
+ */
+export function useSharedDemoAccount(): boolean | undefined {
+  const onboarding = useOnboarding();
+  if (onboarding.isPending) return undefined;
+  return onboarding.data?.sharedDemoAccount === true;
+}

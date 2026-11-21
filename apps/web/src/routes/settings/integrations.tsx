@@ -4,6 +4,7 @@ import { CheckCircle2 } from 'lucide-react';
 import { useState } from 'react';
 import { z } from 'zod';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { SharedDemoNotice } from '@/components/SharedDemoNotice';
 import { FormError } from '@/components/FormError';
 import { useGmailStatus, useGmailSync, useSetGmailLookback } from '@/components/comms/api';
 import { GoogleQuickLinks, GoogleSetupGuide } from '@/components/google/GoogleSetup';
@@ -178,7 +179,7 @@ export function GoogleCard({
 const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 
 /** Gmail ingestion: a separate read-only grant, then sync on demand (and every 15 minutes). */
-function GmailCard() {
+export function GmailCard() {
   const google = useGoogleStatus();
   const gmail = useGmailStatus();
   const sync = useGmailSync();
@@ -200,6 +201,8 @@ function GmailCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3 text-sm">
+        {/* Decision 132: mail stays on the demo, so a shared account says what that means. */}
+        <SharedDemoNotice about="mail" />
         {google.isPending || gmail.isPending ? (
           <p className="text-muted-foreground">Loading...</p>
         ) : granted && gmail.data?.connected ? (

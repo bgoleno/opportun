@@ -2895,3 +2895,259 @@ describe('#401: the details step, filled from the profile, the account and the l
     });
   });
 });
+
+// #546 (slice 3 of #542; tl and sec's note, issuecomment-6875801710, and decision 133): on one of
+// the demo's shared accounts the steps where a visitor enters their own data say that others on
+// the account can see it, the resume step offers no resume (every resume there is the demo's own,
+// so the server refuses each), and a refusal names the field. A dedicated account on a demo server
+// is a normal one: none of this. `/onboarding` says which kind the account is.
+describe('#546: a shared demo account', () => {
+  const WARNING =
+    'This is a shared demo account. Anything you enter here is visible to others using it, and is cleared at the nightly reset.';
+  const onboarding = (sharedDemoAccount: boolean) => ({
+    'GET /onboarding': {
+      tour: { version: 1, status: 'completed', stepId: null, startedAt: null, finishedAt: null },
+      checklist: {
+        aiKey: false,
+        mail: false,
+        firstOpportunity: true,
+        dismissed: true,
+        activatedAt: null,
+      },
+      autoStart: false,
+      demo: true,
+      sharedDemoAccount,
+    },
+  });
+  const PROFILE = {
+    userId: 'u1',
+    fullName: 'Avery Demo',
+    headline: null,
+    email: null,
+    phone: null,
+    location: null,
+    workAuth: null,
+    links: [],
+    applicationDetails: {},
+    updatedAt: NOW,
+  };
+  const demoRoutes = (
+    shared: boolean,
+    sub: SubmissionView | null,
+    extra: Record<string, unknown> = {},
+  ) =>
+    routes(sub, {
+      ...onboarding(shared),
+      'GET /profile': PROFILE,
+      'GET /profile/application-details': { values: [], leftOut: [] },
+      ...extra,
+    });
+  const noResume = submission({
+    resumeId: null,
+    resumeTitle: null,
+    resumeStore: null,
+    resumeSha256: null,
+    resumeAttachmentId: null,
+    snapshotState: 'unsupported',
+    fields: { fullName: 'Jane Doe', email: 'jane@example.com' },
+  });
+
+  for (const step of ['resume', 'details', 'review'] as const) {
+    it(`the ${step} step shows the shared-account warning on a shared account only`, async () => {
+      mockApi(demoRoutes(true, step === 'resume' ? null : noResume));
+      const shared = renderStep(step);
+      expect(await screen.findByText(WARNING)).toBeVisible();
+      shared.unmount();
+
+      const dedicated = mockApi(demoRoutes(false, step === 'resume' ? null : submission()));
+      renderStep(step);
+      // The step and the account's kind are both in before the warning's absence is asserted.
+      await screen.findByRole('heading', { level: 1 });
+      await waitFor(() => expect(calls(dedicated.calls, 'GET', '/onboarding')).toHaveLength(1));
+      await screen.findAllByRole('button');
+      expect(screen.queryByText(WARNING)).toBeNull();
+    });
+  }
+
+  it('the resume step offers no resume on a shared account, and starts the draft without one', async () => {
+    const calls0 = mockApi(
+      demoRoutes(true, null, {
+        'POST /opportunities/opp-1/submissions': () => ({ status: 201, body: noResume }),
+      }),
+    );
+    const { user, router } = renderStep('resume');
+    expect(
+      await screen.findByText(
+        'On the demo an application carries no resume: attach your own on the employer’s form.',
+      ),
+    ).toBeVisible();
+    // The demo's own resume is not offered, not even as a choice.
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(screen.queryByText(/Jane Final/)).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Next: Details' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'details' }));
+    const [create] = calls(calls0.calls, 'POST', '/opportunities/opp-1/submissions');
+    expect(create?.body).not.toHaveProperty('resumeId');
+  });
+
+  // The expired attempt on a shared account can be another visitor's: a new demo draft holds only
+  // what its own visitor types into it (tl and sec's note, point 1).
+  it('starting again on a shared account carries nothing over from an expired attempt', async () => {
+    const expired = submission({
+      ...noResume,
+      status: 'abandoned',
+      failureReason: 'review_expired',
+      fields: { fullName: 'Someone Else', email: 'someone@example.com' },
+    });
+    const fresh = submission({ ...noResume, id: 'sub-2', fields: {}, answers: [] });
+    const out = mockApi(
+      demoRoutes(true, null, {
+        'GET /opportunities/opp-1/submissions': { items: [expired], total: 1 },
+        'POST /opportunities/opp-1/submissions': () => ({ status: 201, body: fresh }),
+        'PATCH /submissions/sub-2': (c: ApiCall) => ({
+          status: 200,
+          body: { ...fresh, ...(c.body as object) },
+        }),
+      }),
+    );
+    const { user, router } = renderStep('resume');
+    await screen.findByText(WARNING);
+    await user.click(screen.getByRole('button', { name: 'Next: Details' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'details' }));
+    expect(calls(out.calls, 'POST', '/opportunities/opp-1/submissions')).toHaveLength(1);
+    expect(calls(out.calls, 'PATCH', '/submissions/sub-2')).toHaveLength(0);
+  });
+
+  it('after an expired review, a shared account is not told its details are kept', async () => {
+    const expired = submission({
+      ...noResume,
+      status: 'abandoned',
+      failureReason: 'review_expired',
+    });
+    const routesFor = (shared: boolean) =>
+      demoRoutes(shared, null, {
+        'GET /opportunities/opp-1/submissions': { items: [expired], total: 1 },
+      });
+    mockApi(routesFor(false));
+    const dedicated = renderStep('details');
+    expect(await screen.findByRole('alert')).toHaveTextContent('your details are kept');
+    dedicated.unmount();
+
+    mockApi(routesFor(true));
+    renderStep('details');
+    await screen.findByText(WARNING);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Your review expired and this application was closed.');
+    expect(alert).not.toHaveTextContent('kept');
+  });
+
+  it('the resume step on a dedicated account offers its resumes and sends the one chosen', async () => {
+    const out = mockApi(
+      demoRoutes(false, null, {
+        'POST /opportunities/opp-1/submissions': () => ({ status: 201, body: submission() }),
+      }),
+    );
+    const { user, router } = renderStep('resume');
+    expect(await screen.findByRole('combobox', { name: 'Resume' })).toHaveDisplayValue(
+      'Jane Final (Base)',
+    );
+    await user.click(screen.getByRole('button', { name: 'Next: Details' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ step: 'details' }));
+    const [create] = calls(out.calls, 'POST', '/opportunities/opp-1/submissions');
+    expect(create?.body).toMatchObject({ resumeId: 'res-1' });
+  });
+
+  it('the panel lets a shared account start with no final resume of its own', async () => {
+    mockApi({
+      ...onboarding(true),
+      'GET /resumes': { items: [], total: 0 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+    });
+    renderWithProviders(<ApplyPanel opp={OPP} />);
+    const link = await screen.findByRole('link', { name: 'Apply on Greenhouse' });
+    expect(link).toHaveAttribute('href', '/opportunities/opp-1/apply?step=resume');
+  });
+
+  it('the details step offers no Save to my profile on a shared account (the server refuses it)', async () => {
+    // The profile holds a name the empty draft does not: a dedicated account is offered the tick.
+    mockApi(demoRoutes(false, submission({ fields: {} })));
+    const dedicated = renderStep('details');
+    expect(await screen.findByRole('checkbox', { name: 'Remove from my profile' })).toBeVisible();
+    expect(screen.getByText(/unless you tick Save to my profile/)).toBeInTheDocument();
+    dedicated.unmount();
+
+    mockApi(demoRoutes(true, submission({ ...noResume, fields: {} })));
+    renderStep('details');
+    expect(await screen.findByText(WARNING)).toBeVisible();
+    expect(screen.getByLabelText('Full name')).toHaveValue('');
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByText(/Save to my profile/)).toBeNull();
+    expect(
+      screen.getByText(
+        'Used to fill the form. Nothing is filled in for you on this shared demo account: enter your own details. They stay on this application.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('the review shows no resume on a shared account, and says to attach your own', async () => {
+    mockApi(demoRoutes(true, noResume));
+    renderStep('review');
+    const section = (await screen.findByRole('heading', { name: 'Resume' })).closest(
+      'section',
+    ) as HTMLElement;
+    // Once the account is known to be a shared one.
+    await waitFor(() =>
+      expect(section).toHaveTextContent(
+        'No resume. On the demo an application carries no resume: attach your own on the employer’s form.',
+      ),
+    );
+  });
+
+  it('a value that came with the demo is refused by name, and the field is marked on the review', async () => {
+    fakeWindowOpen();
+    const out = mockApi(
+      demoRoutes(true, noResume, {
+        'POST /submissions/sub-1/review': () => ({
+          status: 422,
+          body: { error: { code: 'demo_fixture_value', field: 'email' } },
+        }),
+      }),
+    );
+    const { user } = renderStep('review');
+    await user.click(await screen.findByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: /Confirm review and open/ }));
+    const alert = await screen.findByRole('alert', { name: 'Email came with the demo' });
+    expect(alert).toHaveTextContent(
+      'Email: this value came with the demo. Enter your own, or leave the field empty. Nothing was opened.',
+    );
+    expect(within(alert).getByRole('link', { name: 'Change your details' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1/apply?step=details',
+    );
+    // The row itself says so, next to the value.
+    const value = screen.getByText('jane@example.com');
+    expect(value).toHaveTextContent('This value came with the demo.');
+    expect(screen.getByText('Jane Doe')).not.toHaveTextContent('came with the demo');
+    expect(calls(out.calls, 'POST', '/submissions/sub-1/handoff')).toHaveLength(0);
+  });
+
+  it('the demo refusals have their own words, naming the field', async () => {
+    const { submissionErrorText } = await import('./api');
+    const { ApiError } = await import('@/lib/api');
+    expect(
+      submissionErrorText(
+        new ApiError(422, 'demo_fixture_value', undefined, undefined, { field: 'phone' }),
+      ),
+    ).toBe('Phone: this value came with the demo. Enter your own, or leave the field empty.');
+    expect(
+      submissionErrorText(
+        new ApiError(422, 'resume_unavailable_on_demo', undefined, undefined, {
+          field: 'resume',
+        }),
+      ),
+    ).toBe('On the demo an application carries no resume: attach your own on the employer’s form.');
+    expect(submissionErrorText(new ApiError(422, 'unavailable_on_demo'))).toBe(
+      'On the demo, details stay on this application and are not saved to the profile.',
+    );
+  });
+});

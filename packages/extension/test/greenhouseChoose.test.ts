@@ -775,6 +775,46 @@ describe('the helpers themselves refuse anything but the control’s own box and
     expect(h.optionsOf(box)).toBeNull();
   });
 
+  // #537 (sec's audit #524): an option wrapped in a control under the listbox is not an option
+  // either, as one that is a control itself is not.
+  it('optionsOf refuses an option inside a link (an SVG one too), area, button, label or summary under the listbox', () => {
+    const { p, h, byId } = helpers();
+    const box = byId('degree--0');
+    standInList(p, 'degree--0', { options: () => ["Bachelor's Degree"] });
+    h.press(box, true);
+    const list = p.doc.getElementById('react-select-degree--0-listbox')!;
+    for (const tag of ['a', 'button', 'label', 'summary', 'details']) {
+      const wrap = p.doc.createElement(tag);
+      wrap.innerHTML = `<span><div role="option" id="in-${tag}">Bachelor's Degree</div></span>`;
+      list.append(wrap);
+    }
+    const summary = p.doc.createElement('summary');
+    summary.setAttribute('role', 'option');
+    summary.id = 'as-summary';
+    list.append(summary);
+    // An image map's area, and an SVG link, follow their link on a click too (sec at 7b7f5b3). An
+    // SVG element's tagName is lowercase, so the check compares it in upper case.
+    const area = p.doc.createElement('area');
+    area.setAttribute('href', 'https://example.com/');
+    area.innerHTML = `<div role="option" id="in-area">Bachelor's Degree</div>`;
+    list.append(area);
+    const svg = p.doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const svgLink = p.doc.createElementNS('http://www.w3.org/2000/svg', 'a');
+    svgLink.setAttribute('href', 'https://example.com/');
+    const svgOption = p.doc.createElementNS('http://www.w3.org/2000/svg', 'text');
+    svgOption.setAttribute('role', 'option');
+    svgOption.id = 'in-svg-a';
+    svgLink.append(svgOption);
+    svg.append(svgLink);
+    list.append(svg);
+    expect(svgLink.tagName).toBe('a');
+    // details is not a control: an option inside it is still one, unless inside its summary.
+    expect(h.optionsOf(box)!.map((o) => o.id)).toEqual([
+      'react-select-degree--0-option-0',
+      'in-details',
+    ]);
+  });
+
   it("pick clicks only an option of this box's own list, once", () => {
     const { p, h, byId } = helpers();
     standInList(p, 'degree--0', { options: () => ["Bachelor's Degree"] });
@@ -1111,6 +1151,81 @@ describe('one fill at a time in the page (#531)', () => {
     );
     expect(third.filled).toContain('First Name');
     expect(valueOf(p.doc, 'first_name')).toBe('Jane');
+  });
+});
+
+// #537 (sec's audit #524): the page's address is read again before each list is written. A
+// same-document change while a list waits (the form's own history.pushState, or the user
+// following a link inside it) stops the lists not yet written, which are reported.
+describe('the page is still the posting before each list write (#537)', () => {
+  // The lists' own lines in the report: the page's other questions are reported too.
+  const listsIn = (r: Extract<FillReport, { ok: true }>) =>
+    r.notFilled.filter((n) => n.label === 'School' || n.label === 'Degree');
+
+  it('a same-document URL change during a list wait stops the remaining lists, and says so', async () => {
+    const p = page();
+    standInList(p, 'school--0', { options: () => [], arrive: 'never' });
+    const degree = standInList(p, 'degree--0', { options: () => ["Bachelor's Degree"] });
+    const run = fillGreenhouseForm(plan({ lists: [LISTS[2]!, LISTS[3]!] }), p.doc);
+    await new Promise((r) => setTimeout(r, 50));
+    // School is waiting for its options; the page moves to another job, in the same document.
+    expect(p.timers.pending()).toBe(1);
+    p.window.happyDOM.setURL(`https://job-boards.greenhouse.io/${BOARD}/jobs/1000002`);
+    const before = p.events.length;
+    const report = await settleRun(p, run);
+    // Nothing more is written once the page has moved: School is not emptied or closed, and
+    // Degree was never written, opened or chosen in.
+    expect(p.events.slice(before)).toEqual([]);
+    expect(valueOf(p.doc, 'degree--0')).toBe('');
+    expect(degree.isOpen()).toBe(false);
+    expect(report.chosen).toEqual([]);
+    expect(listsIn(report)).toEqual([
+      { label: 'School', reason: 'page_changed' },
+      { label: 'Degree', reason: 'page_changed' },
+    ]);
+  });
+
+  it('a move after a choice, while the form shows it: the next list is not written', async () => {
+    const p = page();
+    standInList(p, 'school--0', { options: () => ['University of Example'] });
+    const degree = standInList(p, 'degree--0', { options: () => ["Bachelor's Degree"] });
+    // The page moves on the click that chooses School's option (as a form that routes on its own
+    // choice would), so during the wait for the form to show it, not during an options wait.
+    p.doc.addEventListener('click', () => {
+      p.window.happyDOM.setURL(`https://job-boards.greenhouse.io/${BOARD}/jobs/1000002`);
+    });
+    const report = await settleRun(
+      p,
+      fillGreenhouseForm(plan({ lists: [LISTS[2]!, LISTS[3]!] }), p.doc),
+    );
+    expect(report.chosen.map((c) => c.label)).toEqual(['School']);
+    expect(on(p, 'degree--0')).toEqual([]);
+    expect(valueOf(p.doc, 'degree--0')).toBe('');
+    expect(degree.isOpen()).toBe(false);
+    expect(listsIn(report)).toEqual([{ label: 'Degree', reason: 'page_changed' }]);
+  });
+
+  it('a move while the options load: the equal option that arrives is not clicked', async () => {
+    const p = page();
+    const school = standInList(p, 'school--0', {
+      options: () => ['University of Example'],
+      arrive: 'late',
+    });
+    // The page moves on the fill's own opening press, before the options arrive (20 ms later).
+    let before = -1;
+    school.box.addEventListener('mouseup', () => {
+      p.window.happyDOM.setURL(`https://job-boards.greenhouse.io/${BOARD}/jobs/1000002`);
+      // The mouseup itself is recorded already (the recorder listens in the capture phase).
+      before = p.events.length;
+    });
+    const report = await settleRun(p, fillGreenhouseForm(plan({ lists: [LISTS[2]!] }), p.doc));
+    expect(before).toBeGreaterThan(0);
+    expect(p.events.slice(before)).toEqual([]);
+    expect(shownIn(p, 'school--0')).toBeNull();
+    expect(report.chosen).toEqual([]);
+    expect(report.notFilled.filter((n) => n.label === 'School')).toEqual([
+      { label: 'School', reason: 'page_changed' },
+    ]);
   });
 });
 
