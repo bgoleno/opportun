@@ -805,6 +805,9 @@ function ReviewStep({
   const patch = usePatchSubmission(opp.id);
   const cancel = useCancelSubmission(opp.id);
   const shared = useSharedDemoAccount() === true;
+  // A shared demo account's attempt carries no resume (#544, #546): the review shows none, so
+  // the tick does not ask the visitor to have read one (#577).
+  const noResume = live.resumeId === null && shared;
   const [ticked, setTicked] = useState(false);
   const [banner, setBanner] = useState<Banner | null>(null);
   const [hint, setHint] = useState<string | null>(null);
@@ -1154,7 +1157,7 @@ function ReviewStep({
       </ReviewSection>
 
       <ReviewSection title="Resume">
-        {live.resumeId === null && shared ? (
+        {noResume ? (
           // A shared demo account's attempt carries no resume (#544, #546).
           <p className="text-sm">No resume. {DEMO_NO_RESUME_TEXT}</p>
         ) : (
@@ -1237,7 +1240,8 @@ function ReviewStep({
               disabled={expiredAt !== null}
             />
             <Label htmlFor={checkboxId} className="text-sm font-normal leading-snug">
-              I have read the resume and my answers, and I will press Submit myself on{' '}
+              {noResume ? 'I have read my answers' : 'I have read the resume and my answers'}, and I
+              will press Submit myself on{' '}
               <span className="font-mono [overflow-wrap:anywhere]">{host}</span>.
             </Label>
           </div>
