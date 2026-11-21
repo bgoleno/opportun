@@ -85,6 +85,9 @@ export async function setBatchWaiting(
     .set({
       rankDeferredAt: sql`coalesce(${discoveryResults.rankDeferredAt}, ${now})`,
       rankSkipReason: 'batch_waiting',
+      // A new wait counts its own returns (#686, tl on #715); one already waiting keeps its count,
+      // or asking it to wait again would undo MAX_BATCH_RETURNS.
+      rankBatchReturns: sql`CASE WHEN ${discoveryResults.rankSkipReason} = 'batch_waiting' THEN ${discoveryResults.rankBatchReturns} ELSE 0 END`,
     })
     .where(and(owned(ctx, id), eq(discoveryResults.disposition, 'pending')))
     .returning({ id: discoveryResults.id })
@@ -141,7 +144,8 @@ export async function usersWithBatchWaiting(exec: Exec): Promise<string[]> {
 export async function releaseBatchWaiting(exec: Exec, ctx: UserCtx): Promise<number> {
   const rows = await exec
     .update(discoveryResults)
-    .set({ rankSkipReason: null })
+    // Their batch wait ends, and its count of returns with it (tl on #715).
+    .set({ rankSkipReason: null, rankBatchReturns: 0 })
     .where(
       and(
         eq(discoveryResults.userId, ctx.userId),
@@ -311,7 +315,8 @@ export async function endBatchWait(
 ): Promise<void> {
   await tx
     .update(discoveryResults)
-    .set({ rankDeferredAt: null, rankSkipReason: null })
+    // Its returns end with the wait (#686, tl on #715): a later wait counts its own.
+    .set({ rankDeferredAt: null, rankSkipReason: null, rankBatchReturns: 0 })
     .where(owned(ctx, id))
     .run();
   if (reason === null) return;
@@ -401,7 +406,8 @@ export const MAX_BATCH_RETURNS = 3;
 /**
  * Counts one return for each of these postings, handed back by a sent batch with no result. One
  * at MAX_BATCH_RETURNS waits no more: it fails as a live provider failure does (endBatchWait), and
- * its count starts again for whatever ranks it next.
+ * its count starts again for whatever ranks it next. Any end of a wait, and the start of a new one
+ * (setBatchWaiting), starts it again (tl on #715).
  */
 export async function countBatchReturns(tx: Exec, ctx: UserCtx, ids: string[]): Promise<void> {
   if (ids.length === 0) return;
@@ -416,10 +422,8 @@ export async function countBatchReturns(tx: Exec, ctx: UserCtx, ids: string[]): 
     .from(discoveryResults)
     .where(and(mine, gte(discoveryResults.rankBatchReturns, MAX_BATCH_RETURNS)))
     .all();
-  for (const { id } of done) {
-    await endBatchWait(tx, ctx, id, 'provider_error');
-    await tx.update(discoveryResults).set({ rankBatchReturns: 0 }).where(owned(ctx, id)).run();
-  }
+  // endBatchWait starts its count again too.
+  for (const { id } of done) await endBatchWait(tx, ctx, id, 'provider_error');
 }
 
 /** A posting a batch ranked starts its count of returns again. */

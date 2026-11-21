@@ -2,11 +2,13 @@
 /**
  * How long one batch client call may take (#686, qa's third pass): with no limit of its own, a
  * provider that hung held a job worker for the fetch's own 300 s on every attempt. A control call
- * (a batch create, a state, a delete) is small; a transfer (the requests' upload, a results
- * download) carries up to a batch's whole text, so it gets longer.
+ * (a batch create, a state, a delete) is small. A transfer (the requests' upload, a results
+ * download) carries up to a batch's whole text: at most RANK_BATCH_MAX (500) postings of a few
+ * tens of KB each, about 10 MB, which 120 s moves at a slow uplink's 1 Mbit/s with room to spare
+ * (tl on #715: not the 300 s hang the issue was about).
  */
 export const BATCH_CONTROL_LIMIT_MS = 60_000;
-export const BATCH_TRANSFER_LIMIT_MS = 300_000;
+export const BATCH_TRANSFER_LIMIT_MS = 120_000;
 
 /** Tests set short ones; production uses the two above. */
 export interface BatchCallLimits {

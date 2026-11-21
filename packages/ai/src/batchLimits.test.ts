@@ -63,9 +63,9 @@ function client(
 }
 
 describe('a batch client call has a time limit of its own (#686)', () => {
-  it('the defaults: a minute for a control call, longer for a transfer', () => {
+  it('the defaults: a minute for a control call, two for a transfer (tl on #715)', () => {
     expect(BATCH_CONTROL_LIMIT_MS).toBe(60_000);
-    expect(BATCH_TRANSFER_LIMIT_MS).toBeGreaterThan(BATCH_CONTROL_LIMIT_MS);
+    expect(BATCH_TRANSFER_LIMIT_MS).toBe(120_000);
   });
 
   it.each(['anthropic', 'openai'] as const)(

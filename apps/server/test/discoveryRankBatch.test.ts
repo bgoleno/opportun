@@ -590,6 +590,34 @@ describe('a result that does not score the posting', () => {
     expect(fake!.sent).toHaveLength(3);
   });
 
+  it('the count starts again with each new batch wait, so returns from an old wait do not carry over (tl on #715)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    for (let i = 0; i < 2; i++) {
+      await submit(app, a);
+      fake!.end(fake!.sent.length, (r) => ({ customId: r.customId, kind: 'expired' }));
+      await collect(app, a);
+    }
+    const [r] = await results(app, a);
+    // Its wait ends another way (ranked live, say), and weeks later it waits for a batch again.
+    await endBatchWait(app.db, ctxOf(a), r!.id, null);
+    expect(await setBatchWaiting(app.db, ctxOf(a), r!.id)).toBe(true);
+    // One return now is the first of the new wait, not the third.
+    await submit(app, a);
+    fake!.end(fake!.sent.length, (x) => ({ customId: x.customId, kind: 'expired' }));
+    await collect(app, a);
+    expect((await results(app, a))[0]).toMatchObject({ rankSkipReason: 'batch_waiting' });
+    // And a posting already waiting keeps its count when it is asked to wait again.
+    expect(await setBatchWaiting(app.db, ctxOf(a), r!.id)).toBe(true);
+    const [row] = await app.db
+      .select({ n: discoveryResults.rankBatchReturns })
+      .from(discoveryResults)
+      .where(eq(discoveryResults.id, r!.id))
+      .all();
+    expect(row!.n).toBe(1);
+  });
+
   it('a posting handed back twice is still sent a third time, and ranked then', async () => {
     const { app, a } = await boot();
     await batching(app, a);

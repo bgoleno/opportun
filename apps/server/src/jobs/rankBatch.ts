@@ -600,6 +600,8 @@ export async function cleanupRankBatch(
  * account delete must call this first: the cleanup authenticates as the user, so once the account
  * and its key are gone nothing can remove the provider's copy. (Today only the demo reset deletes
  * users, and it reseeds the same ids with the same key, so the jobs' own retries get through.)
+ * Not called from the demo reset on purpose (tl on #715): it would make provider calls inside the
+ * reset's exclusive wait, and the reseeded accounts keep their key.
  */
 export async function cleanupPendingRankBatches(
   db: Db,
