@@ -106,6 +106,54 @@ export const SECURITY_SENSITIVE_GLOBS = [
   // and data (#256)
   'scripts/merge-when-green.sh',
   'deploy/destroy.sh',
+  // The areas added in #610 (decision 139), as sec confirmed them there.
+  // the order of credential writes against a password change or reset (#561)
+  '**/lib/passwordLock.ts',
+  // assisted apply submissions: what a submission records, the review that clears it, the jobs
+  // that sweep and follow it up, and the state machine and field limits they enforce
+  'apps/server/src/routes/submissions.ts',
+  'apps/server/src/repos/submission*.ts',
+  'apps/server/src/lib/submission*.ts',
+  'apps/server/src/jobs/submission*.ts',
+  'packages/core/src/submissionStateMachine.ts',
+  'packages/core/src/schemas/submission.ts',
+  // the extension's form filler, which writes into a third-party page, and the popup that drives it
+  'packages/extension/src/greenhouseFill.ts',
+  'packages/extension/src/fillReport.ts',
+  'packages/extension/src/popup.ts',
+  // deployment: the Compose files, the image, and the TLS proxy with its trusted-proxy settings.
+  // Dockerfile and Dockerfile.<variant>, not Dockerfile*: matching ignores case on some systems,
+  // and Dockerfile* would then take in the tests named dockerfile*.test.ts.
+  'deploy/compose*.yml',
+  '**/Dockerfile',
+  '**/Dockerfile.*',
+  'deploy/Caddyfile',
+  // the board probe and ATS detection: outbound fetches to boards, and the posting identities the
+  // destination check later trusts
+  'apps/server/src/jobs/networkBoardProbe.ts',
+  'apps/server/src/jobs/atsDetect.ts',
+  'apps/server/src/jobs/atsJobRefBackfill.ts',
+  'apps/server/src/lib/atsJobRef.ts',
+  // the outbound AI provider clients, and tasks.ts, which fences untrusted text in prompts
+  'packages/ai/src/providers.ts',
+  'packages/ai/src/anthropicBatch.ts',
+  'packages/ai/src/batch.ts',
+  'packages/ai/src/keyCheck.ts',
+  'packages/ai/src/router.ts',
+  'packages/ai/src/tasks.ts',
+  // the demo boundary: shared and dedicated accounts, the seed, and the nightly reset
+  'apps/server/src/lib/demo*.ts',
+  'apps/server/src/cli/seedDemo*.ts',
+  'apps/server/src/cli/createDemoAccount.ts',
+  'apps/server/src/jobs/demoReset.ts',
+  // data export and import: what leaves and enters an account in bulk
+  '**/lib/exporter.ts',
+  '**/lib/importer.ts',
+  '**/routes/importExport.ts',
+  // the filesystem boundary for stored files
+  '**/lib/storage.ts',
+  // the observability settings, behind an admin's password step-up
+  '**/routes/obsSettings.ts',
 ];
 
 /** The changed paths, in order, that match a security-sensitive glob. */
