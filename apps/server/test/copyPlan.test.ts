@@ -167,6 +167,21 @@ describe('value normalization', () => {
     expect(fromPg('json', null)).toBe('N');
   });
 
+  // https://github.com/bgoleno/opportun/issues/587: a key named __proto__ is an ordinary key
+  // in parsed JSON. When cleanText changes the value, the copy is re-encoded from a rebuilt
+  // object, and the key must survive that rebuild rather than set the object's prototype.
+  it('keeps a JSON key named __proto__ when the value is re-encoded', () => {
+    const raw = '{"__proto__":{"a":1},"b":"x\\u0000y"}';
+    const v = fromSqlite('json', raw, at, { count: 0 });
+    expect(v.reencoded).toBe(true);
+    const copied = JSON.parse(v.param as string) as Record<string, unknown>;
+    expect(Object.keys(copied).sort()).toEqual(['__proto__', 'b']);
+    expect(Object.getOwnPropertyDescriptor(copied, '__proto__')?.value).toEqual({ a: 1 });
+    expect(copied.b).toBe('xy');
+    // The cell the copy is verified by carries the key too.
+    expect(v.cell).toContain('"__proto__"');
+  });
+
   it('passes the source JSON text through, so numbers keep their precision', () => {
     const big = fromSqlite('json', '{"n":12345678901234567891}', at, noSanitize());
     expect(big.param).toBe('{"n":12345678901234567891}');

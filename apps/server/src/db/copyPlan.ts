@@ -241,13 +241,16 @@ function cleanJson(value: unknown, changed: { n: number }): unknown {
   }
   if (Array.isArray(value)) return value.map((v) => cleanJson(v, changed));
   if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) {
-      const key = cleanText(k);
-      if (key !== k) changed.n += 1;
-      out[key] = cleanJson(v, changed);
-    }
-    return out;
+    // Object.fromEntries defines own properties, so a key named __proto__ (an ordinary key in
+    // parsed JSON) is copied as a key. An assignment to a plain {} would set the object's
+    // prototype instead and drop the key from the copy and from its check (#587).
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => {
+        const key = cleanText(k);
+        if (key !== k) changed.n += 1;
+        return [key, cleanJson(v, changed)];
+      }),
+    );
   }
   return value;
 }
