@@ -127,9 +127,12 @@ _Broadcast outreach lands in Spam and never creates an opportunity._
 Above the list, **Keyword** searches subject, text and sender, **Sender** filters by sender,
 **Source** limits the list to Gmail, Apple Mail or LinkedIn, and **Newest** / **Oldest** flips
 the order. Each row has a checkbox (every tab except Blocked). Ticking rows shows a bar with the
-count, a reason and **Reject N**, which rejects them all with that reason. A bulk reject does
-the same deletion as a single one but never blocks senders and takes no note; to block a
-sender, reject one of their messages on its own. Changing a filter clears the selection.
+count, a reason and **Reject N**. **Reject N** asks first ("Reject N messages?"), saying that
+the subject, snippet and body of those messages are removed for good and this cannot be undone;
+confirming rejects them all with that reason. A bulk reject does the same deletion as a single
+one but never blocks senders and takes no note; to block a sender, reject one of their messages
+on its own. Only rows on screen can be selected: changing a filter clears the selection, and a
+row that leaves the list (linked, reclassified or gone on a refresh) leaves the selection too.
 
 Your corrections are kept. Once a week (Mondays), if you made at least five since the last
 time, the `discovery.refine_prompt` task proposes a revised classification prompt. The
