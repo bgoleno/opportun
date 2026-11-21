@@ -607,7 +607,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       await api.register(connectorApplyRoutes);
       await api.register(networkRoutes);
       await api.register(referralRoutes);
-      // Assisted apply (#114): every route 404s with OPPORTUN_SUBMISSIONS=0, and on the demo.
+      // Assisted apply (#114): every route 404s with OPPORTUN_SUBMISSIONS=0, and for a shared demo
+      // account while the operator has it switched off for those (decision 133).
       await api.register(submissionRoutes);
       await api.register(obsSettingsRoutes);
       await api.register(obsTraceRoutes);
