@@ -62,7 +62,7 @@ const CandidatesSchema = z.object({
   total: z.number().int(),
   /** True when the model ranked the set; false on the manual path. */
   ranked: z.boolean(),
-  /** Why the set is unranked (no_key, over_budget, provider_error, ...), else null. */
+  /** Why the set is unranked (no_key, budget_exceeded, provider_error, ...), else null. */
   aiUnavailable: z.string().nullable(),
   /** When the ranking shown was made (#590): kept ones keep their time. Null when unranked. */
   rankedAt: z.number().int().nullable(),

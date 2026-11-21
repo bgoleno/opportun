@@ -220,9 +220,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
     const refusedLabel = opp.atsJobRef ? `Apply on ${ats}` : 'Apply on an ATS';
     body = (
       <div className="grid gap-3">
-        {latest !== undefined ? (
-          <LastAttempt latest={latest} companyName={opp.companyName} />
-        ) : null}
+        {latest !== undefined ? <LastAttempt latest={latest} /> : null}
         {reason === null ? (
           <>
             <p className="text-sm text-muted-foreground">
@@ -487,7 +485,7 @@ function Applied({
 }
 
 /** The most recent finished attempt, so a new one starts knowing about it. */
-function LastAttempt({ latest, companyName }: { latest: SubmissionView; companyName: string }) {
+function LastAttempt({ latest }: { latest: SubmissionView }) {
   if (latest.status === 'abandoned' && latest.failureReason === 'review_expired') {
     return (
       <p className="text-sm text-muted-foreground">
@@ -496,21 +494,8 @@ function LastAttempt({ latest, companyName }: { latest: SubmissionView; companyN
       </p>
     );
   }
-  if (['submitted', 'confirmed', 'unknown', 'rejected'].includes(latest.status)) {
-    return (
-      <div className="grid gap-3">
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <SubmissionStatusChip status={latest.status} />
-          {latest.submittedAt !== null ? (
-            <span className="text-muted-foreground">{formatDateTime(latest.submittedAt)}</span>
-          ) : null}
-          <ViewApplication attempt={latest} />
-        </div>
-        {/* What happened after submitting (#148): for submitted or no confirmation seen. */}
-        <OutcomeActions attempt={latest} companyName={companyName} />
-      </div>
-    );
-  }
+  // An attempt that applied is never shown here (#595): the panel leads with it (`Applied`) as
+  // soon as any attempt has applied, so this is reached only when none has.
   return null;
 }
 

@@ -329,6 +329,20 @@ const PREFILL_FIELDS: readonly {
 ];
 
 /**
+ * A question label as greenhouseFill compares it (its `norm`, which lives inside the filler
+ * because the filler runs on the page on its own): spaces collapsed, a trailing required-mark `*`
+ * dropped, any case. Kept the same as that one.
+ */
+function labelKey(label: string): string {
+  return label
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\s*\*$/, '')
+    .trim()
+    .toLowerCase();
+}
+
+/**
  * What the filler fills, from the reviewed attempt only (tl's mapping): the four standard
  * fields by the form's ids, the other details (LinkedIn, website, and #435's city and how you
  * heard) by the question's exact label, and each reviewed answer by
@@ -344,14 +358,23 @@ export function buildPlan(
   const standard = PREFILL_FIELDS.flatMap((f) =>
     f.id === null ? [] : [{ id: f.id, name: f.name, value: value(f.key) }],
   ).filter((x) => x.value !== '');
+  // A reviewed answer is what the user confirmed for its question (#595): a detail loses each label
+  // a reviewed answer also carries, or the filler would find two answers for that question, call it
+  // ambiguous and fill neither. It keeps its other labels, so a second such question on the form
+  // (the "about us" one beside an answered "about this role") is still filled by the detail (qa on
+  // #674). A detail that lost a label is `covered`: when none of the rest is on the form, it is
+  // not reported as missing, since its question was filled with the answer. Labels compare as the
+  // filler compares them.
+  const answered = new Set(attempt.answers.map((a) => labelKey(a.label)));
   const questions = [
-    ...PREFILL_FIELDS.flatMap((f) =>
-      f.id !== null || f.labels.length === 0
-        ? []
-        : [{ labels: [...f.labels], name: f.name, value: value(f.key) }],
-    ),
+    ...PREFILL_FIELDS.flatMap((f) => {
+      if (f.id !== null || f.labels.length === 0) return [];
+      const labels = f.labels.filter((l) => !answered.has(labelKey(l)));
+      const covered = labels.length < f.labels.length;
+      return [{ labels, name: f.name, value: value(f.key), ...(covered ? { covered } : {}) }];
+    }),
     ...attempt.answers.map((a) => ({ labels: [a.label], name: a.label, value: a.value })),
-  ].filter((q) => q.value !== '');
+  ].filter((q) => q.value !== '' && q.labels.length > 0);
   const lists = PREFILL_FIELDS.flatMap((f) =>
     f.list === undefined ? [] : [{ id: f.list, name: f.name, value: value(f.key) }],
   ).filter((l) => l.value !== '');
