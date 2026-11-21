@@ -73,14 +73,25 @@ when the milestone's work was merged.
 - **Demo servers can have a dedicated account for one person, out of the shared demo admin's
   reach.** On a demo server, `createDemoAccount.ts <email> <display name>` makes an ordinary
   account, prints its password once, and marks it so the nightly reset leaves it and its data
-  alone. The shared `demo-admin` is an administrator only for the user list, the pepper list,
+  alone. The command always prints the new password, even if writing its audit entry fails
+  afterwards. The shared `demo-admin` is an administrator only for the user list, the pepper list,
   password resets, and the jobs list and its retry, and only for the five seeded accounts: it
   cannot reset or reach a dedicated account, open registration, or change other instance-wide
   settings, which now say "This setting covers the whole instance and is not available to this
   account." See [A dedicated account for one
   person](docs/demo-deployment.md#a-dedicated-account-for-one-person)
-  ([#563](https://github.com/bgoleno/opportun/issues/563); PR
-  [#567](https://github.com/bgoleno/opportun/pull/567)).
+  ([#563](https://github.com/bgoleno/opportun/issues/563),
+  [#570](https://github.com/bgoleno/opportun/issues/570); PRs
+  [#567](https://github.com/bgoleno/opportun/pull/567),
+  [#574](https://github.com/bgoleno/opportun/pull/574)).
+- **The command-line password reset now works after a pepper rotation.** With a rotated pepper
+  (`OPPORTUN_PEPPER_VERSION` 2 or later, the earlier secret in `OPPORTUN_PEPPER_V1`), the reset
+  used to stamp the new password as version 1 under the new secret, so the password it printed
+  never signed in and the account stayed locked out. The reset, and the demo's
+  `createDemoAccount.ts`, now hash with the same pepper set the server loads, so the password
+  they print signs in
+  ([#568](https://github.com/bgoleno/opportun/issues/568); PR
+  [#569](https://github.com/bgoleno/opportun/pull/569)).
 - **Assisted apply now works on the demo, with the visitor's own data only.** On the shared demo
   accounts a draft starts empty, nothing is saved to the shared profile, an application carries
   no resume (the visitor attaches their own on the employer's form), and the demo's own names and
@@ -97,6 +108,20 @@ when the milestone's work was merged.
   [#545](https://github.com/bgoleno/opportun/issues/545); PRs
   [#550](https://github.com/bgoleno/opportun/pull/550),
   [#566](https://github.com/bgoleno/opportun/pull/566)).
+- **On the demo's shared accounts, the apply steps, Settings > Profile and the mail connectors
+  warn that what you enter is visible to others.** The warning says "This is a shared demo
+  account. Anything you enter here is visible to others using it, and is cleared at the nightly
+  reset." It shows on the Apply page's resume, details and review steps and on Settings > Profile
+  and its Application details card. The Apple Mail and Gmail connector cards say that email a
+  connected mailbox brings in can be read by everyone signed in to the account until the nightly
+  reset, and can mark an application there confirmed. The resume step offers no resume (attach
+  your own on the employer's form), the details step offers no **Save to my profile** ticks,
+  and starting again after an expired review carries nothing over. A value that came with the
+  demo is refused by field name, for example "Email: this value came with the demo. Enter your
+  own, or leave the field empty. Nothing was opened.", with a link back to the details step.
+  Dedicated demo accounts and instances that are not the demo see none of this
+  ([#546](https://github.com/bgoleno/opportun/issues/546); PR
+  [#575](https://github.com/bgoleno/opportun/pull/575)).
 
 ## 0.4.0 (2026-11-14)
 

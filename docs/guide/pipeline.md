@@ -244,7 +244,10 @@ Contacts who could refer you, ranked by the AI, and the asks you have made. See
 
 Assisted apply is on unless the person running your server turned it off (`OPPORTUN_SUBMISSIONS=0`,
 in the [install guide](../install.md#4-configuration-reference)). On the demo it is on, and its
-shared accounts have extra limits ([demo deployment](../demo-deployment.md#device-tokens-and-assisted-apply-on-the-demo)).
+shared accounts have extra limits ([demo deployment](../demo-deployment.md#device-tokens-and-assisted-apply-on-the-demo)):
+there the steps warn that what you enter is visible to others on the account, no resume is
+offered (attach your own on the employer's form, so a Final resume is not needed to start), and
+the details step has no **Save to my profile** ticks.
 Where it is on, the opportunity has an **Assisted apply** panel beside the tabs. You can confirm
 only so many reviews in 24 hours; see
 [Applications and the review limit](settings.md#applications-and-the-review-limit).
