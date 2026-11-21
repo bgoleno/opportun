@@ -56,7 +56,7 @@ removal and an insertion with a one-line rationale.
 - Standing instructions you want applied every time (for example "never use the word
   'passionate'") go under **Settings > Resume rules**.
 
-![The tailoring workspace: a request, the assistant's reply and one suggested edit with an Apply button](images/resume-tailoring-chat.png)
+![The tailoring workspace of a tailored copy: the next-step strip at Tailor, the match report with a Score match button, and the chat with a request, the assistant's reply and one suggested edit with an Apply button](images/resume-tailoring-chat.png)
 
 _A suggested edit, shown as a diff. It is only a proposal until you press Apply._
 
@@ -75,7 +75,7 @@ a score out of 100 with a band (Excellent 90+, Strong 70+, Partial 50+, Stretch 
 one-line summary, missing keywords, and weak areas with a suggestion each. **Score again**
 after applying edits.
 
-![The match report: 82 out of 100, Strong match, with missing keywords and a weak area](images/resume-match-score.png)
+![The match report: 82 out of 100, Strong match, with missing keywords and a weak area, under the next-step strip and beside the chat](images/resume-match-score.png)
 
 _The match report next to the chat, after one applied edit._
 
