@@ -564,11 +564,16 @@ On a shared account, enforced by the server:
 - **Only the visitor's own data is filled**
   ([#544](https://github.com/bgoleno/opportun/issues/544)). A draft starts empty, nothing is saved
   to the shared profile, the application carries no resume (the visitor attaches their own on the
-  employer's form), and the demo's own names and addresses are refused.
+  employer's form), and the demo's own names, addresses and phone number (the seeded candidate's
+  `+1 415 555 0134`, in the 555-01xx range set aside for fiction) are refused.
 - **The screens say it is shared**
   ([#546](https://github.com/bgoleno/opportun/issues/546)). The apply steps, Settings > Profile
   and the Apple Mail and Gmail connector cards warn that what is entered, or what a connected
-  mailbox brings in, can be read by everyone on the account until the nightly reset. A refused
+  mailbox brings in, can be read by everyone on the account until the nightly reset. So does the
+  upload under an opportunity's Details > Attachments (a file attached there can be opened by
+  everyone signed in to the account, and is deleted at the reset), and so does two-factor setup in
+  Settings > Security, while it is off (turning it on locks everyone else out until the reset)
+  ([#671](https://github.com/bgoleno/opportun/issues/671)). A refused
   demo value is named by field, with a link back to the details step. A dedicated account sees
   none of it.
 - **An application is its visitor's.** Everyone signed in to the account can read its drafts, but
