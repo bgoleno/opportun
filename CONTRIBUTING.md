@@ -1,7 +1,7 @@
 # Contributing to Opportun
 
-Thanks for your interest. Opportun is in beta: it has no tagged releases yet, and `main` is
-the only supported version (see [SECURITY.md](SECURITY.md)).
+Thanks for your interest. Opportun is in beta. Only the latest tagged release is supported, and fixes land on `main`
+first (see [SECURITY.md](SECURITY.md)).
 
 ## How to contribute
 
