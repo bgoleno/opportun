@@ -438,10 +438,15 @@ ranking call sends: each posting's text and the ranking prompt with your role ta
 provider keeps it, and its answers, until Opportun has read and applied the results. Then
 Opportun removes them:
 
-- **Anthropic:** the batch is deleted. Anthropic keeps a batch's results for 29 days at most.
-- **OpenAI:** the file of requests and the files of results are deleted. If OpenAI refuses,
-  Opportun tries again for a while. Failing that, OpenAI deletes the result files a week after
-  they were made, and the file of requests after 30 days.
+- **Anthropic:** the batch is deleted.
+- **OpenAI:** the file of requests and the files of results are deleted.
+
+If the provider refuses, or your key is missing at the time, Opportun tries again, five more
+times over about half an hour (1, 2, 4, 8 and 16 minutes apart), with either provider. Failing
+that, the provider's own limit applies: Anthropic keeps a batch's results for 29 days at most;
+OpenAI deletes the result files a week after they were made, and the file of requests after 30
+days. Removing the copy uses your own key, so after your account is deleted Opportun cannot
+remove it, and the provider's limit is what applies.
 
 As with any call, the provider's own policy for data sent through its API applies too.
 
