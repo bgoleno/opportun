@@ -189,7 +189,8 @@ reset in §3, at minimum).
       deployed host cannot check it from the browser alone: against a stub provider that never
       answers, a tailoring or ranking call ends at 40 seconds and the page shows what it shows when
       the AI provider fails, and a tailoring chat reply keeps the text it had so far.
-      `apps/server/test/demoResetGate.test.ts` covers the limits; tick this box only if you ran
+      `apps/server/test/demoAiTimeLimit.test.ts` covers the AI call limit (and
+      `demoResetGate.test.ts` the reset gate); tick this box only if you ran
       the stub check, and say so in the sign-off if not.
 
 ## 8. Operational visibility, not employer-visible but worth confirming before go-live
