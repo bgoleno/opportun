@@ -7,10 +7,18 @@
 // Run the way an operator runs them (`node --import tsx src/cli/<cli>.ts ...`) in a child
 // process, against the test app's SQLite folder. SQLite only: the child cannot reach the Postgres
 // test database, and the fault does not depend on the database.
+//
+// Signing in alone cannot tell a CLI that drops the peppers from one that uses them: an
+// unpeppered hash carries no version, and verify tries every pepper and then none for such a hash
+// (passwords.ts), so it still signs in. Each test therefore also reads the stored hash before the
+// sign-in (which would upgrade it) and checks it names the current version (#572).
 import { spawn } from 'node:child_process';
+import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEMO_SEED_ACK_KEY, seedDemo, type SeedDemoCredentials } from '../src/cli/seedDemo';
+import { users } from '../src/db/schema';
+import { hashVersion } from '../src/lib/passwords';
 import { pepperSet } from '../src/lib/pepperSet';
 import { sqliteOnly } from './db';
 import { testApp } from './helpers';
@@ -31,6 +39,17 @@ afterEach(async () => {
   await app?.close();
   app = undefined;
 });
+
+/** The pepper version on `email`'s stored password hash (0 when it names none). */
+async function storedHashVersion(booted: FastifyInstance, email: string): Promise<number> {
+  const row = await booted.db
+    .select({ passwordHash: users.passwordHash })
+    .from(users)
+    .where(eq(users.email, email))
+    .get();
+  expect(row).toBeDefined();
+  return hashVersion(row!.passwordHash);
+}
 
 /** Runs the CLI against `dataDir` with `env`; resolves with its exit code and output. */
 function runCli(
@@ -75,6 +94,7 @@ describe.skipIf(!sqliteOnly)('the CLI password reset under a rotated pepper (#56
     expect(cli.code).toBe(0);
     const password = cli.stdout.trim();
     expect(password.length).toBeGreaterThanOrEqual(32);
+    expect(await storedHashVersion(app, 'ada@example.com')).toBe(2);
 
     const login = await app.inject({
       method: 'POST',
@@ -121,6 +141,7 @@ describe.skipIf(!sqliteOnly)('the demo dedicated-account CLI under a rotated pep
     expect(cli.code).toBe(0);
     const password = cli.stdout.trim();
     expect(password.length).toBeGreaterThanOrEqual(32);
+    expect(await storedHashVersion(app, 'reporter@example.com')).toBe(2);
 
     const login = await app.inject({
       method: 'POST',
