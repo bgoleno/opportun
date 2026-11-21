@@ -433,3 +433,37 @@ describe('the batch request is the live call (criterion 3)', () => {
     expect(JSON.stringify(sent[0]!.body)).not.toContain(KEY);
   });
 });
+
+describe('cleanup: the batch deleted once the results are applied (#634)', () => {
+  it('DELETEs the batch on the operator host, with the key', async () => {
+    const { fetch, sent } = recordingFetch(() =>
+      json({ id: BATCH_ID, type: 'message_batch_deleted' }),
+    );
+    await client(fetch).cleanup(BATCH_ID);
+    expect(sent.map((s) => `${s.method} ${s.url}`)).toEqual([
+      `DELETE ${OFFICIAL_BASE_URLS.anthropic}/messages/batches/${BATCH_ID}`,
+    ]);
+    expect(sent[0]!.headers['x-api-key']).toBe(KEY);
+  });
+
+  it('a batch already gone counts as removed', async () => {
+    const { fetch } = recordingFetch(() =>
+      json({ type: 'error', error: { type: 'not_found_error', message: 'x' } }, 404),
+    );
+    await expect(client(fetch).cleanup(BATCH_ID)).resolves.toBeUndefined();
+  });
+
+  it('a refused delete throws naming the status, never the key', async () => {
+    const { fetch } = recordingFetch(() =>
+      json({ type: 'error', error: { type: 'api_error', message: `key ${KEY}` } }, 500),
+    );
+    const err = await client(fetch)
+      .cleanup(BATCH_ID)
+      .then(
+        () => null,
+        (e: unknown) => e as Error,
+      );
+    expect(err?.message).toBe('Anthropic batch delete: HTTP 500');
+    expect(String(err?.stack)).not.toContain(KEY);
+  });
+});

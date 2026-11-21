@@ -342,6 +342,9 @@ describe('Inbox', () => {
     await user.click(screen.getByRole('checkbox', { name: /Select message from/ }));
     expect(await screen.findByText('1 selected')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /^Reject 1/ }));
+    // Asked first (#647): rejecting wipes the subject, snippet and body for good.
+    const dialog = await screen.findByRole('dialog', { name: 'Reject 1 message?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 1' }));
     await waitFor(() => expect(posts(calls, '/communications/bulk')).toHaveLength(1));
     expect(posts(calls, '/communications/bulk')[0]?.body).toMatchObject({
       ids: ['nr1'],
@@ -513,5 +516,66 @@ describe('Inbox Sync now (#645)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/647: bulk Reject wipes a message's subject, snippet and
+// body for good. It only ever takes rows on screen, and it asks first, saying how many.
+describe('Inbox bulk Reject (#647)', () => {
+  const row = (id: string, subject: string) => ({
+    ...BASE,
+    id,
+    subject,
+    opportunityId: null,
+    needsReview: true,
+  });
+
+  it('a selected row that leaves the list leaves the selection, and is not rejected', async () => {
+    const user = userEvent.setup();
+    let items = [row('nr1', 'first one'), row('nr2', 'second one')];
+    const { calls } = mockApi({
+      'GET /communications': () => ({ items, total: items.length }),
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+      'POST /communications/bulk': { succeeded: 1, skipped: 0 },
+    });
+    const { queryClient } = renderWithProviders(<Inbox />);
+    await screen.findByText('first one');
+    for (const box of screen.getAllByRole('checkbox', { name: /Select message from/ })) {
+      await user.click(box);
+    }
+    expect(await screen.findByText('2 selected')).toBeInTheDocument();
+    // The first leaves the tab, as a row linked or reclassified from its own buttons does.
+    items = [row('nr2', 'second one')];
+    await queryClient.invalidateQueries();
+    await waitFor(() => expect(screen.queryByText('first one')).toBeNull());
+    expect(await screen.findByText('1 selected')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^Reject 1/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reject 1 message?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 1' }));
+    await waitFor(() => expect(posts(calls, '/communications/bulk')).toHaveLength(1));
+    expect(posts(calls, '/communications/bulk')[0]?.body).toMatchObject({ ids: ['nr2'] });
+  });
+
+  it('asks first, says how many and that it is for good, and Cancel rejects nothing', async () => {
+    const user = userEvent.setup();
+    const items = [row('nr1', 'first one'), row('nr2', 'second one')];
+    const { calls } = mockApi({
+      'GET /communications': { items, total: items.length },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+      'POST /communications/bulk': { succeeded: 2, skipped: 0 },
+    });
+    renderWithProviders(<Inbox />);
+    await screen.findByText('first one');
+    for (const box of screen.getAllByRole('checkbox', { name: /Select message from/ })) {
+      await user.click(box);
+    }
+    await user.click(await screen.findByRole('button', { name: /^Reject 2/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reject 2 messages?' });
+    expect(dialog).toHaveTextContent(/subject, snippet and body/);
+    expect(dialog).toHaveTextContent(/cannot be undone/);
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(posts(calls, '/communications/bulk')).toHaveLength(0);
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
   });
 });
