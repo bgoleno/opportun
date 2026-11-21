@@ -15,12 +15,31 @@ export const SHARED_DEMO_WARNING =
 export const SHARED_DEMO_MAIL_WARNING =
   'This is a shared demo account. Email that a connected mailbox brings in, with its senders, subjects and text, can be read by everyone signed in to this account until the nightly reset. It can also mark an application on this account confirmed.';
 
-export function SharedDemoNotice({ about = 'entries' }: { about?: 'entries' | 'mail' }) {
+/**
+ * Where resumes are stored (#618, decision 133: told, not refused). A Google account connected on
+ * a shared account, with the OAuth client saved for it, is everyone's on it: their tailored copies
+ * are made in its Drive.
+ */
+export const SHARED_DEMO_GOOGLE_WARNING =
+  'This is a shared demo account. A Google account connected here, with the OAuth client saved for it, is used by everyone signed in to this account until the nightly reset: their resumes are read, copied and edited in its Drive.';
+
+/** A Reactive Resume connected on a shared account receives everyone's new resumes (#618). */
+export const SHARED_DEMO_DOCUMENTS_WARNING =
+  'This is a shared demo account. A Reactive Resume connected here, with its address and key, is used by everyone signed in to this account until the nightly reset: their new resumes go to it, and Opportun reads and edits theirs in it.';
+
+const WARNINGS = {
+  entries: SHARED_DEMO_WARNING,
+  mail: SHARED_DEMO_MAIL_WARNING,
+  google: SHARED_DEMO_GOOGLE_WARNING,
+  documents: SHARED_DEMO_DOCUMENTS_WARNING,
+} as const;
+
+export function SharedDemoNotice({ about = 'entries' }: { about?: keyof typeof WARNINGS }) {
   const shared = useSharedDemoAccount();
   if (shared !== true) return null;
   return (
     <Notice label="Shared demo account">
-      <span>{about === 'mail' ? SHARED_DEMO_MAIL_WARNING : SHARED_DEMO_WARNING}</span>
+      <span>{WARNINGS[about]}</span>
     </Notice>
   );
 }

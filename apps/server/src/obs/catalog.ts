@@ -217,7 +217,7 @@ export const ATTRIBUTES = {
   'db.operation.name': { kind: 'enum', values: DB_OPERATIONS },
   'db.collection.name': { kind: 'enum', values: tableNames },
   'opportun.job.kind': { kind: 'enum', values: () => [...registeredJobKinds(), OTHER] },
-  'opportun.job.outcome': { kind: 'enum', values: ['done', 'retry', 'dead'] },
+  'opportun.job.outcome': { kind: 'enum', values: ['done', 'retry', 'dead', 'discarded'] },
   'opportun.obs.signal': { kind: 'enum', values: SIGNALS },
   'opportun.obs.reason': { kind: 'enum', values: DROP_REASONS },
   // The caller's row id. Local only: export drops it (14.8), and metrics never carry it.

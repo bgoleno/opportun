@@ -905,3 +905,61 @@ describe('tailoring sessions', () => {
     });
   });
 });
+
+// #618: on a demo server every signed-in request holds the nightly reset's gate until its response
+// is closed. This reply is hijacked, so the raw close comes when the client goes away, while the
+// handler can still write the reply it has so far: the route keeps a reference of its own.
+describe('the demo reset gate and the streamed reply (#618)', () => {
+  it('a client that goes away mid-stream: the hold stays until the handler is done', async () => {
+    const { app, a } = await boot({ demo: true });
+    const gate = app.jobs.services.demoResetGate!;
+    const { sessionId } = await setup(a);
+    let finish!: () => void;
+    const finished = new Promise<void>((r) => (finish = r));
+    vi.mocked(createLanguageModel).mockReturnValue(
+      new MockLanguageModelV4({
+        doStream: async () => {
+          const parts: LanguageModelV4StreamPart[] = [
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: 'Partial answer' },
+          ];
+          return {
+            stream: new ReadableStream<LanguageModelV4StreamPart>({
+              async pull(controller) {
+                const part = parts.shift();
+                if (part !== undefined) {
+                  controller.enqueue(part);
+                  return;
+                }
+                // Held open until the test lets it fail, as a provider connection that dies.
+                await finished;
+                controller.error(new Error('socket hang up'));
+              },
+            }),
+          };
+        },
+      }),
+    );
+    const address = await app.listen({ port: 0, host: '127.0.0.1' });
+    const abort = new AbortController();
+    const res = await fetch(`${address}/api/v1/tailoring/${sessionId}/messages`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-csrf-token': a.csrf,
+        cookie: `opportun_session=${a.session}; opportun_csrf=${a.csrf}`,
+      },
+      body: JSON.stringify({ content: 'Then I leave' }),
+      signal: abort.signal,
+    });
+    const reader = res.body!.getReader();
+    await reader.read();
+    // The client goes away; the handler is still waiting on the provider, and holds on.
+    abort.abort();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(gate.held).toBe(1);
+    finish();
+    // The handler saves what it has, then gives the hold back.
+    await expect.poll(() => gate.held, { timeout: 5000 }).toBe(0);
+  });
+});

@@ -294,6 +294,10 @@ export async function tailoringRoutes(app: FastifyInstance): Promise<void> {
       if (session.acceptedAt !== null) throw new HttpError(409, 'session_closed');
       if (streaming.has(sessionId)) throw new HttpError(409, 'reply_in_progress');
       streaming.add(sessionId);
+      // On a demo server the reply is hijacked, so the reset's hold (plugins/demoResetHold.ts) would
+      // be given back when the client goes away, while this handler can still write the reply it
+      // has so far: it keeps a reference of its own until it is done (#618).
+      const hold = req.demoResetHold?.retain();
       try {
         // One turn is the tailoring_chat workflow (design 14.5): its trace is the user's, and the
         // session is the conversation (gen_ai.conversation.id, local only).
@@ -388,6 +392,7 @@ export async function tailoringRoutes(app: FastifyInstance): Promise<void> {
         );
       } finally {
         streaming.delete(sessionId);
+        hold?.release();
       }
     },
   );

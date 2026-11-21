@@ -1,6 +1,7 @@
 // Job handlers by kind (design section 8). Handlers register once at module load; the
 // runner looks them up when it claims a job.
 import type { BatchProvider, batchProviderFor } from '@opportun/ai';
+import type { DemoResetGate } from '../lib/demoResetGate';
 import type { FastifyBaseLogger } from 'fastify';
 import type { z } from 'zod';
 import type { DocumentStore } from '../adapters/documentStore';
@@ -28,6 +29,9 @@ export interface JobServices {
   /** The demo reset job's credentials source (issue #280); real process.env in production,
    *  a literal object in tests (#292). */
   env: NodeJS.ProcessEnv;
+  /** The nightly reset's gate (#618, lib/demoResetGate.ts): on a demo server only. A shared demo
+   *  account's job holds it around its run; the reset holds it exclusively. */
+  demoResetGate?: DemoResetGate;
   /** Assisted apply is on (config submissionsEnabled: on unless OPPORTUN_SUBMISSIONS=0, never on
    *  the demo, #455); mail ingest matches confirmations only then (#119). */
   submissions: boolean;
