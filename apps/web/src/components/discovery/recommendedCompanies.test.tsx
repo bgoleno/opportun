@@ -996,6 +996,35 @@ describe('#591: every company across the pages, and a probe polls its own rows',
     expect(walked.items.map((i) => i.company.id)).toEqual(many(0, 203).map((i) => i.company.id));
   });
 
+  // qa on #624: a company that leaves the network while its check runs (its last contact deleted
+  // elsewhere) is no longer in the ?ids= answer. It goes from the list, as a whole-list read took it
+  // away before, and its poll ends; it was left "Checking board..." and polled every 3 s for good.
+  it('a polled company the answer leaves out goes from the list, and the poll ends', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const pending = { ...TAILSPIN, company: { ...TAILSPIN.company, boardProbePending: true } };
+      const { calls } = routes({
+        'GET /discovery/network-companies': (c: { search: string }) =>
+          new URLSearchParams(c.search).get('ids') !== null
+            ? { items: [], total: 0 }
+            : { items: [CONTOSO, INITECH, NORTHWIND, pending, GLOBEX], total: 5 },
+      });
+      renderWithProviders(<CompaniesManager />);
+      const l = await list();
+      await within(l).findByRole('listitem', { name: 'Tailspin Toys' });
+      const reads = () => calls.filter((c) => c.path === '/discovery/network-companies');
+      await vi.advanceTimersByTimeAsync(3000);
+      await waitFor(() => expect(reads()).toHaveLength(2));
+      await waitFor(() =>
+        expect(within(l).queryByRole('listitem', { name: 'Tailspin Toys' })).toBeNull(),
+      );
+      await vi.advanceTimersByTimeAsync(9000);
+      expect(reads()).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('while a probe runs, the poll asks for that company only, and stops when it lands', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {

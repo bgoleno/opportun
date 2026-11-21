@@ -339,11 +339,21 @@ export function useNetworkCompanies(showDenied: boolean) {
         (page) => {
           if (stopped) return;
           const fresh = new Map(page.items.map((i) => [i.company.id, i]));
-          qc.setQueryData<Page<NetworkCompany>>(companyKeys.network(showDenied), (old) =>
-            old === undefined
-              ? old
-              : { ...old, items: old.items.map((i) => fresh.get(i.company.id) ?? i) },
-          );
+          // A company asked for and not in the answer has left the network (its last contact
+          // went elsewhere, or was deleted): it goes from the list, as a whole-list read took it
+          // away before, and so does its poll (qa on #624). Kept, it read "Checking board..."
+          // and was polled every 3 s for good.
+          const asked = new Set(waiting.split(','));
+          qc.setQueryData<Page<NetworkCompany>>(companyKeys.network(showDenied), (old) => {
+            if (old === undefined) return old;
+            const items = old.items.flatMap((i) => {
+              const id = i.company.id;
+              if (!asked.has(id)) return [i];
+              const row = fresh.get(id);
+              return row === undefined ? [] : [row];
+            });
+            return { items, total: old.total - (old.items.length - items.length) };
+          });
         },
         () => {
           if (!stopped) setRetry((n) => n + 1);
