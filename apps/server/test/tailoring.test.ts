@@ -961,5 +961,8 @@ describe('the demo reset gate and the streamed reply (#618)', () => {
     finish();
     // The handler saves what it has, then gives the hold back.
     await expect.poll(() => gate.held, { timeout: 5000 }).toBe(0);
+    // The aborted client's socket can stay open on the server, and app.close() would wait for
+    // it (CI's Node did, for the hook's whole 30 s): close it here.
+    app.server.closeAllConnections();
   });
 });
