@@ -256,7 +256,8 @@ describe('state (criterion 1)', () => {
     ['completed', 'ended'],
     ['failed', 'ended'],
     ['expired', 'ended'],
-    ['cancelling', 'ended'],
+    // #686: a batch still cancelling may write more output; its files are final once cancelled.
+    ['cancelling', 'in_progress'],
     ['cancelled', 'ended'],
   ] as const)('status %s is %s', async (status, expected) => {
     const { fetch, sent } = recordingFetch(() => json(batchObject(status as Status)));

@@ -18,6 +18,7 @@
 // (criterion 1; isOpenAiBatchBase).
 import { generateText, Output } from 'ai';
 import type { BatchProvider, BatchRequest, BatchResultItem, BatchState, BatchUsage } from './batch';
+import { timedFetches, type BatchCallLimits } from './batchLimits';
 import { createLanguageModel } from './providers';
 import { SDK_TELEMETRY_OFF } from './telemetry';
 import { OFFICIAL_BASE_URLS, type ModelPolicy, type ProviderFetchOptions } from './types';
@@ -196,10 +197,12 @@ export function createOpenAiBatchProvider(target: {
   policy: ModelPolicy;
   apiKey: string;
   providerFetch: ProviderFetchOptions;
+  limits?: BatchCallLimits;
 }): BatchProvider {
   const { policy, apiKey, providerFetch } = target;
   // The same fetch and base URL as the live OpenAI client (providers.ts createLanguageModel).
-  const doFetch = providerFetch.officialFetch ?? providerFetch.fetch;
+  // Each call with a time limit of its own (#686): a control call or a file transfer.
+  const fetches = timedFetches(providerFetch.officialFetch ?? providerFetch.fetch, target.limits);
   const base = trimmed(providerFetch.baseUrls?.openai ?? OFFICIAL_BASE_URLS.openai);
   const auth = { authorization: `Bearer ${apiKey}` };
   /** A refusal names what was asked and the status only: never the key or the provider's text. */
@@ -208,7 +211,10 @@ export function createOpenAiBatchProvider(target: {
   const id = (v: string) => encodeURIComponent(v);
 
   async function getBatch(batchId: string): Promise<Json | 'gone'> {
-    const res = await doFetch(`${base}/batches/${id(batchId)}`, { method: 'GET', headers: auth });
+    const res = await fetches.control(`${base}/batches/${id(batchId)}`, {
+      method: 'GET',
+      headers: auth,
+    });
     if (res.status === 404) return 'gone';
     if (!res.ok) throw refused('state', res.status);
     const batch = (await res.json()) as unknown;
@@ -224,7 +230,7 @@ export function createOpenAiBatchProvider(target: {
    * unsent, for ever.
    */
   async function fileLines(fileId: string, what: string): Promise<unknown[]> {
-    const res = await doFetch(`${base}/files/${id(fileId)}/content`, {
+    const res = await fetches.transfer(`${base}/files/${id(fileId)}/content`, {
       method: 'GET',
       headers: auth,
     });
@@ -272,13 +278,17 @@ export function createOpenAiBatchProvider(target: {
         }),
         'batch.jsonl',
       );
-      const upload = await doFetch(`${base}/files`, { method: 'POST', headers: auth, body: form });
+      const upload = await fetches.transfer(`${base}/files`, {
+        method: 'POST',
+        headers: auth,
+        body: form,
+      });
       if (!upload.ok) throw refused('upload', upload.status);
       const file = (await upload.json()) as unknown;
       if (!isRecord(file) || typeof file.id !== 'string') {
         throw new Error('OpenAI batch upload: an unexpected answer');
       }
-      const res = await doFetch(`${base}/batches`, {
+      const res = await fetches.control(`${base}/batches`, {
         method: 'POST',
         headers: { ...auth, 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -291,9 +301,9 @@ export function createOpenAiBatchProvider(target: {
       if (!res.ok) {
         // No batch will read it: the uploaded requests go too (tl on #657), best effort, and the
         // refusal is what the caller hears either way. Kept otherwise, the 30-day default ends it.
-        await doFetch(`${base}/files/${id(file.id)}`, { method: 'DELETE', headers: auth }).catch(
-          () => undefined,
-        );
+        await fetches
+          .control(`${base}/files/${id(file.id)}`, { method: 'DELETE', headers: auth })
+          .catch(() => undefined);
         throw refused('submit', res.status);
       }
       const batch = (await res.json()) as unknown;
@@ -307,16 +317,19 @@ export function createOpenAiBatchProvider(target: {
       const batch = await getBatch(batchId);
       if (batch === 'gone') return 'gone';
       switch (batch.status) {
+        // Still cancelling too: OpenAI may yet write output for the requests that ran, and the
+        // files are final once it is cancelled (#686). Read now, a file written after would never
+        // be read or removed. (The app never cancels a batch; this is for one cancelled elsewhere.)
         case 'validating':
         case 'in_progress':
         case 'finalizing':
+        case 'cancelling':
           return 'in_progress';
-        // Criterion 1: these five are ended, cancelling included; what each request got is
-        // read from the files (results), and a request in neither counts as expired.
+        // Criterion 1: these four are ended; what each request got is read from the files
+        // (results), and a request in neither counts as expired.
         case 'completed':
         case 'failed':
         case 'expired':
-        case 'cancelling':
         case 'cancelled':
           return 'ended';
         default:
@@ -366,7 +379,7 @@ export function createOpenAiBatchProvider(target: {
       );
       let refusal: Error | null = null;
       for (const fileId of ids) {
-        const res = await doFetch(`${base}/files/${id(fileId)}`, {
+        const res = await fetches.control(`${base}/files/${id(fileId)}`, {
           method: 'DELETE',
           headers: auth,
         });
