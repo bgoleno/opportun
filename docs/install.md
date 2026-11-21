@@ -449,8 +449,8 @@ also schedules a nightly job at 04:30 that re-runs the same seeder, discarding w
 day's visitors changed. What actually bounds that job to the demo's own five accounts is not
 the flag: it is that those five account ids are fixed and do not exist on a real database, so
 the same job registered on a real deployment by mistake would find nothing to delete. The
-flag only decides whether the job is scheduled at all, so a real deployment's Settings, Jobs
-page has no reason to show it.
+flag only decides whether the job is scheduled at all, so a real deployment's [Settings, Jobs
+page](guide/settings.md#jobs) has no reason to show it.
 
 Compose settings (`deploy/.env`, see `.env.example`):
 
@@ -1281,7 +1281,7 @@ because it never reads a page. A changed value means the backend has restarted s
 last check, which is what the crash above looks like from here, surfaced through
 `GET /healthz`'s `databaseIntegrity` the same way SQLite's page scan is, and from the same
 place on the Backups page under Settings -> Import/Export. It cannot, by itself, tell that
-crash apart from an entirely ordinary restart (an upgrade, a host reboot): Settings -> Jobs
+crash apart from an entirely ordinary restart (an upgrade, a host reboot): [Settings -> Jobs](guide/settings.md#jobs)
 is the other half, where a backup attempt that failed with "server closed the connection
 unexpectedly" around the same time is the sign that this specific restart was the crash,
 not routine maintenance.
