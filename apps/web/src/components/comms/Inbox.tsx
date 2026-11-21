@@ -275,6 +275,11 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
     order,
   };
   const { data, error, isPending } = useInbox(tab, filters);
+  // What was asked for, not what is being typed: the list on screen answers the debounced values.
+  const filtered =
+    (filters.q ?? '').trim() !== '' ||
+    (filters.sender ?? '').trim() !== '' ||
+    filters.channel !== undefined;
 
   // Clear the selection whenever the filters change: a row that scrolls out of the filtered
   // view must not stay selected and get rejected while the user can no longer see it.
@@ -332,7 +337,10 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
       ) : isPending ? (
         <p className="text-sm text-muted-foreground">Loading...</p>
       ) : data.items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{empty}</p>
+        <p className="text-sm text-muted-foreground">
+          {/* With a filter set, an empty list is about the filter, not the tab (#652). */}
+          {filtered ? 'No messages match these filters.' : empty}
+        </p>
       ) : (
         <ul className="grid grid-cols-1 gap-3" aria-label="Messages">
           {data.items.map((c) =>
