@@ -22,13 +22,7 @@ import {
   sweepWaitingResults,
 } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND, FIRST_RUN_RANK_CAP } from '../src/jobs/discoveryRun';
-import {
-  enqueue,
-  readSchedules,
-  removeSchedule,
-  runNextJob,
-  startRunner,
-} from '../src/jobs/runner';
+import { enqueue, readSchedules, removeSchedule, startRunner } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import {
   createSource,
@@ -45,6 +39,7 @@ import {
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 import { holdAt } from './race';
+import { runQueuedJob } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -120,8 +115,13 @@ async function discoverQueued(
     config: { org: `initech-${first}` },
     roleTargetId: null,
   });
-  await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: c.userId });
-  await runNextJob(app.db, { services: app.jobs.services });
+  const queued = await enqueue(
+    app.db,
+    DISCOVERY_RUN_KIND,
+    { sourceId: src.id },
+    { userId: c.userId },
+  );
+  await runQueuedJob(app, queued);
 }
 
 async function discover(app: FastifyInstance, c: TestClient, count = 1, first = 1): Promise<void> {
