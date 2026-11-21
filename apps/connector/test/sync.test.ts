@@ -163,6 +163,95 @@ describe('syncOnce', () => {
     expect(await loadState(io)).toEqual({ cursor: at(2) });
   });
 
+  // #649: a refusal other than 413 used to throw, so the cursor never moved and every sync re-sent
+  // the same batch. Now it is split down to the message the server refuses, which is skipped and
+  // named, and the rest goes through.
+  it.each([400, 409, 422])(
+    'a batch refused with %i is split down to the refused message, which is skipped and named; the rest goes through',
+    async (status) => {
+      const f = scriptedFetch([
+        { status, body: { error: { code: 'invalid_body' } } },
+        ok(2, 2),
+        { status, body: { error: { code: 'invalid_body' } } },
+      ]);
+      const { io, fs, err } = makeIo({
+        osascript: osascriptReturning([[raw(1), raw(2), raw(3)]]).run,
+        fetch: f.fetch,
+      });
+      await withConfig(fs);
+      expect(await syncOnce(io, CONFIG)).toEqual({ found: 3, pushed: 2, inserted: 2, skipped: 1 });
+      expect(f.calls.map((c) => c.body.messages.length)).toEqual([3, 2, 1]);
+      const warning = err.join('\n');
+      expect(warning).toMatch(/^WARNING: skipped /m);
+      expect(warning).toContain(`apple-mail:${raw(3).id}`);
+      expect(warning).toContain('"Role 3"');
+      expect(warning).toContain(`HTTP ${status}, invalid_body`);
+      // Past the skipped message: the next sync does not send it again.
+      expect(await loadState(io)).toEqual({ cursor: at(3) });
+    },
+  );
+
+  it('a refusal of every message in a batch is the server refusing the connector, not one message: nothing is skipped', async () => {
+    const f = scriptedFetch([
+      { status: 400, body: { error: { code: 'invalid_body' } } },
+      { status: 400, body: { error: { code: 'invalid_body' } } },
+      { status: 400, body: { error: { code: 'invalid_body' } } },
+    ]);
+    const { io, fs, err } = makeIo({
+      osascript: osascriptReturning([[raw(1), raw(2)]]).run,
+      fetch: f.fetch,
+    });
+    await withConfig(fs, CONFIG, { cursor: at(0) });
+    await expect(syncOnce(io, CONFIG)).rejects.toThrow(
+      /refused a batch \(HTTP 400, invalid_body\)/,
+    );
+    expect(err.join('\n')).not.toMatch(/skipped/);
+    // The position stays, so nothing is lost once the server or the connector is updated.
+    expect(await loadState(io)).toEqual({ cursor: at(0) });
+  });
+
+  it('a page the server refuses whole is seen as systemic within a few requests, not one per message (tl on #680)', async () => {
+    const refused = { status: 400, body: { error: { code: 'invalid_body' } } };
+    const f = scriptedFetch(Array.from({ length: 250 }, () => refused));
+    const page = Array.from({ length: 100 }, (_, i) => raw(i + 1));
+    const { io, fs, err } = makeIo({ osascript: osascriptReturning([page]).run, fetch: f.fetch });
+    await withConfig(fs, CONFIG, { cursor: at(0) });
+    await expect(syncOnce(io, CONFIG)).rejects.toThrow(
+      /refused a batch \(HTTP 400, invalid_body\)/,
+    );
+    // 100, 50, 25, 13, 7, 4, 2, then two single messages both refused alike, nothing accepted:
+    // the connector, not those messages. Not 2N-1 = 199.
+    expect(f.calls.map((c) => c.body.messages.length)).toEqual([100, 50, 25, 13, 7, 4, 2, 1, 1]);
+    expect(err.join('\n')).not.toMatch(/skipped/);
+    expect(await loadState(io)).toEqual({ cursor: at(0) });
+  });
+
+  it('two single refusals after something was accepted are those messages: both skipped', async () => {
+    const refused = { status: 422, body: { error: { code: 'invalid_body' } } };
+    const f = scriptedFetch([refused, ok(2, 2), refused, refused, refused]);
+    const { io, fs, err } = makeIo({
+      osascript: osascriptReturning([[raw(1), raw(2), raw(3), raw(4)]]).run,
+      fetch: f.fetch,
+    });
+    await withConfig(fs);
+    expect(await syncOnce(io, CONFIG)).toEqual({ found: 4, pushed: 2, inserted: 2, skipped: 2 });
+    expect(f.calls.map((c) => c.body.messages.length)).toEqual([4, 2, 2, 1, 1]);
+    expect(err.join('\n')).toContain(`apple-mail:${raw(3).id}`);
+    expect(err.join('\n')).toContain(`apple-mail:${raw(4).id}`);
+  });
+
+  it('a 404 (no such route: a server older than the connector) is not split', async () => {
+    const f = scriptedFetch([{ status: 404, body: { error: { code: 'not_found' } } }]);
+    const { io, fs } = makeIo({
+      osascript: osascriptReturning([[raw(1), raw(2)]]).run,
+      fetch: f.fetch,
+    });
+    await withConfig(fs, CONFIG, { cursor: at(0) });
+    await expect(syncOnce(io, CONFIG)).rejects.toThrow(/HTTP 404/);
+    expect(f.calls).toHaveLength(1);
+    expect(await loadState(io)).toEqual({ cursor: at(0) });
+  });
+
   it('keeps terminal control characters from a refused subject out of the warning', async () => {
     const f = scriptedFetch([{ status: 413, body: { error: { code: 'message_too_large' } } }]);
     const { io, fs, err } = makeIo({

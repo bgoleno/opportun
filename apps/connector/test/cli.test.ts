@@ -213,6 +213,50 @@ describe('init', () => {
     });
   });
 
+  // #650: a cursor is the old server's position. A different server has none of that mail, so
+  // init with another address starts the next sync from the start of the lookback window.
+  describe('the sync cursor and the server address (#650)', () => {
+    const flags = (server: string) => [
+      'init',
+      '--server',
+      server,
+      '--token',
+      TOKEN,
+      '--mailbox',
+      'Inbox',
+      '--days',
+      String(CONFIG.lookbackDays),
+    ];
+
+    it('is cleared when the server address changes, with an explanation, and the next sync reads the whole window', async () => {
+      const mail = osascriptReturning([[]]);
+      const { io, fs, out, clock } = makeIo({
+        fetch: scriptedFetch([ok(), ok()]).fetch,
+        osascript: mail.run,
+      });
+      await withConfig(fs, CONFIG, { cursor: 1234 });
+      expect(await main(flags('https://other-opportun.example'), io)).toBe(EXIT.OK);
+      expect(await loadState(io)).toEqual({ cursor: null });
+      expect(out.join('\n')).toMatch(/server address changed/i);
+      expect(out.join('\n')).toMatch(/next sync re-reads the whole lookback window/);
+      // The next sync starts at the window's start, not at the old server's position.
+      expect(await main(['sync'], io)).toBe(EXIT.OK);
+      const since = (JSON.parse(mail.calls[0]?.[4] ?? '{}') as { since: number }).since;
+      expect(since).toBe(clock.now() - CONFIG.lookbackDays * 24 * 60 * 60 * 1000);
+    });
+
+    it.each([
+      ['the same address', 'https://opportun.example'],
+      ['the same address with a trailing slash', 'https://opportun.example/'],
+    ])('is kept for %s', async (_why, server) => {
+      const { io, fs, out } = makeIo({ fetch: scriptedFetch([ok()]).fetch });
+      await withConfig(fs, CONFIG, { cursor: 1234 });
+      expect(await main(flags(server), io)).toBe(EXIT.OK);
+      expect(await loadState(io)).toEqual({ cursor: 1234 });
+      expect(out.join('\n')).not.toMatch(/server address changed/i);
+    });
+  });
+
   it('refuses a malformed token before writing anything', async () => {
     const { io, fs, err } = makeIo();
     const code = await main(

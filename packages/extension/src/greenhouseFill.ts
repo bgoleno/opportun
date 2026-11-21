@@ -46,7 +46,16 @@ export interface FillPlan {
   /** Standard fields, by the form's own element id, with the reviewed value. */
   standard: { id: string; name: string; value: string }[];
   /** Questions matched by their label, normalised; any one of `labels` matches. */
-  questions: { labels: string[]; name: string; value: string }[];
+  questions: {
+    labels: string[];
+    name: string;
+    value: string;
+    /**
+     * A detail whose label a reviewed answer took (prefill.ts, #595): its question was filled with
+     * the answer, so when none of its other labels is on the form it is not reported as missing.
+     */
+    covered?: boolean;
+  }[];
   /**
    * Lists chosen in by the form's own control id (#402 slice 2): `country` (the phone's country
    * code), `candidate-location`, `school--0` and `degree--0`, with the reviewed value.
@@ -528,7 +537,9 @@ export async function fillGreenhouseForm(
     if (!used.has(`s${i}`)) notFilled.push({ label: s.name, reason: 'no_matching_question' });
   });
   plan.questions.forEach((q, i) => {
-    if (!used.has(`q${i}`)) notFilled.push({ label: q.name, reason: 'no_matching_question' });
+    if (!used.has(`q${i}`) && q.covered !== true) {
+      notFilled.push({ label: q.name, reason: 'no_matching_question' });
+    }
   });
   // A withheld field the form does not ask for is still listed, by its name.
   (plan.withheld ?? []).forEach((w, i) => {

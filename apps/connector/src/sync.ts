@@ -58,6 +58,30 @@ interface Delivered {
   pushed: number;
   inserted: number;
   skipped: number;
+  /**
+   * Messages the server refused one by one (a 4xx other than 413, #649), with its answer. They are
+   * skipped, and named, only once the whole batch is through: see deliverBatch.
+   */
+  refused: { message: InboundMessage; status: number; code: string | null }[];
+}
+
+/**
+ * How a batch's split has gone so far (tl on #680): how many messages the server took, and the
+ * last single message it refused. Two single messages refused alike with nothing taken yet is the
+ * server refusing the connector, found in a handful of requests rather than one per message.
+ */
+interface Progress {
+  accepted: number;
+  lastRefusal: { status: number; code: string | null } | null;
+}
+
+/** A refusal the connector cannot act on: stop the sync, keep the position. */
+function refusedBatch(status: number, code: string | null): ConnectorError {
+  return new ConnectorError(
+    `The server refused a batch (HTTP ${status}${code === null ? '' : `, ${code}`}). ` +
+      'Check that the connector and the server are up to date.',
+    EXIT.FAILURE,
+  );
 }
 
 /** Mail content for the terminal: control characters (escape sequences) masked, cut short. */
@@ -78,6 +102,7 @@ async function deliver(
   config: ConnectorConfig,
   batch: InboundMessage[],
   signal: AbortSignal | undefined,
+  progress: Progress = { accepted: 0, lastRefusal: null },
 ): Promise<Delivered> {
   let failures = 0;
   let rateWaits = 0;
@@ -85,7 +110,8 @@ async function deliver(
     const res = await pushBatch(io, config, batch);
     switch (res.kind) {
       case 'ok':
-        return { pushed: batch.length, inserted: res.inserted, skipped: 0 };
+        progress.accepted += batch.length;
+        return { pushed: batch.length, inserted: res.inserted, skipped: 0, refused: [] };
       case 'rate_limited': {
         rateWaits += 1;
         if (rateWaits > MAX_RATE_WAITS) {
@@ -125,25 +151,86 @@ async function deliver(
               '12MB, so this usually means a reverse proxy in front of Opportun has a lower ' +
               'limit: raise it (nginx: client_max_body_size 12m; its default is 1m).',
           );
-          return { pushed: 0, inserted: 0, skipped: 1 };
+          return { pushed: 0, inserted: 0, skipped: 1, refused: [] };
         }
-        const mid = Math.ceil(batch.length / 2);
-        const a = await deliver(io, config, batch.slice(0, mid), signal);
-        const b = await deliver(io, config, batch.slice(mid), signal);
-        return {
-          pushed: a.pushed + b.pushed,
-          inserted: a.inserted + b.inserted,
-          skipped: a.skipped + b.skipped,
-        };
+        return await halves(io, config, batch, signal, progress);
       }
-      case 'rejected':
-        throw new ConnectorError(
-          `The server refused a batch (HTTP ${res.status}${res.code === null ? '' : `, ${res.code}`}). ` +
-            'Check that the connector and the server are up to date.',
-          EXIT.FAILURE,
-        );
+      case 'rejected': {
+        // No such route: a server older than the connector. Nothing in the batch is at fault.
+        if (res.status === 404) throw refusedBatch(res.status, res.code);
+        // One message the server will not take (#649): found by halving, as for a 413, and
+        // skipped with a warning once the whole batch is through, so it is not sent for ever.
+        const only = batch[0];
+        if (batch.length === 1 && only !== undefined) {
+          const last = progress.lastRefusal;
+          if (
+            progress.accepted === 0 &&
+            last !== null &&
+            last.status === res.status &&
+            last.code === res.code
+          ) {
+            throw refusedBatch(res.status, res.code);
+          }
+          progress.lastRefusal = { status: res.status, code: res.code };
+          return {
+            pushed: 0,
+            inserted: 0,
+            skipped: 1,
+            refused: [{ message: only, status: res.status, code: res.code }],
+          };
+        }
+        return await halves(io, config, batch, signal, progress);
+      }
     }
   }
+}
+
+/** A batch sent as its two halves, one after the other, and their outcomes added up. */
+async function halves(
+  io: ConnectorIo,
+  config: ConnectorConfig,
+  batch: InboundMessage[],
+  signal: AbortSignal | undefined,
+  progress: Progress,
+): Promise<Delivered> {
+  const mid = Math.ceil(batch.length / 2);
+  const a = await deliver(io, config, batch.slice(0, mid), signal, progress);
+  const b = await deliver(io, config, batch.slice(mid), signal, progress);
+  return {
+    pushed: a.pushed + b.pushed,
+    inserted: a.inserted + b.inserted,
+    skipped: a.skipped + b.skipped,
+    refused: [...a.refused, ...b.refused],
+  };
+}
+
+/**
+ * One batch of a sync. When the server refuses the connector (an outdated one, say), not some
+ * messages, the sync stops and the position stays, so nothing is skipped that an update would have
+ * let through (#649). That is seen early, during the split (deliver: the second single message
+ * refused alike with nothing taken yet), and, for a batch of two or one, here: every message
+ * refused. Otherwise each refused message is skipped and named.
+ */
+async function deliverBatch(
+  io: ConnectorIo,
+  config: ConnectorConfig,
+  batch: InboundMessage[],
+  signal: AbortSignal | undefined,
+): Promise<Delivered> {
+  const done = await deliver(io, config, batch, signal);
+  const first = done.refused[0];
+  if (first !== undefined && done.refused.length === batch.length) {
+    throw refusedBatch(first.status, first.code);
+  }
+  for (const { message, status, code } of done.refused) {
+    io.stderr(
+      `WARNING: skipped ${message.externalId}, "${printable(message.subject)}" sent ` +
+        `${new Date(message.sentAt).toISOString()}: the server refused it ` +
+        `(HTTP ${status}${code === null ? '' : `, ${code}`}) and it will not be retried. ` +
+        'If the connector or the server is out of date, update it.',
+    );
+  }
+  return done;
 }
 
 export async function syncOnce(
@@ -209,7 +296,7 @@ export async function syncOnce(
 
       for (const batch of splitBatches(items.map((i) => i.message))) {
         if (signal?.aborted === true) throw new Aborted();
-        const done = await deliver(io, config, batch, signal);
+        const done = await deliverBatch(io, config, batch, signal);
         summary.pushed += done.pushed;
         summary.inserted += done.inserted;
         summary.skipped += done.skipped;
