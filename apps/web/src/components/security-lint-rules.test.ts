@@ -23,6 +23,14 @@ const ERROR_RULES = [
     'export const repeated = (text: string): boolean => /^(a+)+$/.test(text);\n',
   ],
   [
+    'security/detect-non-literal-fs-filename',
+    "import { readFileSync } from 'node:fs';\nexport const read = (p: string): string => readFileSync(p, 'utf8');\n",
+  ],
+  [
+    'security/detect-non-literal-regexp',
+    'export const match = (p: string, s: string): boolean => new RegExp(p).test(s);\n',
+  ],
+  [
     'security/detect-object-injection',
     'export function put(o: Record<string, unknown>, key: string, v: unknown): void {\n  o[key] = v;\n}\n',
   ],
@@ -51,10 +59,14 @@ async function severityOf(rule: string, code: string, path: string): Promise<num
 }
 
 /**
- * Rules eslint.config.js turns off for test files, on purpose: tests index their own fixture and
- * schema objects by keys they define (#587). Everywhere else they are errors.
+ * Rules eslint.config.js turns off for test files, on purpose (#587): tests build fixtures in
+ * per-test temporary folders, and index their own fixture and schema objects by keys they define.
+ * Everywhere else they are errors.
  */
-const OFF_IN_TESTS: ReadonlySet<string> = new Set(['security/detect-object-injection']);
+const OFF_IN_TESTS: ReadonlySet<string> = new Set([
+  'security/detect-non-literal-fs-filename',
+  'security/detect-object-injection',
+]);
 const isTestPath = (path: string) => path.includes('/test/') || /\.test\.tsx?$/.test(path);
 
 describe('triaged eslint-plugin-security rules are errors (#587)', () => {

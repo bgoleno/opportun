@@ -162,6 +162,8 @@ export default defineConfig(
     rules: {
       'security/detect-possible-timing-attacks': 'error',
       'security/detect-unsafe-regex': 'error',
+      'security/detect-non-literal-fs-filename': 'error',
+      'security/detect-non-literal-regexp': 'error',
       'security/detect-object-injection': 'error',
       // No hits when they were triaged (#587): errors from the start.
       'security/detect-bidi-characters': 'error',

@@ -240,6 +240,7 @@ export function pageNamesCompany(html: string, companyName: string): boolean {
     }
   }
   if (words.join('').length < 3) return false;
+  // eslint-disable-next-line security/detect-non-literal-regexp -- built from asciiWords, which yields only [a-z0-9]+, so no metacharacter reaches it
   const phrase = new RegExp(`\\b${words.join('\\W+')}\\b`);
   if (phrase.test(fold(sanitizeDescriptionText(html) ?? ''))) return true;
   return declaredNames(html).some((d) => phrase.test(fold(d)));
