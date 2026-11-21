@@ -132,6 +132,12 @@ export interface AiDeps {
    */
   providerFetch: ProviderFetchOptions;
   /**
+   * The most one call may take, its retries included (one deadline from its start): set by the
+   * server on a demo server only (#656), where a call holds the demo reset's gate while it runs.
+   * Unset, no limit.
+   */
+  callTimeLimitMs?: number;
+  /**
    * The user the call is for: an opaque row id, put on the call's span as `user.id`. When it is not
    * the user in the trace context, the call starts a trace of its own (design 14.6), so a job that
    * works through every user's rows makes one trace per user. Absent: no `user.id`.

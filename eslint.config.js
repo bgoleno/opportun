@@ -162,6 +162,8 @@ export default defineConfig(
     rules: {
       'security/detect-possible-timing-attacks': 'error',
       'security/detect-unsafe-regex': 'error',
+      'security/detect-non-literal-fs-filename': 'error',
+      'security/detect-non-literal-regexp': 'error',
     },
   },
   {

@@ -28,6 +28,12 @@ export const START_LIMIT_MS = 20_000;
  */
 export const STREAM_LIMIT_MS = 40_000;
 
+/**
+ * How long one AI provider request may take on a demo server (#656; lib/ai.ts setAiCallLimit):
+ * below the hold's bound, for the AI calls a handler or a job makes, streamed or not.
+ */
+export const AI_CALL_LIMIT_MS = 40_000;
+
 declare module 'fastify' {
   interface FastifyInstance {
     /** On a demo server, how long a streamed reply may run; undefined elsewhere (no limit). */

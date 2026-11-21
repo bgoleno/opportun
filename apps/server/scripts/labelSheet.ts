@@ -43,6 +43,7 @@ const otherSample = Number(arg('other') ?? DEFAULT_OTHER_SAMPLE);
 if (!Number.isInteger(otherSample) || otherSample < 0) fail('--other must be a whole number');
 
 assertSheetDestination(outPath, REPO_ROOT);
+// eslint-disable-next-line security/detect-non-literal-fs-filename -- the operator's --out path, checked by assertSheetDestination just above
 if (existsSync(outPath)) {
   fail(`${outPath} already exists. Labelling it is work; pass a different --out.`);
 }
@@ -75,6 +76,7 @@ const keptOther = new Set(
 );
 const sheet = rows.filter((r) => r.classification !== 'other' || keptOther.has(r.id));
 
+// eslint-disable-next-line security/detect-non-literal-fs-filename -- the operator's --out path, checked by assertSheetDestination above
 writeFileSync(outPath, renderLabelSheet(sheet), { mode: 0o600 });
 
 process.stdout.write(

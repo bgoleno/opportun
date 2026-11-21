@@ -15,10 +15,12 @@ if (reportPath === undefined || required.length === 0) {
 
 // A missing report means the suite step never ran (an earlier step failed): say so
 // plainly instead of crashing with a stack trace.
+// eslint-disable-next-line security/detect-non-literal-fs-filename -- the CI step's own report path argument
 if (!existsSync(reportPath)) {
   console.error(`requireTests: report not found at ${reportPath}: the test step did not run.`);
   process.exit(1);
 }
+// eslint-disable-next-line security/detect-non-literal-fs-filename -- the CI step's own report path argument
 const report = JSON.parse(readFileSync(reportPath, 'utf8'));
 const tests = report.testResults.flatMap((file) =>
   file.assertionResults.map((t) => ({ name: t.fullName, status: t.status })),
