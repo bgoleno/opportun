@@ -6,7 +6,7 @@
 // board gets its own share of the budget; and a save that ran out of time before its boards
 // answered leaves a one-off job to finish the check.
 import { eq } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { jobs, opportunities } from '../src/db/schema';
 import { POSTING_CHECK_KIND, verifyEmbeddedGreenhouse } from '../src/lib/greenhouseEmbed';
 import type { safeFetch } from '../src/lib/safeFetch';
@@ -220,5 +220,91 @@ describe('a save that ran out of time leaves a job to finish the check (#685 cri
     app.jobs.services.sourceFetch = greenhouse(() => 'no').fetch;
     expect((await patch(a, opp.id, link('7101'))).statusCode).toBe(200);
     expect(await checks(app)).toHaveLength(0);
+  });
+});
+
+// tl on #714: criterion 2's "concurrent saves to one host each get a fair chance". The host takes
+// one request a second, shared by every save (safeFetch's per-host bucket), so four saves that
+// each need their third board ask for 12 s of it at once, more than their 5 s budgets cover.
+// Each still ends with its identity: in its response, or once its queued check has run.
+describe('concurrent saves to one host each end with their identity (#685 criterion 2)', () => {
+  it('four saves at once, each needing its third board', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const { app, a } = await boot();
+      const { ctx } = await companyWithBoards(app, a, ['b1', 'b2', 'b3']);
+      const opps = [];
+      for (const title of ['Backend', 'Frontend', 'Platform', 'Data']) {
+        opps.push(
+          await createOpportunity(app.db, ctx, {
+            companyName: 'Example Corp',
+            title: `${title} Engineer`,
+            sourceKind: 'manual',
+          }),
+        );
+      }
+      // One request at a time, a second each; a request whose turn would end past its own time
+      // limit fails when the limit ends, as safeFetch's does.
+      let hostFreeAt = Date.now();
+      const fetch = (async (url: string, init?: { timeoutMs?: number }) => {
+        const m = JOB.exec(url);
+        if (m === null) throw new Error(`unexpected request: ${url}`);
+        const [, token, jid] = m as unknown as [string, string, string];
+        const start = Date.now();
+        const end = Math.max(start, hostFreeAt) + 1000;
+        if (init?.timeoutMs !== undefined && end - start > init.timeoutMs) {
+          await new Promise((r) => setTimeout(r, init.timeoutMs));
+          throw new Error('timeout');
+        }
+        hostFreeAt = end;
+        await new Promise((r) => setTimeout(r, end - start));
+        const held = token === 'b3';
+        return {
+          status: held ? 200 : 404,
+          headers: new Headers(),
+          body: Buffer.from(held ? JSON.stringify({ id: Number(jid) }) : '{}'),
+        };
+      }) as unknown as typeof safeFetch;
+      app.jobs.services.sourceFetch = fetch;
+
+      const saves = opps.map((o, i) => patch(a, o.id, link(`700${i + 1}`)));
+      let settled = false;
+      const all = Promise.all(saves).finally(() => (settled = true));
+      while (!settled) await vi.advanceTimersByTimeAsync(250);
+      for (const res of await all) expect(res.statusCode, res.body).toBe(200);
+      // More than the budgets cover: not every save could finish in its 5 s.
+      const queued = await checks(app);
+      expect(queued.length).toBeGreaterThan(0);
+      for (const job of queued) {
+        let done = false;
+        const running = runQueuedJob(app, job.id).finally(() => (done = true));
+        while (!done) await vi.advanceTimersByTimeAsync(250);
+        await running;
+      }
+      for (const [i, o] of opps.entries()) {
+        expect((await stored(app, o.id)).atsJobRef).toMatchObject({
+          org: 'b3',
+          externalId: `700${i + 1}`,
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// tl's optional point on #714: a save that sends its link unchanged asks no board again, as before
+// #685 (the form sends every field, so each edit would otherwise re-ask them).
+describe('an unchanged link is not checked again (#685)', () => {
+  it('re-saving the same link asks no board', async () => {
+    const { app, a } = await boot();
+    const { opp } = await companyWithBoards(app, a, ['board']);
+    const gh = greenhouse(() => 'fail');
+    app.jobs.services.sourceFetch = gh.fetch;
+    expect((await patch(a, opp.id, link('7101'))).statusCode).toBe(200);
+    const asked = gh.asked.length;
+    expect(asked).toBeGreaterThan(0);
+    expect((await patch(a, opp.id, link('7101'))).statusCode).toBe(200);
+    expect(gh.asked.length).toBe(asked);
   });
 });

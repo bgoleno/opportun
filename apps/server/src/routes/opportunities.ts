@@ -174,8 +174,10 @@ export async function opportunityRoutes(app: FastifyInstance): Promise<void> {
       // API, outside any transaction (#398): one request per known board of the company the save
       // ends with (#598), none for any other link or a job already identified.
       const url = req.body.postingUrl;
+      // A link sent unchanged is not checked again (as before #685): the form sends every field.
+      const before = url == null ? null : (await getOpportunity(db, ctx, id)).postingUrl;
       const written = await updateOpportunity(db, ctx, id, req.body);
-      if (url == null || written.atsJobRef != null) return written;
+      if (url == null || url === before || written.atsJobRef != null) return written;
       const found = await checkEmbeddedGreenhouse(
         db,
         ctx,
