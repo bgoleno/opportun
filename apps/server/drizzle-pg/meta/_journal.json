@@ -372,6 +372,13 @@
       "when": 1796700000000,
       "tag": "0052_dedupe_ai_failures",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1797000000000,
+      "tag": "0053_obs_metric_points_bucket_index",
+      "breakpoints": true
     }
   ]
 }
