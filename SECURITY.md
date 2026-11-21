@@ -6,13 +6,15 @@ stage of the project, including the current beta.
 
 ## Supported versions
 
-| Version                  | Supported                       |
-| ------------------------ | ------------------------------- |
-| `main` (beta)            | Yes: fixes land on `main`       |
-| Any older commit or fork | No: update to the latest `main` |
+| Version                                                                   | Supported                                     |
+| ------------------------------------------------------------------------- | --------------------------------------------- |
+| The [latest release](https://github.com/bgoleno/opportun/releases/latest) | Yes: it gets security fixes                   |
+| `main` (beta)                                                             | Where fixes land first, then in a new release |
+| Any older release, commit or fork                                         | No: update to the latest release              |
 
-There are no tagged releases yet. Once releases begin, the latest minor release will
-receive security fixes and this table will list it.
+Only the latest release is supported. When a new release comes out, the one before it stops
+getting security fixes. The table names "the latest release" rather than a number, so it does
+not change with each release.
 
 ## Reporting a vulnerability
 
