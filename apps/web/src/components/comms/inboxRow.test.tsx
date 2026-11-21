@@ -607,3 +607,55 @@ describe('Inbox bulk Reject (#647)', () => {
     expect(screen.getByText('2 selected')).toBeInTheDocument();
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/652: a failed Ignore said nothing (Move to and Not spam
+// both toast theirs), and a filter that matched nothing showed the tab's own empty text, which
+// reads as an empty inbox.
+describe('Inbox: a failed Ignore, and a filter that matches nothing (#652)', () => {
+  it('a failed Ignore says so, and the suggestion stays', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'DELETE /communications/c1/proposed-transition': () => ({
+        status: 500,
+        body: { error: { code: 'server_error', message: 'The server could not do that.' } },
+      }),
+    });
+    renderWithProviders(
+      <ul>
+        <InboxRow comm={BASE} mode="linked" />
+      </ul>,
+    );
+    const row = await screen.findByRole('listitem', { name: 'Your application at Acme' });
+    await user.click(within(row).getByRole('button', { name: 'Ignore' }));
+    expect(await screen.findByText('Suggestion not dismissed')).toBeInTheDocument();
+    expect(within(row).getByText('Suggested stage')).toBeInTheDocument();
+  });
+
+  it('a filter that matches nothing says so, not that the tab is empty', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /communications': (call: { search: string }) => ({
+        status: 200,
+        body: call.search.includes('q=')
+          ? { items: [], total: 0 }
+          : { items: [{ ...BASE, id: 'nr1', subject: 'needs_review subject' }], total: 1 },
+      }),
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    renderWithProviders(<Inbox />);
+    await screen.findByText('needs_review subject');
+    await user.type(screen.getByLabelText('Keyword'), 'nothing like this');
+    expect(await screen.findByText('No messages match these filters.')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing needs review.')).toBeNull();
+  });
+
+  it('with no filter set, an empty tab still says its own empty text', async () => {
+    mockApi({
+      'GET /communications': { items: [], total: 0 },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    renderWithProviders(<Inbox />);
+    expect(await screen.findByText('Nothing needs review.')).toBeInTheDocument();
+    expect(screen.queryByText('No messages match these filters.')).toBeNull();
+  });
+});
