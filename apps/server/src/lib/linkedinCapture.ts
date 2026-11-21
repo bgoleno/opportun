@@ -249,6 +249,7 @@ const DESCRIPTION_END = new Set(
  * exists for a different reason -- finding where "About the job" ends, not where the page's
  * site chrome begins).
  */
+// eslint-disable-next-line security/detect-non-literal-regexp -- the constant patterns from /core linkedinMarkers
 const trailingNoiseMarkers = TRAILING_NOISE_MARKER_PATTERNS.map((p) => new RegExp(p, 'i'));
 
 export function cutTrailingNoise(text: string): string {

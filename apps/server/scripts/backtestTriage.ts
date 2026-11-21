@@ -32,6 +32,7 @@ if (dbPath === undefined || labelsPath === undefined) {
   fail('usage: backtest --db <opportun.db> --labels <labelled.csv> [--self <address>]');
 }
 
+// eslint-disable-next-line security/detect-non-literal-fs-filename -- the operator's own --labels argument to a local script
 const labelled = parseLabelSheet(readFileSync(resolve(labelsPath), 'utf8'));
 const labels = new Map(labelled.map((r) => [r.id, r.label]));
 
@@ -81,6 +82,7 @@ const linkedThreads = new Set(
 const bodyOf = (ref: string | null): string => {
   if (ref === null) return '';
   try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a body path from the operator's own database copy, under its data folder
     return readFileSync(join(dataDir, ref), 'utf8');
   } catch {
     return '';
