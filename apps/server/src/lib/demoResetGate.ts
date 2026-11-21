@@ -18,6 +18,12 @@
 // back, through a path nobody foresaw, still cannot stall the reset. A hold that reaches it is
 // given back, and its holder is told (onExpire), so it can stop what it was doing.
 //
+// What that leaves (sec and tl on #638; #656): a holder that does not stop when told, and a handler
+// whose work outlives its request, can still write after the bound, so after the reset, into the
+// account reseeded under the same id. The limits below the bound make that rare (a body has
+// START_LIMIT_MS, an AI request AI_CALL_LIMIT_MS, a streamed reply STREAM_LIMIT_MS: see
+// plugins/demoResetHold.ts), not impossible. docs/demo-deployment.md says so too.
+//
 // In process: one server process per database, as docs/install.md requires (one instance; the job
 // runner and the write gate assume it too). Off the demo there is no gate, and nothing waits.
 
