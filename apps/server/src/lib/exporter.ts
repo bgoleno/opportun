@@ -41,6 +41,9 @@ export const EXPORT_EXCLUDED_TABLES: readonly string[] = [
   // Ranking batches in flight with the AI provider (#441): queue state like jobs, meaningless in
   // another instance, which could never collect them. A posting's rank_batch_id stays, as an id.
   'rank_batches',
+  // The kept referral ranking (#590): derived from the contacts and the opportunity, and made again
+  // on the next open of the tab, like search_index.
+  'referral_rankings',
 ];
 
 type UserTable = DbTable & { userId: DbColumn };
@@ -148,11 +151,21 @@ function summary(
   return lines.join('\n') + '\n';
 }
 
+export interface ExportOptions {
+  /**
+   * Leaves every request address out of the audit rows. For a shared demo account, whose
+   * sign-ins are different visitors' (isSharedDemoAccount): its trail's addresses are other
+   * people's, and the exporter cannot tell which ones are the exporter's own, so none is kept.
+   */
+  withoutRequestAddresses?: boolean;
+}
+
 /** Everything the caller owns, as zip entries. Only ctx.userId's rows are read. */
 export async function buildExport(
   db: Db,
   ctx: UserCtx,
   now: number = Date.now(),
+  opts: ExportOptions = {},
 ): Promise<ExportEntry[]> {
   const tables: Record<string, unknown[]> = {};
   const me = await db
@@ -174,6 +187,13 @@ export async function buildExport(
       .from(table)
       .where(eq(table.userId, ctx.userId))
       .all();
+  }
+  // audit_log is the one exported table that holds a request address (sessions is excluded).
+  if (opts.withoutRequestAddresses === true) {
+    tables.audit_log = (tables.audit_log as (typeof schema.auditLog.$inferSelect)[]).map((row) => ({
+      ...row,
+      ip: null,
+    }));
   }
 
   const companyName = new Map(

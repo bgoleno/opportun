@@ -6,6 +6,7 @@
 // render them as plain text, never as markdown or HTML.
 import type { CompanyStatus, IndustryTagSource, NaicsTier } from '@opportun/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { toast } from '@/components/ui/toast';
 import { api, ApiError, errorMessage } from '@/lib/api';
 import type { Page } from '@/lib/opportunities';
@@ -283,17 +284,88 @@ export interface NetworkCompany {
   contacts: { id: string; name: string; strength: number | null }[];
 }
 
-/** The companies in the user's network, read from their own contacts: no AI call. */
+/** The server's page cap (#591): the screen filters and sorts the whole network, so it walks
+ *  the pages, as the pipeline does for opportunities. */
+const NETWORK_PAGE = 200;
+
+/**
+ * Every page of the user's network, each company once: a company added while the pages are read
+ * shifts the later rows by one, and the row it pushes over would otherwise show twice.
+ */
+export async function fetchNetworkCompanies(showDenied: boolean): Promise<Page<NetworkCompany>> {
+  const byId = new Map<string, NetworkCompany>();
+  const denied = showDenied ? '&showDenied=true' : '';
+  for (let offset = 0; ; offset += NETWORK_PAGE) {
+    const page = await api<Page<NetworkCompany>>(
+      `/discovery/network-companies?limit=${NETWORK_PAGE}&offset=${offset}${denied}`,
+    );
+    for (const item of page.items) {
+      if (!byId.has(item.company.id)) byId.set(item.company.id, item);
+    }
+    if (page.items.length < NETWORK_PAGE || offset + NETWORK_PAGE >= page.total) {
+      return { items: [...byId.values()], total: page.total };
+    }
+  }
+}
+
+/**
+ * The companies in the user's network, read from their own contacts: no AI call.
+ *
+ * While a board probe runs on some of them, only those rows are read again every 3 s (?ids=,
+ * #591), and each is put in place in the list; the whole network was read again each time
+ * before. The poll stops once none is pending.
+ */
 export function useNetworkCompanies(showDenied: boolean) {
-  return useQuery({
+  const qc = useQueryClient();
+  const query = useQuery({
     queryKey: companyKeys.network(showDenied),
-    queryFn: () =>
-      api<{ items: NetworkCompany[] }>(
-        `/discovery/network-companies${showDenied ? '?showDenied=true' : ''}`,
-      ),
-    refetchInterval: (q) =>
-      probing(q.state.data?.items.map((i) => i.company)) ? PROBE_POLL_MS : false,
+    queryFn: () => fetchNetworkCompanies(showDenied),
   });
+  const waiting = (query.data?.items ?? [])
+    .filter((i) => i.company.boardProbePending === true)
+    .map((i) => i.company.id)
+    .sort()
+    .join(',');
+  // Each read sets the next timer: a changed list (dataUpdatedAt) or, after a failed read, the
+  // tick, so one failure does not end the poll while a probe is still pending.
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (waiting === '') return;
+    let stopped = false;
+    const timer = setTimeout(() => {
+      void api<Page<NetworkCompany>>(
+        `/discovery/network-companies?ids=${waiting}&limit=${NETWORK_PAGE}${showDenied ? '&showDenied=true' : ''}`,
+      ).then(
+        (page) => {
+          if (stopped) return;
+          const fresh = new Map(page.items.map((i) => [i.company.id, i]));
+          // A company asked for and not in the answer has left the network (its last contact
+          // went elsewhere, or was deleted): it goes from the list, as a whole-list read took it
+          // away before, and so does its poll (qa on #624). Kept, it read "Checking board..."
+          // and was polled every 3 s for good.
+          const asked = new Set(waiting.split(','));
+          qc.setQueryData<Page<NetworkCompany>>(companyKeys.network(showDenied), (old) => {
+            if (old === undefined) return old;
+            const items = old.items.flatMap((i) => {
+              const id = i.company.id;
+              if (!asked.has(id)) return [i];
+              const row = fresh.get(id);
+              return row === undefined ? [] : [row];
+            });
+            return { items, total: old.total - (old.items.length - items.length) };
+          });
+        },
+        () => {
+          if (!stopped) setRetry((n) => n + 1);
+        },
+      );
+    }, PROBE_POLL_MS);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [waiting, showDenied, qc, query.dataUpdatedAt, retry]);
+  return query;
 }
 
 /** Why Check board was refused, in the user's words (#301). */

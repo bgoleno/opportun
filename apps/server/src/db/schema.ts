@@ -54,6 +54,7 @@ export const industryProfile = t.industryProfile;
 export const mailFilterRules = t.mailFilterRules;
 export const taskRuns = t.taskRuns;
 export const networkContacts = t.networkContacts;
+export const referralRankings = t.referralRankings;
 export const communications = t.communications;
 export const applicationSubmissions = t.applicationSubmissions;
 export const resumeSends = t.resumeSends;

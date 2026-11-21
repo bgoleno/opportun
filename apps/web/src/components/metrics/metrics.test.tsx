@@ -4,7 +4,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import type { MetricCatalog, MetricSeries } from './api';
 import { MetricsPage, type MetricsSearch } from './MetricsPage';
@@ -206,6 +206,82 @@ describe('MetricsPage', () => {
     await waitFor(() => expect(calls.length).toBeGreaterThan(before));
     const q = lastSeries(calls);
     expect(Number(q.get('to')) - Number(q.get('from'))).toBeLessThanOrEqual(30 * 24 * H);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/614: the From input holds whole minutes, so the
+  // start it shows for a preset chosen at hh:mm:59.900 is 59.9 s older than 30 days before that.
+  // An Apply against the clock alone then had a tenth of a second before it refused its own range.
+  describe('the last 30 days chosen late in a minute, then Custom', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+    const LATE = new Date(2026, 10, 20, 12, 0, 59, 900).getTime();
+
+    it.each([
+      ['a few seconds', 5_000],
+      ['two hours', 2 * H],
+    ])('applies with no refusal %s later, inside the last 30 days', async (_label, wait) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(LATE);
+      const { calls } = mockApi({
+        'GET /obs/metrics': CATALOG,
+        'GET /obs/metrics/series': seriesFor,
+      });
+      renderWithProviders(<Harness initial={{ metric: 'http.server.request.duration' }} />);
+      const user = userEvent.setup();
+      await screen.findByRole('table', { name: /Calls/ });
+      await user.selectOptions(screen.getByLabelText('Time range'), '30d');
+      await user.selectOptions(screen.getByLabelText('Time range'), 'custom');
+      vi.setSystemTime(LATE + wait);
+      const before = calls.length;
+      await user.click(screen.getByRole('button', { name: 'Apply' }));
+      expect(screen.queryByRole('alert')).toBeNull();
+      await waitFor(() => expect(calls.length).toBeGreaterThan(before));
+      const q = lastSeries(calls);
+      const from = Number(q.get('from'));
+      const to = Number(q.get('to'));
+      expect(to).toBeLessThanOrEqual(LATE + wait);
+      expect(to - from).toBeLessThanOrEqual(30 * 24 * H);
+      expect(from).toBeGreaterThanOrEqual(LATE + wait - 30 * 24 * H);
+    });
+
+    it('refuses, as before, an end typed so long ago that nothing of the range is kept', async () => {
+      // qa on #628: the page-filled start is clamped into the last 30 days, which can move it
+      // past a typed end; the range must then be refused here, not sent the wrong way round.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(LATE);
+      const { calls } = mockApi({
+        'GET /obs/metrics': CATALOG,
+        'GET /obs/metrics/series': seriesFor,
+      });
+      renderWithProviders(<Harness initial={{ metric: 'http.server.request.duration' }} />);
+      const user = userEvent.setup();
+      await screen.findByRole('table', { name: /Calls/ });
+      await user.selectOptions(screen.getByLabelText('Time range'), '30d');
+      await user.selectOptions(screen.getByLabelText('Time range'), 'custom');
+      vi.setSystemTime(LATE + 2 * H);
+      await user.clear(screen.getByLabelText('To'));
+      await user.type(screen.getByLabelText('To'), localInput(LATE + 2 * H - 30 * 24 * H));
+      const before = calls.length;
+      await user.click(screen.getByRole('button', { name: 'Apply' }));
+      expect(screen.getByRole('alert')).toHaveTextContent(/Points are kept 30 days/);
+      expect(calls.length).toBe(before);
+    });
+
+    it('still refuses a start typed more than 30 days ago', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(LATE);
+      mockApi({ 'GET /obs/metrics': CATALOG, 'GET /obs/metrics/series': seriesFor });
+      renderWithProviders(<Harness initial={{ metric: 'http.server.request.duration' }} />);
+      const user = userEvent.setup();
+      await screen.findByRole('table', { name: /Calls/ });
+      await user.selectOptions(screen.getByLabelText('Time range'), '30d');
+      await user.selectOptions(screen.getByLabelText('Time range'), 'custom');
+      await user.clear(screen.getByLabelText('From'));
+      await user.type(screen.getByLabelText('From'), localInput(LATE - 31 * 24 * H));
+      await user.click(screen.getByRole('button', { name: 'Apply' }));
+      expect(screen.getByRole('alert')).toHaveTextContent(/Points are kept 30 days/);
+    });
   });
 
   it('refuses a custom range that starts in the future', async () => {

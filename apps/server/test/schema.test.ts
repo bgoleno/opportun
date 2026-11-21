@@ -34,6 +34,7 @@ const EXPECTED_TABLES = [
   'profiles',
   'prompts',
   'rank_batches',
+  'referral_rankings',
   'resume_match_reports',
   'resume_rules',
   'resume_sends',

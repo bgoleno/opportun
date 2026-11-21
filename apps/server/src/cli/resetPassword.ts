@@ -3,11 +3,16 @@
 //   node --import tsx src/cli/resetPassword.ts <email>
 //
 // Generates a strong temporary password, stores only its Argon2id hash, ends every session the
-// user has, turns off TOTP 2FA (the recovery of last resort for a lost phone with no recovery
-// codes: the user re-enrolls after signing in), and prints the temporary password to stdout. Nothing else: the password never goes
-// to a log, a file, the audit trail or stderr. Exits nonzero (touching nothing) when the email
-// is unknown. Run it against the same DATA_DIR (and, on Postgres, the same DB_DIALECT and
-// DATABASE_URL) as the server (in Docker: docker compose exec).
+// user has, revokes their device tokens, unlinks their sign-in providers (#573), turns off TOTP
+// 2FA (the recovery of last resort for a lost phone with no recovery codes: the user re-enrolls
+// after signing in), and prints the temporary password to stdout. Nothing else goes to stdout, so
+// a script can read the password from it; which providers were unlinked goes to stderr. The
+// password never goes to a log, a file, the audit trail or stderr. Exits nonzero (touching
+// nothing) when the email is unknown, and when its pepper version is not the one the server last
+// started with (#606: the password would never sign in). Run it against the same DATA_DIR (and, on
+// Postgres, the same DB_DIALECT and DATABASE_URL) and the same pepper variables as the server:
+// OPPORTUN_PEPPER, OPPORTUN_PEPPER_VERSION and every OPPORTUN_PEPPER_V<N> (in Docker, docker
+// compose exec inherits them).
 // First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
 import '../unsetEmptyAiBaseUrls';
 import { resolve } from 'node:path';
@@ -18,6 +23,7 @@ import { closeDatabase, connectDatabase, type Db } from '../db/client';
 import { users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { resetUserPassword } from '../lib/passwordReset';
+import { stalePepperProblem } from '../lib/pepperVersion';
 import { NO_PEPPERS, type PepperSet } from '../lib/passwords';
 
 export { temporaryPassword } from '../lib/passwordReset';
@@ -66,9 +72,25 @@ export async function main({
     io.stderr(`No user with email ${normalized}; nothing changed.`);
     return 1;
   }
-  const password = await resetUserPassword(db, user.id, peppers);
-  await audit(db, 'auth.password_reset_cli', { userId: user.id });
+  // Before anything is hashed or written: a run whose pepper version is not the server's would
+  // print a password that never signs in, after ending the sessions and tokens (#606).
+  const stale = await stalePepperProblem(db, peppers);
+  if (stale !== null) {
+    io.stderr(`${stale} Nothing changed.`);
+    return 1;
+  }
+  const { password, unlinkedProviders } = await resetUserPassword(db, user.id, peppers);
+  await audit(db, 'auth.password_reset_cli', {
+    userId: user.id,
+    ...(unlinkedProviders.length === 0 ? {} : { detail: { unlinkedProviders } }),
+  });
   io.stdout(password);
+  if (unlinkedProviders.length > 0) {
+    io.stderr(
+      `Unlinked sign-in providers: ${unlinkedProviders.join(', ')}. ` +
+        'Link them again under Settings > Security after signing in.',
+    );
+  }
   return 0;
 }
 

@@ -977,6 +977,32 @@ export const networkContacts = sqliteTable(
   ],
 );
 
+/**
+ * The referral ranking kept for one opportunity (https://github.com/bgoleno/opportun/issues/590):
+ * the model's validated ranks for the candidates it was sent, and the hash of everything it was
+ * sent (the contacts, the opportunity, the prompt and the model policy). Re-opening the tab with the
+ * same hash reuses it instead of calling the model again; any change to an input is a new hash, so
+ * nothing has to invalidate it. One row per opportunity, replaced by each fresh ranking. Derived
+ * data, left out of the export like search_index.
+ */
+export const referralRankings = sqliteTable(
+  'referral_rankings',
+  {
+    id: id(),
+    userId: userRef(),
+    opportunityId: text('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    /** sha256 of the call's inputs, never of a key. */
+    inputHash: text('input_hash').notNull(),
+    ranking: json<{ contactId: string; rank: number; rationale: string }[]>('ranking').notNull(),
+    rankedAt: integer('ranked_at').notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('referral_rankings_user_opportunity_uq').on(t.userId, t.opportunityId)],
+);
+
 /** Ingested copies only; the user's mailbox is never modified (FR-M8). */
 export const communications = sqliteTable(
   'communications',

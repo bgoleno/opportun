@@ -193,13 +193,13 @@ export async function startUserSession(
 }
 
 /** What a new session or pending 2FA token records of the request that made it. */
-function sessionMeta(req: FastifyRequest): { ip: string; userAgent?: string } {
+export function sessionMeta(req: FastifyRequest): { ip: string; userAgent?: string } {
   const ua = req.headers['user-agent'];
   return { ip: req.ip, ...(ua === undefined ? {} : { userAgent: ua }) };
 }
 
 /** The cookies for a session already written (createSession), possibly inside a transaction. */
-function setSessionCookies(
+export function setSessionCookies(
   req: FastifyRequest,
   reply: FastifyReply,
   { token, expiresAt }: { token: string; expiresAt: number },
@@ -929,7 +929,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         params: UserIdParams,
         body: AdminResetBody,
         response: {
-          200: z.object({ temporaryPassword: z.string() }),
+          200: z.object({
+            temporaryPassword: z.string(),
+            /** The providers the reset unlinked (#573), for the admin to have linked again. */
+            unlinkedProviders: z.array(z.string()),
+          }),
           401: ErrorResponse,
           403: ErrorResponse,
           404: ErrorResponse,
@@ -963,14 +967,21 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         .where(eq(users.id, targetId))
         .get();
       if (target === undefined) return fail(reply, 404, 'not_found');
-      const temporaryPassword = await resetUserPassword(db, target.id, peppers);
+      const { password: temporaryPassword, unlinkedProviders } = await resetUserPassword(
+        db,
+        target.id,
+        peppers,
+      );
       await audit(db, 'admin.password_reset', {
         userId: ctx.userId,
         ip: req.ip,
-        detail: { targetUserId: target.id },
+        detail: {
+          targetUserId: target.id,
+          ...(unlinkedProviders.length === 0 ? {} : { unlinkedProviders }),
+        },
       });
       // Shown once to the admin, who hands it over out of band; never stored or logged.
-      return reply.code(200).send({ temporaryPassword });
+      return reply.code(200).send({ temporaryPassword, unlinkedProviders });
     },
   );
 }

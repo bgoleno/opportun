@@ -560,11 +560,14 @@ interface DocumentStore {
 
 ### 6.3 SSRF and fetch hygiene (NFR-SEC6)
 
-All adapter HTTP goes through one `safeFetch` wrapper except the AI provider's
-`openai_compatible` base URL path (a known gap, not a deliberate deviation, tracked in
-#334): allowlisted schemes/hosts
+All adapter HTTP goes through one `safeFetch` wrapper: allowlisted schemes/hosts
 per adapter, DNS pinning with private-range rejection (including on redirect), 15 s
-timeout, 5 MB cap, and per-host token-bucket rate limits.
+timeout, 5 MB cap, and per-host token-bucket rate limits. AI provider requests, an
+`openai_compatible` base URL included, go through `lib/aiProviderFetch.ts` instead, which checks
+the prohibited hosts and that every resolved address is public, but cannot pin the address to the
+connection (a streaming SDK makes it). That DNS-rebinding residual is a documented deviation:
+see "HTTP MCP sources, the AI provider path, and DNS rebinding" in
+[SECURITY.md](../SECURITY.md#deliberate-deviations).
 
 ## 7. Security design
 
