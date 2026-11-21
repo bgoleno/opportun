@@ -10,7 +10,8 @@ import path from 'node:path';
 export const SECURITY_SENSITIVE_GLOBS = [
   // auth
   '**/lib/passwords.ts',
-  '**/lib/pepperSet.ts',
+  // the peppers and their versions (pepperSet.ts today; a later pepper*.ts with them, tl on #610)
+  '**/lib/pepper*.ts',
   '**/lib/reauth.ts',
   '**/lib/sessions.ts',
   '**/lib/totp.ts',
@@ -136,7 +137,8 @@ export const SECURITY_SENSITIVE_GLOBS = [
   'apps/server/src/lib/atsJobRef.ts',
   // the outbound AI provider clients, and tasks.ts, which fences untrusted text in prompts
   'packages/ai/src/providers.ts',
-  'packages/ai/src/anthropicBatch.ts',
+  // every provider's batch client, as each lands (*Batch.ts, tl on #610)
+  'packages/ai/src/*Batch.ts',
   'packages/ai/src/batch.ts',
   'packages/ai/src/keyCheck.ts',
   'packages/ai/src/router.ts',

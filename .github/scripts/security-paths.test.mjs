@@ -201,6 +201,14 @@ for (const file of FLAGGED_FILES) {
   });
 }
 
+// Files in agreed areas that open PRs add (tl on #610): another provider's batch client, and the
+// pepper version beside the pepper set.
+for (const file of ['packages/ai/src/openaiBatch.ts', 'apps/server/src/lib/pepperVersion.ts']) {
+  test(`a later ${file} is flagged too (#610)`, () => {
+    assert.deepEqual(matchingSecurityPaths([file]), [file]);
+  });
+}
+
 test('a Dockerfile variant added later is flagged too (#610)', () => {
   const file = 'deploy/Dockerfile.dev';
   assert.deepEqual(matchingSecurityPaths([file]), [file]);
