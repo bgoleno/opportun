@@ -389,7 +389,7 @@ No ATS credentials are stored: there is nothing to store because there is no emp
 
 ### 7.2 SSRF and outbound fetch
 
-The server adds **no** new outbound fetch for submission. The one read that may be useful (Greenhouse job `questions`) reuses `sctx.fetch`/`safeFetch` with `allowHosts: ['boards-api.greenhouse.io']` exactly as the adapter does (`adapters/sources/atsCommon.ts`, `ATS_ALLOW_HOSTS` at `lib/safeFetch.ts` line 131, SSRF hardening NFR-SEC6, `MAX_REDIRECTS` line 87, `PROHIBITED_HOSTS` line 94, `PAGE_FETCH_PROHIBITED_HOSTS` line 111). `destination_url` is stored and returned, never fetched by the server. It is validated: `https` only, host must satisfy the same ATS host recognition used by `lib/atsJobRef.ts`/`jobs/atsDetect.ts` `boardFromUrl` (rejecting lookalike hosts), or be a company career-site host with a matching `gh_jid`. LinkedIn and Indeed are never destinations (`PROHIBITED_HOSTS`, `PAGE_FETCH_PROHIBITED_HOSTS`). M1c (#129) dropped career-page destinations entirely, so a handoff destination is always a recognised ATS host, and #142 refuses at creation a draft whose destination could never be handed off. If career-page destinations come back, they are handoff-only by default (Tech Lead, 2026-11-02, on #120), because a `gh_jid` link on any host would otherwise receive the user's fields and resume once prefill exists.
+On the demo's shared accounts, assisted apply makes no outbound request and no AI call: an attempt there carries no resume, so creating a draft, review, handoff, `/current`, `/snapshot` and the confirmation fetch nothing. (Elsewhere, a Google Doc resume is exported from Google for the snapshot.) **Find posting**, which the Apply panel offers and which predates assisted apply, reads the ATS APIs (their fixed hosts, or a Workday board's own tenant host) and, when the company has no board on record, the company's careers page, which can be any public https address. Every read goes through `safeFetch` (public addresses only, pinned, at most one request per second per host), and none reads a `destination_url`. This is the same fetch a captured link makes. The design first considered one read, Greenhouse job `questions`, which would reuse `sctx.fetch`/`safeFetch` with `allowHosts: ['boards-api.greenhouse.io']` as the adapter does (`adapters/sources/atsCommon.ts`, `ATS_ALLOW_HOSTS` at `lib/safeFetch.ts` line 131, SSRF hardening NFR-SEC6, `MAX_REDIRECTS` line 87, `PROHIBITED_HOSTS` line 94, `PAGE_FETCH_PROHIBITED_HOSTS` line 111). `destination_url` is stored and returned, never fetched by the server. It is validated: `https` only, host must satisfy the same ATS host recognition used by `lib/atsJobRef.ts`/`jobs/atsDetect.ts` `boardFromUrl` (rejecting lookalike hosts), or be a company career-site host with a matching `gh_jid`. LinkedIn and Indeed are never destinations (`PROHIBITED_HOSTS`, `PAGE_FETCH_PROHIBITED_HOSTS`). M1c (#129) dropped career-page destinations entirely, so a handoff destination is always a recognised ATS host, and #142 refuses at creation a draft whose destination could never be handed off. If career-page destinations come back, they are handoff-only by default (Tech Lead, 2026-11-02, on #120), because a `gh_jid` link on any host would otherwise receive the user's fields and resume once prefill exists.
 
 ### 7.3 PII in resumes, answers and logs
 
@@ -470,7 +470,7 @@ Principles applied from `docs/engineering-principles.md`: prove the absence of d
 8. **Isolation:** `assertIsolated` for submissions, snapshots and device routes (`test/isolation.ts`).
 9. **Schema conformance and copy plan:** `test/schemaConformance.test.ts` and `test/copyPlan.test.ts` fail if the twin schemas or the copy list disagree.
 10. **Extension tests** (`packages/extension/test`): manifest unchanged except version (guard test already exists, `manifest.test.ts`); injected filler source scan for forbidden tokens; destination-pinning refusal; fill against saved HTML fixtures of each ATS form (static fixtures, never live fetches). Note: real-form behaviour (captcha, file input) is only checked in the M3 spike and manual QA, and the QA checklist (`packages/extension/README.md` line 116 onward) gains rows for each ATS.
-11. **Demo gating:** with `OPPORTUN_DEMO=1`, every new route returns `404` and the seeded demo has no submissions.
+11. **Demo gating:** with `OPPORTUN_DEMO=1`, the shared demo accounts get assisted apply unless `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY=0`, which makes every route answer `404` for them. Each attempt there is bound to the visitor (the session) that started it, a resume and saving to the profile are refused, and the demo's own values are refused. The seeded demo has no submissions. A dedicated account behaves as on any instance.
 12. **Redaction:** a test that submits an answer containing a sentinel string and asserts it appears in no `audit_log.detail`, no `jobs.payload`, and no captured log output.
 13. Run all gates (`lint`, `typecheck`, `format:check`, `test`) per `CONTRIBUTING.md`, "Before pushing".
 
@@ -478,7 +478,7 @@ Principles applied from `docs/engineering-principles.md`: prove the absence of d
 
 ## 9. Rollout: small, independently shippable milestones
 
-Each milestone is behind a per-instance config flag, `OPPORTUN_SUBMISSIONS`, always off on the demo. It was off unless set to `1` while the milestones were built. Since https://github.com/bgoleno/opportun/issues/455 (the owner's decision, after M2a closed) it is on by default, and an operator turns it off with `0`; any other value refuses to start.
+Each milestone is behind a per-instance config flag, `OPPORTUN_SUBMISSIONS`; on the demo's shared accounts it is on unless `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY=0` (§7.8 records the first design, which hid it there). It was off unless set to `1` while the milestones were built. Since https://github.com/bgoleno/opportun/issues/455 (the owner's decision, after M2a closed) it is on by default, and an operator turns it off with `0`; any other value refuses to start.
 
 The Tech Lead re-cut these milestones against main on 2026-11-02 (https://github.com/bgoleno/opportun/issues/79#issuecomment-6572248522), and each has its own issue. The original M0 to M4 shape stands; M1 is now four PRs and M2 two. At 3a2b3bd, M1, M2 and M4 are closed; M0 (#113) and M3 (#120) are open.
 
@@ -494,7 +494,7 @@ The Tech Lead re-cut these milestones against main on 2026-11-02 (https://github
 | M3  | Extension prefill, Greenhouse first             | #120  | The `apply:assist` scope, device routes, a separate popup path, the filler and destination pinning. Gated on M0 item 2 for that ATS (whether prefill works on real forms); the owner lifted the terms gate on 2026-11-02 (#113). Lever and Ashby follow as small PRs. |
 | M4  | Confirmation page capture                       | #121  | The confirmation route, the popup button and the `capture` activity. After M3.                                                                                                                                                                                        |
 
-Rules for every milestone: Opportun never transmits an application; everything sits behind `OPPORTUN_SUBMISSIONS` (off unless `1` until M2a; on by default since #455, off with `0`; always off on the demo), and M1 alone is never switched on for users; one opportunity per request, with no batch or list-and-act route.
+Rules for every milestone: Opportun never transmits an application; everything sits behind `OPPORTUN_SUBMISSIONS` (off unless `1` until M2a; on by default since #455, off with `0`; on the demo's shared accounts unless `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY=0`), and M1 alone is never switched on for users; one opportunity per request, with no batch or list-and-act route.
 
 Each milestone is releasable alone; M1 without M2 is already useful as "resume I sent" bookkeeping, but I would not release M1 to users without M2's follow-up job (a submitted row that silently stays `submitted` forever is a false "never" in the sense of `docs/engineering-principles.md` lines 215–226).
 
@@ -508,7 +508,7 @@ Add under 5.3 or a new 5.11 "Assisted application (FR-X)":
 - **FR-X2 (P1):** Pre-review gate: a submission cannot be handed off until the user has reviewed destination, resume snapshot, fields and answers on one screen; the review is invalidated by any change; one opportunity per action; no batch; a server-enforced daily review ceiling.
 - **FR-X3 (P1):** The submission's outcome and confirmation evidence (user-attested submission, captured confirmation page, matched confirmation email) are recorded on the opportunity timeline and in the resume's submitted record (FR-R3), and the absence of confirmation is surfaced as a next step, never as a failure and never acted on automatically.
 - **FR-X4 (P2):** The browser extension may prefill the ATS form in the tab the user is viewing on an explicit click; it never presses the form's submit control.
-- **FR-X5 (P1):** Feature unavailable on the demo deployment.
+- **FR-X5 (P1):** On the demo deployment the shared accounts get the feature with each attempt bound to its visitor, resumes and saving to the profile refused, and the demo's own values refused; the operator can turn it off for them. (First written as "unavailable on the demo"; replaced by https://github.com/bgoleno/opportun/issues/545.)
 
 Clarifying note to append to **NG-3** (additive, does not relax any clause): "Assisted application (FR-X) is permitted because Opportun itself transmits nothing: it prepares and records, the user's browser fills a form the user is viewing, and the user presses the destination's own submit control. No code path in the server, the connector or the extension may invoke an application submit. A direct submission API integration remains out of scope because candidate access to such APIs does not exist (they require an employer-issued key) and doing it without one would violate C-2."
 
@@ -544,7 +544,7 @@ All eight were answered by the owner on 2026-10-27 and 2026-10-28, and the answe
 5. **Q5: Daily review ceiling.** Defaults of 10 per rolling 24 hours (instance ceiling 25). Do you want lower, and should the user be able to raise it at all?
 6. **Q6: Reapply policy.** Allow re-applying to the same requisition with a typed reason (design), or refuse outright?
 7. **Q7: Naming.** "Apply on Greenhouse" / "Assisted apply" over "Submit to ATS". Agree?
-8. **Q8: Demo.** Hidden entirely (design) or a read-only sample?
+8. **Q8: Demo.** Hidden entirely (design) or a read-only sample? (Answered "hidden" in 2026-10; replaced by https://github.com/bgoleno/opportun/issues/545: on for the shared accounts.)
 
 ### 10.3 Explicit non-goals
 
@@ -602,7 +602,7 @@ Data and states the popup shows: not configured (existing); **No application rea
 
 - **Settings > Integrations > Extensions and Connectors:** add scope option "Assisted apply" to the device token creation form (alongside "Browser capture") and to the extension's Set up flow, with plain-language text on what it can read and write (the one reviewed application and its snapshot, and see Device token reach in [What the build changed](#what-the-build-changed); it cannot start or review an application).
 - **Settings > Applications:** feature toggle (if instance-enabled), daily review ceiling (lowerable only, shows the instance ceiling), follow-up window days (default 3), list of recognised ATS sender domains for matching confirmation emails (read-only seed plus user additions, reusing the mail allow/deny rules UI pattern).
-- **Demo:** the Apply panel absent; no settings section.
+- **Demo:** the shared accounts get the Apply panel and the Settings screens as on any instance, with a notice that what is entered is visible to others on the account; there is no resume step and no **Save to my profile** tick.
 
 ### 11.7 Cross-cutting UX requirements
 

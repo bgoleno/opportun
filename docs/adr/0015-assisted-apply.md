@@ -42,6 +42,9 @@ Opportun prepares and records an application; it never transmits one.
 - Whether an application was submitted rests on the user's word until evidence arrives. The
   timeline says so ("Basis: you reported submitting this"), and "No confirmation seen" is a next
   step, never a failure.
-- The feature is behind `OPPORTUN_SUBMISSIONS` and is never on the demo. It was off unless set to
+- The feature is behind `OPPORTUN_SUBMISSIONS`. It was first never on the demo; since
+  https://github.com/bgoleno/opportun/issues/545 it is on for the demo's shared accounts, each
+  application bound to its visitor, with no resume and nothing saved to the profile (an operator
+  can turn that off with `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY=0`). It was off unless set to
   `1` until the owner made it on by default (https://github.com/bgoleno/opportun/issues/455): now
   an operator turns it off with `0`.

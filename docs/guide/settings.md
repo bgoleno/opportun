@@ -242,8 +242,10 @@ Administrators see **Settings > Users**:
 
 - **Users**: everyone on the instance, their role, whether two-factor is on, and when they
   joined. **Reset password** gives a member a temporary password, shown once. It signs them
-  out everywhere, revokes their device tokens and turns off their two-factor sign-in. You
-  cannot reset your own account this way.
+  out everywhere, revokes their device tokens, unlinks their Google, GitHub or LinkedIn
+  sign-in, and turns off their two-factor sign-in. The dialog with the temporary password
+  names the providers it unlinked, so the member can link theirs again under
+  **Settings > Security**. You cannot reset your own account this way.
   Both this and opening or closing registration ask for your own password.
 - **Password pepper**: shown only when a pepper is configured (see
   [install guide section 4](../install.md#4-configuration-reference)). Names any account that

@@ -3,9 +3,11 @@
 //   node --import tsx src/cli/resetPassword.ts <email>
 //
 // Generates a strong temporary password, stores only its Argon2id hash, ends every session the
-// user has, turns off TOTP 2FA (the recovery of last resort for a lost phone with no recovery
-// codes: the user re-enrolls after signing in), and prints the temporary password to stdout. Nothing else: the password never goes
-// to a log, a file, the audit trail or stderr. Exits nonzero (touching nothing) when the email
+// user has, revokes their device tokens, unlinks their sign-in providers (#573), turns off TOTP
+// 2FA (the recovery of last resort for a lost phone with no recovery codes: the user re-enrolls
+// after signing in), and prints the temporary password to stdout. Nothing else goes to stdout, so
+// a script can read the password from it; which providers were unlinked goes to stderr. The
+// password never goes to a log, a file, the audit trail or stderr. Exits nonzero (touching nothing) when the email
 // is unknown. Run it against the same DATA_DIR (and, on Postgres, the same DB_DIALECT and
 // DATABASE_URL) as the server (in Docker: docker compose exec).
 // First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
@@ -66,9 +68,18 @@ export async function main({
     io.stderr(`No user with email ${normalized}; nothing changed.`);
     return 1;
   }
-  const password = await resetUserPassword(db, user.id, peppers);
-  await audit(db, 'auth.password_reset_cli', { userId: user.id });
+  const { password, unlinkedProviders } = await resetUserPassword(db, user.id, peppers);
+  await audit(db, 'auth.password_reset_cli', {
+    userId: user.id,
+    ...(unlinkedProviders.length === 0 ? {} : { detail: { unlinkedProviders } }),
+  });
   io.stdout(password);
+  if (unlinkedProviders.length > 0) {
+    io.stderr(
+      `Unlinked sign-in providers: ${unlinkedProviders.join(', ')}. ` +
+        'Link them again under Settings > Security after signing in.',
+    );
+  }
   return 0;
 }
 

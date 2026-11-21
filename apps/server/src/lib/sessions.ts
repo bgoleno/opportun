@@ -115,6 +115,20 @@ export async function destroySession(db: Db, token: string): Promise<void> {
     .run();
 }
 
+/**
+ * Whether the session stored as `id` (sessionIdOf its cookie) still exists for `userId`. A change
+ * and a reset delete every one of the user's under the password lock (#561): a step that holds the
+ * same lock and finds its session gone writes nothing (#573).
+ */
+export async function sessionStored(exec: Exec, id: string, userId: string): Promise<boolean> {
+  const row = await exec
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(and(eq(sessions.id, id), eq(sessions.userId, userId), eq(sessions.kind, 'session')))
+    .get();
+  return row !== undefined;
+}
+
 /** Every sessions row the user has, pending 2FA tokens included. Inside a change's or reset's
  *  locked transaction (#561), so a sign-in that holds that lock writes before it, or not at all. */
 export async function destroyAllSessions(db: Exec, userId: string): Promise<void> {
