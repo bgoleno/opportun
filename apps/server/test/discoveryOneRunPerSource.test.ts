@@ -22,6 +22,7 @@ import { createSource, getSourceRow, hasSucceededRun, listResults } from '../src
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 import { holdAt } from './race';
+import { holdInstanceSchedules } from './runQueuedJob';
 
 const boot = useApi();
 const ctxOf = (c: TestClient): UserCtx => ({ userId: c.userId, isAdmin: false });
@@ -60,7 +61,11 @@ function slowBoard() {
   return { state, firstStarted, release };
 }
 
-const runOne = (app: FastifyInstance) => runNextJob(app.db, { services: app.jobs.services });
+// The test's own job, not a seeded schedule come due on the real clock (#615).
+const runOne = async (app: FastifyInstance) => {
+  await holdInstanceSchedules(app);
+  return await runNextJob(app.db, { services: app.jobs.services });
+};
 
 /** The source's schedule queues its occurrence under this key (runner materializeSchedules). */
 const scheduled = (app: FastifyInstance, c: TestClient, sourceId: string) =>
