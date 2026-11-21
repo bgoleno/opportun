@@ -4,7 +4,8 @@
 // later block turns a rule back to a warning, or off, for one package. It lives in apps/web
 // because a test outside every workspace package is run by no `pnpm test`. lintText takes each
 // fixture path only to pick the config blocks that apply to it.
-import { ESLint } from 'eslint';
+import { ESLint, type Linter } from 'eslint';
+import security from 'eslint-plugin-security';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -76,4 +77,31 @@ describe('triaged eslint-plugin-security rules are errors (#587)', () => {
       expect(await severityOf(rule, code, path)).toBe(expected);
     });
   }
+});
+
+const SEVERITY: Readonly<Record<string, number>> = { off: 0, warn: 1, error: 2 };
+function severityIn(entry: Linter.RuleEntry | undefined): number | undefined {
+  const level = Array.isArray(entry) ? entry[0] : entry;
+  return typeof level === 'string' ? SEVERITY[level] : level;
+}
+
+// The fixtures above pin the rules one at a time. This pins the whole plugin: every rule its
+// recommended config turns on resolves to an error for every package (or off on a test path, for
+// OFF_IN_TESTS), so a rule a plugin upgrade adds to `recommended` as a warning fails here until it
+// is triaged, instead of joining a pile of warnings nobody reads.
+describe('every eslint-plugin-security recommended rule is an error (#587)', () => {
+  const recommended = Object.keys(security.configs.recommended.rules ?? {});
+
+  it('the recommended config has rules to check', () => {
+    expect(recommended.length).toBeGreaterThan(0);
+  });
+
+  it.each(PATHS)('in %s', async (path) => {
+    const config = (await eslint.calculateConfigForFile(join(repoRoot, path))) as Linter.Config;
+    const got = Object.fromEntries(recommended.map((r) => [r, severityIn(config.rules?.[r])]));
+    const want = Object.fromEntries(
+      recommended.map((r) => [r, OFF_IN_TESTS.has(r) && isTestPath(path) ? 0 : 2]),
+    );
+    expect(got).toEqual(want);
+  });
 });
