@@ -14,6 +14,13 @@ import { ATTR, inBatchSpan, OPERATION_BATCH_COLLECT, OPERATION_BATCH_SUBMIT } fr
 import type { ModelPolicy, ProviderFetchOptions, TaskKey, TaskRunRecord } from './types';
 
 export { batchMultiplier };
+export {
+  BATCH_RESULTS_MAX_BYTES,
+  BATCH_RESULTS_TIMEOUT_MS,
+  clampTokens,
+  MAX_TOKEN_COUNT,
+  readBatchText,
+} from './batchRead';
 
 /** One request in a batch: the caller's id for it, and what structuredRequest built. */
 export interface BatchRequest {

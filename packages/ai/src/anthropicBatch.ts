@@ -10,6 +10,7 @@
 // and never in an error, a log or a span. Written against Anthropic's API reference (see
 // anthropicBatch.fixtures.ts for the pages and the date read): no call to the real API was made to
 // build it, and the owner's own batch confirms it (slice C, #511).
+import { batchResultsSignal, clampTokens, readBatchText } from './batchRead';
 import { generateText, Output } from 'ai';
 import type { BatchProvider, BatchRequest, BatchResultItem, BatchState, BatchUsage } from './batch';
 import { createLanguageModel } from './providers';
@@ -80,7 +81,8 @@ async function liveBody(
 type Json = Record<string, unknown>;
 const isRecord = (v: unknown): v is Json =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
-const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+// A provider's count as the ledger takes it: a whole number in range (#620 point 4).
+const count = clampTokens;
 
 /** One results line, as the reference gives it; anything else is an unexpected answer. */
 function resultItem(line: unknown): BatchResultItem | null {
@@ -215,13 +217,15 @@ export function createAnthropicBatchProvider(target: {
     async results(batchId) {
       // The documented results endpoint on the operator's own base URL, never a results_url a
       // response names: the key goes nowhere a response could point it.
+      // Bounded in size and time (#620 point 4): read whole before, however large or slow.
       const res = await doFetch(`${batches}/${encodeURIComponent(batchId)}/results`, {
         method: 'GET',
         headers: headers(false),
+        signal: batchResultsSignal(),
       });
       if (!res.ok) throw refused('results', res.status);
       const items: BatchResultItem[] = [];
-      for (const raw of (await res.text()).split('\n')) {
+      for (const raw of (await readBatchText(res)).split('\n')) {
         if (raw.trim() === '') continue;
         let line: unknown;
         try {
