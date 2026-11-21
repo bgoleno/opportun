@@ -22,13 +22,14 @@ import { discoveryResults, jobs, taskRuns } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { RANK_WAITING_SWEEP_KIND, sweepWaitingResults } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND, FIRST_RUN_RANK_CAP } from '../src/jobs/discoveryRun';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { enqueue } from '../src/jobs/runner';
 import { putSecret } from '../src/lib/secretBox';
 import type { UserCtx } from '../src/repos/base';
 import { createSource, listResults, setDisposition } from '../src/repos/discovery';
 import { writeDiscoveryBudget } from '../src/repos/discoveryBudget';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { runQueuedJob } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -98,8 +99,13 @@ async function discover(
     config: { org },
     roleTargetId: null,
   });
-  await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: c.userId });
-  await runNextJob(app.db, { services: app.jobs.services });
+  const queued = await enqueue(
+    app.db,
+    DISCOVERY_RUN_KIND,
+    { sourceId: src.id },
+    { userId: c.userId },
+  );
+  await runQueuedJob(app, queued);
   await app.jobs.drain();
   for (const row of await results(app, c)) {
     const n = Number(row.posting.title.split(' ')[1]);
