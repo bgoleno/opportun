@@ -5,9 +5,14 @@
 # keeps its state in /data (attachments, backups, exports, master.key) and /sqlite
 # (opportun.db alone; issue #179), and is meant to run with a read-only root filesystem.
 
-ARG NODE_VERSION=22
+# Every stage starts from node:22-slim, pinned by the digest of its multi-arch index (read
+# 2026-11-20), so a build from one commit starts from the same bytes on any day (#619). The tag
+# says what was pinned; the digest is what is pulled. To move to a newer node:22-slim, read the
+# index digest (the Digest: line of `docker buildx imagetools inspect node:22-slim`) and replace
+# it in each FROM below.
+# apps/server/test/dockerfileBaseImage.test.ts holds every FROM to a digest.
 
-FROM node:${NODE_VERSION}-slim AS base
+FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS base
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     CI=true
@@ -45,7 +50,7 @@ RUN pnpm --filter @opportun/server --prod deploy /out/server \
 # (https://github.com/bgoleno/opportun/issues/442);
 # apps/server/test/dockerfilePgdg.test.ts holds the file to that, and to fetching nothing from
 # postgresql.org but the apt packages.
-FROM node:${NODE_VERSION}-slim AS pgdg-key
+FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS pgdg-key
 COPY deploy/pgdg-ACCC4CF8.asc /pgdg.asc
 RUN apt-get update \
  && apt-get install -y --no-install-recommends gnupg \
@@ -56,7 +61,7 @@ RUN apt-get update \
       exit 1; \
     fi
 
-FROM node:${NODE_VERSION}-slim AS runtime
+FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS runtime
 # OCI labels, on the runtime stage because that is the image that ships. `source` is what
 # GitHub reads to link the container package to its repository: with it, the package is listed
 # on the public repository's page and shows that repository's README, instead of being attached
