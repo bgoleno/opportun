@@ -18,21 +18,16 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { loadDbConfig, loadSqliteDir } from '../config';
+import { loadDbConfig, loadPeppers, loadSqliteDir } from '../config';
 import { closeDatabase, connectDatabase, withTransaction, type Db } from '../db/client';
 import { settings, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { writeDedicatedMark } from '../lib/demoDedicated';
 import { temporaryPassword } from '../lib/passwordReset';
-import { hashPassword, NO_PEPPERS, pepperSet, type PepperSet } from '../lib/passwords';
+import { hashPassword } from '../lib/passwords';
 import { insertUserRow } from '../lib/registration';
 import { DEMO_MARKER_KEY } from './seedDemo';
 import type { CliIo } from './resetPassword';
-
-/** The same one-pepper set resetPassword.ts builds: the server's current OPPORTUN_PEPPER. */
-function toPepperSet(pepper: string): PepperSet {
-  return pepper === '' ? NO_PEPPERS : pepperSet(1, { 1: pepper });
-}
 
 // The registration route's own rules for both (routes/auth.ts RegisterBody).
 const Email = z.string().trim().toLowerCase().pipe(z.email().max(254));
@@ -40,13 +35,15 @@ const DisplayName = z.string().trim().min(1).max(100);
 
 export interface CreateDemoAccountArgs {
   db: Db;
-  /** The server's environment: OPPORTUN_DEMO must be 1. */
+  /**
+   * The server's environment: OPPORTUN_DEMO must be 1, and its peppers (OPPORTUN_PEPPER,
+   * OPPORTUN_PEPPER_VERSION, OPPORTUN_PEPPER_V<N>) are loaded from it as the server loads them,
+   * so the hash is stamped with the current version (#568).
+   */
   env: NodeJS.ProcessEnv;
   email: string | undefined;
   displayName: string | undefined;
   io?: CliIo;
-  /** OPPORTUN_PEPPER of the server this database belongs to ('' when none). */
-  pepper?: string;
 }
 
 const USAGE = 'Usage: node --import tsx src/cli/createDemoAccount.ts <email> <display name>';
@@ -65,7 +62,6 @@ export async function main({
   email,
   displayName,
   io = processIo,
-  pepper = '',
 }: CreateDemoAccountArgs): Promise<number> {
   const parsedEmail = Email.safeParse(email ?? '');
   const parsedName = DisplayName.safeParse(displayName ?? '');
@@ -78,7 +74,7 @@ export async function main({
     return 1;
   }
   const password = temporaryPassword();
-  const passwordHash = await hashPassword(password, toPepperSet(pepper));
+  const passwordHash = await hashPassword(password, loadPeppers(env));
   const now = Date.now();
   let userId: string;
   try {
@@ -145,8 +141,6 @@ if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
         env: process.env,
         email: process.argv[2],
         displayName: process.argv[3],
-        // The same pepper the server hashes with, or the password would not verify.
-        pepper: process.env.OPPORTUN_PEPPER ?? '',
       });
     } finally {
       await closeDatabase(handle);
