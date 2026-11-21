@@ -356,20 +356,23 @@ export function buildPlan(
   const standard = PREFILL_FIELDS.flatMap((f) =>
     f.id === null ? [] : [{ id: f.id, name: f.name, value: value(f.key) }],
   ).filter((x) => x.value !== '');
-  // A reviewed answer is what the user confirmed for its question (#595): a detail with a label a
-  // reviewed answer also carries is left out, whole. Kept, the filler would find two answers for
-  // that question, call it ambiguous and fill neither; and with only that label taken, the
-  // detail's other labels would match nothing and it would be reported as not filled under its
-  // own name although its question was (qa on #674). Labels compare as the filler compares them.
+  // A reviewed answer is what the user confirmed for its question (#595): a detail loses each label
+  // a reviewed answer also carries, or the filler would find two answers for that question, call it
+  // ambiguous and fill neither. It keeps its other labels, so a second such question on the form
+  // (the "about us" one beside an answered "about this role") is still filled by the detail (qa on
+  // #674). A detail that lost a label is `covered`: when none of the rest is on the form, it is
+  // not reported as missing, since its question was filled with the answer. Labels compare as the
+  // filler compares them.
   const answered = new Set(attempt.answers.map((a) => labelKey(a.label)));
   const questions = [
-    ...PREFILL_FIELDS.flatMap((f) =>
-      f.id !== null || f.labels.length === 0 || f.labels.some((l) => answered.has(labelKey(l)))
-        ? []
-        : [{ labels: [...f.labels], name: f.name, value: value(f.key) }],
-    ),
+    ...PREFILL_FIELDS.flatMap((f) => {
+      if (f.id !== null || f.labels.length === 0) return [];
+      const labels = f.labels.filter((l) => !answered.has(labelKey(l)));
+      const covered = labels.length < f.labels.length;
+      return [{ labels, name: f.name, value: value(f.key), ...(covered ? { covered } : {}) }];
+    }),
     ...attempt.answers.map((a) => ({ labels: [a.label], name: a.label, value: a.value })),
-  ].filter((q) => q.value !== '');
+  ].filter((q) => q.value !== '' && q.labels.length > 0);
   const lists = PREFILL_FIELDS.flatMap((f) =>
     f.list === undefined ? [] : [{ id: f.list, name: f.name, value: value(f.key) }],
   ).filter((l) => l.value !== '');

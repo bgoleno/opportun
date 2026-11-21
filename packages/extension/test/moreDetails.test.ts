@@ -233,6 +233,44 @@ describe('a reviewed answer to the "How did you hear" question wins over the det
     },
   );
 
+  it('two heard-from questions, one answered in review: the answer fills that one, the detail the other (qa on #674)', async () => {
+    // "About us" is a text question here; the form's own list of that name is renamed first.
+    const html = withTextQuestion('How did you hear about this role?').replace(
+      'What is your placeholder notice period?',
+      'How did you hear about us?',
+    );
+    const page = loadForm(html, { timers: 'manual' });
+    const plan = JSON.parse(
+      JSON.stringify(
+        buildPlan(
+          {
+            ...attempt(DETAILS),
+            answers: [{ label: 'How did you hear about this role?', value: 'A former colleague' }],
+          },
+          { board: BOARD, jobId: JOB_ID },
+          null,
+        ),
+      ),
+    ) as ReturnType<typeof buildPlan>;
+    const run = fillGreenhouseForm(plan, page.doc);
+    let done = false;
+    void run.then(() => {
+      done = true;
+    });
+    let seen: number[] = [];
+    while (!done) {
+      await new Promise((r) => setTimeout(r, 50));
+      const stale = page.timers.ids().filter((id) => seen.includes(id));
+      seen = page.timers.ids();
+      if (stale.length > 0) page.timers.fire(stale);
+    }
+    const report = await run;
+    if (!report.ok) throw new Error(`not filled: ${report.reason}`);
+    expect(valueOf(page.doc, 'question_9000105')).toBe('A former colleague');
+    expect(valueOf(page.doc, 'question_9000104')).toBe('LinkedIn');
+    expect(report.notFilled.filter((n) => n.label.startsWith('How did you hear'))).toEqual([]);
+  });
+
   it('a reviewed answer to another question leaves the detail to fill this one', () => {
     const plan = JSON.parse(
       JSON.stringify(
