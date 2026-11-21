@@ -607,3 +607,101 @@ describe('Inbox bulk Reject (#647)', () => {
     expect(screen.getByText('2 selected')).toBeInTheDocument();
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/646: each tab asked for 200 and rendered only those,
+// with no paging and no "of N", while its badge showed the true total. Paged here at 2 a page (the
+// app's page is 200, the server's cap) so the test renders a few rows.
+describe('Inbox: a tab over one page (#646)', () => {
+  let ALL = Array.from({ length: 5 }, (_, i) => ({
+    ...BASE,
+    id: `m${i + 1}`,
+    subject: `message ${i + 1}`,
+    opportunityId: null,
+    needsReview: true,
+  }));
+
+  function serve() {
+    return mockApi({
+      'GET /communications': (call: { search: string }) => {
+        const params = new URLSearchParams(call.search);
+        const limit = Number(params.get('limit'));
+        const offset = Number(params.get('offset') ?? 0);
+        return {
+          status: 200,
+          body: { items: ALL.slice(offset, offset + limit), total: ALL.length },
+        };
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+  }
+
+  it('every message can be reached, and the tab says how many are shown of the total', async () => {
+    const user = userEvent.setup();
+    serve();
+    renderWithProviders(<Inbox pageSize={2} />);
+    expect(await screen.findByText('message 1')).toBeInTheDocument();
+    expect(screen.getByText('Showing 1–2 of 5')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(await screen.findByText('message 3')).toBeInTheDocument();
+    expect(screen.queryByText('message 1')).toBeNull();
+    expect(screen.getByText('Showing 3–4 of 5')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(await screen.findByText('message 5')).toBeInTheDocument();
+    expect(screen.getByText('Showing 5–5 of 5')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Previous page' }));
+    expect(await screen.findByText('message 3')).toBeInTheDocument();
+  });
+
+  it('a page left empty steps back to the last page with messages', async () => {
+    const user = userEvent.setup();
+    serve();
+    const { queryClient } = renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 3');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 5');
+    // Its only message leaves the tab (rejected or linked from its own buttons).
+    const kept = ALL;
+    ALL = ALL.slice(0, 4);
+    try {
+      await queryClient.invalidateQueries();
+      expect(await screen.findByText('Showing 3–4 of 4')).toBeInTheDocument();
+      expect(screen.getByText('message 3')).toBeInTheDocument();
+    } finally {
+      ALL = kept;
+    }
+  });
+
+  it('a tab that fits on one page shows no pager', async () => {
+    mockApi({
+      'GET /communications': { items: ALL.slice(0, 2), total: 2 },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    renderWithProviders(<Inbox pageSize={2} />);
+    expect(await screen.findByText('message 1')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Next page' })).toBeNull();
+    expect(screen.queryByText(/^Showing /)).toBeNull();
+  });
+
+  it('a filter change goes back to the first page', async () => {
+    const user = userEvent.setup();
+    const { calls } = serve();
+    renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 3');
+    await user.type(screen.getByRole('searchbox', { name: 'Keyword' }), 'message');
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.search.includes('q=message') && !/offset=[1-9]/.test(c.search)),
+      ).toBe(true),
+    );
+    expect(await screen.findByText('Showing 1–2 of 5')).toBeInTheDocument();
+  });
+});
