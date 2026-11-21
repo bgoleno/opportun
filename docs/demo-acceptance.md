@@ -210,15 +210,15 @@ names, addresses or resumes on a real form (the owner's decision 1 on #542).
       "This is a shared demo account. Anything you enter here is visible to others using it, and
       is cleared at the nightly reset." So do Settings > Profile and its application details.
 - [ ] With the account's own display name (for example "Demo User 1") as Full name, **Confirm
-      review and open** is refused naming Full name ("this value came with the demo"), and no tab
-      opens.
+      review and open** is refused naming Full name ("this value came with the demo"), and no form
+      opens (a blank tab opens on the click and closes at once).
 - [ ] With your own details instead, it opens the posting's Greenhouse form in a new tab, and the
       extension, opened on that tab, fills your details and attaches no resume. Close the tab
       without submitting, or submit it yourself if you mean to apply.
 - [ ] Signed in to the same account in a second browser (another visitor), the application is
-      readable on the opportunity, but changing it says "This application was started in another
-      session on this shared demo account", and an extension paired in that second session is not
-      given it.
+      readable on the opportunity, but its details are disabled there (changing a draft started in
+      the other session says "This application was started in another session on this shared demo
+      account"), and an extension paired in that second session is not given it.
 - [ ] After the next nightly reset, the application and both tokens are gone, and the extension
       paired before it is signed out (its next read gets 401).
 

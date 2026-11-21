@@ -48,6 +48,7 @@ import {
 } from '../src/repos/discoveryBudget';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { holdInstanceSchedules, runQueuedJob } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -99,8 +100,13 @@ async function discover(app: FastifyInstance, c: TestClient, count: number): Pro
     config: { org: 'initech' },
     roleTargetId: null,
   });
-  await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: c.userId });
-  await runNextJob(app.db, { services: app.jobs.services });
+  const queued = await enqueue(
+    app.db,
+    DISCOVERY_RUN_KIND,
+    { sourceId: src.id },
+    { userId: c.userId },
+  );
+  await runQueuedJob(app, queued);
   await app.jobs.drain();
 }
 
@@ -480,13 +486,13 @@ describe('#299 criterion 3: the paths that queue the drain', () => {
       .run();
     await spendUpTo(app, a, 0.95);
     await bothWays(app, a, async () => {
-      await enqueue(
+      const queued = await enqueue(
         app.db,
         DISCOVERY_RANK_KIND,
         { resultId: second!.id },
         { userId: a.userId, dedupeKey: `${DISCOVERY_RANK_KIND}:${second!.id}:${newId()}` },
       );
-      await runNextJob(app.db, { services: app.jobs.services });
+      await runQueuedJob(app, queued);
     });
   });
 
@@ -500,13 +506,13 @@ describe('#299 criterion 3: the paths that queue the drain', () => {
       await writeKeyChangedAt(app.db, ctxOf(a), Date.now() + 60_000);
       throw new AiUnavailableError('provider_error', 'HTTP 401', { keyRejected: true });
     });
-    await enqueue(
+    const queued = await enqueue(
       app.db,
       DISCOVERY_RANK_KIND,
       { resultId: row!.id },
       { userId: a.userId, dedupeKey: `${DISCOVERY_RANK_KIND}:${row!.id}:${newId()}` },
     );
-    await runNextJob(app.db, { services: app.jobs.services });
+    await runQueuedJob(app, queued);
     expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(1);
     expect(await queuedDrains(app)).toEqual([]);
   });
@@ -525,13 +531,13 @@ describe('#299 criterion 3: the paths that queue the drain', () => {
         .run();
       return { score: 60, rationale: 'A fair match.', disqualifiers: [] } as never;
     });
-    await enqueue(
+    const queued = await enqueue(
       app.db,
       DISCOVERY_RANK_KIND,
       { resultId: row!.id },
       { userId: a.userId, dedupeKey: `${DISCOVERY_RANK_KIND}:${row!.id}:${newId()}` },
     );
-    await runNextJob(app.db, { services: app.jobs.services });
+    await runQueuedJob(app, queued);
     expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(1);
     expect(await queuedDrains(app)).toEqual([]);
   });
@@ -657,9 +663,19 @@ describe('#317: at a small budget, the calls that start together leave tagging r
       config: { org: 'initech' },
       roleTargetId: null,
     });
-    await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: a.userId });
-    await runNextJob(app.db, { services: app.jobs.services });
-    const worker = () => runNextJob(app.db, { services: app.jobs.services });
+    const queued = await enqueue(
+      app.db,
+      DISCOVERY_RUN_KIND,
+      { sourceId: src.id },
+      { userId: a.userId },
+    );
+    await runQueuedJob(app, queued);
+    // Only the run's own jobs: a seeded schedule come due (the company tags sweep among them) would
+    // spend from the same budget (#615).
+    const worker = async () => {
+      await holdInstanceSchedules(app);
+      return await runNextJob(app.db, { services: app.jobs.services });
+    };
     while ((await Promise.all([worker(), worker(), worker(), worker()])).some(Boolean));
     setRaceHook(undefined);
 

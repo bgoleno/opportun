@@ -12,7 +12,7 @@
 // Find posting, never on a page view, and never by the writers that keep or drop an identity
 // without asking (postingAtsJobRefKeeping).
 import { greenhouseJidOf } from '@opportun/core';
-import { and, eq, ne } from 'drizzle-orm';
+import { and, desc, eq, ne } from 'drizzle-orm';
 import { GREENHOUSE_HOST } from '../adapters/sources/greenhouse';
 import { ATS_MAX_BYTES } from '../adapters/sources/atsCommon';
 import type { SourceContext } from '../adapters/discoverySource';
@@ -26,19 +26,29 @@ import { postingAtsJobRefKeeping, verifiedGreenhouseRef, type AtsJobRef } from '
 /** Greenhouse boards asked about one link, at most (tl's criterion 1). */
 export const MAX_TOKENS_TRIED = 3;
 
+/**
+ * The time every board check for one link may take in all (#598): each request gets what is left
+ * of it, and none starts once it is spent. A save waited up to 15 s a board before, 45 s in all.
+ * When it runs out the save goes on with no identity, as when no board holds the job.
+ */
+export const EMBED_CHECK_BUDGET_MS = 5000;
+
 const TOKEN = /^[a-z0-9-]{1,100}$/;
 
 /**
  * The company's known Greenhouse board tokens, in the order they are tried: its detected board
  * (ATS detection), then its Greenhouse discovery sources, then the boards of its other
- * opportunities' identities. Never anything read from the link.
+ * opportunities' identities, each group newest first (#598: read with no order before, so which
+ * three were tried was the database's choice). Never anything read from the link. A company not
+ * yet known (`companyId` null: a save naming a new one) has no board.
  */
 export async function knownGreenhouseTokens(
   db: Db,
   ctx: UserCtx,
-  opp: { id: string; companyId: string },
+  opp: { id: string; companyId: string | null },
 ): Promise<string[]> {
   const out: string[] = [];
+  if (opp.companyId === null) return out;
   const add = (token: string | null | undefined): void => {
     const t = token?.toLowerCase();
     if (t !== undefined && TOKEN.test(t) && !out.includes(t)) out.push(t);
@@ -59,6 +69,7 @@ export async function knownGreenhouseTokens(
         eq(discoverySources.kind, 'ats_greenhouse'),
       ),
     )
+    .orderBy(desc(discoverySources.createdAt), desc(discoverySources.id))
     .all();
   for (const source of sources) {
     add(boardOfSource(source.kind, splitConfig(source).config)?.slug);
@@ -73,6 +84,7 @@ export async function knownGreenhouseTokens(
         ne(opportunities.id, opp.id),
       ),
     )
+    .orderBy(desc(opportunities.createdAt), desc(opportunities.id))
     .all();
   for (const row of others) {
     if (row.atsJobRef?.kind === 'ats_greenhouse') add(row.atsJobRef.org);
@@ -85,12 +97,14 @@ async function boardHoldsJob(
   sctx: Pick<SourceContext, 'fetch' | 'log'>,
   token: string,
   jid: string,
+  timeoutMs: number,
 ): Promise<boolean> {
   let res;
   try {
     res = await sctx.fetch(`https://${GREENHOUSE_HOST}/v1/boards/${token}/jobs/${jid}`, {
       allowHosts: [GREENHOUSE_HOST],
       maxBytes: ATS_MAX_BYTES,
+      timeoutMs,
     });
   } catch (err) {
     // The token names the company's board: only the kind is logged (design 14.8).
@@ -108,21 +122,26 @@ async function boardHoldsJob(
 
 /**
  * A verified Greenhouse identity for a `gh_jid` link on a company's own page, or null: the first
- * of the company's known boards whose API answers with that job. One request per token tried.
+ * of the company's known boards whose API answers with that job. One request per token tried, all
+ * of them within `budgetMs` (#598).
  */
 export async function verifyEmbeddedGreenhouse(
   db: Db,
   ctx: UserCtx,
-  opp: { id: string; companyId: string },
+  opp: { id: string; companyId: string | null },
   link: string,
   sctx: Pick<SourceContext, 'fetch' | 'log'>,
   now: number = Date.now(),
+  budgetMs: number = EMBED_CHECK_BUDGET_MS,
 ): Promise<AtsJobRef | null> {
   if (boardFromUrl(link) !== null) return null;
   const jid = greenhouseJidOf(link);
   if (jid === null) return null;
+  const deadline = Date.now() + budgetMs;
   for (const token of await knownGreenhouseTokens(db, ctx, opp)) {
-    if (await boardHoldsJob(sctx, token, jid)) return verifiedGreenhouseRef(token, jid, now);
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    if (await boardHoldsJob(sctx, token, jid, left)) return verifiedGreenhouseRef(token, jid, now);
   }
   return null;
 }
@@ -135,7 +154,7 @@ export async function verifyEmbeddedGreenhouse(
 export async function resolvePostingAtsJobRef(
   db: Db,
   ctx: UserCtx,
-  opp: { id: string; companyId: string; atsJobRef: AtsJobRef | null | undefined },
+  opp: { id: string; companyId: string | null; atsJobRef: AtsJobRef | null | undefined },
   link: string | null | undefined,
   sctx: Pick<SourceContext, 'fetch' | 'log'>,
 ): Promise<AtsJobRef | null> {
