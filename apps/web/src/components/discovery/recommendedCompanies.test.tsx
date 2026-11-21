@@ -6,7 +6,7 @@
 import { naicsTitle } from '@opportun/core';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mockApi, renderWithProviders } from '@/test/render';
 import { CompaniesManager } from './CompaniesManager';
 import type { CompanyView, IndustryRow, NetworkCompany } from './companiesApi';
@@ -941,5 +941,88 @@ describe('#296: a board found by guessing names shows its address', () => {
     ).toBeInTheDocument();
     expect(within(row).queryByRole('textbox')).toBeNull();
     expect(within(row).queryByText(/careers URL/i)).toBeNull();
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/591: the network list is paged on the server, the
+// screen still shows every company, and a running probe asks for its own rows only.
+describe('#591: every company across the pages, and a probe polls its own rows', () => {
+  const many = (from: number, to: number): NetworkCompany[] =>
+    Array.from({ length: to - from }, (_, k) => {
+      const i = from + k;
+      return {
+        company: company({ id: `m-${i}`, name: `Example Co ${String(i).padStart(4, '0')}` }),
+        board: 'not_checked',
+        contactCount: 1,
+        strongestStrength: null,
+        contacts: [{ id: `mp-${i}`, name: `Sample Person ${i}`, strength: null }],
+      };
+    });
+
+  it('walks the pages of 200 and lists each company once, though a row shifted between pages', async () => {
+    const { calls } = routes({
+      'GET /discovery/network-companies': (c: { search: string }) => {
+        const offset = Number(new URLSearchParams(c.search).get('offset') ?? '0');
+        // The second page starts one early: a company added mid-walk shifted the rows.
+        return offset === 0
+          ? { items: many(0, 200), total: 203 }
+          : { items: many(199, 203), total: 203 };
+      },
+    });
+    renderWithProviders(<CompaniesManager />);
+    const l = await list();
+    await waitFor(() => expect(within(l).getAllByText(/^Example Co /)).toHaveLength(203));
+    expect(within(l).getAllByText('Example Co 0199')).toHaveLength(1);
+    const reads = calls.filter((c) => c.path === '/discovery/network-companies');
+    expect(reads.map((c) => new URLSearchParams(c.search).get('offset'))).toEqual(['0', '200']);
+    expect(reads.every((c) => new URLSearchParams(c.search).get('limit') === '200')).toBe(true);
+  });
+
+  it('while a probe runs, the poll asks for that company only, and stops when it lands', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let landed = false;
+      const pending = {
+        ...TAILSPIN,
+        company: { ...TAILSPIN.company, boardProbePending: true },
+      };
+      const done = {
+        ...TAILSPIN,
+        company: {
+          ...TAILSPIN.company,
+          boardProbePending: false,
+          boardProbedAt: NOW,
+          boardOpenJobs: 12,
+        },
+      };
+      const { calls } = routes({
+        'GET /discovery/network-companies': (c: { search: string }) => {
+          const ids = new URLSearchParams(c.search).get('ids');
+          if (ids !== null) return { items: [landed ? done : pending], total: 1 };
+          return { items: [CONTOSO, INITECH, NORTHWIND, pending, GLOBEX], total: 5 };
+        },
+      });
+      renderWithProviders(<CompaniesManager />);
+      const l = await list();
+      const row = await within(l).findByRole('listitem', { name: 'Tailspin Toys' });
+      expect(await within(row).findByText('Checking board...')).toBeInTheDocument();
+      const reads = () => calls.filter((c) => c.path === '/discovery/network-companies');
+      expect(reads()).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(3000);
+      await waitFor(() => expect(reads()).toHaveLength(2));
+      expect(new URLSearchParams(reads()[1]!.search).get('ids')).toBe(TAILSPIN.company.id);
+
+      landed = true;
+      await vi.advanceTimersByTimeAsync(3000);
+      await waitFor(() => expect(within(row).queryByText('Checking board...')).toBeNull());
+      const after = reads().length;
+      await vi.advanceTimersByTimeAsync(9000);
+      expect(reads()).toHaveLength(after);
+      // Never the whole network again while it ran.
+      expect(reads().filter((c) => !c.search.includes('ids='))).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
