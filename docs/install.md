@@ -1072,7 +1072,11 @@ name (`Recruiting`) matches that mailbox in every account and On My Mac, and
 `~/.config/opportun-connector/config.json`, readable only by you (0600). `init` then sends
 an empty batch to check the token and prints the server's answer. Re-run `init` at any
 time; it offers your current answers as defaults and keeps the token if you press Enter.
-Every answer can also be given as a flag (`opportun-connector --help`); prefer the prompt
+Every answer can also be given as a flag (`opportun-connector --help`). `init` asks for
+the server, the token, the mailboxes and the days only when you give none of `--server`,
+`--token`, `--mailbox` and `--days`; once you give any of them, it asks only for the server,
+token or mailboxes you left out, and the days keep their saved value (else 180). `--interval`
+is never asked: it keeps its saved value (else 15) unless you pass it. Prefer the prompt
 for the token, since a flag can end up in your shell history.
 
 **4. Sync.**

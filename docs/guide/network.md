@@ -1,6 +1,6 @@
 # Network
 
-[Guide home](README.md) · Previous: [Discovery](discovery.md) · Next: [Settings](settings.md)
+[Guide home](README.md) · Previous: [Browser extension](browser-extension.md) · Next: [Settings](settings.md)
 
 Your network is the people who can tell you about a team or refer you in. Each of them is a
 contact, and Opportun maps each contact to a company, so each opportunity can show who you know

@@ -112,6 +112,27 @@ _Broadcast outreach lands in Spam and never creates an opportunity._
   **Unlink** removes the link.
 - **Reclassify** corrects the type or outreach kind. Saving a correction (even one that
   changes nothing) clears the review flag on a linked message.
+- **Not spam** (Spam tab only) brings a message back, as described above.
+- **Reject** says a message should never have been in Opportun. It cannot be undone: it
+  deletes the message's subject and body from Opportun and keeps only the sender and the date,
+  so the same message is not pulled in again. The original stays in your mailbox. Choose a
+  reason (required), optionally add a note, and optionally tick **Never fetch mail from this
+  sender again** to block the sender's address or their whole domain. A note stays on your
+  server unless you also tick **Use this note to improve the filter**, which sends it to the AI
+  that proposes filter improvements. Blocking is on by default only for the reasons
+  **Medical or personal** and **Financial**.
+
+### Filter, sort and reject several at once
+
+Above the list, **Keyword** searches subject, text and sender, **Sender** filters by sender,
+**Source** limits the list to Gmail, Apple Mail or LinkedIn, and **Newest** / **Oldest** flips
+the order. Each row has a checkbox (every tab except Blocked). Ticking rows shows a bar with the
+count, a reason and **Reject N**. **Reject N** asks first ("Reject N messages?"), saying that
+the subject, snippet and body of those messages are removed for good and this cannot be undone;
+confirming rejects them all with that reason. A bulk reject does the same deletion as a single
+one but never blocks senders and takes no note; to block a sender, reject one of their messages
+on its own. Only rows on screen can be selected: changing a filter clears the selection, and a
+row that leaves the list (linked, reclassified or gone on a refresh) leaves the selection too.
 
 Your corrections are kept. Once a week (Mondays), if you made at least five since the last
 time, the `discovery.refine_prompt` task proposes a revised classification prompt. The
@@ -123,8 +144,9 @@ Apple Mail has no server API, so a small command-line connector on your Mac read
 mailboxes you name and pushes them to Opportun with a **device token**. Your mail password
 never reaches the server, and the token can only push mail in, never read anything back.
 
-1. Under **Settings > Integrations > Extensions and Connectors**, press **Create token**, tick only
-   **Apple Mail connector (mail:push)**, and confirm with your password. Copy the token: it is
+1. Under **Settings > Integrations > Extensions and Connectors**, press **Create token**, give it
+   a **Name** (for example "Work MacBook"), tick only **Apple Mail connector (mail:push)**, and
+   confirm with your password. All three are required. Copy the token: it is
    shown once.
 2. Build, configure and schedule the connector on your Mac:
    [install guide section 11](../install.md#11-apple-mail-macos) has every command.

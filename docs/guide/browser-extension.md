@@ -1,5 +1,7 @@
 # Browser extension
 
+[Guide home](README.md) · Previous: [Discovery](discovery.md) · Next: [Network](network.md)
+
 Opportun never visits LinkedIn, or any other job site, on its own. When you are looking at a
 profile or a job posting and you want it in Opportun, you click the extension and it sends
 that page's visible text to **your own** server. A profile becomes a contact; a job posting
