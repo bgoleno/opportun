@@ -607,3 +607,94 @@ describe('Inbox bulk Reject (#647)', () => {
     expect(screen.getByText('2 selected')).toBeInTheDocument();
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/678 criterion 3 (qa on #672): with only unlinked rows
+// in the bulk tests, a bar that always sent null links passed. A linked row sends its link.
+describe('Inbox bulk Reject sends each row its own link (#678)', () => {
+  it('a linked row goes with its opportunity, an unlinked one with null', async () => {
+    const user = userEvent.setup();
+    const { calls } = mockApi({
+      'GET /communications': {
+        items: [
+          { ...BASE, id: 'l1', subject: 'linked one', opportunityId: 'opp-7' },
+          { ...BASE, id: 'u1', subject: 'unlinked one', opportunityId: null },
+        ],
+        total: 2,
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+      'POST /communications/bulk': { succeeded: 2, skipped: 0, changed: 0 },
+    });
+    renderWithProviders(<Inbox initialTab="linked" />);
+    await screen.findByText('linked one');
+    for (const box of screen.getAllByRole('checkbox', { name: /Select message from/ })) {
+      await user.click(box);
+    }
+    await user.click(await screen.findByRole('button', { name: /^Reject 2/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reject 2 messages?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 2' }));
+    await waitFor(() => expect(posts(calls, '/communications/bulk')).toHaveLength(1));
+    expect(posts(calls, '/communications/bulk')[0]?.body).toMatchObject({
+      items: [
+        { id: 'l1', opportunityId: 'opp-7' },
+        { id: 'u1', opportunityId: null },
+      ],
+    });
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/678, qa's O1 and O2 (third exploratory pass).
+describe('Inbox bulk Reject: focus and filters (#678)', () => {
+  const rows = [
+    { ...BASE, id: 'a1', subject: 'alpha one', opportunityId: null, needsReview: true },
+    { ...BASE, id: 'b1', subject: 'beta one', opportunityId: null, needsReview: true },
+  ];
+
+  it('after a confirmed bulk reject, focus is on the message list, not the page body', async () => {
+    const user = userEvent.setup();
+    let gone = false;
+    mockApi({
+      'GET /communications': () => ({
+        status: 200,
+        body: gone ? { items: [rows[1]], total: 1 } : { items: rows, total: 2 },
+      }),
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+      'POST /communications/bulk': () => {
+        gone = true;
+        return { succeeded: 1, skipped: 0, changed: 0 };
+      },
+    });
+    renderWithProviders(<Inbox />);
+    await screen.findByText('alpha one');
+    await user.click(screen.getAllByRole('checkbox', { name: /Select message from/ })[0]!);
+    await user.click(await screen.findByRole('button', { name: /^Reject 1/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reject 1 message?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 1' }));
+    await waitFor(() => expect(screen.queryByText('alpha one')).toBeNull());
+    await waitFor(() => expect(document.activeElement).not.toBe(document.body));
+    expect(document.activeElement).toBe(
+      screen.getByRole('region', { name: 'Needs review messages' }),
+    );
+  });
+
+  it('a filter that still lists the selected row keeps it selected, and its confirmation open', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /communications': (call: { search: string }) => ({
+        status: 200,
+        // The keyword "one" still matches both rows.
+        body: { items: rows, total: 2, search: call.search },
+      }),
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    renderWithProviders(<Inbox />);
+    await screen.findByText('alpha one');
+    await user.click(screen.getAllByRole('checkbox', { name: /Select message from/ })[0]!);
+    // Typed, then the confirmation opened before the keyword's short delay has applied it.
+    await user.type(screen.getByRole('searchbox', { name: 'Keyword' }), 'one');
+    await user.click(await screen.findByRole('button', { name: /^Reject 1/ }));
+    expect(await screen.findByRole('dialog', { name: 'Reject 1 message?' })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 400));
+    expect(screen.getByRole('dialog', { name: 'Reject 1 message?' })).toBeInTheDocument();
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+  });
+});
