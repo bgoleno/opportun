@@ -40,6 +40,13 @@ export const NETWORK_PROBE_FAILED_NIGHTS = 3;
 export const NETWORK_BOARD_CHECK_SETTING = 'network_board_check';
 /** The longest a company that stopped a vendor is left out of the nightly pick (#518). */
 export const NETWORK_PROBE_PARK_MAX_NIGHTS = 8;
+/**
+ * How many nights one user's own failures may stop a vendor for every user, at most once in
+ * (#617, sec's audit): the park (#518) bounds one company, this bounds one user with many always
+ * failing companies. Past it, such a failure still ends that user's night and parks the company,
+ * but leaves the vendor open to everyone else.
+ */
+export const NETWORK_PROBE_USER_STOP_NIGHTS = 7;
 /** The reason on a probe cancelled because a vendor said slow down. */
 export const NETWORK_PROBE_STOPPED =
   'a board provider asked to slow down: the rest wait for the next night';
@@ -86,14 +93,34 @@ async function vendorStopped(db: Db, kind: AtsKind, now: number): Promise<boolea
   return row !== undefined && row.at >= nightStart(now);
 }
 
+/** The user's own row: when that user's probes last stopped this vendor for every user (#617). */
+export const userVendorStopName = (kind: AtsKind): string =>
+  `network_probe_vendor_stopped_by.${kind}`;
+
 /**
- * Stops this job's requests to a vendor for every user until the next night's sweep. An upsert
- * that sets the time, never a read and a rewrite, so two probes told at once cannot lose it.
+ * Stops this job's requests to a vendor for every user until the next night's sweep, unless this
+ * user's probes already did so within NETWORK_PROBE_USER_STOP_NIGHTS nights (#617): then only the
+ * user's own night ends (the caller's part). An upsert that sets the time, never a read and a
+ * rewrite, so two probes told at once cannot lose it.
  */
-async function stopVendor(db: Db, kind: AtsKind, now: number): Promise<void> {
+async function stopVendor(db: Db, ctx: UserCtx, kind: AtsKind, now: number): Promise<void> {
+  const mine = userSettingKey(userVendorStopName(kind), ctx.userId);
+  const last = await db
+    .select({ at: settings.updatedAt })
+    .from(settings)
+    .where(and(eq(settings.key, mine), eq(settings.userId, ctx.userId)))
+    .get();
+  if (last !== undefined && last.at >= nightsAfter(now, 1 - NETWORK_PROBE_USER_STOP_NIGHTS)) {
+    return;
+  }
   await db
     .insert(settings)
     .values({ key: vendorStopKey(kind), userId: null, value: now, updatedAt: now })
+    .onConflictDoUpdate({ target: settings.key, set: { value: now, updatedAt: now } })
+    .run();
+  await db
+    .insert(settings)
+    .values({ key: mine, userId: ctx.userId, value: now, updatedAt: now })
     .onConflictDoUpdate({ target: settings.key, set: { value: now, updatedAt: now } })
     .run();
 }
@@ -351,10 +378,17 @@ const ANSWERED_REFUSALS: ReadonlySet<FetchBlockedReason> = new Set([
  */
 function slowDownGuard(
   db: Db,
+  ctx: UserCtx,
   sctx: SourceContext,
-): { sctx: SourceContext; slowedDown: () => boolean; skippedStopped: () => boolean } {
+): {
+  sctx: SourceContext;
+  slowedDown: () => boolean;
+  skippedStopped: () => boolean;
+  waitedLocally: () => boolean;
+} {
   let slowedDown = false;
   let skippedStopped = false;
+  let waitedLocally = false;
   const fetch: SourceContext['fetch'] = async (url, opts) => {
     if (slowedDown) throw new Error('the board provider asked to slow down');
     const vendor = vendorOf(url);
@@ -366,15 +400,19 @@ function slowDownGuard(
     try {
       res = await sctx.fetch(url, opts);
     } catch (err) {
-      if (!(err instanceof FetchBlockedError && ANSWERED_REFUSALS.has(err.reason))) {
+      if (err instanceof FetchBlockedError && err.reason === 'rate_wait') {
+        // The deadline passed in safeFetch's own token wait, before anything was sent (#617): the
+        // vendor was not asked, so this is neither a slow-down nor an answer.
+        waitedLocally = true;
+      } else if (!(err instanceof FetchBlockedError && ANSWERED_REFUSALS.has(err.reason))) {
         slowedDown = true;
-        if (vendor !== undefined) await stopVendor(db, vendor, Date.now());
+        if (vendor !== undefined) await stopVendor(db, ctx, vendor, Date.now());
       }
       throw err;
     }
     if (res.status === 429 || res.status >= 500) {
       slowedDown = true;
-      if (vendor !== undefined) await stopVendor(db, vendor, Date.now());
+      if (vendor !== undefined) await stopVendor(db, ctx, vendor, Date.now());
     }
     return res;
   };
@@ -382,6 +420,7 @@ function slowDownGuard(
     sctx: { ...sctx, fetch },
     slowedDown: () => slowedDown,
     skippedStopped: () => skippedStopped,
+    waitedLocally: () => waitedLocally,
   };
 }
 
@@ -393,6 +432,7 @@ export type NetworkProbeOutcome =
         | 'off'
         | 'stopped'
         | 'vendor_stopped'
+        | 'rate_wait'
         | 'missing'
         | 'followed'
         | 'denied'
@@ -430,7 +470,7 @@ export async function runNetworkProbe(
   if (company.status === 'followed') return { status: 'skipped', reason: 'followed' };
   if (company.boardProbedAt !== null) return { status: 'skipped', reason: 'probed' };
   if (!isNetworkBoardKind(company.atsKind)) return { status: 'skipped', reason: 'other_board' };
-  const guard = slowDownGuard(db, sctx);
+  const guard = slowDownGuard(db, ctx, sctx);
   const thisCompany = and(eq(companies.userId, ctx.userId), eq(companies.id, companyId));
   // An answered probe ends any park (#518): the vendor answers this company's requests again.
   const unpark = async () => {
@@ -452,6 +492,11 @@ export async function runNetworkProbe(
     // not "no board" and not a failed night, and the company waits for a later night (criterion 16).
     if (guard.skippedStopped() && !guard.slowedDown()) {
       return { status: 'skipped', reason: 'vendor_stopped' };
+    }
+    // A request that never left this server (its token wait ran out, #617) asked the vendor
+    // nothing: as above, nothing is recorded and the company waits for a later night.
+    if (guard.waitedLocally() && !guard.slowedDown()) {
+      return { status: 'skipped', reason: 'rate_wait' };
     }
     sctx.log.warn(
       { 'opportun.company.id': companyId, 'error.type': err instanceof Error ? err.name : 'Error' },

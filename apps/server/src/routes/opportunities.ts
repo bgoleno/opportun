@@ -1,4 +1,5 @@
 // Opportunities and lifecycle transitions (FR-O1, O2, O5, O9 partial).
+import { keyedFetch } from '../lib/safeFetch';
 import {
   CLOSED_REASONS,
   DISMISS_REASONS,
@@ -168,7 +169,7 @@ export async function opportunityRoutes(app: FastifyInstance): Promise<void> {
       const current = await getOpportunity(db, ctx, id);
       if (url === current.postingUrl) return updateOpportunity(db, ctx, id, req.body);
       const atsJobRef = await resolvePostingAtsJobRef(db, ctx, current, url, {
-        fetch: app.jobs.services.sourceFetch,
+        fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId),
         log: req.log,
       });
       return updateOpportunity(db, ctx, id, req.body, { atsJobRef });

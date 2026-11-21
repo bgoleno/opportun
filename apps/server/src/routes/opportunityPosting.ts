@@ -17,6 +17,7 @@
 // capture already on the opportunity's timeline, for a record whose description was corrupted
 // by something else (#238) or whose company never had a readable board for Refetch (#255) to
 // find anything on.
+import { keyedFetch } from '../lib/safeFetch';
 import { buffer } from 'node:stream/consumers';
 import { NormalizedPostingSchema } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
@@ -134,7 +135,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
     async (req) => {
       const ctx = app.requireUser(req);
       const { id } = req.params;
-      const sctx = { fetch: app.jobs.services.sourceFetch, log: req.log };
+      const sctx = { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log };
       const current = await getOpportunity(db, ctx, id);
       // Checked before any board is read: the user's own description has nothing to find. An
       // embedded Greenhouse link still gets its identity, from Greenhouse's API, with the
@@ -168,7 +169,12 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           // The board this posting was just read from is the proof an embedded Greenhouse job
           // needs (#398): no further request.
           outcome.readFrom === undefined
-            ? { sctx: { fetch: app.jobs.services.sourceFetch, log: req.log } }
+            ? {
+                sctx: {
+                  fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId),
+                  log: req.log,
+                },
+              }
             : { readFrom: outcome.readFrom },
         );
         const note = outcome.note === undefined ? {} : { note: outcome.note };
@@ -213,11 +219,13 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
         const { posting, text, url } = req.body;
         // Anything handed over here, a picked board row included, comes from the client: an
         // embedded Greenhouse link in it is checked on Greenhouse's API, never taken on trust (#398).
-        const identity = { sctx: { fetch: app.jobs.services.sourceFetch, log: req.log } };
+        const identity = {
+          sctx: { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log },
+        };
         if (posting !== undefined) {
           // A Workday board row is listed without its description: fetch it now (FR-D10).
           const described = await describeWorkdayPosting(
-            { fetch: app.jobs.services.sourceFetch, log: req.log },
+            { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log },
             posting,
           );
           return attachPosting(db, ctx, id, described, 'board', undefined, identity);
@@ -233,7 +241,10 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
             identity,
           );
         }
-        const page = await fetchPageText(app.jobs.services.sourceFetch, url as string);
+        const page = await fetchPageText(
+          keyedFetch(app.jobs.services.sourceFetch, ctx.userId),
+          url as string,
+        );
         const out = await extract(db, ctx, url, page);
         return attachPosting(
           db,
@@ -281,7 +292,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
         db,
         ctx,
         req.params.id,
-        { fetch: app.jobs.services.sourceFetch, log: req.log },
+        { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log },
         { force },
       );
       return outcome.kind === 'no_description_found'
