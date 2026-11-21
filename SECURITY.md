@@ -127,11 +127,16 @@ who has a credential they should not have.
   - a session after the two-factor code;
   - a device token after its password re-confirmation;
   - a session after a provider sign-in;
-  - a new provider link.
+  - a new provider link;
+  - a two-factor enrolment, and its activation, after their password re-confirmation;
+  - an administrator's reset of another account, after the administrator's own password
+    re-confirmation.
 
   Each is written under a per-user lock that a change and a reset also take, and only while the
   password hash it was checked against, the pending token, the provider link or the session it
-  started from is still there. So a change or reset that lands during the check wins and nothing
+  started from is still there. An administrator's reset holds both accounts' locks, taken in a
+  fixed order, and runs only while the administrator's own password is still the one just
+  proven (`apps/server/src/routes/auth.ts`). So a change or reset that lands during the check wins and nothing
   is written, and one that starts just after removes what was written along with everything else
   (`apps/server/src/lib/passwordLock.ts`).
 
