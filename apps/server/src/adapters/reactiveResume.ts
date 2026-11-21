@@ -31,7 +31,7 @@ import { and, desc, eq, ne } from 'drizzle-orm';
 import { withTransaction, type Db } from '../db/client';
 import { secrets, settings } from '../db/schema';
 import { HttpError } from '../lib/errors';
-import { FetchBlockedError, type safeFetch } from '../lib/safeFetch';
+import { FetchBlockedError, keyedFetch, type safeFetch } from '../lib/safeFetch';
 import { racePoint } from '../lib/racePoints';
 import { getSecretValue, putSecretIn } from '../lib/secretBox';
 import type { Exec, UserCtx } from '../repos/base';
@@ -465,6 +465,9 @@ export interface ReactiveResumeDeps {
 }
 
 export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentStore {
+  // Each call under the user's rate key (#617, tl on #667): users of one shared Reactive Resume
+  // host take turns at its bucket rather than queuing behind each other's bursts.
+  const fetchFor = (ctx: UserCtx): RrFetch => keyedFetch(deps.fetch, ctx.userId);
   async function cfgFor(ctx: UserCtx): Promise<RrConfig> {
     const cfg = await deps.config(ctx);
     if (cfg === undefined) {
@@ -481,7 +484,7 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
     async registerExisting(ctx, ref): Promise<ResumeDocMeta> {
       const cfg = await cfgFor(ctx);
       const id = parseRrRef(ref, cfg.baseUrl);
-      const resume = await getResume(deps.fetch, cfg, id);
+      const resume = await getResume(fetchFor(ctx), cfg, id);
       return { docRef: id, title: resume.name, url: rrResumeUrl(cfg.baseUrl, id) };
     },
 
@@ -489,7 +492,7 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
       const cfg = await cfgFor(ctx);
       const baseId = parseRrRef(baseRef, cfg.baseUrl);
       const created = await rrJson(
-        deps.fetch,
+        fetchFor(ctx),
         cfg,
         `/resumes/${encodeURIComponent(baseId)}/copies`,
         { method: 'POST', body: { name } },
@@ -502,7 +505,7 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
 
     async readText(ctx, ref) {
       const cfg = await cfgFor(ctx);
-      const resume = await getResume(deps.fetch, cfg, parseRrRef(ref, cfg.baseUrl));
+      const resume = await getResume(fetchFor(ctx), cfg, parseRrRef(ref, cfg.baseUrl));
       return flattenRrResume(resume.data).text;
     },
 
@@ -518,7 +521,7 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
       }
       const cfg = await cfgFor(ctx);
       const id = parseRrRef(ref, cfg.baseUrl);
-      const resume = await getResume(deps.fetch, cfg, id);
+      const resume = await getResume(fetchFor(ctx), cfg, id);
       const { text, slots } = flattenRrResume(resume.data);
       const missing = edits.findIndex((e) => !text.includes(e.find));
       if (missing !== -1) {
@@ -553,7 +556,7 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
         .filter((s) => original.get(s.path) !== s.value)
         .map((s) => ({ op: 'replace' as const, path: s.path, value: s.value }));
       if (operations.length > 0) {
-        await rrJson(deps.fetch, cfg, `/resumes/${encodeURIComponent(id)}`, {
+        await rrJson(fetchFor(ctx), cfg, `/resumes/${encodeURIComponent(id)}`, {
           method: 'PATCH',
           body: { operations, expectedUpdatedAt: resume.updatedAt },
         });
