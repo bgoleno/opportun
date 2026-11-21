@@ -273,6 +273,8 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
       headers: { authorization: `Bearer ${TOKEN}`, accept: 'application/json' },
       credentials: 'omit',
       redirect: 'error',
+      // The action's time limit (#648).
+      signal: expect.any(AbortSignal),
     });
     expect(snapshot![0]).toBe(`${SERVER}/api/v1/connector/apply/sub-1/snapshot`);
     expect(s.deps.runFill).toHaveBeenCalledTimes(1);
@@ -1357,5 +1359,44 @@ describe('#531: the resume download is bounded, and the page holds one fill at a
     // The second filler wrote nothing.
     expect(valueOf(s.page.doc, 'first_name')).toBe('');
     expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/648: Fill says it is working at once, and a server
+// that never answers ends in an error with the buttons back and focus on the button.
+describe('Fill in this application against a server that never answers (#648)', () => {
+  it('says it is filling at once, then that the server did not answer, with the buttons back', async () => {
+    const s = setup({});
+    await mountPopup(s.doc, s.deps);
+    await settleOpen(s);
+    s.get.mockImplementation(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          // As fetch does: an already-aborted signal rejects at once.
+          if (init.signal?.aborted === true) reject(new Error('aborted'));
+          init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+    let end: () => void = () => undefined;
+    const ended = new Promise<void>((r) => {
+      end = r;
+    });
+    s.deps.limit = vi.fn(async () => {
+      await ended;
+    });
+    const fill = s.$('prefill') as HTMLButtonElement;
+    fill.focus();
+    fill.click();
+    await vi.waitFor(() => expect(s.$('status').textContent).toBe('Filling…'));
+    expect(fill.disabled).toBe(true);
+    // The request is out, and the server says nothing.
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalled());
+    end();
+    await vi.waitFor(() =>
+      expect(s.$('status').textContent).toMatch(/did not answer within 30 seconds/),
+    );
+    expect(fill.disabled).toBe(false);
+    expect(s.doc.activeElement).toBe(fill);
+    expect(s.plans).toEqual([]);
   });
 });
