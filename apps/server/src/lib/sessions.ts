@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
-import type { Db } from '../db/client';
+import type { Db, Exec } from '../db/client';
 import { sessions, users } from '../db/schema';
 import type { UserCtx } from '../repos/base';
 
@@ -20,7 +20,7 @@ function tokenId(token: string): string {
 
 /** New opaque session: 32 random bytes (base64url) to the client, SHA-256 hex stored. */
 export async function createSession(
-  db: Db,
+  db: Exec,
   userId: string,
   meta: { ip?: string; userAgent?: string },
 ): Promise<{ token: string; expiresAt: number }> {
@@ -115,6 +115,8 @@ export async function destroySession(db: Db, token: string): Promise<void> {
     .run();
 }
 
-export async function destroyAllSessions(db: Db, userId: string): Promise<void> {
+/** Every sessions row the user has, pending 2FA tokens included. Inside a change's or reset's
+ *  locked transaction (#561), so a sign-in that holds that lock writes before it, or not at all. */
+export async function destroyAllSessions(db: Exec, userId: string): Promise<void> {
   await db.delete(sessions).where(eq(sessions.userId, userId)).run();
 }
