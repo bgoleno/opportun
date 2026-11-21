@@ -21,6 +21,7 @@ import { operatorBaseUrls } from '../src/lib/aiProviderFetch';
 
 const ROOT = join(__dirname, '..', '..', '..');
 const COMPOSE = readFileSync(join(ROOT, 'deploy', 'compose.yml'), 'utf8');
+const DEMO_COMPOSE = readFileSync(join(ROOT, 'deploy', 'compose.demo.yml'), 'utf8');
 const INSTALL = readFileSync(join(ROOT, 'docs', 'install.md'), 'utf8');
 
 /**
@@ -49,7 +50,21 @@ const NOT_PASSED: ReadonlyMap<string, string> = new Map([
     'compose.demo.yml passes it on purpose; a household deployment must not pick it up from a ' +
       'stray line in a copied .env',
   ],
+  // A demo server's only, so passed by the demo overlay alone (#547; checked below).
+  [
+    'OPPORTUN_DEMO_TOKEN_CAP',
+    "compose.demo.yml passes it: it limits a demo server's shared accounts and nothing else",
+  ],
+  [
+    'OPPORTUN_DEMO_SHARED_ASSISTED_APPLY',
+    "compose.demo.yml passes it: it limits a demo server's shared accounts and nothing else",
+  ],
 ]);
+
+/** Not passed by compose.yml because the demo overlay passes them: each is checked there. */
+const PASSED_BY_DEMO_OVERLAY = [...NOT_PASSED]
+  .filter(([, why]) => why.startsWith('compose.demo.yml passes it'))
+  .map(([name]) => name);
 
 /** Variables Compose itself reads from .env or the shell, never from compose.yml. */
 const READ_BY_COMPOSE: ReadonlySet<string> = new Set(['COMPOSE_PROFILES']);
@@ -75,8 +90,8 @@ function documentedSettings(): string[] {
 }
 
 /** The `environment:` of the opportun service as written, name to value. */
-function opportunEnvironment(): Map<string, string> {
-  const lines = COMPOSE.split('\n');
+function opportunEnvironment(compose = COMPOSE): Map<string, string> {
+  const lines = compose.split('\n');
   const service = lines.findIndex((l) => l === '  opportun:');
   expect(service).toBeGreaterThan(-1);
   const env = lines.findIndex((l, i) => i > service && l === '    environment:');
@@ -199,5 +214,35 @@ describe('what compose.yml passes as ${VAR:-} is read as if VAR were unset', () 
         expect(unset).toHaveProperty('config.db.dialect', dialect);
       }
     });
+  });
+});
+
+// The demo-only settings (#547): compose.yml leaves them out on purpose, so the demo overlay must
+// pass them, or a demo deployment's .env could set them and the server would never see it.
+describe('compose.demo.yml passes the demo-only settings', () => {
+  const demo = opportunEnvironment(DEMO_COMPOSE);
+
+  it('finds them', () => {
+    expect(PASSED_BY_DEMO_OVERLAY).toEqual(
+      expect.arrayContaining(['OPPORTUN_DEMO', 'OPPORTUN_DEMO_TOKEN_CAP']),
+    );
+  });
+
+  it.each(PASSED_BY_DEMO_OVERLAY)('%s is in its environment', (name) => {
+    expect(demo.has(name), `${name} is not passed by compose.demo.yml`).toBe(true);
+  });
+
+  // The optional ones go as ${VAR:-}, which must read exactly as unset (the default).
+  const optional = PASSED_BY_DEMO_OVERLAY.filter((name) => name !== 'OPPORTUN_DEMO');
+  const BASE: NodeJS.ProcessEnv = {
+    OPPORTUN_MASTER_KEY: 'ab'.repeat(32),
+    OPPORTUN_BASE_URL: 'http://localhost:8080',
+    OPPORTUN_DEMO: '1',
+  };
+  it.each(optional)('%s is passed as ${VAR:-}, and empty equals unset', (name) => {
+    expect(demo.get(name)).toBe(`\${${name}:-}`);
+    const unset = loadConfig({ ...BASE, [name]: undefined });
+    expect(loadConfig({ ...BASE, [name]: '' })).toEqual(unset);
+    expect(unset.demo).toBe(true);
   });
 });

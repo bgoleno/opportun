@@ -6,11 +6,24 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { listNetworkCompanies } from '../repos/networkCompanies';
+import { IdParams, listQuery, MAX_LIMIT, pageOf } from './common';
 import { companyViews, CompanyViewSchema } from './companies';
 
-const NetworkCompaniesQuery = z.object({
-  showDenied: z.enum(['true', 'false']).default('false'),
-});
+/**
+ * Paged as the other lists are (#591): ?limit= (50, at most 200) and ?offset=. ?ids=a,b,c (at
+ * most 200) asks for just those companies: the web's poll while a board probe runs, which reads
+ * the rows it waits on instead of the whole network every 3 s.
+ */
+const NetworkCompaniesQuery = listQuery([])
+  .omit({ sort: true })
+  .extend({
+    showDenied: z.enum(['true', 'false']).default('false'),
+    ids: z
+      .string()
+      .transform((s) => s.split(','))
+      .pipe(z.array(IdParams.shape.id).min(1).max(MAX_LIMIT))
+      .optional(),
+  });
 
 const NetworkCompanySchema = z.object({
   company: CompanyViewSchema,
@@ -31,13 +44,16 @@ export async function networkCompanyRoutes(app: FastifyInstance): Promise<void> 
     {
       schema: {
         querystring: NetworkCompaniesQuery,
-        response: { 200: z.object({ items: z.array(NetworkCompanySchema) }) },
+        response: { 200: pageOf(NetworkCompanySchema) },
       },
     },
     async (req) => {
       const ctx = app.requireUser(req);
-      const items = await listNetworkCompanies(db, ctx, {
+      const { items, total } = await listNetworkCompanies(db, ctx, {
         showDenied: req.query.showDenied === 'true',
+        limit: req.query.limit,
+        offset: req.query.offset,
+        ids: req.query.ids,
       });
       const views = new Map(
         (
@@ -48,7 +64,10 @@ export async function networkCompanyRoutes(app: FastifyInstance): Promise<void> 
           )
         ).map((v) => [v.id, v]),
       );
-      return { items: items.map((item) => ({ ...item, company: views.get(item.company.id)! })) };
+      return {
+        items: items.map((item) => ({ ...item, company: views.get(item.company.id)! })),
+        total,
+      };
     },
   );
 }

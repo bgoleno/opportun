@@ -614,6 +614,28 @@ Two settings change the limits for the shared accounts, with these defaults:
 `OPPORTUN_SUBMISSIONS=0` still turns assisted apply off for everyone. The nightly reset removes every
 shared account's tokens, applications and stored files.
 
+### Try assisted apply: what to tell a visitor
+
+A visitor tries assisted apply on a real job they choose, with their own details, and submits it
+themselves if they mean to apply. The demo's own opportunities are invented, so none of them has a
+form to fill. In short, for a shared account:
+
+1. Sign in, add the job (**New opportunity** with its posting link, then **Find posting** on its
+   Details tab, or capture it with the extension), and move it to Interested.
+2. Under **Settings > Integrations > Extensions and Connectors**, download the extension from the
+   demo (it already knows the demo's address), load it unpacked, and pair it with an **Assisted
+   apply** token, in the same session as the application.
+3. **Apply on** _ATS_: no resume (attach your own on the form), your own details typed in (the
+   step starts empty), then review. A value that came with the demo is refused, by field.
+4. **Confirm review and open**, then on the form's tab open the extension, which fills what was
+   reviewed. Check it, attach your resume, and press the site's own Submit, or close the tab.
+
+Tell them that anything entered on a shared account is visible to everyone signed in to it until
+the nightly reset, as the warning on each step says. A dedicated account applies as on any server.
+The guide's [Try assisted apply on the demo](guide/pipeline.md#try-assisted-apply-on-the-demo)
+has the same steps for the visitor, and `docs/demo-acceptance.md` section 9 has the checks for this
+host.
+
 ## Hard constraints on anything added to this deployment
 
 **No credentials, keys or passwords in this repository, including in a template.** Variable
