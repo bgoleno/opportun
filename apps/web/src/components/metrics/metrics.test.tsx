@@ -245,6 +245,29 @@ describe('MetricsPage', () => {
       expect(from).toBeGreaterThanOrEqual(LATE + wait - 30 * 24 * H);
     });
 
+    it('refuses, as before, an end typed so long ago that nothing of the range is kept', async () => {
+      // qa on #628: the page-filled start is clamped into the last 30 days, which can move it
+      // past a typed end; the range must then be refused here, not sent the wrong way round.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(LATE);
+      const { calls } = mockApi({
+        'GET /obs/metrics': CATALOG,
+        'GET /obs/metrics/series': seriesFor,
+      });
+      renderWithProviders(<Harness initial={{ metric: 'http.server.request.duration' }} />);
+      const user = userEvent.setup();
+      await screen.findByRole('table', { name: /Calls/ });
+      await user.selectOptions(screen.getByLabelText('Time range'), '30d');
+      await user.selectOptions(screen.getByLabelText('Time range'), 'custom');
+      vi.setSystemTime(LATE + 2 * H);
+      await user.clear(screen.getByLabelText('To'));
+      await user.type(screen.getByLabelText('To'), localInput(LATE + 2 * H - 30 * 24 * H));
+      const before = calls.length;
+      await user.click(screen.getByRole('button', { name: 'Apply' }));
+      expect(screen.getByRole('alert')).toHaveTextContent(/Points are kept 30 days/);
+      expect(calls.length).toBe(before);
+    });
+
     it('still refuses a start typed more than 30 days ago', async () => {
       vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(LATE);

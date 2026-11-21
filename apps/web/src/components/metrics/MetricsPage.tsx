@@ -313,7 +313,13 @@ function MetricView({ metric: m }: { metric: MetricInfo }) {
       return setRangeError('Points are kept 30 days: choose a range inside the last 30 days.');
     }
     const end = Math.min(t, now);
-    setCustom({ from: Math.max(f, now - MAX_SPAN_MS, end - MAX_SPAN_MS), to: end });
+    const start = Math.max(f, now - MAX_SPAN_MS, end - MAX_SPAN_MS);
+    // Clamping the start into the 30 days can move it past a typed end: then nothing of the range
+    // is still kept (qa on #628), and it is refused like any other range outside the 30 days.
+    if (start >= end) {
+      return setRangeError('Points are kept 30 days: choose a range inside the last 30 days.');
+    }
+    setCustom({ from: start, to: end });
   };
 
   const label = statLabel(stat, m.unit);
