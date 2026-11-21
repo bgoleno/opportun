@@ -7,8 +7,9 @@
 // the user said they submitted. Nothing here starts, reviews, hands off or submits anything,
 // nothing records "I submitted it", and nothing lists applications.
 //
-// Off, or on the demo, every route here 404s before any token is looked at, whatever the token's
-// scopes (sec on #182).
+// Off, every route here 404s before any token is looked at, whatever the token's scopes (sec on
+// #182). On the demo it is on (#545): a shared account's token sees only its own visitor's
+// attempts, and 404s when the operator has switched assisted apply off for those accounts.
 import {
   ATS_REF_KINDS,
   SUBMISSION_CONFIRMATION_KINDS,
