@@ -16,9 +16,10 @@
 // (`/v1/responses`), which a gateway or proxy at another base URL need not serve, so with the
 // operator's OPENAI_BASE_URL set elsewhere batchProviderFor has no client and ranking is live
 // (criterion 1; isOpenAiBatchBase).
-import { batchResultsSignal, clampTokens, readBatchText } from './batchRead';
+import { clampTokens, readBatchJson, readBatchText } from './batchRead';
 import { generateText, Output } from 'ai';
 import type { BatchProvider, BatchRequest, BatchResultItem, BatchState, BatchUsage } from './batch';
+import { timedFetches, type BatchCallLimits } from './batchLimits';
 import { createLanguageModel } from './providers';
 import { SDK_TELEMETRY_OFF } from './telemetry';
 import { OFFICIAL_BASE_URLS, type ModelPolicy, type ProviderFetchOptions } from './types';
@@ -198,10 +199,12 @@ export function createOpenAiBatchProvider(target: {
   policy: ModelPolicy;
   apiKey: string;
   providerFetch: ProviderFetchOptions;
+  limits?: BatchCallLimits;
 }): BatchProvider {
   const { policy, apiKey, providerFetch } = target;
   // The same fetch and base URL as the live OpenAI client (providers.ts createLanguageModel).
-  const doFetch = providerFetch.officialFetch ?? providerFetch.fetch;
+  // Each call with a time limit of its own (#686): a control call or a file transfer.
+  const fetches = timedFetches(providerFetch.officialFetch ?? providerFetch.fetch, target.limits);
   const base = trimmed(providerFetch.baseUrls?.openai ?? OFFICIAL_BASE_URLS.openai);
   const auth = { authorization: `Bearer ${apiKey}` };
   /** A refusal names what was asked and the status only: never the key or the provider's text. */
@@ -209,11 +212,21 @@ export function createOpenAiBatchProvider(target: {
     new Error(`OpenAI batch ${what}: HTTP ${status}`);
   const id = (v: string) => encodeURIComponent(v);
 
+  /** A batch's input, output and error file ids, those it names. */
+  function fileIdsOf(batch: Json): string[] {
+    return [batch.input_file_id, batch.output_file_id, batch.error_file_id].filter(
+      (v): v is string => typeof v === 'string' && v !== '',
+    );
+  }
+
   async function getBatch(batchId: string): Promise<Json | 'gone'> {
-    const res = await doFetch(`${base}/batches/${id(batchId)}`, { method: 'GET', headers: auth });
+    const res = await fetches.control(`${base}/batches/${id(batchId)}`, {
+      method: 'GET',
+      headers: auth,
+    });
     if (res.status === 404) return 'gone';
     if (!res.ok) throw refused('state', res.status);
-    const batch = (await res.json()) as unknown;
+    const batch = await readBatchJson(res);
     if (!isRecord(batch)) throw new Error('OpenAI batch state: an unexpected answer');
     return batch;
   }
@@ -226,15 +239,14 @@ export function createOpenAiBatchProvider(target: {
    * unsent, for ever.
    */
   async function fileLines(fileId: string, what: string): Promise<unknown[]> {
-    // Bounded in size and time (#620 point 4): read whole before, however large or slow.
-    const res = await doFetch(`${base}/files/${id(fileId)}/content`, {
+    const res = await fetches.transfer(`${base}/files/${id(fileId)}/content`, {
       method: 'GET',
       headers: auth,
-      signal: batchResultsSignal(),
     });
     if (res.status === 404) return [];
     if (!res.ok) throw refused(what, res.status);
     const out: unknown[] = [];
+    // At most 64 MiB, within the transfer limit (#620 point 4): read whole before.
     for (const raw of (await readBatchText(res)).split('\n')) {
       if (raw.trim() === '') continue;
       try {
@@ -276,13 +288,17 @@ export function createOpenAiBatchProvider(target: {
         }),
         'batch.jsonl',
       );
-      const upload = await doFetch(`${base}/files`, { method: 'POST', headers: auth, body: form });
+      const upload = await fetches.transfer(`${base}/files`, {
+        method: 'POST',
+        headers: auth,
+        body: form,
+      });
       if (!upload.ok) throw refused('upload', upload.status);
-      const file = (await upload.json()) as unknown;
+      const file = await readBatchJson(upload);
       if (!isRecord(file) || typeof file.id !== 'string') {
         throw new Error('OpenAI batch upload: an unexpected answer');
       }
-      const res = await doFetch(`${base}/batches`, {
+      const res = await fetches.control(`${base}/batches`, {
         method: 'POST',
         headers: { ...auth, 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -295,12 +311,12 @@ export function createOpenAiBatchProvider(target: {
       if (!res.ok) {
         // No batch will read it: the uploaded requests go too (tl on #657), best effort, and the
         // refusal is what the caller hears either way. Kept otherwise, the 30-day default ends it.
-        await doFetch(`${base}/files/${id(file.id)}`, { method: 'DELETE', headers: auth }).catch(
-          () => undefined,
-        );
+        await fetches
+          .control(`${base}/files/${id(file.id)}`, { method: 'DELETE', headers: auth })
+          .catch(() => undefined);
         throw refused('submit', res.status);
       }
-      const batch = (await res.json()) as unknown;
+      const batch = await readBatchJson(res);
       if (!isRecord(batch) || typeof batch.id !== 'string') {
         throw new Error('OpenAI batch submit: an unexpected answer');
       }
@@ -311,16 +327,19 @@ export function createOpenAiBatchProvider(target: {
       const batch = await getBatch(batchId);
       if (batch === 'gone') return 'gone';
       switch (batch.status) {
+        // Still cancelling too: OpenAI may yet write output for the requests that ran, and the
+        // files are final once it is cancelled (#686). Read now, a file written after would never
+        // be read or removed. (The app never cancels a batch; this is for one cancelled elsewhere.)
         case 'validating':
         case 'in_progress':
         case 'finalizing':
+        case 'cancelling':
           return 'in_progress';
-        // Criterion 1: these five are ended, cancelling included; what each request got is
-        // read from the files (results), and a request in neither counts as expired.
+        // Criterion 1: these four are ended; what each request got is read from the files
+        // (results), and a request in neither counts as expired.
         case 'completed':
         case 'failed':
         case 'expired':
-        case 'cancelling':
         case 'cancelled':
           return 'ended';
         default:
@@ -359,18 +378,28 @@ export function createOpenAiBatchProvider(target: {
       return items;
     },
 
-    async cleanup(batchId) {
+    async cleanupRefs(batchId) {
+      // The three file ids, read at the collect (#686): the cleanup then deletes them by id.
+      const batch = await getBatch(batchId);
+      return batch === 'gone' ? [] : fileIdsOf(batch);
+    },
+
+    async cleanup(batchId, refs) {
       // The batch's three files, deleted (DELETE /files/{id}, the files reference): the requests
       // (the input file) and the results (output and error). The batch object itself cannot be
-      // deleted. Each is tried even when another is refused, and gone already is removed.
-      const batch = await getBatch(batchId);
-      if (batch === 'gone') return;
-      const ids = [batch.input_file_id, batch.output_file_id, batch.error_file_id].filter(
-        (v): v is string => typeof v === 'string' && v !== '',
-      );
+      // deleted. Each is tried even when another is refused, and gone already is removed. The ids
+      // read at the collect (cleanupRefs) when given; otherwise read from the batch now.
+      let ids: string[];
+      if (refs !== undefined && refs.length > 0) {
+        ids = [...refs];
+      } else {
+        const batch = await getBatch(batchId);
+        if (batch === 'gone') return;
+        ids = fileIdsOf(batch);
+      }
       let refusal: Error | null = null;
       for (const fileId of ids) {
-        const res = await doFetch(`${base}/files/${id(fileId)}`, {
+        const res = await fetches.control(`${base}/files/${id(fileId)}`, {
           method: 'DELETE',
           headers: auth,
         });

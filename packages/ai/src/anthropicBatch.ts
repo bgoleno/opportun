@@ -10,9 +10,10 @@
 // and never in an error, a log or a span. Written against Anthropic's API reference (see
 // anthropicBatch.fixtures.ts for the pages and the date read): no call to the real API was made to
 // build it, and the owner's own batch confirms it (slice C, #511).
-import { batchResultsSignal, clampTokens, readBatchText } from './batchRead';
+import { clampTokens, readBatchJson, readBatchText } from './batchRead';
 import { generateText, Output } from 'ai';
 import type { BatchProvider, BatchRequest, BatchResultItem, BatchState, BatchUsage } from './batch';
+import { timedFetches, type BatchCallLimits } from './batchLimits';
 import { createLanguageModel } from './providers';
 import { SDK_TELEMETRY_OFF } from './telemetry';
 import { OFFICIAL_BASE_URLS, type ModelPolicy, type ProviderFetchOptions } from './types';
@@ -153,11 +154,13 @@ export function createAnthropicBatchProvider(target: {
   policy: ModelPolicy;
   apiKey: string;
   providerFetch: ProviderFetchOptions;
+  limits?: BatchCallLimits;
 }): BatchProvider {
   const { policy, apiKey, providerFetch } = target;
   // The same fetch and base URL as the live Anthropic client (providers.ts createLanguageModel):
   // the operator's ANTHROPIC_BASE_URL when set, with the fetch that trusts its origin.
-  const doFetch = providerFetch.officialFetch ?? providerFetch.fetch;
+  // Each call with a time limit of its own (#686): a control call or a file transfer.
+  const fetches = timedFetches(providerFetch.officialFetch ?? providerFetch.fetch, target.limits);
   // Its trailing slashes dropped by a loop, not a regular expression (CodeQL js/polynomial-redos on
   // #534): the base is the operator's setting, and this stays linear whatever it holds.
   let base = providerFetch.baseUrls?.anthropic ?? OFFICIAL_BASE_URLS.anthropic;
@@ -187,13 +190,13 @@ export function createAnthropicBatchProvider(target: {
           })),
         ),
       };
-      const res = await doFetch(batches, {
+      const res = await fetches.transfer(batches, {
         method: 'POST',
         headers: headers(true),
         body: JSON.stringify(body),
       });
       if (!res.ok) throw refused('submit', res.status);
-      const batch = (await res.json()) as unknown;
+      const batch = await readBatchJson(res);
       if (!isRecord(batch) || typeof batch.id !== 'string') {
         throw new Error('Anthropic batch submit: an unexpected answer');
       }
@@ -201,13 +204,13 @@ export function createAnthropicBatchProvider(target: {
     },
 
     async state(batchId): Promise<BatchState> {
-      const res = await doFetch(`${batches}/${encodeURIComponent(batchId)}`, {
+      const res = await fetches.control(`${batches}/${encodeURIComponent(batchId)}`, {
         method: 'GET',
         headers: headers(false),
       });
       if (res.status === 404) return 'gone';
       if (!res.ok) throw refused('state', res.status);
-      const batch = (await res.json()) as unknown;
+      const batch = await readBatchJson(res);
       const status = isRecord(batch) ? batch.processing_status : undefined;
       if (status === 'in_progress' || status === 'canceling') return 'in_progress';
       if (status === 'ended') return 'ended';
@@ -217,14 +220,14 @@ export function createAnthropicBatchProvider(target: {
     async results(batchId) {
       // The documented results endpoint on the operator's own base URL, never a results_url a
       // response names: the key goes nowhere a response could point it.
-      // Bounded in size and time (#620 point 4): read whole before, however large or slow.
-      const res = await doFetch(`${batches}/${encodeURIComponent(batchId)}/results`, {
+      const res = await fetches.transfer(`${batches}/${encodeURIComponent(batchId)}/results`, {
         method: 'GET',
         headers: headers(false),
-        signal: batchResultsSignal(),
       });
       if (!res.ok) throw refused('results', res.status);
       const items: BatchResultItem[] = [];
+      // At most 64 MiB, within the transfer limit (#620 point 4): read whole before.
+      // At most 64 MiB, within the transfer limit (#620 point 4): read whole before.
       for (const raw of (await readBatchText(res)).split('\n')) {
         if (raw.trim() === '') continue;
         let line: unknown;
@@ -242,11 +245,16 @@ export function createAnthropicBatchProvider(target: {
       return items;
     },
 
+    // Deleting the batch needs its id only.
+    async cleanupRefs() {
+      return [];
+    },
+
     async cleanup(batchId) {
       // Deleting the batch takes its results with it; otherwise Anthropic keeps them 29 days
       // (#634; the batch-processing guide). Allowed once processing has ended, which it has: this
       // runs after the results were read. Gone already is removed.
-      const res = await doFetch(`${batches}/${encodeURIComponent(batchId)}`, {
+      const res = await fetches.control(`${batches}/${encodeURIComponent(batchId)}`, {
         method: 'DELETE',
         headers: headers(false),
       });

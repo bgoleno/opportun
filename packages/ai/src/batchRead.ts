@@ -3,6 +3,7 @@
 // counts were taken as given. Both clients (anthropicBatch.ts, openaiBatch.ts) read the results
 // through readBatchText and count tokens through clampTokens. A bound that is hit throws, as an
 // unexpected answer does, so the collect job tries the batch again later rather than drop it.
+import { BATCH_CONTROL_LIMIT_MS, BATCH_TRANSFER_LIMIT_MS } from './batchLimits';
 
 /**
  * The most a results answer may be. A batch holds at most 500 ranking requests (RANK_BATCH_MAX),
@@ -10,16 +11,14 @@
  */
 export const BATCH_RESULTS_MAX_BYTES = 64 * 1024 * 1024;
 
-/** How long reading one results answer may take, from the request to its last byte. */
-export const BATCH_RESULTS_TIMEOUT_MS = 120_000;
+/**
+ * The most any other answer may be (a batch's state, a submit's or an upload's answer): each is one
+ * small object. The EM on #735, sec rating it low: these were read with res.json(), unbounded too.
+ */
+export const BATCH_ANSWER_MAX_BYTES = 1024 * 1024;
 
 /** The most a token count may be: far above any model's context, never a ledger-sized number. */
 export const MAX_TOKEN_COUNT = 10_000_000;
-
-/** A time bound for a results request, to pass as its fetch signal. */
-export function batchResultsSignal(ms: number = BATCH_RESULTS_TIMEOUT_MS): AbortSignal {
-  return AbortSignal.timeout(ms);
-}
 
 /**
  * The answer's text, read up to `maxBytes` and within `timeoutMs`: past either it throws, and what
@@ -28,7 +27,9 @@ export function batchResultsSignal(ms: number = BATCH_RESULTS_TIMEOUT_MS): Abort
 export async function readBatchText(
   res: Response,
   maxBytes: number = BATCH_RESULTS_MAX_BYTES,
-  timeoutMs: number = BATCH_RESULTS_TIMEOUT_MS,
+  // The transfer limit the request already carries (#715): one time limit, not a second of its own
+  // (tl on #735). The reader's own timer stops a body that has stalled.
+  timeoutMs: number = BATCH_TRANSFER_LIMIT_MS,
 ): Promise<string> {
   const declared = Number(res.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > maxBytes) {
@@ -65,6 +66,11 @@ export async function readBatchText(
     at += c.byteLength;
   }
   return new TextDecoder().decode(all);
+}
+
+/** A small answer's JSON, read within BATCH_ANSWER_MAX_BYTES and the control call's time limit. */
+export async function readBatchJson(res: Response): Promise<unknown> {
+  return JSON.parse(await readBatchText(res, BATCH_ANSWER_MAX_BYTES, BATCH_CONTROL_LIMIT_MS));
 }
 
 /** A provider's token count as the ledger takes it: a whole number from 0 to MAX_TOKEN_COUNT. */

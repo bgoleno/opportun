@@ -2,15 +2,18 @@
 // were read whole (res.text()), with no size or time bound, and their token counts were taken as
 // given. Both clients now read the results through one bounded reader, and clamp every count.
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import * as anthropic from './anthropicBatch.fixtures';
 import {
+  BATCH_ANSWER_MAX_BYTES,
   BATCH_RESULTS_MAX_BYTES,
-  BATCH_RESULTS_TIMEOUT_MS,
+  BATCH_TRANSFER_LIMIT_MS,
   batchProviderFor,
   clampTokens,
 } from './batch';
 import * as openai from './openaiBatch.fixtures';
 import { resolvePolicy } from './policies';
+import { structuredRequest } from './router';
 import type { ModelPolicy } from './types';
 
 // The providers' reads, with the size bound at 10 KiB: the real 64 MiB would make each test stream
@@ -28,6 +31,11 @@ const { readBatchText: realRead } =
 
 const SONNET: ModelPolicy = resolvePolicy('discovery.rank', undefined);
 const GPT: ModelPolicy = { provider: 'openai', model: 'gpt-5', maxOutputTokens: 2000 };
+const OPTS = {
+  system: 'Score this posting.',
+  prompt: 'Score the posting and return the result.',
+  schema: z.object({ score: z.number(), rationale: z.string() }),
+};
 
 const providerFor = (policy: ModelPolicy, fetch: typeof globalThis.fetch) => {
   const p = batchProviderFor({
@@ -72,9 +80,11 @@ describe('readBatchText: a bounded read of a results answer (#620 point 4)', () 
     await expect(realRead(new Response(never), 1024, 50)).rejects.toThrow(/timed out/);
   });
 
-  it('the real bounds: 64 MiB, two minutes', () => {
+  it('the real bounds: 64 MiB of results, 1 MiB for any other answer, within the transfer limit', () => {
     expect(BATCH_RESULTS_MAX_BYTES).toBe(64 * 1024 * 1024);
-    expect(BATCH_RESULTS_TIMEOUT_MS).toBe(120_000);
+    expect(BATCH_ANSWER_MAX_BYTES).toBe(1024 * 1024);
+    // One time limit, #715's for a transfer (tl on #735): not a second one of this file's own.
+    expect(BATCH_TRANSFER_LIMIT_MS).toBe(120_000);
   });
 });
 
@@ -149,5 +159,46 @@ describe('token counts are clamped (#620 point 4)', () => {
     const [item] = await providerFor(GPT, fetch).results(openai.BATCH_ID);
     expect(item).toMatchObject({ kind: 'succeeded', usage: { input: 0, output: 10_000_000 } });
     expect((item as { usage: { cacheRead: number } }).usage.cacheRead).toBe(3);
+  });
+});
+
+// The EM on #735 (sec rated it low): the state and submit answers were read with res.json(), with
+// no size bound either. They go through the reader too, capped at 1 MiB: a batch object is small.
+describe('state and submit answers are bounded too (#620 point 4)', () => {
+  const big = () => new Response(streamOf(1100, 1024).body, { status: 200 });
+
+  it('Anthropic: a state answer past 1 MiB is refused', async () => {
+    await expect(
+      providerFor(SONNET, (async () => big()) as never).state(anthropic.BATCH_ID),
+    ).rejects.toThrow(/too large/);
+  });
+
+  it('Anthropic: a submit answer past 1 MiB is refused', async () => {
+    const req = { customId: 'p1', request: structuredRequest(SONNET, OPTS) };
+    await expect(providerFor(SONNET, (async () => big()) as never).submit([req])).rejects.toThrow(
+      /too large/,
+    );
+  });
+
+  it('OpenAI: a state answer past 1 MiB is refused', async () => {
+    await expect(
+      providerFor(GPT, (async () => big()) as never).state(openai.BATCH_ID),
+    ).rejects.toThrow(/too large/);
+  });
+
+  it('OpenAI: an upload answer past 1 MiB is refused', async () => {
+    const req = { customId: 'p1', request: structuredRequest(GPT, OPTS) };
+    await expect(providerFor(GPT, (async () => big()) as never).submit([req])).rejects.toThrow(
+      /too large/,
+    );
+  });
+
+  it('OpenAI: a batch-create answer past 1 MiB is refused', async () => {
+    const req = { customId: 'p1', request: structuredRequest(GPT, OPTS) };
+    const fetch = (async (url: string) =>
+      url.endsWith('/files')
+        ? new Response(JSON.stringify(openai.fileObject()), { status: 200 })
+        : big()) as never;
+    await expect(providerFor(GPT, fetch).submit([req])).rejects.toThrow(/too large/);
   });
 });
