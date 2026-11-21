@@ -22,7 +22,13 @@ import {
   sweepWaitingResults,
 } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND, FIRST_RUN_RANK_CAP } from '../src/jobs/discoveryRun';
-import { enqueue, readSchedules, runNextJob, startRunner } from '../src/jobs/runner';
+import {
+  enqueue,
+  readSchedules,
+  removeSchedule,
+  runNextJob,
+  startRunner,
+} from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import {
   createSource,
@@ -45,24 +51,38 @@ vi.mock('@opportun/ai', async (importOriginal) => {
   return { ...real, runStructured: vi.fn() };
 });
 
-const boot = useApi();
+const bootApp = useApi();
+
+/**
+ * An app whose only schedule is the one these tests are about, the hourly sweep of waiting
+ * postings. A day of drains here otherwise also ran every other schedule due in it: the weekly
+ * company suggestions and prompt refinements call the same mocked provider and spend the same
+ * budget, so which of them fell inside a test's days decided its result (pinned to a Sunday, a
+ * Monday or a Tuesday in UTC, up to 9 tests failed; https://github.com/bgoleno/opportun/issues/580,
+ * as https://github.com/bgoleno/opportun/issues/578 was for the dead-key sweep).
+ */
+async function boot() {
+  const env = await bootApp();
+  for (const { kind } of await readSchedules(env.app.db)) {
+    if (kind !== RANK_WAITING_SWEEP_KIND) await removeSchedule(env.app.db, kind);
+  }
+  return env;
+}
 const ctxOf = (c: TestClient): UserCtx => ({ userId: c.userId, isAdmin: false });
 const PAGE = { limit: 200, offset: 0 };
 const DAY = 86_400_000;
 const CALL_USD = 0.01;
 
-// The clock every test starts from (https://github.com/bgoleno/opportun/issues/289). boot()
-// queues each seeded schedule's next run from the clock, and tests here move Date up to a few
-// days on from that day's UTC midnight. From the real clock, a weekly run then fell inside those
-// days on some weekdays only: company.suggest (Tuesday 08:00, in the process's own zone: UTC on
-// CI) ran through the mocked provider and added calls the tests count. Pinned, every schedule and
-// every "today" starts from one known instant, so the result does not depend on the day the suite
-// runs. Pinned rather than turning company.suggest off, because the other weekly runs (Monday
-// 05:00 and 06:00, Wednesday 06:00) would still move with the real date. A Thursday, 07:00 UTC:
-// in every zone from UTC-12 to UTC+14, no weekly run falls in the next three days. The clock
-// still moves (shouldAdvanceTime), as the real one would, until a test fakes its own;
-// afterEach's useRealTimers ends it.
+// The clock every test starts from (https://github.com/bgoleno/opportun/issues/289), so every
+// "today" starts from one known instant and the result does not depend on the day the suite runs.
+// Tests here move Date up to a few days on from that day's UTC midnight. boot() also leaves only
+// the sweep's schedule (#580), so no weekly run falls inside those days whatever the pinned day is;
+// one test below runs from every day of a week to show it. A Thursday, 07:00 UTC. The clock still
+// moves (shouldAdvanceTime), as the real one would, until a test fakes its own; afterEach's
+// useRealTimers ends it.
 const PINNED_NOW = Date.UTC(2026, 10, 12, 7);
+/** Sunday 2026-11-15 to Saturday 2026-11-21, each at the pinned time of day (07:00 UTC). */
+const A_WEEK = Array.from({ length: 7 }, (_, i) => Date.UTC(2026, 10, 15 + i, 7));
 
 // Braces matter: a function returned from beforeEach is run as a cleanup hook, here the mock.
 beforeEach(() => {
@@ -727,25 +747,31 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
       expect((await getBudget(a)).waiting).toBe(2);
     });
 
-    it('sources that run just after the UTC day starts cannot starve older ones, day after day', async () => {
-      const { app, a } = await boot();
-      const today = await waitingPostings(app, a, 4);
-      const { titles } = providerCharges(app, a);
-      vi.setSystemTime(today + DAY + 10_000);
-      await noSweepDue(app);
-      await discover(app, a, 3, 100);
-      expect(titles).toEqual(['Engineer 004', 'Engineer 003']);
-      vi.setSystemTime(today + 2 * DAY + 10_000);
-      await noSweepDue(app);
-      await discover(app, a, 3, 200);
-      expect(titles).toEqual(['Engineer 004', 'Engineer 003', 'Engineer 002', 'Engineer 001']);
-      vi.setSystemTime(today + 3 * DAY + 10_000);
-      await noSweepDue(app);
-      await discover(app, a, 3, 300);
-      // Now the first day's new postings, still ahead of the ones that came after them.
-      expect(titles.slice(4).every((t) => /Engineer 10\d/.test(t))).toBe(true);
-      expect(titles).toHaveLength(6);
-    });
+    // From every day of a week, at the pinned time of day: with every seeded schedule left in,
+    // this one failed from a Sunday, Monday or Tuesday in UTC (#580).
+    it.each(A_WEEK.map((d) => [new Date(d).toISOString().slice(0, 10), d] as const))(
+      'sources that run just after the UTC day starts cannot starve older ones, day after day (from %s)',
+      async (_day, start) => {
+        vi.setSystemTime(start);
+        const { app, a } = await boot();
+        const today = await waitingPostings(app, a, 4);
+        const { titles } = providerCharges(app, a);
+        vi.setSystemTime(today + DAY + 10_000);
+        await noSweepDue(app);
+        await discover(app, a, 3, 100);
+        expect(titles).toEqual(['Engineer 004', 'Engineer 003']);
+        vi.setSystemTime(today + 2 * DAY + 10_000);
+        await noSweepDue(app);
+        await discover(app, a, 3, 200);
+        expect(titles).toEqual(['Engineer 004', 'Engineer 003', 'Engineer 002', 'Engineer 001']);
+        vi.setSystemTime(today + 3 * DAY + 10_000);
+        await noSweepDue(app);
+        await discover(app, a, 3, 300);
+        // Now the first day's new postings, still ahead of the ones that came after them.
+        expect(titles.slice(4).every((t) => /Engineer 10\d/.test(t))).toBe(true);
+        expect(titles).toHaveLength(6);
+      },
+    );
 
     it('with no room, a new posting joins the wait and no drain is queued', async () => {
       const { app, a } = await boot();

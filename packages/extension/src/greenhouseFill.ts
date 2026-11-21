@@ -93,7 +93,9 @@ export type NotFilledReason =
   /** The form's list did not appear (no list named by aria-controls) by the bound. */
   | 'list_not_shown'
   /** An option (`detail`) was clicked but the control does not show it: check the field. */
-  | 'not_confirmed';
+  | 'not_confirmed'
+  /** The page moved to another address while the lists were filled: this one was left (#537). */
+  | 'page_changed';
 
 export type FillReport =
   | {
@@ -132,24 +134,27 @@ export async function fillGreenhouseForm(
   const marks = view as unknown as Record<string, unknown>;
   if (marks.__opportunFillRunning === true) return { ok: false, reason: 'fill_running' };
 
-  // The page must still be the posting the attempt was handed off to.
-  let here: URL | null;
-  try {
-    here = new URL(doc.location.href);
-  } catch {
-    here = null;
-  }
-  const parts = here === null ? [] : here.pathname.split('/').filter((p) => p !== '');
-  const onPosting =
-    here !== null &&
-    here.protocol === 'https:' &&
-    (here.hostname === 'job-boards.greenhouse.io' || here.hostname === 'boards.greenhouse.io') &&
-    here.port === '' &&
-    parts.length === 3 &&
-    (parts[0] ?? '').toLowerCase() === plan.board.toLowerCase() &&
-    parts[1] === 'jobs' &&
-    parts[2] === plan.jobId;
-  if (!onPosting) return { ok: false, reason: 'wrong_page' };
+  // The page must still be the posting the attempt was handed off to. Read again before each list
+  // is written (#537), since a list waits and the page can move in the same document meanwhile.
+  const onPosting = (): boolean => {
+    let here: URL;
+    try {
+      here = new URL(doc.location.href);
+    } catch {
+      return false;
+    }
+    const parts = here.pathname.split('/').filter((p) => p !== '');
+    return (
+      here.protocol === 'https:' &&
+      (here.hostname === 'job-boards.greenhouse.io' || here.hostname === 'boards.greenhouse.io') &&
+      here.port === '' &&
+      parts.length === 3 &&
+      (parts[0] ?? '').toLowerCase() === plan.board.toLowerCase() &&
+      parts[1] === 'jobs' &&
+      parts[2] === plan.jobId
+    );
+  };
+  if (!onPosting()) return { ok: false, reason: 'wrong_page' };
 
   const form = doc.getElementById('application-form');
   if (form === null || form.tagName !== 'FORM') return { ok: false, reason: 'no_form' };
@@ -269,11 +274,17 @@ export async function fillGreenhouseForm(
     const list = listId === '' ? null : doc.getElementById(listId);
     if (shell === null || list === null) return null;
     if (list.getAttribute('role') !== 'listbox' || !shell.contains(list)) return null;
-    return Array.from(list.querySelectorAll('[role="option"]')).filter(
-      (o) =>
-        o.closest('[role="listbox"]') === list &&
-        !['A', 'BUTTON', 'INPUT', 'LABEL'].includes(o.tagName),
-    );
+    // Never one that is, or sits inside, a link or a control under the listbox (#537, sec's
+    // audit #524): a click there would follow the link or press the control. In upper case: an
+    // SVG link's tagName is "a", and it follows its link too (sec at 7b7f5b3).
+    return Array.from(list.querySelectorAll('[role="option"]')).filter((o) => {
+      if (o.closest('[role="listbox"]') !== list) return false;
+      for (let at: Element | null = o; at !== null && at !== list; at = at.parentElement) {
+        const tag = at.tagName.toUpperCase();
+        if (['A', 'AREA', 'BUTTON', 'INPUT', 'LABEL', 'SUMMARY'].includes(tag)) return false;
+      }
+      return true;
+    });
   };
   // The one click: only on an option of the list this box names, inside its own select-shell.
   const pick = (box: Element, option: Element): boolean => {
@@ -594,8 +605,16 @@ export async function fillGreenhouseForm(
   // The only part that waits, so the only part another fill could run beside: marked (above).
   marks.__opportunFillRunning = true;
   try {
-    for (const job of lists) {
+    for (const [at, job] of lists.entries()) {
       const { box, label, value } = job;
+      // The page moved while an earlier list waited (the form's own history.pushState, or a link
+      // followed inside it): this list and the rest are not written, and are reported (#537).
+      if (!onPosting()) {
+        for (const rest of lists.slice(at)) {
+          notFilled.push({ label: rest.label, reason: 'page_changed' });
+        }
+        break;
+      }
       const setter = inputValue?.set;
       // Checked again just before acting (tl's blocking 1 at 8084132): seconds may have passed
       // since the fields were read, and the user may have opened this list or typed in it. Then
@@ -662,6 +681,14 @@ export async function fillGreenhouseForm(
             () => theirs() ?? (optionsOf(box) === null ? { kind: 'no_list' } : { kind: 'none' }),
             3000,
           );
+      // The page moved during this list's wait: nothing more is written, not the click, not the
+      // emptying and not the closing mouseup, here or in the lists after it (#537).
+      if (!onPosting()) {
+        for (const rest of lists.slice(at)) {
+          notFilled.push({ label: rest.label, reason: 'page_changed' });
+        }
+        break;
+      }
       // Theirs, during the wait or just before the click: left as it is, with no click, no
       // emptying and no closing mouseup.
       const user = found?.kind === 'theirs' ? found : found?.kind === 'one' ? theirs() : null;
@@ -914,11 +941,17 @@ export function greenhouseListHelpers(doc: Document, form: Element) {
     const list = listId === '' ? null : doc.getElementById(listId);
     if (shell === null || list === null) return null;
     if (list.getAttribute('role') !== 'listbox' || !shell.contains(list)) return null;
-    return Array.from(list.querySelectorAll('[role="option"]')).filter(
-      (o) =>
-        o.closest('[role="listbox"]') === list &&
-        !['A', 'BUTTON', 'INPUT', 'LABEL'].includes(o.tagName),
-    );
+    // Never one that is, or sits inside, a link or a control under the listbox (#537, sec's
+    // audit #524): a click there would follow the link or press the control. In upper case: an
+    // SVG link's tagName is "a", and it follows its link too (sec at 7b7f5b3).
+    return Array.from(list.querySelectorAll('[role="option"]')).filter((o) => {
+      if (o.closest('[role="listbox"]') !== list) return false;
+      for (let at: Element | null = o; at !== null && at !== list; at = at.parentElement) {
+        const tag = at.tagName.toUpperCase();
+        if (['A', 'AREA', 'BUTTON', 'INPUT', 'LABEL', 'SUMMARY'].includes(tag)) return false;
+      }
+      return true;
+    });
   };
   // The one click: only on an option of the list this box names, inside its own select-shell.
   const pick = (box: Element, option: Element): boolean => {
