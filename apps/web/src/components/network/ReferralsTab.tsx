@@ -11,12 +11,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/toast';
 import { errorMessage } from '@/lib/api';
-import { formatDate } from '@/lib/opportunities';
+import { formatDate, formatDateTime } from '@/lib/opportunities';
 import {
   useAskReferral,
   useContacts,
   useOpportunityReferrals,
   useReferralCandidates,
+  useReRankReferrals,
   useSetReferralStatus,
   type OpportunityReferral,
   type ReferralCandidate,
@@ -150,6 +151,7 @@ export function ReferralsTab({
   const referrals = useOpportunityReferrals(opportunityId);
   const askReferral = useAskReferral(opportunityId);
   const setStatus = useSetReferralStatus(opportunityId);
+  const reRank = useReRankReferrals(opportunityId);
   // Once any contacts exist the LinkedIn export has been imported (or contacts added by hand),
   // so the empty state must not tell the user to import again.
   const hasContacts = (useContacts('', 0).data?.total ?? 0) > 0;
@@ -225,6 +227,24 @@ export function ReferralsTab({
                   These contacts are not ranked by AI ({aiNote(data.aiUnavailable)}). Current
                   colleagues and closer contacts come first.
                 </p>
+              ) : null}
+              {data.ranked ? (
+                // The ranking is kept (#590): say when it was made, and offer a fresh one.
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+                  <span>
+                    Ranked by AI
+                    {data.rankedAt == null ? '' : ` ${formatDateTime(data.rankedAt)}`}.
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={reRank.isPending}
+                    onClick={() => reRank.mutate()}
+                  >
+                    {reRank.isPending ? 'Re-ranking...' : 'Re-rank'}
+                  </Button>
+                  {reRank.error ? <FormError message={errorMessage(reRank.error)} /> : null}
+                </div>
               ) : null}
               <ul className="grid gap-2" aria-label="Referral candidates">
                 {data.items.map((c) => (
