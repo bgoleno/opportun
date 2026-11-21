@@ -15,7 +15,9 @@ import { errorMessage } from '@/lib/api';
  * "Are you sure?" for destructive actions, and for any other that needs a yes first (say so with
  * confirmVariant, so it does not read as a warning). Closes only on success: a rejected `onConfirm`
  * leaves the dialog open with the failure shown in it, rather than closing as if it had
- * worked and leaving the outcome to a toast the person may not connect to this dialog.
+ * worked and leaving the outcome to a toast the person may not connect to this dialog. While the
+ * action is in flight it cannot be closed at all (Cancel, Escape, a backdrop click: #678), so its
+ * outcome always has this dialog to be shown in.
  */
 export function ConfirmDialog(props: {
   open: boolean;
@@ -32,18 +34,25 @@ export function ConfirmDialog(props: {
     <Dialog
       open={props.open}
       onOpenChange={(o) => {
+        if (!o && busy) return;
         if (!o) setError(null);
         props.onOpenChange(o);
       }}
     >
-      <DialogContent className="max-w-md">
+      <DialogContent
+        className="max-w-md"
+        // Escape is the native dialog's cancel event: refused while in flight, so it cannot close.
+        onCancel={(e) => {
+          if (busy) e.preventDefault();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{props.title}</DialogTitle>
           <DialogDescription>{props.description}</DialogDescription>
         </DialogHeader>
         {error === null ? null : <FormError message={error} />}
         <DialogFooter>
-          <Button variant="outline" onClick={() => props.onOpenChange(false)}>
+          <Button variant="outline" disabled={busy} onClick={() => props.onOpenChange(false)}>
             Cancel
           </Button>
           <Button

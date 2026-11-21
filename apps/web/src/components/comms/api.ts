@@ -147,6 +147,9 @@ export function useInbox(view: InboxTab, filters: InboxFilters = {}) {
     queryKey: [...ck.view(view), filterKey(filters)] as const,
     queryFn: () =>
       api<Page<CommunicationView>>(`/communications?view=${view}&limit=200${filterQuery(filters)}`),
+    // The rows on screen stay while a new filter's load (#678): without them the selection, and a
+    // confirmation open for it, would be dropped for the moment the list is empty.
+    placeholderData: keepPreviousData,
   });
 }
 
