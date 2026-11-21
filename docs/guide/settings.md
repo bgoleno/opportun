@@ -577,6 +577,7 @@ event and error records as logs, so in practice they stay in the instance.
 | `opportun.count.described`              | whole number             | yes      |
 | `opportun.count.deferred`               | whole number             | yes      |
 | `opportun.count.skipped`                | whole number             | yes      |
+| `opportun.count.holders`                | whole number             | yes      |
 | `opportun.count.truncated`              | whole number             | yes      |
 | `opportun.count.read`                   | whole number             | yes      |
 | `opportun.count.returned`               | whole number             | yes      |

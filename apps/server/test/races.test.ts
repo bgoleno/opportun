@@ -755,4 +755,30 @@ describe('Google vault writes (review fix 3)', () => {
     expect(await tokenRows(app, a.userId)).toHaveLength(1);
     expect((await readTokens(app.db, ctx))?.refreshToken).toBe('r-rotated');
   });
+
+  // The library's refresh event is not awaited by the request or job that caused it (#147), so its
+  // write can come after the connection it belongs to is gone: disconnected meanwhile, or, on the
+  // demo, the account deleted and reseeded by the nightly reset under the same id (#618). It never
+  // puts a connection back.
+  it('a refresh that lands after the tokens were removed stores nothing', async () => {
+    const { app, a } = await boot();
+    const ctx = { userId: a.userId, isAdmin: false };
+    await writeTokens(app.db, ctx, tokens('r-old', 'a-old'));
+    const pause = pauseAt('google.refresh');
+    const late = storeRefreshedTokens(app.db, ctx, {
+      access_token: 'a-new',
+      refresh_token: 'r-new',
+    });
+    await pause.reached;
+    await exec(
+      app,
+      'DELETE FROM secrets WHERE user_id = ? AND label = ?',
+      a.userId,
+      GOOGLE_TOKENS_LABEL,
+    );
+    pause.release();
+    await late;
+    expect(await tokenRows(app, a.userId)).toHaveLength(0);
+    expect(await readTokens(app.db, ctx)).toBeUndefined();
+  });
 });
