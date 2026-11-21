@@ -10,6 +10,7 @@ import { DetailsPanel } from '@/components/opportunity/DetailsPanel';
 import { OpportunityDetail } from '@/components/opportunity/OpportunityDetail';
 import { formatDate, formatDateTime, type OpportunityView } from '@/lib/opportunities';
 import { parseApplySearch } from '@/routes/opportunities.$id_.apply';
+import { keys as settingsKeys } from '@/routes/settings/-api';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { ApplyPage } from './ApplyPage';
 import { clockTime, type SubmissionView } from './api';
@@ -2990,6 +2991,34 @@ describe('#546: a shared demo account', () => {
     expect(create?.body).not.toHaveProperty('resumeId');
   });
 
+  // Which resumes to offer depends on the kind of account (qa's J14 on #575): until /onboarding
+  // answers, the step offers none, rather than show the demo's own resumes for a moment.
+  it('the resume step offers no resume choice while the kind of account is unknown', async () => {
+    let answer!: () => void;
+    const held = new Promise<void>((r) => (answer = r));
+    const out = mockApi(
+      demoRoutes(true, null, {
+        'GET /onboarding': async () => {
+          await held;
+          return onboarding(true)['GET /onboarding'];
+        },
+      }),
+    );
+    renderStep('resume');
+    expect(await screen.findByText('Loading...')).toBeVisible();
+    // The resumes have answered: only the account's kind is still out.
+    await waitFor(() => expect(calls(out.calls, 'GET', '/resumes')).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByRole('combobox')).toBeNull();
+    expect(screen.queryByText('Choose the resume to use')).toBeNull();
+    expect(screen.queryByText(/No final resume yet/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Next: Details' })).toBeNull();
+
+    answer();
+    expect(await screen.findByText(WARNING)).toBeVisible();
+    expect(screen.queryByRole('combobox')).toBeNull();
+  });
+
   // The expired attempt on a shared account can be another visitor's: a new demo draft holds only
   // what its own visitor types into it (tl and sec's note, point 1).
   it('starting again on a shared account carries nothing over from an expired attempt', async () => {
@@ -3077,8 +3106,13 @@ describe('#546: a shared demo account', () => {
     dedicated.unmount();
 
     mockApi(demoRoutes(true, submission({ ...noResume, fields: {} })));
-    renderStep('details');
+    const { queryClient } = renderStep('details');
     expect(await screen.findByText(WARNING)).toBeVisible();
+    // The profile, which would offer the tick, has answered too (tl on #575): no tick is a choice,
+    // not a profile still loading.
+    await waitFor(() =>
+      expect(queryClient.getQueryState(settingsKeys.profile)?.status).toBe('success'),
+    );
     expect(screen.getByLabelText('Full name')).toHaveValue('');
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(screen.queryByText(/Save to my profile/)).toBeNull();
@@ -3101,6 +3135,27 @@ describe('#546: a shared demo account', () => {
         'No resume. On the demo an application carries no resume: attach your own on the employer’s form.',
       ),
     );
+  });
+
+  it('the review tick names no resume on a shared account, and is unchanged elsewhere', async () => {
+    mockApi(demoRoutes(true, noResume));
+    const shared = renderStep('review');
+    await screen.findByText(WARNING);
+    expect(
+      await screen.findByRole('checkbox', {
+        name: 'I have read my answers, and I will press Submit myself on boards.greenhouse.io.',
+      }),
+    ).toBeVisible();
+    expect(screen.queryByText(/I have read the resume/)).toBeNull();
+    shared.unmount();
+
+    mockApi(demoRoutes(false, submission()));
+    renderStep('review');
+    expect(
+      await screen.findByRole('checkbox', {
+        name: 'I have read the resume and my answers, and I will press Submit myself on boards.greenhouse.io.',
+      }),
+    ).toBeVisible();
   });
 
   it('a value that came with the demo is refused by name, and the field is marked on the review', async () => {

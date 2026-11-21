@@ -556,6 +556,12 @@ On a shared account, enforced by the server:
   ([#544](https://github.com/bgoleno/opportun/issues/544)). A draft starts empty, nothing is saved
   to the shared profile, the application carries no resume (the visitor attaches their own on the
   employer's form), and the demo's own names and addresses are refused.
+- **The screens say it is shared**
+  ([#546](https://github.com/bgoleno/opportun/issues/546)). The apply steps, Settings > Profile
+  and the Apple Mail and Gmail connector cards warn that what is entered, or what a connected
+  mailbox brings in, can be read by everyone on the account until the nightly reset. A refused
+  demo value is named by field, with a link back to the details step. A dedicated account sees
+  none of it.
 - **An application is its visitor's.** Everyone signed in to the account can read its drafts, but
   only the visitor (the session) who started one can change, review or hand it off, and only that
   visitor's device token is given it. A new sign-in is a new visitor, so an extension paired in an
