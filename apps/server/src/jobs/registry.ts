@@ -31,8 +31,8 @@ export interface JobServices {
   /** Assisted apply is on (config submissionsEnabled: on unless OPPORTUN_SUBMISSIONS=0, never on
    *  the demo, #455); mail ingest matches confirmations only then (#119). */
   submissions: boolean;
-  /** Finds a provider's ranking batch client (#441): batchProviderFor, which has none yet, or a
-   *  fake in tests. Absent means batchProviderFor. */
+  /** Finds a provider's ranking batch client (#441): batchProviderFor (Anthropic's, #509, and
+   *  OpenAI's, #510), or a fake in tests. Absent means batchProviderFor. */
   rankBatchProvider: (target: Parameters<typeof batchProviderFor>[0]) => BatchProvider | null;
 }
 
