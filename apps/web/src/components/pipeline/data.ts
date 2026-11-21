@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { z } from 'zod';
 import { toast } from '@/components/ui/toast';
-import { api } from '@/lib/api';
+import { api, ApiError } from '@/lib/api';
 import {
   invalidateListsAfterChange,
   qk,
@@ -49,8 +49,10 @@ export function useAllOpportunities() {
  * board's own `useAllOpportunities` cache, same as useStageFlow's stage updates do -- so the
  * drop holds instead of snapping back while the request is in flight. Unlike before this fix,
  * a failure now rolls back to the exact pre-drag snapshot rather than just toasting and hoping
- * the next refetch sorts it out: with one atomic request, a failure means nothing was saved, so
+ * the next refetch sorts it out: with one atomic request, a refusal means nothing was saved, so
  * the optimistic update is the only thing that could be wrong, and undoing it is well-defined.
+ * A failure that is not a refusal (a 5xx, a lost answer) may come after the commit, so that one
+ * also reads the board's list back (#589).
  */
 export function useReorderOpportunities() {
   const qc = useQueryClient();
@@ -71,8 +73,14 @@ export function useReorderOpportunities() {
       );
       return { previous };
     },
-    onError: (_err, _changes, context) => {
+    onError: (err, _changes, context) => {
       for (const [key, data] of context?.previous ?? []) qc.setQueryData(key, data);
+      // A definite 4xx refused the batch before anything was saved, so the snapshot is the
+      // server's order. Any other failure (a 5xx, a lost answer, a dropped connection) may come
+      // after the server committed: the board reads its list back, once (tl on #589).
+      if (!(err instanceof ApiError && err.status >= 400 && err.status < 500)) {
+        void qc.invalidateQueries({ queryKey: qk.allOpportunities, exact: true });
+      }
       toast({
         title: 'Order not saved',
         description: 'The board has been restored.',
@@ -80,7 +88,7 @@ export function useReorderOpportunities() {
       });
     },
     // Not this board's own list (#589): on success it already holds the order the server applied
-    // in one transaction, and on failure the snapshot restored above, since nothing was saved.
+    // in one transaction; a failure restored the snapshot, and read the list back if needed.
     onSettled: () => invalidateListsAfterChange(qc),
   });
   return mutation.mutate;

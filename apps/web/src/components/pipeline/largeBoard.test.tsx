@@ -59,6 +59,8 @@ function opp(i: number, stage: OpportunityStage, sortOrder = 0): OpportunityView
 function server(opts: {
   stage?: (call: ApiCall) => unknown;
   reorder?: (call: ApiCall) => unknown;
+  /** The single-opportunity read fails (as a 404 does), so a refused move falls back. */
+  noRowRead?: boolean;
 }) {
   const items = [
     opp(1, 'discovered', 0),
@@ -87,7 +89,10 @@ function server(opts: {
     }
     return { status: 204 };
   };
-  const one = (call: ApiCall) => ({ ...find(call.path.split('/')[2] ?? '')! });
+  const one = (call: ApiCall) =>
+    opts.noRowRead === true
+      ? { status: 500, body: { error: { code: 'server_error' } } }
+      : { ...find(call.path.split('/')[2] ?? '')! };
   return {
     items,
     routes: {
@@ -151,7 +156,7 @@ async function settled(
   calls: ApiCall[],
   queryClient: { isFetching: () => number; isMutating: () => number },
 ) {
-  await waitFor(() => expect(otherListGets(calls)).toBe(2));
+  await waitFor(() => expect(otherListGets(calls)).toBeGreaterThanOrEqual(2));
   await waitFor(() => {
     expect(queryClient.isMutating()).toBe(0);
     expect(queryClient.isFetching()).toBe(0);
@@ -225,7 +230,61 @@ describe('a change on a board of 1,000 opportunities (#589)', () => {
     expect(rowGets(calls, 'opp-1')).toBe(1);
   });
 
-  it('a failed reorder restores the order and says so, with no list request for the board', async () => {
+  it('a refused stage change whose read-back fails reads the whole board back instead', async () => {
+    let items: OpportunityView[] = [];
+    const { calls, queryClient, ...fake } = await renderBoard({
+      noRowRead: true,
+      stage: () => {
+        items.find((o) => o.id === 'opp-1')!.stage = 'applied';
+        return { status: 409, body: { error: { code: 'conflict' } } };
+      },
+    });
+    items = fake.items;
+    await drop('opp-1', 'interested');
+    await settled(calls, queryClient);
+    expect(
+      await within(column('Applied')).findByRole('article', { name: /Company 1: Role 1/ }),
+    ).toBeVisible();
+    expect(rowGets(calls, 'opp-1')).toBe(1);
+    expect(boardPages(calls)).toBe(2 * (TOTAL / 200));
+  });
+
+  it('a reorder the server refuses restores the order and says so, with no list request', async () => {
+    // A definite 4xx: the batch was refused before anything was saved, so the snapshot is the
+    // server's state.
+    const { calls, queryClient } = await renderBoard({
+      reorder: () => ({ status: 422, body: { error: { code: 'validation_failed' } } }),
+    });
+    await drop('opp-1', 'opp-2');
+    await settled(calls, queryClient);
+    expect(await screen.findByText('Order not saved')).toBeInTheDocument();
+    expect(cardOrder('New')).toEqual(['Company 1: Role 1', 'Company 2: Role 2']);
+    expect(boardPages(calls)).toBe(TOTAL / 200);
+  });
+
+  it('a reorder whose answer is lost after the server saved it reads the board back once', async () => {
+    // The server committed the batch, then the answer failed (a proxy's 502, a dropped
+    // connection): the outcome is unknown to the board, so it reads its list back, once.
+    let items: OpportunityView[] = [];
+    const { calls, queryClient, ...fake } = await renderBoard({
+      reorder: (call) => {
+        for (const c of (call.body as { changes: { id: string; sortOrder: number }[] }).changes) {
+          items.find((o) => o.id === c.id)!.sortOrder = c.sortOrder;
+        }
+        return { status: 502, body: { error: { code: 'bad_gateway' } } };
+      },
+    });
+    items = fake.items;
+    await drop('opp-1', 'opp-2');
+    await settled(calls, queryClient);
+    expect(await screen.findByText('Order not saved')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(cardOrder('New')).toEqual(['Company 2: Role 2', 'Company 1: Role 1']),
+    );
+    expect(boardPages(calls)).toBe(2 * (TOTAL / 200));
+  });
+
+  it('a reorder that fails without saving shows the old order after reading the board back', async () => {
     const { calls, queryClient } = await renderBoard({
       reorder: () => ({ status: 500, body: { error: { code: 'server_error' } } }),
     });
@@ -233,6 +292,6 @@ describe('a change on a board of 1,000 opportunities (#589)', () => {
     await settled(calls, queryClient);
     expect(await screen.findByText('Order not saved')).toBeInTheDocument();
     expect(cardOrder('New')).toEqual(['Company 1: Role 1', 'Company 2: Role 2']);
-    expect(boardPages(calls)).toBe(TOTAL / 200);
+    expect(boardPages(calls)).toBe(2 * (TOTAL / 200));
   });
 });
