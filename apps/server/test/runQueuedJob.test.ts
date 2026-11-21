@@ -1,7 +1,7 @@
 // The test helpers of https://github.com/bgoleno/opportun/issues/615: runQueuedJob runs the job a
 // test queued and nothing else, and holdInstanceSchedules keeps the boot-seeded schedules from
 // being claimed in place of a test's own job.
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { jobs } from '../src/db/schema';
@@ -69,5 +69,38 @@ describe('#615: holdInstanceSchedules', () => {
     expect(ran).toEqual(['mine']);
     expect((await row(app, due)).status).toBe('pending');
     expect((await row(app, mine)).status).toBe('done');
+  });
+  // https://github.com/bgoleno/opportun/issues/677: tests hold the schedules from several claims
+  // at once (four workers, or a run started while another is in flight). Each hold was one
+  // multi-row UPDATE, and on Postgres two of them locking the same rows in different orders
+  // deadlocked ("deadlock detected", discoveryTagReserve on #689's Postgres leg). Concurrent holds
+  // now take turns.
+  it('many holds at once never deadlock, and every seeded occurrence ends up held', async () => {
+    const { app } = await boot();
+    const keys = (await readSchedules(app.db))
+      .filter((s) => s.userId === null)
+      .map((s) => `${SCHEDULE_PREFIX}${s.kind}`);
+    expect(keys.length).toBeGreaterThan(5);
+    // A due occurrence of every seeded schedule, as on the real clock at their crons.
+    for (const dedupeKey of keys) {
+      await enqueue(app.db, KIND, { name: 'seeded' }, { runAt: LONG_AGO, dedupeKey });
+    }
+    const pending = () =>
+      app.db
+        .select({ runAt: jobs.runAt })
+        .from(jobs)
+        .where(and(eq(jobs.status, 'pending'), inArray(jobs.dedupeKey, keys)))
+        .all();
+    expect((await pending()).length).toBeGreaterThan(5);
+    for (let round = 0; round < 15; round++) {
+      // Come due again, so every hold in the round has rows to take.
+      await app.db
+        .update(jobs)
+        .set({ runAt: LONG_AGO })
+        .where(and(eq(jobs.status, 'pending'), inArray(jobs.dedupeKey, keys)))
+        .run();
+      await Promise.all(Array.from({ length: 8 }, () => holdInstanceSchedules(app)));
+      expect((await pending()).every((j) => j.runAt > Date.now())).toBe(true);
+    }
   });
 });
