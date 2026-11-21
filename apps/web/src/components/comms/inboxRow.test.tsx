@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import type { CommunicationView } from './api';
 import { Inbox } from './Inbox';
@@ -346,5 +346,62 @@ describe('Inbox', () => {
       ids: ['nr1'],
       action: { kind: 'reject' },
     });
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/645: after Sync now the Inbox keeps reading while the sync
+// runs and its messages are classified, so the new mail, the counts and "Synced ..." show without a
+// reload, and it stops once nothing is left to wait for.
+describe('Inbox Sync now (#645)', () => {
+  it('shows the new mail and the new sync time without a reload, then stops asking', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const T0 = Date.UTC(2026, 10, 20, 9, 0);
+      const T1 = Date.UTC(2026, 10, 21, 10, 30);
+      let phase = 0; // 0 before the click; then running, synced with 1 to classify, all done
+      const status = () =>
+        phase === 0
+          ? { connected: true, lastSyncAt: T0, count: 0, status: 'ok', pendingClassify: 0 }
+          : phase === 1
+            ? { connected: true, lastSyncAt: T0, count: 0, status: 'running', pendingClassify: 0 }
+            : phase === 2
+              ? { connected: true, lastSyncAt: T1, count: 1, status: 'ok', pendingClassify: 1 }
+              : { connected: true, lastSyncAt: T1, count: 1, status: 'ok', pendingClassify: 0 };
+      const fresh = {
+        ...BASE,
+        id: 'new1',
+        subject: 'A brand new message',
+        opportunityId: null,
+        needsReview: true,
+      };
+      const { calls } = mockApi({
+        'GET /integrations/gmail': () => {
+          const s = status();
+          if (phase > 0 && phase < 3) phase += 1;
+          // Wrapped: the payload's own `status` would read as the HTTP status.
+          return { status: 200, body: { ...s, lookbackDays: 180, accountEmail: null } };
+        },
+        'GET /communications': () =>
+          phase >= 3 ? { items: [fresh], total: 1 } : { items: [], total: 0 },
+        'POST /integrations/gmail/sync': () => {
+          phase = 1;
+          return { status: 202, body: { jobId: 'job-1' } };
+        },
+      });
+      const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+      renderWithProviders(<Inbox />);
+      await screen.findByRole('button', { name: /Sync now/ });
+      expect(screen.queryByText('A brand new message')).toBeNull();
+      await user.click(screen.getByRole('button', { name: /Sync now/ }));
+      for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(3000);
+      expect(await screen.findByText('A brand new message')).toBeInTheDocument();
+      expect(screen.getByText(new RegExp(`^Synced `))).not.toHaveTextContent(/9:00/);
+      const reads = () => calls.filter((c) => c.path === '/integrations/gmail').length;
+      const settled = reads();
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(reads()).toBe(settled);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

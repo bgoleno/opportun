@@ -1,7 +1,7 @@
 // Mail ingestion API (FR-M1; Apple Mail status for FR-M5). Sync runs as a job; status reports the read-only grant, the last
 // sync and how many messages are stored. Nothing here can change the user's mailbox (FR-M7).
 import type { CommChannel } from '@opportun/core';
-import { and, count, eq } from 'drizzle-orm';
+import { and, count, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -11,7 +11,7 @@ import {
   gmailQueryForDays,
   writeGmailQuery,
 } from '../adapters/gmail';
-import { communications } from '../db/schema';
+import { communications, jobs } from '../db/schema';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import { appleMailState, gmailGranted as gmailGrantedFor } from '../lib/mailStatus';
@@ -20,13 +20,29 @@ import { requireUser, type UserCtx } from '../repos/base';
 import { getSyncState, putSyncState } from '../repos/communications';
 import { readUserSetting } from '../repos/userSettings';
 import type { Db } from '../db/client';
-import { enqueueGmailSync, GMAIL_INTEGRATION } from '../jobs/gmailSync';
+import { CLASSIFY_JOB_KIND, enqueueGmailSync, GMAIL_INTEGRATION } from '../jobs/gmailSync';
 import { withTransaction } from '../db/client';
 
 /** The synced mailbox's address, stored by the sync (adapters/gmail). */
 async function gmailAccountAddress(db: Db, ctx: UserCtx): Promise<string | null> {
   const stored = await readUserSetting(db, ctx, GMAIL_ADDRESS_SETTING, z.string(), '');
   return stored.length === 0 ? null : stored;
+}
+
+/** The user's classify jobs not yet finished: queued, or running now. */
+async function pendingClassify(db: Db, ctx: UserCtx): Promise<number> {
+  const row = await db
+    .select({ n: count() })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.userId, ctx.userId),
+        eq(jobs.kind, CLASSIFY_JOB_KIND),
+        inArray(jobs.status, ['pending', 'running']),
+      ),
+    )
+    .get();
+  return row?.n ?? 0;
 }
 
 const StatusSchema = z.object({
@@ -42,6 +58,11 @@ const StatusSchema = z.object({
    * Google account rather than guessing.
    */
   accountEmail: z.string().nullable(),
+  /**
+   * This user's messages still waiting for, or in, their classification (#645): the Inbox keeps
+   * reading after Sync now until this is 0, so new mail shows in its place without a reload.
+   */
+  pendingClassify: z.number().int().nonnegative(),
 });
 const AppleMailStatusSchema = z.object({
   /**
@@ -101,6 +122,7 @@ export async function integrationsMailRoutes(app: FastifyInstance): Promise<void
       status: state?.status ?? null,
       lookbackDays: await gmailLookbackDays(db, ctx),
       accountEmail: await gmailAccountAddress(db, ctx),
+      pendingClassify: await pendingClassify(db, ctx),
     };
   });
 
