@@ -8,3 +8,9 @@ updates:
     directory: /deploy
     schedule:
       interval: weekly
+    # Digest and minor or patch updates within node 22 only (#683): the runtime's major version
+    # follows .nvmrc and is changed on purpose, with the code, not by a bot (it proposed 22 -> 26
+    # in #675, which every docker leg failed).
+    ignore:
+      - dependency-name: node
+        update-types: ['version-update:semver-major']
