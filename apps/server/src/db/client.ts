@@ -302,6 +302,7 @@ function isPgError(e: unknown): e is Error & Record<string, unknown> {
  */
 export function scrubPgError(err: unknown): unknown {
   if (!isPgError(err)) return err;
+  // eslint-disable-next-line security/detect-object-injection -- a field name from the PG_VALUE_FIELDS constant
   for (const field of PG_VALUE_FIELDS) delete err[field];
   if (String(err.code).startsWith('22')) {
     const original = err.message;
@@ -808,6 +809,7 @@ export function collationProblem(
   if (row === undefined) return `database collation is unknown: ${fix}`;
   const provider = row.datlocprovider ?? 'c';
   if (provider !== 'c') {
+    // eslint-disable-next-line security/detect-object-injection -- a read of a fixed lookup by the server's locale-provider code
     return `database locale provider is ${LOCALE_PROVIDERS[provider] ?? provider}, not libc: names and titles sort differently than on SQLite (${fix})`;
   }
   const isC = (v: string) => v === 'C' || v === 'POSIX';
@@ -1404,6 +1406,7 @@ export function libpqEnvFor(
   const q = u.searchParams;
   const env: LibpqEnv = {};
   const set = (key: string, value: string | null | undefined) => {
+    // eslint-disable-next-line security/detect-object-injection -- set() is only called with literal PG* variable names
     if (value !== null && value !== undefined && value !== '') env[key] = value;
   };
   set('PGHOST', q.get('host') ?? (hostless ? undefined : u.hostname.replace(/^\[(.*)\]$/, '$1')));

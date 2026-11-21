@@ -1,6 +1,7 @@
 // Reactive Resume integration (FR-R7): the instance address and API key, a validate probe,
 // and the per-user document store preference. The key goes into the vault once and never
 // comes back out over HTTP (NFR-SEC4).
+import { keyedFetch } from '../lib/safeFetch';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -92,9 +93,11 @@ export async function reactiveResumeRoutes(app: FastifyInstance): Promise<void> 
     '/integrations/reactive-resume/validate',
     { schema: { response: { 200: ValidationSchema } } },
     async (req) => {
-      const cfg = await readRrConfig(db, requireUser(req));
+      const ctx = requireUser(req);
+      const cfg = await readRrConfig(db, ctx);
       if (cfg === undefined) throw new HttpError(409, 'reactive_resume_not_connected');
-      return validateReactiveResume(app.reactiveResumeFetch, cfg);
+      // Under the user's rate key, as the store's calls are (#617).
+      return validateReactiveResume(keyedFetch(app.reactiveResumeFetch, ctx.userId), cfg);
     },
   );
 

@@ -104,12 +104,10 @@ function replaceAt(root: Record<string, unknown>, pointer: string, value: unknow
   let node: unknown = root;
   for (const part of parts.slice(0, -1)) {
     if (node === null || typeof node !== 'object') return false;
-    // eslint-disable-next-line security/detect-object-injection -- test fake walking a pointer
     node = (node as Record<string, unknown>)[part];
   }
   const last = parts[parts.length - 1] as string;
   if (node === null || typeof node !== 'object' || !(last in (node as object))) return false;
-  // eslint-disable-next-line security/detect-object-injection -- test fake walking a pointer
   (node as Record<string, unknown>)[last] = value;
   return true;
 }

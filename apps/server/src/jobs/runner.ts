@@ -18,12 +18,23 @@ import { runWithHoldStop } from '../lib/demoResetGate';
 import { HttpError } from '../lib/errors';
 import { jobs, settings } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
+import { keyedFetch } from '../lib/safeFetch';
 import { contextFromTraceparent, currentTraceparent, isCollecting, obs } from '../obs';
 import { OTHER } from '../obs/catalog';
 import { errorType } from '../obs/outbound';
 import { RANK_WAITING_KIND } from './discoveryKinds';
 import { finishInterruptedRuns } from './interruptedRuns';
 import { getJobHandler, type JobContext, type JobHandler, type JobServices } from './registry';
+
+/**
+ * The services a job gets: a job that belongs to a user fetches under that user's rate key
+ * (#617), so the per-host bucket shares a vendor host between users rather than one user's jobs
+ * holding every slot ahead of another's.
+ */
+function servicesFor(services: Partial<JobServices>, userId: string | null): Partial<JobServices> {
+  if (userId === null || services.sourceFetch === undefined) return services;
+  return { ...services, sourceFetch: keyedFetch(services.sourceFetch, userId) };
+}
 
 export const DEFAULT_MAX_ATTEMPTS = 5;
 const BASE_DELAY_MS = 30_000;
@@ -357,7 +368,7 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
     userId: job.userId,
     attempt: job.attempts,
     maxAttempts: job.maxAttempts,
-    services: opts.services ?? {},
+    services: servicesFor(opts.services ?? {}, job.userId),
     // Also true once its hold on the demo reset's gate is about to end (its stop signal, the
     // margin before the bound: tl on #704), or has: a job that loops stops before its AI calls
     // all fail at once and it writes their failures.
@@ -541,6 +552,7 @@ export function startRunner(
   const activeByKind = new Map<string, number>();
   const atCap = (): string[] =>
     [...activeByKind.entries()]
+      // eslint-disable-next-line security/detect-object-injection -- job kinds are server constants, and a missing one falls back to no cap
       .filter(([kind, n]) => n >= (limits[kind] ?? Number.POSITIVE_INFINITY))
       .map(([kind]) => kind);
 
