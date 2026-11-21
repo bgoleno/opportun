@@ -54,6 +54,12 @@ export interface BatchProvider {
   state(batchId: string): Promise<BatchState>;
   /** Every request's result, once the batch has ended. */
   results(batchId: string): Promise<BatchResultItem[]>;
+  /**
+   * Removes what the provider keeps of an ended batch whose results were applied: its requests and
+   * its results (#634). Throws when a removal is refused, so the caller can try again later; what
+   * is already gone counts as removed.
+   */
+  cleanup(batchId: string): Promise<void>;
 }
 
 /**
@@ -96,6 +102,8 @@ function withBatchSpans(provider: BatchProvider, policy: ModelPolicy): BatchProv
         return out;
       }),
     state: (batchId) => provider.state(batchId),
+    // No span: it carries no tokens or cost, and its failure is the cleanup job's to log.
+    cleanup: (batchId) => provider.cleanup(batchId),
     results: (batchId) =>
       inBatchSpan(OPERATION_BATCH_COLLECT, policy, async (set) => {
         set({ [ATTR.batchId]: batchId });
