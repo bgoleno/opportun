@@ -327,6 +327,20 @@ const PREFILL_FIELDS: readonly {
 ];
 
 /**
+ * A question label as greenhouseFill compares it (its `norm`, which lives inside the filler
+ * because the filler runs on the page on its own): spaces collapsed, a trailing required-mark `*`
+ * dropped, any case. Kept the same as that one.
+ */
+function labelKey(label: string): string {
+  return label
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\s*\*$/, '')
+    .trim()
+    .toLowerCase();
+}
+
+/**
  * What the filler fills, from the reviewed attempt only (tl's mapping): the four standard
  * fields by the form's ids, the other details (LinkedIn, website, and #435's city and how you
  * heard) by the question's exact label, and each reviewed answer by
@@ -342,14 +356,24 @@ export function buildPlan(
   const standard = PREFILL_FIELDS.flatMap((f) =>
     f.id === null ? [] : [{ id: f.id, name: f.name, value: value(f.key) }],
   ).filter((x) => x.value !== '');
+  // A reviewed answer is what the user confirmed for its question (#595): a detail that would
+  // fill a question under the same label is left out, or the filler would find two answers for
+  // it, call it ambiguous and fill neither. Labels compare as the filler compares them.
+  const answered = new Set(attempt.answers.map((a) => labelKey(a.label)));
   const questions = [
     ...PREFILL_FIELDS.flatMap((f) =>
       f.id !== null || f.labels.length === 0
         ? []
-        : [{ labels: [...f.labels], name: f.name, value: value(f.key) }],
+        : [
+            {
+              labels: f.labels.filter((l) => !answered.has(labelKey(l))),
+              name: f.name,
+              value: value(f.key),
+            },
+          ],
     ),
     ...attempt.answers.map((a) => ({ labels: [a.label], name: a.label, value: a.value })),
-  ].filter((q) => q.value !== '');
+  ].filter((q) => q.value !== '' && q.labels.length > 0);
   const lists = PREFILL_FIELDS.flatMap((f) =>
     f.list === undefined ? [] : [{ id: f.list, name: f.name, value: value(f.key) }],
   ).filter((l) => l.value !== '');
