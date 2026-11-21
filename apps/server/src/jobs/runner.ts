@@ -11,7 +11,7 @@ import { ROOT_CONTEXT } from '@opentelemetry/api';
 import { CronExpressionParser } from 'cron-parser';
 import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { isUniqueViolation, rawGet, runCount, type Db, type Exec } from '../db/client';
+import { isUniqueViolation, rawGet, type Db, type Exec } from '../db/client';
 import { claimNextJob, type ClaimedJob } from '../db/dialect';
 import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
 import { HttpError } from '../lib/errors';
