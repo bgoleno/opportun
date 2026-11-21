@@ -560,6 +560,50 @@ describe('a result that does not score the posting', () => {
     }
   });
 
+  // #686 (qa): an expired batch was resent at once, every time, with no end. Two resends at most:
+  // the third return from a batch ends the wait, as a live provider failure does (tl on #686).
+  it('a posting a batch hands back three times waits no more: two resends at most', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    // Returned by an expiry, by a batch the provider no longer has, and by no result at all.
+    const returnOnce = [
+      () => fake!.end(fake!.sent.length, (r) => ({ customId: r.customId, kind: 'expired' })),
+      () => fake!.forget(fake!.sent.length),
+      () => fake!.end(fake!.sent.length, () => null),
+    ];
+    for (const [i, giveBack] of returnOnce.entries()) {
+      expect(await submit(app, a), `send ${i + 1}`).toMatchObject({ status: 'submitted' });
+      giveBack();
+      await collect(app, a);
+    }
+    const [r] = await results(app, a);
+    expect(r).toMatchObject({
+      aiScore: null,
+      rankSkipReason: 'provider_error',
+      rankDeferredAt: null,
+    });
+    // Not sent again.
+    expect(fake!.sent).toHaveLength(3);
+    expect(await submit(app, a)).not.toMatchObject({ status: 'submitted' });
+    expect(fake!.sent).toHaveLength(3);
+  });
+
+  it('a posting handed back twice is still sent a third time, and ranked then', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    for (let i = 0; i < 2; i++) {
+      await submit(app, a);
+      fake!.end(fake!.sent.length, (r) => ({ customId: r.customId, kind: 'expired' }));
+      await collect(app, a);
+    }
+    expect(await submit(app, a)).toMatchObject({ status: 'submitted', requests: 1 });
+    fake!.end(3, succeeded(64));
+    await collect(app, a);
+    expect((await results(app, a))[0]).toMatchObject({ aiScore: 64 });
+  });
+
   it('a batch the provider no longer has: its postings wait again, as if expired', async () => {
     const { app, a } = await boot();
     await batching(app, a);

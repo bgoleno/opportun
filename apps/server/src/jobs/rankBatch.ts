@@ -65,6 +65,8 @@ import {
   takeBatchLink,
   touchBatchChecked,
   unlinkBatch,
+  countBatchReturns,
+  clearBatchReturns,
   writeRankBatching,
   type BatchItem,
   type RankBatchRow,
@@ -345,9 +347,13 @@ async function applyBatchResult(
         await endBatchWait(tx, ctx, item.customId, 'provider_error');
         return 'failed';
       }
-      // Any other error, expired or canceled: unlinked, it waits for a later batch.
+      // Any other error, expired or canceled: unlinked, it waits for a later batch, up to its last
+      // return (#686: countBatchReturns ends the wait then).
+      await countBatchReturns(tx, ctx, [item.customId]);
       return 'returned';
     }
+    // Answered: its count of returns starts again (#686).
+    await clearBatchReturns(tx, ctx, item.customId);
     const parsed = parseStructuredText(item.text, RankOutputSchema);
     await recordTaskRun(
       tx,
@@ -441,7 +447,8 @@ export async function collectRankBatch(
       db,
       async (tx) => {
         await setBatchState(tx, batch.id, 'failed', now);
-        return await unlinkBatch(tx, ctx, batch.id, { batching: true });
+        // Handed back, each one counted (#686).
+        return await unlinkBatch(tx, ctx, batch.id, { batching: true, returned: true });
       },
       { scope: lockFor(ctx) },
     );
@@ -519,7 +526,8 @@ export async function collectRankBatch(
   counts.returned += await withTransaction(
     db,
     async (tx) => {
-      const left = await unlinkBatch(tx, ctx, batch.id, { batching: true });
+      // No result for these: handed back, each one counted (#686).
+      const left = await unlinkBatch(tx, ctx, batch.id, { batching: true, returned: true });
       await setBatchState(tx, batch.id, 'collected', now);
       await enqueueRankBatchCleanup(tx, {
         userId: batch.userId,
