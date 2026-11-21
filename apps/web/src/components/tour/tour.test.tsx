@@ -23,7 +23,14 @@ const NOTHING_DONE: Checklist = {
 };
 
 function onboarding(over: Partial<Onboarding> = {}): Onboarding {
-  return { tour: NOT_STARTED, checklist: NOTHING_DONE, autoStart: false, demo: false, ...over };
+  return {
+    tour: NOT_STARTED,
+    checklist: NOTHING_DONE,
+    autoStart: false,
+    demo: false,
+    sharedDemoAccount: false,
+    ...over,
+  };
 }
 
 const ALL_TARGETS = [

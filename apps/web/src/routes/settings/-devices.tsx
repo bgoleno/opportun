@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Copy } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { SharedDemoNotice } from '@/components/SharedDemoNotice';
 import { FormError } from '@/components/FormError';
 import { FormField } from '@/components/FormField';
 import { Badge } from '@/components/ui/badge';
@@ -127,6 +128,8 @@ export function DevicesCard() {
             onSetUp={() => setSettingUp(true)}
           />
         </ul>
+        {/* Decision 132: mail stays on the demo, so a shared account says what that means. */}
+        <SharedDemoNotice about="mail" />
         <AppleMailLine status={appleMail.data} />
         {tokens.isError ? <FormError message={errorMessage(tokens.error)} /> : null}
         {tokens.isPending ? (

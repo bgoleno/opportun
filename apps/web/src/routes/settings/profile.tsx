@@ -7,6 +7,7 @@ import { useFieldArray, useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { FormError } from '@/components/FormError';
 import { FormField } from '@/components/FormField';
+import { SharedDemoNotice } from '@/components/SharedDemoNotice';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import {
@@ -117,6 +118,8 @@ function ProfileForm({ profile }: { profile: Profile }) {
       </CardHeader>
       <CardContent>
         <form onSubmit={submit} noValidate className="grid gap-4">
+          {/* On a shared demo account only (#546): others on the account can read it. */}
+          <SharedDemoNotice />
           <FormError message={formError} />
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField label="Full name" error={errors.fullName?.message}>
@@ -308,6 +311,7 @@ function ApplicationDetailsCard({ profile }: { profile: Profile }) {
         {/* grid-cols-1 and a row that wraps: at 320 px the two buttons are wider than the card,
             and an implicit grid column would not shrink below them (mobile.spec). */}
         <form onSubmit={submit} noValidate className="grid grid-cols-1 gap-4">
+          <SharedDemoNotice />
           <FormError message={formError} />
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {OWN_DETAILS.map((f) => (
