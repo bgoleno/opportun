@@ -17,8 +17,10 @@ https://github.com/bgoleno/opportun.
 **As of 2026-11-03, main at 3a2b3bd.** This goes stale with every merge; the live state is on
 https://github.com/bgoleno/opportun/issues/79 and the milestone issues it lists.
 
-- Everything built sits behind `OPPORTUN_SUBMISSIONS`: on by default, off with `0`, never on for
-  the demo. It was off unless set to `1` until https://github.com/bgoleno/opportun/issues/455.
+- Everything built sits behind `OPPORTUN_SUBMISSIONS`: on by default, off with `0`. On the demo
+  it is on for the shared accounts, each application bound to its visitor, with resumes and
+  saving to the profile refused
+  (https://github.com/bgoleno/opportun/issues/545). It was off unless set to `1` until https://github.com/bgoleno/opportun/issues/455.
 - Merged: M1 (records, snapshot, review gate, apply screens), M2 (I submitted it, outcomes, the
   follow-up, confirmation email matching) and M4 (recording the confirmation page).
 - Open: M0, the spike (#113, parts of it need the owner's accounts and inbox), and M3, extension
@@ -62,7 +64,7 @@ Decisions 1 to 8 were the open questions in Part A section 10.2; the owner answe
 | 5   | Daily review ceiling: 10 per rolling 24 hours by default, instance ceiling 25, users can only lower it                                                                                             | 2026-10-28       |
 | 6   | Re-applying to the same requisition is allowed, with a typed reason                                                                                                                                | 2026-10-28       |
 | 7   | Named "Assisted apply" and "Apply on \<ATS>", not "Submit to ATS"                                                                                                                                  | 2026-10-28       |
-| 8   | Hidden entirely on the demo                                                                                                                                                                        | 2026-10-28       |
+| 8   | Hidden entirely on the demo. **Replaced:** on for the demo's shared accounts, each application bound to its visitor, resumes and saving to the profile refused (#545)                              | 2026-10-28       |
 | 9   | The review step shows a static "valid until \<time>", not a countdown (Part B, for WCAG 2.2.1); Part A's countdown is dropped                                                                      | 2026-11-01, #79  |
 | 10  | Opportun's existing server-side Workday reads (job list and job detail on a company's own myworkdayjobs.com host) stay as they are                                                                 | 2026-11-02, #113 |
 | 11  | Vendor terms are not a gate on prefill, after reading the terms findings. Whether prefill works on a real form (M0 item 2) still decides each ATS                                                  | 2026-11-02, #113 |
