@@ -30,6 +30,7 @@ import { useApi } from './api';
 import { sqliteOnly } from './db';
 import type { TestClient } from './isolation';
 import { settledOrWaiting } from './race';
+import { holdInstanceSchedules } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -148,7 +149,11 @@ const queueRun = (
     { dedupeKey: `${DISCOVERY_RUN_KIND}:${key}:${sourceId}`, userId: c.userId, runAt },
   );
 
-const startRun = (app: FastifyInstance) => runNextJob(app.db, { services: app.jobs.services });
+// The test's own job, not a seeded schedule come due on the real clock (#615).
+const startRun = async (app: FastifyInstance) => {
+  await holdInstanceSchedules(app);
+  return await runNextJob(app.db, { services: app.jobs.services });
+};
 
 /**
  * A run of the source called directly, not through the runner, which since #269 would skip a
