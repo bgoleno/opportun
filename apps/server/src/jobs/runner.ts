@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { isUniqueViolation, rawGet, runCount, type Db, type Exec } from '../db/client';
 import { claimNextJob, type ClaimedJob } from '../db/dialect';
 import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
+import { runWithHoldStop } from '../lib/demoResetGate';
 import { HttpError } from '../lib/errors';
 import { jobs, settings } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
@@ -402,7 +403,9 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
         return { outcome: 'discarded' };
       }
     }
-    return await runHandler(db, job, opts, handler, parsed.data, ctx, transient);
+    const run = () => runHandler(db, job, opts, handler, parsed.data, ctx, transient);
+    // Its AI calls end on the hold's stop signal, before the bound (#684).
+    return await (hold === undefined ? run() : runWithHoldStop(hold.signal, run));
   } finally {
     hold?.release();
   }

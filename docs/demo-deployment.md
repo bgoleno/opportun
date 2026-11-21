@@ -557,7 +557,10 @@ demo server has two kinds of account (the owner's decision 133):
   `demo-user4`), shared by every visitor and reset nightly. The limits below apply to these only.
 - **A dedicated account**: one the owner makes for one person on a demo server (see
   [A dedicated account for one person](#a-dedicated-account-for-one-person)). It behaves as an
-  account on any instance, with none of the limits below.
+  account on any instance, with none of the limits below except the reset's time limits: a
+  request's 20 seconds for its body and an AI call's 40 seconds apply to every account on a demo
+  server, a dedicated one included, since the server sets them before it knows whose request it
+  is (see **Nothing that began before the reset writes after it**).
 
 On a shared account, enforced by the server:
 
@@ -596,7 +599,7 @@ On a shared account, enforced by the server:
   (with the OAuth client saved for it), or a Reactive Resume, is used by everyone signed in to the
   account until the reset: their resumes are made in it. The Google and Reactive Resume cards say
   so ([#618](https://github.com/bgoleno/opportun/issues/618)). The reset removes the connection.
-- **Nothing that began before the reset writes after it, within limits** (#618, #656). A request
+- **Nothing that began before the reset writes after it** (#618, #656, #684). A request
   already in when the reset starts finishes first; one that comes during it waits, and then finds
   its session or token gone; a job of a shared account that was waiting is dropped without running,
   and a job of the server's own (not one account's) finishes first. The reset waits at most a minute for requests and
@@ -606,12 +609,21 @@ On a shared account, enforced by the server:
   - an AI call is ended after 40 seconds, and the tailoring chat's reply too (its text so far is
     kept); the visitor sees what they would when the AI provider fails;
   - nothing holds the reset off for more than 50 seconds: past that, a request is ended, and a job
-    is told to stop.
+    is told to stop;
+  - and whatever the limits above add up to (a slow body and then a slow AI call can take more than
+    50 seconds), every AI call and the chat's reply also end 5 seconds before the request's or the
+    job's 50 seconds are up. So what the request or job writes after it (the AI call's record, a
+    result marked unavailable) comes while it still holds the reset off, and the reset then replaces
+    it.
+
+  These time limits apply to every account on a demo server, a dedicated one included: the server
+  sets them before it looks up whose request it is.
 
   What this does not cover:
-  - **A handler or job still running past those 50 seconds** (one that ignores the stop, or work
-    that does not end when its request does) can still write after the reset, into the account
-    reseeded under the same id. The limits above make that a slow, rare case, not a closed one.
+  - **Slow work that is not an AI call**: AI calls and the chat's reply end on the stop, but other
+    slow work in a request or a job, or work a handler leaves running after it has answered, does
+    not, and can still write after the reset, into the account reseeded under the same id. A
+    request's other work is database reads and writes, which take well under those 5 seconds.
   - **A seed run by hand** (`seedDemo.ts`) is a separate process the gate does not see: run it with
     the server stopped (see above).
   - **More than one server process** on the same database: the gate is in the process, as the
