@@ -21,6 +21,7 @@ export function joinList(items: readonly string[] | null | undefined): string {
  * over: it reads `'1e5'` as 100000, and it reads any thousands separator as NaN, which is how
  * people actually write a salary.
  */
+// eslint-disable-next-line security/detect-unsafe-regex -- the grouped branch needs a comma per repetition, so no ambiguity; linear
 const WHOLE_NUMBER = /^(?:\d+|\d{1,3}(?:,\d{3})+)$/;
 
 /** Text input to optional whole number: '' -> null; anything else must be an integer >= 0. */
