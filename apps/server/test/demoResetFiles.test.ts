@@ -195,12 +195,14 @@ describe('the fixture identity list covers every identity value the seed writes 
       // The resume's own header: the candidate's name, and every email anywhere in its text.
       seen.push(DEMO_RESUME_BASE_TEXT.split('\n')[0]!);
       seen.push(...(DEMO_RESUME_BASE_TEXT.match(/\S+@\S+/g) ?? []));
+      // And every phone number in it (#671): a run of digits, spaces and + ( ) -.
+      seen.push(...(DEMO_RESUME_BASE_TEXT.match(/\+?\d[\d ()-]{8,}\d/g) ?? []));
       for (const t of DEMO_TAILORED_RESUMES) {
         seen.push(...(t.summary.match(/\S+@\S+/g) ?? []));
       }
       expect(seen.length).toBeGreaterThan(10);
       for (const value of seen) expect(isFixtureIdentity('any', value), value).toBe(true);
-      expect(DEMO_IDENTITY_VALUES.length).toBe(DEMO_USERS.length * 2 + 2);
+      expect(DEMO_IDENTITY_VALUES.length).toBe(DEMO_USERS.length * 2 + 3);
     } finally {
       await app.close();
     }
