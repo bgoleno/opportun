@@ -625,7 +625,9 @@ describe('auth writes keyed only on id (review fix 1 sweep)', () => {
       });
       expect(changed.statusCode).toBe(204);
       pause.release();
-      expect((await loggingIn).statusCode).toBe(200);
+      // The in-flight login proved the old password, which the change replaced: it is refused
+      // and starts no session (#561), and its rehash is not written.
+      expect((await loggingIn).statusCode).toBe(401);
       // The change stands: the in-flight login did not put the old password back.
       expect((await login(app, 'a brand new passphrase')).statusCode).toBe(200);
       expect((await login(app, PASSWORD)).statusCode).toBe(401);

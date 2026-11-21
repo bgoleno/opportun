@@ -77,7 +77,7 @@ export async function clearTwoFactor(
  * cookie lookup never accepts.
  */
 export async function createPendingToken(
-  db: Db,
+  db: Exec,
   userId: string,
   meta: { ip?: string; userAgent?: string },
 ): Promise<string> {
@@ -97,6 +97,20 @@ export async function createPendingToken(
     })
     .run();
   return token;
+}
+
+/**
+ * Whether the pending token is still stored. A password change and a reset delete every one of the
+ * user's (destroyAllSessions, under the password lock): the code step checks this under the same
+ * lock before it starts the session (#561).
+ */
+export async function pendingTokenStored(exec: Exec, token: string): Promise<boolean> {
+  const row = await exec
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(and(eq(sessions.id, sha256(token)), eq(sessions.kind, 'pending_2fa')))
+    .get();
+  return row !== undefined;
 }
 
 /** The user a pending token names (live or not), for keying the per-user verify limit. */
