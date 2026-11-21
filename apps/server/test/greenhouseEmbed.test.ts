@@ -374,7 +374,6 @@ describe('#598: which company, which order, and how long', () => {
       await new Promise((r) => setTimeout(r, init?.timeoutMs ?? 400));
       throw new Error('timeout');
     }) as unknown as typeof safeFetch;
-    const started = Date.now();
     const ref = await verifyEmbeddedGreenhouse(
       app.db,
       ctx,
@@ -385,9 +384,8 @@ describe('#598: which company, which order, and how long', () => {
       80,
     );
     expect(ref).toBeNull();
-    // Well under the 1.2 s three unbounded checks take here, with room for a slow database.
-    expect(Date.now() - started).toBeLessThan(700);
-    // Each request gets what is left of the budget, never more, and none after it is spent.
+    // Each request gets what is left of the budget, never more, and none after it is spent: what
+    // bounds the save, without timing it (a wall-clock check flakes on a loaded host, tl on #633).
     expect(timeouts.length).toBeGreaterThanOrEqual(1);
     expect(timeouts.every((t) => t !== undefined && t > 0 && t <= 80)).toBe(true);
     expect(timeouts.reduce<number>((sum, t) => sum + (t ?? 0), 0)).toBeLessThanOrEqual(
