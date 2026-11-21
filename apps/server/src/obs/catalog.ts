@@ -890,6 +890,9 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.rank_batch.id',
     'opportun.count.unmatched',
   ],
+  'ranking batch cleanup: what the batch holds could not be read; read at the cleanup': [
+    'opportun.rank_batch.id',
+  ],
   'could not read the message again; classifying on the snippet': [
     'opportun.communication.id',
     'opportun.mail.channel',

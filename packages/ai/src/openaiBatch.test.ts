@@ -517,6 +517,17 @@ describe('cleanup: the batch files removed once the results are applied (#634)',
     for (const s of sent) expect(s.headers.authorization).toBe(`Bearer ${KEY}`);
   });
 
+  it('the ids read at the collect (cleanupRefs) are deleted without asking the batch again (#686)', async () => {
+    const read = deletes((id) => json({ id, deleted: true }));
+    const refs = await client(read.fetch).cleanupRefs(BATCH_ID);
+    expect(refs).toEqual(FILES);
+    const { fetch, sent } = deletes((id) => json({ id, deleted: true }));
+    await client(fetch).cleanup(BATCH_ID, refs);
+    expect(sent.map((s) => `${s.method} ${s.url}`)).toEqual(
+      FILES.map((id) => `DELETE ${BASE}/files/${id}`),
+    );
+  });
+
   it('a file already gone counts as removed', async () => {
     const { fetch } = deletes(() => json({ error: { message: 'No such File object' } }, 404));
     await expect(client(fetch).cleanup(BATCH_ID)).resolves.toBeUndefined();

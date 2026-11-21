@@ -60,7 +60,13 @@ export interface BatchProvider {
    * its results (#634). Throws when a removal is refused, so the caller can try again later; what
    * is already gone counts as removed.
    */
-  cleanup(batchId: string): Promise<void>;
+  cleanup(batchId: string, refs?: readonly string[]): Promise<void>;
+  /**
+   * What cleanup will need to remove, read when the results are (#686, sec): OpenAI's file ids,
+   * so a later cleanup does not depend on the batch still naming them. None for a provider whose
+   * cleanup needs only the batch id. Never a key or any request text.
+   */
+  cleanupRefs(batchId: string): Promise<string[]>;
 }
 
 // Each call's time limit (#686): batchLimits.ts, which the two clients import (no cycle here).
@@ -112,7 +118,8 @@ function withBatchSpans(provider: BatchProvider, policy: ModelPolicy): BatchProv
       }),
     state: (batchId) => provider.state(batchId),
     // No span: it carries no tokens or cost, and its failure is the cleanup job's to log.
-    cleanup: (batchId) => provider.cleanup(batchId),
+    cleanup: (batchId, refs) => provider.cleanup(batchId, refs),
+    cleanupRefs: (batchId) => provider.cleanupRefs(batchId),
     results: (batchId) =>
       inBatchSpan(OPERATION_BATCH_COLLECT, policy, async (set) => {
         set({ [ATTR.batchId]: batchId });

@@ -210,6 +210,13 @@ export function createOpenAiBatchProvider(target: {
     new Error(`OpenAI batch ${what}: HTTP ${status}`);
   const id = (v: string) => encodeURIComponent(v);
 
+  /** A batch's input, output and error file ids, those it names. */
+  function fileIdsOf(batch: Json): string[] {
+    return [batch.input_file_id, batch.output_file_id, batch.error_file_id].filter(
+      (v): v is string => typeof v === 'string' && v !== '',
+    );
+  }
+
   async function getBatch(batchId: string): Promise<Json | 'gone'> {
     const res = await fetches.control(`${base}/batches/${id(batchId)}`, {
       method: 'GET',
@@ -368,15 +375,25 @@ export function createOpenAiBatchProvider(target: {
       return items;
     },
 
-    async cleanup(batchId) {
+    async cleanupRefs(batchId) {
+      // The three file ids, read at the collect (#686): the cleanup then deletes them by id.
+      const batch = await getBatch(batchId);
+      return batch === 'gone' ? [] : fileIdsOf(batch);
+    },
+
+    async cleanup(batchId, refs) {
       // The batch's three files, deleted (DELETE /files/{id}, the files reference): the requests
       // (the input file) and the results (output and error). The batch object itself cannot be
-      // deleted. Each is tried even when another is refused, and gone already is removed.
-      const batch = await getBatch(batchId);
-      if (batch === 'gone') return;
-      const ids = [batch.input_file_id, batch.output_file_id, batch.error_file_id].filter(
-        (v): v is string => typeof v === 'string' && v !== '',
-      );
+      // deleted. Each is tried even when another is refused, and gone already is removed. The ids
+      // read at the collect (cleanupRefs) when given; otherwise read from the batch now.
+      let ids: string[];
+      if (refs !== undefined && refs.length > 0) {
+        ids = [...refs];
+      } else {
+        const batch = await getBatch(batchId);
+        if (batch === 'gone') return;
+        ids = fileIdsOf(batch);
+      }
       let refusal: Error | null = null;
       for (const fileId of ids) {
         const res = await fetches.control(`${base}/files/${id(fileId)}`, {

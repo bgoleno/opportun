@@ -241,6 +241,11 @@ export function createAnthropicBatchProvider(target: {
       return items;
     },
 
+    // Deleting the batch needs its id only.
+    async cleanupRefs() {
+      return [];
+    },
+
     async cleanup(batchId) {
       // Deleting the batch takes its results with it; otherwise Anthropic keeps them 29 days
       // (#634; the batch-processing guide). Allowed once processing has ended, which it has: this
