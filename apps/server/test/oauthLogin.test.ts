@@ -9,7 +9,7 @@ import { main as resetPasswordCli } from '../src/cli/resetPassword';
 import { useApi } from './api';
 import { testApp } from './helpers';
 import { fakeOAuth, type FakeIdentity, type FakeOAuth } from './fakeOAuth';
-import { registerTwoUsers, type TestClient } from './isolation';
+import { PASSWORD as ADMIN_PASSWORD, registerTwoUsers, type TestClient } from './isolation';
 import { exec, queryAll, queryOne } from './db';
 import { onSlowTransaction } from '../src/db/gate';
 import { heldApart, holdAt, pauseAt, settledOrWaiting } from './race';
@@ -53,6 +53,71 @@ async function configure(admin: TestClient, name: 'google' | 'github' | 'linkedi
   expect(res.statusCode).toBe(200);
   return res;
 }
+
+// https://github.com/bgoleno/opportun/issues/620 point 3 (sec's second audit): changing who can sign
+// in with a provider asks for the admin's own password, as the registration switch does. A stolen
+// admin session alone cannot point the login page at a client of its choosing, nor remove one.
+describe('oauth provider configuration asks for the admin password (#620)', () => {
+  const put = (c: TestClient, password?: string) =>
+    c.request({
+      method: 'PUT',
+      url: '/api/v1/admin/oauth-providers/github',
+      payload: {
+        clientId: 'github-client-id',
+        clientSecret: CLIENT_SECRET,
+        ...(password === undefined ? {} : { password }),
+      },
+    });
+  const configured = async (c: TestClient, name: string) =>
+    (
+      (await c.request({ method: 'GET', url: `/api/v1/admin/oauth-providers/${name}` })).json() as {
+        configured: boolean;
+      }
+    ).configured;
+
+  it('saving: no password is refused, a wrong one is 403 and stores nothing, the right one saves', async () => {
+    const { a } = await boot();
+    expect((await put(a)).statusCode).toBe(400);
+    const wrong = await put(a, 'not the password');
+    expect(wrong.statusCode).toBe(403);
+    expect(wrong.json()).toMatchObject({ error: { code: 'invalid_password' } });
+    expect(await configured(a, 'github')).toBe(false);
+    expect((await put(a, ADMIN_PASSWORD)).statusCode).toBe(200);
+    expect(await configured(a, 'github')).toBe(true);
+  });
+
+  it('removing: no password is refused, a wrong one is 403 and keeps it, the right one removes it', async () => {
+    const { a } = await boot();
+    await configure(a, 'google');
+    const del = (password?: string) =>
+      a.request({
+        method: 'DELETE',
+        url: '/api/v1/admin/oauth-providers/google',
+        ...(password === undefined ? {} : { payload: { password } }),
+      });
+    expect((await del()).statusCode).toBe(400);
+    expect((await del('not the password')).statusCode).toBe(403);
+    expect(await configured(a, 'google')).toBe(true);
+    expect((await del(ADMIN_PASSWORD)).statusCode).toBe(204);
+    expect(await configured(a, 'google')).toBe(false);
+  });
+
+  it('reusing the integration client: no password is refused, a wrong one is 403 and stores nothing', async () => {
+    const { a } = await boot();
+    await configureIntegrationClient(a);
+    const imp = (password?: string) =>
+      a.request({
+        method: 'POST',
+        url: '/api/v1/admin/oauth-providers/google/import',
+        ...(password === undefined ? {} : { payload: { password } }),
+      });
+    expect((await imp()).statusCode).toBe(400);
+    expect((await imp('not the password')).statusCode).toBe(403);
+    expect(await configured(a, 'google')).toBe(false);
+    expect((await imp(ADMIN_PASSWORD)).statusCode).toBe(200);
+    expect(await configured(a, 'google')).toBe(true);
+  });
+});
 
 describe('oauth provider configuration (admin)', () => {
   it('stores credentials and reports configured flags, never the secret', async () => {
