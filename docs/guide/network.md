@@ -54,8 +54,13 @@ click.
 
 On an opportunity, the **Referrals** tab lists **Who could refer you**: your contacts at that
 company first, then people who used to work there. The `referral.rationale` AI task ranks them
-and writes a one-line reason for each. Opening the tab makes one AI call; the browser reuses
-the answer for about ten minutes before asking again.
+and writes a one-line reason for each. The first time you open the tab makes one AI call; the
+ranking is then kept, so opening it again (on another device, or after a reload) makes none. It is
+ranked again only when something it was built from changes: a contact that could match, the
+opportunity or its company, the ranking prompt, or the model. A ranked list says "Ranked by AI"
+with the date and time, and **Re-rank** next to it asks for a fresh ranking and replaces the kept
+one. If AI is unavailable (no key, or the task's budget is spent), the kept ranking is not shown,
+and **Re-rank** leaves it as it was.
 
 - **Ask** records that you asked that person. Opportun does not send anything: you write and
   send the message yourself.
