@@ -225,8 +225,32 @@ describe('a reviewed answer to the "How did you hear" question wins over the det
       expect(valueOf(page.doc, 'question_9000105')).toBe('A former colleague');
       expect(report.filled).toContain(label);
       expect(report.notFilled.filter((n) => n.reason === 'ambiguous')).toEqual([]);
+      // Nor is the detail reported as not filled under its own name: the question it is for was
+      // filled, with the answer (qa on #674).
+      expect(
+        report.notFilled.filter((n) => n.label === 'How did you hear about this role?'),
+      ).toEqual([]);
     },
   );
+
+  it('a reviewed answer to another question leaves the detail to fill this one', () => {
+    const plan = JSON.parse(
+      JSON.stringify(
+        buildPlan(
+          {
+            ...attempt(DETAILS),
+            answers: [{ label: 'Why do you want to work here?', value: 'The platform team.' }],
+          },
+          { board: BOARD, jobId: JOB_ID },
+          null,
+        ),
+      ),
+    ) as ReturnType<typeof buildPlan>;
+    // The detail, under all five of its labels, is still in the plan.
+    expect(
+      plan.questions.find((q) => q.name === 'How did you hear about this role?')?.labels,
+    ).toEqual(HEARD_LABELS);
+  });
 
   it('with no reviewed answer to it, the detail still fills the question', async () => {
     const { doc } = await fill(withTextQuestion('How did you hear about this role?'));

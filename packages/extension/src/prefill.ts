@@ -356,24 +356,20 @@ export function buildPlan(
   const standard = PREFILL_FIELDS.flatMap((f) =>
     f.id === null ? [] : [{ id: f.id, name: f.name, value: value(f.key) }],
   ).filter((x) => x.value !== '');
-  // A reviewed answer is what the user confirmed for its question (#595): a detail that would
-  // fill a question under the same label is left out, or the filler would find two answers for
-  // it, call it ambiguous and fill neither. Labels compare as the filler compares them.
+  // A reviewed answer is what the user confirmed for its question (#595): a detail with a label a
+  // reviewed answer also carries is left out, whole. Kept, the filler would find two answers for
+  // that question, call it ambiguous and fill neither; and with only that label taken, the
+  // detail's other labels would match nothing and it would be reported as not filled under its
+  // own name although its question was (qa on #674). Labels compare as the filler compares them.
   const answered = new Set(attempt.answers.map((a) => labelKey(a.label)));
   const questions = [
     ...PREFILL_FIELDS.flatMap((f) =>
-      f.id !== null || f.labels.length === 0
+      f.id !== null || f.labels.length === 0 || f.labels.some((l) => answered.has(labelKey(l)))
         ? []
-        : [
-            {
-              labels: f.labels.filter((l) => !answered.has(labelKey(l))),
-              name: f.name,
-              value: value(f.key),
-            },
-          ],
+        : [{ labels: [...f.labels], name: f.name, value: value(f.key) }],
     ),
     ...attempt.answers.map((a) => ({ labels: [a.label], name: a.label, value: a.value })),
-  ].filter((q) => q.value !== '' && q.labels.length > 0);
+  ].filter((q) => q.value !== '');
   const lists = PREFILL_FIELDS.flatMap((f) =>
     f.list === undefined ? [] : [{ id: f.list, name: f.name, value: value(f.key) }],
   ).filter((l) => l.value !== '');
