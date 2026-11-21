@@ -86,9 +86,10 @@ with both `capture:push` and `apply:assist`.
   to, if any. It cannot enumerate or fetch records.
 - **`apply:assist`** (the capture extension, for assisted apply): stored application data.
   This is the only scope that reads stored records. It is available unless the operator turns
-  assisted apply off with `OPPORTUN_SUBMISSIONS=0`. On the demo it is on for the shared
-  accounts unless the operator sets `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY=0` (see the
-  deviation on the demo's shared accounts below). With it off, this
+  assisted apply off with `OPPORTUN_SUBMISSIONS=0`. On the demo it is on as well; the
+  operator can turn it off for the shared accounts alone with
+  `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY=0` (see the deviation on the demo's shared accounts
+  below). With it off, this
   scope cannot be created and its routes answer 404 whatever a token's scopes, so the two
   scopes above are all a device token can do. With it on, a token with this scope can:
   - read the application handed off to a posting it names: the field values and answers the
@@ -176,7 +177,9 @@ since it was not a deliberate choice.)
   shared account keeps at most 20 active device tokens (`OPPORTUN_DEMO_TOKEN_CAP`), the
   oldest revoked when another is made, which can sign another visitor's extension out. Every
   scope can be minted there, `mail:push` included, so mail one visitor connects can be read by
-  everyone on the account, behind the same warning as everything else entered there. The
+  everyone on the account, behind the same warning as everything else entered there. Any
+  visitor can also revoke any of the account's device tokens from Settings, not only through
+  the cap, and can change the account's password, which ends every visitor's session. The
   nightly reset removes the accounts' tokens, applications and stored files. Opportun still
   never submits an application. An account made for one person on a demo server behaves as on
   any other instance, and `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY=0` turns the feature off for
