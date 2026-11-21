@@ -155,6 +155,30 @@ export default defineConfig(
   tseslint.configs.recommended,
   security.configs.recommended,
   {
+    // https://github.com/bgoleno/opportun/issues/587: each eslint-plugin-security rule becomes an
+    // error once its warnings are triaged (fixed, or disabled on the line with the reason it is
+    // safe), so a new hit fails `pnpm verify` instead of joining a pile nobody reads. The other
+    // rules follow as their own triage lands.
+    rules: {
+      'security/detect-possible-timing-attacks': 'error',
+      'security/detect-unsafe-regex': 'error',
+      'security/detect-non-literal-fs-filename': 'error',
+      'security/detect-non-literal-regexp': 'error',
+      'security/detect-object-injection': 'error',
+      // No hits when they were triaged (#587): errors from the start.
+      'security/detect-bidi-characters': 'error',
+      'security/detect-buffer-noassert': 'error',
+      'security/detect-child-process': 'error',
+      'security/detect-disable-mustache-escape': 'error',
+      'security/detect-eval-with-expression': 'error',
+      'security/detect-invisible-characters': 'error',
+      'security/detect-new-buffer': 'error',
+      'security/detect-no-csrf-before-method-override': 'error',
+      'security/detect-non-literal-require': 'error',
+      'security/detect-pseudoRandomBytes': 'error',
+    },
+  },
+  {
     languageOptions: {
       globals: { ...globals.node },
     },
@@ -324,10 +348,13 @@ export default defineConfig(
     },
   },
   {
-    // Tests build fixtures in per-test temp dirs; non-literal paths there are expected.
+    // Tests build fixtures in per-test temp dirs; non-literal paths there are expected. And they
+    // index fixture and schema objects by table, column and loop keys the test itself defines,
+    // never by outside input (#587, each hit read when the rule was triaged).
     files: ['**/test/**', '**/*.test.ts', '**/*.test.tsx'],
     rules: {
       'security/detect-non-literal-fs-filename': 'off',
+      'security/detect-object-injection': 'off',
     },
   },
   {

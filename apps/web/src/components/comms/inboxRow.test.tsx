@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { formatDateTime } from '@/lib/opportunities';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import type { CommunicationView } from './api';
 import { Inbox } from './Inbox';
@@ -334,17 +335,373 @@ describe('Inbox', () => {
         total: 1,
       },
       'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
-      'POST /communications/bulk': { succeeded: 1, skipped: 0 },
+      'POST /communications/bulk': { succeeded: 1, skipped: 0, changed: 0 },
     });
     renderWithProviders(<Inbox />);
     await screen.findByText('pick me');
     await user.click(screen.getByRole('checkbox', { name: /Select message from/ }));
     expect(await screen.findByText('1 selected')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /^Reject 1/ }));
+    // Asked first (#647): rejecting wipes the subject, snippet and body for good.
+    const dialog = await screen.findByRole('dialog', { name: 'Reject 1 message?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 1' }));
     await waitFor(() => expect(posts(calls, '/communications/bulk')).toHaveLength(1));
+    // With the link each was seen under (#666): the server leaves a changed one alone.
     expect(posts(calls, '/communications/bulk')[0]?.body).toMatchObject({
-      ids: ['nr1'],
+      items: [{ id: 'nr1', opportunityId: null }],
       action: { kind: 'reject' },
     });
+  });
+
+  it('says when selected messages were changed elsewhere and left as they are (#666)', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /communications': {
+        items: [
+          { ...BASE, id: 'nr1', subject: 'one', opportunityId: null, needsReview: true },
+          { ...BASE, id: 'nr2', subject: 'two', opportunityId: null, needsReview: true },
+        ],
+        total: 2,
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+      'POST /communications/bulk': { succeeded: 1, skipped: 0, changed: 1 },
+    });
+    renderWithProviders(<Inbox />);
+    await screen.findByText('one');
+    for (const box of screen.getAllByRole('checkbox', { name: /Select message from/ })) {
+      await user.click(box);
+    }
+    await user.click(await screen.findByRole('button', { name: /^Reject 2/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reject 2 messages?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 2' }));
+    expect(await screen.findByText('1 rejected')).toBeInTheDocument();
+    expect(screen.getByText(/1 was changed elsewhere and left as it is\./)).toBeInTheDocument();
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/645: after Sync now the Inbox keeps reading while the sync
+// runs and its messages are classified, so the new mail, the counts and "Synced ..." show without a
+// reload, and it stops once nothing is left to wait for.
+// qa on #668: every row's Open original reads the Gmail status too, and each copy re-read the
+// lists on a change, so one new status cost (rows + 1) times the list reads. The lists are read
+// once per change, whatever the number of rows.
+describe('Inbox Sync now: a sync that never reports (#645, qa)', () => {
+  it('stops asking after two minutes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let clicked = false;
+      const { calls } = mockApi({
+        'GET /integrations/gmail': () => ({
+          status: 200,
+          body: {
+            connected: true,
+            lastSyncAt: 1,
+            count: 0,
+            status: clicked ? 'running' : 'ok',
+            lookbackDays: 180,
+            accountEmail: null,
+            pendingClassify: 0,
+          },
+        }),
+        'GET /communications': { items: [], total: 0 },
+        'POST /integrations/gmail/sync': () => {
+          clicked = true;
+          return { status: 202, body: { jobId: 'job-1' } };
+        },
+      });
+      const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+      renderWithProviders(<Inbox />);
+      await user.click(await screen.findByRole('button', { name: /Sync now/ }));
+      const reads = () => calls.filter((c) => c.path === '/integrations/gmail').length;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(reads()).toBeGreaterThan(5);
+      await vi.advanceTimersByTimeAsync(100_000);
+      const atCap = reads();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(reads()).toBe(atCap);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('Inbox: one status change reads the lists once, however many rows (#645, qa)', () => {
+  it('five rows on screen cost no more list reads than none', async () => {
+    let count = 0;
+    const readsFor = async (rows: number) => {
+      const items = Array.from({ length: rows }, (_, i) => ({
+        ...BASE,
+        id: `r${i}`,
+        subject: `row ${i}`,
+        opportunityId: null,
+        needsReview: true,
+      }));
+      const { calls } = mockApi({
+        'GET /integrations/gmail': () => ({
+          status: 200,
+          body: {
+            connected: true,
+            lastSyncAt: 1,
+            count: count,
+            status: 'ok',
+            lookbackDays: 180,
+            accountEmail: 'me@gmail.test',
+            pendingClassify: 0,
+          },
+        }),
+        'GET /communications': { items, total: items.length },
+      });
+      const view = renderWithProviders(<Inbox />);
+      if (rows > 0) await screen.findByText('row 0');
+      else await screen.findByRole('button', { name: /Sync now/ });
+      await waitFor(() => expect(calls.some((c) => c.path === '/integrations/gmail')).toBe(true));
+      const lists = () => calls.filter((c) => c.path === '/communications').length;
+      // Let the first reads settle, then one new status answer.
+      await new Promise((r) => setTimeout(r, 50));
+      const before = lists();
+      count += 1;
+      await view.queryClient.invalidateQueries({ queryKey: ['integrations', 'gmail'] });
+      await new Promise((r) => setTimeout(r, 100));
+      const used = lists() - before;
+      view.unmount();
+      return used;
+    };
+    const none = await readsFor(0);
+    const five = await readsFor(5);
+    expect(none).toBeGreaterThan(0);
+    expect(five).toBe(none);
+  });
+});
+
+describe('Inbox Sync now (#645)', () => {
+  it('shows the new mail and the new sync time without a reload, then stops asking', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // Relative to the clock, never fixed: the poll compares the sync's time with the click's.
+      const T0 = Date.now() - 24 * 60 * 60 * 1000;
+      let T1 = 0;
+      // Before the click, the last sync was T0. After it, the status reads: running, then synced
+      // with 1 message still to classify, then all done. The message is in the list only once
+      // the status has said it is classified, so a poll that stops early never shows it.
+      let clicked = false;
+      let readsAfter = 0;
+      let classified = false;
+      const status = () => {
+        if (!clicked) {
+          return { connected: true, lastSyncAt: T0, count: 0, status: 'ok', pendingClassify: 0 };
+        }
+        readsAfter += 1;
+        if (readsAfter === 1) {
+          return {
+            connected: true,
+            lastSyncAt: T0,
+            count: 0,
+            status: 'running',
+            pendingClassify: 0,
+          };
+        }
+        if (readsAfter === 2) {
+          T1 = Date.now();
+          return { connected: true, lastSyncAt: T1, count: 1, status: 'ok', pendingClassify: 1 };
+        }
+        classified = true;
+        return { connected: true, lastSyncAt: T1, count: 1, status: 'ok', pendingClassify: 0 };
+      };
+      const fresh = {
+        ...BASE,
+        id: 'new1',
+        subject: 'A brand new message',
+        opportunityId: null,
+        needsReview: true,
+      };
+      const { calls } = mockApi({
+        // Wrapped: the payload's own `status` would read as the HTTP status.
+        'GET /integrations/gmail': () => ({
+          status: 200,
+          body: { ...status(), lookbackDays: 180, accountEmail: null },
+        }),
+        'GET /communications': () =>
+          classified ? { items: [fresh], total: 1 } : { items: [], total: 0 },
+        'POST /integrations/gmail/sync': () => {
+          clicked = true;
+          return { status: 202, body: { jobId: 'job-1' } };
+        },
+      });
+      const user = userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+      renderWithProviders(<Inbox />);
+      await screen.findByRole('button', { name: /Sync now/ });
+      expect(screen.queryByText('A brand new message')).toBeNull();
+      await user.click(screen.getByRole('button', { name: /Sync now/ }));
+      for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(3000);
+      expect(await screen.findByText('A brand new message')).toBeInTheDocument();
+      expect(screen.getByText(/^Synced /)).toHaveTextContent(formatDateTime(T1));
+      const reads = () => calls.filter((c) => c.path === '/integrations/gmail').length;
+      const settled = reads();
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(reads()).toBe(settled);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/647: bulk Reject wipes a message's subject, snippet and
+// body for good. It only ever takes rows on screen, and it asks first, saying how many.
+describe('Inbox bulk Reject (#647)', () => {
+  const row = (id: string, subject: string) => ({
+    ...BASE,
+    id,
+    subject,
+    opportunityId: null,
+    needsReview: true,
+  });
+
+  it('a selected row that leaves the list leaves the selection, and is not rejected', async () => {
+    const user = userEvent.setup();
+    let items = [row('nr1', 'first one'), row('nr2', 'second one')];
+    const { calls } = mockApi({
+      'GET /communications': () => ({ items, total: items.length }),
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+      'POST /communications/bulk': { succeeded: 1, skipped: 0 },
+    });
+    const { queryClient } = renderWithProviders(<Inbox />);
+    await screen.findByText('first one');
+    for (const box of screen.getAllByRole('checkbox', { name: /Select message from/ })) {
+      await user.click(box);
+    }
+    expect(await screen.findByText('2 selected')).toBeInTheDocument();
+    // The first leaves the tab, as a row linked or reclassified from its own buttons does.
+    items = [row('nr2', 'second one')];
+    await queryClient.invalidateQueries();
+    await waitFor(() => expect(screen.queryByText('first one')).toBeNull());
+    expect(await screen.findByText('1 selected')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^Reject 1/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reject 1 message?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 1' }));
+    await waitFor(() => expect(posts(calls, '/communications/bulk')).toHaveLength(1));
+    expect(posts(calls, '/communications/bulk')[0]?.body).toMatchObject({
+      items: [{ id: 'nr2', opportunityId: null }],
+    });
+  });
+
+  it('asks first, says how many and that it is for good, and Cancel rejects nothing', async () => {
+    const user = userEvent.setup();
+    const items = [row('nr1', 'first one'), row('nr2', 'second one')];
+    const { calls } = mockApi({
+      'GET /communications': { items, total: items.length },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+      'POST /communications/bulk': { succeeded: 2, skipped: 0 },
+    });
+    renderWithProviders(<Inbox />);
+    await screen.findByText('first one');
+    for (const box of screen.getAllByRole('checkbox', { name: /Select message from/ })) {
+      await user.click(box);
+    }
+    await user.click(await screen.findByRole('button', { name: /^Reject 2/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reject 2 messages?' });
+    expect(dialog).toHaveTextContent(/subject, snippet and body/);
+    expect(dialog).toHaveTextContent(/cannot be undone/);
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(posts(calls, '/communications/bulk')).toHaveLength(0);
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/646: each tab asked for 200 and rendered only those,
+// with no paging and no "of N", while its badge showed the true total. Paged here at 2 a page (the
+// app's page is 200, the server's cap) so the test renders a few rows.
+describe('Inbox: a tab over one page (#646)', () => {
+  let ALL = Array.from({ length: 5 }, (_, i) => ({
+    ...BASE,
+    id: `m${i + 1}`,
+    subject: `message ${i + 1}`,
+    opportunityId: null,
+    needsReview: true,
+  }));
+
+  function serve() {
+    return mockApi({
+      'GET /communications': (call: { search: string }) => {
+        const params = new URLSearchParams(call.search);
+        const limit = Number(params.get('limit'));
+        const offset = Number(params.get('offset') ?? 0);
+        return {
+          status: 200,
+          body: { items: ALL.slice(offset, offset + limit), total: ALL.length },
+        };
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+  }
+
+  it('every message can be reached, and the tab says how many are shown of the total', async () => {
+    const user = userEvent.setup();
+    serve();
+    renderWithProviders(<Inbox pageSize={2} />);
+    expect(await screen.findByText('message 1')).toBeInTheDocument();
+    expect(screen.getByText('Showing 1–2 of 5')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(await screen.findByText('message 3')).toBeInTheDocument();
+    expect(screen.queryByText('message 1')).toBeNull();
+    expect(screen.getByText('Showing 3–4 of 5')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(await screen.findByText('message 5')).toBeInTheDocument();
+    expect(screen.getByText('Showing 5–5 of 5')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Previous page' }));
+    expect(await screen.findByText('message 3')).toBeInTheDocument();
+  });
+
+  it('a page left empty steps back to the last page with messages', async () => {
+    const user = userEvent.setup();
+    serve();
+    const { queryClient } = renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 3');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 5');
+    // Its only message leaves the tab (rejected or linked from its own buttons).
+    const kept = ALL;
+    ALL = ALL.slice(0, 4);
+    try {
+      await queryClient.invalidateQueries();
+      expect(await screen.findByText('Showing 3–4 of 4')).toBeInTheDocument();
+      expect(screen.getByText('message 3')).toBeInTheDocument();
+    } finally {
+      ALL = kept;
+    }
+  });
+
+  it('a tab that fits on one page shows no pager', async () => {
+    mockApi({
+      'GET /communications': { items: ALL.slice(0, 2), total: 2 },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    renderWithProviders(<Inbox pageSize={2} />);
+    expect(await screen.findByText('message 1')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Next page' })).toBeNull();
+    expect(screen.queryByText(/^Showing /)).toBeNull();
+  });
+
+  it('a filter change goes back to the first page', async () => {
+    const user = userEvent.setup();
+    const { calls } = serve();
+    renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 3');
+    await user.type(screen.getByRole('searchbox', { name: 'Keyword' }), 'message');
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.search.includes('q=message') && !/offset=[1-9]/.test(c.search)),
+      ).toBe(true),
+    );
+    expect(await screen.findByText('Showing 1–2 of 5')).toBeInTheDocument();
   });
 });

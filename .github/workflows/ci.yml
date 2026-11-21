@@ -49,6 +49,9 @@ jobs:
           --health-retries 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Nothing here pushes with git: the token is not left in .git/config (#619).
+          persist-credentials: false
 
       # corepack first: setup-node's pnpm cache needs the package manager on PATH to find
       # the store it is caching.
@@ -207,6 +210,9 @@ jobs:
           --health-retries 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Nothing here pushes with git: the token is not left in .git/config (#619).
+          persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
@@ -275,6 +281,9 @@ jobs:
       COMPOSE_PROJECT_NAME: opportun-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.db }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Nothing here pushes with git: the token is not left in .git/config (#619).
+          persist-credentials: false
 
       - name: Quick start (as documented)
         run: |
@@ -372,4 +381,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Nothing here pushes with git: the token is not left in .git/config (#619).
+          persist-credentials: false
       - run: bash deploy/destroy.test.sh

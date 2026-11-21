@@ -124,7 +124,12 @@ function fromBoardPath(board: AtsBoard, url: URL): Omit<AtsJobRef, 'url'> | null
  * punctuation (`.,;:!?`, and a `)` that closes no `(`, #549) is not part of it, as the text scan
  * always read it (sec at 23f3a37).
  */
-export function atsJobRefOfUrl(address: string): AtsJobRef | null {
+/**
+ * `address` without the punctuation a sentence leaves after a pasted URL: trailing `.,;:!?` and a
+ * `)` that closes no `(`. Exported for the handoff's own check (#620): a destination this would
+ * change is refused, so the address checked is the address opened.
+ */
+export function withoutTrailingPunctuation(address: string): string {
   // Dropped by loops, not a regular expression, so it stays linear whatever the address holds.
   // A `)` is trailing punctuation only when it closes no `(` (#549): a URL pasted out of "(...)"
   // keeps its job id, and a Workday ".../San-Jose-CA-(Remote)/..." or a balanced "(...)" at the
@@ -146,7 +151,30 @@ export function atsJobRefOfUrl(address: string): AtsJobRef | null {
     if ('.,;:!?'.includes(last) || (last === ')' && strayClose.has(end - 1))) end -= 1;
     else break;
   }
-  const raw = address.slice(0, end);
+  return address.slice(0, end);
+}
+
+/**
+ * The job an address names on a board, read only from the board host and its own path: never
+ * from `gh_jid` or another query parameter, and with no punctuation dropped. For the handoff's
+ * destination check (#620, sec): a board root or an embed page that names its job some other way
+ * is not this requisition's page. Other callers keep atsJobRefOfUrl's fallback.
+ */
+export function atsJobRefOfBoardPath(address: string): AtsJobRef | null {
+  let url: URL;
+  try {
+    url = new URL(address);
+  } catch {
+    return null;
+  }
+  const board = boardFromUrl(address);
+  if (board === null) return null;
+  const ref = fromBoardPath(board, url);
+  return ref === null ? null : { ...ref, url: address };
+}
+
+export function atsJobRefOfUrl(address: string): AtsJobRef | null {
+  const raw = withoutTrailingPunctuation(address);
   let url: URL;
   try {
     url = new URL(raw);

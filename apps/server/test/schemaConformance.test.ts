@@ -129,8 +129,8 @@ describe('schema twin conformance', () => {
     expect([drifted.n.columnType, same.n.columnType]).toEqual(['PgBigInt64', 'PgBigInt53']);
   });
 
-  it('both twins export exactly the 38 shared tables', () => {
-    expect(TABLE_EXPORTS).toHaveLength(38);
+  it('both twins export exactly the 39 shared tables', () => {
+    expect(TABLE_EXPORTS).toHaveLength(39);
     for (const name of TABLE_EXPORTS) {
       expect(lite[name], name).toBeDefined();
       expect(pg[name], name).toBeDefined();

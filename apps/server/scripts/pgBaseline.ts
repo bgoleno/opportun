@@ -68,6 +68,7 @@ export function pgLiteral(column: PgColumn, value: unknown): string {
 export function seedStatements(sqlite: Sqlite): string[] {
   const out: string[] = [];
   for (const name of TABLE_EXPORTS) {
+    // eslint-disable-next-line security/detect-object-injection -- a table name from the TABLE_EXPORTS constant list
     const cfg = getTableConfig(pg[name] as PgTable);
     // A table added by a migration after the baseline does not exist in a database migrated
     // to the baseline head, and by definition seeds no rows there. Without this, adding any
@@ -111,10 +112,12 @@ interface Journal {
 }
 
 export function readJournal(path: string): Journal {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- called only with this script's own constant journal paths
   return JSON.parse(readFileSync(path, 'utf8')) as Journal;
 }
 
 function main(): void {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- one of this script's own constant paths
   if (existsSync(PG_JOURNAL)) {
     throw new Error(
       'drizzle-pg already has a journal: the baseline is generated once and never regenerated',
@@ -130,7 +133,9 @@ function main(): void {
     const handle = openDatabase(dir);
     const seeds = seedStatements(handle.sqlite);
     handle.sqlite.close();
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- one of this script's own constant paths
     const ddl = readFileSync(BASELINE_FILE, 'utf8').trimEnd();
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- one of this script's own constant paths
     writeFileSync(BASELINE_FILE, `${ddl}${BREAK}${SEED_MARKER}\n${seeds.join(BREAK)}\n`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -143,6 +148,7 @@ function main(): void {
     throw new Error('expected exactly the baseline entry in the new Postgres journal');
   }
   baseline.when = head.when;
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- one of this script's own constant paths
   writeFileSync(PG_JOURNAL, `${JSON.stringify(journal, null, 2)}\n`);
   process.stdout.write(`baseline at SQLite head ${head.tag} (when ${head.when})\n`);
 }

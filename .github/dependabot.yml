@@ -1,0 +1,16 @@
+# Keeps the image's base current (#619, the owner's decision there): deploy/Dockerfile pins
+# node:22-slim by digest, and Dependabot opens a pull request when a newer digest is published.
+# It goes through the same checks and review as any other pull request. The docker ecosystem
+# only: the npm lockfile is updated by hand, as before.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule:
+      interval: weekly
+    # Digest and minor or patch updates within node 22 only (#683): the runtime's major version
+    # follows .nvmrc and is changed on purpose, with the code, not by a bot (it proposed 22 -> 26
+    # in #675, which every docker leg failed).
+    ignore:
+      - dependency-name: node
+        update-types: ['version-update:semver-major']

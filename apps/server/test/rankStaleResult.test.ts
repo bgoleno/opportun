@@ -26,6 +26,7 @@ import {
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 import { pauseAt } from './race';
+import { holdInstanceSchedules } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -114,7 +115,11 @@ async function captureIt(app: FastifyInstance, c: TestClient, id: string) {
   expect(res.statusCode, res.body).toBe(200);
 }
 
-const runJob = (app: FastifyInstance) => runNextJob(app.db, { services: app.jobs.services });
+// The test's own job, not a seeded schedule come due on the real clock (#615).
+const runJob = async (app: FastifyInstance) => {
+  await holdInstanceSchedules(app);
+  return await runNextJob(app.db, { services: app.jobs.services });
+};
 
 const queued = async (app: FastifyInstance, kind: string) =>
   await app.db

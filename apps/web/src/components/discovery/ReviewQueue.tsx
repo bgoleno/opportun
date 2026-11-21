@@ -175,6 +175,7 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
       if (shiftKey && from !== null && items !== undefined) {
         const [lo, hi] = from < index ? [from, index] : [index, from];
         for (let i = lo; i <= hi; i++) {
+          // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
           const row = items[i];
           if (row !== undefined) next.add(row.id);
         }
@@ -438,6 +439,7 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
    *  singleton group (the one case with a single id to check); -1 for a multi-location group
    *  or an out-of-range position, matching `findIndex`'s own "not found" convention. */
   function itemIndexAt(groupIndex: number): number {
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     const g = groups[groupIndex];
     if (g === undefined || g.members.length !== 1) return -1;
     return (items ?? []).findIndex((r) => r.id === g.members[0]!.id);
@@ -477,6 +479,7 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
       const result = new Set(prev);
       const [lo, hi] = anchor < next ? [anchor, next] : [next, anchor];
       for (let i = lo; i <= hi; i++) {
+        // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
         const row = items?.[i];
         if (row !== undefined) result.add(row.id);
       }

@@ -362,10 +362,17 @@ touch a volume; there is no safe reason to need the wider command at all on this
 ## Backups
 
 No script outside the app itself backs up the demo host, and that is intentional: the demo
-wipes and reseeds every account and all of its data at 04:30 server time, right after the app's
-own 03:00 nightly job (`docs/install.md`), so nothing accumulates on this host that is worth
-preserving from one day to the next. A day's demo activity is gone at the reset regardless of
-whether anything backed it up first. **That reasoning is the thing that should stop someone
+wipes and reseeds the five shared accounts at 04:30 server time, right after the app's own 03:00
+nightly backup (`docs/install.md`), so nothing accumulates in them that is worth preserving from
+one day to the next.
+
+**What a visitor entered outlives the reset in the app's own backups.** The 03:00 backup is a
+copy of the whole database, shared accounts included, and the app keeps the 14 newest. So what a
+visitor entered on a shared account during a day (their details, an uploaded resume, mail a
+connected mailbox brought in) is in the backups for up to 14 days after the reset that removed it
+from the app. To clear it sooner, delete the older snapshots (and their manifests) from the
+`backups` folder of the data directory on the host; the app has no button for it. A dedicated
+account's data is in them too, as on any instance. **That reasoning is the thing that should stop someone
 "fixing" the absence of a backup script here by adding a plain `cp` of `opportun.db` to a cron
 job later** — there is nothing on this host worth the risk a `cp` carries.
 
@@ -550,7 +557,10 @@ demo server has two kinds of account (the owner's decision 133):
   `demo-user4`), shared by every visitor and reset nightly. The limits below apply to these only.
 - **A dedicated account**: one the owner makes for one person on a demo server (see
   [A dedicated account for one person](#a-dedicated-account-for-one-person)). It behaves as an
-  account on any instance, with none of the limits below.
+  account on any instance, with none of the limits below except the reset's time limits: a
+  request's 20 seconds for its body and an AI call's 40 seconds apply to every account on a demo
+  server, a dedicated one included, since the server sets them before it knows whose request it
+  is (see **Nothing that began before the reset writes after it**).
 
 On a shared account, enforced by the server:
 
@@ -574,6 +584,53 @@ On a shared account, enforced by the server:
     editing the opportunity's posting address sends a reviewed application back to draft, deleting
     the opportunity removes its applications, and a `mail:push` confirmation can match any
     application on the account.
+- **One visitor can lock the others out until the reset.** Changing a shared account's password,
+  or turning on its two-factor sign-in, ends every other visitor's session on it, and they cannot
+  sign in again: they do not have the new password or the authenticator. The nightly reset puts the
+  account back as it was seeded. To do it sooner, `demo-admin` can reset that account's password
+  under Settings → Users, which also turns two-factor sign-in off (it shows a new password; tell
+  the visitors, or run the seed again, `seedDemo.ts`, to restore the shared ones). If it is
+  `demo-admin` itself that was locked, run the seed from the host with the server stopped, so no
+  request or job is in flight while it reseeds (the nightly reset waits for them; the command does
+  not): `docker compose ... stop opportun`, then
+  `docker compose ... run --rm opportun node --import tsx src/cli/seedDemo.ts`, then
+  `docker compose ... up -d`. It restores every shared account and its seeded password.
+- **What is connected for resumes is everyone's.** A Google account connected on a shared account
+  (with the OAuth client saved for it), or a Reactive Resume, is used by everyone signed in to the
+  account until the reset: their resumes are made in it. The Google and Reactive Resume cards say
+  so ([#618](https://github.com/bgoleno/opportun/issues/618)). The reset removes the connection.
+- **Nothing that began before the reset writes after it** (#618, #656, #684). A request
+  already in when the reset starts finishes first; one that comes during it waits, and then finds
+  its session or token gone; a job of a shared account that was waiting is dropped without running,
+  and a job of the server's own (not one account's) finishes first. The reset waits at most a minute for requests and
+  jobs to finish; if some are still in, it resets nothing, and the job tries again a little later.
+  So that no single request or job can hold it off:
+  - a request's body must arrive within 20 seconds;
+  - an AI call is ended after 40 seconds, and the tailoring chat's reply too (its text so far is
+    kept); the visitor sees what they would when the AI provider fails;
+  - nothing holds the reset off for more than 50 seconds: past that, a request is ended, and a job
+    is told to stop;
+  - and whatever the limits above add up to (a slow body and then a slow AI call can take more than
+    50 seconds), every AI call and the chat's reply also end 5 seconds before the request's or the
+    job's 50 seconds are up. So what the request or job writes after it (the AI call's record, a
+    result marked unavailable) comes while it still holds the reset off, and the reset then replaces
+    it. This stop applies whether or not a reset is running: on a demo server no AI call in a
+    request or a job runs past 45 seconds of it.
+
+  These time limits apply to every account on a demo server, a dedicated one included: the server
+  sets them before it looks up whose request it is.
+
+  What this does not cover:
+  - **Slow work that is not an AI call**: AI calls and the chat's reply end on the stop, and a job
+    is told to stop then too, but other slow work in a request is not stopped: making a resume in
+    Google Docs or Reactive Resume (Apply on a suggestion), which a shared account can connect, is
+    one. Such work, or work a handler leaves running after it has answered, can still write after
+    the reset, into the account reseeded under the same id.
+  - **A seed run by hand** (`seedDemo.ts`) is a separate process the gate does not see: run it with
+    the server stopped (see above).
+  - **More than one server process** on the same database: the gate is in the process, as the
+    install guide's single instance assumes.
+
 - **At most 20 active device tokens per account.** Minting past it revokes the account's oldest
   token, which can sign another visitor's extension out. Every scope can be minted, `mail:push`
   included, by the owner's decision: a visitor's own mail in a shared account is visible to the other

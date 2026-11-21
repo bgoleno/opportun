@@ -30,6 +30,7 @@ import { discoveryCostFigures } from '../src/repos/discoveryFigures';
 import { writeDiscoveryBudget } from '../src/repos/discoveryBudget';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { holdInstanceSchedules, runQueuedJob } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -90,8 +91,13 @@ async function board(app: FastifyInstance, c: TestClient) {
  * later run goes ahead of the rank jobs an earlier one left queued.
  */
 async function runOnce(app: FastifyInstance, c: TestClient, sourceId: string): Promise<void> {
-  await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId }, { userId: c.userId, runAt: 0 });
-  await runNextJob(app.db, { services: app.jobs.services });
+  const queued = await enqueue(
+    app.db,
+    DISCOVERY_RUN_KIND,
+    { sourceId },
+    { userId: c.userId, runAt: 0 },
+  );
+  await runQueuedJob(app, queued);
 }
 
 /** The titles of the postings that have a pending job of `kind`. */
@@ -321,6 +327,8 @@ describe('#215 criterion 1: the cap on a first run', () => {
       seen.push({ rankJobs: rankJobs.length, finishedAt: run?.finishedAt ?? null });
     });
     try {
+      // The run queued above, not a seeded schedule come due on the real clock (#615).
+      await holdInstanceSchedules(app);
       await runNextJob(app.db, { services: app.jobs.services });
     } finally {
       setRaceHook(undefined);

@@ -3,9 +3,10 @@
 import { canonicalCaptureUrl } from './canonical';
 import type { RawPage } from './extract';
 
-/** The server's text cap (apps/server/src/routes/connectorCapture.ts CAPTURE_TEXT_MAX). */
-export const MAX_TEXT = 200_000;
-export const MAX_TITLE = 500;
+// The server's caps, in a module of their own for the server's parity test (#649).
+import { MAX_TEXT, MAX_TITLE } from './limits';
+
+export { MAX_TEXT, MAX_TITLE };
 
 export interface CapturePayload {
   url: string;

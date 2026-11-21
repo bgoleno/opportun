@@ -13,15 +13,28 @@ import { and, eq, inArray, like, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { isUniqueViolation, rawGet, runCount, type Db, type Exec } from '../db/client';
 import { claimNextJob, type ClaimedJob } from '../db/dialect';
+import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
+import { runWithHoldStop } from '../lib/demoResetGate';
 import { HttpError } from '../lib/errors';
 import { jobs, settings } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
+import { keyedFetch } from '../lib/safeFetch';
 import { contextFromTraceparent, currentTraceparent, isCollecting, obs } from '../obs';
 import { OTHER } from '../obs/catalog';
 import { errorType } from '../obs/outbound';
 import { RANK_WAITING_KIND } from './discoveryKinds';
 import { finishInterruptedRuns } from './interruptedRuns';
 import { getJobHandler, type JobContext, type JobHandler, type JobServices } from './registry';
+
+/**
+ * The services a job gets: a job that belongs to a user fetches under that user's rate key
+ * (#617), so the per-host bucket shares a vendor host between users rather than one user's jobs
+ * holding every slot ahead of another's.
+ */
+function servicesFor(services: Partial<JobServices>, userId: string | null): Partial<JobServices> {
+  if (userId === null || services.sourceFetch === undefined) return services;
+  return { ...services, sourceFetch: keyedFetch(services.sourceFetch, userId) };
+}
 
 export const DEFAULT_MAX_ATTEMPTS = 5;
 const BASE_DELAY_MS = 30_000;
@@ -252,7 +265,8 @@ function errorText(err: unknown): string {
 
 /** How a run ended, for the job metric and span (#343). */
 interface JobOutcome {
-  outcome: 'done' | 'retry' | 'dead';
+  /** discarded: a shared demo account's job whose account the nightly reset replaced (#618). */
+  outcome: 'done' | 'retry' | 'dead' | 'discarded';
   /** A class or code (14.8): `no_handler`, `invalid_payload`, or the thrown error's. */
   errorType?: string;
 }
@@ -346,13 +360,19 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
     );
     return { outcome: 'dead', errorType: 'invalid_payload' };
   }
+  let holdExpired = false;
+  // The hold's stop signal (#684), once the job holds the gate: set below.
+  const held: { stop?: AbortSignal } = {};
   const ctx: JobContext = {
     jobId: job.id,
     userId: job.userId,
     attempt: job.attempts,
     maxAttempts: job.maxAttempts,
-    services: opts.services ?? {},
-    stopping: opts.stopping ?? (() => false),
+    services: servicesFor(opts.services ?? {}, job.userId),
+    // Also true once its hold on the demo reset's gate is about to end (its stop signal, the
+    // margin before the bound: tl on #704), or has: a job that loops stops before its AI calls
+    // all fail at once and it writes their failures.
+    stopping: () => holdExpired || held.stop?.aborted === true || (opts.stopping?.() ?? false),
     async setResult(value) {
       await db
         .update(jobs)
@@ -364,8 +384,63 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
   // Computed before the run, from the payload as stored: a handler is free to mutate what it
   // was given, and what must not outlive the job is what the row holds.
   const transient = withoutTransient(handler, job.payload);
+  // On a demo server a job holds the reset's gate for its whole run (#618), so it finishes before
+  // the nightly reset starts, or waits for it: a shared demo account's job, and an instance job,
+  // whose per-user work (the prompt refinements, say) can reach those accounts (tl on #618). Not
+  // the reset itself, nor a job of any other account. Once it holds it, its row must still be
+  // there: the reset deletes the shared accounts' jobs with them, so a job claimed before the reset
+  // is discarded without running, and writes nothing into the account reseeded under the same id.
+  // A hold has a bound (lib/demoResetGate.ts): past it the job is told to stop (ctx.stopping).
+  const gate = opts.services?.demoResetGate;
+  const gated =
+    gate !== undefined &&
+    handler.takesDemoResetGateItself !== true &&
+    (job.userId === null || SHARED_DEMO_IDS.has(job.userId));
+  const hold = gated
+    ? await gate.shared({
+        onExpire: () => {
+          holdExpired = true;
+          log?.warn(
+            { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
+            'job held the demo reset gate to its limit; told to stop',
+          );
+        },
+      })
+    : undefined;
+  if (hold !== undefined) held.stop = hold.signal;
   try {
-    await handler.run(db, parsed.data, ctx);
+    if (hold !== undefined) {
+      const still = await db.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, job.id)).get();
+      if (still === undefined) {
+        log?.warn(
+          { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
+          'job discarded: the demo reset replaced its account',
+        );
+        return { outcome: 'discarded' };
+      }
+    }
+    const run = () => runHandler(db, job, opts, handler, parsed.data, ctx, transient);
+    // Its AI calls end on the hold's stop signal, before the bound (#684).
+    return await (hold === undefined ? run() : runWithHoldStop(hold.signal, run));
+  } finally {
+    hold?.release();
+  }
+}
+
+/** The handler's run, and the row's end: done, retried later, or dead. */
+async function runHandler(
+  db: Db,
+  job: ClaimedJob,
+  opts: RunOptions,
+  handler: JobHandler<unknown>,
+  payload: unknown,
+  ctx: JobContext,
+  transient: unknown,
+): Promise<JobOutcome> {
+  const now = opts.now ?? Date.now;
+  const log = opts.services?.log;
+  try {
+    await handler.run(db, payload, ctx);
   } catch (err) {
     const at = now();
     // #345: catalogued keys (design 14.9); the error reduces to its type and frames in the log.
@@ -477,6 +552,7 @@ export function startRunner(
   const activeByKind = new Map<string, number>();
   const atCap = (): string[] =>
     [...activeByKind.entries()]
+      // eslint-disable-next-line security/detect-object-injection -- job kinds are server constants, and a missing one falls back to no cap
       .filter(([kind, n]) => n >= (limits[kind] ?? Number.POSITIVE_INFINITY))
       .map(([kind]) => kind);
 

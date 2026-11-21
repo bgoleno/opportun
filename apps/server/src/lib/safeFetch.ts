@@ -19,8 +19,19 @@ import { BlockList, isIP, type LookupFunction } from 'node:net';
 import type { OutboundTarget } from '../obs/catalog';
 import { observeOutbound, outboundTargetFor } from '../obs/outbound';
 
+/**
+ * Why safeFetch refused or gave up. `rate_wait` is a deadline that passed while the request waited
+ * for its host's local token, before anything was sent (#617): it says nothing about the host,
+ * unlike `timeout`, a deadline that passed with the request out.
+ */
 export type FetchBlockedReason =
-  'scheme' | 'host_not_allowed' | 'private_address' | 'too_large' | 'timeout' | 'redirect_blocked';
+  | 'scheme'
+  | 'host_not_allowed'
+  | 'private_address'
+  | 'too_large'
+  | 'timeout'
+  | 'rate_wait'
+  | 'redirect_blocked';
 
 export class FetchBlockedError extends Error {
   override name = 'FetchBlockedError';
@@ -67,6 +78,13 @@ export interface SafeFetchOptions {
    * caller passes it only where the host cannot say, such as a user-configured service.
    */
   target?: OutboundTarget;
+  /**
+   * Whose request this is, for the per-host bucket's fairness (#617): usually the user id. A key
+   * holds at most RATE_KEY_SLOTS of a host's slots ahead at a time, and its further requests wait
+   * behind its own, so one user's burst cannot push another user's request past its deadline.
+   * Requests with no key share one.
+   */
+  rateKey?: string;
 }
 
 export interface RequestBody {
@@ -94,6 +112,11 @@ export const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 export const DEFAULT_TIMEOUT_MS = 15_000;
 export const MAX_REDIRECTS = 3;
 const BUCKET_INTERVAL_MS = 1000;
+/**
+ * Slots of one host a single rate key may hold ahead at once (see SafeFetchOptions.rateKey). With
+ * n keys active on a host, a new request waits at most about n * RATE_KEY_SLOTS intervals.
+ */
+export const RATE_KEY_SLOTS = 3;
 
 /**
  * Hosts never fetched, whatever an allowlist says (design 6.2: user capture and official
@@ -393,26 +416,74 @@ export function createSafeFetch(deps: SafeFetchDeps) {
    * map holds only hosts with a wait still ahead).
    */
   const nextFree = new Map<string, number>();
+  /**
+   * Host and rate key -> slots that key holds ahead (reserved, its time not yet come), and the
+   * requests of that key waiting for one of them to free (#617). Emptied as they drain.
+   */
+  const held = new Map<string, number>();
+  const waiters = new Map<string, (() => void)[]>();
+
+  /** Waits until `slot` (host and key) holds fewer than RATE_KEY_SLOTS, then takes one. */
+  async function holdSlot(slot: string, signal: AbortSignal): Promise<void> {
+    while ((held.get(slot) ?? 0) >= RATE_KEY_SLOTS) {
+      await untilAbort(
+        new Promise<void>((resolve) => {
+          const list = waiters.get(slot) ?? [];
+          list.push(resolve);
+          waiters.set(slot, list);
+        }),
+        signal,
+      );
+    }
+    held.set(slot, (held.get(slot) ?? 0) + 1);
+  }
+
+  /**
+   * Gives a held slot back and wakes every waiter of that key, each of which checks again: a waiter
+   * whose own deadline already passed is woken too, so waking only one could wake no live one.
+   */
+  function freeSlot(slot: string): void {
+    const n = (held.get(slot) ?? 1) - 1;
+    if (n <= 0) held.delete(slot);
+    else held.set(slot, n);
+    const list = waiters.get(slot);
+    waiters.delete(slot);
+    for (const wake of list ?? []) wake();
+  }
 
   function prune(now: number): void {
     for (const [host, at] of nextFree) if (at <= now) nextFree.delete(host);
   }
 
-  async function takeToken(rawHost: string, signal: AbortSignal): Promise<void> {
+  async function takeToken(rawHost: string, rateKey: string, signal: AbortSignal): Promise<void> {
     const host = normalizeHost(rawHost);
+    // A deadline already passed (a redirect hop that took the rest of it): nothing to wait for.
+    if (signal.aborted) throw new FetchBlockedError('rate_wait', host);
+    const slot = `${host}\u0000${rateKey}`;
+    try {
+      await holdSlot(slot, signal);
+    } catch {
+      // The deadline passed behind this key's own slots: nothing was reserved or sent (#617).
+      throw new FetchBlockedError('rate_wait', host);
+    }
     const now = deps.now();
     prune(now);
     const at = Math.max(now, nextFree.get(host) ?? now);
     const reserved = at + BUCKET_INTERVAL_MS;
     nextFree.set(host, reserved);
-    if (at <= now) return;
+    if (at <= now) {
+      freeSlot(slot);
+      return;
+    }
     try {
       await untilAbort(deps.sleep(at - now), signal);
-    } catch (err) {
+    } catch {
       // The wait aborted, so the slot was never used: give it back (#524), unless a later request
       // has reserved after it, whose own slot this one cannot shorten.
       if (nextFree.get(host) === reserved) nextFree.set(host, at);
-      throw err;
+      throw new FetchBlockedError('rate_wait', host);
+    } finally {
+      freeSlot(slot);
     }
   }
 
@@ -509,7 +580,7 @@ export function createSafeFetch(deps: SafeFetchDeps) {
           ...(opts.post === undefined ? {} : { post: opts.post }),
           ...(opts.headers === undefined ? {} : { headers: opts.headers }),
         };
-        await takeToken(target.url.hostname.toLowerCase(), signal);
+        await takeToken(target.url.hostname.toLowerCase(), opts.rateKey ?? '', signal);
         // One measurement per hop (#343): each hop is a real request, as the HTTP conventions
         // count it, so a followed redirect is two.
         const res = await observeOutbound(
@@ -567,6 +638,14 @@ export function createSafeFetch(deps: SafeFetchDeps) {
 
   // bucketCount: how many hosts the rate buckets hold, for the tests of pruning (#524).
   return Object.assign(safeFetchWith, { bucketCount: () => nextFree.size });
+}
+
+/**
+ * `fetch`, with every request it makes under `rateKey` (#617): a job's or a request's user, so the
+ * per-host bucket shares a host between users instead of serving one user's burst first.
+ */
+export function keyedFetch(fetch: typeof safeFetch, rateKey: string): typeof safeFetch {
+  return (url, opts) => fetch(url, { ...opts, rateKey });
 }
 
 /** The process-wide safeFetch (real DNS, pinned HTTPS, shared per-host buckets). */

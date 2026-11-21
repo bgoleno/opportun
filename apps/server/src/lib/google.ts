@@ -635,6 +635,11 @@ export async function storeRefreshedTokens(
   await withTransaction(db, async (tx) => {
     await lockScope(tx, `user:${ctx.userId}`);
     const prev = await readTokensIn(tx, db, ctx);
+    // Nothing stored any more: the connection was removed after this refresh began (a disconnect,
+    // or on the demo the nightly reset, which reseeds the account under the same id, #618). The
+    // library's event is not awaited by whatever made the call, so this can run late; it never
+    // puts a connection back.
+    if (prev === undefined) return;
     const merged = JSON.stringify(mergeTokens(prev, fresh));
     await replaceSecretIn(tx, db, ctx, GOOGLE_TOKENS_LABEL, merged);
   });

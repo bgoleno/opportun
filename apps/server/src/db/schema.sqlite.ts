@@ -506,6 +506,12 @@ export const opportunityDedupeCandidates = sqliteTable(
     decision: text('decision', { enum: DEDUPE_CANDIDATE_DECISIONS }).notNull(),
     /** Null while decision is 'pending'. */
     decidedBy: text('decided_by', { enum: DEDUPE_CANDIDATE_DECIDED_BY }),
+    /**
+     * How many AI passes failed on this pending row (#687): an unexpected error, or a ref the
+     * model made up. At OPPORTUNITY_DEDUPE_AI_MAX_FAILURES the pass stops sending it to the model,
+     * and it waits for the user. Not counted: the AI being unavailable for its user.
+     */
+    aiFailures: integer('ai_failures').notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -975,6 +981,32 @@ export const networkContacts = sqliteTable(
     index('network_contacts_user_id_idx').on(t.userId),
     index('network_contacts_user_company_idx').on(t.userId, t.currentCompanyId),
   ],
+);
+
+/**
+ * The referral ranking kept for one opportunity (https://github.com/bgoleno/opportun/issues/590):
+ * the model's validated ranks for the candidates it was sent, and the hash of everything it was
+ * sent (the contacts, the opportunity, the prompt and the model policy). Re-opening the tab with the
+ * same hash reuses it instead of calling the model again; any change to an input is a new hash, so
+ * nothing has to invalidate it. One row per opportunity, replaced by each fresh ranking. Derived
+ * data, left out of the export like search_index.
+ */
+export const referralRankings = sqliteTable(
+  'referral_rankings',
+  {
+    id: id(),
+    userId: userRef(),
+    opportunityId: text('opportunity_id')
+      .notNull()
+      .references(() => opportunities.id, { onDelete: 'cascade' }),
+    /** sha256 of the call's inputs, never of a key. */
+    inputHash: text('input_hash').notNull(),
+    ranking: json<{ contactId: string; rank: number; rationale: string }[]>('ranking').notNull(),
+    rankedAt: integer('ranked_at').notNull(),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('referral_rankings_user_opportunity_uq').on(t.userId, t.opportunityId)],
 );
 
 /** Ingested copies only; the user's mailbox is never modified (FR-M8). */
