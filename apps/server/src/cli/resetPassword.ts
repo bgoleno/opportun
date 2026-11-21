@@ -12,7 +12,9 @@
 // started with (#606: the password would never sign in). Run it against the same DATA_DIR (and, on
 // Postgres, the same DB_DIALECT and DATABASE_URL) and the same pepper variables as the server:
 // OPPORTUN_PEPPER, OPPORTUN_PEPPER_VERSION and every OPPORTUN_PEPPER_V<N> (in Docker, docker
-// compose exec inherits them).
+// compose exec inherits them). After changing them for a rotation, restart the server before
+// running this: the check compares version numbers only, so a new secret under the same version
+// as the server's last start is not caught (#635).
 // First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
 import '../unsetEmptyAiBaseUrls';
 import { resolve } from 'node:path';
