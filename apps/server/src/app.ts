@@ -12,6 +12,7 @@ import { configureGateWatchdog, gateHeldError } from './db/gate';
 import { SCHEMA_DIALECT } from './db/schema';
 import { obsHttpPlugin } from './plugins/obsHttp';
 import { securityPlugin } from './plugins/security';
+import { demoResetHoldPlugin } from './plugins/demoResetHold';
 import { sessionPlugin } from './plugins/session';
 import {
   createGoogleConn,
@@ -23,6 +24,8 @@ import {
 import { setAiOverride, type AiOverride } from './lib/ai';
 import { bindVaultKey } from './lib/secretBox';
 import { OAUTH_PROVIDERS, oauthCallbackPath } from './lib/oauthProviders';
+import { NO_PEPPERS } from './lib/passwords';
+import { recordPepperVersion } from './lib/pepperVersion';
 import type { DocumentStore } from './adapters/documentStore';
 import { createGoogleDocsStore } from './adapters/googleDocs';
 import { createLocalFileStore } from './adapters/localFile';
@@ -47,6 +50,7 @@ import { JOB_PRUNE_CRON, JOB_PRUNE_JOB_KIND } from './jobs/jobPrune';
 import { OBS_PRUNE_CRON, OBS_PRUNE_JOB_KIND } from './jobs/obsPrune';
 import { stopObs } from './obs';
 import { startObsFromSettings } from './obs/config';
+import { DemoResetGate } from './lib/demoResetGate';
 import { loggerOptions } from './obs/log';
 import { obsMetricRoutes } from './routes/obsMetrics';
 import { obsSettingsRoutes } from './routes/obsSettings';
@@ -198,6 +202,8 @@ export interface OAuthWiring {
 
 export interface BuildOptions {
   logStream?: LogStream;
+  /** The demo reset gate's limits (#618): tests set short ones; production uses the defaults. */
+  demoResetLimits?: { startMs?: number; holdMs?: number; streamMs?: number };
   /** Replaces the googleapis-backed client (tests inject a fake: no network). */
   google?: GoogleApi;
   /** Replaces the Google Docs document store. */
@@ -400,6 +406,9 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     createReactiveResumeStore({ fetch: rrFetch, config: (ctx) => readRrConfig(db, ctx) }),
   );
   app.decorate('localFileStore', createLocalFileStore({ storage, db }));
+  // The pepper version this server runs with, on every boot (0 without a pepper), for the CLIs that
+  // set a password: they refuse a different one (#606). The number only, never a secret.
+  await recordPepperVersion(db, (cfg.peppers ?? NO_PEPPERS).current);
   // Nightly backup unless an operator already changed or disabled the schedule.
   await seedSchedule(db, BACKUP_JOB_KIND, BACKUP_CRON);
   // Before that backup, not after (issue #170): a bad result gets a date, not a guess, and
@@ -496,6 +505,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     submissions: submissionsEnabled(cfg),
     demo: cfg.demo,
     rankBatchProvider: opts.rankBatchProvider ?? batchProviderFor,
+    // The nightly reset's gate (#618): only a demo server resets, so only it has one.
+    ...(cfg.demo ? { demoResetGate: new DemoResetGate() } : {}),
   };
   app.decorate('jobs', {
     services,
@@ -525,6 +536,23 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     await stopObs(db);
     await closeDatabase(dbHandle);
   });
+  // Before the session plugin, so a request's session lookup is inside its hold (#618).
+  if (services.demoResetGate !== undefined) {
+    await app.register(demoResetHoldPlugin, {
+      gate: services.demoResetGate,
+      ...(opts.demoResetLimits?.startMs === undefined
+        ? {}
+        : { startLimitMs: opts.demoResetLimits.startMs }),
+      ...(opts.demoResetLimits?.holdMs === undefined
+        ? {}
+        : { holdLimitMs: opts.demoResetLimits.holdMs }),
+      ...(opts.demoResetLimits?.streamMs === undefined
+        ? {}
+        : { streamLimitMs: opts.demoResetLimits.streamMs }),
+    });
+  } else {
+    app.decorate('demoStreamLimitMs', undefined);
+  }
   await app.register(sessionPlugin, { demo: cfg.demo });
 
   const typed = app.withTypeProvider<ZodTypeProvider>();

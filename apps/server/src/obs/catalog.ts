@@ -217,7 +217,7 @@ export const ATTRIBUTES = {
   'db.operation.name': { kind: 'enum', values: DB_OPERATIONS },
   'db.collection.name': { kind: 'enum', values: tableNames },
   'opportun.job.kind': { kind: 'enum', values: () => [...registeredJobKinds(), OTHER] },
-  'opportun.job.outcome': { kind: 'enum', values: ['done', 'retry', 'dead'] },
+  'opportun.job.outcome': { kind: 'enum', values: ['done', 'retry', 'dead', 'discarded'] },
   'opportun.obs.signal': { kind: 'enum', values: SIGNALS },
   'opportun.obs.reason': { kind: 'enum', values: DROP_REASONS },
   // The caller's row id. Local only: export drops it (14.8), and metrics never carry it.
@@ -245,6 +245,7 @@ export const ATTRIBUTES = {
   'opportun.count.described': int,
   'opportun.count.deferred': int,
   'opportun.count.skipped': int,
+  'opportun.count.holders': int,
   'opportun.count.truncated': int,
   'opportun.count.read': int,
   'opportun.count.set': int,
@@ -814,6 +815,17 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.job.kind',
     'opportun.job.attempt',
     'opportun.job.max_attempts',
+  ],
+  // #618: a shared demo account's job whose account the nightly reset replaced.
+  'job discarded: the demo reset replaced its account': ['opportun.job.id', 'opportun.job.kind'],
+  'job held the demo reset gate to its limit; told to stop': [
+    'opportun.job.id',
+    'opportun.job.kind',
+  ],
+  'a request held the demo reset gate to its limit; ended': [],
+  'a request held the demo reset gate too long before its handler; ended': [],
+  'demo reset waited too long for requests or jobs in flight; not reset, will retry': [
+    'opportun.count.holders',
   ],
   'healthz database check failed': [],
   'healthz queue lag check failed': [],
