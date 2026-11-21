@@ -20,7 +20,7 @@ import { and, count, eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { withTransaction, isUniqueViolation } from '../db/client';
+import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
 import { oauthAccounts, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { readClientCreds, readClientId } from '../lib/google';
@@ -52,14 +52,16 @@ import {
   verifyOAuthState,
   type OAuthMode,
 } from '../lib/oauthState';
+import { withPasswordLock } from '../lib/passwordLock';
 import { hasUsablePassword, unusablePasswordHash } from '../lib/passwords';
 import { rateLimit } from '../lib/rateLimit';
 import { confirmPassword, reauthLimits } from '../lib/reauth';
 import { createPendingToken } from '../lib/twoFactor';
 import { isRegistrationOpen } from '../lib/registration';
+import { createSession, sessionStored } from '../lib/sessions';
 import { isSecureRequest } from '../plugins/security';
 import { requireUser, type UserCtx } from '../repos/base';
-import { startUserSession } from './auth';
+import { sessionMeta, setSessionCookies } from './auth';
 
 /** HttpOnly cookie holding the browser binding of an in-flight OAuth flow. */
 /**
@@ -472,28 +474,57 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         detail: { isAdmin: false, method: 'oauth', provider },
       });
     }
-    const user = await db
-      .select({ totpEnabled: users.totpEnabled })
-      .from(users)
-      .where(eq(users.id, userId))
-      .get();
-    if (user === undefined) return reply.redirect(`${LOGIN_PAGE}?oauth=error`);
-    if (user.totpEnabled) {
+    // The link is read; a reset can commit from here on (#573).
+    await racePoint('oauth.login.linked');
+    // The session, or the pending 2FA token, is written only while the link just read still
+    // exists, under the lock a reset takes to unlink it (#573, as a password sign-in does with
+    // its hash in #561): a reset that committed since then wins, and this sign-in is refused as
+    // one with no link would be. One that starts later waits for the write and deletes it.
+    const written = await withPasswordLock(db, userId, async (tx) => {
+      const link = await tx
+        .select({ id: oauthAccounts.id })
+        .from(oauthAccounts)
+        .where(
+          and(
+            eq(oauthAccounts.userId, userId),
+            eq(oauthAccounts.provider, provider),
+            eq(oauthAccounts.providerAccountId, identity.providerAccountId),
+          ),
+        )
+        .get();
+      if (link === undefined) return null;
+      const user = await tx
+        .select({ totpEnabled: users.totpEnabled })
+        .from(users)
+        .where(eq(users.id, userId))
+        .get();
+      if (user === undefined) return null;
+      return user.totpEnabled
+        ? {
+            kind: 'pending' as const,
+            pendingToken: await createPendingToken(tx, userId, sessionMeta(req)),
+          }
+        : { kind: 'session' as const, session: await createSession(tx, userId, sessionMeta(req)) };
+    });
+    if (written === null) {
+      await audit(db, 'auth.oauth_unknown', {
+        userId,
+        ip: req.ip,
+        detail: { provider, reason: 'unlinked' },
+      });
+      return reply.redirect(`${LOGIN_PAGE}?oauth=unknown`);
+    }
+    if (written.kind === 'pending') {
       // The provider stood in for the password; the code step is unchanged. The token rides
       // in the fragment, which browsers never send to a server or put in a Referer.
-      const ua = req.headers['user-agent'];
-      const pendingToken = await createPendingToken(db, userId, {
-        ip: req.ip,
-        ...(ua === undefined ? {} : { userAgent: ua }),
-      });
       await audit(db, 'auth.2fa_challenge', {
         userId,
         ip: req.ip,
         detail: { method: 'oauth' },
       });
-      return reply.redirect(`${LOGIN_PAGE}#pending2fa=${pendingToken}`);
+      return reply.redirect(`${LOGIN_PAGE}#pending2fa=${written.pendingToken}`);
     }
-    await startUserSession(req, reply, userId);
+    setSessionCookies(req, reply, written.session);
     await audit(db, 'auth.login', {
       userId,
       ip: req.ip,
@@ -512,57 +543,63 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     if (ctx === null) return reply.redirect(`${LOGIN_PAGE}?oauth=session`);
     const flash = (v: string) => reply.redirect(`${SECURITY_PAGE}?oauth=${v}`);
     const userId = ctx.userId;
-    type LinkOutcome = 'linked' | 'already_mine' | 'other_user' | 'provider_already_linked';
+    const sessionId = sessionIdFrom(req);
+    if (sessionId === null) return reply.redirect(`${LOGIN_PAGE}?oauth=session`);
+    type LinkOutcome =
+      'linked' | 'already_mine' | 'other_user' | 'provider_already_linked' | 'session_gone';
     let outcome: LinkOutcome;
     await racePoint('oauth.link');
     try {
-      // One transaction under the user's scope: the checks and the insert cannot interleave
-      // with another callback of this user (nothing indexes one account per provider per
-      // user). The unique (provider, account) index stays the cross-user guard.
-      outcome = await withTransaction(
-        db,
-        async (tx): Promise<LinkOutcome> => {
-          const existing = await tx
-            .select({ userId: oauthAccounts.userId })
-            .from(oauthAccounts)
-            .where(
-              and(
-                eq(oauthAccounts.provider, provider),
-                eq(oauthAccounts.providerAccountId, identity.providerAccountId),
-              ),
-            )
-            .get();
-          if (existing !== undefined) {
-            return existing.userId === userId ? 'already_mine' : 'other_user';
-          }
-          // One account per provider per user: a second flow that lost the race stops here.
-          const mine = await tx
-            .select({ id: oauthAccounts.id })
-            .from(oauthAccounts)
-            .where(and(eq(oauthAccounts.userId, userId), eq(oauthAccounts.provider, provider)))
-            .get();
-          if (mine !== undefined) return 'provider_already_linked';
-          await racePoint('oauth.link.locked');
-          const now = Date.now();
-          await tx
-            .insert(oauthAccounts)
-            .values({
-              id: newId(),
-              userId,
-              provider,
-              providerAccountId: identity.providerAccountId,
-              createdAt: now,
-              updatedAt: now,
-            })
-            .run();
-          return 'linked';
-        },
-        { scope: `user:${userId}` },
-      );
+      // One transaction under the password lock, then the user's scope (always in that order):
+      // the checks and the insert cannot interleave with another callback of this user (nothing
+      // indexes one account per provider per user), and the unique (provider, account) index
+      // stays the cross-user guard. The password lock is the one a reset takes to end every
+      // session and unlink every provider (#573): the link is written only while the session
+      // that started it still exists, so a reset that committed since the request began wins,
+      // and one that starts later waits for the insert and deletes it.
+      outcome = await withPasswordLock(db, userId, async (tx): Promise<LinkOutcome> => {
+        await lockScope(tx, `user:${userId}`);
+        if (!(await sessionStored(tx, sessionId, userId))) return 'session_gone';
+        const existing = await tx
+          .select({ userId: oauthAccounts.userId })
+          .from(oauthAccounts)
+          .where(
+            and(
+              eq(oauthAccounts.provider, provider),
+              eq(oauthAccounts.providerAccountId, identity.providerAccountId),
+            ),
+          )
+          .get();
+        if (existing !== undefined) {
+          return existing.userId === userId ? 'already_mine' : 'other_user';
+        }
+        // One account per provider per user: a second flow that lost the race stops here.
+        const mine = await tx
+          .select({ id: oauthAccounts.id })
+          .from(oauthAccounts)
+          .where(and(eq(oauthAccounts.userId, userId), eq(oauthAccounts.provider, provider)))
+          .get();
+        if (mine !== undefined) return 'provider_already_linked';
+        await racePoint('oauth.link.locked');
+        const now = Date.now();
+        await tx
+          .insert(oauthAccounts)
+          .values({
+            id: newId(),
+            userId,
+            provider,
+            providerAccountId: identity.providerAccountId,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run();
+        return 'linked';
+      });
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;
       outcome = 'other_user';
     }
+    if (outcome === 'session_gone') return reply.redirect(`${LOGIN_PAGE}?oauth=session`);
     if (outcome === 'already_mine') return flash('linked');
     if (outcome !== 'linked') {
       await audit(db, 'auth.oauth_link_conflict', {
