@@ -1,5 +1,6 @@
-// A minimal zip writer for e2e uploads: stored (uncompressed) entries, no extras, enough for
-// the server's unzip to read. Keeps the specs free of a compression dependency.
+// A minimal zip writer for e2e uploads (stored entries, no extras, enough for the server's unzip
+// to read), and a reader for the server's export. Keeps the specs free of a compression dependency.
+import { inflateRawSync } from 'node:zlib';
 
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
   let c = n;
@@ -61,4 +62,33 @@ export function storedZip(files: Record<string, string | Buffer>): Buffer {
   end.writeUInt32LE(directory.length, 12);
   end.writeUInt32LE(offset, 16);
   return Buffer.concat([...locals, directory, end]);
+}
+
+/**
+ * Reads a zip archive into name to content, by its central directory: stored and deflated
+ * entries, which is what the server's export writes (fflate's ZipDeflate). Enough to look inside
+ * an export; not a general unzip.
+ */
+export function readZip(zip: Buffer): Record<string, Buffer> {
+  const end = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (end < 0) throw new Error('not a zip: no end of central directory');
+  const count = zip.readUInt16LE(end + 10);
+  let at = zip.readUInt32LE(end + 16);
+  const out = new Map<string, Buffer>();
+  for (let i = 0; i < count; i++) {
+    if (zip.readUInt32LE(at) !== 0x02014b50) throw new Error('bad central directory entry');
+    const method = zip.readUInt16LE(at + 10);
+    const compressed = zip.readUInt32LE(at + 20);
+    const nameLength = zip.readUInt16LE(at + 28);
+    const extraLength = zip.readUInt16LE(at + 30);
+    const commentLength = zip.readUInt16LE(at + 32);
+    const local = zip.readUInt32LE(at + 42);
+    const name = zip.toString('utf8', at + 46, at + 46 + nameLength);
+    // The local header's own name and extra lengths say where its data starts.
+    const start = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
+    const data = zip.subarray(start, start + compressed);
+    out.set(name, method === 0 ? Buffer.from(data) : inflateRawSync(data));
+    at += 46 + nameLength + extraLength + commentLength;
+  }
+  return Object.fromEntries(out);
 }
