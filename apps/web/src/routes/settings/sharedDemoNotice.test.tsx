@@ -6,15 +6,19 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { GoogleStatus } from '@/components/resume/api';
+import { Attachments } from '@/components/opportunity/DetailsPanel';
 import {
   SHARED_DEMO_DOCUMENTS_WARNING,
+  SHARED_DEMO_FILES_WARNING,
   SHARED_DEMO_GOOGLE_WARNING,
   SHARED_DEMO_MAIL_WARNING,
+  SHARED_DEMO_TWO_FACTOR_WARNING,
   SHARED_DEMO_WARNING,
 } from '@/components/SharedDemoNotice';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { DevicesCard } from './-devices';
 import { GmailCard, GoogleCard, ReactiveResumeCard } from './integrations';
+import { TwoFactorCard } from './-twoFactor';
 import { ProfileSettings } from './profile';
 
 const onboarding = (sharedDemoAccount: boolean) => ({
@@ -196,6 +200,57 @@ describe('#618: where resumes are stored, on a shared demo account', () => {
     );
     await screen.findByRole('heading', { name: 'Google' });
     await screen.findByRole('heading', { name: 'Reactive Resume' });
+    await answered(api);
+    expect(screen.queryByRole('status', { name: 'Shared demo account' })).toBeNull();
+  });
+});
+
+// #671 (qa's demo-flow check): a file a visitor attaches, and two-factor sign-in a visitor turns
+// on, are everyone's business on a shared account too: the one is readable by all on it, the
+// other locks them out. Told, as elsewhere (decision 133); a dedicated account sees neither.
+describe('#671: the attachment upload and two-factor setup, on a shared demo account', () => {
+  const places = {
+    'GET /opportunities/o1/attachments': { items: [], total: 0 },
+    'GET /opportunities/o1/submissions': { items: [] },
+    'GET /auth/2fa': { enabled: false, recoveryCodesLeft: 0 },
+  };
+  const both = () => (
+    <>
+      <Attachments opportunityId="o1" />
+      <TwoFactorCard />
+    </>
+  );
+
+  it('the attachment upload says files are seen by everyone on the account, until the reset', async () => {
+    mockApi({ ...onboarding(true), ...places });
+    renderWithProviders(both());
+    await screen.findByRole('heading', { name: 'Attachments' });
+    const notice = await within(card('Attachments')).findByRole('status', {
+      name: 'Shared demo account',
+    });
+    expect(notice).toHaveTextContent(SHARED_DEMO_FILES_WARNING);
+    expect(notice).toHaveTextContent(/nightly reset/);
+  });
+
+  it('two-factor setup says turning it on locks the others out until the reset', async () => {
+    mockApi({ ...onboarding(true), ...places });
+    renderWithProviders(both());
+    await screen.findByRole('heading', { name: /Two-factor sign-in/ });
+    const twoFactor = screen
+      .getByRole('heading', { name: /Two-factor sign-in/ })
+      .closest('[data-slot="card"]') as HTMLElement;
+    const notice = await within(twoFactor).findByRole('status', {
+      name: 'Shared demo account',
+    });
+    expect(notice).toHaveTextContent(SHARED_DEMO_TWO_FACTOR_WARNING);
+    expect(notice).toHaveTextContent(/locks/);
+  });
+
+  it('a dedicated account sees neither', async () => {
+    const api = mockApi({ ...onboarding(false), ...places });
+    renderWithProviders(both());
+    await screen.findByRole('heading', { name: 'Attachments' });
+    await screen.findByRole('heading', { name: /Two-factor sign-in/ });
     await answered(api);
     expect(screen.queryByRole('status', { name: 'Shared demo account' })).toBeNull();
   });
