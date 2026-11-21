@@ -65,6 +65,8 @@ export interface GmailStatus {
    * whichever Google account the browser lists first. Null until a sync has read the profile.
    */
   accountEmail: string | null;
+  /** This user's messages still being classified (#645); the Inbox reads on until it is 0. */
+  pendingClassify?: number;
 }
 
 export interface ReclassifyInput {
@@ -325,14 +327,63 @@ export function useOpportunitySearch(q: string) {
   });
 }
 
+/** When Sync now was pressed, kept beside the status so every reader of it sees one value. */
+const SYNC_WATCH_KEY = ['integrations', 'gmail-sync-watch'] as const;
+/** How often the status is read while a sync's mail is on its way, and for how long at most. */
+const SYNC_POLL_MS = 2500;
+const SYNC_WATCH_MAX_MS = 2 * 60_000;
+
+/**
+ * Whether the mail a Sync now asked for may still be on its way (#645): the sync has not reported
+ * since the click, it is running, or messages from it are still being classified. Never past
+ * SYNC_WATCH_MAX_MS, so a sync that never reports does not poll for good.
+ */
+function syncInFlight(status: GmailStatus | undefined, since: number | undefined): boolean {
+  if (since === undefined || Date.now() - since > SYNC_WATCH_MAX_MS) return false;
+  if (status === undefined) return true;
+  return (
+    status.status === 'running' ||
+    (status.lastSyncAt ?? 0) < since ||
+    (status.pendingClassify ?? 0) > 0
+  );
+}
+
 export function useGmailStatus() {
-  return useQuery({ queryKey: ck.gmail, queryFn: () => api<GmailStatus>('/integrations/gmail') });
+  const qc = useQueryClient();
+  return useQuery({
+    queryKey: ck.gmail,
+    queryFn: () => api<GmailStatus>('/integrations/gmail'),
+    // Read again while a sync's mail is on its way, then stop (#645).
+    refetchInterval: (q) =>
+      syncInFlight(q.state.data, qc.getQueryData<number>(SYNC_WATCH_KEY)) ? SYNC_POLL_MS : false,
+  });
+}
+
+/**
+ * Each new Gmail status can mean new or newly classified mail: the message lists and their counts
+ * are read again, so they show without a reload or a tab switch (#645). Called once, by the
+ * Inbox's sync control, never by every reader of the status: each row's Open original reads it
+ * too, and one refresh per reader cost (rows + 1) times the list reads (qa on #668).
+ */
+export function useGmailSyncRefresh() {
+  const qc = useQueryClient();
+  const { data } = useGmailStatus();
+  const seen = useRef<string | null>(null);
+  useEffect(() => {
+    if (data === undefined) return;
+    const now = `${data.lastSyncAt ?? ''}|${data.count}|${data.pendingClassify ?? ''}|${data.status ?? ''}`;
+    if (seen.current !== null && seen.current !== now) {
+      void qc.invalidateQueries({ queryKey: ck.all });
+    }
+    seen.current = now;
+  }, [data, qc]);
 }
 
 export function useGmailSync() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api<{ jobId: string }>('/integrations/gmail/sync', { method: 'POST' }),
+    onSuccess: () => qc.setQueryData(SYNC_WATCH_KEY, Date.now()),
     onSettled: () => qc.invalidateQueries({ queryKey: ck.gmail }),
   });
 }

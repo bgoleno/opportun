@@ -16,6 +16,7 @@ import {
   channelLabel,
   useBulkTriage,
   useGmailStatus,
+  useGmailSyncRefresh,
   useGmailSync,
   useInbox,
   type InboxFilters,
@@ -334,6 +335,8 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
 }
 
 function SyncControl() {
+  // The one place the lists follow the status (#645): not in useGmailStatus, which every row reads.
+  useGmailSyncRefresh();
   const status = useGmailStatus();
   const sync = useGmailSync();
   if (status.isPending || status.isError) return null;
