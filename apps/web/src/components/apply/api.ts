@@ -621,15 +621,11 @@ interface DeviceTokenView {
  * job, but the user may apply on the company's page, where the extension does not fill (tl on
  * #425).
  */
-export function useExtensionCanFill(
+/** Whether the attempt's form is one the extension fills, whatever tokens the user has. */
+function extensionFillsForm(
   live: SubmissionView,
   opp: Pick<OpportunityView, 'atsJobRef'>,
 ): boolean {
-  const tokens = useQuery({
-    queryKey: ['device-tokens'] as const,
-    queryFn: () => api<{ items: DeviceTokenView[] }>('/device-tokens'),
-    retry: false,
-  });
   if (live.atsKind !== 'ats_greenhouse') return false;
   if (opp.atsJobRef?.verifiedVia === 'gh_jid') return false;
   let host: string;
@@ -638,7 +634,23 @@ export function useExtensionCanFill(
   } catch {
     return false;
   }
-  if (!EXTENSION_FILLS_HOSTS.has(host)) return false;
+  return EXTENSION_FILLS_HOSTS.has(host);
+}
+
+export function useExtensionCanFill(
+  live: SubmissionView,
+  opp: Pick<OpportunityView, 'atsJobRef'>,
+): boolean {
+  const fills = extensionFillsForm(live, opp);
+  // The token list only matters for a form the extension fills (#595): read it only then. The
+  // hook still runs every time (the rules of hooks); it just does not fetch.
+  const tokens = useQuery({
+    queryKey: ['device-tokens'] as const,
+    queryFn: () => api<{ items: DeviceTokenView[] }>('/device-tokens'),
+    retry: false,
+    enabled: fills,
+  });
+  if (!fills) return false;
   return (tokens.data?.items ?? []).some(
     (t) => t.revokedAt === null && t.scopes.includes('apply:assist'),
   );
