@@ -5,6 +5,7 @@ import { exchangeAndIdentify, providerFetchOptions } from '../src/lib/oauthProvi
 import { consumePasswordSetGrant, grantPasswordSet } from '../src/lib/oauthState';
 import { createSafeFetch } from '../src/lib/safeFetch';
 import { totpCode } from '../src/lib/totp';
+import { main as resetPasswordCli } from '../src/cli/resetPassword';
 import { useApi } from './api';
 import { testApp } from './helpers';
 import { fakeOAuth, type FakeIdentity, type FakeOAuth } from './fakeOAuth';
@@ -1503,4 +1504,175 @@ describe('password-set grant (M-1)', () => {
     vi.setSystemTime(Date.now() + 5 * 60 * 1000 + 1);
     expect(consumePasswordSetGrant(db, 'session-3', 'user-1')).toBe(false);
   });
+});
+
+// A password reset is compromise recovery: it also removes every sign-in provider linked to the
+// account, in its locked transaction, so a provider someone else linked cannot sign in after it
+// (https://github.com/bgoleno/opportun/issues/573). A self-service change keeps them.
+const B_EMAIL = 'isolation-b@example.com';
+const B_GITHUB: FakeIdentity = { id: '573002', email: B_EMAIL, emailVerified: true };
+const B_GOOGLE: FakeIdentity = { id: 'google-b-573', email: B_EMAIL, emailVerified: true };
+const A_GITHUB: FakeIdentity = { id: '573001', email: A_EMAIL, emailVerified: true };
+
+/** The admin `admin` resets `target`'s password from Settings > Users. */
+const adminReset = (admin: TestClient, target: TestClient) =>
+  admin.request({
+    method: 'POST',
+    url: `/api/v1/admin/users/${target.userId}/reset-password`,
+    payload: { password: PASSWORD },
+  });
+
+/** The operator's command-line reset, against the app's own database. */
+async function cliReset(app: FastifyInstance, email: string) {
+  const out: string[] = [];
+  const err: string[] = [];
+  const code = await resetPasswordCli({
+    db: app.db,
+    email,
+    io: { stdout: (s) => out.push(s), stderr: (s) => err.push(s) },
+  });
+  return { code, out, err };
+}
+
+/** The session cookie a response set, if it set a live one. */
+const sessionSet = (res: LightMyRequestResponse) => {
+  const value = cookieOf(res, 'opportun_session')?.value;
+  return value === undefined || value === '' ? null : value;
+};
+
+/** Every sessions row (sessions and pending 2FA tokens alike) `userId` has. */
+async function sessionRows(app: FastifyInstance, userId: string) {
+  return await queryAll(app, 'SELECT id FROM sessions WHERE user_id = ?', userId);
+}
+
+/** Turns 2FA on for `c`. */
+async function enable2fa(c: TestClient) {
+  const enrolled = await c.request({
+    method: 'POST',
+    url: '/api/v1/auth/2fa/enroll',
+    payload: { password: PASSWORD },
+  });
+  const { secret } = enrolled.json() as { secret: string };
+  const activated = await c.request({
+    method: 'POST',
+    url: '/api/v1/auth/2fa/activate',
+    payload: { password: PASSWORD, code: totpCode(secret, Date.now()) },
+  });
+  expect(activated.statusCode, activated.body).toBe(200);
+}
+
+describe('a password reset unlinks every sign-in provider (#573)', () => {
+  it.each(['admin', 'cli'] as const)(
+    'the %s reset removes the account provider rows, and a provider sign-in no longer reaches it',
+    async (how) => {
+      const { a, b, app } = await boot();
+      await configure(a, 'github');
+      await configure(a, 'google');
+      for (const [name, identity] of [
+        ['github', B_GITHUB],
+        ['google', B_GOOGLE],
+      ] as const) {
+        expect((await oauthLink(app, name, b, identity)).headers.location).toBe(
+          '/settings/security?oauth=linked',
+        );
+      }
+      // Another account's link is not the reset's business.
+      await oauthLink(app, 'github', a, A_GITHUB);
+      expect((await oauthLogin(app, 'github', B_GITHUB)).headers.location).toBe('/');
+
+      if (how === 'admin') {
+        const res = await adminReset(a, b);
+        expect(res.statusCode, res.body).toBe(200);
+        // The admin is told which ones to link again.
+        expect(res.json().unlinkedProviders).toEqual(['github', 'google']);
+      } else {
+        const res = await cliReset(app, B_EMAIL);
+        expect(res.code).toBe(0);
+        // stdout is the temporary password alone, as before; the note goes to stderr.
+        expect(res.out).toHaveLength(1);
+        expect(res.err.join('\n')).toMatch(/unlinked.*github, google/i);
+      }
+
+      expect(await oauthRows(app)).toEqual([
+        { userId: a.userId, provider: 'github', accountId: A_GITHUB.id },
+      ]);
+      for (const [name, identity] of [
+        ['github', B_GITHUB],
+        ['google', B_GOOGLE],
+      ] as const) {
+        const res = await oauthLogin(app, name, identity);
+        // The email matches b's account, which never joins or signs in by email.
+        expect(res.headers.location).toBe('/login?oauth=existing_account');
+        expect(sessionSet(res)).toBeNull();
+      }
+      expect(await sessionRows(app, b.userId)).toEqual([]);
+      expect((await oauthLogin(app, 'github', A_GITHUB)).headers.location).toBe('/');
+    },
+  );
+
+  it('the CLI reset of an account with no provider says nothing about providers', async () => {
+    const { app } = await boot();
+    const res = await cliReset(app, B_EMAIL);
+    expect(res.code).toBe(0);
+    expect(res.out).toHaveLength(1);
+    expect(res.err).toEqual([]);
+  });
+
+  it('a self-service password change keeps the linked providers', async () => {
+    const { a, b, app } = await boot();
+    await configure(a, 'github');
+    await oauthLink(app, 'github', b, B_GITHUB);
+    const changed = await b.request({
+      method: 'POST',
+      url: '/api/v1/auth/password',
+      payload: { current: PASSWORD, next: 'another long passphrase 573' },
+    });
+    expect(changed.statusCode, changed.body).toBe(204);
+    expect(await oauthRows(app)).toEqual([
+      { userId: b.userId, provider: 'github', accountId: B_GITHUB.id },
+    ]);
+    const res = await oauthLogin(app, 'github', B_GITHUB);
+    expect(res.headers.location).toBe('/');
+    expect(sessionSet(res)).not.toBeNull();
+  });
+});
+
+describe('a provider flow in flight during a reset leaves nothing behind (#573)', () => {
+  it('a link callback held before its write links nothing once a reset has run', async () => {
+    const { a, b, app } = await boot();
+    await configure(a, 'github');
+    const pause = pauseAt('oauth.link');
+    const linking = oauthLink(app, 'github', b, B_GITHUB);
+    await pause.reached;
+    expect((await adminReset(a, b)).statusCode).toBe(200);
+    pause.release();
+    const res = await linking;
+    expect(res.headers.location).toBe('/login?oauth=session');
+    expect(await oauthRows(app)).toEqual([]);
+    expect(await events(app, 'auth.oauth_linked')).toEqual([]);
+  });
+
+  it.each([false, true])(
+    'a sign-in held after its link read (2FA on: %s) starts nothing once a reset has run',
+    async (twoFactor) => {
+      const { a, b, app } = await boot();
+      await configure(a, 'github');
+      await oauthLink(app, 'github', b, B_GITHUB);
+      if (twoFactor) await enable2fa(b);
+      const loginsOfB = async () =>
+        (await events(app, 'auth.login')).filter((e) => e.userId === b.userId).length;
+      const before = await loginsOfB();
+      const pause = pauseAt('oauth.login.linked');
+      const signingIn = oauthLogin(app, 'github', B_GITHUB);
+      await pause.reached;
+      expect((await adminReset(a, b)).statusCode).toBe(200);
+      pause.release();
+      const res = await signingIn;
+      expect(res.headers.location).toBe('/login?oauth=unknown');
+      expect(sessionSet(res)).toBeNull();
+      // Neither a session nor a pending 2FA token outlives the reset.
+      expect(await sessionRows(app, b.userId)).toEqual([]);
+      expect(await loginsOfB()).toBe(before);
+    },
+  );
 });
