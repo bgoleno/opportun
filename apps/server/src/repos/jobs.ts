@@ -6,6 +6,7 @@
 import { and, asc, count, desc, eq, inArray, isNull, or, type SQL } from 'drizzle-orm';
 import { jobs, type JOB_STATUSES } from '../db/schema';
 import type { Db, UserCtx } from './base';
+import { ownedBy } from './base';
 
 type JobStatus = (typeof JOB_STATUSES)[number];
 
@@ -28,7 +29,7 @@ export function jobsListQuery(
 ) {
   const owner =
     scope.kind === 'user'
-      ? eq(jobs.userId, scope.userId)
+      ? ownedBy(jobs.userId, scope)
       : scope.kind === 'users_and_instance'
         ? or(isNull(jobs.userId), inArray(jobs.userId, [...scope.userIds]))
         : undefined;
@@ -107,7 +108,7 @@ export async function userJobOfKinds(db: Db, ctx: UserCtx, id: string, kinds: re
   return db
     .select()
     .from(jobs)
-    .where(and(eq(jobs.id, id), inArray(jobs.kind, [...kinds]), eq(jobs.userId, ctx.userId)))
+    .where(and(eq(jobs.id, id), inArray(jobs.kind, [...kinds]), ownedBy(jobs.userId, ctx)))
     .get();
 }
 
@@ -124,7 +125,7 @@ export async function unfinishedDedupeKeys(
     .where(
       and(
         eq(jobs.kind, kind),
-        eq(jobs.userId, ctx.userId),
+        ownedBy(jobs.userId, ctx),
         inArray(jobs.status, ['pending', 'running']),
         inArray(jobs.dedupeKey, [...keys]),
       ),
@@ -140,7 +141,7 @@ export async function countUnfinished(db: Db, ctx: UserCtx, kind: string): Promi
     .from(jobs)
     .where(
       and(
-        eq(jobs.userId, ctx.userId),
+        ownedBy(jobs.userId, ctx),
         eq(jobs.kind, kind),
         inArray(jobs.status, ['pending', 'running']),
       ),

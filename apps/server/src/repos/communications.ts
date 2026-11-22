@@ -26,6 +26,7 @@ import { HttpError, notFound } from '../lib/errors';
 import { cleanText, truncateText } from '../lib/safeText';
 import { assertOpportunityOwned } from './activities';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { countWhere, likeContains, type Page } from './list';
 import { rejectCommunication } from './reject';
 import { createOpportunity, transitionOpportunity, type OpportunityView } from './opportunities';
@@ -149,7 +150,7 @@ export async function getSyncState(
   return await db
     .select()
     .from(syncState)
-    .where(and(eq(syncState.userId, ctx.userId), eq(syncState.integration, integration)))
+    .where(and(ownedBy(syncState.userId, ctx), eq(syncState.integration, integration)))
     .get();
 }
 
@@ -307,7 +308,7 @@ function selectViews(exec: Exec, ctx: UserCtx) {
     .from(communications)
     .leftJoin(
       opportunities,
-      and(eq(opportunities.id, communications.opportunityId), eq(opportunities.userId, ctx.userId)),
+      and(eq(opportunities.id, communications.opportunityId), ownedBy(opportunities.userId, ctx)),
     )
     .leftJoin(companies, eq(companies.id, opportunities.companyId));
 }
@@ -335,7 +336,7 @@ function toView(row: ViewRow): CommunicationView {
 }
 
 function ownedComm(ctx: UserCtx, id: string): SQL | undefined {
-  return and(eq(communications.userId, ctx.userId), eq(communications.id, id));
+  return and(ownedBy(communications.userId, ctx), eq(communications.id, id));
 }
 
 async function getRowSync(exec: Exec, ctx: UserCtx, id: string): Promise<CommunicationRow> {
@@ -381,7 +382,7 @@ export async function listCommunications(
 ): Promise<Page<CommunicationView>> {
   if (opts.opportunityId !== undefined) await assertOpportunityOwned(db, ctx, opts.opportunityId);
   const where = and(
-    eq(communications.userId, ctx.userId),
+    ownedBy(communications.userId, ctx),
     viewWhere(opts.view),
     opts.opportunityId === undefined
       ? undefined
@@ -492,7 +493,7 @@ export async function needsReviewCount(db: Db, ctx: UserCtx): Promise<number> {
   return await countWhere(
     db,
     communications,
-    and(eq(communications.userId, ctx.userId), viewWhere('needs_review')),
+    and(ownedBy(communications.userId, ctx), viewWhere('needs_review')),
   );
 }
 
@@ -613,7 +614,7 @@ async function resolveMatch(
     })
     .from(opportunities)
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
-    .where(eq(opportunities.userId, ctx.userId))
+    .where(ownedBy(opportunities.userId, ctx))
     .all();
   const atCompany = all.filter((o) => sameCompany(o.companyName, match.company));
   if (atCompany.length === 0) return undefined;
@@ -649,12 +650,12 @@ async function threadLink(
           opportunities,
           and(
             eq(opportunities.id, communications.opportunityId),
-            eq(opportunities.userId, ctx.userId),
+            ownedBy(opportunities.userId, ctx),
           ),
         )
         .where(
           and(
-            eq(communications.userId, ctx.userId),
+            ownedBy(communications.userId, ctx),
             eq(communications.channel, comm.channel),
             eq(communications.threadKey, comm.threadKey),
             ne(communications.id, comm.id),
@@ -676,7 +677,7 @@ async function opportunityStage(
     await exec
       .select({ stage: opportunities.stage })
       .from(opportunities)
-      .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, id)))
+      .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, id)))
       .get()
   )?.stage;
 }
@@ -833,9 +834,7 @@ export async function applyClassification(
       await tx
         .update(opportunities)
         .set({ sourceRef: `${comm.channel}:${comm.externalId}`.slice(0, 500) })
-        .where(
-          and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, createdOpportunityId)),
-        )
+        .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, createdOpportunityId)))
         .run();
       const activity = await tx
         .insert(activities)

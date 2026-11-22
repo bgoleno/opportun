@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { resumeRules, tailoringSessions, type TranscriptTurn } from '../db/schema';
 import { HttpError, notFound } from '../lib/errors';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { getResume } from './resumes';
 import { withTransaction } from '../db/client';
 
@@ -17,7 +18,7 @@ async function load(exec: Exec, ctx: UserCtx, id: string): Promise<SessionRow> {
   const row = await exec
     .select()
     .from(tailoringSessions)
-    .where(and(eq(tailoringSessions.userId, ctx.userId), eq(tailoringSessions.id, id)))
+    .where(and(ownedBy(tailoringSessions.userId, ctx), eq(tailoringSessions.id, id)))
     .get();
   if (row === undefined) throw notFound();
   return row;
@@ -36,7 +37,7 @@ export async function openSession(db: Db, ctx: UserCtx, resumeId: string): Promi
       .from(tailoringSessions)
       .where(
         and(
-          eq(tailoringSessions.userId, ctx.userId),
+          ownedBy(tailoringSessions.userId, ctx),
           eq(tailoringSessions.resumeId, resumeId),
           isNull(tailoringSessions.acceptedAt),
         ),
@@ -74,7 +75,7 @@ async function rewrite(
     return await tx
       .update(tailoringSessions)
       .set({ ...change(row), updatedAt: Date.now() })
-      .where(and(eq(tailoringSessions.userId, ctx.userId), eq(tailoringSessions.id, id)))
+      .where(and(ownedBy(tailoringSessions.userId, ctx), eq(tailoringSessions.id, id)))
       .returning()
       .get();
   });
@@ -125,7 +126,7 @@ export async function activeResumeRules(db: Db, ctx: UserCtx): Promise<string[]>
     await db
       .select({ ruleText: resumeRules.ruleText })
       .from(resumeRules)
-      .where(and(eq(resumeRules.userId, ctx.userId), eq(resumeRules.active, true)))
+      .where(and(ownedBy(resumeRules.userId, ctx), eq(resumeRules.active, true)))
       .orderBy(asc(resumeRules.sortOrder), asc(resumeRules.createdAt), asc(resumeRules.id))
       .all()
   ).map((r) => r.ruleText);

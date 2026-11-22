@@ -8,6 +8,7 @@ import { companies, networkContacts, referralRankings } from '../db/schema';
 import { notFound } from '../lib/errors';
 import { profileSlugOf } from '../lib/linkedinCapture';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { sameCompany } from './communications';
 import { findOrCreateCompanySync } from './companies';
 import { countWhere, likeContains, orderBy, sortColumns, type ListOpts, type Page } from './list';
@@ -50,7 +51,7 @@ export const CONTACT_SORTS = sortColumns({
 });
 
 function owned(ctx: UserCtx, id: string): SQL | undefined {
-  return and(eq(networkContacts.userId, ctx.userId), eq(networkContacts.id, id));
+  return and(ownedBy(networkContacts.userId, ctx), eq(networkContacts.id, id));
 }
 
 /** Lowercased, trimmed and de-duplicated, first occurrence first. */
@@ -80,7 +81,7 @@ async function companyNameOf(
       await exec
         .select({ name: companies.name })
         .from(companies)
-        .where(and(eq(companies.userId, ctx.userId), eq(companies.id, companyId)))
+        .where(and(ownedBy(companies.userId, ctx), eq(companies.id, companyId)))
         .get()
     )?.name ?? null
   );
@@ -122,7 +123,7 @@ export async function listContacts(
   opts: ListOpts & { q?: string | undefined; companyId?: string | undefined },
 ): Promise<Page<ContactView>> {
   const where = and(
-    eq(networkContacts.userId, ctx.userId),
+    ownedBy(networkContacts.userId, ctx),
     opts.q === undefined
       ? undefined
       : or(
@@ -235,7 +236,7 @@ async function dropRankingsNaming(tx: Exec, ctx: UserCtx, contactId: string): Pr
   const rows = await tx
     .select({ id: referralRankings.id, ranking: referralRankings.ranking })
     .from(referralRankings)
-    .where(eq(referralRankings.userId, ctx.userId))
+    .where(ownedBy(referralRankings.userId, ctx))
     .all();
   const naming = rows.filter((r) => r.ranking.some((e) => e.contactId === contactId));
   if (naming.length === 0) return;
@@ -243,7 +244,7 @@ async function dropRankingsNaming(tx: Exec, ctx: UserCtx, contactId: string): Pr
     .delete(referralRankings)
     .where(
       and(
-        eq(referralRankings.userId, ctx.userId),
+        ownedBy(referralRankings.userId, ctx),
         inArray(
           referralRankings.id,
           naming.map((r) => r.id),
@@ -297,7 +298,7 @@ async function findCaptured(
   const mine = await exec
     .select()
     .from(networkContacts)
-    .where(eq(networkContacts.userId, ctx.userId))
+    .where(ownedBy(networkContacts.userId, ctx))
     .orderBy(asc(networkContacts.createdAt), asc(networkContacts.id))
     .all();
   const byUrl = mine.find((c) => profileSlugOf(c.linkedinUrl) === input.slug);

@@ -10,6 +10,7 @@ import {
 import { and, desc, eq, isNotNull, ne } from 'drizzle-orm';
 import { applicationSubmissions, companies, opportunities, profiles, users } from '../db/schema';
 import type { Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 
 /**
  * The caller's sources. `excluding` is the draft being filled, which is never its own "last
@@ -22,14 +23,14 @@ export async function detailSourcesFor(
   ctx: UserCtx,
   opts: { excluding: string | null },
 ): Promise<DetailSources> {
-  const profile = await exec.select().from(profiles).where(eq(profiles.userId, ctx.userId)).get();
+  const profile = await exec.select().from(profiles).where(ownedBy(profiles.userId, ctx)).get();
   const account = await exec
     .select({ email: users.email, displayName: users.displayName })
     .from(users)
-    .where(eq(users.id, ctx.userId))
+    .where(ownedBy(users.id, ctx))
     .get();
   const reviewed = and(
-    eq(applicationSubmissions.userId, ctx.userId),
+    ownedBy(applicationSubmissions.userId, ctx),
     isNotNull(applicationSubmissions.reviewedAt),
     ...(opts.excluding === null ? [] : [ne(applicationSubmissions.id, opts.excluding)]),
   );
@@ -46,12 +47,12 @@ export async function detailSourcesFor(
       opportunities,
       and(
         eq(opportunities.id, applicationSubmissions.opportunityId),
-        eq(opportunities.userId, ctx.userId),
+        ownedBy(opportunities.userId, ctx),
       ),
     )
     .innerJoin(
       companies,
-      and(eq(companies.id, opportunities.companyId), eq(companies.userId, ctx.userId)),
+      and(eq(companies.id, opportunities.companyId), ownedBy(companies.userId, ctx)),
     )
     .where(reviewed)
     .orderBy(desc(applicationSubmissions.reviewedAt), desc(applicationSubmissions.id))

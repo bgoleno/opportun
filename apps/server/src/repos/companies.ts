@@ -5,6 +5,7 @@ import { companyMatchKey, newId } from '@opportun/core';
 import { companies } from '../db/schema';
 import { duplicate, notFound } from '../lib/errors';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { countWhere, likeContains, orderBy, sortColumns, type ListOpts, type Page } from './list';
 import { lockScope, withTransaction } from '../db/client';
 import { racePoint } from '../lib/racePoints';
@@ -42,7 +43,7 @@ async function findByName(exec: Exec, ctx: UserCtx, name: string): Promise<Compa
   return await exec
     .select()
     .from(companies)
-    .where(and(eq(companies.userId, ctx.userId), sameName(name)))
+    .where(and(ownedBy(companies.userId, ctx), sameName(name)))
     .get();
 }
 
@@ -101,7 +102,7 @@ export async function listCompanies(
   opts: ListOpts & { q?: string | undefined; status?: Company['status'] | undefined },
 ): Promise<Page<Company>> {
   const where = and(
-    eq(companies.userId, ctx.userId),
+    ownedBy(companies.userId, ctx),
     opts.q === undefined ? undefined : likeContains(companies.name, opts.q),
     opts.status === undefined ? undefined : eq(companies.status, opts.status),
   );
@@ -120,7 +121,7 @@ export async function getCompany(db: Db, ctx: UserCtx, id: string): Promise<Comp
   const row = await db
     .select()
     .from(companies)
-    .where(and(eq(companies.userId, ctx.userId), eq(companies.id, id)))
+    .where(and(ownedBy(companies.userId, ctx), eq(companies.id, id)))
     .get();
   if (row === undefined) throw notFound();
   return row;
@@ -162,7 +163,7 @@ export async function setCompanyIndustry(
   await db
     .update(companies)
     .set({ naicsCode: code, industrySource: 'user', industryAt: now, updatedAt: now })
-    .where(and(eq(companies.id, id), eq(companies.userId, ctx.userId)))
+    .where(and(eq(companies.id, id), ownedBy(companies.userId, ctx)))
     .run();
   // Another user's company, or none: nothing changed above, and this is the 404.
   return await getCompany(db, ctx, id);
@@ -187,7 +188,7 @@ export async function updateCompany(
         ...(patch.name === undefined ? {} : withMatchKey({ name: patch.name })),
         updatedAt: Date.now(),
       })
-      .where(and(eq(companies.userId, ctx.userId), eq(companies.id, id)))
+      .where(and(ownedBy(companies.userId, ctx), eq(companies.id, id)))
       .returning()
       .get();
     if (row === undefined) throw notFound();

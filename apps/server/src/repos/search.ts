@@ -24,6 +24,7 @@ import { sql } from 'drizzle-orm';
 import { rawAll, rawGet, rawRun } from '../db/client';
 import { SCHEMA_DIALECT } from '../db/schema';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedSql } from './base';
 import type { Page } from './list';
 
 export const SEARCH_KINDS = ['opportunity', 'activity', 'communication', 'contact'] as const;
@@ -162,7 +163,7 @@ export async function removeFromIndex(
   await rawRun(
     exec,
     sql`DELETE FROM search_index
-        WHERE entity_kind = ${kind} AND entity_id = ${id} AND user_id = ${ctx.userId}`,
+        WHERE entity_kind = ${kind} AND entity_id = ${id} AND ${ownedSql('user_id', ctx)}`,
   );
 }
 
@@ -208,9 +209,9 @@ export async function removeOpportunityFromIndex(
   await rawRun(
     exec,
     sql`DELETE FROM search_index
-        WHERE user_id = ${ctx.userId} AND entity_kind = 'activity'
+        WHERE ${ownedSql('user_id', ctx)} AND entity_kind = 'activity'
           AND entity_id IN (SELECT id FROM activities
-                            WHERE user_id = ${ctx.userId} AND opportunity_id = ${opportunityId})`,
+                            WHERE ${ownedSql('user_id', ctx)} AND opportunity_id = ${opportunityId})`,
   );
   await removeFromIndex(exec, ctx, 'opportunity', opportunityId);
 }
@@ -431,18 +432,18 @@ export async function search(
     FROM search_index
     LEFT JOIN opportunities o
       ON search_index.entity_kind = 'opportunity' AND o.id = search_index.entity_id
-     AND o.user_id = ${ctx.userId}
+     AND ${ownedSql('o.user_id', ctx)}
     LEFT JOIN activities a
       ON search_index.entity_kind = 'activity' AND a.id = search_index.entity_id
-     AND a.user_id = ${ctx.userId}
+     AND ${ownedSql('a.user_id', ctx)}
     LEFT JOIN communications c
       ON search_index.entity_kind = 'communication' AND c.id = search_index.entity_id
-     AND c.user_id = ${ctx.userId}
+     AND ${ownedSql('c.user_id', ctx)}
     LEFT JOIN network_contacts p
       ON search_index.entity_kind = 'contact' AND p.id = search_index.entity_id
-     AND p.user_id = ${ctx.userId}
+     AND ${ownedSql('p.user_id', ctx)}
     WHERE search_index MATCH ${match}
-      AND search_index.user_id = ${ctx.userId}
+      AND ${ownedSql('search_index.user_id', ctx)}
       AND coalesce(o.id, a.id, c.id, p.id) IS NOT NULL`;
   const rows = await rawAll<HitRow>(
     db,
@@ -481,18 +482,18 @@ async function searchPg(
     FROM search_index
     LEFT JOIN opportunities o
       ON search_index.entity_kind = 'opportunity' AND o.id = search_index.entity_id
-     AND o.user_id = ${ctx.userId}
+     AND ${ownedSql('o.user_id', ctx)}
     LEFT JOIN activities a
       ON search_index.entity_kind = 'activity' AND a.id = search_index.entity_id
-     AND a.user_id = ${ctx.userId}
+     AND ${ownedSql('a.user_id', ctx)}
     LEFT JOIN communications c
       ON search_index.entity_kind = 'communication' AND c.id = search_index.entity_id
-     AND c.user_id = ${ctx.userId}
+     AND ${ownedSql('c.user_id', ctx)}
     LEFT JOIN network_contacts p
       ON search_index.entity_kind = 'contact' AND p.id = search_index.entity_id
-     AND p.user_id = ${ctx.userId}
+     AND ${ownedSql('p.user_id', ctx)}
     WHERE search_index.tsv @@ to_tsquery('simple', ${query})
-      AND search_index.user_id = ${ctx.userId}
+      AND ${ownedSql('search_index.user_id', ctx)}
       AND coalesce(o.id, a.id, c.id, p.id) IS NOT NULL`;
   const rows = await rawAll<Omit<HitRow, 'snippet'> & { text: string }>(
     db,
