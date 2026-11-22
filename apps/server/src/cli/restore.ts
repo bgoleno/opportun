@@ -14,9 +14,8 @@
 // for Postgres, DATABASE_URL, exactly as lib/restore.ts itself does.
 // First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
 import '../unsetEmptyAiBaseUrls';
-import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadDbConfig, loadSqliteDir, type DbConfig } from '../config';
+import { loadDbConfig, loadSqliteDir, type DbConfig, loadDataDir } from '../config';
 import {
   formatRestoreReport,
   restorePostgres,
@@ -86,12 +85,10 @@ export async function main({
 
 const entry = process.argv[1];
 if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
-  const dataDir = resolve(
-    process.env.DATA_DIR === undefined || process.env.DATA_DIR === ''
-      ? './data'
-      : process.env.DATA_DIR,
-  );
+  const dataDir = loadDataDir();
+  // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
   const db = loadDbConfig(process.env);
+  // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
   const storage = createStorage(dataDir, loadSqliteDir(process.env, dataDir));
   main({ snapshot: process.argv[2], storage, db }).then(
     (code) => {

@@ -616,6 +616,7 @@ export async function seedDemo(
   db: Db,
   creds: SeedDemoCredentials,
   now: number = Date.now(),
+  // eslint-disable-next-line no-restricted-properties -- the default for an environment parameter a test replaces (#292); its parser reads it (#773)
   env: NodeJS.ProcessEnv = process.env,
   hooks: SeedDemoHooks = {},
 ): Promise<SeedDemoReport> {

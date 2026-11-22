@@ -11,12 +11,12 @@ import {
   SendersSchema,
 } from '../adapters/sources/alertEmail';
 import { settings } from '../db/schema';
-import { readBuildInfo } from '../lib/buildInfo';
 import { CronSchema, discoveryDefaultCron, setDiscoveryDefaultCron } from '../jobs/atsDetect';
 import { NETWORK_BOARD_CHECK_SETTING, readNetworkBoardCheck } from '../jobs/networkBoardProbe';
 import type { UserCtx } from '../repos/base';
 import { deleteUserSetting, userSettingExists, writeUserSetting } from '../repos/userSettings';
 import { obs } from '../obs';
+import { loadBuildInfo } from '../config';
 
 export const THEME_PREFS = ['light', 'dark', 'auto'] as const;
 const ThemeBody = z.object({ pref: z.enum(THEME_PREFS) });
@@ -55,7 +55,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   // Any signed-in user: Settings shows it. Read from the build's environment, never fetched.
   api.get('/settings/build', { schema: { response: { 200: BuildBody } } }, async (req) => {
     app.requireUser(req);
-    return readBuildInfo(process.env);
+    return loadBuildInfo();
   });
 
   api.get('/settings/theme', { schema: { response: { 200: ThemeBody } } }, async (req) => {

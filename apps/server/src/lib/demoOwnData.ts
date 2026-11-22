@@ -59,12 +59,18 @@ function atDemoDomain(v: string): boolean {
   return domain === DEMO_MAIL_DOMAIN || domain.endsWith(`.${DEMO_MAIL_DOMAIN}`);
 }
 
-/** Whether `value`, in field `key`, is one of the demo's own identity values. */
-export function isFixtureIdentity(key: string, value: string): boolean {
+/**
+ * Whether `value`, in field `key`, is one of the demo's own identity values. The phone is compared
+ * by its digits in every field, not only `phone` (#782): a form names its fields as it likes
+ * (`mobile`, `tel`, a question id), so no list of phone-like names would be complete. That refuses
+ * only the seed's phone: it is the only identity value with seven digits or more, and a field
+ * whose national digits are exactly its number holds that number, whatever it is called.
+ */
+export function isFixtureIdentity(_key: string, value: string): boolean {
   const v = normalise(value);
   if (IDENTITY.has(v) || atDemoDomain(v)) return true;
   const phone = nationalDigits(value);
-  return key === 'phone' && phone.length >= 7 && IDENTITY_DIGITS.has(phone);
+  return phone.length >= 7 && IDENTITY_DIGITS.has(phone);
 }
 
 /**

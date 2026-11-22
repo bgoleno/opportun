@@ -26,6 +26,7 @@ import {
 /** What happens to a key the catalog does not list for the record. */
 export type UnknownKeyMode = 'drop' | 'throw';
 
+// eslint-disable-next-line no-restricted-properties -- test-run detection, not a setting (#773)
 let unknownKeyMode: UnknownKeyMode = process.env.VITEST === undefined ? 'drop' : 'throw';
 
 /** For tests: run the production behaviour ('drop') or the test behaviour ('throw'). */

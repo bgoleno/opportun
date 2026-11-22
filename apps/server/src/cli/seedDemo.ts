@@ -65,9 +65,8 @@
 // reseeds cleanly. Self-healing, not a case to build recovery machinery for.
 // First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
 import '../unsetEmptyAiBaseUrls';
-import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadConfig, loadSqliteDir } from '../config';
+import { loadConfig, loadSqliteDir, loadDataDir } from '../config';
 import { closeDatabase, connectDatabase } from '../db/client';
 import { credsFromEnv, seedDemo } from '../lib/demo/seed';
 import { queueInFlightBatchCleanups } from '../jobs/rankBatch';
@@ -82,21 +81,20 @@ const USAGE = [
 
 const entry = process.argv[1];
 if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
-  const dataDir = resolve(
-    process.env.DATA_DIR === undefined || process.env.DATA_DIR === ''
-      ? './data'
-      : process.env.DATA_DIR,
-  );
+  const dataDir = loadDataDir();
   const run = async (): Promise<number> => {
+    // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
     const creds = credsFromEnv(process.env);
     if (creds === undefined) {
       process.stderr.write(`${USAGE}\n`);
       return 2;
     }
+    // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
     const sqliteDir = loadSqliteDir(process.env, dataDir);
     const handle = await connectDatabase({
       dataDir,
       sqliteDir,
+      // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
       db: loadConfig(process.env).db,
     });
     const { db } = handle;

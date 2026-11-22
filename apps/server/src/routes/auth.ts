@@ -212,25 +212,16 @@ function fail(reply: FastifyReply, status: number, code: string) {
   return reply.code(status).send({ error: { code } });
 }
 
-/**
- * Starts a real session for `userId`: the HttpOnly session cookie plus the readable CSRF
- * cookie. Shared by password login, the 2FA step, registration and OAuth sign-in.
- */
-export async function startUserSession(
-  req: FastifyRequest,
-  reply: FastifyReply,
-  userId: string,
-): Promise<void> {
-  setSessionCookies(req, reply, await createSession(req.server.db, userId, sessionMeta(req)));
-}
-
 /** What a new session or pending 2FA token records of the request that made it. */
 export function sessionMeta(req: FastifyRequest): { ip: string; userAgent?: string } {
   const ua = req.headers['user-agent'];
   return { ip: req.ip, ...(ua === undefined ? {} : { userAgent: ua }) };
 }
 
-/** The cookies for a session already written (createSession), possibly inside a transaction. */
+/**
+ * The cookies for a session already written (createSession), set only once the transaction that
+ * wrote it, and its audit row, has committed (#779): a failed write then sets no cookie.
+ */
 export function setSessionCookies(
   req: FastifyRequest,
   reply: FastifyReply,
@@ -264,8 +255,6 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     return raw === undefined || raw.length === 0 ? undefined : raw;
   }
 
-  const startSession = startUserSession;
-
   const ipLimit = rateLimit({ keyFn: (req) => `ip|${req.ip}`, ...AUTH_IP_LIMIT });
 
   api.post(
@@ -280,9 +269,19 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const { email, password, displayName } = req.body;
       const passwordHash = await hashPassword(password, peppers);
+      let session: Awaited<ReturnType<typeof createSession>> | undefined;
       let created: typeof users.$inferSelect;
       try {
-        created = await registerUser(db, { email, passwordHash, displayName });
+        // The account, its first session and the audit row commit together (#779): a failed
+        // audit write leaves no account behind, so the same registration can be tried again.
+        created = await registerUser(db, { email, passwordHash, displayName }, async (tx, row) => {
+          session = await createSession(tx, row.id, sessionMeta(req));
+          await audit(tx, 'auth.register', {
+            userId: row.id,
+            ip: req.ip,
+            detail: { isAdmin: row.isAdmin },
+          });
+        });
       } catch (err) {
         if (err instanceof RegistrationClosedError) {
           return fail(reply, 403, 'registration_closed');
@@ -290,12 +289,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         if (isUniqueViolation(err)) return fail(reply, 409, 'email_taken');
         throw err;
       }
-      await startSession(req, reply, created.id);
-      await audit(db, 'auth.register', {
-        userId: created.id,
-        ip: req.ip,
-        detail: { isAdmin: created.isAdmin },
-      });
+      // Written with the account, in its transaction: set once that has committed.
+      if (session === undefined) throw new Error('registration committed without its session');
+      setSessionCookies(req, reply, session);
       return reply.code(201).send({ user: toPublic(created) });
     },
   );
@@ -394,22 +390,26 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         user.passwordHash,
         // Whether 2FA is on is read here, under the lock, not with the password above (#620): an
         // activation that committed during the check gives a pending token, never a full session.
-        async (tx) =>
-          (
-            await tx
-              .select({ totpEnabled: users.totpEnabled })
-              .from(users)
-              .where(eq(users.id, user.id))
-              .get()
-          )?.totpEnabled === true
-            ? {
-                kind: 'pending' as const,
-                pendingToken: await createPendingToken(tx, user.id, sessionMeta(req)),
-              }
-            : {
-                kind: 'session' as const,
-                session: await createSession(tx, user.id, sessionMeta(req)),
-              },
+        // The audit row is written with the session or pending token (#779): a failed write rolls
+        // both back, and no cookie or token is handed out.
+        async (tx) => {
+          const twoFactor =
+            (
+              await tx
+                .select({ totpEnabled: users.totpEnabled })
+                .from(users)
+                .where(eq(users.id, user.id))
+                .get()
+            )?.totpEnabled === true;
+          if (twoFactor) {
+            const pendingToken = await createPendingToken(tx, user.id, sessionMeta(req));
+            await audit(tx, 'auth.2fa_challenge', { userId: user.id, ip: req.ip });
+            return { kind: 'pending' as const, pendingToken };
+          }
+          const session = await createSession(tx, user.id, sessionMeta(req));
+          await audit(tx, 'auth.login', { userId: user.id, ip: req.ip });
+          return { kind: 'session' as const, session };
+        },
         { ...(upgraded === undefined ? {} : { rehashTo: upgraded }), point: 'auth.login.locked' },
       );
       if (!written.current) {
@@ -432,13 +432,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       await emailLimit.refund(req);
       if (written.value.kind === 'pending') {
         // The password factor passed; no session until the code step (POST /auth/2fa/verify).
-        await audit(db, 'auth.2fa_challenge', { userId: user.id, ip: req.ip });
         return reply
           .code(200)
           .send({ requires2fa: true, pendingToken: written.value.pendingToken });
       }
       setSessionCookies(req, reply, written.value.session);
-      await audit(db, 'auth.login', { userId: user.id, ip: req.ip });
       return reply.code(200).send({ user: toPublic(user) });
     },
   );
@@ -468,7 +466,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req, reply) => {
       const { pendingToken, code, recoveryCode } = req.body;
-      const result = await redeemPendingToken(db, pendingToken, { code, recoveryCode });
+      // A recovery code's spend is recorded with the spend itself (tl on #801): it commits here,
+      // before the session's transaction below, and stays spent if that one fails.
+      const result = await redeemPendingToken(
+        db,
+        pendingToken,
+        { code, recoveryCode },
+        Date.now(),
+        (userId) => async (tx, remaining) => {
+          await audit(tx, 'auth.2fa_recovery_used', { userId, ip: req.ip, detail: { remaining } });
+        },
+      );
       if (!result.ok) {
         if (result.code !== 'invalid_code') return fail(reply, 401, result.code);
         await audit(db, 'auth.2fa_failed', {
@@ -489,26 +497,23 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       if (user === undefined) return fail(reply, 401, 'invalid_pending');
       // The session is written only while the pending token is still stored, under the password
       // lock: a change or reset deletes every one of the user's under the same lock (#561).
-      const session = await withPasswordLock(db, userId, async (tx) =>
-        (await pendingTokenStored(tx, pendingToken))
-          ? await createSession(tx, userId, sessionMeta(req))
-          : null,
-      );
+      // Its audit rows are written with it (#779): a failed write leaves no session and sets no
+      // cookie. The code redeemed above stays spent, and a recovery code's spend was recorded with
+      // it: that claim commits on its own, before the lock (#561), and the user starts again from
+      // the password step.
+      const session = await withPasswordLock(db, userId, async (tx) => {
+        if (!(await pendingTokenStored(tx, pendingToken))) return null;
+        const written = await createSession(tx, userId, sessionMeta(req));
+        await audit(tx, 'auth.2fa_verified', { userId, ip: req.ip, detail: { method } });
+        await audit(tx, 'auth.login', { userId, ip: req.ip, detail: { twoFactor: true } });
+        return written;
+      });
       if (session === null) {
         // A change or reset since the claim (#662): say so, rather than that it took too long.
         const changed = await takeRevokedPending(db, pendingToken);
         return fail(reply, 401, changed ? 'password_changed' : 'invalid_pending');
       }
       setSessionCookies(req, reply, session);
-      await audit(db, 'auth.2fa_verified', { userId, ip: req.ip, detail: { method } });
-      if (method === 'recovery') {
-        await audit(db, 'auth.2fa_recovery_used', {
-          userId,
-          ip: req.ip,
-          detail: { remaining: user.totpRecovery?.length ?? 0 },
-        });
-      }
-      await audit(db, 'auth.login', { userId, ip: req.ip, detail: { twoFactor: true } });
       return reply.code(200).send({ user: toPublic(user) });
     },
   );
@@ -575,19 +580,23 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       await racePoint('twoFactor.enroll');
       // Only while the password just proven is still the user's (#620): a change or reset that
       // committed since the check wins, as for a sign-in (#561).
-      const written = await whilePasswordCurrent(db, user.id, verified, (tx) =>
-        tx
+      // The secret and its audit row commit together (#779).
+      const written = await whilePasswordCurrent(db, user.id, verified, async (tx) => {
+        const row = await tx
           .update(users)
           .set({ totpSecret: encryptSecret(db, secret), updatedAt: Date.now() })
           .where(and(eq(users.id, user.id), eq(users.totpEnabled, false)))
           .returning({ id: users.id })
-          .get(),
-      );
+          .get();
+        if (row !== undefined) {
+          await audit(tx, 'auth.2fa_enroll_started', { userId: user.id, ip: req.ip });
+        }
+        return row;
+      });
       if (!written.current) return passwordChanged(req, reply, user.id, '2fa.enroll');
       if (written.value === undefined) return fail(reply, 409, 'already_enabled');
       const url = otpauthUrl(secret, user.email);
       const qrDataUrl = await QRCode.toDataURL(url, { errorCorrectionLevel: 'M', margin: 1 });
-      await audit(db, 'auth.2fa_enroll_started', { userId: user.id, ip: req.ip });
       // Shown once: the secret is never returned again (re-enrolling generates a new one).
       return reply.code(200).send({ secret, otpauthUrl: url, qrDataUrl });
     },
@@ -635,8 +644,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // A re-enroll in between (new secret) or a double submit (already on) misses: 409, and
       // no second set of recovery codes is handed out.
       // And only while the password just proven is still the user's (#620).
-      const written = await whilePasswordCurrent(db, user.id, verified, (tx) =>
-        tx
+      // And its audit row commits with it (#779).
+      const written = await whilePasswordCurrent(db, user.id, verified, async (tx) => {
+        const row = await tx
           .update(users)
           .set({
             totpEnabled: true,
@@ -652,8 +662,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
             ),
           )
           .returning({ id: users.id })
-          .get(),
-      );
+          .get();
+        if (row !== undefined) await audit(tx, 'auth.2fa_enabled', { userId: user.id, ip: req.ip });
+        return row;
+      });
       if (!written.current) return passwordChanged(req, reply, user.id, '2fa.activate');
       const activated = written.value;
       if (activated === undefined) {
@@ -664,7 +676,6 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           .get();
         return fail(reply, 409, now?.enabled === true ? 'already_enabled' : 'enrollment_changed');
       }
-      await audit(db, 'auth.2fa_enabled', { userId: user.id, ip: req.ip });
       // Shown exactly once; only their hashes are stored.
       return reply.code(200).send({ recoveryCodes });
     },
@@ -702,7 +713,20 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       if (user === undefined) return fail(reply, 401, 'unauthorized');
       if (!user.enabled || user.secret === null) return fail(reply, 409, 'not_enabled');
       const { code, recoveryCode } = req.body;
-      const method = await checkSecondFactor(db, ctx.userId, { code, recoveryCode });
+      // A recovery code's spend is recorded with the spend (tl on #801), as at sign-in.
+      const method = await checkSecondFactor(
+        db,
+        ctx.userId,
+        { code, recoveryCode },
+        Date.now(),
+        async (tx, remaining) => {
+          await audit(tx, 'auth.2fa_recovery_used', {
+            userId: ctx.userId,
+            ip: req.ip,
+            detail: { remaining, step: 'disable' },
+          });
+        },
+      );
       if (method === null) {
         await audit(db, 'auth.2fa_failed', {
           userId: ctx.userId,
@@ -714,14 +738,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       await racePoint('twoFactor.disable');
       // Clears only the 2FA this factor belonged to: one disabled and enrolled again in the
       // meantime is not this request's to remove.
-      if (!(await clearTwoFactor(db, ctx.userId, user.secret))) {
-        return fail(reply, 409, 'not_enabled');
-      }
-      await audit(db, 'auth.2fa_disabled', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { method },
+      // The removal and its audit row commit together (#779).
+      const cleared = await withTransaction(db, async (tx) => {
+        if (!(await clearTwoFactor(tx, ctx.userId, user.secret as string))) return false;
+        await audit(tx, 'auth.2fa_disabled', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { method },
+        });
+        return true;
       });
+      if (!cleared) return fail(reply, 409, 'not_enabled');
       return reply.code(204).send(null);
     },
   );
@@ -812,22 +839,22 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         // This client's fresh session, in the same transaction (tl on #571): written after the
         // commit, a reset that waited on the lock could run first and leave it standing.
         const session = await createSession(tx, user.id, sessionMeta(req));
+        // And the audit row, so a failed write rolls the change back with it (#779).
+        await audit(tx, initial ? 'auth.password_set_initial' : 'auth.password_changed', {
+          userId: user.id,
+          ip: req.ip,
+          // A count, under a key the audit's redaction leaves alone (it hides any key with "token").
+          ...(req.body.revokeDeviceTokens === true ? { detail: { revokedDevices: revoked } } : {}),
+        });
         await racePoint('auth.passwordChange.locked');
         return { revoked, session };
       });
       if (changed === undefined) return fail(reply, 403, 'invalid_current_password');
       // The change has committed; a reset can run from here on (tl on #571).
       await racePoint('auth.passwordChange.committed');
-      const revokedDevices = changed.revoked;
       // Every existing session (other devices and this one) died with the change; this client
       // gets the fresh one written with it.
       setSessionCookies(req, reply, changed.session);
-      await audit(db, initial ? 'auth.password_set_initial' : 'auth.password_changed', {
-        userId: user.id,
-        ip: req.ip,
-        // A count, under a key the audit's redaction leaves alone (it hides any key with "token").
-        ...(req.body.revokeDeviceTokens === true ? { detail: { revokedDevices } } : {}),
-      });
       return reply.code(204).send(null);
     },
   );
