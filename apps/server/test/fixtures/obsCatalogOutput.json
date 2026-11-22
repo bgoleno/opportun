@@ -57,10 +57,7 @@
     "gmail.googleapis.com",
     "docs.googleapis.com"
   ],
-  "db.system.name": [
-    "sqlite",
-    "postgresql"
-  ],
+  "db.system.name": ["sqlite", "postgresql"],
   "db.operation.name": [
     "SELECT",
     "INSERT",
@@ -172,17 +169,8 @@
     "submissions.snapshot_reconcile",
     "_OTHER"
   ],
-  "opportun.job.outcome": [
-    "done",
-    "retry",
-    "dead",
-    "discarded"
-  ],
-  "opportun.obs.signal": [
-    "metrics",
-    "spans",
-    "logs"
-  ],
+  "opportun.job.outcome": ["done", "retry", "dead", "discarded"],
+  "opportun.obs.signal": ["metrics", "spans", "logs"],
   "opportun.obs.reason": [
     "unknown_key",
     "invalid_value",
@@ -190,15 +178,8 @@
     "buffer_full",
     "message_withheld"
   ],
-  "opportun.process.signal": [
-    "SIGINT",
-    "SIGTERM"
-  ],
-  "opportun.mail.channel": [
-    "gmail",
-    "apple_mail",
-    "linkedin"
-  ],
+  "opportun.process.signal": ["SIGINT", "SIGTERM"],
+  "opportun.mail.channel": ["gmail", "apple_mail", "linkedin"],
   "opportun.setting": [
     "theme",
     "submissions.dailyReviewCap",
@@ -213,10 +194,7 @@
     "onboarding_checklist",
     "network_board_check"
   ],
-  "opportun.discovery.run_outcome": [
-    "done",
-    "error"
-  ],
+  "opportun.discovery.run_outcome": ["done", "error"],
   "opportun.discovery.source_kind": [
     "ats_greenhouse",
     "ats_lever",
@@ -227,40 +205,13 @@
     "extension",
     "ats_workday"
   ],
-  "opportun.ats.kind": [
-    "ats_greenhouse",
-    "ats_lever",
-    "ats_ashby",
-    "ats_workday"
-  ],
-  "opportun.oauth.provider": [
-    "google",
-    "github",
-    "linkedin"
-  ],
-  "opportun.artifact.target": [
-    "chrome",
-    "firefox"
-  ],
-  "gen_ai.operation.name": [
-    "chat",
-    "invoke_workflow",
-    "batch_submit",
-    "batch_collect"
-  ],
-  "gen_ai.provider.name": [
-    "anthropic",
-    "openai"
-  ],
-  "opportun.ai.provider": [
-    "anthropic",
-    "openai",
-    "openai_compatible"
-  ],
-  "gen_ai.output.type": [
-    "json",
-    "text"
-  ],
+  "opportun.ats.kind": ["ats_greenhouse", "ats_lever", "ats_ashby", "ats_workday"],
+  "opportun.oauth.provider": ["google", "github", "linkedin"],
+  "opportun.artifact.target": ["chrome", "firefox"],
+  "gen_ai.operation.name": ["chat", "invoke_workflow", "batch_submit", "batch_collect"],
+  "gen_ai.provider.name": ["anthropic", "openai"],
+  "opportun.ai.provider": ["anthropic", "openai", "openai_compatible"],
+  "gen_ai.output.type": ["json", "text"],
   "gen_ai.prompt.name": [
     "resume.tailor",
     "resume.match",
@@ -327,7 +278,5 @@
     "mail_sync",
     "company_tags"
   ],
-  "gen_ai.token.modality": [
-    "text"
-  ]
+  "gen_ai.token.modality": ["text"]
 }

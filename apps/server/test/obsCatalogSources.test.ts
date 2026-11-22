@@ -3,6 +3,7 @@
 // catalog by those modules as they load, so the catalog imports neither. What a booted server's
 // catalog says is pinned here against the output captured from main 98ce1d5, before that change:
 // every enum attribute's values, and the fixed service hosts.
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ATTRIBUTES, fixedServiceHosts, type AttrType } from '../src/obs/catalog';
 import { testApp } from './helpers';
@@ -20,9 +21,11 @@ describe("the catalog's lists on a booted server (#764)", () => {
   it('are what they were before the catalog took them as data', async () => {
     const { app } = await testApp();
     try {
-      await expect(`${JSON.stringify(catalogOutput(), null, 2)}\n`).toMatchFileSnapshot(
-        './fixtures/obsCatalogOutput.json',
+      // Captured from main 98ce1d5 (a booted server), before the catalog took these lists as data.
+      const before: unknown = JSON.parse(
+        readFileSync(new URL('./fixtures/obsCatalogOutput.json', import.meta.url), 'utf8'),
       );
+      expect(catalogOutput()).toEqual(before);
     } finally {
       await app.close();
     }
