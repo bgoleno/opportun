@@ -43,6 +43,7 @@ import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
 import { requireService, type JobContext, type JobHandler, type JobServices } from './registry';
 import { enqueueSnapshot, SNAPSHOT_JOB_KIND } from '../lib/submissionSnapshotQueue';
+import { resumeStoreFor } from '../lib/resumeStores';
 
 /** Design 6.3: three tries with the runner's backoff, then the attempt shows the failure. */
 export const SNAPSHOT_MAX_ATTEMPTS = 3;
@@ -68,11 +69,13 @@ class Superseded extends Error {
   }
 }
 
-/** The store that holds this resume; the same choice routes/resumes.ts storeFor makes. */
+/** The store that holds this resume, through the one registry routes/resumes.ts uses (#771). */
 function storeOf(ctx: JobContext, store: Resume['store']): DocumentStore {
-  if (store === 'reactive_resume') return requireService(ctx, 'reactiveResumeStore');
-  if (store === 'local_file') return requireService(ctx, 'localFileStore');
-  return requireService(ctx, 'documentStore');
+  return resumeStoreFor(store, {
+    documentStore: () => requireService(ctx, 'documentStore'),
+    reactiveResumeStore: () => requireService(ctx, 'reactiveResumeStore'),
+    localFileStore: () => requireService(ctx, 'localFileStore'),
+  });
 }
 
 /** Only a draft whose snapshot is still pending, for the resume this run exported, is written. */

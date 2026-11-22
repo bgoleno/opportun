@@ -26,6 +26,7 @@
 //     changed rich-text node is re-encoded (a non-breaking space becomes a plain space);
 //   - the tailored copy is a duplicate in Reactive Resume; Opportun never renders or exports
 //     the PDF itself.
+import type { ResumeStore } from '@opportun/core';
 import { z } from 'zod';
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { withTransaction, type Db } from '../db/client';
@@ -45,8 +46,19 @@ export const RR_SECRET_KIND = 'oauth_token' as const;
 export const RR_SECRET_LABEL = 'reactive_resume';
 export const RR_URL_SETTING = 'reactive_resume_url';
 export const DOCUMENT_STORE_SETTING = 'document_store';
-export const DOCUMENT_STORE_PREFS = ['google', 'reactive_resume'] as const;
+/**
+ * Where new resumes go: a resume store's own name (#771), one name per store. `google` is the
+ * old name of `google_doc`: a preference stored, or a client still sending it, reads as that.
+ */
+export const DOCUMENT_STORE_PREFS = [
+  'google_doc',
+  'reactive_resume',
+] as const satisfies readonly ResumeStore[];
 export type DocumentStorePref = (typeof DOCUMENT_STORE_PREFS)[number];
+/** A preference as stored or sent, the old name included, read as its one name (#771). */
+export const DocumentStorePrefInput = z
+  .enum([...DOCUMENT_STORE_PREFS, 'google'])
+  .transform((v): DocumentStorePref => (v === 'google' ? 'google_doc' : v));
 
 export interface RrConfig {
   /** An https origin without a trailing slash. */
@@ -680,7 +692,7 @@ async function clearRrConfigIn(db: Exec, ctx: UserCtx): Promise<void> {
     )
     .run();
   if ((await readDocumentStorePref(db, ctx)) === 'reactive_resume') {
-    await writeUserSetting(db, ctx, DOCUMENT_STORE_SETTING, 'google');
+    await writeUserSetting(db, ctx, DOCUMENT_STORE_SETTING, 'google_doc');
   }
 }
 
@@ -689,7 +701,7 @@ export async function readDocumentStorePref(db: Exec, ctx: UserCtx): Promise<Doc
     db,
     ctx,
     DOCUMENT_STORE_SETTING,
-    z.enum(DOCUMENT_STORE_PREFS),
-    'google',
+    DocumentStorePrefInput,
+    'google_doc',
   );
 }
