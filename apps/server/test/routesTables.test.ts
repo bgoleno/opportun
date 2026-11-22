@@ -12,10 +12,19 @@ const TABLES = ['users', 'jobs'];
 /** The names a file imports from db/schema, from any number of import statements. */
 function schemaImports(text: string): string[] {
   const names: string[] = [];
-  for (const m of text.matchAll(
-    /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*['"][./]*db\/schema['"]/g,
-  )) {
-    for (const part of m[1]!.split(',')) {
+  // Statement by statement (no nested pattern): each import from a path ending in db/schema.
+  for (const stmt of text.split(';')) {
+    const from = stmt.lastIndexOf('from');
+    if (!stmt.trimStart().startsWith('import') || from < 0) continue;
+    const path = stmt
+      .slice(from + 4)
+      .trim()
+      .replace(/['"]/g, '');
+    if (!path.endsWith('db/schema')) continue;
+    const open = stmt.indexOf('{');
+    const close = stmt.indexOf('}');
+    if (open < 0 || close < open) continue;
+    for (const part of stmt.slice(open + 1, close).split(',')) {
       const name = part
         .replace(/^\s*type\s+/, '')
         .split(/\s+as\s+/)[0]!
