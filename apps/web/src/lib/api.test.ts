@@ -62,4 +62,36 @@ describe('errorMessage', () => {
       "Only this instance's administrator can add a source that runs a command on the server.",
     );
   });
+
+  // https://github.com/bgoleno/opportun/issues/750: the client's own wording first, then the
+  // sentence the server marked for users, then the generic text.
+  it("prefers its own wording for a code over the server's sentence", () => {
+    expect(errorMessage(new ApiError(409, 'duplicate', 'A row with that name exists.'))).toBe(
+      'That already exists.',
+    );
+  });
+
+  it("uses the server's sentence for a code it has no wording for", () => {
+    expect(errorMessage(new ApiError(422, 'invalid_cron', 'must be a valid cron expression'))).toBe(
+      'must be a valid cron expression',
+    );
+  });
+
+  it('falls back to the generic text when the server sent no sentence', () => {
+    expect(errorMessage(new ApiError(422, 'invalid_cron'))).toBe('Request failed (invalid_cron).');
+  });
+
+  it("reads the server's sentence from the envelope, as text", async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json(
+          { error: { code: 'invalid_pattern', message: 'Not a sender pattern: <b>x</b>' } },
+          { status: 422 },
+        ),
+      ),
+    );
+    const err = await api('/mail-filters', { method: 'POST', body: {} }).catch((e: unknown) => e);
+    expect(errorMessage(err)).toBe('Not a sender pattern: <b>x</b>');
+  });
 });
