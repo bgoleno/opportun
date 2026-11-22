@@ -173,11 +173,15 @@ export async function opportunityRoutes(app: FastifyInstance): Promise<void> {
       // last). A new link on a company's own page (`?gh_jid=`) is then checked on Greenhouse's
       // API, outside any transaction (#398): one request per known board of the company the save
       // ends with (#598), none for any other link or a job already identified.
-      const url = req.body.postingUrl;
-      // A link sent unchanged is not checked again (as before #685): the form sends every field.
-      const before = url == null ? null : (await getOpportunity(db, ctx, id)).postingUrl;
+      const before = await getOpportunity(db, ctx, id);
       const written = await updateOpportunity(db, ctx, id, req.body);
-      if (url == null || url === before || written.atsJobRef != null) return written;
+      // A link sent unchanged is not checked again (as before #685): the form sends every field.
+      // Unless the company changed, which drops a `gh_jid` identity (#785): the link, sent or
+      // stored, is then checked on the new company's boards.
+      const companyChanged = written.companyId !== before.companyId;
+      const url = req.body.postingUrl ?? (companyChanged ? written.postingUrl : null);
+      if (url == null || (url === before.postingUrl && !companyChanged)) return written;
+      if (written.atsJobRef != null) return written;
       const found = await checkEmbeddedGreenhouse(
         db,
         ctx,
@@ -188,8 +192,8 @@ export async function opportunityRoutes(app: FastifyInstance): Promise<void> {
         EMBED_CHECK_BUDGET_MS,
       );
       if (found.ref !== null) {
-        // Only while the link is still this one: a later save's link is never overwritten.
-        await setCheckedPostingRef(db, ctx, id, url, found.ref);
+        // Only while the link and company are still these: a later save's are never overwritten.
+        await setCheckedPostingRef(db, ctx, id, url, found.ref, written.companyId);
       } else if (found.undecided) {
         // Out of time, or a board gave no answer: a background check finishes it (#685).
         await enqueue(
