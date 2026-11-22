@@ -348,7 +348,57 @@ describe('POST /opportunities/:id/find-posting', () => {
     expect(out.atsJobRef).toMatchObject({ externalId: '1003' });
   });
 
-  it('a described posting already confirmed is still refused', async () => {
+  // #812 (qa on #804): the stored identity on its own, with no link, and when it and the link
+  // name different jobs. The stored one is the opportunity's own job.
+  const storeIdentity = async (app: { db: Db }, id: string, url: string) =>
+    app.db
+      .update(opportunities)
+      .set({ atsJobRef: atsJobRefOfUrl(url) })
+      .where(eq(opportunities.id, id))
+      .run();
+
+  it('a stored identity with no link, missing from the board: a title match is a candidate only', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Staff Platform Engineer' });
+    await storeIdentity(app, id, OWN_LINK);
+    boardServes([posting('Staff Platform Engineer II', '1002')]);
+
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().outcome).not.toBe('attached');
+    const out = await getOpportunity(app.db, ctxOf(a), id);
+    expect(out).toMatchObject({ postingUrl: null, atsJobRef: { externalId: '1003' } });
+    expect(out.postingState).not.toBe('confirmed');
+  });
+
+  it('a stored identity that differs from the link: the stored job is the one attached', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, {
+      title: 'Staff Platform Engineer',
+      postingUrl: 'https://job-boards.greenhouse.io/sentineledge/jobs/1005',
+    });
+    await storeIdentity(app, id, OWN_LINK);
+    boardServes([posting('Staff Platform Engineer', '1005'), posting('Platform Engineer', '1003')]);
+
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ outcome: 'attached' });
+    const out = await getOpportunity(app.db, ctxOf(a), id);
+    expect(out.atsJobRef).toMatchObject({ externalId: '1003' });
+    expect(out.postingUrl).toBe(OWN_LINK);
+  });
+
+  // #812 (qa on #804; tl): Find posting and Refetch on a confirmed posting with the user's own
+  // description re-check the board and keep the description; the opportunity's own job decides.
+  it('confirmed, own description, no job of its own: a title match is a candidate only (#812)', async () => {
     const { app, a } = await boot();
     const id = await seed(app, a, {
       title: 'Product Manager, SIEM',
@@ -356,7 +406,7 @@ describe('POST /opportunities/:id/find-posting', () => {
     });
     await setPostingState(app.db, ctxOf(a), id, {
       postingState: 'confirmed',
-      postingStateDetail: null,
+      postingStateDetail: 'user_confirmed',
     });
     boardServes([posting('Staff Product Manager, SIEM', '7663059003')]);
 
@@ -365,8 +415,103 @@ describe('POST /opportunities/:id/find-posting', () => {
       url: `/api/v1/opportunities/${id}/find-posting`,
     });
 
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().outcome).toBe('candidates');
+    expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject({
+      descriptionMd: 'already here',
+      postingUrl: null,
+      atsJobRef: null,
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+    });
+  });
+
+  it('confirmed, own description, its own job on the board: refreshed, the description kept (#812)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, {
+      title: 'Staff Platform Engineer',
+      postingUrl: OWN_LINK,
+      descriptionMd: 'my own notes on the role',
+    });
+    await storeIdentity(app, id, OWN_LINK);
+    await setPostingState(app.db, ctxOf(a), id, {
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+    });
+    boardServes([posting('Staff Platform Engineer', '1002'), posting('Platform Engineer', '1003')]);
+
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ outcome: 'attached' });
+    const out = await getOpportunity(app.db, ctxOf(a), id);
+    expect(out).toMatchObject({
+      descriptionMd: 'my own notes on the role',
+      postingUrl: OWN_LINK,
+      atsJobRef: { externalId: '1003' },
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+      location: null,
+    });
+    const { items } = await listActivities(app.db, ctxOf(a), id, { limit: 50, offset: 0 });
+    expect(
+      items.some(
+        (i) =>
+          i.bodyMd?.includes("Checked on the company's board; your description was kept.") === true,
+      ),
+    ).toBe(true);
+  });
+
+  it('confirmed, own description, its own job missing: nothing changes, and it says so (#812)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, {
+      title: 'Staff Platform Engineer',
+      postingUrl: OWN_LINK,
+      descriptionMd: 'my own notes on the role',
+    });
+    await storeIdentity(app, id, OWN_LINK);
+    await setPostingState(app.db, ctxOf(a), id, {
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+    });
+    const before = await getOpportunity(app.db, ctxOf(a), id);
+    boardServes([posting('Staff Platform Engineer II', '1002')]);
+
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().outcome).toBe('candidates');
+    expect(res.json().note).toContain("isn't on the company's board");
+    const out = await getOpportunity(app.db, ctxOf(a), id);
+    expect(out).toMatchObject({
+      descriptionMd: before.descriptionMd,
+      postingUrl: before.postingUrl,
+      atsJobRef: before.atsJobRef,
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+    });
+  });
+
+  it('confirmed, own description: pasted text over it is still refused (#812)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Staff Platform Engineer', descriptionMd: 'mine' });
+    await setPostingState(app.db, ctxOf(a), id, {
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+    });
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/posting`,
+      payload: { text: 'Pasted text of some posting, long enough to count as a description.' },
+    });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error).toMatchObject({ code: 'already_described' });
+    expect((await getOpportunity(app.db, ctxOf(a), id)).descriptionMd).toBe('mine');
   });
 
   it("404s for another user's opportunity", async () => {

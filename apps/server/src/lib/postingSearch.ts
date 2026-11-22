@@ -534,7 +534,7 @@ export async function findPosting(
 
   const reads = await readBoards(sctx, lookup, owned);
   const cut = reads.find((r) => r.cut !== undefined)?.cut;
-  const note =
+  let note: { note?: string } =
     cut === undefined
       ? {}
       : {
@@ -559,12 +559,17 @@ export async function findPosting(
   // itself, or a title match would swap its identity for another job's. Boards that could not be
   // read at all change nothing.
   const ownMissed = ownRef !== null && reads.length > 0;
+  if (ownMissed) {
+    // Said with whatever is offered (#812, tl): the job this opportunity names is not there now.
+    const missing = "The job this opportunity names isn't on the company's board now.";
+    note = { note: note.note === undefined ? missing : `${missing} ${note.note}` };
+  }
 
   const hit = referenceHit(reads, refs);
   if (hit !== null) {
     const candidate = exactly(await describeWorkdayPosting(sctx, hit.posting));
     const readFrom = { kind: hit.board.kind, org: hit.board.org };
-    if (ownMissed) return unattachable(candidate);
+    if (ownMissed) return { ...unattachable(candidate), ...note };
     return hasDescription(candidate.posting)
       ? { status: 'exact', candidate, via: 'email_link', readFrom }
       : unattachable(candidate);
