@@ -146,7 +146,12 @@ export function isForbidden(err: unknown): boolean {
   return err instanceof ApiError && err.status === 403;
 }
 
-/** A short human message for an error thrown by api(). */
+/**
+ * A short human message for an error thrown by api(): this client's own wording for the code
+ * first, then the sentence the server marked for users (#750), then the generic text. The result
+ * is shown as text, never as HTML (React escapes it): a server sentence may echo what the user
+ * typed.
+ */
 export function errorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     switch (err.code) {

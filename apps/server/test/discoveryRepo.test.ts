@@ -160,7 +160,7 @@ describe('discovery sources repo', () => {
       }
       expect(caught, cron).toBeInstanceOf(HttpError);
       expect(caught as HttpError, cron).toMatchObject({ statusCode: 422, code: 'invalid_cron' });
-      expect((caught as HttpError).details?.message, cron).toMatch(/hour|five fields/);
+      expect((caught as HttpError).userMessage, cron).toMatch(/hour|five fields/);
     }
     expect((await make('0 * * * *')).scheduleCron).toBe('0 * * * *');
     const src = await make('0 7 * * *');
