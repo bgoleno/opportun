@@ -7,17 +7,17 @@
 //
 // Following a company (status 'followed', by PATCH or by accepting a suggestion) enables its
 // board's discovery source on the user's default cron; any other status disables it (FR-D5).
+import {
+  ATS_DETECT_KIND,
+  atsDetectDedupeKey,
+  syncFollowedCompany,
+  enqueueAtsDetect,
+} from '../lib/atsDetect';
 import { COMPANY_STATUSES, CompanySchema, isNaicsCode } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { Db } from '../db/client';
-import {
-  ATS_DETECT_KIND,
-  atsDetectDedupeKey,
-  enqueueAtsDetect,
-  syncFollowedCompany,
-} from '../jobs/atsDetect';
 import {
   BOARD_PROBE_KIND,
   boardProbeDedupeKey,

@@ -159,7 +159,9 @@ export function PostingConfirmedStatus(props: {
         title="Refetch this posting?"
         description={
           opp.descriptionIsUserWritten
-            ? "You've edited this description by hand. Refetching replaces it with a fresh copy from the company's board, and your edit can't be recovered afterward."
+            ? // #812 (tl): a Refetch on the user's own description re-checks the board and keeps
+              // the description; only the link and the job it names can change.
+              "Opportun checks the company's board again; your description is kept."
             : "This replaces the current description with a fresh copy from the company's board. If nothing is found, the description is left exactly as it is."
         }
         confirmLabel="Refetch"

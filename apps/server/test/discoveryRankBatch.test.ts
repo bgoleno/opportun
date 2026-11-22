@@ -66,6 +66,7 @@ import {
   unlinkBatch,
   writeRankBatching,
 } from '../src/repos/rankBatches';
+import { enqueueRankBatchSubmit } from '../src/jobs/rankBatchClient';
 import { useApi } from './api';
 import { withFailingInsert } from './db';
 import type { TestClient } from './isolation';
@@ -1191,6 +1192,65 @@ describe('the rules tl found untested (blocking 6)', () => {
 
   // #784 (qa's regression pass): a refused send is sent again on the runner's backoff, not only at
   // the hourly sweep or when the next posting joins.
+  const returnsOf = async (app: FastifyInstance, id: string) =>
+    (
+      await app.db
+        .select({ n: discoveryResults.rankBatchReturns })
+        .from(discoveryResults)
+        .where(eq(discoveryResults.id, id))
+        .all()
+    )[0]!.n;
+
+  // #827 (qa on #820): a refused send had no overall cap; the sweep sent it again every hour, for
+  // good. Each send the runner gives up on (its last attempt, or one with no answer) counts a
+  // return for its postings; at MAX_BATCH_RETURNS their wait ends, as a provider failure.
+  it('a send refused every time stops after 3 sends of 3 attempts, and says why (#827)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    fake!.submitError = new BatchRefusedError('submit', 529, 'Anthropic');
+    const sendJob = async () =>
+      (await app.db.select().from(jobs).where(eq(jobs.kind, RANK_BATCH_SEND_KIND)).all())[0]!;
+    let tries = 0;
+    const realSubmit = fake!.submit.bind(fake!);
+    fake!.submit = async (r) => {
+      tries += 1;
+      return realSubmit(r);
+    };
+    vi.setSystemTime(Date.now() + 5 * 60_000 + 1_000);
+    for (let send = 1; send <= 3; send++) {
+      // One send: its attempts, each when due.
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        await app.jobs.drain();
+        const job = await sendJob();
+        if (job.status === 'pending') vi.setSystemTime(job.runAt + 1);
+      }
+      const [r] = await results(app, a);
+      if (send < 3) {
+        expect(r).toMatchObject({ rankSkipReason: 'batch_waiting' });
+        expect(await returnsOf(app, r!.id)).toBe(send);
+        // The sweep's next send, as an hour later.
+        await app.db.delete(jobs).where(eq(jobs.kind, RANK_BATCH_SEND_KIND)).run();
+        await enqueueRankBatchSubmit(app.db, ctxOf(a));
+      }
+    }
+    expect(tries).toBe(9);
+    const [ended] = await results(app, a);
+    expect(ended).toMatchObject({ rankSkipReason: 'provider_error', aiScore: null });
+  });
+
+  it('a refused attempt the runner will try again counts no return (#827)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    fake!.submitError = new BatchRefusedError('submit', 529, 'Anthropic');
+    vi.setSystemTime(Date.now() + 5 * 60_000 + 1_000);
+    await app.jobs.drain();
+    const [r] = await results(app, a);
+    expect(r).toMatchObject({ rankSkipReason: 'batch_waiting' });
+    expect(await returnsOf(app, r!.id)).toBe(0);
+  });
+
   it('a refused send is retried on the backoff: about a minute, then two, then the sweep (#784)', async () => {
     const { app, a } = await boot();
     await batching(app, a);

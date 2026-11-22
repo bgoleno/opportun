@@ -1,5 +1,6 @@
 import cookie from '@fastify/cookie';
 import Fastify, { type FastifyInstance, LogController } from 'fastify';
+import { ATS_REVERIFY_CRON, ATS_REVERIFY_KIND } from './lib/atsDetect';
 import { removeSchedule, seedSchedule } from './lib/jobQueue';
 import {
   serializerCompiler,
@@ -39,7 +40,6 @@ import './adapters/sources/index';
 import './jobs/index';
 import { batchProviderFor } from '@opportun/ai';
 import type { JobServices } from './jobs/registry';
-import { ATS_REVERIFY_CRON, ATS_REVERIFY_KIND } from './jobs/atsDetect';
 import { RANK_WAITING_SWEEP_CRON, RANK_WAITING_SWEEP_KIND } from './jobs/discoveryRankWaiting';
 import { RANK_BATCH_SWEEP_CRON, RANK_BATCH_SWEEP_KIND } from './jobs/rankBatch';
 import { ATTACHMENT_SWEEP_CRON, ATTACHMENT_SWEEP_JOB_KIND } from './jobs/attachmentSweep';

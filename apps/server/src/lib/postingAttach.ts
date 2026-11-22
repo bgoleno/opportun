@@ -34,7 +34,7 @@ export type AttachSource = 'email_link' | 'posting_link' | 'board' | 'paste';
 
 const HOW_SAID: ReadonlyMap<AttachSource, string> = new Map([
   ['email_link', 'Found through a link in a linked message.'],
-  ['posting_link', "Found on the company's ATS board, by the job its posting link names."],
+  ['posting_link', "Found on the company's ATS board, by the job this opportunity names."],
   ['board', "Found on the company's ATS board."],
   ['paste', 'Added by hand.'],
 ]);
@@ -47,7 +47,7 @@ const HOW_SAID: ReadonlyMap<AttachSource, string> = new Map([
  */
 const HOW_SAID_REFETCH: ReadonlyMap<AttachSource, string> = new Map([
   ['email_link', 'Refetched through a link in a linked message.'],
-  ['posting_link', "Refetched from the company's ATS board, by the job its posting link names."],
+  ['posting_link', "Refetched from the company's ATS board, by the job this opportunity names."],
   ['board', "Refetched from the company's ATS board."],
   ['paste', 'Replaced by hand.'],
 ]);
@@ -76,9 +76,10 @@ export async function attachPosting(
    */
   identity: { readFrom?: ReadFrom; sctx?: Pick<SourceContext, 'fetch' | 'log'> } = {},
   /**
-   * #756 (tl): when the user wrote the description and the posting is not confirmed yet, confirm
-   * the posting from this board copy without touching the description (design D11), instead of
-   * refusing. Find posting and a picked board row only; pasted text is still refused.
+   * #756 (tl): when the user wrote the description, confirm the posting from this board copy
+   * without touching the description (design D11), instead of refusing; on a posting confirmed
+   * already too (#812, tl: a Refetch re-checks the board). Find posting and a picked board row
+   * only; pasted text is still refused.
    */
   opts: { keepDescription?: boolean } = {},
 ): Promise<OpportunityView> {
@@ -92,9 +93,9 @@ export async function attachPosting(
   const usersOwn =
     !replaceAllowedByFlag(current) &&
     !isSystemWritten(current.descriptionMd, current.descriptionFingerprint);
-  // The user's own description is kept, and the posting only confirmed, when asked to and the
-  // posting is not settled yet (#756); otherwise their writing still refuses the attach.
-  const keep = usersOwn && opts.keepDescription === true && current.postingState !== 'confirmed';
+  // The user's own description is kept, and the posting only confirmed, when asked to (#756), the
+  // posting settled already or not (#812); otherwise their writing still refuses the attach.
+  const keep = usersOwn && opts.keepDescription === true;
   if (usersOwn && !keep) {
     throw new HttpError(
       409,
@@ -144,9 +145,19 @@ export async function attachPosting(
     postingStateDetail: keep ? 'user_confirmed' : null,
     atsJobRef,
   });
+  // A Refetch that kept the user's description and found the same job changed no text: a check
+  // (#812, tl). Another job (a row the user picked) is a change, and said as one (qa on #830).
+  const sameJob =
+    refetch &&
+    current.atsJobRef != null &&
+    atsJobRef != null &&
+    current.atsJobRef.kind === atsJobRef.kind &&
+    current.atsJobRef.externalId === atsJobRef.externalId;
   const howSaid = [
-    (refetch ? HOW_SAID_REFETCH : HOW_SAID).get(how) ?? '',
-    keep ? 'Your own description was kept.' : '',
+    keep && sameJob
+      ? "Checked on the company's board; your description was kept."
+      : ((refetch ? HOW_SAID_REFETCH : HOW_SAID).get(how) ?? ''),
+    keep && !sameJob ? 'Your own description was kept.' : '',
   ]
     .filter((l) => l !== '')
     .join(' ');

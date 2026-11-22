@@ -101,6 +101,22 @@ export function unreadableTooLong(unreadableSince: number, now: number, limitMs:
 }
 
 /**
+ * Whether the worker checkpoints on this look (https://github.com/bgoleno/opportun/issues/831): when
+ * the WAL calls for one (`reason`), at once, unless the last attempt was held back (a reader's
+ * snapshot, or another connection holding the checkpoint lock), and then only once `retryMs` has
+ * passed since it. A checkpoint that copied everything is never followed by the delay.
+ */
+export function attemptDue(
+  reason: 'size' | 'age' | undefined,
+  heldBack: boolean,
+  now: number,
+  lastAttempt: number,
+  retryMs: number,
+): boolean {
+  return reason !== undefined && (!heldBack || now - lastAttempt >= retryMs);
+}
+
+/**
  * Whether a checkpoint stopped short because a reader held frames back, so that the next try waits
  * the retry delay. Only frames that were in the WAL when the worker read its header, just before
  * the checkpoint, count: frames a writer committed while the checkpoint ran are in its `log` but
@@ -182,7 +198,7 @@ function run(data: CheckpointWorkerData, port: NonNullable<typeof parentPort>): 
           ? 'age'
           : undefined;
     // A checkpoint that a reader held back is retried, but not on every poll.
-    if (reason !== undefined && (!heldBack || now - lastAttempt >= data.retryMs)) {
+    if (reason !== undefined && attemptDue(reason, heldBack, now, lastAttempt, data.retryMs)) {
       lastAttempt = now;
       const startedAt = Date.now();
       const started = performance.now();

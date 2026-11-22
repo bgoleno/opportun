@@ -2,6 +2,7 @@
 // N5a): one public request to the company's job board, with no AI call, stores how many jobs it has
 // open and how many of them the pre-filter passes for the user's role targets. Every request goes
 // through the real safeFetch logic over a scripted DNS table and transport, as in atsDetect.test.ts.
+import { AtsDetectTransientError, detectAts } from '../src/lib/atsDetect';
 import { enqueue } from '../src/lib/jobQueue';
 import { runStructured } from '@opportun/ai';
 import { readFileSync } from 'node:fs';
@@ -11,7 +12,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetSources, type SourceContext } from '../src/adapters/discoverySource';
 import type { NormalizedPosting } from '@opportun/core';
 import { companies, jobs } from '../src/db/schema';
-import { AtsDetectTransientError, detectAts } from '../src/jobs/atsDetect';
 import {
   BOARD_PROBE_KIND,
   boardProbeDedupeKey,

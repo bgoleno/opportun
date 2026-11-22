@@ -13,6 +13,7 @@
 // A Workday board (FR-D10) is read from its listing only, since its descriptions cost one detail
 // request per posting; the posting the flow settles on is then described from its detail
 // endpoint (describeWorkdayPosting), as is a Workday candidate the user picks later.
+import { AtsDetectTransientError, detectAts } from './atsDetect';
 import { TITLE_MATCH_THRESHOLD } from './titleMatch';
 import { boardConfig, boardFromUrl, boardOfSource } from './atsBoard';
 import { greenhouseJidOf, NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
@@ -32,7 +33,6 @@ import {
 } from '../adapters/sources/workday';
 import type { Db } from '../db/client';
 import { communications, discoverySources } from '../db/schema';
-import { AtsDetectTransientError, detectAts } from '../jobs/atsDetect';
 import type { AtsJobRefRecord } from '../db/schema.shared';
 import type { UserCtx } from '../repos/base';
 import { getCompany } from '../repos/companies';
@@ -383,14 +383,27 @@ function referenceHit(
     const wanted = ref.externalId.toLowerCase();
     for (const read of reads) {
       if (read.board.kind !== ref.kind) continue;
-      if (ref.org !== null && ref.org !== read.board.org) continue;
       const hit = read.postings.find(
-        (p) => p.externalId != null && p.externalId.toLowerCase() === wanted,
+        (p) =>
+          p.externalId != null &&
+          p.externalId.toLowerCase() === wanted &&
+          // The board read, or the board the posting's own link names (qa and tl on #830): an
+          // identity's org is the slug of its link (postingAtsJobRef, tl on #140: the handoff
+          // compares it), which can be another spelling than the board's token (vandelay on the
+          // vandelayindustries board). Either one is this job.
+          (ref.org === null ||
+            ref.org === read.board.org ||
+            ref.org === postingUrlSlug(p.postingUrl)),
       );
       if (hit !== undefined) return { posting: hit, board: read.board };
     }
   }
   return null;
+}
+
+/** The board slug a posting's own link names, if it is a board-host link. */
+function postingUrlSlug(url: string | null | undefined): string | null {
+  return url == null ? null : (boardFromUrl(url)?.slug ?? null);
 }
 
 /**
@@ -534,7 +547,7 @@ export async function findPosting(
 
   const reads = await readBoards(sctx, lookup, owned);
   const cut = reads.find((r) => r.cut !== undefined)?.cut;
-  const note =
+  let note: { note?: string } =
     cut === undefined
       ? {}
       : {
@@ -559,12 +572,17 @@ export async function findPosting(
   // itself, or a title match would swap its identity for another job's. Boards that could not be
   // read at all change nothing.
   const ownMissed = ownRef !== null && reads.length > 0;
+  if (ownMissed) {
+    // Said with whatever is offered (#812, tl): the job this opportunity names is not there now.
+    const missing = "The job this opportunity names isn't on the company's board now.";
+    note = { note: note.note === undefined ? missing : `${missing} ${note.note}` };
+  }
 
   const hit = referenceHit(reads, refs);
   if (hit !== null) {
     const candidate = exactly(await describeWorkdayPosting(sctx, hit.posting));
     const readFrom = { kind: hit.board.kind, org: hit.board.org };
-    if (ownMissed) return unattachable(candidate);
+    if (ownMissed) return { ...unattachable(candidate), ...note };
     return hasDescription(candidate.posting)
       ? { status: 'exact', candidate, via: 'email_link', readFrom }
       : unattachable(candidate);

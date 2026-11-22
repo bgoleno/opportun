@@ -2,6 +2,7 @@
 // on the issue, on by default as the owner decided, sec's conditions folded in. Every request goes through the real safeFetch over a
 // scripted DNS table and transport, as in atsDetect.test.ts, and every call the probe makes is
 // counted before safeFetch sees it, so a refused request to a private address counts too.
+import { slugCandidates } from '../src/lib/atsDetect';
 import { enqueue } from '../src/lib/jobQueue';
 import { runStructured } from '@opportun/ai';
 import { and, eq } from 'drizzle-orm';
@@ -9,7 +10,6 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetSources, type SourceContext } from '../src/adapters/discoverySource';
 import { companies, jobs, settings } from '../src/db/schema';
-import { slugCandidates } from '../src/jobs/atsDetect';
 import {
   NETWORK_BOARD_CHECK_SETTING,
   NETWORK_PROBE_FAILED_NIGHTS,

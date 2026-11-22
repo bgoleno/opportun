@@ -8,13 +8,13 @@
 // suggested, such as one in the user's network: from 'none' or 'suggested' it follows the company
 // and queues its board detection, exactly as accept does. A denied company is refused (409), so a
 // deny stays a deny until the user undoes it on purpose.
+import { syncFollowedCompany, enqueueAtsDetect } from '../lib/atsDetect';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { CompanyStatus } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { Db } from '../db/client';
 import { companies } from '../db/schema';
-import { enqueueAtsDetect, syncFollowedCompany } from '../jobs/atsDetect';
 import { HttpError } from '../lib/errors';
 import type { UserCtx } from '../repos/base';
 import { COMPANY_SORTS, getCompany, listCompanies, type Company } from '../repos/companies';
