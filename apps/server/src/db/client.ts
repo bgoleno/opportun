@@ -1107,20 +1107,23 @@ const afterCommitQueues = new WeakMap<object, (() => void)[]>();
  * Runs `fn` once the transaction `exec` belongs to has committed, or now when `exec` is no
  * transaction withTransaction opened (a plain statement on `db` commits as it runs). Dropped when
  * that transaction rolls back. For effects that must not report a change that did not happen,
- * such as an audit row's telemetry event (lib/audit.ts). `fn` must not throw: a failure there
- * cannot undo the commit, so it is caught and dropped.
+ * such as an audit row's telemetry event (lib/audit.ts). Outside a transaction `fn` runs as any
+ * call does, so what it throws reaches the caller. After a commit, a throw cannot undo the change,
+ * so in production it is dropped; under the test runner it is rethrown (tl on #822), as obs/gate.ts
+ * does, so a telemetry key missing from the catalog still fails CI.
  */
 export function afterCommit(exec: Exec, fn: () => void): void {
   const queue = afterCommitQueues.get(exec as object);
-  if (queue === undefined) runAfterCommit(fn);
+  if (queue === undefined) fn();
   else queue.push(fn);
 }
 
 function runAfterCommit(fn: () => void): void {
   try {
     fn();
-  } catch {
-    // Telemetry, never a reason to fail a change that has committed.
+  } catch (err) {
+    if (isTestRun()) throw err;
+    // Production: telemetry, never a reason to fail a change that has committed.
   }
 }
 
