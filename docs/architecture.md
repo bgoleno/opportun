@@ -280,7 +280,7 @@ Each seam below is what a multi-tenant, horizontally scaled service would need, 
 
 ### 8.1 Tenancy and isolation (M)
 
-- **Now:** the user is the only tenant unit. Every domain table has `user_id`, and every repo query filters on it, each through its own small `owned…` helper (for example `repos/opportunities.ts`, `repos/attachments.ts`). Some rows are instance-wide: settings with a null `user_id` (registration, sign-in provider clients, telemetry, the pepper version, schedules), system prompts, jobs and audit rows. `users.is_admin` makes someone an admin of the whole instance. Demo accounts are pinned ids, reset nightly (`jobs/demoReset.ts`).
+- **Now:** the user is the only tenant unit. Every domain table has `user_id`, and every repo query filters on it through one helper, `ownedBy` (or `ownedSql` for hand-written SQL) in `repos/base.ts` (#768), which a test keeps that way. Some rows are instance-wide: settings with a null `user_id` (registration, sign-in provider clients, telemetry, the pepper version, schedules), system prompts, jobs and audit rows. `users.is_admin` makes someone an admin of the whole instance. Demo accounts are pinned ids, reset nightly (`jobs/demoReset.ts`).
 - **To change:**
   - separate the platform operator from an in-app admin, and move instance settings to platform configuration or to per-tenant rows;
   - add per-tenant quotas;

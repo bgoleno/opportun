@@ -1,6 +1,7 @@
 // An opportunity's ATS identity follows its posting, however the posting got there (issue
 // https://github.com/bgoleno/opportun/issues/137, with the Tech Lead's design note on it).
 // Organised by the issue's acceptance criteria. Every URL here is synthetic; nothing is fetched.
+import { confirm } from '../src/lib/postingReconcile';
 import { destinationAllowed } from '../src/lib/submissionDestination';
 import type { AtsJobRef, NormalizedPosting } from '@opportun/core';
 import { eq } from 'drizzle-orm';
@@ -12,7 +13,6 @@ import {
   backfillAtsJobRefs,
   enqueueBackfillAtsJobRefsOnce,
 } from '../src/jobs/atsJobRefBackfill';
-import { confirm } from '../src/jobs/postingReconcile';
 import { extractAtsJobRefs, postingAtsJobRef } from '../src/lib/atsJobRef';
 import { attachPosting } from '../src/lib/postingAttach';
 import { confirmPosting } from '../src/lib/postingConfirm';

@@ -1882,12 +1882,13 @@ describe('oauth: the audit row commits with what it records (#779)', () => {
     expect(await oauthRows(app)).toEqual([]);
   });
 
-  it('an unlink whose auth.oauth_unlinked write fails keeps the link', async () => {
+  // #846, #815's rule for removals: an unlink is a removal, so it commits first and is recorded
+  // after. A failed audit write never leaves a provider able to sign in that its owner unlinked.
+  it('an unlink whose auth.oauth_unlinked write fails still unlinks', async () => {
     const { a, app } = await boot();
     await configure(a, 'github');
     await oauthLink(app, 'github', a, IDENTITY);
-    const linked = await oauthRows(app);
-    expect(linked).toHaveLength(1);
+    expect(await oauthRows(app)).toHaveLength(1);
     failing = 'auth.oauth_unlinked';
     const res = await a.request({
       method: 'DELETE',
@@ -1896,6 +1897,9 @@ describe('oauth: the audit row commits with what it records (#779)', () => {
     });
     failing = null;
     expect(res.statusCode).toBe(500);
-    expect(await oauthRows(app)).toEqual(linked);
+    expect(await oauthRows(app)).toEqual([]);
+    // And the unlinked identity no longer signs in.
+    const login = await oauthLogin(app, 'github', IDENTITY);
+    expect(cookieOf(login, 'opportun_session')?.value ?? '').toBe('');
   });
 });

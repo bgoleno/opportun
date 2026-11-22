@@ -1,11 +1,6 @@
 // ATS board detection (Task 10, FR-D9). Every request goes through the real safeFetch logic
 // (createSafeFetch over a scripted DNS table and transport), so the SSRF rules that guard the
 // careers-page fetch are exercised as they run in production (Review Focus 2).
-import { boardFromUrl } from '../src/lib/atsBoard';
-import { eq } from 'drizzle-orm';
-import { afterEach, describe, expect, it } from 'vitest';
-import { resetSources, type SourceContext } from '../src/adapters/discoverySource';
-import { companies, jobs, settings } from '../src/db/schema';
 import {
   ATS_DETECT_KIND,
   ATS_REVERIFY_CRON,
@@ -13,11 +8,16 @@ import {
   DEFAULT_DISCOVERY_CRON,
   detectAts,
   domainLabel,
-  queueReverification,
   REVERIFY_AFTER_MS,
   scanCareersHtml,
   slugCandidates,
-} from '../src/jobs/atsDetect';
+} from '../src/lib/atsDetect';
+import { boardFromUrl } from '../src/lib/atsBoard';
+import { eq } from 'drizzle-orm';
+import { afterEach, describe, expect, it } from 'vitest';
+import { resetSources, type SourceContext } from '../src/adapters/discoverySource';
+import { companies, jobs, settings } from '../src/db/schema';
+import { queueReverification } from '../src/jobs/atsDetect';
 import { createSafeFetch, type RawResponse } from '../src/lib/safeFetch';
 import { createCompany, getCompany } from '../src/repos/companies';
 import { listSources } from '../src/repos/discovery';

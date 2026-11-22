@@ -69,7 +69,13 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig, loadSqliteDir, loadDataDir } from '../config';
 import { closeDatabase, connectDatabase } from '../db/client';
 import { credsFromEnv, seedDemo } from '../lib/demo/seed';
-import { queueInFlightBatchCleanups } from '../jobs/rankBatch';
+import { queueInFlightBatchCleanups, rankBatchCleanupJob } from '../jobs/rankBatch';
+import { registerJob } from '../jobs/registry';
+
+// The cleanups this command queues (#784) get their handler's attempts and a checked payload, as
+// in the server (#827, qa on #820): the CLI loads no other handlers, so without this the queue
+// took the default attempts and stored the payload unchecked.
+registerJob(rankBatchCleanupJob);
 
 // The seed itself is lib/demo/seed.ts (#765): this file is only the command.
 const USAGE = [

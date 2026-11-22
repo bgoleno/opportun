@@ -269,6 +269,9 @@ function BulkBar({
         description={`Rejecting removes the subject, snippet and body of ${ids.length === 1 ? 'this message' : `these ${count}`} for good. This cannot be undone.`}
         confirmLabel={`Reject ${ids.length}`}
         confirmVariant="destructive"
+        // As the button that opened it (#758): a confirmation opened before a new filter applied
+        // waits for its list, so it never rejects a row that filter is about to hide.
+        confirmDisabled={loading}
         onConfirm={reject}
       />
       <Button type="button" variant="ghost" size="sm" onClick={onDone} disabled={bulk.isPending}>

@@ -37,6 +37,7 @@ import {
 } from '../db/schema';
 import { duplicate, HttpError, notFound } from '../lib/errors';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy, ownedSql } from './base';
 import { countWhere, orderBy, sortColumns, type ListOpts, type Page } from './list';
 import { indexActivity, removeFromIndex } from './search';
 import { runCount, rawGet, rawAll, withTransaction } from '../db/client';
@@ -58,7 +59,7 @@ export async function assertOpportunityOwned(
   const row = await exec
     .select({ id: opportunities.id })
     .from(opportunities)
-    .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, opportunityId)))
+    .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, opportunityId)))
     .get();
   if (row === undefined) throw notFound();
 }
@@ -73,7 +74,7 @@ export const ACTIVITY_SORTS = sortColumns({
 });
 
 function ownedActivity(ctx: UserCtx, id: string): SQL | undefined {
-  return and(eq(activities.userId, ctx.userId), eq(activities.id, id));
+  return and(ownedBy(activities.userId, ctx), eq(activities.id, id));
 }
 
 export async function listActivities(
@@ -83,7 +84,7 @@ export async function listActivities(
   opts: ListOpts,
 ): Promise<Page<ActivityRow>> {
   await assertOpportunityOwned(db, ctx, opportunityId);
-  const where = and(eq(activities.userId, ctx.userId), eq(activities.opportunityId, opportunityId));
+  const where = and(ownedBy(activities.userId, ctx), eq(activities.opportunityId, opportunityId));
   const items = await db
     .select()
     .from(activities)
@@ -197,7 +198,7 @@ export async function createReferral(
     const contact = await tx
       .select({ id: networkContacts.id, name: networkContacts.name })
       .from(networkContacts)
-      .where(and(eq(networkContacts.userId, ctx.userId), eq(networkContacts.id, input.contactId)))
+      .where(and(ownedBy(networkContacts.userId, ctx), eq(networkContacts.id, input.contactId)))
       .get();
     if (contact === undefined) throw notFound();
     const existing = await tx
@@ -205,7 +206,7 @@ export async function createReferral(
       .from(activities)
       .where(
         and(
-          eq(activities.userId, ctx.userId),
+          ownedBy(activities.userId, ctx),
           eq(activities.opportunityId, opportunityId),
           eq(activities.kind, 'referral'),
           linksContact(contact.id),
@@ -262,7 +263,7 @@ export async function listOpportunityReferrals(
     .from(activities)
     .where(
       and(
-        eq(activities.userId, ctx.userId),
+        ownedBy(activities.userId, ctx),
         eq(activities.opportunityId, opportunityId),
         eq(activities.kind, 'referral'),
       ),
@@ -281,7 +282,7 @@ export async function listOpportunityReferrals(
           await db
             .select({ id: networkContacts.id, name: networkContacts.name })
             .from(networkContacts)
-            .where(and(eq(networkContacts.userId, ctx.userId), inArray(networkContacts.id, ids)))
+            .where(and(ownedBy(networkContacts.userId, ctx), inArray(networkContacts.id, ids)))
             .all()
         ).map((c) => [c.id, c.name] as const),
   );
@@ -328,12 +329,12 @@ export async function listContactReferrals(
       .from(activities)
       .innerJoin(
         opportunities,
-        and(eq(opportunities.id, activities.opportunityId), eq(opportunities.userId, ctx.userId)),
+        and(eq(opportunities.id, activities.opportunityId), ownedBy(opportunities.userId, ctx)),
       )
       .innerJoin(companies, eq(companies.id, opportunities.companyId))
       .where(
         and(
-          eq(activities.userId, ctx.userId),
+          ownedBy(activities.userId, ctx),
           eq(activities.kind, 'referral'),
           linksContact(contactId),
         ),
@@ -356,7 +357,7 @@ export const NEXT_STEP_SORTS = sortColumns({
 });
 
 function ownedStep(ctx: UserCtx, id: string): SQL | undefined {
-  return and(eq(nextSteps.userId, ctx.userId), eq(nextSteps.id, id));
+  return and(ownedBy(nextSteps.userId, ctx), eq(nextSteps.id, id));
 }
 
 export async function listNextSteps(
@@ -366,7 +367,7 @@ export async function listNextSteps(
   opts: ListOpts,
 ): Promise<Page<NextStepRow>> {
   await assertOpportunityOwned(db, ctx, opportunityId);
-  const where = and(eq(nextSteps.userId, ctx.userId), eq(nextSteps.opportunityId, opportunityId));
+  const where = and(ownedBy(nextSteps.userId, ctx), eq(nextSteps.opportunityId, opportunityId));
   const items = await db
     .select()
     .from(nextSteps)
@@ -481,7 +482,7 @@ const activitySource: TimelineSource = (scope) => sql`
            ['externalUrl', sql`a.external_url`],
          ])} AS data
   FROM activities a JOIN opportunities o ON o.id = a.opportunity_id AND o.user_id = a.user_id
-  WHERE a.user_id = ${scope.userId}
+  WHERE ${ownedSql('a.user_id', scope)}
   ${scope.opportunityId === undefined ? sql`` : sql`AND a.opportunity_id = ${scope.opportunityId}`}`;
 
 const stageSource: TimelineSource = (scope) => sql`
@@ -493,7 +494,7 @@ const stageSource: TimelineSource = (scope) => sql`
            ['note', sql`h.note`],
          ])} AS data
   FROM stage_history h JOIN opportunities o ON o.id = h.opportunity_id AND o.user_id = h.user_id
-  WHERE h.user_id = ${scope.userId}
+  WHERE ${ownedSql('h.user_id', scope)}
   ${scope.opportunityId === undefined ? sql`` : sql`AND h.opportunity_id = ${scope.opportunityId}`}`;
 
 /** Which linked mail (alias `c`) the timeline shows; lastActivityAt uses the same test. */
@@ -510,7 +511,7 @@ const communicationSource: TimelineSource = (scope) => sql`
            ['classification', sql`c.classification`],
          ])} AS data
   FROM communications c JOIN opportunities o ON o.id = c.opportunity_id AND o.user_id = c.user_id
-  WHERE c.user_id = ${scope.userId}
+  WHERE ${ownedSql('c.user_id', scope)}
     AND ${MAIL_ON_TIMELINE}
   ${scope.opportunityId === undefined ? sql`` : sql`AND c.opportunity_id = ${scope.opportunityId}`}`;
 
@@ -632,14 +633,14 @@ export async function lastActivityAt(
     exec,
     sql`SELECT opportunity_id, max(at) AS at FROM (
       SELECT a.opportunity_id AS opportunity_id, a.occurred_at AS at FROM activities a
-        WHERE a.user_id = ${ctx.userId} AND a.opportunity_id IN (${idList})
+        WHERE ${ownedSql('a.user_id', ctx)} AND a.opportunity_id IN (${idList})
       UNION ALL
       SELECT h.opportunity_id, h.at FROM stage_history h
-        WHERE h.user_id = ${ctx.userId} AND h.opportunity_id IN (${idList})
+        WHERE ${ownedSql('h.user_id', ctx)} AND h.opportunity_id IN (${idList})
           AND h.from_stage IS NOT NULL
       UNION ALL
       SELECT c.opportunity_id, c.sent_at FROM communications c
-        WHERE c.user_id = ${ctx.userId} AND c.opportunity_id IN (${idList}) AND ${MAIL_ON_TIMELINE}
+        WHERE ${ownedSql('c.user_id', ctx)} AND c.opportunity_id IN (${idList}) AND ${MAIL_ON_TIMELINE}
     ) AS entries WHERE at <= ${now} GROUP BY opportunity_id`,
   );
   for (const row of rows) out.set(row.opportunity_id, row.at);
@@ -678,7 +679,7 @@ export async function dashboard(db: Db, ctx: UserCtx, now = Date.now()): Promise
   const grouped = await db
     .select({ stage: opportunities.stage, n: count() })
     .from(opportunities)
-    .where(eq(opportunities.userId, ctx.userId))
+    .where(ownedBy(opportunities.userId, ctx))
     .groupBy(opportunities.stage)
     .all();
   const byStage = new Map(grouped.map(({ stage, n }) => [stage, n]));
@@ -706,12 +707,12 @@ export async function dashboard(db: Db, ctx: UserCtx, now = Date.now()): Promise
     .from(nextSteps)
     .innerJoin(
       opportunities,
-      and(eq(opportunities.id, nextSteps.opportunityId), eq(opportunities.userId, ctx.userId)),
+      and(eq(opportunities.id, nextSteps.opportunityId), ownedBy(opportunities.userId, ctx)),
     )
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
     .where(
       and(
-        eq(nextSteps.userId, ctx.userId),
+        ownedBy(nextSteps.userId, ctx),
         isNull(nextSteps.doneAt),
         isNotNull(nextSteps.dueAt),
         lte(nextSteps.dueAt, now + DUE_WINDOW_MS),
@@ -734,7 +735,7 @@ export async function dashboard(db: Db, ctx: UserCtx, now = Date.now()): Promise
     db,
     communications,
     and(
-      eq(communications.userId, ctx.userId),
+      ownedBy(communications.userId, ctx),
       eq(communications.needsReview, true),
       or(
         isNull(communications.outreachKind),

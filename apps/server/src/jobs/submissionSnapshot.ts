@@ -42,8 +42,12 @@ import { applicationSubmissions, attachments, resumes } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
 import { requireService, type JobContext, type JobHandler, type JobServices } from './registry';
-import { enqueueSnapshot, SNAPSHOT_JOB_KIND } from '../lib/submissionSnapshotQueue';
 import { resumeStoreFor } from '../lib/resumeStores';
+import {
+  enqueueSnapshot,
+  SnapshotPayload,
+  SNAPSHOT_JOB_KIND,
+} from '../lib/submissionSnapshotQueue';
 
 /** Design 6.3: three tries with the runner's backoff, then the attempt shows the failure. */
 export const SNAPSHOT_MAX_ATTEMPTS = 3;
@@ -53,11 +57,6 @@ export const SNAPSHOT_MAX_ATTEMPTS = 3;
  * job runs, before it lets the runner try later. Nobody re-chooses faster than an export.
  */
 const MAX_ROUNDS = 3;
-
-const Payload = z
-  .object({ submissionId: z.string().min(1), resumeId: z.string().min(1).nullable() })
-  .strict();
-type Payload = z.infer<typeof Payload>;
 
 type Resume = typeof resumes.$inferSelect;
 
@@ -196,7 +195,7 @@ type SubmissionRow = typeof applicationSubmissions.$inferSelect;
 async function wanted(
   db: Db,
   userId: string,
-  payload: Payload,
+  payload: SnapshotPayload,
 ): Promise<SubmissionRow | undefined> {
   const row = await db
     .select()
@@ -214,9 +213,9 @@ async function wanted(
   return row;
 }
 
-export const submissionSnapshotJob: JobHandler<Payload> = {
+export const submissionSnapshotJob: JobHandler<SnapshotPayload> = {
   kind: SNAPSHOT_JOB_KIND,
-  payloadSchema: Payload,
+  payloadSchema: SnapshotPayload,
   maxAttempts: SNAPSHOT_MAX_ATTEMPTS,
   async run(db, payload, ctx) {
     // Enqueued with the owner's id (repos/submissions.ts); without one there is no user to act for.

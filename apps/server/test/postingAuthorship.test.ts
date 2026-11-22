@@ -67,7 +67,7 @@ describe('posting writes are guarded on authorship', () => {
 
   // #756: refused once its posting is confirmed; before that, Find posting may confirm it from
   // the board while keeping the description (test/opportunityPosting.test.ts).
-  it('still refuses Find posting on a description the user wrote, once its posting is confirmed', async () => {
+  it('Find posting on a description the user wrote, once its posting is confirmed, keeps the description (#812)', async () => {
     const { app, a } = await boot();
     const opp = await opportunity(app, ctxOf(a), 'my own notes', false);
     await setPostingState(app.db, ctxOf(a), opp.id, {
@@ -77,13 +77,13 @@ describe('posting writes are guarded on authorship', () => {
 
     const res = await find(a, opp.id);
 
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error.code).toBe('already_described');
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await getOpportunity(app.db, ctxOf(a), opp.id)).descriptionMd).toBe('my own notes');
   });
 
   // #756 (tl): once the user edited what the capture wrote, Find posting may still confirm an
   // unconfirmed posting, the edit kept; with the posting confirmed it is refused as before.
-  it('Find posting on a description the user edited: kept while unconfirmed, refused once confirmed', async () => {
+  it('Find posting on a description the user edited: kept while unconfirmed, and once confirmed (#812)', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
     const opp = await opportunity(app, ctx, 'the captured page text', true);
@@ -96,7 +96,8 @@ describe('posting writes are guarded on authorship', () => {
       postingState: 'confirmed',
       postingStateDetail: null,
     });
-    expect((await find(a, opp.id)).statusCode).toBe(409);
+    expect((await find(a, opp.id)).statusCode).toBe(200);
+    expect((await getOpportunity(app.db, ctx, opp.id)).descriptionMd).toBe('my own notes');
   });
 
   it('lets the user act on the edited flag their own edit raised', async () => {
