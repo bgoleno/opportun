@@ -79,19 +79,28 @@ export function hashDeviceToken(token: string): string {
  * Both happen in one transaction, in this order (sec on #557): the password lock, the hash check,
  * then the tokens' lock, the revokes and the insert. A 403 for a changed password therefore
  * revokes nothing, and two mints at once cannot leave more than `maxActive`.
+ *
+ * `onCreated` runs in that transaction after the insert (#802): what must commit with the token or
+ * not at all, its audit row.
  */
 export async function createDeviceToken(
   db: Db,
   ctx: UserCtx,
   input: { name: string; scopes: DeviceTokenScope[] },
-  opts: { passwordHash?: string; maxActive?: number; ip?: string; actor?: string | null } = {},
+  opts: {
+    passwordHash?: string;
+    maxActive?: number;
+    ip?: string;
+    actor?: string | null;
+    onCreated?: (tx: Exec, meta: DeviceTokenMeta) => Promise<void>;
+  } = {},
 ): Promise<{ meta: DeviceTokenMeta; token: string }> {
   const token = DEVICE_TOKEN_PREFIX + randomBytes(32).toString('base64url');
   const now = Date.now();
   const scopes = [...new Set(input.scopes)];
   const { passwordHash, maxActive } = opts;
   const actor = opts.actor ?? null;
-  if (passwordHash === undefined && maxActive === undefined) {
+  if (passwordHash === undefined && maxActive === undefined && opts.onCreated === undefined) {
     return { meta: await insertToken(db, ctx, input.name, token, scopes, now, actor), token };
   }
   // The cap (#550), then the insert, in whichever transaction holds the write.
@@ -118,7 +127,9 @@ export async function createDeviceToken(
         });
       }
     }
-    return { meta: await insertToken(tx, ctx, input.name, token, scopes, now, actor), token };
+    const meta = await insertToken(tx, ctx, input.name, token, scopes, now, actor);
+    if (opts.onCreated !== undefined) await opts.onCreated(tx, meta);
+    return { meta, token };
   };
   if (passwordHash === undefined) return await withTransaction(db, write);
   // Only while the hash the password was proven against is still the user's, under the lock a
@@ -171,11 +182,16 @@ export async function listDeviceTokens(db: Db, ctx: UserCtx): Promise<DeviceToke
     .all();
 }
 
-/** Revokes the caller's own token (idempotent: the first revocation time sticks); 404 otherwise. */
+/**
+ * Revokes the caller's own token (idempotent: the first revocation time sticks); 404 otherwise.
+ * `onRevoked` runs only for the call that revoked it, in one transaction with that conditional
+ * UPDATE (#802): its audit row. After the race point, so nothing is held open across the wait.
+ */
 export async function revokeDeviceToken(
   db: Db,
   ctx: UserCtx,
   id: string,
+  onRevoked?: (tx: Exec, meta: DeviceTokenMeta) => Promise<void>,
 ): Promise<DeviceTokenMeta> {
   const owned = and(eq(deviceTokens.id, id), eq(deviceTokens.userId, ctx.userId));
   const row = await db.select(META_COLUMNS).from(deviceTokens).where(owned).get();
@@ -184,12 +200,16 @@ export async function revokeDeviceToken(
   await racePoint('deviceTokens.revoke');
   const now = Date.now();
   // Only an unrevoked token: of two concurrent revokes the first time sticks.
-  const revoked = await db
-    .update(deviceTokens)
-    .set({ revokedAt: now, updatedAt: now })
-    .where(and(owned, isNull(deviceTokens.revokedAt)))
-    .returning(META_COLUMNS)
-    .get();
+  const revoked = await withTransaction(db, async (tx) => {
+    const row = await tx
+      .update(deviceTokens)
+      .set({ revokedAt: now, updatedAt: now })
+      .where(and(owned, isNull(deviceTokens.revokedAt)))
+      .returning(META_COLUMNS)
+      .get();
+    if (row !== undefined && onRevoked !== undefined) await onRevoked(tx, row);
+    return row;
+  });
   if (revoked !== undefined) return revoked;
   const current = await db.select(META_COLUMNS).from(deviceTokens).where(owned).get();
   if (current === undefined) throw notFound();
@@ -219,7 +239,7 @@ export async function revokeAllDeviceTokens(db: Exec, userId: string): Promise<n
  * creating a token this needs no password.
  */
 export async function renameDeviceToken(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   id: string,
   name: string,
