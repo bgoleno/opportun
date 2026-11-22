@@ -25,8 +25,6 @@ import {
 import { ATS_REF_KINDS, COMM_CHANNELS, DISCOVERY_SOURCE_KINDS } from '@opportun/core';
 import { getTableName } from 'drizzle-orm';
 import * as schema from '../db/schema';
-import { registeredJobKinds } from '../jobs/registry';
-import { ATS_ALLOW_HOSTS } from '../lib/safeFetch';
 
 /** A closed list of values, or a function returning one (read when a value is checked). */
 type Values = readonly string[] | (() => readonly string[]);
@@ -102,12 +100,40 @@ export type OutboundTarget = (typeof OUTBOUND_TARGETS)[number];
 let fixedHosts: readonly string[] | undefined;
 
 /**
- * Read on first use, not at load: safeFetch imports obs/outbound, which imports this file, so
- * reading ATS_ALLOW_HOSTS while the modules load would find safeFetch still initialising.
+ * The lists the catalog names but other modules own (https://github.com/bgoleno/opportun/issues/764):
+ * the public ATS API hosts (lib/safeFetch.ts) and the registered job kinds (jobs/registry.ts).
+ * Each owner hands its own over as it loads, so the catalog imports neither (the cycle in
+ * docs/architecture.md 6.1). They are read at use, never at this file's load, and a read before
+ * an owner has loaded throws: an entry point that never loads one fails loudly instead of gating
+ * telemetry against a short list.
  */
+let atsHosts: readonly string[] | undefined;
+let jobKinds: (() => readonly string[]) | undefined;
+
+/** lib/safeFetch.ts's ATS_ALLOW_HOSTS, handed over as safeFetch loads. */
+export function provideAtsHosts(hosts: readonly string[]): void {
+  atsHosts = hosts;
+  fixedHosts = undefined;
+}
+
+/** jobs/registry.ts's registeredJobKinds, handed over as the registry loads; read at each use. */
+export function provideJobKinds(source: () => readonly string[]): void {
+  jobKinds = source;
+}
+
 export function fixedServiceHosts(): readonly string[] {
-  fixedHosts ??= serviceHostsWith(ATS_ALLOW_HOSTS);
+  if (atsHosts === undefined) {
+    throw new Error('obs/catalog: the ATS hosts are read before lib/safeFetch.ts has loaded');
+  }
+  fixedHosts ??= serviceHostsWith(atsHosts);
   return fixedHosts;
+}
+
+function registeredKinds(): readonly string[] {
+  if (jobKinds === undefined) {
+    throw new Error('obs/catalog: the job kinds are read before jobs/registry.ts has loaded');
+  }
+  return jobKinds();
 }
 
 const serviceHostsWith = (ats: readonly string[]): readonly string[] => [
@@ -216,7 +242,7 @@ export const ATTRIBUTES = {
   'db.system.name': { kind: 'enum', values: ['sqlite', 'postgresql'] },
   'db.operation.name': { kind: 'enum', values: DB_OPERATIONS },
   'db.collection.name': { kind: 'enum', values: tableNames },
-  'opportun.job.kind': { kind: 'enum', values: () => [...registeredJobKinds(), OTHER] },
+  'opportun.job.kind': { kind: 'enum', values: () => [...registeredKinds(), OTHER] },
   'opportun.job.outcome': { kind: 'enum', values: ['done', 'retry', 'dead', 'discarded'] },
   'opportun.obs.signal': { kind: 'enum', values: SIGNALS },
   'opportun.obs.reason': { kind: 'enum', values: DROP_REASONS },
