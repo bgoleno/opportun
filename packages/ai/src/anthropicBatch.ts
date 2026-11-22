@@ -13,7 +13,7 @@
 import { clampTokens, readBatchJson, readBatchText } from './batchRead';
 import { generateText, Output } from 'ai';
 import type { BatchProvider, BatchRequest, BatchResultItem, BatchState, BatchUsage } from './batch';
-import { timedFetches, type BatchCallLimits } from './batchLimits';
+import { BatchRefusedError, timedFetches, type BatchCallLimits } from './batchLimits';
 import { createLanguageModel } from './providers';
 import { SDK_TELEMETRY_OFF } from './telemetry';
 import { OFFICIAL_BASE_URLS, type ModelPolicy, type ProviderFetchOptions } from './types';
@@ -173,7 +173,7 @@ export function createAnthropicBatchProvider(target: {
   });
   /** A refusal names what was asked and the status only: never the key or the provider's text. */
   const refused = (what: string, status: number) =>
-    new Error(`Anthropic batch ${what}: HTTP ${status}`);
+    new BatchRefusedError(what, status, 'Anthropic');
 
   return {
     async submit(requests) {
@@ -248,6 +248,15 @@ export function createAnthropicBatchProvider(target: {
     // Deleting the batch needs its id only.
     async cleanupRefs() {
       return [];
+    },
+
+    async cancel(batchId) {
+      const res = await fetches.control(`${batches}/${encodeURIComponent(batchId)}/cancel`, {
+        method: 'POST',
+        headers: headers(false),
+      });
+      if (res.status === 404) return;
+      if (!res.ok) throw refused('cancel', res.status);
     },
 
     async cleanup(batchId) {

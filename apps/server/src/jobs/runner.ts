@@ -162,7 +162,13 @@ async function finish(
       lockedBy: null,
       lockedAt: null,
       updatedAt: now,
-      ...(error === undefined ? {} : { lastError: error.slice(0, MAX_ERROR_LENGTH) }),
+      // A done job carries no error: one left from an earlier attempt is not this outcome's, and
+      // Settings > Jobs would show it as if it were (qa's regression pass, #784).
+      ...(error === undefined
+        ? status === 'done'
+          ? { lastError: null }
+          : {}
+        : { lastError: error.slice(0, MAX_ERROR_LENGTH) }),
       ...(payload === undefined ? {} : { payload }),
     })
     .where(eq(jobs.id, id))

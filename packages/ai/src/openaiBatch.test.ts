@@ -582,3 +582,23 @@ describe('the batch price (criterion 5)', () => {
     expect(batchMultiplier('openai_compatible')).toBeUndefined();
   });
 });
+
+describe('cancel: a batch nobody will collect is stopped (#784)', () => {
+  it('POSTs the cancel on the operator host, with the key', async () => {
+    const { fetch, sent } = recordingFetch(() => json(batchObject('cancelling')));
+    await client(fetch).cancel(BATCH_ID);
+    expect(sent.map((s) => `${s.method} ${s.url}`)).toEqual([
+      `POST ${BASE}/batches/${BATCH_ID}/cancel`,
+    ]);
+    expect(sent[0]!.headers.authorization).toBe(`Bearer ${KEY}`);
+  });
+
+  it('a batch already gone counts as stopped; a refusal throws naming the status only', async () => {
+    const gone = recordingFetch(() => json({ error: { message: 'x' } }, 404));
+    await expect(client(gone.fetch).cancel(BATCH_ID)).resolves.toBeUndefined();
+    const refused = recordingFetch(() => json({ error: { message: `key ${KEY}` } }, 500));
+    await expect(client(refused.fetch).cancel(BATCH_ID)).rejects.toThrow(
+      /^OpenAI batch cancel: HTTP 500$/,
+    );
+  });
+});

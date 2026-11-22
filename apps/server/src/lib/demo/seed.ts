@@ -607,12 +607,18 @@ async function seedOneUserResumes(
   return 1 + DEMO_TAILORED_RESUMES.length;
 }
 
+/** What a caller runs inside the reset's transaction, before the accounts are deleted (#784). */
+export interface SeedDemoHooks {
+  beforeDelete?: (tx: Exec, userIds: readonly string[]) => Promise<void>;
+}
+
 export async function seedDemo(
   db: Db,
   creds: SeedDemoCredentials,
   now: number = Date.now(),
   // eslint-disable-next-line no-restricted-properties -- the default for an environment parameter a test replaces (#292); its parser reads it (#773)
   env: NodeJS.ProcessEnv = process.env,
+  hooks: SeedDemoHooks = {},
 ): Promise<SeedDemoReport> {
   requireDemoFlag(env);
   requireDemoOverlay(env);
@@ -657,6 +663,11 @@ export async function seedDemo(
       filesBefore = [...fromAttachments, ...fromBodies]
         .map((r) => r.path)
         .filter((p): p is string => p !== null);
+      // Each account's ranking batch still in flight (#784): its row goes with the account and no
+      // collect will run for it, so the caller queues its cleanup here, in this transaction
+      // (jobs/rankBatch.ts queueInFlightBatchCleanups; lib/ does not import jobs/). Both callers,
+      // the nightly reset and the CLI, pass it.
+      await hooks.beforeDelete?.(tx, userIds);
       const deleted = await deleteExistingDemoUsers(tx, userIds);
       for (let i = 0; i < DEMO_USERS.length; i++) {
         // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
