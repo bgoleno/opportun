@@ -11,7 +11,12 @@ import {
   type DiscoverySource,
 } from '../src/adapters/discoverySource';
 import type { Db } from '../src/db/client';
-import { communications, opportunities, resumes } from '../src/db/schema';
+import {
+  activities as activitiesTable,
+  communications,
+  opportunities,
+  resumes,
+} from '../src/db/schema';
 import { backfillAtsJobRefs } from '../src/jobs/atsJobRefBackfill';
 import { reconcilePosting } from '../src/jobs/postingReconcile';
 import { attachPosting } from '../src/lib/postingAttach';
@@ -703,5 +708,77 @@ describe('the handoff destination (criterion 2)', () => {
     const sub = { atsKind: 'ats_greenhouse' as const, atsExternalId: JID, atsRef: 'examplecorp' };
     expect(destinationRefusal(BOARD_PAGE, sub)).toBeNull();
     expect(destinationRefusal(CAREERS, sub)).toBe('not_ats_board');
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/813 (qa on #804): Find posting identifying a posting
+// through its own gh_jid link wrote no timeline entry, where every other way a posting is found
+// writes one (postingAttach's "Job posting attached"). It writes the same kind now, saying how.
+describe('Find posting by the own gh_jid link writes a timeline entry (#813)', () => {
+  const linkEntries = async (app: Awaited<ReturnType<typeof boot>>['app'], id: string) =>
+    (
+      await app.db
+        .select({
+          kind: activitiesTable.kind,
+          title: activitiesTable.title,
+          bodyMd: activitiesTable.bodyMd,
+          externalUrl: activitiesTable.externalUrl,
+        })
+        .from(activitiesTable)
+        .where(eq(activitiesTable.opportunityId, id))
+        .all()
+    ).filter((a) => a.kind === 'link');
+
+  it('identifying and confirming a posting the user described says so, and that the description was kept', async () => {
+    const { app, a } = await boot();
+    api = greenhouseApi({ examplecorp: [JID] });
+    const id = await seed(app, a);
+    await updateOpportunity(app.db, ctxOf(a), id, {
+      postingUrl: CAREERS,
+      descriptionMd: 'My own notes about this role.',
+    });
+    embeddedBoardServes([]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.json().outcome).toBe('identified');
+    expect(await linkEntries(app, id)).toEqual([
+      {
+        kind: 'link',
+        title: 'Job posting identified',
+        bodyMd:
+          'Recognised on Greenhouse, by the job its posting link names. Your own description was kept.',
+        externalUrl: BOARD_PAGE,
+      },
+    ]);
+  });
+
+  it('identifying a posting already confirmed says so too', async () => {
+    const { app, a } = await boot();
+    api = greenhouseApi({ examplecorp: [JID] });
+    const id = await seed(app, a);
+    await updateOpportunity(app.db, ctxOf(a), id, {
+      postingUrl: CAREERS,
+      descriptionMd: 'My own notes about this role.',
+    });
+    await setPostingState(app.db, ctxOf(a), id, {
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+    });
+    embeddedBoardServes([]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.json().outcome).toBe('identified');
+    expect(await linkEntries(app, id)).toEqual([
+      {
+        kind: 'link',
+        title: 'Job posting identified',
+        bodyMd: 'Recognised on Greenhouse, by the job its posting link names.',
+        externalUrl: BOARD_PAGE,
+      },
+    ]);
   });
 });
