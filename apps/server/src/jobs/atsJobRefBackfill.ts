@@ -13,6 +13,7 @@
 // is conditional on the row being as it was read (the same posting URL and updated_at), so an
 // attach, reconcile or URL edit landing meanwhile wins. Same one-shot-per-deployment shape as
 // companyMatchKeyRepair.ts.
+import { enqueue } from '../lib/jobQueue';
 import type { AtsJobRef } from '@opportun/core';
 import { and, eq, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
@@ -23,7 +24,6 @@ import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
 import { lockLiveAttempt, markPostingChanged } from '../repos/submissions';
 import type { JobHandler } from './registry';
-import { enqueue } from './runner';
 
 export const BACKFILL_ATS_JOB_REFS_KIND = 'opportunities.backfill_ats_job_refs';
 /** Global marker (user_id NULL): the backfill has been queued for this deployment. */

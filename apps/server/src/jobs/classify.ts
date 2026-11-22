@@ -3,6 +3,7 @@
 // task, then hands the output to the deterministic post-processing in repos/communications.
 // Job alert digests (Task 12) never reach the model: they are routed to the alert-email lead
 // parser instead (normally at sync time; here too, for backfills and retries).
+import { CLASSIFY_JOB_KIND } from '../lib/mailClassifyQueue';
 import { buffer } from 'node:stream/consumers';
 import {
   AiUnavailableError,
@@ -24,7 +25,6 @@ import type { UserCtx } from '../repos/base';
 import { applyClassification, type ApplyOutcome } from '../repos/communications';
 import { getActivePrompt } from '../repos/prompts';
 import { enqueueEnrich } from './opportunityEnrich';
-import { CLASSIFY_JOB_KIND } from './gmailSync';
 import { requireService, type JobHandler } from './registry';
 
 /**

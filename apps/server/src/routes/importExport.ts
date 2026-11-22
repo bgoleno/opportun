@@ -2,12 +2,12 @@
 // job; its progress and report are read back by job id. The export is built from the
 // caller's rows only and streamed as a zip.
 import multipart from '@fastify/multipart';
+import { enqueue } from '../lib/jobQueue';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { JOB_STATUSES, jobs } from '../db/schema';
-import { enqueue } from '../jobs/runner';
 import { audit } from '../lib/audit';
 import { HttpError, notFound } from '../lib/errors';
 import { isSharedDemoAccount } from '../lib/demoAccounts';

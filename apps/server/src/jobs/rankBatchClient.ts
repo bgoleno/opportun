@@ -1,5 +1,6 @@
 // Whether a ranking goes in a batch (#441), and the batch client to send it with. A leaf beside
 // jobs/rankBatch.ts, so the rank job can ask without importing the batch jobs (which import it).
+import { enqueue } from '../lib/jobQueue';
 import {
   AiUnavailableError,
   batchProviderFor,
@@ -10,9 +11,8 @@ import type { Db } from '../db/client';
 import { buildAiDeps } from '../lib/ai';
 import type { UserCtx } from '../repos/base';
 import { readRankBatching } from '../repos/rankBatches';
-import { RANK_BATCH_SEND_KIND } from './discoveryKinds';
+import { RANK_BATCH_SEND_KIND } from '../lib/jobKinds';
 import type { JobServices } from './registry';
-import { enqueue } from './runner';
 
 export { RANK_BATCH_SEND_KIND };
 

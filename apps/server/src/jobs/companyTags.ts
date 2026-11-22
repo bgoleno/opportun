@@ -11,6 +11,7 @@
 // already stored from its board, and the static table. Network company names do go to the provider
 // (the owner's decision 3 on #190). No contact, note or other company field is read, so none can be
 // sent, and no board is fetched for this. The calls count against the discovery budget.
+import { enqueue } from '../lib/jobQueue';
 import {
   AiUnavailableError,
   CompanyTagsOutputSchema,
@@ -36,7 +37,6 @@ import { usersWithRejectedKey } from '../repos/discovery';
 import { discoveryBudgetHasRoom } from '../repos/discoveryBudget';
 import { getActivePrompt } from '../repos/prompts';
 import type { JobHandler } from './registry';
-import { enqueue } from './runner';
 import { workflow } from '../obs/workflow';
 
 export const COMPANY_TAGS_KIND = 'discovery.company_tags';

@@ -5,6 +5,7 @@
 // still out, and the handler's writes after it (the call's own task run, a ranking) landed in the
 // fresh account. Each demo AI call now also ends when the request's hold is about to, so the
 // handler's writes come while it still holds the gate, and the reset replaces them.
+import { enqueue } from '../src/lib/jobQueue';
 import { randomBytes } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -15,7 +16,7 @@ import { DEMO_USERS } from '../src/lib/demo/fixture';
 import { taskRuns } from '../src/db/schema';
 import { runDemoResetGated } from '../src/jobs/demoReset';
 import { registerJob, unregisterJob } from '../src/jobs/registry';
-import { enqueue, runDueJobs } from '../src/jobs/runner';
+import { runDueJobs } from '../src/jobs/runner';
 import {
   currentHoldStop,
   DemoResetGate,

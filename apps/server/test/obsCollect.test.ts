@@ -2,10 +2,10 @@
 // by default (the owner's spec): with it off nothing reaches the telemetry tables and no
 // exporter attaches, which these tests show by counting rows before and after driving every
 // base entry point. Turned on by an admin, collection starts at once, with no restart.
+import { enqueue } from '../src/lib/jobQueue';
 import { context, trace, TraceFlags } from '@opentelemetry/api';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { auditLog, jobs, obsMetricPoints, obsSpans, obsTraces, settings } from '../src/db/schema';
-import { enqueue } from '../src/jobs/runner';
 import {
   attachedExporters,
   attachExporter,

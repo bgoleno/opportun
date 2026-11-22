@@ -1,12 +1,13 @@
 // The test helpers of https://github.com/bgoleno/opportun/issues/615: runQueuedJob runs the job a
 // test queued and nothing else, and holdInstanceSchedules keeps the boot-seeded schedules from
 // being claimed in place of a test's own job.
+import { enqueue, readSchedules, SCHEDULE_PREFIX } from '../src/lib/jobQueue';
 import { and, eq, inArray } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { jobs } from '../src/db/schema';
 import { registerJob } from '../src/jobs/registry';
-import { enqueue, readSchedules, runNextJob, SCHEDULE_PREFIX } from '../src/jobs/runner';
+import { runNextJob } from '../src/jobs/runner';
 import { useApi } from './api';
 import { holdInstanceSchedules, runQueuedJob } from './runQueuedJob';
 

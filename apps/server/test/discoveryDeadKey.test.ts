@@ -3,6 +3,7 @@
 // https://github.com/bgoleno/opportun/pull/230). The router is real here, because what it makes of
 // a 401 is what is under test; discoveryBudget.test.ts has the drain and the ways back. The network
 // is a stub and every posting is made up.
+import { enqueue, readSchedules, removeSchedule } from '../src/lib/jobQueue';
 import type { NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -12,7 +13,6 @@ import { discoveryResults, jobs, taskRuns } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { RANK_WAITING_SWEEP_KIND, sweepWaitingResults } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
-import { enqueue, readSchedules, removeSchedule } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import { createSource, setRankDeferred } from '../src/repos/discovery';
 import { useApi } from './api';

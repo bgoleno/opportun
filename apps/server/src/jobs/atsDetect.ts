@@ -19,6 +19,7 @@
 // is followed, on the user's default cron (discovery_default_cron:<userId>, default 0 7 * * *).
 // syncFollowedCompany applies a follow or unfollow; setDiscoveryDefaultCron moves the sources
 // still on the old default when the user changes it.
+import { userCronProblem } from '../lib/jobQueue';
 import { and, eq, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import { z } from 'zod';
 import {
@@ -58,7 +59,6 @@ import {
 import { readUserSetting, writeUserSetting } from '../repos/userSettings';
 import { requireService, type JobHandler } from './registry';
 import { enqueueVendorCheck } from './vendorCheckQueue';
-import { userCronProblem } from './runner';
 
 export const ATS_DETECT_KIND = 'company.ats_detect'; // payload {companyId}
 export const ATS_REVERIFY_KIND = 'company.ats_reverify';
