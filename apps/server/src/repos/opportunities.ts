@@ -1,6 +1,7 @@
 // Opportunities and their lifecycle (FR-O1, O2, O5). Stage changes go through
 // applyTransition from @opportun/core and write opportunities + stage_history in one
 // transaction, so a rejected transition writes nothing.
+import { enqueueCompanyDomainResolve } from '../lib/companyDomainQueue';
 import {
   and,
   count,
@@ -29,7 +30,6 @@ import {
   type PostingStateDetail,
   type SourceKind,
 } from '@opportun/core';
-import { enqueueCompanyDomainResolve } from '../jobs/companyDomainResolve';
 import {
   activities,
   applicationSubmissions,

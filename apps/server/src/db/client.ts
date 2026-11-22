@@ -862,6 +862,7 @@ export interface ConnectOptions {
     pollMs?: number;
     pageSize?: number;
     unreadableMs?: number;
+    retryMs?: number;
   };
 }
 

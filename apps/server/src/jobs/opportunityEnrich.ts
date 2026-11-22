@@ -14,6 +14,8 @@
 // prohibited hosts refused), bounded in size and count. The posting text is extracted with the
 // capture.extract task when an AI key exists, else the raw page text becomes the description.
 // When nothing can be found the job leaves a note on the opportunity naming what to do.
+import { TITLE_MATCH_THRESHOLD, titleOverlap } from '../lib/titleMatch';
+import { boardConfig, boardFromUrl } from '../lib/atsBoard';
 import { AiUnavailableError, CaptureOutputSchema, renderPrompt, runStructured } from '@opportun/ai';
 import { decodeEntities, newId } from '@opportun/core';
 import { and, asc, eq, isNotNull } from 'drizzle-orm';
@@ -38,14 +40,7 @@ import { getActivePrompt } from '../repos/prompts';
 import { updateOpportunity } from '../repos/opportunities';
 import { sanitizeDescriptionText } from '../lib/postingSanitize';
 import { workdayPosting } from '../lib/atsJobRef';
-import {
-  atsDetectDedupeKey,
-  ATS_DETECT_KIND,
-  boardConfig,
-  boardFromUrl,
-  scanCareersHtml,
-} from './atsDetect';
-import { TITLE_MATCH_THRESHOLD, titleOverlap } from './leadResolve';
+import { atsDetectDedupeKey, ATS_DETECT_KIND, scanCareersHtml } from './atsDetect';
 import { enqueue } from './runner';
 import { requireService, type JobContext, type JobHandler } from './registry';
 import { continuesTrace } from '../obs/workflow';

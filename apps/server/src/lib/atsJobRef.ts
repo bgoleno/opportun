@@ -13,8 +13,8 @@
 // `https://<tenant>.<dc>.myworkdayjobs.com[/<locale>]/<site>/job/<location>/<title>_<reqId>[/apply]`.
 // Requisition ids are not all digits (`1000001`, `1000002-1`, `JR-000001`): the id is whatever
 // follows the last underscore. Reading one needs no network at all.
+import { boardFromUrl, type AtsBoard, type AtsKind } from './atsBoard';
 import { greenhouseBoardJobUrl, greenhouseJidOf } from '@opportun/core';
-import { boardFromUrl, type AtsBoard, type AtsKind } from '../jobs/atsDetect';
 
 export interface AtsJobRef {
   kind: AtsKind;

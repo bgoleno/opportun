@@ -128,10 +128,13 @@ export async function createDeviceToken(
     point: 'deviceTokens.create.locked',
   });
   if (!created.current) {
+    // A sentence written for the user to read (#743), so marked for the client (#750).
     throw new HttpError(
       403,
       'password_changed',
       'Your password changed while this was being checked. Sign in again and try once more.',
+      undefined,
+      { userFacing: true },
     );
   }
   return created.value;

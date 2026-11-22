@@ -243,6 +243,56 @@ export default defineConfig(
     },
   },
   {
+    // Layers (docs/architecture.md sections 3 and 6.2, https://github.com/bgoleno/opportun/issues/763):
+    // repos and lib sit below jobs and routes, so they import neither. Their pure helpers live in
+    // lib/ (lib/atsBoard.ts, lib/titleMatch.ts, lib/triageContext.ts and others), and
+    // apps/server/test/importCycles.test.ts checks that the jobs/repos and mail groups stay free
+    // of cycles. The negations below are the job modules still imported here: the queue itself
+    // (runner, registry, discoveryKinds), enqueue helpers (gmailSync, submissionSnapshot), and
+    // backup, dbIntegrityCheck, postingReconcile, atsDetect and, from lib/demo/seed.ts,
+    // attachmentSweep. Moving them out is
+    // https://github.com/bgoleno/opportun/issues/788; this list only shrinks. The rule
+    // reads static imports and re-exports, not import(): today nothing here imports a job or a
+    // route that way. @typescript-eslint's rule, not the core one, so the NFR-SEC11 block's
+    // no-restricted-imports (fsBan, all of apps/server/src) still applies: a second block
+    // setting that same rule would replace its options for these files.
+    files: ['apps/server/src/repos/**/*.ts', 'apps/server/src/lib/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [
+                '../jobs/*',
+                '../../jobs/*',
+                '!../jobs/atsDetect',
+                '!../jobs/backup',
+                '!../jobs/dbIntegrityCheck',
+                '!../jobs/discoveryKinds',
+                '!../jobs/gmailSync',
+                '!../jobs/postingReconcile',
+                '!../jobs/registry',
+                '!../jobs/runner',
+                '!../jobs/submissionSnapshot',
+                '!../../jobs/attachmentSweep',
+              ],
+              allowTypeImports: true,
+              message:
+                'repos/ and lib/ do not import jobs/ (docs/architecture.md 6.2): move the helper to lib/.',
+            },
+            {
+              group: ['../routes/*', '../../routes/*'],
+              allowTypeImports: true,
+              message:
+                'repos/ and lib/ do not import routes/ (docs/architecture.md 6.2): move the helper to lib/.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // The server's data layer is async (iteration 4): a statement or transaction that is not
     // awaited runs out of order and loses its error. Type-aware, so it sees drizzle builders.
     // no-restricted-syntax deliberately does not live in this block (issue #305): every

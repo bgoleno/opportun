@@ -93,6 +93,12 @@ export function startBackgroundCheckpointer(
     maxWaitMs?: number;
     pollMs?: number;
     unreadableMs?: number;
+    /**
+     * Tests only: the delay before a checkpoint a reader held back is tried again. A test that
+     * shows a checkpoint did not wait for it sets it far above any bound it waits with (#732), so
+     * a slow host cannot pass for one or the other.
+     */
+    retryMs?: number;
   },
 ): BackgroundCheckpointer {
   const data: CheckpointWorkerData = {
@@ -103,7 +109,7 @@ export function startBackgroundCheckpointer(
     maxPages: opts.maxPages ?? CHECKPOINT_PAGES,
     maxWaitMs: opts.maxWaitMs ?? CHECKPOINT_MAX_WAIT_MS,
     pollMs: opts.pollMs ?? POLL_MS,
-    retryMs: RETRY_MS,
+    retryMs: opts.retryMs ?? RETRY_MS,
     unreadableMs: opts.unreadableMs ?? UNREADABLE_MS,
   };
   const worker = new Worker(WORKER_FILE, { workerData: data, execArgv: ['--import', 'tsx'] });

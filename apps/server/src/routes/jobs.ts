@@ -5,13 +5,14 @@ import { and, desc, eq, inArray, isNull, or, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import type { Db } from '../db/client';
 import { JOB_STATUSES, jobs } from '../db/schema';
 import { audit } from '../lib/audit';
 import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
 import { isSharedDemoAdmin, withinSharedDemo } from '../lib/demoSharedAdmin';
 import { forbidden, HttpError, notFound } from '../lib/errors';
 import { reviveDeadJob, type JobRow } from '../jobs/runner';
-import { requireUser } from '../repos/base';
+import { requireAdmin, requireUser } from '../repos/base';
 import { IdParams } from './common';
 
 export const JobView = z.object({
@@ -27,7 +28,21 @@ export const JobView = z.object({
   updatedAt: z.number().int(),
 });
 
-function toJobView(j: JobRow): z.infer<typeof JobView> {
+function toJobView(
+  j: Pick<
+    JobRow,
+    | 'id'
+    | 'kind'
+    | 'status'
+    | 'attempts'
+    | 'maxAttempts'
+    | 'runAt'
+    | 'lastError'
+    | 'userId'
+    | 'createdAt'
+    | 'updatedAt'
+  >,
+): z.infer<typeof JobView> {
   return {
     id: j.id,
     kind: j.kind,
@@ -46,6 +61,31 @@ const ListQuery = z.object({
   status: z.enum(JOB_STATUSES).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
+
+/**
+ * The jobs list, newest change first (#592). Settings > Jobs polls it every 5 s for 200 rows: only
+ * the columns the screen shows (never a payload or a result, which can be large), in the order of
+ * jobs_updated_at_idx, so its cost does not grow with the done jobs kept in retention.
+ */
+export function jobsListQuery(db: Db, where: SQL | undefined, limit: number) {
+  return db
+    .select({
+      id: jobs.id,
+      kind: jobs.kind,
+      status: jobs.status,
+      attempts: jobs.attempts,
+      maxAttempts: jobs.maxAttempts,
+      runAt: jobs.runAt,
+      lastError: jobs.lastError,
+      userId: jobs.userId,
+      createdAt: jobs.createdAt,
+      updatedAt: jobs.updatedAt,
+    })
+    .from(jobs)
+    .where(where)
+    .orderBy(desc(jobs.updatedAt), desc(jobs.id))
+    .limit(limit);
+}
 
 export async function jobRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
@@ -69,13 +109,7 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
         owner,
         req.query.status === undefined ? undefined : eq(jobs.status, req.query.status),
       ) as SQL | undefined;
-      const rows = await db
-        .select()
-        .from(jobs)
-        .where(where)
-        .orderBy(desc(jobs.updatedAt), desc(jobs.id))
-        .limit(req.query.limit)
-        .all();
+      const rows = await jobsListQuery(db, where, req.query.limit).all();
       return { items: rows.map(toJobView) };
     },
   );
@@ -84,8 +118,7 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
     '/jobs/:id/retry',
     { schema: { params: IdParams, response: { 200: JobView } } },
     async (req) => {
-      const ctx = requireUser(req);
-      if (!ctx.isAdmin) throw forbidden();
+      const ctx = requireAdmin(req);
       if (isSharedDemoAdmin(app.config, ctx)) {
         const job = await db
           .select({ userId: jobs.userId })

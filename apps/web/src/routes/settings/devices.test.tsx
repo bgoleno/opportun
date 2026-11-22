@@ -244,6 +244,39 @@ describe('DevicesCard', () => {
     expect(screen.queryByRole('dialog', { name: 'Copy your device token' })).toBeNull();
   });
 
+  // https://github.com/bgoleno/opportun/issues/743: a password changed mid-check (#643) is said in
+  // plain words, from the server's sentence or, should a body ever arrive without it, the client's.
+  it.each([
+    [
+      'with the server sentence',
+      {
+        code: 'password_changed',
+        message:
+          'Your password changed while this was being checked. Sign in again and try once more.',
+      },
+    ],
+    ['with the code alone', { code: 'password_changed' }],
+  ])('a password changed during the check says so, %s', async (_how, error) => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /device-tokens': { items: [] },
+      'GET /integrations/apple-mail': NOT_CONNECTED,
+      'POST /device-tokens': () => ({ status: 403, body: { error } }),
+    });
+    renderWithProviders(<DevicesCard />);
+    await user.click(await screen.findByRole('button', { name: 'Create token' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Create a device token' });
+    await user.type(within(dialog).getByLabelText('Name'), 'Work MacBook');
+    await user.type(within(dialog).getByLabelText('Current password'), 'correct');
+    await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+    expect(
+      await within(dialog).findByText(
+        'Your password changed while this was being checked. Sign in again and try once more.',
+      ),
+    ).toBeVisible();
+    expect(within(dialog).queryByText(/Request failed/)).toBeNull();
+  });
+
   it('revokes a token only after confirmation', async () => {
     const user = userEvent.setup();
     let items: Meta[] = [LAPTOP];

@@ -14,9 +14,9 @@ permissions:
   contents: read
 
 # Action references are pinned to full commit SHAs with the version as a trailing comment
-# (Renovate keeps them current). osv-scanner-action too (#524): b1d267a is the commit its own
-# v2.7.0 release tag points to. Its action.yml still runs the image
-# ghcr.io/google/osv-scanner-action:v2.7.0 by tag, which the commit pin does not fix.
+# (Dependabot keeps them current, #728). Container images, the OSV scanner's among them, are
+# pinned by digest (#733): a container action that names its image by tag is not used, since its
+# commit pin does not pin what runs (images-pinned.test.mjs holds both).
 
 jobs:
   visibility:
@@ -49,34 +49,34 @@ jobs:
           # Nothing here pushes with git: the token is not left in .git/config (#619).
           persist-credentials: false
 
+      # The scanner runs as its container image pinned by digest (#733), not through
+      # google/osv-scanner-action: that is a container action whose image is named by tag
+      # (ghcr.io/google/osv-scanner-action:v2.7.0), so pinning the action's commit did not pin the
+      # code that scanned. The workspace is mounted at its own path, so the SARIF's file paths are
+      # the runner's and code scanning resolves them. Exit 1 means findings; any other nonzero
+      # status, or no SARIF, is a scan that did not complete, which must not pass as "no findings".
       - name: Scan the lockfile
-        id: scan
-        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
-        continue-on-error: true
-        with:
-          scan-args: |-
-            --output=osv-results.json
-            --format=json
-            --lockfile=pnpm-lock.yaml
-
-      # The scanner exits nonzero both for findings (the reporter below acts on those) and for
-      # a failed scan; a failed scan writes no results, which must not pass as "no findings".
-      - name: Check that the scan completed
-        if: steps.scan.outcome == 'failure'
         run: |
-          if [ ! -s osv-results.json ]; then
-            echo "::error::OSV-Scanner failed without writing results; see the scan step."
+          set +e
+          docker run --rm -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$GITHUB_WORKSPACE" \
+            ghcr.io/google/osv-scanner@sha256:4f3b7e2c64b9d38a5febc5a7e4a3dfef1d1362f726dea7a2ef4762b46469fcd0 \
+            --lockfile=pnpm-lock.yaml --format=sarif --output=osv-results.sarif
+          status=$?
+          set -e
+          echo "osv-scanner exit status: $status"
+          if [ ! -s osv-results.sarif ] || { [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; }; then
+            echo "::error::OSV-Scanner did not complete (status $status); see the scan above."
             exit 1
           fi
 
-      - name: Report findings
-        uses: google/osv-scanner-action/osv-reporter-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          scan-args: |-
-            --output=osv-results.sarif
-            --new=osv-results.json
-            --gh-annotations=true
-            --fail-on-vuln=true
+          node-version-file: .nvmrc
+
+      # As the reporter action did (--gh-annotations, --fail-on-vuln): one annotation per finding,
+      # and any finding fails the job. The SARIF is kept and uploaded below either way.
+      - name: Report findings
+        run: node .github/scripts/osv-sarif-report.mjs osv-results.sarif
 
       - name: Keep the SARIF as a run artifact
         if: ${{ !cancelled() }}

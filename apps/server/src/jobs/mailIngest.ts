@@ -3,17 +3,13 @@
 // upserted on (user, channel, external id), and a message seen for the first time is routed:
 // alert digests to discovery, everything else to the classifier. A re-delivered message that
 // was stored but never routed (the enqueue failed after the commit) is routed then.
+import { senderAddress } from '../lib/mailAddress';
 import type { CommChannel } from '@opportun/core';
 import type { InboundMessage } from '../adapters/mailProvider';
-import { isAlertDigest, processAlertDigest, senderAddress } from '../adapters/sources/alertEmail';
+import { isAlertDigest, processAlertDigest } from '../adapters/sources/alertEmail';
 import { triageMessage } from '../lib/mailTriage';
 import { gateApplies, gateMessage } from '../lib/triageGate';
-import {
-  accountAddress,
-  listRules,
-  readConsumerVeto,
-  type MailFilterRuleRow,
-} from '../repos/mailFilters';
+import { triageContext } from '../lib/triageContext';
 import { and, eq, isNotNull } from 'drizzle-orm';
 import { lockScope, withTransaction, type Db } from '../db/client';
 import { extractAtsJobRefs } from '../lib/atsJobRef';
@@ -35,46 +31,9 @@ import type { Exec } from '../db/client';
 import { continuesTrace } from '../obs/workflow';
 
 export const CLASSIFY_JOB_KIND = 'comms.classify';
-/** The sync_state row the Apple Mail connector's batches update (lastSyncAt, status). */
-export const APPLE_MAIL_INTEGRATION = 'apple_mail';
 
 export const classifyDedupeKey = (communicationId: string): string =>
   `comms.classify:${communicationId}`;
-
-/**
- * The Stage 1 inputs, cached for a few seconds per user.
- *
- * A sync reads these once per message otherwise, which on the 1,768-message initial backfill
- * is thousands of queries for a value that changes when the user edits a settings page. The
- * window is short enough that an edit made mid-sync still takes effect within it, which is why
- * this is a TTL rather than a per-run snapshot.
- */
-const TRIAGE_CACHE_MS = 5_000;
-const triageCache = new Map<
-  string,
-  { at: number; value: [MailFilterRuleRow[], boolean, string | null] }
->();
-
-export async function triageContext(
-  db: Db,
-  ctx: UserCtx,
-): Promise<[MailFilterRuleRow[], boolean, string | null]> {
-  const hit = triageCache.get(ctx.userId);
-  const now = Date.now();
-  if (hit !== undefined && now - hit.at < TRIAGE_CACHE_MS) return hit.value;
-  const value: [MailFilterRuleRow[], boolean, string | null] = [
-    await listRules(db, ctx),
-    await readConsumerVeto(db, ctx),
-    await accountAddress(db, ctx),
-  ];
-  triageCache.set(ctx.userId, { at: now, value });
-  return value;
-}
-
-/** Drops the cached Stage 1 inputs for a user, so a settings edit takes effect at once. */
-export function invalidateTriageContext(userId: string): void {
-  triageCache.delete(userId);
-}
 
 /**
  * Queues classification of one stored message (at most one unfinished job per message).

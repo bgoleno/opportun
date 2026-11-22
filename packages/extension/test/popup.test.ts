@@ -818,6 +818,36 @@ describe('popup actions that wait on the server (#648)', () => {
     },
   );
 
+  it.each([
+    ['capture', 'Capturing…'],
+    ['test', 'Testing the connection…'],
+  ] as const)(
+    'the %s status says only the timeout once the server is cut off, nothing in between (#783)',
+    async (id, working) => {
+      const { doc, deps, $ } = setup({ stored: SAVED });
+      deps.fetch = hangingFetch;
+      const l = limit();
+      deps.limit = l.fn;
+      await mountPopup(doc, deps);
+      // Every text the live region shows, in order.
+      const said: string[] = [];
+      const region = status(doc);
+      const watch = new doc.defaultView!.MutationObserver(() => {
+        if (said.at(-1) !== region.textContent) said.push(region.textContent ?? '');
+      });
+      watch.observe(region, { childList: true, characterData: true, subtree: true });
+      $<HTMLButtonElement>(id).click();
+      await vi.waitFor(() => expect(hangingFetch).toHaveBeenCalled());
+      l.end();
+      await vi.waitFor(() =>
+        expect(region.textContent).toMatch(/did not answer within 30 seconds/),
+      );
+      await new Promise((r) => setTimeout(r, 0));
+      watch.disconnect();
+      expect(said.filter((t) => t !== '')).toEqual([working, region.textContent]);
+    },
+  );
+
   it('a request started after the limit, while the page was read, is cut at once (tl on #713)', async () => {
     const { doc, deps, $ } = setup({ stored: SAVED });
     deps.fetch = hangingFetch;

@@ -122,7 +122,8 @@ function validConfig(kind: SourceKind, config: Record<string, unknown>): Record<
   const parsed = SOURCE_CONFIG_SCHEMAS[kind].safeParse(config);
   if (!parsed.success) {
     const message = z.prettifyError(parsed.error).slice(0, 500);
-    throw new HttpError(422, 'invalid_config', message, { message });
+    // The caller's own config, described by zod: a sentence about what they sent (#750).
+    throw new HttpError(422, 'invalid_config', message, undefined, { userFacing: true });
   }
   return parsed.data;
 }
@@ -152,12 +153,15 @@ function assertMayConfigure(
 function assertCron(cron: string | null | undefined): void {
   if (cron === null || cron === undefined) return;
   if (cron.length > 100) {
-    throw new HttpError(422, 'invalid_cron', undefined, {
-      message: 'must be at most 100 characters',
+    throw new HttpError(422, 'invalid_cron', 'must be at most 100 characters', undefined, {
+      userFacing: true,
     });
   }
   const problem = userCronProblem(cron);
-  if (problem !== null) throw new HttpError(422, 'invalid_cron', undefined, { message: problem });
+  // userCronProblem's own sentences about the caller's cron (#750).
+  if (problem !== null) {
+    throw new HttpError(422, 'invalid_cron', problem, undefined, { userFacing: true });
+  }
 }
 
 async function assertOwned(exec: Exec, ctx: UserCtx, input: SourcePatch): Promise<void> {
