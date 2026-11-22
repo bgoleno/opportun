@@ -77,9 +77,44 @@ describe('referral asks', () => {
           status: 'asked',
           note: 'Sent my resume over chat.',
           occurredAt: expect.any(Number),
+          removed: false,
         },
       ],
       total: 1,
+    });
+  });
+
+  // #694 (qa on #688): the ask kept the contact's name as it was when it was made, so a rename was
+  // not followed, and a deleted contact was still linked.
+  it("shows the contact's current name, and marks an ask whose contact was deleted", async () => {
+    const { a } = await boot();
+    const opp = await createOpp(a);
+    const jane = await createContact(a);
+    const lee = await createContact(a, 'Lee Park');
+    expect((await ask(a, opp.id, { contactId: jane.id })).statusCode).toBe(201);
+    expect((await ask(a, opp.id, { contactId: lee.id })).statusCode).toBe(201);
+    const renamed = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/network/${jane.id}`,
+      payload: { name: 'Jane Doe-Smith' },
+    });
+    expect(renamed.statusCode, renamed.body).toBe(200);
+    const deleted = await a.request({ method: 'DELETE', url: `/api/v1/network/${lee.id}` });
+    expect(deleted.statusCode).toBe(204);
+    const listed = await a.request({
+      method: 'GET',
+      url: `/api/v1/opportunities/${opp.id}/referrals`,
+    });
+    const items = listed.json<{ items: { contactId: string; name: string; removed: boolean }[] }>()
+      .items;
+    expect(items.find((i) => i.contactId === jane.id)).toMatchObject({
+      name: 'Jane Doe-Smith',
+      removed: false,
+    });
+    // The name it had, so the ask still says who it was; marked removed, so nothing links to it.
+    expect(items.find((i) => i.contactId === lee.id)).toMatchObject({
+      name: 'Lee Park',
+      removed: true,
     });
   });
 

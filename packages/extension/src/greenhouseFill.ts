@@ -93,6 +93,13 @@ export type NotFilledReason =
   | 'attach_file_yourself'
   /** The resume could not be checked (the tab moved on): look at it on the form. */
   | 'resume_unchecked'
+  /**
+   * Why the resume copy was not attached (#653): set by the popup in place of attach_yourself,
+   * from the download. The filler never returns these, so NOT_FILLED_REASONS leaves them out.
+   */
+  | 'resume_preparing'
+  | 'resume_not_downloaded'
+  | 'resume_unusable'
   /** The server withheld the field: its stored value fails today's checks (#196). */
   | 'withheld'
   /** No option on the form's list equals the reviewed value (`detail`), by the bound. */

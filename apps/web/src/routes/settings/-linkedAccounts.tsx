@@ -35,6 +35,14 @@ const FLASH = new Map<string, { text: string; error: boolean }>([
   ],
   ['denied', { text: 'Linking was cancelled at the provider.', error: true }],
   ['error', { text: 'Something went wrong linking that account. Try again.', error: true }],
+  // A callback whose state did not verify, for a signed-in browser (#662).
+  [
+    'not_completed',
+    {
+      text: 'That link was not completed: it was out of date, already used, or started in another session. Choose Link again to try once more.',
+      error: true,
+    },
+  ],
 ]);
 
 const LAST_METHOD =

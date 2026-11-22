@@ -6,7 +6,7 @@ import { writeSetting } from '../src/lib/ai';
 import { GMAIL_SCOPES, writeTokens } from '../src/lib/google';
 import { useApi } from './api';
 import { queryOne } from './db';
-import { DEMO_USERS } from '../src/cli/seedDemoFixture';
+import { DEMO_USERS } from '../src/lib/demo/fixture';
 import { sharedDemoUser, type TestClient } from './isolation';
 
 const boot = useApi();

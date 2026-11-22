@@ -379,6 +379,13 @@
       "when": 1796800000000,
       "tag": "0053_discovery_rank_batch_returns",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1796900000000,
+      "tag": "0054_pending_revoked_reason",
+      "breakpoints": true
     }
   ]
 }
