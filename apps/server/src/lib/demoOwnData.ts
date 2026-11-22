@@ -22,8 +22,23 @@ const normalise = (v: string): string =>
 /** A phone number is the same number however it is punctuated. */
 const digits = (v: string): string => v.replace(/\D/g, '');
 
+/**
+ * A phone's national number (#682, qa on #676): its digits, less the international prefix (00)
+ * and North America's country code (1) on an 11-digit number, so the seeded +1 number typed as
+ * 415-555-0134, 1-415-555-0134 or 00 1 415 555 0134 is the same number. The seed's numbers are
+ * North American; another country's code stays, so +44 415 555 0134 is another number.
+ */
+function nationalDigits(v: string): string {
+  let d = digits(v);
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.length === 11 && d.startsWith('1')) d = d.slice(1);
+  return d;
+}
+
 const IDENTITY = new Set(DEMO_IDENTITY_VALUES.map(normalise));
-const IDENTITY_DIGITS = new Set(DEMO_IDENTITY_VALUES.map(digits).filter((d) => d.length >= 7));
+const IDENTITY_DIGITS = new Set(
+  DEMO_IDENTITY_VALUES.map(nationalDigits).filter((d) => d.length >= 7),
+);
 /**
  * The demo's own mail domain: every email the seed writes is at it, and no visitor's own address
  * is, so any address there, or at a subdomain of it (qa on #550), is the demo's (tl on #550), not
@@ -42,7 +57,8 @@ function atDemoDomain(v: string): boolean {
 export function isFixtureIdentity(key: string, value: string): boolean {
   const v = normalise(value);
   if (IDENTITY.has(v) || atDemoDomain(v)) return true;
-  return key === 'phone' && digits(value).length >= 7 && IDENTITY_DIGITS.has(digits(value));
+  const phone = nationalDigits(value);
+  return key === 'phone' && phone.length >= 7 && IDENTITY_DIGITS.has(phone);
 }
 
 /**

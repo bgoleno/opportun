@@ -8,6 +8,7 @@
   --accent-fg: #ffffff;
   --ok: #1a7f37;
   --info: #3a5f9e;
+  --warn: #9a6700;
   --err: #b42318;
 }
 
@@ -21,6 +22,7 @@
     --accent-fg: #0b0b0c;
     --ok: #4ac26b;
     --info: #8fb3ff;
+    --warn: #d29922;
     --err: #ff7b72;
   }
 }
@@ -85,6 +87,10 @@ button.primary {
 
 #status[data-tone='info'] {
   color: var(--info);
+}
+
+#status[data-tone='warning'] {
+  color: var(--warn);
 }
 
 #status[data-tone='error'] {

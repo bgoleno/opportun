@@ -5,6 +5,7 @@ import {
   count,
   desc,
   eq,
+  inArray,
   isNotNull,
   isNull,
   lte,
@@ -241,9 +242,15 @@ export interface OpportunityReferral {
   status: ReferralStatus | null;
   note: string | null;
   occurredAt: number;
+  /** The contact was deleted (#694): `name` is the one the ask recorded, and nothing links to it. */
+  removed: boolean;
 }
 
-/** The opportunity's referral asks linked to a contact, newest first. */
+/**
+ * The opportunity's referral asks linked to a contact, newest first. Each names the contact as
+ * they are now (#694, qa on #688): the ask records the name it was made with, which a rename
+ * leaves behind; a deleted contact keeps that recorded name and is marked removed.
+ */
 export async function listOpportunityReferrals(
   db: Db,
   ctx: UserCtx,
@@ -262,20 +269,33 @@ export async function listOpportunityReferrals(
     )
     .orderBy(desc(activities.occurredAt), desc(activities.id))
     .all();
-  const items = rows.flatMap((r) => {
+  const linked = rows.flatMap((r) => {
     const contact = contactOf(r.participants);
-    return contact === undefined
+    return contact === undefined ? [] : [{ r, contact }];
+  });
+  const ids = [...new Set(linked.map((l) => l.contact.contactId))];
+  const current = new Map(
+    ids.length === 0
       ? []
-      : [
-          {
-            activityId: r.id,
-            contactId: contact.contactId,
-            name: contact.name,
-            status: referralStatusOf(r.bodyMd),
-            note: referralNoteOf(r.bodyMd),
-            occurredAt: r.occurredAt,
-          },
-        ];
+      : (
+          await db
+            .select({ id: networkContacts.id, name: networkContacts.name })
+            .from(networkContacts)
+            .where(and(eq(networkContacts.userId, ctx.userId), inArray(networkContacts.id, ids)))
+            .all()
+        ).map((c) => [c.id, c.name] as const),
+  );
+  const items = linked.map(({ r, contact }) => {
+    const name = current.get(contact.contactId);
+    return {
+      activityId: r.id,
+      contactId: contact.contactId,
+      name: name ?? contact.name,
+      status: referralStatusOf(r.bodyMd),
+      note: referralNoteOf(r.bodyMd),
+      occurredAt: r.occurredAt,
+      removed: name === undefined,
+    };
   });
   return { items, total: items.length };
 }

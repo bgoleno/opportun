@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { Window } from 'happy-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from '../src/api';
 import type { CaptureSiteId } from '../src/canonical';
 import { extractIndeedJob, type ExtractResult, type RawPage } from '../src/extract';
@@ -14,7 +14,7 @@ import {
   viewjobPage,
 } from './fixtures/indeedPages';
 import { load, type FixturePage } from './fixtures/pages';
-import { mountPopup, type PopupDeps } from '../src/popupController';
+import { ACTION_TIMEOUT_MS, mountPopup, type PopupDeps } from '../src/popupController';
 import { renderOutcome } from '../src/render';
 import type { SettingsStorage } from '../src/settings';
 
@@ -104,6 +104,9 @@ const status = (doc: Document) => doc.getElementById('status')!;
 
 async function click(el: HTMLElement, done: () => boolean) {
   el.click();
+  // The action has ended once its button is back (#648: the status line shows a working line
+  // at once, so a status that is not empty is no longer the end).
+  await vi.waitFor(() => expect((el as HTMLButtonElement).disabled).toBe(false));
   await vi.waitFor(() => expect(done()).toBe(true));
 }
 
@@ -118,6 +121,35 @@ describe('popup settings', () => {
     expect(data).toEqual(SAVED);
     expect(status(doc).textContent).toBe('Settings saved.');
   });
+
+  // #655 (sec): http is allowed only on this computer or the local network, but on the network
+  // the token still crosses it in the clear. The save goes through and says so.
+  it('saving a plain-http address on a local network name warns that the token is unencrypted', async () => {
+    const { doc, data, deps, $ } = setup();
+    await mountPopup(doc, deps);
+    $<HTMLInputElement>('server-url').value = 'http://nas.local:8080';
+    $<HTMLInputElement>('token').value = TOKEN;
+    await click($('save'), () => status(doc).textContent !== '');
+    expect(data).toEqual({ serverUrl: 'http://nas.local:8080', token: TOKEN });
+    expect(status(doc).dataset.tone).toBe('warning');
+    expect(status(doc).textContent).toBe(
+      'Settings saved. This address uses plain http: the token travels unencrypted on your network.',
+    );
+  });
+
+  it.each(['http://localhost:8080', 'http://127.0.0.1:8080'])(
+    'saving %s (this computer, not the network) needs no warning',
+    async (serverUrl) => {
+      const { doc, data, deps, $ } = setup();
+      await mountPopup(doc, deps);
+      $<HTMLInputElement>('server-url').value = serverUrl;
+      $<HTMLInputElement>('token').value = TOKEN;
+      await click($('save'), () => status(doc).textContent !== '');
+      expect(data).toEqual({ serverUrl, token: TOKEN });
+      expect(status(doc).dataset.tone).toBe('success');
+      expect(status(doc).textContent).toBe('Settings saved.');
+    },
+  );
 
   it('does not ask for a permission it already holds (issue #49)', async () => {
     // Chrome closes the popup whenever the host-permission prompt opens, so a save that
@@ -625,5 +657,236 @@ describe('popup text', () => {
       expect(text).toContain(LOCATION);
       expect(hint).toContain(LOCATION);
     }
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/653: a capture that saved something links to it.
+describe('Open in Opportun after a capture (#653)', () => {
+  const ID = '0192f1d2-7c3a-7b4e-9a1b-2c3d4e5f6a7b';
+  const link = (doc: Document) => doc.getElementById('open-result') as HTMLAnchorElement;
+  const capture = async (body?: unknown) => {
+    const s = setup({ stored: SAVED, ...(body === undefined ? {} : { body }) });
+    await mountPopup(s.doc, s.deps);
+    await click(s.$('capture'), () => status(s.doc).dataset.tone === 'success');
+    return s;
+  };
+
+  it('a job capture links to its opportunity, in a new tab', async () => {
+    const { doc } = await capture({
+      kind: 'job',
+      resultId: 'r1',
+      duplicate: false,
+      refined: false,
+      opportunityId: ID,
+      stage: 'interested',
+    });
+    expect(link(doc).hidden).toBe(false);
+    expect(link(doc).textContent).toBe('Open in Opportun');
+    expect(link(doc).getAttribute('href')).toBe(`${SERVER}/opportunities/${ID}`);
+    expect(link(doc).getAttribute('target')).toBe('_blank');
+    expect(link(doc).getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  it('a profile capture links to its contact', async () => {
+    const { doc } = await capture({
+      kind: 'profile',
+      contactId: ID,
+      created: true,
+      refined: false,
+    });
+    expect(link(doc).hidden).toBe(false);
+    expect(link(doc).getAttribute('href')).toBe(`${SERVER}/network/${ID}`);
+  });
+
+  it('an older server that sends no id gets the text of today, and no link', async () => {
+    const { doc } = await capture({
+      kind: 'job',
+      resultId: 'r1',
+      duplicate: false,
+      refined: false,
+    });
+    expect(status(doc).textContent).toBe('Captured to Opportun.');
+    expect(link(doc).hidden).toBe(true);
+    expect(link(doc).getAttribute('href')).toBeNull();
+  });
+
+  for (const odd of ['../settings', 'a b', 'x?y=1', '', 'a'.repeat(101)]) {
+    it(`an id that is not an id (${JSON.stringify(odd.slice(0, 12))}) gets no link`, async () => {
+      const { doc } = await capture({
+        kind: 'job',
+        resultId: 'r1',
+        duplicate: false,
+        refined: false,
+        opportunityId: odd,
+        stage: 'interested',
+      });
+      expect(link(doc).hidden).toBe(true);
+      expect(link(doc).getAttribute('href')).toBeNull();
+    });
+  }
+
+  it('the link goes away when the next action starts', async () => {
+    const s = await capture();
+    expect(link(s.doc).hidden).toBe(false);
+    s.$<HTMLButtonElement>('test').click();
+    await vi.waitFor(() => expect(link(s.doc).hidden).toBe(true));
+    expect(link(s.doc).getAttribute('href')).toBeNull();
+  });
+
+  it('the link goes away on a Save that is refused before any action starts (qa on #717)', async () => {
+    const s = await capture();
+    expect(link(s.doc).hidden).toBe(false);
+    s.$<HTMLInputElement>('server-url').value = 'not a url';
+    await click(s.$('save'), () => status(s.doc).dataset.tone === 'error');
+    expect(link(s.doc).hidden).toBe(true);
+    expect(link(s.doc).getAttribute('href')).toBeNull();
+  });
+
+  it('a capture the server refused shows no link', async () => {
+    const s = setup({ stored: SAVED, status: 500, body: {} });
+    await mountPopup(s.doc, s.deps);
+    await click(s.$('capture'), () => status(s.doc).dataset.tone === 'error');
+    expect(link(s.doc).hidden).toBe(true);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/648: an action shows that it is working at once, a
+// server that never answers ends in an error with the buttons back, focus returns to the button
+// used, the fill report is announced, and an invalid address or token marks its own field.
+describe('popup actions that wait on the server (#648)', () => {
+  /** A fetch that never answers: it ends only when the popup gives up on it. */
+  const hangingFetch = vi.fn<FetchLike>(
+    (_url, init) =>
+      new Promise((_resolve, reject) => {
+        // As fetch does: an already-aborted signal rejects at once.
+        if (init.signal?.aborted === true) reject(new Error('aborted'));
+        init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      }),
+  );
+  /** The popup's action limit, ended when the test says so. */
+  function limit() {
+    let end: () => void = () => undefined;
+    const ended = new Promise<void>((r) => {
+      end = r;
+    });
+    const fn = vi.fn(async (ms: number) => {
+      expect(ms).toBe(ACTION_TIMEOUT_MS);
+      await ended;
+    });
+    return { fn, end: () => end() };
+  }
+  const buttons = (doc: Document) =>
+    ['capture', 'prefill', 'record', 'save', 'test'].map(
+      (id) => doc.getElementById(id) as HTMLButtonElement,
+    );
+
+  beforeEach(() => {
+    hangingFetch.mockClear();
+  });
+
+  it.each([
+    ['capture', 'Capturing…', /It may still have saved this: check Opportun before you try again/],
+    ['test', 'Testing the connection…', /Check that it is running and reachable/],
+  ] as const)(
+    'the %s button says it is working at once, and a server that never answers ends in an error',
+    async (id, working, says) => {
+      const { doc, deps, $ } = setup({ stored: SAVED });
+      deps.fetch = hangingFetch;
+      const l = limit();
+      deps.limit = l.fn;
+      await mountPopup(doc, deps);
+      const button = $<HTMLButtonElement>(id);
+      button.focus();
+      button.click();
+      await vi.waitFor(() => expect(status(doc).textContent).toBe(working));
+      expect(buttons(doc).every((b) => b.disabled)).toBe(true);
+      // Chrome takes focus from a disabled button; happy-dom neither does nor lets blur() do it,
+      // so focus goes elsewhere here (qa on #713).
+      doc.getElementById('server-url')!.focus();
+      expect(doc.activeElement).not.toBe(button);
+      // The request is out, and the server says nothing.
+      await vi.waitFor(() => expect(hangingFetch).toHaveBeenCalled());
+      l.end();
+      await vi.waitFor(() =>
+        expect(status(doc).textContent).toMatch(/did not answer within 30 seconds/),
+      );
+      expect(status(doc).dataset.tone).toBe('error');
+      expect(status(doc).textContent).toMatch(says);
+      expect(buttons(doc).every((b) => !b.disabled)).toBe(true);
+      // Focus is back on the button that was used.
+      expect(doc.activeElement).toBe(button);
+    },
+  );
+
+  it('a request started after the limit, while the page was read, is cut at once (tl on #713)', async () => {
+    const { doc, deps, $ } = setup({ stored: SAVED });
+    deps.fetch = hangingFetch;
+    const l = limit();
+    deps.limit = l.fn;
+    let release: (() => void) | undefined;
+    const extract = deps.runExtract;
+    deps.runExtract = vi.fn(async (...args: Parameters<PopupDeps['runExtract']>) => {
+      await new Promise<void>((r) => {
+        release = r;
+      });
+      return extract(...args);
+    });
+    await mountPopup(doc, deps);
+    const button = $<HTMLButtonElement>('capture');
+    button.click();
+    await vi.waitFor(() => expect(release).toBeDefined());
+    // The limit ends while only the page is being read: no request is waiting yet.
+    l.end();
+    await new Promise((r) => setTimeout(r, 20));
+    release!();
+    await vi.waitFor(() =>
+      expect(status(doc).textContent).toMatch(/did not answer within 30 seconds/),
+    );
+    expect(hangingFetch).toHaveBeenCalledTimes(1);
+    expect(button.disabled).toBe(false);
+  });
+
+  it('focus returns to the button after an action that the server answered', async () => {
+    const { doc, deps, $ } = setup({ stored: SAVED });
+    await mountPopup(doc, deps);
+    const button = $<HTMLButtonElement>('capture');
+    button.focus();
+    await click(button, () => !button.disabled && status(doc).textContent !== 'Capturing…');
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+    expect(doc.activeElement).toBe(button);
+  });
+
+  it('the fill report is a live region, so what was filled is announced', () => {
+    const { doc } = setup();
+    const report = doc.getElementById('prefill-report')!;
+    expect(report.getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('an invalid address marks its own field, and a good save clears it', async () => {
+    const { doc, deps, $ } = setup();
+    await mountPopup(doc, deps);
+    const server = $<HTMLInputElement>('server-url');
+    server.value = 'not a url';
+    $<HTMLInputElement>('token').value = TOKEN;
+    await click($('save'), () => status(doc).textContent !== '');
+    expect(server.getAttribute('aria-invalid')).toBe('true');
+    expect(server.getAttribute('aria-describedby')).toBe('status');
+    expect($('token').getAttribute('aria-invalid')).toBeNull();
+    server.value = SERVER;
+    await click($('save'), () => status(doc).textContent === 'Settings saved.');
+    expect(server.getAttribute('aria-invalid')).toBeNull();
+    expect(server.getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('an invalid token marks its own field', async () => {
+    const { doc, deps, $ } = setup();
+    await mountPopup(doc, deps);
+    $<HTMLInputElement>('server-url').value = SERVER;
+    const token = $<HTMLInputElement>('token');
+    token.value = 'not-a-token';
+    await click($('save'), () => status(doc).textContent !== '');
+    expect(token.getAttribute('aria-invalid')).toBe('true');
+    expect(token.getAttribute('aria-describedby')).toBe('status');
+    expect($('server-url').getAttribute('aria-invalid')).toBeNull();
   });
 });

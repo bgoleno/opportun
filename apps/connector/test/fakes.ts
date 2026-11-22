@@ -1,12 +1,13 @@
 // In-memory stand-ins for every I/O seam, so the suite runs on any platform without Mail,
 // a network or a real home directory.
-import type {
-  Clock,
-  ConnectorIo,
-  FetchInit,
-  FileSystem,
-  HttpResponse,
-  OsascriptResult,
+import {
+  TOKEN_FILE_LIMIT,
+  type Clock,
+  type ConnectorIo,
+  type FetchInit,
+  type FileSystem,
+  type HttpResponse,
+  type OsascriptResult,
 } from '../src/types';
 
 export class MemFs implements FileSystem {
@@ -22,6 +23,17 @@ export class MemFs implements FileSystem {
   }
   async mkdir(path: string, mode: number): Promise<void> {
     this.dirs.set(path, mode);
+  }
+  async readTextAndMode(path: string) {
+    const file = this.files.get(path);
+    if (file === undefined) return null;
+    const size = Buffer.byteLength(file.text);
+    return {
+      isFile: true,
+      size,
+      mode: file.mode,
+      text: size <= TOKEN_FILE_LIMIT ? file.text : null,
+    };
   }
 }
 
@@ -138,6 +150,9 @@ export function makeIo(overrides: Partial<ConnectorIo> = {}) {
     configDir: '/home/me/.config/opportun-connector',
     prompt: async () => {
       throw new Error('unexpected prompt');
+    },
+    readStdin: async () => {
+      throw new Error('unexpected read of stdin');
     },
     ...overrides,
   };

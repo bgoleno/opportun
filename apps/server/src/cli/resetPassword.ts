@@ -79,11 +79,19 @@ export async function main({
     io.stderr(`${stale} Nothing changed.`);
     return 1;
   }
-  const { password, unlinkedProviders } = await resetUserPassword(db, user.id, peppers);
-  await audit(db, 'auth.password_reset_cli', {
-    userId: user.id,
-    ...(unlinkedProviders.length === 0 ? {} : { detail: { unlinkedProviders } }),
-  });
+  // The audit row is written in the reset's transaction (#661): a failed write changes nothing and
+  // this exits nonzero with no password printed, so the account is never left reset with a
+  // password nobody saw. Printed only once the reset and its row have committed together.
+  const { password, unlinkedProviders } = await resetUserPassword(
+    db,
+    user.id,
+    peppers,
+    async (tx, unlinked) =>
+      await audit(tx, 'auth.password_reset_cli', {
+        userId: user.id,
+        ...(unlinked.length === 0 ? {} : { detail: { unlinkedProviders: unlinked } }),
+      }),
+  );
   io.stdout(password);
   if (unlinkedProviders.length > 0) {
     io.stderr(

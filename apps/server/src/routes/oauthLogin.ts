@@ -78,10 +78,18 @@ const SECURITY_PAGE = '/settings/security';
 const OAUTH_IP_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
 
 const ProviderParams = z.object({ provider: z.enum(OAUTH_PROVIDERS) });
+/**
+ * Changing who can sign in with a provider re-asks for the admin's own password (#620, sec's second
+ * audit), as the registration switch does: a stolen admin session alone cannot point the login page
+ * at a client of its choosing, nor take one away.
+ */
+const AdminPassword = z.string().min(1).max(1024);
 const CredsBody = z.object({
   clientId: z.string().trim().min(1).max(300),
   clientSecret: z.string().trim().min(1).max(500),
+  password: AdminPassword,
 });
+const ConfirmBody = z.object({ password: AdminPassword });
 /** GET start is login only: linking goes through the password-confirmed POST .../link. */
 const StartQuery = z.object({ mode: z.literal('login') });
 const LinkBody = z.object({ password: z.string().min(1).max(1024) });
@@ -179,14 +187,38 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  /** The admin's own password, checked; false when it was wrong (and answered 403). */
+  const adminConfirmed = (
+    req: FastifyRequest,
+    reply: FastifyReply,
+    userId: string,
+    action: string,
+    password: string,
+  ) => confirmPassword(req, reply, { userId, password, action });
+
   api.put(
     '/admin/oauth-providers/:provider',
-    { schema: { params: ProviderParams, body: CredsBody, response: { 200: ProviderStatus } } },
-    async (req) => {
+    {
+      preHandler: reauthLimits(db),
+      schema: { params: ProviderParams, body: CredsBody, response: { 200: ProviderStatus } },
+    },
+    async (req, reply) => {
       const ctx = requireAdmin(req);
       const { provider } = req.params;
       if (!providerAvailable(provider)) throw new HttpError(409, 'provider_unavailable');
-      await writeProviderCreds(db, provider, req.body);
+      if (
+        !(await adminConfirmed(
+          req,
+          reply,
+          ctx.userId,
+          'admin.oauth_provider_configure',
+          req.body.password,
+        ))
+      ) {
+        return reply;
+      }
+      const { clientId, clientSecret } = req.body;
+      await writeProviderCreds(db, provider, { clientId, clientSecret });
       await audit(db, 'admin.oauth_provider_configured', {
         userId: ctx.userId,
         ip: req.ip,
@@ -205,11 +237,25 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
    */
   api.post(
     '/admin/oauth-providers/:provider/import',
-    { schema: { params: ProviderParams, response: { 200: ProviderStatus } } },
-    async (req) => {
+    {
+      preHandler: reauthLimits(db),
+      schema: { params: ProviderParams, body: ConfirmBody, response: { 200: ProviderStatus } },
+    },
+    async (req, reply) => {
       const ctx = requireAdmin(req);
       const { provider } = req.params;
       if (provider !== 'google') throw new HttpError(409, 'import_unsupported');
+      if (
+        !(await adminConfirmed(
+          req,
+          reply,
+          ctx.userId,
+          'admin.oauth_provider_configure',
+          req.body.password,
+        ))
+      ) {
+        return reply;
+      }
       // The integration client belongs to the admin asking, never to another user (FR-S5).
       const creds = await readClientCreds(db, ctx);
       if (creds === undefined) throw new HttpError(409, 'integration_client_missing');
@@ -225,10 +271,24 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
 
   api.delete(
     '/admin/oauth-providers/:provider',
-    { schema: { params: ProviderParams, response: { 204: z.null() } } },
+    {
+      preHandler: reauthLimits(db),
+      schema: { params: ProviderParams, body: ConfirmBody, response: { 204: z.null() } },
+    },
     async (req, reply) => {
       const ctx = requireAdmin(req);
       const { provider } = req.params;
+      if (
+        !(await adminConfirmed(
+          req,
+          reply,
+          ctx.userId,
+          'admin.oauth_provider_remove',
+          req.body.password,
+        ))
+      ) {
+        return reply;
+      }
       await deleteProviderCreds(db, provider);
       await audit(db, 'admin.oauth_provider_removed', {
         userId: ctx.userId,
@@ -677,7 +737,12 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
           ip: req.ip,
           detail: { provider, replay: verified !== null },
         });
-        throw new HttpError(403, 'bad_state');
+        // An app page that says the sign-in or link was not completed, not a raw JSON 403
+        // (#662): the Security page for a signed-in browser, else the sign-in page. Nothing in
+        // the request is trusted for this, the mode included: the state did not verify.
+        return reply.redirect(
+          `${req.userCtx === null ? LOGIN_PAGE : SECURITY_PAGE}?oauth=not_completed`,
+        );
       }
       const mode: OAuthMode = verified.mode;
       // Where a failure lands, and its flash (setpw flashes are the Set-a-password card's).

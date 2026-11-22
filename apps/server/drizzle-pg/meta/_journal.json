@@ -376,8 +376,22 @@
     {
       "idx": 53,
       "version": "7",
+      "when": 1796800000000,
+      "tag": "0053_discovery_rank_batch_returns",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
       "when": 1796900000000,
-      "tag": "0053_jobs_updated_at_index",
+      "tag": "0054_pending_revoked_reason",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1797000000000,
+      "tag": "0055_jobs_updated_at_index",
       "breakpoints": true
     }
   ]

@@ -89,7 +89,33 @@ describe('TwoFactorStep (login, second step)', () => {
     );
     await user.type(await screen.findByLabelText('Authentication code'), '123456');
     await user.click(screen.getByRole('button', { name: 'Verify' }));
-    await waitFor(() => expect(onRestart).toHaveBeenCalledWith(expect.stringMatching(/again/i)));
+    // The timeout keeps its own message (#662).
+    await waitFor(() =>
+      expect(onRestart).toHaveBeenCalledWith(
+        'That sign-in took too long. Enter your password again.',
+      ),
+    );
+  });
+
+  it('a password changed or reset meanwhile says so, not that it took too long (#662)', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'POST /auth/2fa/verify': () => ({
+        status: 401,
+        body: { error: { code: 'password_changed' } },
+      }),
+    });
+    const onRestart = vi.fn();
+    renderWithProviders(
+      <TwoFactorStep pendingToken="pt-1" onSignedIn={vi.fn()} onRestart={onRestart} />,
+    );
+    await user.type(await screen.findByLabelText('Authentication code'), '123456');
+    await user.click(screen.getByRole('button', { name: 'Verify' }));
+    await waitFor(() =>
+      expect(onRestart).toHaveBeenCalledWith(
+        'Your password was changed while you were signing in. Sign in again with your new password.',
+      ),
+    );
   });
 
   it('refuses to submit a malformed code', async () => {

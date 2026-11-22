@@ -102,10 +102,13 @@ describe('OAuthProvidersCard', () => {
     await user.type(within(github).getByLabelText('Client ID'), 'Iv1.abc');
     await user.type(within(github).getByLabelText('Client secret'), 'shh-secret');
     await user.click(within(github).getByRole('button', { name: 'Save' }));
+    // The admin's own password first (#620 point 3).
+    await confirmWith(user, ADMIN_PW);
     await waitFor(() =>
       expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({
         clientId: 'Iv1.abc',
         clientSecret: 'shh-secret',
+        password: ADMIN_PW,
       }),
     );
     expect(await within(github).findByText('Configured')).toBeInTheDocument();
@@ -128,10 +131,12 @@ describe('OAuthProvidersCard', () => {
     const google = await screen.findByRole('region', { name: 'Google sign-in' });
     expect(google).toHaveTextContent(INTEGRATION_CLIENT_ID);
     await user.click(within(google).getByRole('button', { name: 'Use that client' }));
+    await confirmWith(user, ADMIN_PW);
     await waitFor(() =>
       expect(
-        calls.some((c) => c.method === 'POST' && c.path === '/admin/oauth-providers/google/import'),
-      ).toBe(true),
+        calls.find((c) => c.method === 'POST' && c.path === '/admin/oauth-providers/google/import')
+          ?.body,
+      ).toEqual({ password: ADMIN_PW }),
     );
     expect(await within(google).findByText('Configured')).toBeInTheDocument();
   });
@@ -179,12 +184,44 @@ describe('OAuthProvidersCard', () => {
     renderWithProviders(<OAuthProvidersCard />);
     const google = await screen.findByRole('region', { name: 'Google sign-in' });
     await user.click(within(google).getByRole('button', { name: 'Remove' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Remove Google sign-in?' });
-    await user.click(within(dialog).getByRole('button', { name: 'Remove' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Confirm your password' });
+    expect(dialog).toHaveTextContent(/Remove Google sign-in\?/);
+    await confirmWith(user, ADMIN_PW);
     await waitFor(() =>
       expect(
-        calls.some((c) => c.method === 'DELETE' && c.path === '/admin/oauth-providers/google'),
-      ).toBe(true),
+        calls.find((c) => c.method === 'DELETE' && c.path === '/admin/oauth-providers/google')
+          ?.body,
+      ).toEqual({ password: ADMIN_PW }),
     );
   });
+
+  // https://github.com/bgoleno/opportun/issues/620 point 3: a wrong password is said in the dialog,
+  // which stays open, and nothing changes.
+  it('a wrong admin password keeps the dialog open and says so', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /admin/oauth-providers': { items: items({ google: true, github: false }) },
+      'DELETE /admin/oauth-providers/google': () => ({
+        status: 403,
+        body: { error: { code: 'invalid_password' } },
+      }),
+    });
+    renderWithProviders(<OAuthProvidersCard />);
+    const google = await screen.findByRole('region', { name: 'Google sign-in' });
+    await user.click(within(google).getByRole('button', { name: 'Remove' }));
+    await confirmWith(user, 'not it');
+    const dialog = await screen.findByRole('dialog', { name: 'Confirm your password' });
+    expect(
+      await within(dialog).findByText('That is not your current password.'),
+    ).toBeInTheDocument();
+    expect(within(google).getByText('Configured')).toBeInTheDocument();
+  });
 });
+
+const ADMIN_PW = 'correct horse battery';
+
+async function confirmWith(user: ReturnType<typeof userEvent.setup>, password: string) {
+  const dialog = await screen.findByRole('dialog', { name: 'Confirm your password' });
+  await user.type(within(dialog).getByLabelText('Current password'), password);
+  await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+}

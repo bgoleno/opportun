@@ -1,5 +1,5 @@
 {
-  "id": "4bf841c1-c92f-4443-8245-36ca062b2b2b",
+  "id": "c1142ca5-16f7-4da3-9b67-6e8277f59f60",
   "prevId": "9845c73c-c155-4602-8991-2f402b04405a",
   "version": "7",
   "dialect": "postgresql",
@@ -1604,6 +1604,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "rank_batch_returns": {
+          "name": "rank_batch_returns",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "resolution": {
           "name": "resolution",
           "type": "text",
@@ -2547,27 +2554,6 @@
           "columns": [
             {
               "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "jobs_updated_at_idx": {
-          "name": "jobs_updated_at_idx",
-          "columns": [
-            {
-              "expression": "updated_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

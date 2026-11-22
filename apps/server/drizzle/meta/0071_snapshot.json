@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "f798376b-5ca1-404e-b928-b0f91995b42c",
+  "id": "09375764-28ce-413f-8eff-fbe335d5f641",
   "prevId": "b7da7742-7305-4ebe-a125-4272b5b6ff5d",
   "tables": {
     "activities": {
@@ -1514,6 +1514,14 @@
           "notNull": false,
           "autoincrement": false
         },
+        "rank_batch_returns": {
+          "name": "rank_batch_returns",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
         "resolution": {
           "name": "resolution",
           "type": "text",
@@ -2353,14 +2361,6 @@
           "name": "jobs_user_id_idx",
           "columns": [
             "user_id"
-          ],
-          "isUnique": false
-        },
-        "jobs_updated_at_idx": {
-          "name": "jobs_updated_at_idx",
-          "columns": [
-            "updated_at",
-            "id"
           ],
           "isUnique": false
         }

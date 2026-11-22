@@ -22,6 +22,9 @@ export interface InboundMessage {
   sentAt: number;
 }
 
+/** The most a token file may hold, as --token-stdin reads no further (tl and sec on #740). */
+export const TOKEN_FILE_LIMIT = 4096;
+
 export interface FileSystem {
   /** The file's text, or null when it does not exist. */
   readText(path: string): Promise<string | null>;
@@ -29,6 +32,19 @@ export interface FileSystem {
   writeText(path: string, text: string, mode: number): Promise<void>;
   /** Creates the directory (and parents) and sets its mode. */
   mkdir(path: string, mode: number): Promise<void>;
+  /**
+   * The file's text and permission bits (0o777 at most), both from the one file it opened, or
+   * null when there is none (#699: a check of one file and a read of another cannot happen). Only
+   * a regular file of at most TOKEN_FILE_LIMIT bytes is read.
+   */
+  readTextAndMode(path: string): Promise<{
+    /** A regular file: a FIFO, a device or a directory is not read (tl and sec on #740). */
+    isFile: boolean;
+    size: number;
+    mode: number;
+    /** Null when it is not a regular file or is over TOKEN_FILE_LIMIT: then nothing was read. */
+    text: string | null;
+  } | null>;
 }
 
 export interface FetchInit {
@@ -74,6 +90,8 @@ export interface ConnectorIo {
   /** Where config.json and state.json live. */
   configDir: string;
   prompt: Prompt;
+  /** Standard input to its end (init --token-stdin), at most a few KiB. */
+  readStdin(): Promise<string>;
 }
 
 /** Process exit codes, documented in the README. */

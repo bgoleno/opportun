@@ -2,8 +2,9 @@
 // the reason code is what improves the filter, the note is the user's own and stays local
 // unless they say otherwise for that note, and (#145) "removed" and "removed and blocked" are
 // different promises, so the dialog must say which one the server actually confirmed.
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { mockApi, renderWithProviders } from '@/test/render';
 import type { CommunicationView } from './api';
@@ -36,11 +37,11 @@ const COMM: CommunicationView = {
   createdAt: Date.now(),
 };
 
-async function reject(result: unknown) {
+async function reject(result: unknown, comm: CommunicationView = COMM) {
   const api = mockApi({ 'POST /communications/c1/reject': result });
   lastCalls = api.calls;
   const onOpenChange = vi.fn();
-  renderWithProviders(<RejectDialog comm={COMM} open onOpenChange={onOpenChange} />);
+  renderWithProviders(<RejectDialog comm={comm} open onOpenChange={onOpenChange} />);
   const user = userEvent.setup();
   await user.selectOptions(
     await screen.findByLabelText('Why should this not be here?'),
@@ -62,6 +63,17 @@ describe('RejectDialog', () => {
       (c) => c.method === 'POST' && c.path === '/communications/c1/reject',
     );
     expect(post?.body).toMatchObject({ expectedOpportunityId: null });
+  });
+
+  // #678 criterion 3 (qa on #672): with only unlinked messages above, a dialog that always sent
+  // null passed. A linked one sends its link.
+  it('a linked message sends its own link, not null', async () => {
+    await reject({ blocked: null }, { ...COMM, opportunityId: 'opp-7', opportunityTitle: 'Staff' });
+    await screen.findByText('Rejected and removed');
+    const post = lastCalls.find(
+      (c) => c.method === 'POST' && c.path === '/communications/c1/reject',
+    );
+    expect(post?.body).toMatchObject({ expectedOpportunityId: 'opp-7' });
   });
 
   it('says "blocked" only once the server confirms a deny rule is active', async () => {
@@ -190,5 +202,53 @@ describe('RejectForm', () => {
   it('warns that rejecting destroys the content', () => {
     render(<RejectForm sender="x@agency-c.example" onReject={vi.fn()} pending={false} />);
     expect(screen.getByTestId('reject-warning')).toHaveTextContent(/subject and body/i);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/678 criteria 1 and 2 (qa on #672): the rejected row
+// leaves the list on the refetch, and with it this dialog. Callbacks passed to mutate() are dropped
+// once the component is gone, so a single reject's success, and its refusal, were reported
+// nowhere. Here the dialog is gone before the server answers, which is the case that lost them. A
+// refusal also read as a raw code.
+describe('RejectDialog: the outcome is reported even once the dialog is gone (#678)', () => {
+  async function rejectThenUnmount(answer: unknown) {
+    let answerNow!: () => void;
+    const answered = new Promise<void>((r) => (answerNow = r));
+    let unmount!: () => void;
+    function Host() {
+      const [shown, setShown] = useState(true);
+      unmount = () => setShown(false);
+      return shown ? <RejectDialog comm={COMM} open onOpenChange={() => {}} /> : null;
+    }
+    mockApi({
+      'POST /communications/c1/reject': async () => {
+        await answered;
+        return answer;
+      },
+    });
+    renderWithProviders(<Host />);
+    const user = userEvent.setup();
+    await user.selectOptions(
+      await screen.findByLabelText('Why should this not be here?'),
+      'medical_or_personal',
+    );
+    await user.click(screen.getByRole('button', { name: 'Reject' }));
+    act(() => unmount());
+    expect(screen.queryByRole('dialog')).toBeNull();
+    answerNow();
+  }
+
+  it('a reject that went through says so', async () => {
+    await rejectThenUnmount({ status: 200, body: { blocked: null } });
+    expect(await screen.findByText('Rejected and removed')).toBeInTheDocument();
+  });
+
+  it('a refused one says why in plain words', async () => {
+    await rejectThenUnmount({ status: 409, body: { error: { code: 'message_changed' } } });
+    expect(await screen.findByText('Not rejected')).toBeInTheDocument();
+    expect(
+      screen.getByText('This message was linked or changed elsewhere, so it was not rejected.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/message_changed/)).toBeNull();
   });
 });

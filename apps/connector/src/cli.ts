@@ -22,6 +22,7 @@ import {
   EXIT,
   maskTokens,
   redact,
+  TOKEN_FILE_LIMIT,
   VERSION,
   type ConnectorIo,
   type ExitCode,
@@ -41,8 +42,13 @@ asked for except the interval. If you give any of them, a value you leave out is
 for only when it is the server, the token or the mailboxes; the days and the interval keep
 their saved value, or the default:
   --server <url>      Opportun server address, https://...
-  --token <token>     Device token with the mail:push scope (odt_...). Prefer the
-                      prompt: a flag can end up in shell history.
+  --token-file <path> Read the device token (odt_..., mail:push scope) from a file
+                      only you can read (chmod 600). The way to pass it in a script.
+  --token-stdin       Read the device token from standard input, for example
+                      pbpaste | opportun-connector init --server <url> --token-stdin
+                      (needs --server; mailboxes default to the saved ones or Inbox)
+  --token <token>     The token itself, kept for older scripts. A token in a flag
+                      stays in your shell history: prefer the prompt or the two above.
   --mailbox <name>    Mailbox to read; repeat for several. "Inbox" (all inboxes),
                       a mailbox name, or "Account/Mailbox". Default: Inbox
   --days <n>          How far back the first sync reaches (default ${DEFAULT_LOOKBACK_DAYS})
@@ -96,6 +102,36 @@ const mailboxList = (s: string): string[] =>
     .map((m) => m.trim())
     .filter((m) => m !== '');
 
+/**
+ * The token from `--token-file` (#655, sec): a file only its owner can read, as the config itself
+ * is, since a token there is as good as a password for pushing mail.
+ */
+async function tokenFromFile(io: ConnectorIo, path: string): Promise<string> {
+  // One open for both (#699, sec on #695): the mode checked is the mode of the file read.
+  const file = await io.fs.readTextAndMode(path);
+  if (file === null) throw new ConnectorError(`No token file at ${path}.`, EXIT.USAGE);
+  // Bounded as --token-stdin is (tl and sec on #740): a FIFO or a huge file would hang init.
+  if (!file.isFile) {
+    throw new ConnectorError(`${path} is not a regular file.`, EXIT.USAGE);
+  }
+  if (file.size > TOKEN_FILE_LIMIT) {
+    throw new ConnectorError(
+      `${path} is larger than a device token file can be (${TOKEN_FILE_LIMIT} bytes).`,
+      EXIT.USAGE,
+    );
+  }
+  const { mode } = file;
+  const text = file.text ?? '';
+  if ((mode & 0o077) !== 0) {
+    throw new ConnectorError(
+      `${path} can be read by others (mode ${mode.toString(8)}). A token file must be yours ` +
+        `alone: chmod 600 ${path}`,
+      EXIT.USAGE,
+    );
+  }
+  return text;
+}
+
 async function init(io: ConnectorIo, args: string[]): Promise<ExitCode> {
   const { values } = parseArgs({
     args,
@@ -103,16 +139,30 @@ async function init(io: ConnectorIo, args: string[]): Promise<ExitCode> {
     options: {
       server: { type: 'string' },
       token: { type: 'string' },
+      'token-file': { type: 'string' },
+      'token-stdin': { type: 'boolean' },
       mailbox: { type: 'string', multiple: true },
       days: { type: 'string' },
       interval: { type: 'string' },
     },
   });
+  const tokenFile = values['token-file'];
+  const fromStdin = values['token-stdin'] === true;
+  const sources = [values.token !== undefined, tokenFile !== undefined, fromStdin];
+  if (sources.filter(Boolean).length > 1) {
+    throw usageError('Give one of --token, --token-file or --token-stdin.');
+  }
+  if (fromStdin && values.server === undefined) {
+    // The prompts read standard input too, and it holds the token.
+    throw usageError('--token-stdin needs --server: standard input carries the token.');
+  }
   // A corrupt or missing config just means there are no defaults to offer.
   const existing = await readConfig(io).catch(() => null);
   const interactive =
     values.server === undefined &&
     values.token === undefined &&
+    tokenFile === undefined &&
+    !fromStdin &&
     values.mailbox === undefined &&
     values.days === undefined;
   const ask = async (question: string, fallback: string, opts: { secret?: boolean } = {}) => {
@@ -129,6 +179,8 @@ async function init(io: ConnectorIo, args: string[]): Promise<ExitCode> {
 
   const tokenInput =
     values.token ??
+    (tokenFile !== undefined ? await tokenFromFile(io, tokenFile) : undefined) ??
+    (fromStdin ? await io.readStdin() : undefined) ??
     (await ask(
       'Device token (Settings > Integrations > Extensions and Connectors)',
       existing?.token ?? '',
@@ -139,12 +191,14 @@ async function init(io: ConnectorIo, args: string[]): Promise<ExitCode> {
   const mailboxes =
     values.mailbox !== undefined
       ? values.mailbox.flatMap(mailboxList)
-      : mailboxList(
-          await ask(
-            'Mailboxes to read, comma-separated',
-            existing?.mailboxes.join(', ') ?? 'Inbox',
-          ),
-        );
+      : fromStdin
+        ? (existing?.mailboxes ?? ['Inbox'])
+        : mailboxList(
+            await ask(
+              'Mailboxes to read, comma-separated',
+              existing?.mailboxes.join(', ') ?? 'Inbox',
+            ),
+          );
   if (mailboxes.length === 0) throw new ConnectorError('Name at least one mailbox.', EXIT.USAGE);
 
   const daysInput =
