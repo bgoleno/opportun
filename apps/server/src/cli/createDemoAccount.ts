@@ -88,9 +88,8 @@ export async function main({
   const password = temporaryPassword();
   const passwordHash = await hashPassword(password, peppers);
   const now = Date.now();
-  let userId: string;
   try {
-    userId = await withTransaction(
+    await withTransaction(
       db,
       async (tx) => {
         // Seeded first: the seed makes demo-admin the admin, and a database with no demo marker
@@ -117,6 +116,9 @@ export async function main({
           now,
         });
         await writeDedicatedMark(tx, row.id, now);
+        // With the account (#802, as #723 does for a reset): a failed write creates nothing, and
+        // the password below is never shown for an account that does not exist.
+        await audit(tx, 'demo.dedicated_account_created', { userId: row.id });
         return row.id;
       },
       // registerUser's scope: no first registration runs beside this insert.
@@ -127,14 +129,12 @@ export async function main({
     io.stderr(`${err.message} Nothing changed.`);
     return 1;
   }
-  // Shown before the audit write (tl on #567, #570): the account and its mark have committed, so
-  // if that write fails, the account still has a password its owner can be given.
+  // Shown only once the account, its mark and its audit row have committed together (#802).
   io.stderr(
     `Created the dedicated demo account ${parsedEmail.data}. Its password is on stdout, shown ` +
       'this once: give it to its owner, who can change it in Settings.',
   );
   io.stdout(password);
-  await audit(db, 'demo.dedicated_account_created', { userId });
   return 0;
 }
 
