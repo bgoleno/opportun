@@ -220,6 +220,19 @@ describe('the Google integration: the audit row commits with the change (#802)',
     expect(await readClientCreds(app.db, ctxOf(a))).toBeUndefined();
   });
 
+  // #853: a refused callback whose refusal record cannot be written still lands on an app page.
+  it('a bad state whose audit write fails still lands on Settings', async () => {
+    const { a } = await boot();
+    failing = 'google.bad_state';
+    const res = await a.request({
+      method: 'GET',
+      url: '/api/v1/integrations/google/callback?code=auth-code&state=not-a-state',
+    });
+    failing = null;
+    expect(res.statusCode, res.body).toBe(302);
+    expect(res.headers.location).toBe('/settings/integrations?google=not_completed');
+  });
+
   it('a connection whose audit write fails stores no tokens', async () => {
     const { app, a } = await boot();
     const saved = await a.request({
