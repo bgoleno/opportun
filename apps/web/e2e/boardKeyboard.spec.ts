@@ -28,10 +28,30 @@ async function dismissed(page: Page, opp: { company: string; title: string }) {
   await expect(card(page, opp.company, opp.title)).toBeVisible();
 }
 
+/** Presses `key` and says whether the live region changed, within a second. */
+async function stepped(page: Page, key: 'ArrowLeft' | 'ArrowRight'): Promise<boolean> {
+  const before = (await liveRegion(page).textContent()) ?? '';
+  await page.keyboard.press(key);
+  return expect(liveRegion(page))
+    .not.toHaveText(before, { timeout: 1_000 })
+    .then(
+      () => true,
+      () => false,
+    );
+}
+
 /**
- * Picks `moved` up with Space, then presses the arrow key one at a time (ArrowLeft unless told),
- * each time letting the live region announce the new place, until it is over `target`'s column;
- * then drops.
+ * Picks `moved` up with Space, then steps with the arrow key (ArrowLeft unless told), each time
+ * letting the live region announce the new place, until it is over `target`'s column; then drops,
+ * and waits for dnd-kit to say how the drop ended.
+ *
+ * Nothing is dropped until an arrow press has visibly moved the card (#823): dnd-kit's
+ * KeyboardSensor starts listening for keys in a timer after the pick-up (6.3.1, attach()), and on
+ * a loaded machine a key pressed before that timer runs is ignored. A card that already starts
+ * over the target (dnd-kit can place it there at once) once dropped about 10 ms after the pick-up
+ * and the drop was lost, leaving the drag open. So a card that starts over the target steps on past
+ * it and back first. An arrow that changes nothing is pressed again, as the first step may only go
+ * from the card to its own column, announced the same way; the drop key is pressed once.
  */
 async function keyboardDrop(
   page: Page,
@@ -39,22 +59,36 @@ async function keyboardDrop(
   target: string,
   arrow: 'ArrowLeft' | 'ArrowRight' = 'ArrowLeft',
 ) {
+  const back = arrow === 'ArrowLeft' ? 'ArrowRight' : 'ArrowLeft';
+  const wanted = `is over the ${target} column`;
+  const over = async () => ((await liveRegion(page).textContent()) ?? '').includes(wanted);
   await moved.focus();
   await page.keyboard.press('Space');
   await expect(liveRegion(page)).toContainText('is over');
-  const wanted = `is over the ${target} column`;
-  for (let i = 0; i < 12; i++) {
-    const before = (await liveRegion(page).textContent()) ?? '';
-    if (before.includes(wanted)) break;
-    await page.keyboard.press(arrow);
-    // The first step may only go from the card to its own column, which is announced the same
-    // way, so the text need not change: wait for a change, briefly, and go on either way.
-    await expect(liveRegion(page))
-      .not.toHaveText(before, { timeout: 1_000 })
-      .catch(() => undefined);
+  let listening = false;
+  if (await over()) {
+    // Away, on past the target the way the drag goes (or else back), then back to it.
+    let away: 'ArrowLeft' | 'ArrowRight' | undefined;
+    for (const key of [arrow, back] as const) {
+      // A press before the sensor listens changes nothing: press again, the same way.
+      for (let i = 0; i < 4 && away === undefined; i++) if (await stepped(page, key)) away = key;
+      if (away !== undefined) break;
+    }
+    expect(away, `the card never moved off the ${target} column`).toBeDefined();
+    listening = true;
+    const home = away === 'ArrowLeft' ? 'ArrowRight' : 'ArrowLeft';
+    for (let i = 0; i < 6 && !(await over()); i++) await stepped(page, home);
+  } else {
+    for (let i = 0; i < 12 && !(await over()); i++) {
+      if (await stepped(page, arrow)) listening = true;
+    }
   }
+  expect(listening, 'no arrow press moved the card, so the drop could be ignored').toBe(true);
   await expect(liveRegion(page)).toContainText(wanted);
   await page.keyboard.press('Space');
+  // The drop ends the drag: dnd-kit says how (not moved, dropped, or waiting for a reason), and
+  // never "is over" again.
+  await expect(liveRegion(page), 'Space did not end the drag').not.toContainText('is over');
 }
 
 test.describe('the board refuses a keyboard move as it refuses a pointer move (#413)', () => {
