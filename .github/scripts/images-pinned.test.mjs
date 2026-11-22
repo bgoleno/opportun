@@ -97,9 +97,13 @@ const DOCKER_VALUE_OPTIONS = new Set([
 /**
  * The image of each `docker run`, `docker create` or `docker pull` in a workflow's scripts (#800),
  * with its line: a bare Docker Hub name (`node:22`) as well as a registry one. Only a command
- * counts, at the start of a line or after `;`, `&&`, `||`, `|` or `$(`, not the words inside a
- * string (an echo that mentions `docker pull`). A continued line (ending in a backslash) is read
- * with the lines it continues to.
+ * counts, at the start of a line, after a one-line step's `run:` (with or without its `- `), or
+ * after `;`, `&&`, `||`, `|` or `$(`, not the words inside a string (an echo that mentions
+ * `docker pull`). A continued line (ending in a backslash) is read with the lines it continues to.
+ * Not read, as no workflow uses them: `docker` called through a variable (`$DOCKER run`) or
+ * `sudo`, and an image named by a variable (that word is read as the image, so it fails, not
+ * passes). An option that takes a value but is not in DOCKER_VALUE_OPTIONS has its value read as
+ * the image, which also fails rather than passes.
  */
 export function dockerImagesOf(text) {
   const lines = text.split('\n');
@@ -112,7 +116,7 @@ export function dockerImagesOf(text) {
       logical = `${logical.replace(/\\\s*$/, ' ')}${lines[i].replace(/(^|\s)#.*$/, '')}`;
     }
     for (const m of logical.matchAll(
-      /(?:^\s*|[;&|(]\s*|\$\(\s*)docker\s+(run|create|pull)\b(.*)$/g,
+      /(?:^\s*(?:-\s+)?run:\s*['"]?|^\s*|[;&|(]\s*|\$\(\s*)docker\s+(run|create|pull)\b(.*)$/g,
     )) {
       const words = m[2]
         .trim()
@@ -166,6 +170,8 @@ test('docker run, create and pull are read for their image, a bare Docker Hub na
     'out=$(docker run redis:7 echo hi)',
     'echo "anyone can `docker pull` these with no login"',
     '# docker run commented:1',
+    '      - run: docker pull node:20',
+    '        run: docker run --rm alpine:3 true',
   ].join('\n');
   assert.deepEqual(dockerImagesOf(text), [
     { line: 1, ref: 'node:22' },
@@ -173,11 +179,13 @@ test('docker run, create and pull are read for their image, a bare Docker Hub na
     { line: 3, ref: pinned },
     { line: 6, ref: 'postgres:16@sha256:' + 'b'.repeat(64) },
     { line: 7, ref: 'redis:7' },
+    { line: 10, ref: 'node:20' },
+    { line: 11, ref: 'alpine:3' },
   ]);
   const loose = dockerImagesOf(text)
     .filter((r) => !DIGEST.test(r.ref))
     .map((r) => r.ref);
-  assert.deepEqual(loose, ['node:22', 'alpine', 'redis:7']);
+  assert.deepEqual(loose, ['node:22', 'alpine', 'redis:7', 'node:20', 'alpine:3']);
 });
 
 for (const file of WORKFLOWS) {
