@@ -57,7 +57,9 @@ The full security design is [docs/design.md](docs/design.md), section 7. In shor
   Indeed host stays their choice), but without connection pinning -- the same
   documented residual as the MCP DNS-rebinding case covered separately below; filesystem
   access confined to the data directory; rate limits on sign-in, password re-confirmation
-  and device-token routes, and a per-user AI budget.
+  and device-token routes, a per-user share of each job site's request queue (see
+  [Requests to job sites, shared fairly](#requests-to-job-sites-shared-fairly)), and a per-user
+  AI budget.
 - **Assumed trusted**: the host, and whoever administers it. Anyone who controls the
   server process, the `data/` directory and `master.key` can read everything on the
   instance.
@@ -104,6 +106,106 @@ with both `capture:push` and `apply:assist`.
 
   It cannot list applications, and it cannot start, review or hand off an application or
   record "I submitted it". Its routes share a limit of 60 requests per token per 15 minutes.
+
+### Passwords, sessions and linked sign-in providers
+
+A password change and a password reset are how a user, or the administrator, cuts off someone
+who has a credential they should not have.
+
+- **A password change** ends every session of the account, the device it was made on included,
+  which gets a fresh session in the same step. Settings also offers to revoke every device token
+  at once, checked by default. The revocation commits together with the new password, or not at
+  all.
+- **A password reset** (the administrator's Settings > Users, or the command-line reset) sets a
+  temporary password and shows it once. It also ends every session, revokes every device token,
+  unlinks every sign-in provider (Google, GitHub, LinkedIn) and turns two-factor sign-in off. The
+  provider unlinking includes one that someone else linked, since a reset is also compromise
+  recovery. The user links their providers again afterwards.
+- **A credential that rests on a check made a moment earlier** is written only if that check
+  still holds when the credential is written:
+  - a session or pending two-factor token after a password sign-in;
+  - a session after the two-factor code;
+  - a device token after its password re-confirmation;
+  - a session after a provider sign-in;
+  - a new provider link;
+  - a two-factor enrolment, and its activation, after their password re-confirmation;
+  - an administrator's reset of another account, after the administrator's own password
+    re-confirmation.
+
+  Each is written under a per-user lock that a change and a reset also take, and only while the
+  password hash it was checked against, the pending token, the provider link or the session it
+  started from is still there. An administrator's reset holds both accounts' locks, taken in a
+  fixed order, and runs only while the administrator's own password is still the one just
+  proven (`apps/server/src/routes/auth.ts`). So a change or reset that lands during the check wins and nothing
+  is written, and one that starts just after removes what was written along with everything else
+  (`apps/server/src/lib/passwordLock.ts`).
+
+What this does not do: it cannot undo what a credential was used for before the change or
+reset, and it does not sign anyone out of the Google, GitHub or LinkedIn account itself. Those are
+the user's to secure with that provider.
+
+### Requests to job sites, shared fairly
+
+Requests the server makes through its fetch layer (`apps/server/src/lib/safeFetch.ts`) to a job
+board, an ATS or any other site go through one queue per host, at most one request per second.
+
+- **Each user gets a share.** A user's requests may hold at most `RATE_KEY_SLOTS` (3) of a host's
+  slots ahead at once, and their other requests wait for one of their own to free up. So one
+  user's large discovery run cannot push everyone else's requests to that host far behind.
+  Requests made for the server itself, not for one user, share a key of their own.
+- **A local wait is not the vendor's answer.** A request whose deadline passes while it waits in
+  that queue fails as `rate_wait`, which is never counted as the vendor failing or asking to slow
+  down.
+- **One user cannot stop a vendor for everyone indefinitely.** In the nightly check of a network's
+  boards, one user's failing companies can stop a vendor for every user at most once in
+  `NETWORK_PROBE_USER_STOP_NIGHTS` (7) nights (`apps/server/src/jobs/networkBoardProbe.ts`). Past
+  that, such a failure ends only that user's night.
+
+This is fairness between the users of one instance, not a protection against the vendor's own
+limits. The queue is per process, like the rest of the instance (one server process per
+database, as [docs/install.md](docs/install.md) requires).
+
+### What your AI provider keeps: ranking batches
+
+Batch ranking sends postings to the AI provider's batch service many at a time, instead of one
+live call each. It is off unless the user's own setting turns it on, and Settings does not offer
+that setting yet (`apps/server/src/repos/rankBatches.ts`).
+
+- **What it sends** is what a live ranking call sends: each posting's text, and the ranking
+  prompt with the user's role target.
+- **How it is sent:** with the AI key that user's ranking uses, through the same checked
+  provider path as every AI call (`apps/server/src/lib/aiProviderFetch.ts`, described under the
+  deviations below). The key goes only in its request header, never in an error, log or trace.
+- **Which providers:** Anthropic's Message Batches, and OpenAI's Batch API with its files.
+  OpenAI batches are made only against OpenAI's own API. With an operator's `OPENAI_BASE_URL`
+  pointing elsewhere, ranking stays live (`packages/ai/src/openaiBatch.ts`).
+- **What the provider keeps:** the batch and its results, until Opportun has applied the results.
+  Then a job of its own deletes the provider's copy: the Anthropic batch, or the OpenAI files of
+  requests and results. If the provider refuses, the job tries again for a while.
+- **When that delete never runs,** the copy stays until the provider's own retention ends.
+  [docs/guide/discovery.md](docs/guide/discovery.md#where-a-ranking-batchs-text-sits) gives the
+  figures; cases where the delete can be lost are tracked in
+  [#686](https://github.com/bgoleno/opportun/issues/686).
+
+The provider's own policy for data sent through its API applies as it does to every AI call.
+
+### Kept AI results: the referral ranking
+
+The Referrals tab's ranking of who could refer the user, with the AI's one-line reason for each
+contact, is kept per user and opportunity, so reopening the tab does not make another AI call
+(`apps/server/src/routes/referrals.ts`, table `referral_rankings`).
+
+- It is read only for its owner, and only for an opportunity that is theirs.
+- It is reused only while the AI's input is exactly the same: a hash of the contacts' lines and
+  the opportunity text. Any change to either means a fresh ranking, which replaces the kept one.
+  **Re-rank** asks for one at any time.
+- A kept ranking is filtered to the contacts in the current set before it is shown.
+- It is deleted with the user or the opportunity, and it is left out of exports as derived data
+  (`apps/server/src/lib/exporter.ts`).
+
+What this does not do yet: when a contact is deleted, the kept row for an opportunity still holds
+that contact's reason until the opportunity is ranked again. It is never shown, but it is still
+stored. That is tracked in [#710](https://github.com/bgoleno/opportun/issues/710).
 
 ## Deliberate deviations
 
@@ -187,6 +289,34 @@ since it was not a deliberate choice.)
   any other instance, and `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY=0` turns the feature off for
   the shared accounts only. The operator's settings are in
   [docs/demo-deployment.md](docs/demo-deployment.md#device-tokens-and-assisted-apply-on-the-demo).
+
+  The nightly reset deletes the shared accounts and reseeds them under the same ids, so a write
+  that began before it could land in the fresh accounts. A gate keeps the two apart
+  (`apps/server/src/lib/demoResetGate.ts`, `apps/server/src/plugins/demoResetHold.ts`):
+
+  - every signed-in request, and every job that may reach those accounts, holds it while it runs;
+  - the reset waits for them, at most a minute, and resets nothing if some are still in;
+  - a request that arrives meanwhile waits, and then finds its session or token gone.
+
+  So that no single request or job holds the reset off:
+
+  - a request's body must arrive within 20 seconds;
+  - an AI call ends after 40 seconds;
+  - no hold lasts more than 50 seconds;
+  - every AI call, and the tailoring chat's reply, also ends 5 seconds before its request's or
+    job's hold does, and a job is told to stop then too. So what the work writes after it (the
+    call's record, a result marked unavailable) still comes while it holds the gate, and the reset
+    then replaces it ([#684](https://github.com/bgoleno/opportun/issues/684), fixed in
+    [#704](https://github.com/bgoleno/opportun/pull/704); `currentHoldStop` in
+    `apps/server/src/lib/demoResetGate.ts`).
+
+  What it does not close: slow work in a request that is not an AI call, such as making a resume in
+  Google Docs or Reactive Resume, and work a handler leaves running after it has answered, can still
+  write after the reset into the reseeded account. That write is the visitor's own, into an account
+  every visitor can write to anyway. A seed run by hand, and more than one server process on the
+  database, are outside the gate. The details are
+  in docs/demo-deployment.md, under "Nothing that began before the reset writes after it".
+
 - **Postgres TLS is encrypted but not verified by default.** For a Postgres host that is not
   loopback, `DB_SSL` defaults to `require`: the connection is encrypted, but the server
   certificate chain and hostname are not checked. An attacker positioned on the network
