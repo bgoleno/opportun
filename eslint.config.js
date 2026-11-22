@@ -282,10 +282,10 @@ export default defineConfig(
     // repos and lib sit below jobs and routes, so they import neither. Their pure helpers live in
     // lib/ (lib/atsBoard.ts, lib/titleMatch.ts, lib/triageContext.ts and others), and
     // apps/server/test/importCycles.test.ts checks that the jobs/repos and mail groups stay free
-    // of cycles. The negations below are the job modules still imported here: the registry
-    // (lib/greenhouseEmbed.ts defines a job handler), and backup, dbIntegrityCheck,
-    // postingReconcile, atsDetect and, from lib/demo/seed.ts, attachmentSweep. The queue API and
-    // the kinds are in lib/ (lib/jobQueue.ts, lib/jobKinds.ts). Moving the rest out is
+    // of cycles. The negations below are the job modules still imported here: backup,
+    // dbIntegrityCheck, postingReconcile, atsDetect and, from lib/demo/seed.ts, attachmentSweep.
+    // The queue API and the kinds are in lib/ (lib/jobQueue.ts, lib/jobKinds.ts), and the job
+    // handlers are defined in jobs/, so lib/ needs no registry. Moving the rest out is
     // https://github.com/bgoleno/opportun/issues/788; this list only shrinks. The rule
     // reads static imports and re-exports, not import(): today nothing here imports a job or a
     // route that way. @typescript-eslint's rule, not the core one, so the NFR-SEC11 block's
@@ -305,7 +305,6 @@ export default defineConfig(
                 '!../jobs/backup',
                 '!../jobs/dbIntegrityCheck',
                 '!../jobs/postingReconcile',
-                '!../jobs/registry',
                 '!../../jobs/attachmentSweep',
               ],
               allowTypeImports: true,
