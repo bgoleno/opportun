@@ -28,4 +28,14 @@ describe('GoogleCard', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/had no login session/i)).toBeNull();
   });
+
+  it('a connection whose callback did not verify says it was not completed (#662)', async () => {
+    mockApi({ 'GET /integrations/google': status() });
+    renderWithProviders(<GoogleCard flash="not_completed" />);
+    expect(
+      await screen.findByText(
+        'The Google connection was not completed: it was out of date, already used, or started in another session. Click Connect Google account to try again.',
+      ),
+    ).toBeInTheDocument();
+  });
 });
