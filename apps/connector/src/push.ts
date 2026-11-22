@@ -108,6 +108,9 @@ export async function pushBatch(
   if (status === 403) return { kind: 'forbidden' };
   if (status === 413) return { kind: 'too_large' };
   if (status >= 500) return { kind: 'server_error', status };
+  // Only the code is read. The server may also send a `message` written for users (#750): if it is
+  // ever printed, it goes through sync.ts's printable() first, as mail subjects do, since it may
+  // echo text that is not ours.
   const error = (await jsonOf(res)).error as { code?: unknown } | undefined;
   return { kind: 'rejected', status, code: typeof error?.code === 'string' ? error.code : null };
 }
