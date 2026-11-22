@@ -250,6 +250,15 @@ export function createAnthropicBatchProvider(target: {
       return [];
     },
 
+    async cancel(batchId) {
+      const res = await fetches.control(`${batches}/${encodeURIComponent(batchId)}/cancel`, {
+        method: 'POST',
+        headers: headers(false),
+      });
+      if (res.status === 404) return;
+      if (!res.ok) throw refused('cancel', res.status);
+    },
+
     async cleanup(batchId) {
       // Deleting the batch takes its results with it; otherwise Anthropic keeps them 29 days
       // (#634; the batch-processing guide). Allowed once processing has ended, which it has: this

@@ -467,3 +467,29 @@ describe('cleanup: the batch deleted once the results are applied (#634)', () =>
     expect(String(err?.stack)).not.toContain(KEY);
   });
 });
+
+describe('cancel: a batch nobody will collect is stopped (#784)', () => {
+  it('POSTs the cancel on the operator host, with the key', async () => {
+    const { fetch, sent } = recordingFetch(() =>
+      json({ id: BATCH_ID, type: 'message_batch', processing_status: 'canceling' }),
+    );
+    await client(fetch).cancel(BATCH_ID);
+    expect(sent.map((s) => `${s.method} ${s.url}`)).toEqual([
+      `POST ${OFFICIAL_BASE_URLS.anthropic}/messages/batches/${BATCH_ID}/cancel`,
+    ]);
+    expect(sent[0]!.headers['x-api-key']).toBe(KEY);
+  });
+
+  it('a batch already gone counts as stopped; a refusal throws naming the status only', async () => {
+    const gone = recordingFetch(() =>
+      json({ type: 'error', error: { type: 'not_found_error', message: 'x' } }, 404),
+    );
+    await expect(client(gone.fetch).cancel(BATCH_ID)).resolves.toBeUndefined();
+    const refused = recordingFetch(() =>
+      json({ type: 'error', error: { type: 'api_error', message: `key ${KEY}` } }, 500),
+    );
+    await expect(client(refused.fetch).cancel(BATCH_ID)).rejects.toThrow(
+      /^Anthropic batch cancel: HTTP 500$/,
+    );
+  });
+});

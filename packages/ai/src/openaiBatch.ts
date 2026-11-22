@@ -329,7 +329,7 @@ export function createOpenAiBatchProvider(target: {
       switch (batch.status) {
         // Still cancelling too: OpenAI may yet write output for the requests that ran, and the
         // files are final once it is cancelled (#686). Read now, a file written after would never
-        // be read or removed. (The app never cancels a batch; this is for one cancelled elsewhere.)
+        // be read or removed. (The app cancels only a batch whose account was deleted, #784.)
         case 'validating':
         case 'in_progress':
         case 'finalizing':
@@ -382,6 +382,15 @@ export function createOpenAiBatchProvider(target: {
       // The three file ids, read at the collect (#686): the cleanup then deletes them by id.
       const batch = await getBatch(batchId);
       return batch === 'gone' ? [] : fileIdsOf(batch);
+    },
+
+    async cancel(batchId) {
+      const res = await fetches.control(`${base}/batches/${id(batchId)}/cancel`, {
+        method: 'POST',
+        headers: auth,
+      });
+      if (res.status === 404) return;
+      if (!res.ok) throw refused('cancel', res.status);
     },
 
     async cleanup(batchId, refs) {

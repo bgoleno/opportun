@@ -70,6 +70,7 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig, loadSqliteDir } from '../config';
 import { closeDatabase, connectDatabase } from '../db/client';
 import { credsFromEnv, seedDemo } from '../lib/demo/seed';
+import { queueInFlightBatchCleanups } from '../jobs/rankBatch';
 
 // The seed itself is lib/demo/seed.ts (#765): this file is only the command.
 const USAGE = [
@@ -100,7 +101,10 @@ if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
     });
     const { db } = handle;
     try {
-      const report = await seedDemo(db, creds);
+      // As the nightly reset does (#784): a batch in flight gets its cleanup queued.
+      const report = await seedDemo(db, creds, undefined, undefined, {
+        beforeDelete: queueInFlightBatchCleanups,
+      });
       process.stdout.write(
         `${report.deletedExisting ? 'Re-seeded' : 'Seeded'} ${report.userIds.length} accounts, ` +
           `${report.companiesPerUser} companies, ${report.opportunitiesPerUser} opportunities, ` +

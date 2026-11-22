@@ -30,9 +30,9 @@ import {
 } from '@opportun/ai';
 import type { FastifyBaseLogger } from 'fastify';
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import { withTransaction, type Db, type Exec } from '../db/client';
-import { jobs, users } from '../db/schema';
+import { jobs, rankBatches, users } from '../db/schema';
 import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
@@ -569,8 +569,54 @@ const CleanupPayload = z.object({
   policy: ModelPolicySchema,
   providerBatchId: z.string().min(1).max(256),
   refs: z.array(z.string().min(1).max(256)).max(8),
+  /**
+   * A batch still in flight whose account was deleted (#784): nobody will collect it, so it is
+   * cancelled before its copy is removed. Absent for a collected batch.
+   */
+  cancel: z.boolean().optional(),
 });
 export type RankBatchCleanup = z.infer<typeof CleanupPayload>;
+
+/**
+ * Queues the cleanup (cancel, then delete) of each of these accounts' batches still in flight, in
+ * the caller's transaction, before the accounts are deleted (#784: no collect will run for them,
+ * so the provider's copy would stay). An instance job, so it outlives the rows (jobs.user_id
+ * cascades); no provider call is made here (tl on #715). It runs as the account named in its
+ * payload, with that account's key: on the demo, where only the reset deletes users, the
+ * reseeded account has the same key, the instance's OPPORTUN_DEMO_AI_KEY. A general user delete
+ * would have to resolve the key before the user's stored key goes; never put a key in the payload
+ * (sec on #686).
+ */
+export async function queueInFlightBatchCleanups(
+  tx: Exec,
+  userIds: readonly string[],
+): Promise<void> {
+  if (userIds.length === 0) return;
+  const inFlight = await tx
+    .select({
+      userId: rankBatches.userId,
+      policy: rankBatches.policy,
+      providerBatchId: rankBatches.providerBatchId,
+    })
+    .from(rankBatches)
+    .where(
+      and(
+        inArray(rankBatches.userId, [...userIds]),
+        eq(rankBatches.state, 'submitted'),
+        isNotNull(rankBatches.providerBatchId),
+      ),
+    )
+    .all();
+  for (const batch of inFlight) {
+    await enqueueRankBatchCleanup(tx, {
+      userId: batch.userId,
+      policy: batch.policy as unknown as RankBatchCleanup['policy'],
+      providerBatchId: batch.providerBatchId as string,
+      refs: [],
+      cancel: true,
+    });
+  }
+}
 
 /** One unfinished cleanup per provider batch, however often its collect runs (sec on #686). */
 export async function enqueueRankBatchCleanup(
@@ -604,6 +650,19 @@ export async function cleanupRankBatch(
   const ctx: UserCtx = { userId: cleanup.userId, isAdmin: false };
   const client = await rankBatchClient(db, ctx, services, cleanup.policy as ModelPolicy);
   if (client === null) throw new Error('rank batch cleanup: no batch client for its user now');
+  if (
+    cleanup.cancel === true &&
+    (await client.provider.state(cleanup.providerBatchId)) === 'in_progress'
+  ) {
+    await client.provider.cancel(cleanup.providerBatchId);
+    // A cancel takes a while to land (OpenAI: up to ten minutes, its files written at the end).
+    // Removed on a later try, with the runner's backoff, once it has ended.
+    if ((await client.provider.state(cleanup.providerBatchId)) === 'in_progress') {
+      throw new Error(
+        'rank batch cleanup: the batch is still being cancelled; removed on a later try',
+      );
+    }
+  }
   await client.provider.cleanup(cleanup.providerBatchId, cleanup.refs);
   return { status: 'removed' };
 }

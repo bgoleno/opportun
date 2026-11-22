@@ -102,6 +102,12 @@ class FakeBatches implements BatchProvider {
   cleanedRefs: (readonly string[] | undefined)[] = [];
   /** Thrown by every cleanup call while set: a refused delete. */
   cleanupError: Error | null = null;
+  /** Every batch id a cancel was asked for (#784). */
+  cancelled: string[] = [];
+  async cancel(batchId: string): Promise<void> {
+    this.cancelled.push(batchId);
+    if (this.states.get(batchId) === 'in_progress') this.states.set(batchId, 'ended');
+  }
   async cleanupRefs(batchId: string): Promise<string[]> {
     return [`file-of-${batchId}`];
   }
