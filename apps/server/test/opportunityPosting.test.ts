@@ -517,7 +517,12 @@ describe('POST /opportunities/:id/find-posting', () => {
 
     expect((await find()).json()).toMatchObject({ outcome: 'attached' });
     const first = await getOpportunity(app.db, ctxOf(a), id);
-    expect(first).toMatchObject({ postingState: 'confirmed', atsJobRef: { externalId: '1003' } });
+    // The identity's org stays its link's slug (postingAtsJobRef, tl on #140): the assisted-apply
+    // handoff compares the destination's slug with it.
+    expect(first).toMatchObject({
+      postingState: 'confirmed',
+      atsJobRef: { externalId: '1003', org: 'sentinel' },
+    });
 
     for (let i = 0; i < 2; i++) {
       const res = await find();
@@ -528,7 +533,7 @@ describe('POST /opportunities/:id/find-posting', () => {
         descriptionMd: 'my own notes on the role',
         postingState: 'confirmed',
         postingStateDetail: 'user_confirmed',
-        atsJobRef: { externalId: '1003' },
+        atsJobRef: { externalId: '1003', org: 'sentinel' },
       });
     }
   });

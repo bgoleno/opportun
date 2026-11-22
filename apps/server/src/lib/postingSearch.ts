@@ -383,14 +383,27 @@ function referenceHit(
     const wanted = ref.externalId.toLowerCase();
     for (const read of reads) {
       if (read.board.kind !== ref.kind) continue;
-      if (ref.org !== null && ref.org !== read.board.org) continue;
       const hit = read.postings.find(
-        (p) => p.externalId != null && p.externalId.toLowerCase() === wanted,
+        (p) =>
+          p.externalId != null &&
+          p.externalId.toLowerCase() === wanted &&
+          // The board read, or the board the posting's own link names (qa and tl on #830): an
+          // identity's org is the slug of its link (postingAtsJobRef, tl on #140: the handoff
+          // compares it), which can be another spelling than the board's token (vandelay on the
+          // vandelayindustries board). Either one is this job.
+          (ref.org === null ||
+            ref.org === read.board.org ||
+            ref.org === postingUrlSlug(p.postingUrl)),
       );
       if (hit !== undefined) return { posting: hit, board: read.board };
     }
   }
   return null;
+}
+
+/** The board slug a posting's own link names, if it is a board-host link. */
+function postingUrlSlug(url: string | null | undefined): string | null {
+  return url == null ? null : (boardFromUrl(url)?.slug ?? null);
 }
 
 /**
