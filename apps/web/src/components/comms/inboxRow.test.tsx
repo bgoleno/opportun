@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { formatDateTime } from '@/lib/opportunities';
-import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
+import { mockApi, renderWithProviders, toastRegion, type ApiCall } from '@/test/render';
 import type { CommunicationView } from './api';
 import { Inbox } from './Inbox';
 import { InboxRow } from './InboxRow';
@@ -374,8 +374,10 @@ describe('Inbox', () => {
     await user.click(await screen.findByRole('button', { name: /^Reject 2/ }));
     const dialog = await screen.findByRole('dialog', { name: 'Reject 2 messages?' });
     await user.click(within(dialog).getByRole('button', { name: 'Reject 2' }));
-    expect(await screen.findByText('1 rejected')).toBeInTheDocument();
-    expect(screen.getByText(/1 was changed elsewhere and left as it is\./)).toBeInTheDocument();
+    expect(await toastRegion().findByText('1 rejected')).toBeInTheDocument();
+    expect(
+      toastRegion().getByText(/1 was changed elsewhere and left as it is\./),
+    ).toBeInTheDocument();
   });
 });
 
