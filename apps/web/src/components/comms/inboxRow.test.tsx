@@ -1244,7 +1244,7 @@ describe('Inbox bulk Reject: a reload behind the confirmation (#841)', () => {
     release();
   });
 
-  it('a reload that keeps every row leaves the confirmation open, with no message', async () => {
+  it('a reload that keeps every row leaves the confirmation open, and its reject says only what it did', async () => {
     const user = userEvent.setup();
     const { release } = heldFilter(rows);
     renderWithProviders(<Inbox />);
@@ -1254,6 +1254,11 @@ describe('Inbox bulk Reject: a reload behind the confirmation (#841)', () => {
       expect(within(dialog).getByRole('button', { name: 'Reject 2' })).toBeEnabled(),
     );
     expect(screen.getByRole('dialog', { name: 'Reject 2 messages?' })).toBeInTheDocument();
+    expect(screen.queryByText('Nothing was rejected')).toBeNull();
+    // And once confirmed, the bar goes with its rows, which is not the list changing under it.
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 2' }));
+    expect(await screen.findByText('1 rejected')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(screen.queryByText('Nothing was rejected')).toBeNull();
   });
 });
