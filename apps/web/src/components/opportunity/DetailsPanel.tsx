@@ -299,7 +299,16 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
   async function runFind() {
     setFindError(null);
     try {
-      const result = await find.mutateAsync();
+      const result = await find.mutateAsync(opp.postingState ?? 'none');
+      if (result.outcome === 'already_confirmed') {
+        // A background check finished while the page was open (#852): nothing searched again.
+        toast({
+          title: 'Already confirmed',
+          description: "The board check finished while this page was open; it's up to date now.",
+          variant: 'success',
+        });
+        return;
+      }
       if (result.outcome === 'attached') {
         const title = result.candidate?.posting.title ?? opp.title;
         // #114: a single confident match from a board read only in part (result.note) is

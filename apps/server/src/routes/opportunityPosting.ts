@@ -20,7 +20,7 @@
 import { CAPTURE_MAX_TEXT } from '../lib/captureText';
 import { keyedFetch } from '../lib/safeFetch';
 import { buffer } from 'node:stream/consumers';
-import { NormalizedPostingSchema } from '@opportun/core';
+import { NormalizedPostingSchema, POSTING_STATES } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -57,10 +57,23 @@ const CandidateView = z.object({
   otherLocations: z.array(z.string()),
 });
 
+/**
+ * The posting state the page saw when Find posting was clicked ('none' for no state yet), so a
+ * click landing after a background check confirmed the posting does not refetch it (#852).
+ */
+const FindQuery = z.object({ seen: z.enum([...POSTING_STATES, 'none']).optional() });
+
 const FindResponse = z.object({
   /** 'identified' (#398): the opportunity's own careers link got its Greenhouse identity from
    *  Greenhouse's API; no posting was attached. */
-  outcome: z.enum(['attached', 'identified', 'candidates', 'none', 'no_board']),
+  outcome: z.enum([
+    'attached',
+    'identified',
+    'candidates',
+    'none',
+    'no_board',
+    'already_confirmed',
+  ]),
   /** Present when the outcome is 'attached' or 'identified'. */
   opportunity: OpportunityView.optional(),
   candidate: CandidateView.optional(),
@@ -135,12 +148,19 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
 
   api.post(
     '/opportunities/:id/find-posting',
-    { schema: { params: IdParams, response: { 200: FindResponse } } },
+    { schema: { params: IdParams, querystring: FindQuery, response: { 200: FindResponse } } },
     async (req) => {
       const ctx = app.requireUser(req);
       const { id } = req.params;
       const sctx = { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log };
       const current = await getOpportunity(db, ctx, id);
+      // The page's click saw the posting not confirmed yet, and a background check has confirmed it
+      // since (#852, qa on #865: a click as the check ends). Not a Refetch the user asked for: the
+      // posting is answered as it now is, and nothing is read or written.
+      const seen = req.query.seen;
+      if (seen !== undefined && seen !== 'confirmed' && current.postingState === 'confirmed') {
+        return { outcome: 'already_confirmed' as const, opportunity: current };
+      }
       // A background check is reading the board for this posting now (#852, qa): a click then
       // would be a second search racing it, writing a second attach. Its own result lands soon.
       // Its unfinished job is the signal, not the state alone (tl on #865): 'searching' left by a

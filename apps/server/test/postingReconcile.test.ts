@@ -196,6 +196,38 @@ describe('reconcilePosting', () => {
     expect(click.statusCode, click.body).toBe(200);
   });
 
+  // qa on #865: a click just as the check ends found the posting confirmed and refetched it, a
+  // second attach. The page says what state it saw; a posting confirmed since is left alone.
+  it('a click that saw the check running, landing just after it confirmed, changes nothing (#852)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const opp = await seedCaptured(app, ctx);
+    await run(app, ctx, opp.id, boardWith([atsPosting()]));
+    const confirmed = await getOpportunity(app.db, ctx, opp.id);
+    expect(confirmed.postingState).toBe('confirmed');
+
+    const click = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${opp.id}/find-posting?seen=searching`,
+    });
+    expect(click.statusCode, click.body).toBe(200);
+    expect(click.json()).toMatchObject({ outcome: 'already_confirmed' });
+    const { items } = await listActivities(app.db, ctx, opp.id, { limit: 50, offset: 0 });
+    expect(items.filter((i) => i.title === 'Job posting attached')).toEqual([]);
+    expect(await getOpportunity(app.db, ctx, opp.id)).toMatchObject({
+      descriptionMd: confirmed.descriptionMd,
+      updatedAt: confirmed.updatedAt,
+    });
+
+    // A Refetch the user asked for on a confirmed posting still runs.
+    const refetch = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${opp.id}/find-posting?seen=confirmed`,
+    });
+    expect(refetch.json().outcome).not.toBe('already_confirmed');
+  });
+
   it('re-fingerprints what it wrote, so its own text is not read as a user edit', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);

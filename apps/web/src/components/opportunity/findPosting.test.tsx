@@ -96,6 +96,22 @@ describe('Find posting', () => {
     expect(await screen.findByText(/still checking this posting/i)).toBeInTheDocument();
   });
 
+  // qa on #865: a click as a background check ends. The click says what state the page saw, and
+  // a posting confirmed since is answered as it is, said so, with nothing attached again.
+  it('a click says the state it saw, and a posting confirmed meanwhile is said so (#852)', async () => {
+    const api = setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'already_confirmed',
+        opportunity: { ...BARE, postingState: 'confirmed' },
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={{ ...BARE, postingState: 'searching' }} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(await screen.findByText('Already confirmed')).toBeInTheDocument();
+    const call = api.calls.find((c: ApiCall) => c.path === '/opportunities/opp-1/find-posting');
+    expect(call?.search).toContain('seen=searching');
+  });
+
   it('attaches a single match without opening the picker', async () => {
     const api = setup({
       'POST /opportunities/opp-1/find-posting': {
