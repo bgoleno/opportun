@@ -949,6 +949,7 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'failed to persist a refreshed Google token': ['user.id'],
   'google token exchange failed': [],
   'google token revocation failed': [],
+  'google grant revocation after a failed connect failed': [],
   'oauth sign-in exchange failed': ['opportun.oauth.provider'],
 };
 

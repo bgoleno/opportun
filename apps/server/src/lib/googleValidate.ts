@@ -9,7 +9,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client';
 import { settings } from '../db/schema';
-import type { UserCtx } from '../repos/base';
+import type { Exec, UserCtx } from '../repos/base';
 import { readSetting, writeSetting } from './ai';
 import type { GoogleClientCreds } from './google';
 import type { safeFetch } from './safeFetch';
@@ -140,7 +140,7 @@ export async function validateGoogleClient(
 }
 
 export async function storeGoogleValidation(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   v: GoogleClientValidation,
 ): Promise<void> {
@@ -158,7 +158,7 @@ export async function readGoogleValidation(
   return parsed.success ? parsed.data : null;
 }
 
-export async function deleteGoogleValidation(db: Db, ctx: UserCtx): Promise<void> {
+export async function deleteGoogleValidation(db: Exec, ctx: UserCtx): Promise<void> {
   await db
     .delete(settings)
     .where(and(eq(settings.key, googleValidationKey(ctx.userId)), eq(settings.userId, ctx.userId)))
