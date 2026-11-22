@@ -3,31 +3,10 @@
 // the real server and its own store. Nothing is stubbed: with collection off the store is empty,
 // so the chart and its table show zero calls, which is what an instance that never turned
 // collection on has.
-import { expect, test, type BrowserContext, type Page } from '@playwright/test';
-import { ADMIN } from './global-setup';
+import { expect, test, type Page } from '@playwright/test';
+import { signInAsAdmin } from './helpers';
 
 const HOUR = 3_600_000;
-
-/**
- * Signs the admin in once for this file and reuses that session's cookies in its other tests:
- * every sign-in counts against the login limit (10 per address and email in 15 minutes), and
- * the suite signs the admin in from several files (#749).
- */
-let adminCookies: Awaited<ReturnType<BrowserContext['cookies']>> | undefined;
-async function signInAsAdmin(page: Page): Promise<void> {
-  if (adminCookies !== undefined) {
-    await page.context().addCookies(adminCookies);
-    await page.goto('/');
-    await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
-    return;
-  }
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(ADMIN.email);
-  await page.getByLabel('Password', { exact: true }).fill(ADMIN.password);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
-  adminCookies = await page.context().cookies();
-}
 
 /** The span of the next series request, and its response's status. */
 async function nextSeriesSpan(page: Page, act: () => Promise<unknown>): Promise<number> {
