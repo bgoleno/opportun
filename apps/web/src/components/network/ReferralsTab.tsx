@@ -280,9 +280,16 @@ export function ReferralsTab({
               {asks.map((a) => (
                 <li key={a.activityId} className="grid gap-2 rounded-md border p-3">
                   <div className="flex items-baseline justify-between gap-2">
-                    <Link to="/network/$id" params={{ id: a.contactId }} className={linkClass}>
-                      {a.name}
-                    </Link>
+                    {a.removed ? (
+                      // Deleted since the ask (#694): who it was, and nothing to open.
+                      <span className="font-medium">
+                        {a.name} <span className="text-muted-foreground">(removed)</span>
+                      </span>
+                    ) : (
+                      <Link to="/network/$id" params={{ id: a.contactId }} className={linkClass}>
+                        {a.name}
+                      </Link>
+                    )}
                     <time
                       className="text-xs text-muted-foreground"
                       dateTime={new Date(a.occurredAt).toISOString()}
