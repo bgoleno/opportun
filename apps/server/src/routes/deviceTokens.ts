@@ -147,10 +147,10 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
     { schema: { params: IdParams, response: { 204: z.null() } } },
     async (req, reply) => {
       const ctx = requireUser(req);
-      // Recorded by the call that revoked it, with the revocation (#802): a second revoke of a
-      // revoked token records nothing, and a failed write leaves the token working.
-      await revokeDeviceToken(db, ctx, req.params.id, async (tx, revoked) => {
-        await audit(tx, 'device_token.revoked', {
+      // Recorded by the call that revoked it, after the revocation has committed (#802, sec): a
+      // second revoke of a revoked token records nothing, and a failed write leaves it revoked.
+      await revokeDeviceToken(db, ctx, req.params.id, async (revoked) => {
+        await audit(db, 'device_token.revoked', {
           userId: ctx.userId,
           ip: req.ip,
           detail: { id: revoked.id, name: revoked.name },

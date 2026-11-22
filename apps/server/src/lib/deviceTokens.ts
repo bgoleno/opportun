@@ -184,14 +184,15 @@ export async function listDeviceTokens(db: Db, ctx: UserCtx): Promise<DeviceToke
 
 /**
  * Revokes the caller's own token (idempotent: the first revocation time sticks); 404 otherwise.
- * `onRevoked` runs only for the call that revoked it, in one transaction with that conditional
- * UPDATE (#802): its audit row. After the race point, so nothing is held open across the wait.
+ * `onRevoked` runs only for the call that revoked it, after that conditional UPDATE has
+ * committed (#802, sec): its audit row. A revocation never waits on its record, so a failed audit
+ * write leaves the token revoked, as a logout leaves the session ended.
  */
 export async function revokeDeviceToken(
   db: Db,
   ctx: UserCtx,
   id: string,
-  onRevoked?: (tx: Exec, meta: DeviceTokenMeta) => Promise<void>,
+  onRevoked?: (meta: DeviceTokenMeta) => Promise<void>,
 ): Promise<DeviceTokenMeta> {
   const owned = and(eq(deviceTokens.id, id), eq(deviceTokens.userId, ctx.userId));
   const row = await db.select(META_COLUMNS).from(deviceTokens).where(owned).get();
@@ -200,17 +201,16 @@ export async function revokeDeviceToken(
   await racePoint('deviceTokens.revoke');
   const now = Date.now();
   // Only an unrevoked token: of two concurrent revokes the first time sticks.
-  const revoked = await withTransaction(db, async (tx) => {
-    const row = await tx
-      .update(deviceTokens)
-      .set({ revokedAt: now, updatedAt: now })
-      .where(and(owned, isNull(deviceTokens.revokedAt)))
-      .returning(META_COLUMNS)
-      .get();
-    if (row !== undefined && onRevoked !== undefined) await onRevoked(tx, row);
-    return row;
-  });
-  if (revoked !== undefined) return revoked;
+  const revoked = await db
+    .update(deviceTokens)
+    .set({ revokedAt: now, updatedAt: now })
+    .where(and(owned, isNull(deviceTokens.revokedAt)))
+    .returning(META_COLUMNS)
+    .get();
+  if (revoked !== undefined) {
+    if (onRevoked !== undefined) await onRevoked(revoked);
+    return revoked;
+  }
   const current = await db.select(META_COLUMNS).from(deviceTokens).where(owned).get();
   if (current === undefined) throw notFound();
   return current;

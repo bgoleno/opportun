@@ -140,16 +140,17 @@ export async function secretRoutes(app: FastifyInstance): Promise<void> {
     { schema: { params: IdParams, response: { 204: z.null() } } },
     async (req, reply) => {
       const ctx = requireUser(req);
-      // The delete, its key check record and its audit row commit together (#802).
+      // The delete and its key check record commit together, and the audit row after (#802,
+      // sec): a removal never waits on its record, so a failed write leaves the secret deleted.
       const removed = await withTransaction(db, async (tx) => {
         const gone = await deleteSecret(tx, ctx, req.params.id);
         await deleteKeyValidation(tx, ctx, gone.id);
-        await audit(tx, 'secret.deleted', {
-          userId: ctx.userId,
-          ip: req.ip,
-          detail: { id: gone.id, kind: gone.kind, label: gone.label },
-        });
         return gone;
+      });
+      await audit(db, 'secret.deleted', {
+        userId: ctx.userId,
+        ip: req.ip,
+        detail: { id: removed.id, kind: removed.kind, label: removed.label },
       });
       // An older key of that provider is now the one in use, or there is none and a drain says so.
       if (removed.kind === 'ai_api_key') await resumeAfterKeyChange(db, ctx);

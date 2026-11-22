@@ -245,13 +245,28 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
         // Best effort: status shows no address.
       }
       // The tokens and the audit row commit together (#802).
-      await writeTokens(db, ctx, merged, async (tx) => {
-        await audit(tx, 'google.connected', {
-          userId: ctx.userId,
-          ip: req.ip,
-          detail: { scopeSet, scopes: merged.scopes },
+      try {
+        await writeTokens(db, ctx, merged, async (tx) => {
+          await audit(tx, 'google.connected', {
+            userId: ctx.userId,
+            ip: req.ip,
+            detail: { scopeSet, scopes: merged.scopes },
+          });
         });
-      });
+      } catch (err) {
+        // Nothing was stored, but Google has issued the grant (sec, tl on #815): revoke it, best
+        // effort, so the account does not keep listing the app as authorized.
+        const grant = tokens.refresh_token ?? tokens.access_token ?? null;
+        if (grant != null) {
+          try {
+            await app.google.revokeToken(client, grant);
+          } catch {
+            // Never the token, nor the error (it carries the request).
+            req.log.warn('google grant revocation after a failed connect failed');
+          }
+        }
+        throw err;
+      }
       return reply.redirect(SETTINGS_PAGE);
     },
   );
@@ -293,13 +308,13 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
           req.log.warn('google token revocation failed');
         }
       }
-      // The deletes and the audit row commit together (#802). The revocation above, at Google,
-      // cannot be undone: after a failed audit write the stored tokens stay, already revoked.
+      // The deletes commit together, and the audit row after (#802, sec): a removal never waits on
+      // its record, so a failed write leaves the connection removed, here as at Google above.
       await withTransaction(db, async (tx) => {
         await deleteGoogleSecrets(tx, ctx);
         await deleteGoogleValidation(tx, ctx);
-        await audit(tx, 'google.disconnected', { userId: ctx.userId, ip: req.ip });
       });
+      await audit(db, 'google.disconnected', { userId: ctx.userId, ip: req.ip });
       return reply.code(204).send(null);
     },
   );

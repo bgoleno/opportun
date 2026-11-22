@@ -289,14 +289,13 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
       ) {
         return reply;
       }
-      // The removal and its audit row commit together (#802).
-      await withTransaction(db, async (tx) => {
-        await deleteProviderCreds(tx, provider);
-        await audit(tx, 'admin.oauth_provider_removed', {
-          userId: ctx.userId,
-          ip: req.ip,
-          detail: { provider },
-        });
+      // The removal commits, and the audit row after (#802, sec): a failed write leaves the
+      // provider removed rather than signing people in through it still.
+      await deleteProviderCreds(db, provider);
+      await audit(db, 'admin.oauth_provider_removed', {
+        userId: ctx.userId,
+        ip: req.ip,
+        detail: { provider },
       });
       return reply.code(204).send(null);
     },
