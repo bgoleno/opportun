@@ -58,7 +58,14 @@ export function travelsUnencrypted(serverUrl: string): boolean {
   }
   if (url.protocol !== 'http:') return false;
   const host = url.hostname.toLowerCase().replace(/\.$/, '');
-  return host !== 'localhost' && !/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  // This computer by any of its names (#699): localhost and its subdomains (which resolve to
+  // loopback, RFC 6761), 127/8 and the IPv6 loopback.
+  const loopback =
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host === '[::1]' ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  return !loopback;
 }
 
 /**
