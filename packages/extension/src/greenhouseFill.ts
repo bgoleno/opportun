@@ -104,6 +104,11 @@ export type NotFilledReason =
   | 'withheld'
   /** No option on the form's list equals the reviewed value (`detail`), by the bound. */
   | 'no_option'
+  /**
+   * An option equals the value (`detail`) but sits inside a link or a control, so it was not
+   * clicked (#738: said so, rather than that it is missing).
+   */
+  | 'option_unclickable'
   /** More than one option equals the reviewed value (`detail`): none is chosen. */
   | 'several_options'
   /** The form's list did not appear (no list named by aria-controls) by the bound. */
@@ -248,6 +253,8 @@ export async function fillGreenhouseForm(
     | { kind: 'one'; option: Element }
     | { kind: 'several' }
     | { kind: 'none' }
+    // An equal option is there, but inside a link or a control: optionsOf leaves it out (#738).
+    | { kind: 'unclickable' }
     | { kind: 'no_list' }
     | { kind: 'theirs'; reason: 'choose_on_form' | 'has_value' };
 
@@ -651,6 +658,17 @@ export async function fillGreenhouseForm(
       const equal = job.country
         ? (t: string): boolean => same(t).replace(/ \+\d{1,4}$/, '') === want
         : (t: string): boolean => same(t) === want;
+      // Whether the list this box names holds an equal option that optionsOf left out for where
+      // it sits (inside a link or a control): read only, so the report can say why it was not
+      // chosen rather than that it is missing (#738). Nothing here is clicked.
+      const unclickableEqual = (b: Element): boolean => {
+        const list = doc.getElementById(b.getAttribute('aria-controls') ?? '');
+        if (list === null) return false;
+        const usable = optionsOf(b) ?? [];
+        return Array.from(list.querySelectorAll('[role="option"]')).some(
+          (o) => !usable.includes(o) && equal(o.textContent ?? ''),
+        );
+      };
       // Emptied only while it still holds what this fill wrote, never over the user's own text.
       const empty = (): void => {
         if (box.value !== value) return;
@@ -697,7 +715,13 @@ export async function fillGreenhouseForm(
               if (first === undefined) return null;
               return equals.length === 1 ? { kind: 'one', option: first } : { kind: 'several' };
             },
-            () => theirs() ?? (optionsOf(box) === null ? { kind: 'no_list' } : { kind: 'none' }),
+            () =>
+              theirs() ??
+              (optionsOf(box) === null
+                ? { kind: 'no_list' }
+                : unclickableEqual(box)
+                  ? { kind: 'unclickable' }
+                  : { kind: 'none' }),
             3000,
           );
       // The page moved during this list's wait: nothing more is written, not the click, not the
@@ -751,7 +775,9 @@ export async function fillGreenhouseForm(
                   ? 'several_options'
                   : found.kind === 'no_list'
                     ? 'list_not_shown'
-                    : 'no_option',
+                    : found.kind === 'unclickable'
+                      ? 'option_unclickable'
+                      : 'no_option',
               detail: shown(value),
             },
       );
