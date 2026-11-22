@@ -231,6 +231,23 @@ export async function confirm(
     });
   }
 
+  // The row as it is now (#851, qa): the board read can take seconds, and a description the user
+  // saved meanwhile is theirs (D11). `opp` is what this run read before the board; anything
+  // changed since is left alone, and said so, instead of replaced with the board's copy.
+  const now = await getOpportunity(db, ctx, opp.id);
+  if (
+    now.descriptionMd !== opp.descriptionMd ||
+    now.descriptionFingerprint !== opp.descriptionFingerprint
+  ) {
+    return await flag(
+      db,
+      ctx,
+      opp.id,
+      'edited',
+      'The description changed while the board was being checked, so the board search left it as it is.',
+    );
+  }
+
   const patch: Parameters<typeof updateOpportunity>[3] = {};
   if (description !== '') {
     patch.descriptionMd = description;

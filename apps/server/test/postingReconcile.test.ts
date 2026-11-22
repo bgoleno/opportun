@@ -131,6 +131,43 @@ describe('reconcilePosting', () => {
     expect(out.postingUrl).toBe('https://job-boards.greenhouse.io/soylent/jobs/1000000001');
   });
 
+  // #851 (qa's regression pass 3): the board read is held, and the user saves a description
+  // meanwhile; the check must not then replace it with the board's copy.
+  it('a description the user saves while the board is being read is kept (#851)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const opp = await seedCaptured(app, ctx);
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    let reading: () => void = () => undefined;
+    const started = new Promise<void>((r) => {
+      reading = r;
+    });
+    const board: BoardLookup = async (...args) => {
+      reading();
+      await held;
+      return boardWith([atsPosting()])(...args);
+    };
+
+    const check = run(app, ctx, opp.id, board);
+    await started;
+    const saved = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/opportunities/${opp.id}`,
+      payload: { descriptionMd: 'My own notes, saved while the check ran.' },
+    });
+    expect(saved.statusCode, saved.body).toBe(200);
+    release();
+    await check;
+
+    const out = await getOpportunity(app.db, ctx, opp.id);
+    expect(out.descriptionMd).toBe('My own notes, saved while the check ran.');
+    expect(out.postingState).not.toBe('confirmed');
+  });
+
   it('re-fingerprints what it wrote, so its own text is not read as a user edit', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
