@@ -236,7 +236,14 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
   const report = element<HTMLElement>(doc, 'prefill-report');
   const openResult = element<HTMLAnchorElement>(doc, 'open-result');
 
+  /**
+   * True from the moment the running action's requests are cut at its time limit until busy shows
+   * the timeout (#783): what the cut request makes the action say meanwhile ("Could not reach the
+   * server…") is not shown, so the live region announces the timeout alone.
+   */
+  let cutOff = false;
   const show = ({ tone, text }: Rendered): void => {
+    if (cutOff) return;
     status.dataset.tone = tone;
     status.textContent = text;
   };
@@ -265,7 +272,8 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
    * action starts meanwhile, and its own requests go out unlimited here, with its own bound
    * (OPEN_LOOKUP_MS; sec on #713).
    */
-  let action: { controller: AbortController; expired: boolean; waiting: number } | undefined;
+  let action:
+    { controller: AbortController; expired: boolean; waiting: number; wrote: boolean } | undefined;
   const limited = async <T>(call: (signal: AbortSignal | undefined) => Promise<T>): Promise<T> => {
     const a = action;
     if (a === undefined) return call(undefined);
@@ -277,8 +285,11 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       a.waiting -= 1;
     }
   };
-  const fetch: FetchLike = (url, init) =>
-    limited((signal) => deps.fetch(url, signal === undefined ? init : { ...init, signal }));
+  // Every request on `fetch` is a POST: the action has sent something that could save (#783).
+  const fetch: FetchLike = (url, init) => {
+    if (action !== undefined) action.wrote = true;
+    return limited((signal) => deps.fetch(url, signal === undefined ? init : { ...init, signal }));
+  };
   const get: GetLike = (url, init) =>
     limited((signal) => deps.get(url, signal === undefined ? init : { ...init, signal }));
   const showOutcome = (o: Outcome, site?: CaptureSiteId): void => show(renderOutcome(o, site));
@@ -335,7 +346,10 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     report.replaceChildren();
     hideResultLink();
     const controller = new AbortController();
-    const current = { controller, expired: false, waiting: 0 };
+    const current = { controller, expired: false, waiting: 0, wrote: false };
+    controller.signal.addEventListener('abort', () => {
+      cutOff = true;
+    });
     action = current;
     let done = false;
     void (deps.limit ?? (() => new Promise<void>(() => undefined)))(ACTION_TIMEOUT_MS).then(() => {
@@ -351,8 +365,12 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       done = true;
       action = undefined;
       if (controller.signal.aborted) {
+        cutOff = false;
         report.replaceChildren();
-        show({ tone: 'error', text: opts.writes === true ? TIMED_OUT_MAY_HAVE_SAVED : TIMED_OUT });
+        // "May still have saved" only when this action writes and its write went out: a Record
+        // cut while reading /confirmable sent nothing (#783).
+        const mayHaveSaved = opts.writes === true && current.wrote;
+        show({ tone: 'error', text: mayHaveSaved ? TIMED_OUT_MAY_HAVE_SAVED : TIMED_OUT });
       }
       release();
       opts.button?.focus();
@@ -808,16 +826,21 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       // The settings and the lookup, bounded (OPEN_LOOKUP_MS): past the bound the open gives up
       // without a word and releases the buttons, and an answer that comes later is dropped, so
       // it can never start a fill on a popup the user has since used.
+      // Giving up also cancels the request (#783): it would otherwise stay open until the server
+      // or the browser ended it.
+      const lookup = new AbortController();
+      const lookupGet: GetLike = (url, init) => deps.get(url, { ...init, signal: lookup.signal });
       const decision = (async () => {
         const s = await ready();
         if (isOutcome(s)) return null;
-        return { s, current: await fetchCurrent(get, s, tab.url) };
+        return { s, current: await fetchCurrent(lookupGet, s, tab.url) };
       })();
       decision.catch(() => undefined);
       const decided = await Promise.race([
         decision,
         deps.wait(OPEN_LOOKUP_MS).then(() => 'gave_up' as const),
       ]);
+      if (decided === 'gave_up') lookup.abort();
       if (decided === null || decided === 'gave_up') return;
       const { s, current } = decided;
       if (current.kind !== 'attempt' || !current.attempt.firstRead) return;
