@@ -41,7 +41,7 @@ describe('the layer rule (#763)', () => {
 
   it('allows the job modules it names, and a type-only import of any', async () => {
     expect(
-      await rules("import { enqueue } from '../jobs/runner';\nvoid enqueue;\n", LIB),
+      await rules("import { verifySnapshot } from '../jobs/backup';\nvoid verifySnapshot;\n", LIB),
     ).not.toContain(RULE);
     expect(
       await rules(
@@ -65,6 +65,14 @@ describe('the layer rule (#763)', () => {
         seed,
       ),
     ).toContain(RULE);
+  });
+
+  it('refuses the job modules taken off the list as lib/ took their place (#788)', async () => {
+    for (const mod of ['runner', 'discoveryKinds', 'gmailSync', 'submissionSnapshot']) {
+      expect(await rules(`import { x } from '../jobs/${mod}';\nvoid x;\n`, LIB), mod).toContain(
+        RULE,
+      );
+    }
   });
 
   it('leaves jobs/ alone: the rule is for the layers below it', async () => {

@@ -36,7 +36,7 @@ import {
   splitConfig,
   type DiscoveryResultView,
 } from '../repos/discovery';
-import { DISCOVERY_RUN_KIND, MULTI_POSTED_PREFIX, MULTI_POSTED_SCORE_CAP } from './discoveryKinds';
+import { DISCOVERY_RUN_KIND, MULTI_POSTED_PREFIX, MULTI_POSTED_SCORE_CAP } from '../lib/jobKinds';
 import { requireService, type JobHandler } from './registry';
 import { obs } from '../obs';
 import { workflow } from '../obs/workflow';

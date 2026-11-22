@@ -48,7 +48,7 @@ import { enqueueRankWaiting } from '../jobs/discoveryRankWaiting';
 import { rankBudgetHasRoom } from '../jobs/rankBudget';
 import { rankBudgetSkips, usageRollup } from '../repos/taskRuns';
 import { IdParams } from './common';
-import { DISCOVERY_RANK_KIND } from '../jobs/discoveryKinds';
+import { DISCOVERY_RANK_KIND } from '../lib/jobKinds';
 import { resumeAfterKeyChange } from '../jobs/discoveryRankWaiting';
 
 const TaskKeySchema = z.enum(TASK_KEYS);

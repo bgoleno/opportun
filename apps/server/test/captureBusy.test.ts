@@ -14,7 +14,7 @@ import type { PostgresConfig } from '../src/config';
 import { lockScope, rawGet, withTransaction } from '../src/db/client';
 import { onSlowTransaction } from '../src/db/gate';
 import { discoveryRuns, jobs, opportunities } from '../src/db/schema';
-import { POSTING_RECONCILE_KIND } from '../src/jobs/discoveryKinds';
+import { POSTING_RECONCILE_KIND } from '../src/lib/jobKinds';
 import { CAPTURE_SLOT, withCaptureSlot } from '../src/lib/captureLimit';
 import { HttpError } from '../src/lib/errors';
 import { setRaceHook } from '../src/lib/racePoints';

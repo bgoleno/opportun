@@ -13,12 +13,12 @@
 //
 //   A purge never breaks something in flight. A body an unfinished classify job will read is
 //   left alone, and a file two rows share is unlinked from one of them rather than deleted.
+import { CLASSIFY_JOB_KIND, classifyDedupeKey } from '../lib/mailClassifyQueue';
 import { and, eq, inArray, isNotNull, ne, sql } from 'drizzle-orm';
 import { communications, discoveryResults, jobs } from '../db/schema';
 import type { Db } from '../db/client';
 import type { Storage } from '../lib/storage';
 import type { UserCtx } from '../repos/base';
-import { CLASSIFY_JOB_KIND, classifyDedupeKey } from './mailIngest';
 import { cancelJob, type JobRow } from './runner';
 
 /** Job states that still have a run ahead of them. */

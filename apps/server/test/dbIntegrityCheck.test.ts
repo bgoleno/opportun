@@ -1,6 +1,7 @@
 // Live database integrity check (issue #170): a healthy run writes its result where the
 // backups surface already reads it, and a failed one surfaces as a job failure, same as any
 // other job (routes/jobs.ts).
+import { enqueue } from '../src/lib/jobQueue';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import type { Db } from '../src/db/client';
@@ -12,7 +13,6 @@ import {
   readLiveCheck,
   runDbIntegrityCheck,
 } from '../src/jobs/dbIntegrityCheck';
-import { enqueue } from '../src/jobs/runner';
 import { useApi } from './api';
 import { sqliteOnly, testDialect } from './db';
 

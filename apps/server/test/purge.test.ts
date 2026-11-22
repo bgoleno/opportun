@@ -6,6 +6,7 @@
 // changes nothing, an accepted lead that is never touched, a tombstone that keeps dedupe working
 // so a purged lead does not come back on the next sync, and a body that some unfinished job is
 // still going to read being left alone.
+import { CLASSIFY_JOB_KIND, classifyDedupeKey } from '../src/lib/mailClassifyQueue';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
@@ -17,7 +18,6 @@ import {
   discoverySources,
   jobs,
 } from '../src/db/schema';
-import { CLASSIFY_JOB_KIND, classifyDedupeKey } from '../src/jobs/mailIngest';
 import {
   drainBlockingClassifyJobs,
   previewPurge,

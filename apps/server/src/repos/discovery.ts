@@ -1,6 +1,7 @@
 // Discovery sources, runs and results (FR-D1..D3). Every function is scoped to the caller: a
 // source, run or result of another user is a 404, and a reference (role target, company,
 // source, run) must be the caller's own.
+import { removeSchedule, setSchedule, userCronProblem } from '../lib/jobQueue';
 import {
   newId,
   type Disposition,
@@ -41,8 +42,7 @@ import { descNullsLast, jsonText, likePrefix } from '../db/dialect';
 import { HttpError, notFound } from '../lib/errors';
 import { isBoardSource, prefilter, prefilterHolds, type PrefilterVerdict } from '../lib/prefilter';
 import { PREFILTER_ON_POSITIVES, PREFILTER_ON_RECALL_PERCENT } from '../lib/prefilter';
-import { DISCOVERY_RUN_KIND } from '../jobs/discoveryKinds';
-import { removeSchedule, setSchedule, userCronProblem } from '../jobs/runner';
+import { DISCOVERY_RUN_KIND } from '../lib/jobKinds';
 import type { Db, Exec, UserCtx } from './base';
 import { getOpportunity } from './opportunities';
 import { countWhere, orderBy, sortColumns, type ListOpts, type Page } from './list';

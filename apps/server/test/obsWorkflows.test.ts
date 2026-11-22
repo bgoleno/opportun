@@ -2,6 +2,7 @@
 // each starts an `invoke_workflow {name}` span where the table says, for its user, and the jobs
 // it continues into carry its trace in jobs.trace_context (14.6). An enqueue that some other path
 // shares starts its job's own trace. With collection off nothing of this is recorded.
+import { enqueueClassify, CLASSIFY_JOB_KIND } from '../src/lib/mailClassifyQueue';
 import { simulateReadableStream } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { trace } from '@opentelemetry/api';
@@ -13,8 +14,7 @@ import { jobs, obsSpans, obsTraces } from '../src/db/schema';
 import { companyTagsJob } from '../src/jobs/companyTags';
 import { rankWaitingJob } from '../src/jobs/discoveryRankWaiting';
 import { discoveryRunJob } from '../src/jobs/discoveryRun';
-import { gmailSyncJob, CLASSIFY_JOB_KIND } from '../src/jobs/gmailSync';
-import { enqueueClassify } from '../src/jobs/mailIngest';
+import { gmailSyncJob } from '../src/jobs/gmailSync';
 import type { JobContext, JobHandler } from '../src/jobs/registry';
 import { obs, setCollecting } from '../src/obs';
 import { flushSpans } from '../src/obs/tracing';

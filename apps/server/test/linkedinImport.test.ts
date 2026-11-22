@@ -4,6 +4,7 @@
 // header, quoted fields holding commas and doubled quotes, and connections without an email.
 // The export ZIP upload is the only LinkedIn data path: nothing here (or in the app) fetches
 // linkedin.com (C-1).
+import { enqueue } from '../src/lib/jobQueue';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +13,7 @@ import type { FastifyInstance } from 'fastify';
 import { zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { communications, companies, networkContacts, jobs } from '../src/db/schema';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { runNextJob } from '../src/jobs/runner';
 import {
   LINKEDIN_IMPORT_JOB_KIND,
   legacyMessageExternalId,

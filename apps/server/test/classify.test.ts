@@ -1,3 +1,4 @@
+import { CLASSIFY_JOB_KIND, enqueueClassify } from '../src/lib/mailClassifyQueue';
 import { runStructured } from '@opportun/ai';
 import { newId } from '@opportun/core';
 import { and, eq, isNull } from 'drizzle-orm';
@@ -13,7 +14,6 @@ import {
   stageHistory,
 } from '../src/db/schema';
 import { ClassifyOutputSchema, type ClassifyOutput } from '../src/jobs/classify';
-import { CLASSIFY_JOB_KIND, enqueueClassify } from '../src/jobs/gmailSync';
 import {
   companyKey,
   proposalFor,

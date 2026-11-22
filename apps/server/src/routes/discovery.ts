@@ -1,5 +1,6 @@
 // Discovery API (FR-D1, D3, FR-O7, FR-O10): the review queue (list, accept or attach, dismiss),
 // opportunity merge, and the user's discovery sources (CRUD, run now, run history).
+import { enqueue } from '../lib/jobQueue';
 import { rankAnyway, rankBelowCut } from '../lib/discoveryIngest';
 import {
   dedupeGroupKey,
@@ -18,9 +19,8 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { hasSource } from '../adapters/discoverySource';
-import { DISCOVERY_RUN_KIND } from '../jobs/discoveryKinds';
+import { DISCOVERY_RUN_KIND } from '../lib/jobKinds';
 import { resumeAfterUndo } from '../jobs/discoveryRankWaiting';
-import { enqueue } from '../jobs/runner';
 import { HttpError, duplicate } from '../lib/errors';
 import { createActivity } from '../repos/activities';
 import {

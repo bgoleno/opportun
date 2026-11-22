@@ -3,14 +3,15 @@
 // later runs worked. When a runner starts, a run row still unfinished was left by the process that
 // died: it is ended as interrupted. A run that is going now, one a live job of its source is
 // working on, is left alone. Every source and run is made up.
+import { enqueue } from '../src/lib/jobQueue';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resetSources } from '../src/adapters/discoverySource';
 import { discoveryRuns, jobs } from '../src/db/schema';
 import { INTERRUPTED, finishInterruptedRuns } from '../src/jobs/interruptedRuns';
-import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryKinds';
-import { enqueue, recoverStaleJobs, startRunner } from '../src/jobs/runner';
+import { DISCOVERY_RUN_KIND } from '../src/lib/jobKinds';
+import { recoverStaleJobs, startRunner } from '../src/jobs/runner';
 import { createRun, createSource, listRuns } from '../src/repos/discovery';
 import { useApi } from './api';
 import type { TestClient } from './isolation';

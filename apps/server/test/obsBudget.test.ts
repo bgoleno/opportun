@@ -3,6 +3,7 @@
 // recording provider registered, driving every FR-T3 boundary makes no span and no row; a loop
 // of disabled boundary calls stays under a wide bound; and no server source imports an
 // OpenTelemetry SDK package (only tests do, as devDependencies).
+import { enqueue } from '../src/lib/jobQueue';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
@@ -11,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { rawAll } from '../src/db/client';
 import { obsMetricPoints, obsSpans, obsTraces } from '../src/db/schema';
 import { registerJob } from '../src/jobs/registry';
-import { enqueue, runDueJobs } from '../src/jobs/runner';
+import { runDueJobs } from '../src/jobs/runner';
 import { flushNow, isCollecting, obs } from '../src/obs';
 import { observeStatement } from '../src/obs/database';
 import { observeOutbound } from '../src/obs/outbound';
