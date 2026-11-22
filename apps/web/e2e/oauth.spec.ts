@@ -4,7 +4,7 @@
 // step (OAuth replaces only the password). The provider's consent page is intercepted here and answered with
 // the redirect GitHub would send; the server's OAuth mock (OPPORTUN_OAUTH_MOCK) plays the
 // token and userinfo endpoints for the identity encoded in the code.
-import { expect, test, type Browser, type Page } from '@playwright/test';
+import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 // The server's own TOTP implementation computes the codes an authenticator app would show.
 import { totpCode } from '../../server/src/lib/totp';
 import { mockOAuthCode, type MockOAuthIdentity } from '../../server/src/testSupport/mockOAuth';
@@ -51,32 +51,48 @@ async function fakeGithubConsent(page: Page, identity: MockOAuthIdentity): Promi
   });
 }
 
-/** Signs in as the instance admin in a separate context and configures GitHub sign-in. */
-async function configureGithubSignIn(browser: Browser): Promise<void> {
-  const adminContext = await browser.newContext();
-  try {
+/**
+ * The instance admin, signed in once for this file in a context of its own and kept for its
+ * tests: the suite signs the admin in from several files, and each sign-in counts against the
+ * login limit (10 per address and email in 15 minutes, routes/auth.ts LOGIN_LIMIT), which a
+ * sign-in per test here pushed the whole run past (#749).
+ */
+let adminContext: BrowserContext | undefined;
+async function adminPage(browser: Browser): Promise<Page> {
+  if (adminContext === undefined) {
+    adminContext = await browser.newContext();
     const admin = await adminContext.newPage();
     await admin.goto('/login');
     await admin.getByLabel('Email').fill(ADMIN.email);
     await admin.getByLabel('Password', { exact: true }).fill(ADMIN.password);
     await admin.getByRole('button', { name: 'Sign in' }).click();
     await expect(admin.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
-    await admin.goto('/settings/users');
-    const github = admin.getByRole('region', { name: 'GitHub sign-in' });
-    await expect(github.getByLabel('Redirect URI', { exact: true })).toHaveValue(
-      /\/api\/v1\/auth\/oauth\/github\/callback$/,
-    );
-    await github.getByLabel('Client ID').fill('e2e-github-client');
-    await github.getByLabel('Client secret').fill('e2e-github-secret');
-    await github.getByRole('button', { name: 'Save' }).click();
-    // A change to who can sign in asks for the admin's own password (#620 point 3).
-    const confirm = admin.getByRole('dialog', { name: 'Confirm your password' });
-    await confirm.getByLabel('Current password').fill(ADMIN.password);
-    await confirm.getByRole('button', { name: 'Continue' }).click();
-    await expect(github.getByText('Configured')).toBeVisible();
-  } finally {
-    await adminContext.close();
+    return admin;
   }
+  return adminContext.pages()[0] ?? (await adminContext.newPage());
+}
+
+test.afterAll(async () => {
+  await adminContext?.close();
+  adminContext = undefined;
+});
+
+/** Configures GitHub sign-in as the instance admin. */
+async function configureGithubSignIn(browser: Browser): Promise<void> {
+  const admin = await adminPage(browser);
+  await admin.goto('/settings/users');
+  const github = admin.getByRole('region', { name: 'GitHub sign-in' });
+  await expect(github.getByLabel('Redirect URI', { exact: true })).toHaveValue(
+    /\/api\/v1\/auth\/oauth\/github\/callback$/,
+  );
+  await github.getByLabel('Client ID').fill('e2e-github-client');
+  await github.getByLabel('Client secret').fill('e2e-github-secret');
+  await github.getByRole('button', { name: 'Save' }).click();
+  // A change to who can sign in asks for the admin's own password (#620 point 3).
+  const confirm = admin.getByRole('dialog', { name: 'Confirm your password' });
+  await confirm.getByLabel('Current password').fill(ADMIN.password);
+  await confirm.getByRole('button', { name: 'Continue' }).click();
+  await expect(github.getByText('Configured')).toBeVisible();
 }
 
 test('sign in with GitHub: admin configures, member links, signs in, unlinks (FR-S4)', async ({
@@ -181,4 +197,63 @@ test('sign in with GitHub on a 2FA account still asks for the code (FR-S3, FR-S4
   await page.getByLabel('Authentication code').fill(totpCode(secret, (step + 1) * STEP_MS));
   await page.getByRole('button', { name: 'Verify' }).click();
   await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
+});
+
+// #602 (qa's e2e survey, gap 4, issue #749): an admin's reset of a member's password also
+// unlinks every sign-in provider, so a reset meant to lock someone out is not undone by the
+// GitHub sign-in they linked. Before the reset, GitHub signs the member in; after it, the same
+// GitHub account matches no one, and Settings > Security offers Link again.
+test('an admin password reset also unlinks GitHub sign-in (#602)', async ({ page, browser }) => {
+  await configureGithubSignIn(browser);
+  const name = 'Octo Reset';
+  const email = await registerUser(page, name);
+  const identity = { id: `${Date.now()}5`, email, emailVerified: false };
+  await fakeGithubConsent(page, identity);
+  await page.goto('/settings/security');
+  await page.getByRole('button', { name: 'Link GitHub' }).click();
+  const confirmLink = page.getByRole('dialog', { name: 'Confirm your password' });
+  await confirmLink.getByLabel('Current password').fill(PASSWORD);
+  await confirmLink.getByRole('button', { name: 'Continue' }).click();
+  await expect(page.getByRole('button', { name: 'Unlink GitHub' })).toBeVisible();
+
+  // Linked: GitHub signs the member in.
+  await page.getByRole('button', { name: /^Account:/ }).click();
+  await page.getByRole('menuitem', { name: 'Sign out' }).click();
+  await page.waitForURL((url) => url.pathname === '/login');
+  await page.getByRole('link', { name: 'Continue with GitHub' }).click();
+  await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
+
+  // The admin resets the member's password from Settings > Users.
+  const admin = await adminPage(browser);
+  await admin.goto('/settings/users');
+  await admin
+    .getByRole('row')
+    .filter({ hasText: email })
+    .getByRole('button', { name: `Reset password for ${name}` })
+    .click();
+  const confirm = admin.getByRole('dialog', { name: 'Confirm your password' });
+  await confirm.getByLabel('Current password').fill(ADMIN.password);
+  await confirm.getByRole('button', { name: 'Continue' }).click();
+  const shown = admin.getByRole('dialog', { name: 'Temporary password' });
+  const temporary = await shown
+    .getByLabel(`Temporary password for ${name}`, { exact: true })
+    .inputValue();
+  await shown.getByRole('button', { name: 'Done' }).click();
+  await expect(shown).toBeHidden();
+
+  // The reset ended the member's session; the same GitHub account no longer signs anyone in.
+  await page.reload();
+  await page.waitForURL((url) => url.pathname === '/login');
+  await page.getByRole('link', { name: 'Continue with GitHub' }).click();
+  await expect(page).toHaveURL(/\/login\?oauth=unknown$/);
+  await expect(page.getByText(/No account here matches that sign-in/)).toBeVisible();
+
+  // With the temporary password the member is in, and GitHub reads as not linked.
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password', { exact: true }).fill(temporary);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
+  await page.goto('/settings/security');
+  await expect(page.getByRole('button', { name: 'Link GitHub' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Unlink GitHub' })).toHaveCount(0);
 });
