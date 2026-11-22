@@ -26,6 +26,7 @@ import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { createActivity, createNextStep } from './activities';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { afterStageChange, transitionOpportunityIn, type OpportunityView } from './opportunities';
 import { insertSend, resumeScope } from './resumeSends';
 import { submissionScope } from './submissionReview';
@@ -53,7 +54,7 @@ async function opportunityFacts(exec: Exec, ctx: UserCtx, opportunityId: string)
     .select({ title: opportunities.title, stage: opportunities.stage, company: companies.name })
     .from(opportunities)
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
-    .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, opportunityId)))
+    .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, opportunityId)))
     .get();
   if (row === undefined) throw new HttpError(404, 'not_found');
   return row;
@@ -173,7 +174,7 @@ export async function attestSubmission(
       const resume = await tx
         .select({ id: resumes.id })
         .from(resumes)
-        .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, row.resumeId)))
+        .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, row.resumeId)))
         .get();
       if (resume !== undefined) {
         await insertSend(tx, ctx, {
@@ -295,7 +296,7 @@ export async function recordSubmissionOutcome(
         .where(
           and(
             eq(nextSteps.id, current.followupNextStepId),
-            eq(nextSteps.userId, ctx.userId),
+            ownedBy(nextSteps.userId, ctx),
             isNull(nextSteps.doneAt),
           ),
         )
