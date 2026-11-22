@@ -5,12 +5,12 @@
 // same claim and the same result as the scheduled run, with only the clock skipped. Registered
 // with the AI mock (index.ts), so like every mock it is never on in production, and it answers
 // loopback callers only, as the AI mock does.
+import { enqueue } from '../lib/jobQueue';
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { jobs } from '../db/schema';
 import { OPPORTUNITY_DEDUPE_AI_KIND } from '../jobs/opportunityDedupeAi';
-import { enqueue } from '../jobs/runner';
 
 export const MOCK_JOBS_PATH = '/__mock/jobs';
 
