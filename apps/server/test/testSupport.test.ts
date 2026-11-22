@@ -8,17 +8,19 @@ import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Config } from '../src/config';
-import { companies } from '../src/db/schema';
+import { auditLog, companies, users } from '../src/db/schema';
 import { buildAiDeps } from '../src/lib/ai';
 import { exchangeAndIdentify } from '../src/lib/oauthProviders';
 import { testSupportFromEnv } from '../src/testSupport/index';
+import { createPendingToken } from '../src/lib/twoFactor';
+import { overMargin, peakSpend } from '../src/testSupport/mockAuth';
 import { MATCH_REPORT, TAILOR_FIND } from '../src/testSupport/mockAi';
 import { MOCK_RESUME_TEXT } from '../src/testSupport/mockDocs';
 import { mockOAuthCode, mockOAuthFetch } from '../src/testSupport/mockOAuth';
 import { FIXTURE_COMPANY, mockSourceFetch } from '../src/testSupport/mockSources';
 import { connectGoogle } from './fakeGoogle';
 import { testApp } from './helpers';
-import { registerTwoUsers, type TestClient } from './isolation';
+import { PASSWORD, registerTwoUsers, setRegistrationOpen, type TestClient } from './isolation';
 import { queryAll } from './db';
 
 const CFG = {
@@ -42,6 +44,7 @@ const ALL = {
   OPPORTUN_GMAIL_MOCK: '1',
   OPPORTUN_SOURCE_MOCK: '1',
   OPPORTUN_OAUTH_MOCK: '1',
+  OPPORTUN_AUTH_MOCK: '1',
 };
 
 async function freePort(): Promise<number> {
@@ -395,5 +398,293 @@ describe('Source mock', () => {
       remoteAddress: '10.0.0.5',
     });
     expect(remote.statusCode).toBe(403);
+  });
+});
+
+describe('Sign-in budget record (#776)', () => {
+  it('records each rate-limited auth request and re-authentication, with no secret, to loopback callers only', async () => {
+    const { app, a } = await mockedApp();
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      remoteAddress: '127.0.0.1',
+      payload: { email: ' QA-776@Example.com ', password: 'not the password, twelve+' },
+    });
+    expect(login.statusCode).toBe(401);
+    // A re-authentication: starting 2FA enrolment takes the current password.
+    const enroll = await a.request({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/enroll',
+      payload: { password: 'wrong password, thirteen' },
+    });
+    expect(enroll.statusCode).toBe(403);
+    const res = await app.inject({
+      method: 'GET',
+      url: '/__mock/auth/attempts',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(res.statusCode).toBe(200);
+    const { attempts } = res.json<{
+      attempts: { route: string; reauth: boolean; email: string | null; status: number }[];
+    }>();
+    // mockedApp registered two users; then the sign-in and the enrolment above.
+    expect(attempts.map((x) => [x.route, x.reauth, x.email, x.status])).toEqual([
+      ['POST /api/v1/auth/register', false, null, 201],
+      ['POST /api/v1/auth/register', false, null, 201],
+      ['POST /api/v1/auth/login', false, 'qa-776@example.com', 401],
+      ['POST /api/v1/auth/2fa/enroll', true, null, 403],
+    ]);
+    const text = JSON.stringify(attempts);
+    expect(text).not.toContain('twelve');
+    expect(text).not.toContain('thirteen');
+    const remote = await app.inject({
+      method: 'GET',
+      url: '/__mock/auth/attempts',
+      remoteAddress: '10.0.0.5',
+    });
+    expect(remote.statusCode).toBe(403);
+  });
+
+  it("answers each bucket's peak spend, keyed as its limiter keys it", async () => {
+    const { app, a } = await mockedApp();
+    for (let i = 0; i < 3; i++) {
+      await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        remoteAddress: '127.0.0.1',
+        payload: { email: 'qa-776@example.com', password: 'not the password, twelve+' },
+      });
+    }
+    await a.request({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/enroll',
+      payload: { password: 'wrong password, thirteen' },
+    });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/__mock/auth/budget',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(res.statusCode).toBe(200);
+    const { buckets } = res.json<{
+      buckets: { bucket: string; limit: number; peak: number; requests: number }[];
+    }>();
+    const get = (key: string) => buckets.find((b) => b.bucket === key);
+    expect(get('127.0.0.1|qa-776@example.com')).toMatchObject({ limit: 10, requests: 3 });
+    expect(get('127.0.0.1|qa-776@example.com')?.peak).toBeCloseTo(3, 1);
+    expect(get('login-email|qa-776@example.com')).toMatchObject({ limit: 30, requests: 3 });
+    // Two registrations and three sign-ins share the per-IP ceiling.
+    expect(get('ip|127.0.0.1')).toMatchObject({ limit: 100, requests: 5 });
+    const reauth = buckets.filter((b) => b.bucket.startsWith('reauth|'));
+    expect(reauth).toHaveLength(1);
+    expect(reauth[0]).toMatchObject({ limit: 10, requests: 1 });
+    expect(reauth[0]?.bucket).toMatch(/^reauth\|.+@/);
+    const remote = await app.inject({
+      method: 'GET',
+      url: '/__mock/auth/budget',
+      remoteAddress: '10.0.0.5',
+    });
+    expect(remote.statusCode).toBe(403);
+  });
+});
+
+describe('Sign-in budget record, every sign-in limiter (#776, tl and sec on #829)', () => {
+  const budget = async (app: FastifyInstance) =>
+    (
+      await app.inject({ method: 'GET', url: '/__mock/auth/budget', remoteAddress: '127.0.0.1' })
+    ).json<{ buckets: { kind: string; bucket: string; limit: number; requests: number }[] }>()
+      .buckets;
+
+  it('counts the OAuth per-address ceiling, a 2FA verify per token owner, and the 2FA code limit', async () => {
+    const { app, a } = await mockedApp();
+    await app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/oauth/github/start?mode=login',
+      remoteAddress: '127.0.0.1',
+    });
+    const token = await createPendingToken(app.db, a.userId, { ip: '127.0.0.1' });
+    for (const pendingToken of [token, 'not-a-pending-token']) {
+      await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/2fa/verify',
+        remoteAddress: '127.0.0.1',
+        payload: { pendingToken, code: '000000' },
+      });
+    }
+    await a.request({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/activate',
+      payload: { code: '000000', password: 'wrong password, fourteen' },
+    });
+    const buckets = await budget(app);
+    const get = (key: string) => buckets.find((b) => b.bucket === key);
+    expect(get('oauth|127.0.0.1')).toMatchObject({ kind: 'oauth', limit: 30, requests: 1 });
+    expect(get('2fa|127.0.0.1')).toMatchObject({ kind: '2fa', limit: 10, requests: 2 });
+    expect(get('2fa-user|isolation-a@example.com')).toMatchObject({
+      kind: '2fa-user',
+      requests: 1,
+    });
+    expect(get('2fa-user|none|127.0.0.1')).toMatchObject({ kind: '2fa-user', requests: 1 });
+    expect(get('2fa-code|isolation-a@example.com')).toMatchObject({ kind: '2fa-code', limit: 10 });
+    expect(get('reauth|isolation-a@example.com')).toMatchObject({ kind: 'reauth', requests: 1 });
+  });
+
+  it('keeps no request the schema refused, and so no oversized email', async () => {
+    const { app } = await mockedApp();
+    const before = (await budget(app)).reduce((n, b) => n + b.requests, 0);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/login',
+      remoteAddress: '127.0.0.1',
+      payload: { email: `${'x'.repeat(5000)}@example.com`, password: 'not the password, twelve+' },
+    });
+    expect(res.statusCode).toBe(400);
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/__mock/auth/attempts',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(listed.body).not.toContain('xxxxxxxxxx');
+    expect((await budget(app)).reduce((n, b) => n + b.requests, 0)).toBe(before);
+  });
+});
+
+describe('Sign-in budget record, refunds (#776)', () => {
+  it("gives a passed sign-in's per-account token back, as routes/auth.ts does", async () => {
+    const { app } = await mockedApp();
+    for (let i = 0; i < 3; i++) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        remoteAddress: '127.0.0.1',
+        payload: { email: 'isolation-a@example.com', password: PASSWORD },
+      });
+      expect(res.statusCode).toBe(200);
+    }
+    const res = await app.inject({
+      method: 'GET',
+      url: '/__mock/auth/budget',
+      remoteAddress: '127.0.0.1',
+    });
+    const { buckets } = res.json<{ buckets: { bucket: string; peak: number }[] }>();
+    const peak = (key: string) => buckets.find((b) => b.bucket === key)?.peak;
+    expect(peak('127.0.0.1|isolation-a@example.com')).toBeCloseTo(3, 1);
+    expect(peak('login-email|isolation-a@example.com')).toBeCloseTo(1, 1);
+  });
+});
+
+describe('Sign-in budget record, flag off (#776)', () => {
+  it('is not there without OPPORTUN_AUTH_MOCK', async () => {
+    const support = testSupportFromEnv({ OPPORTUN_SOURCE_MOCK: '1' }, CFG);
+    const { app } = await testApp({}, { build: support?.build, setup: support?.register });
+    open.push(app);
+    for (const url of ['/__mock/auth/attempts', '/__mock/auth/budget']) {
+      const res = await app.inject({ method: 'GET', url, remoteAddress: '127.0.0.1' });
+      expect(res.statusCode).toBe(404);
+    }
+    const signUp = await app.inject({
+      method: 'POST',
+      url: '/__mock/auth/users',
+      remoteAddress: '127.0.0.1',
+      payload: { email: 'qa-776-off@example.com', password: PASSWORD, displayName: 'Off' },
+    });
+    expect(signUp.statusCode).toBe(404);
+  });
+});
+
+describe('Sign-up shortcut (#776)', () => {
+  const body = (email: string) => ({ email, password: PASSWORD, displayName: 'QA Shortcut' });
+  const post = (app: FastifyInstance, email: string, remoteAddress = '127.0.0.1') =>
+    app.inject({ method: 'POST', url: '/__mock/auth/users', remoteAddress, payload: body(email) });
+
+  it('never makes the first account, so never the admin', async () => {
+    const support = testSupportFromEnv({ OPPORTUN_AUTH_MOCK: '1' }, CFG);
+    const { app } = await testApp({}, { build: support?.build, setup: support?.register });
+    open.push(app);
+    const res = await post(app, 'qa-776-first@example.com');
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: { code: 'no_users_yet' } });
+    expect(res.headers['set-cookie']).toBeUndefined();
+    expect(await app.db.select().from(users).all()).toEqual([]);
+    expect(await app.db.select().from(auditLog).all()).toEqual([]);
+  });
+
+  it('signs up as /auth/register does, keeping its rules, with no limiter spent', async () => {
+    const { app } = await mockedApp();
+    // registerTwoUsers closed registration again: the shortcut keeps that rule.
+    const closed = await post(app, 'qa-776-closed@example.com');
+    expect(closed.statusCode).toBe(403);
+    expect(closed.json()).toEqual({ error: { code: 'registration_closed' } });
+    await setRegistrationOpen(app, true);
+    const made = await post(app, 'QA-776-New@Example.com');
+    expect(made.statusCode).toBe(201);
+    const { user } = made.json<{ user: { id: string; email: string; isAdmin: boolean } }>();
+    expect(user).toMatchObject({ email: 'qa-776-new@example.com', isAdmin: false });
+    // The same session and CSRF cookies as a sign-up, and the session works.
+    const cookies = [made.headers['set-cookie']].flat().join('; ');
+    expect(cookies).toMatch(/opportun_session=/);
+    expect(cookies).toMatch(/opportun_csrf=/);
+    const session = /opportun_session=([^;]+)/.exec(cookies)?.[1] ?? '';
+    const me = await app.inject({
+      method: 'GET',
+      url: '/api/v1/auth/me',
+      cookies: { opportun_session: session },
+    });
+    expect(me.statusCode).toBe(200);
+    expect(me.json<{ user: { id: string } }>().user.id).toBe(user.id);
+    // The same audit row as a sign-up through the form.
+    const rows = (await app.db.select().from(auditLog).all()).filter((r) => r.userId === user.id);
+    expect(rows.map((r) => [r.event, r.detail])).toEqual([['auth.register', { isAdmin: false }]]);
+    // The same email refused as taken, as the route refuses it.
+    expect((await post(app, 'qa-776-new@example.com')).statusCode).toBe(409);
+    // Not a request to a limited route: the per-IP ceiling counts only mockedApp's two sign-ups.
+    const budget = await app.inject({
+      method: 'GET',
+      url: '/__mock/auth/budget',
+      remoteAddress: '127.0.0.1',
+    });
+    const { buckets } = budget.json<{ buckets: { bucket: string; requests: number }[] }>();
+    expect(buckets.find((b) => b.bucket === 'ip|127.0.0.1')?.requests).toBe(2);
+    // Loopback only, as a second guard.
+    expect((await post(app, 'qa-776-remote@example.com', '10.0.0.5')).statusCode).toBe(403);
+  });
+});
+
+describe('overMargin (#776, tl on #829)', () => {
+  it('lets the OAuth ceiling reach 80% and every other kind half its limit', () => {
+    expect(overMargin({ kind: 'oauth', peak: 23.7, limit: 30 })).toBe(false); // 79%
+    expect(overMargin({ kind: 'oauth', peak: 24.3, limit: 30 })).toBe(true); // 81%
+    expect(overMargin({ kind: 'login', peak: 4.9, limit: 10 })).toBe(false);
+    expect(overMargin({ kind: 'login', peak: 5.1, limit: 10 })).toBe(true);
+    expect(overMargin({ kind: 'ip', peak: 51, limit: 100 })).toBe(true);
+  });
+});
+
+describe('peakSpend (#776)', () => {
+  const W = 15 * 60_000;
+  it('counts a burst, refills over time and stops at the limit', () => {
+    const at = (ms: number) => ({ at: ms, refund: false });
+    expect(peakSpend([], 10, W)).toBe(0);
+    expect(peakSpend([at(0), at(1), at(2)], 10, W)).toBeCloseTo(3, 1);
+    // A request every 90 s refills one token each time at 10 per 15 minutes: never above 1.
+    expect(
+      peakSpend(
+        [0, 1, 2, 3, 4].map((i) => at(i * 90_000)),
+        10,
+        W,
+      ),
+    ).toBe(1);
+    // Twelve at once: the bucket empties and the rest are refused.
+    expect(
+      peakSpend(
+        Array.from({ length: 12 }, (_, i) => at(i)),
+        10,
+        W,
+      ),
+    ).toBe(10);
+  });
+  it('gives a refunded token straight back', () => {
+    const ok = Array.from({ length: 5 }, (_, i) => ({ at: i, refund: true }));
+    expect(peakSpend(ok, 30, W)).toBeCloseTo(1, 1);
   });
 });
