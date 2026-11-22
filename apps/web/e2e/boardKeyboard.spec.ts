@@ -263,3 +263,69 @@ test.describe('a keyboard drag reaches the collapsed rails, in column order (#47
     await expect(page.getByRole('button', { name: /^Expand Dismissed/ })).toBeFocused();
   });
 });
+
+// #833 (qa, found while fixing #823): with the Dismissed column expanded, a card picked up in it
+// was announced over Offer, and ArrowLeft could not step out of Dismissed. Every column, in
+// on-screen order, is reachable in both directions, with Dismissed collapsed and expanded.
+const COLUMNS = [
+  'New',
+  'Interested',
+  'Preparing',
+  'Applied',
+  'In process',
+  'Offer',
+  'Dismissed',
+  'Closed',
+];
+
+test.describe('a keyboard drag steps to the adjacent column in both directions (#833)', () => {
+  test.use({ viewport: { width: 2200, height: 1100 } });
+
+  test('picked up in an expanded Dismissed column: announced there, and ArrowLeft steps to Offer', async ({
+    page,
+  }) => {
+    await registerUser(page);
+    for (const title of ['Offer One', 'Offer Two']) {
+      const opp = { company: 'Initrode', title };
+      await createOpportunity(page, opp);
+      await moveWithMenu(page, opp, 'Offer');
+    }
+    const opp = { company: 'Initrode', title: 'Dismissed One' };
+    await dismissed(page, opp);
+    const name = `${opp.company}: ${opp.title}`;
+
+    await card(page, opp.company, opp.title).focus();
+    await page.keyboard.press('Space');
+    await expect(liveRegion(page)).toHaveText(`${name} is over the Dismissed column.`);
+    await stepTo(page, 'ArrowLeft', `${name} is over the Offer column.`);
+    await stepTo(page, 'ArrowRight', `${name} is over the Dismissed column.`);
+    await stepTo(page, 'ArrowRight', `${name} is over the Closed column.`);
+    await stepTo(page, 'ArrowLeft', `${name} is over the Dismissed column.`);
+    await stepTo(page, 'ArrowLeft', `${name} is over the Offer column.`);
+    await page.keyboard.press('Escape');
+  });
+
+  for (const expanded of [false, true]) {
+    test(`walks every column right then left, Dismissed ${expanded ? 'expanded' : 'collapsed'}`, async ({
+      page,
+    }) => {
+      await registerUser(page);
+      const opp = { company: 'Initrode', title: 'Walking Card' };
+      await createOpportunity(page, opp);
+      if (expanded) await page.getByRole('button', { name: /^Expand Dismissed/ }).click();
+      const name = `${opp.company}: ${opp.title}`;
+
+      await card(page, opp.company, opp.title).focus();
+      await page.keyboard.press('Space');
+      await expect(liveRegion(page)).toHaveText(`${name} is over the ${COLUMNS[0]} column.`);
+      for (const col of COLUMNS.slice(1)) {
+        await stepTo(page, 'ArrowRight', `${name} is over the ${col} column.`);
+      }
+      for (const col of [...COLUMNS].reverse().slice(1)) {
+        await stepTo(page, 'ArrowLeft', `${name} is over the ${col} column.`);
+      }
+      await page.keyboard.press('Escape');
+      await expect(column(page, COLUMNS[0]!).getByRole('article', { name })).toBeVisible();
+    });
+  }
+});
