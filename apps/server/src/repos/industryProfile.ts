@@ -8,6 +8,7 @@ import { runCount, withTransaction } from '../db/client';
 import { industryProfile } from '../db/schema';
 import { HttpError } from '../lib/errors';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 
 export type IndustryProfileRow = typeof industryProfile.$inferSelect;
 
@@ -19,13 +20,13 @@ export interface IndustrySuggestion {
 }
 
 const owned = (ctx: UserCtx, code: string) =>
-  and(eq(industryProfile.userId, ctx.userId), eq(industryProfile.naicsCode, code));
+  and(ownedBy(industryProfile.userId, ctx), eq(industryProfile.naicsCode, code));
 
 export async function listIndustryProfile(exec: Exec, ctx: UserCtx): Promise<IndustryProfileRow[]> {
   return await exec
     .select()
     .from(industryProfile)
-    .where(eq(industryProfile.userId, ctx.userId))
+    .where(ownedBy(industryProfile.userId, ctx))
     .orderBy(asc(industryProfile.createdAt), asc(industryProfile.naicsCode))
     .all();
 }
@@ -50,7 +51,7 @@ export async function replaceSuggestions(
   return await withTransaction(db, async (tx) => {
     await tx
       .delete(industryProfile)
-      .where(and(eq(industryProfile.userId, ctx.userId), eq(industryProfile.confirmed, false)))
+      .where(and(ownedBy(industryProfile.userId, ctx), eq(industryProfile.confirmed, false)))
       .run();
     const kept = new Set((await listIndustryProfile(tx, ctx)).map((r) => r.naicsCode));
     const fresh = suggestions.filter((s) => !kept.has(s.code));

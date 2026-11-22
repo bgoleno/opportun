@@ -35,6 +35,7 @@ import {
 } from '../lib/submissionMatch';
 import { createActivity } from './activities';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { submissionScope } from './submissionReview';
 import { getRow, notNow, owned, view, type SubmissionRow } from './submissions';
 import type { Submission } from '@opportun/core';
@@ -80,7 +81,7 @@ export async function confirmationCandidates(
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         inArray(applicationSubmissions.status, [...AWAITING]),
         lte(applicationSubmissions.submittedAt, sentAt + CONFIRMATION_SKEW_MS),
         gte(applicationSubmissions.submittedAt, sentAt - CONFIRMATION_WINDOW_MS),
@@ -144,7 +145,7 @@ export async function confirmFromEmail(
       .where(
         and(
           eq(nextSteps.id, current.followupNextStepId),
-          eq(nextSteps.userId, ctx.userId),
+          ownedBy(nextSteps.userId, ctx),
           isNull(nextSteps.doneAt),
         ),
       )
@@ -407,7 +408,7 @@ export async function confirmFromPage(
         .where(
           and(
             eq(nextSteps.id, current.followupNextStepId),
-            eq(nextSteps.userId, ctx.userId),
+            ownedBy(nextSteps.userId, ctx),
             isNull(nextSteps.doneAt),
           ),
         )
@@ -473,7 +474,7 @@ export async function confirmableForPage(
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         inArray(applicationSubmissions.status, ['handed_off', 'submitted', 'unknown', 'confirmed']),
       ),
     )
@@ -565,7 +566,7 @@ async function confirmationPage(
       bodyMd: activities.bodyMd,
     })
     .from(activities)
-    .where(and(eq(activities.userId, ctx.userId), eq(activities.id, row.confirmationActivityId)))
+    .where(and(ownedBy(activities.userId, ctx), eq(activities.id, row.confirmationActivityId)))
     .get();
   if (entry === undefined) return null;
   return {
@@ -598,9 +599,7 @@ export async function detailView(
       sentAt: communications.sentAt,
     })
     .from(communications)
-    .where(
-      and(eq(communications.userId, ctx.userId), eq(communications.id, row.confirmationCommId)),
-    )
+    .where(and(ownedBy(communications.userId, ctx), eq(communications.id, row.confirmationCommId)))
     .get();
   if (message === undefined) return { ...base, confirmationEmail: null };
   return {

@@ -36,6 +36,7 @@ import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { submissionDigest } from '../lib/submissionDigest';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 // A cycle (submissionReview imports this module's row helpers), safe because neither module uses
 // the other at load time: destinationAllowed is only called inside functions here.
 import { countWhere, type ListOpts, type Page } from './list';
@@ -130,7 +131,7 @@ export function view(row: SubmissionRow): Submission {
 }
 
 export const owned = (ctx: UserCtx, id: string) =>
-  and(eq(applicationSubmissions.userId, ctx.userId), eq(applicationSubmissions.id, id));
+  and(ownedBy(applicationSubmissions.userId, ctx), eq(applicationSubmissions.id, id));
 
 export async function getRow(exec: Exec, ctx: UserCtx, id: string): Promise<SubmissionRow> {
   const row = await exec.select().from(applicationSubmissions).where(owned(ctx, id)).get();
@@ -144,7 +145,7 @@ async function byKey(exec: Exec, ctx: UserCtx, key: string): Promise<SubmissionR
     .from(applicationSubmissions)
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         eq(applicationSubmissions.idempotencyKey, key),
       ),
     )
@@ -161,7 +162,7 @@ async function liveFor(
     .from(applicationSubmissions)
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         eq(applicationSubmissions.opportunityId, opportunityId),
         inArray(applicationSubmissions.status, LIVE),
       ),
@@ -200,7 +201,7 @@ async function finalResume(exec: Exec, ctx: UserCtx, resumeId: string) {
   const resume = await exec
     .select()
     .from(resumes)
-    .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, resumeId)))
+    .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, resumeId)))
     .get();
   // Another user's resume reads exactly like a missing one.
   if (resume === undefined || resume.archivedAt !== null) throw ineligible('resume_not_found');
@@ -272,7 +273,7 @@ export async function createSubmissionDraft(
   const opp = await db
     .select()
     .from(opportunities)
-    .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, opportunityId)))
+    .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, opportunityId)))
     .get();
   if (opp === undefined) throw notFound();
   // A live attempt first, ahead of the eligibility checks (#144, from qa on #142): when the
@@ -393,11 +394,11 @@ export async function listSubmissionsForOpportunity(
   const opp = await db
     .select({ id: opportunities.id })
     .from(opportunities)
-    .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, opportunityId)))
+    .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, opportunityId)))
     .get();
   if (opp === undefined) throw notFound();
   const where = and(
-    eq(applicationSubmissions.userId, ctx.userId),
+    ownedBy(applicationSubmissions.userId, ctx),
     eq(applicationSubmissions.opportunityId, opportunityId),
   );
   const rows = await db
@@ -573,9 +574,7 @@ export async function getSnapshotForDownload(
       : await db
           .select()
           .from(attachments)
-          .where(
-            and(eq(attachments.userId, ctx.userId), eq(attachments.id, row.resumeAttachmentId)),
-          )
+          .where(and(ownedBy(attachments.userId, ctx), eq(attachments.id, row.resumeAttachmentId)))
           .get();
   if (file === undefined) {
     throw new HttpError(404, 'no_snapshot', 'This application has no saved resume file.');
@@ -627,7 +626,7 @@ export async function handedOffForPage(
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         eq(applicationSubmissions.status, 'handed_off'),
       ),
     )
@@ -651,10 +650,7 @@ export async function handedOffForPage(
           .select({ filename: attachments.filename, bytes: attachments.bytes })
           .from(attachments)
           .where(
-            and(
-              eq(attachments.userId, ctx.userId),
-              eq(attachments.id, only.row.resumeAttachmentId),
-            ),
+            and(ownedBy(attachments.userId, ctx), eq(attachments.id, only.row.resumeAttachmentId)),
           )
           .get();
   const snapshotState =
@@ -715,9 +711,7 @@ export async function handedOffSnapshot(
       : await db
           .select()
           .from(attachments)
-          .where(
-            and(eq(attachments.userId, ctx.userId), eq(attachments.id, row.resumeAttachmentId)),
-          )
+          .where(and(ownedBy(attachments.userId, ctx), eq(attachments.id, row.resumeAttachmentId)))
           .get();
   if (file === undefined) {
     throw new HttpError(409, 'snapshot_not_ready', 'This application has no resume file ready.', {
@@ -747,7 +741,7 @@ export async function lockLiveAttempt(
     .from(applicationSubmissions)
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         eq(applicationSubmissions.opportunityId, opportunityId),
         inArray(applicationSubmissions.status, [...NOT_YET_OPENED_STATUSES]),
       ),
@@ -777,7 +771,7 @@ export async function lockAttemptsOf(
     .from(applicationSubmissions)
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         inArray(applicationSubmissions.opportunityId, [...opportunityIds]),
       ),
     )

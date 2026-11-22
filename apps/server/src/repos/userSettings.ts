@@ -5,6 +5,7 @@ import type { z } from 'zod';
 import { afterCommit } from '../db/client';
 import { settings } from '../db/schema';
 import type { Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { obs } from '../obs';
 
 export const userSettingKey = (name: string, userId: string): string => `${name}:${userId}`;
@@ -20,7 +21,7 @@ export async function readUserSetting<T>(
   const row = await exec
     .select({ value: settings.value })
     .from(settings)
-    .where(and(eq(settings.key, userSettingKey(name, ctx.userId)), eq(settings.userId, ctx.userId)))
+    .where(and(eq(settings.key, userSettingKey(name, ctx.userId)), ownedBy(settings.userId, ctx)))
     .get();
   if (row === undefined) return fallback;
   const parsed = schema.safeParse(row.value);
@@ -58,7 +59,7 @@ export async function userSettingExists(exec: Exec, ctx: UserCtx, name: string):
   const row = await exec
     .select({ key: settings.key })
     .from(settings)
-    .where(and(eq(settings.key, userSettingKey(name, ctx.userId)), eq(settings.userId, ctx.userId)))
+    .where(and(eq(settings.key, userSettingKey(name, ctx.userId)), ownedBy(settings.userId, ctx)))
     .get();
   return row !== undefined;
 }
@@ -67,7 +68,7 @@ export async function userSettingExists(exec: Exec, ctx: UserCtx, name: string):
 export async function deleteUserSetting(exec: Exec, ctx: UserCtx, name: string): Promise<void> {
   await exec
     .delete(settings)
-    .where(and(eq(settings.key, userSettingKey(name, ctx.userId)), eq(settings.userId, ctx.userId)))
+    .where(and(eq(settings.key, userSettingKey(name, ctx.userId)), ownedBy(settings.userId, ctx)))
     .run();
 }
 
@@ -80,7 +81,7 @@ export async function userSettingUpdatedAt(
   const row = await exec
     .select({ updatedAt: settings.updatedAt })
     .from(settings)
-    .where(and(eq(settings.key, userSettingKey(name, ctx.userId)), eq(settings.userId, ctx.userId)))
+    .where(and(eq(settings.key, userSettingKey(name, ctx.userId)), ownedBy(settings.userId, ctx)))
     .get();
   return row?.updatedAt ?? null;
 }
