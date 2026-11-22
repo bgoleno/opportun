@@ -60,7 +60,7 @@ import { createPendingToken } from '../lib/twoFactor';
 import { isRegistrationOpen } from '../lib/registration';
 import { createSession, sessionStored } from '../lib/sessions';
 import { isSecureRequest } from '../plugins/security';
-import { requireUser, type UserCtx } from '../repos/base';
+import { requireAdmin, requireUser, type UserCtx } from '../repos/base';
 import { sessionMeta, setSessionCookies } from './auth';
 
 /** HttpOnly cookie holding the browser binding of an in-flight OAuth flow. */
@@ -160,12 +160,6 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
       sharesIntegrationClient: clientId !== undefined && clientId === integrationClientId,
     };
   };
-
-  function requireAdmin(req: Parameters<typeof requireUser>[0]) {
-    const ctx = requireUser(req);
-    if (!ctx.isAdmin) throw new HttpError(403, 'forbidden');
-    return ctx;
-  }
 
   api.get(
     '/admin/oauth-providers',
