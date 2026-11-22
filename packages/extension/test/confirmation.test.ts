@@ -284,8 +284,37 @@ describe('Record confirmation page against a server that never answers (#648)', 
     );
     expect(record.disabled).toBe(false);
     expect(s.doc.activeElement).toBe(record);
-    // Record writes: the post may have reached the server (sec on #713).
-    expect(s.$('status').textContent).toMatch(/check Opportun before you try again/);
+    // Only the read of /confirmable was cut: nothing was sent that could have saved (#783).
+    expect(s.$('status').textContent).toMatch(/Check that it is running and reachable/);
+    expect(s.$('status').textContent).not.toMatch(/may still have saved/);
     expect(s.posts).toEqual([]);
+  });
+
+  it('a post the server never answers may still have saved: check Opportun before trying again (#783, sec on #713)', async () => {
+    const s = setup();
+    s.fetch.mockImplementation(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          if (init.signal?.aborted === true) reject(new Error('aborted'));
+          init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+    let end: () => void = () => undefined;
+    const ended = new Promise<void>((r) => {
+      end = r;
+    });
+    s.deps.limit = vi.fn(async (ms: number) => {
+      expect(ms).toBe(ACTION_TIMEOUT_MS);
+      await ended;
+    });
+    await mountPopup(s.doc, s.deps);
+    (s.$('record') as HTMLButtonElement).click();
+    // The lookup answered, and the post is out.
+    await vi.waitFor(() => expect(s.fetch).toHaveBeenCalled());
+    end();
+    await vi.waitFor(() =>
+      expect(s.$('status').textContent).toMatch(/did not answer within 30 seconds/),
+    );
+    expect(s.$('status').textContent).toMatch(/check Opportun before you try again/);
   });
 });

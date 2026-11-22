@@ -38,7 +38,11 @@ const CreateBody = z.object({
   /** The current password: minting a credential needs more than the session cookie. */
   password: z.string().min(1).max(1024),
 });
-const ErrorResponse = z.object({ error: z.object({ code: z.string() }) });
+// The message is kept (#743): a response schema drops what it does not name, and a refusal such as
+// password_changed (#643) carries the sentence the user is meant to read.
+const ErrorResponse = z.object({
+  error: z.object({ code: z.string(), message: z.string().optional() }),
+});
 const IdParams = z.object({ id: z.string().min(1).max(64) });
 /** A label only: renaming grants nothing, so it needs no password (design D6). */
 const RenameBody = z.object({ name: z.string().trim().min(1).max(100) });

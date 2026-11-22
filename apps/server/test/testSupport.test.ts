@@ -309,4 +309,40 @@ describe('Source mock', () => {
     });
     expect(res.statusCode).toBe(403);
   });
+
+  it('answers a fixture board job by id, refuses any other, and lists the job requests (#748)', async () => {
+    const hit = await mockSourceFetch(
+      'https://boards-api.greenhouse.io/v1/boards/vandelayindustries/jobs/1003',
+      { allowHosts: [] },
+    );
+    expect(hit.status).toBe(200);
+    expect(JSON.parse(hit.body.toString('utf8'))).toMatchObject({ id: 1003 });
+    const unknownJob = await mockSourceFetch(
+      'https://boards-api.greenhouse.io/v1/boards/vandelayindustries/jobs/9999',
+      { allowHosts: [] },
+    );
+    expect(unknownJob.status).toBe(404);
+    const unknownBoard = await mockSourceFetch(
+      'https://boards-api.greenhouse.io/v1/boards/initech/jobs/1003',
+      { allowHosts: [] },
+    );
+    expect(unknownBoard.status).toBe(404);
+    const { app } = await mockedApp();
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/__mock/discovery/job-checks',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(listed.json<{ checks: string[] }>().checks.slice(-3)).toEqual([
+      'vandelayindustries/1003',
+      'vandelayindustries/9999',
+      'initech/1003',
+    ]);
+    const remote = await app.inject({
+      method: 'GET',
+      url: '/__mock/discovery/job-checks',
+      remoteAddress: '10.0.0.5',
+    });
+    expect(remote.statusCode).toBe(403);
+  });
 });

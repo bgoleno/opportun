@@ -4,10 +4,10 @@
 // extension, any of the user's tokens) spend one shared budget per user. The extension's
 // per-token budget stays as it was. Each refusal names the limit it hit, so each client can
 // say which one and when to try again.
+import { insertLeads } from '../src/lib/discoveryIngest';
 import { AiUnavailableError, runStructured } from '@opportun/ai';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { insertLeads } from '../src/jobs/discoveryRun';
 import { CAPTURE_USER_LIMIT } from '../src/lib/captureLimit';
 import { ensureChannelSource } from '../src/repos/discovery';
 import { useApi } from './api';

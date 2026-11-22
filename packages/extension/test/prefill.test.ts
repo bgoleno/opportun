@@ -1071,6 +1071,23 @@ describe('#402 slice 2: the fill waits for lists, and the report lists every cho
     );
   });
 
+  // #738 (qa's regression pass): an option the filler would not click because of where it sits
+  // (inside a link or a label) was reported as missing from the list.
+  it('a list option it would not click for where it sits is reported as that, not as missing', () => {
+    const lines = reportLines({
+      ok: true,
+      chosen: [],
+      filled: [],
+      notFilled: [
+        { label: 'School', reason: 'option_unclickable', detail: 'University of Example' },
+      ],
+      resume: null,
+    });
+    expect(lines.notFilled).toEqual([
+      'School: the form\'s list has "University of Example", but inside a link or a label, so Opportun did not click it: choose it on the form',
+    ]);
+  });
+
   it('a value with replacement patterns is shown as it is (sec at 8084132)', () => {
     const lines = reportLines({
       ok: true,
@@ -1350,6 +1367,26 @@ describe('#403: opening the popup on the handed-off posting fills it, once', () 
     }
     expect(s.$('status').textContent).toBe('');
     expect(s.deps.runFill).not.toHaveBeenCalled();
+  });
+
+  it('giving up at the bound aborts the lookup it sent (#783)', async () => {
+    const s = setup({ current: () => new Promise<FetchResponse>(() => undefined) });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    const signal = s.get.mock.calls[0]?.[1]?.signal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(false);
+    s.endOpenBound();
+    await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+  });
+
+  it('a lookup answered within the bound is not aborted (#783)', async () => {
+    const s = setup({ current: first({ firstRead: false }) });
+    await open(s);
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+    s.endOpenBound();
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.get.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
   });
 
   it('a first read that arrives after the bound starts no fill', async () => {

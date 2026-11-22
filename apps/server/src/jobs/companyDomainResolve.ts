@@ -20,27 +20,13 @@ import type { Db } from '../db/client';
 import { companies, opportunities, settings, users } from '../db/schema';
 import type { safeFetch } from '../lib/safeFetch';
 import type { UserCtx } from '../repos/base';
+import {
+  COMPANY_DOMAIN_RESOLVE_KIND,
+  enqueueCompanyDomainResolve,
+} from '../lib/companyDomainQueue';
 import { candidateDomains, getPage, pageNamesCompany } from './opportunityEnrich';
 import { requireService, type JobContext, type JobHandler } from './registry';
 import { enqueue } from './runner';
-
-export const COMPANY_DOMAIN_RESOLVE_KIND = 'company.domain_resolve'; // payload {companyId}
-export const companyDomainResolveDedupeKey = (companyId: string): string =>
-  `${COMPANY_DOMAIN_RESOLVE_KIND}:${companyId}`;
-
-/** Queues resolution for one company, deduped so a flurry of stage moves costs one job. */
-export async function enqueueCompanyDomainResolve(
-  db: Db,
-  userId: string,
-  companyId: string,
-): Promise<void> {
-  await enqueue(
-    db,
-    COMPANY_DOMAIN_RESOLVE_KIND,
-    { companyId },
-    { dedupeKey: companyDomainResolveDedupeKey(companyId), userId },
-  );
-}
 
 export type ResolveOutcome =
   | { outcome: 'resolved'; domain: string }

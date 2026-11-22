@@ -7,6 +7,8 @@
 // there and never stored: what an attempt keeps is the message's id and the names of the signals
 // that matched (NFR-PRV5). An email confirmation changes no stage, and the user can undo it
 // (unlinkConfirmation): signal B is the sender's unauthenticated address (sec on #128).
+import { senderAddress } from '../lib/mailAddress';
+import { boardFromUrl } from '../lib/atsBoard';
 import { and, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
 import { lockScope, withTransaction } from '../db/client';
 import {
@@ -18,7 +20,6 @@ import {
   opportunities,
 } from '../db/schema';
 import { WORKDAY_HOST } from '../adapters/discoverySource';
-import { boardFromUrl } from '../jobs/atsDetect';
 import { atsJobRefOfUrl } from '../lib/atsJobRef';
 import { audit } from '../lib/audit';
 import { sameVisitor } from '../lib/demoOwnData';
@@ -32,7 +33,6 @@ import {
   type ConfirmationCandidate,
   type ConfirmationSignal,
 } from '../lib/submissionMatch';
-import { senderAddress } from '../adapters/sources/alertEmail';
 import { createActivity } from './activities';
 import type { Db, Exec, UserCtx } from './base';
 import { submissionScope } from './submissionReview';

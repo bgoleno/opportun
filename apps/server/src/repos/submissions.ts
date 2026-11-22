@@ -7,6 +7,7 @@
 // on the client's key), read it, edit it while it is a draft, and cancel it. Review, handoff and
 // everything after them arrive with later milestones; their columns already exist and stay
 // unset here.
+import { destinationAllowed } from '../lib/submissionDestination';
 import {
   applySubmissionTransition,
   canSubmissionTransition,
@@ -37,7 +38,6 @@ import { enqueueSnapshot } from '../jobs/submissionSnapshot';
 import type { Db, Exec, UserCtx } from './base';
 // A cycle (submissionReview imports this module's row helpers), safe because neither module uses
 // the other at load time: destinationAllowed is only called inside functions here.
-import { destinationAllowed } from './submissionReview';
 import { countWhere, type ListOpts, type Page } from './list';
 import { effectiveSubmission, latestSends } from './resumeSends';
 import { applicationDetailsFor } from './applicationDetails';
