@@ -43,6 +43,10 @@ describe('oauth login helpers', () => {
     );
     expect(oauthFlashMessage('denied')).toMatch(/cancelled/);
     expect(oauthFlashMessage('error')).toMatch(/went wrong/);
+    // A callback whose state did not verify (#662): not completed, and how to try again.
+    expect(oauthFlashMessage('not_completed')).toBe(
+      'That sign-in or account link was not completed: it was out of date, already used, or started in another session. Sign in, then try again.',
+    );
     expect(oauthFlashMessage(undefined)).toBeNull();
     expect(oauthFlashMessage('<script>')).toMatch(/went wrong/);
   });

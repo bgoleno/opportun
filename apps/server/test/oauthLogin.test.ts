@@ -9,7 +9,7 @@ import { main as resetPasswordCli } from '../src/cli/resetPassword';
 import { useApi } from './api';
 import { testApp } from './helpers';
 import { fakeOAuth, type FakeIdentity, type FakeOAuth } from './fakeOAuth';
-import { registerTwoUsers, type TestClient } from './isolation';
+import { PASSWORD as ADMIN_PASSWORD, registerTwoUsers, type TestClient } from './isolation';
 import { exec, queryAll, queryOne } from './db';
 import { onSlowTransaction } from '../src/db/gate';
 import { heldApart, holdAt, pauseAt, settledOrWaiting } from './race';
@@ -48,11 +48,80 @@ async function configure(admin: TestClient, name: 'google' | 'github' | 'linkedi
   const res = await admin.request({
     method: 'PUT',
     url: `/api/v1/admin/oauth-providers/${name}`,
-    payload: { clientId: `${name}-client-id`, clientSecret: CLIENT_SECRET },
+    payload: {
+      clientId: `${name}-client-id`,
+      clientSecret: CLIENT_SECRET,
+      password: ADMIN_PASSWORD,
+    },
   });
   expect(res.statusCode).toBe(200);
   return res;
 }
+
+// https://github.com/bgoleno/opportun/issues/620 point 3 (sec's second audit): changing who can sign
+// in with a provider asks for the admin's own password, as the registration switch does. A stolen
+// admin session alone cannot point the login page at a client of its choosing, nor remove one.
+describe('oauth provider configuration asks for the admin password (#620)', () => {
+  const put = (c: TestClient, password?: string) =>
+    c.request({
+      method: 'PUT',
+      url: '/api/v1/admin/oauth-providers/github',
+      payload: {
+        clientId: 'github-client-id',
+        clientSecret: CLIENT_SECRET,
+        ...(password === undefined ? {} : { password }),
+      },
+    });
+  const configured = async (c: TestClient, name: string) =>
+    (
+      (await c.request({ method: 'GET', url: `/api/v1/admin/oauth-providers/${name}` })).json() as {
+        configured: boolean;
+      }
+    ).configured;
+
+  it('saving: no password is refused, a wrong one is 403 and stores nothing, the right one saves', async () => {
+    const { a } = await boot();
+    expect((await put(a)).statusCode).toBe(400);
+    const wrong = await put(a, 'not the password');
+    expect(wrong.statusCode).toBe(403);
+    expect(wrong.json()).toMatchObject({ error: { code: 'invalid_password' } });
+    expect(await configured(a, 'github')).toBe(false);
+    expect((await put(a, ADMIN_PASSWORD)).statusCode).toBe(200);
+    expect(await configured(a, 'github')).toBe(true);
+  });
+
+  it('removing: no password is refused, a wrong one is 403 and keeps it, the right one removes it', async () => {
+    const { a } = await boot();
+    await configure(a, 'google');
+    const del = (password?: string) =>
+      a.request({
+        method: 'DELETE',
+        url: '/api/v1/admin/oauth-providers/google',
+        ...(password === undefined ? {} : { payload: { password } }),
+      });
+    expect((await del()).statusCode).toBe(400);
+    expect((await del('not the password')).statusCode).toBe(403);
+    expect(await configured(a, 'google')).toBe(true);
+    expect((await del(ADMIN_PASSWORD)).statusCode).toBe(204);
+    expect(await configured(a, 'google')).toBe(false);
+  });
+
+  it('reusing the integration client: no password is refused, a wrong one is 403 and stores nothing', async () => {
+    const { a } = await boot();
+    await configureIntegrationClient(a);
+    const imp = (password?: string) =>
+      a.request({
+        method: 'POST',
+        url: '/api/v1/admin/oauth-providers/google/import',
+        ...(password === undefined ? {} : { payload: { password } }),
+      });
+    expect((await imp()).statusCode).toBe(400);
+    expect((await imp('not the password')).statusCode).toBe(403);
+    expect(await configured(a, 'google')).toBe(false);
+    expect((await imp(ADMIN_PASSWORD)).statusCode).toBe(200);
+    expect(await configured(a, 'google')).toBe(true);
+  });
+});
 
 describe('oauth provider configuration (admin)', () => {
   it('stores credentials and reports configured flags, never the secret', async () => {
@@ -114,7 +183,11 @@ describe('oauth provider configuration (admin)', () => {
   it('removes a provider configuration', async () => {
     const { a } = await boot();
     await configure(a, 'google');
-    const del = await a.request({ method: 'DELETE', url: '/api/v1/admin/oauth-providers/google' });
+    const del = await a.request({
+      method: 'DELETE',
+      url: '/api/v1/admin/oauth-providers/google',
+      payload: { password: ADMIN_PASSWORD },
+    });
     expect(del.statusCode).toBe(204);
     const one = await a.request({ method: 'GET', url: '/api/v1/admin/oauth-providers/google' });
     expect(one.json()).toMatchObject({ configured: false });
@@ -128,10 +201,18 @@ describe('oauth provider configuration (admin)', () => {
       {
         method: 'PUT' as const,
         url: '/api/v1/admin/oauth-providers/google',
-        payload: { clientId: 'x', clientSecret: 'y' },
+        payload: { clientId: 'x', clientSecret: 'y', password: ADMIN_PASSWORD },
       },
-      { method: 'DELETE' as const, url: '/api/v1/admin/oauth-providers/google' },
-      { method: 'POST' as const, url: '/api/v1/admin/oauth-providers/google/import' },
+      {
+        method: 'DELETE' as const,
+        url: '/api/v1/admin/oauth-providers/google',
+        payload: { password: ADMIN_PASSWORD },
+      },
+      {
+        method: 'POST' as const,
+        url: '/api/v1/admin/oauth-providers/google/import',
+        payload: { password: ADMIN_PASSWORD },
+      },
     ]) {
       const res = await b.request(req);
       expect(res.statusCode, `${req.method} ${req.url}`).toBe(403);
@@ -144,7 +225,7 @@ describe('oauth provider configuration (admin)', () => {
       method: 'PUT',
       url: '/api/v1/admin/oauth-providers/google',
       cookies: { opportun_session: a.session, opportun_csrf: a.csrf },
-      payload: { clientId: 'x', clientSecret: 'y' },
+      payload: { clientId: 'x', clientSecret: 'y', password: ADMIN_PASSWORD },
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().error.code).toBe('csrf');
@@ -155,7 +236,7 @@ describe('oauth provider configuration (admin)', () => {
     const res = await a.request({
       method: 'PUT',
       url: '/api/v1/admin/oauth-providers/facebook',
-      payload: { clientId: 'x', clientSecret: 'y' },
+      payload: { clientId: 'x', clientSecret: 'y', password: ADMIN_PASSWORD },
     });
     expect(res.statusCode).toBe(400);
   });
@@ -206,6 +287,7 @@ describe('oauth provider configuration (admin)', () => {
     const res = await a.request({
       method: 'POST',
       url: '/api/v1/admin/oauth-providers/google/import',
+      payload: { password: ADMIN_PASSWORD },
     });
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toMatchObject({ provider: 'google', configured: true });
@@ -226,7 +308,11 @@ describe('oauth provider configuration (admin)', () => {
     const apart = await a.request({ method: 'GET', url: '/api/v1/admin/oauth-providers/google' });
     expect(apart.json().sharesIntegrationClient).toBe(false);
 
-    await a.request({ method: 'POST', url: '/api/v1/admin/oauth-providers/google/import' });
+    await a.request({
+      method: 'POST',
+      url: '/api/v1/admin/oauth-providers/google/import',
+      payload: { password: ADMIN_PASSWORD },
+    });
     const shared = await a.request({ method: 'GET', url: '/api/v1/admin/oauth-providers/google' });
     expect(shared.json().sharesIntegrationClient).toBe(true);
 
@@ -241,6 +327,7 @@ describe('oauth provider configuration (admin)', () => {
     const res = await a.request({
       method: 'POST',
       url: '/api/v1/admin/oauth-providers/google/import',
+      payload: { password: ADMIN_PASSWORD },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json().error.code).toBe('integration_client_missing');
@@ -251,6 +338,7 @@ describe('oauth provider configuration (admin)', () => {
     const res = await a.request({
       method: 'POST',
       url: '/api/v1/admin/oauth-providers/github/import',
+      payload: { password: ADMIN_PASSWORD },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json().error.code).toBe('import_unsupported');
@@ -263,6 +351,7 @@ describe('oauth provider configuration (admin)', () => {
     const res = await a.request({
       method: 'POST',
       url: '/api/v1/admin/oauth-providers/google/import',
+      payload: { password: ADMIN_PASSWORD },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json().error.code).toBe('integration_client_missing');
@@ -746,7 +835,7 @@ describe('oauth login', () => {
 });
 
 describe('oauth state', () => {
-  it('a forged state is 403, audited, and never reaches the token endpoint', async () => {
+  it('a forged state lands on the sign-in page, audited, and never reaches the token endpoint', async () => {
     const { a, app } = await boot();
     await configure(a, 'github');
     const s = await start(app, 'github', 'login');
@@ -758,8 +847,9 @@ describe('oauth state', () => {
       { code: provider.issue(GH_ATTACKER), state: tampered },
       { [OAUTH_COOKIE]: s.binding },
     );
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error.code).toBe('bad_state');
+    // An app page, not a raw JSON 403 (#662).
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe('/login?oauth=not_completed');
     expect(await events(app, 'auth.oauth_bad_state')).toHaveLength(1);
     expect(provider.calls).toHaveLength(0);
   });
@@ -771,14 +861,14 @@ describe('oauth state', () => {
     const s = await start(app, 'github', 'login');
     const code = provider.issue({ id: '666', email: 'attacker@example.com', emailVerified: true });
     const res = await callback(app, 'github', { code, state: s.state }, {});
-    expect(res.statusCode).toBe(403);
+    expect(res.headers.location).toBe('/login?oauth=not_completed');
     const other = await callback(
       app,
       'github',
       { code, state: s.state },
       { [OAUTH_COOKIE]: 'someone-elses-binding-value-aaaaaaaaaaaaaaa' },
     );
-    expect(other.statusCode).toBe(403);
+    expect(other.headers.location).toBe('/login?oauth=not_completed');
     expect(provider.calls).toHaveLength(0);
   });
 
@@ -801,7 +891,7 @@ describe('oauth state', () => {
       { code: provider.issue({ id: '5', email: A_EMAIL, emailVerified: true }), state: s.state },
       cookies,
     );
-    expect(replay.statusCode).toBe(403);
+    expect(replay.headers.location).toBe('/login?oauth=not_completed');
     expect(await events(app, 'auth.oauth_bad_state')).toHaveLength(1);
   });
 
@@ -816,7 +906,7 @@ describe('oauth state', () => {
       { code: provider.issue(GH_ATTACKER), state: s.state },
       { [OAUTH_COOKIE]: s.binding },
     );
-    expect(cross.statusCode).toBe(403);
+    expect(cross.headers.location).toBe('/login?oauth=not_completed');
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       const late = await start(app, 'github', 'login');
@@ -827,7 +917,7 @@ describe('oauth state', () => {
         { code: provider.issue(GH_ATTACKER), state: late.state },
         { [OAUTH_COOKIE]: late.binding },
       );
-      expect(res.statusCode).toBe(403);
+      expect(res.headers.location).toBe('/login?oauth=not_completed');
     } finally {
       vi.useRealTimers();
     }
@@ -845,8 +935,29 @@ describe('oauth state', () => {
       { code, state: s.state },
       { [OAUTH_COOKIE]: s.binding, opportun_session: b.session },
     );
-    expect(res.statusCode).toBe(403);
+    // b is signed in: the page that says so is b's own Security page (#662).
+    expect(res.headers.location).toBe('/settings/security?oauth=not_completed');
     expect(await oauthRows(app)).toEqual([]);
+    expect(await events(app, 'auth.oauth_bad_state')).toHaveLength(1);
+  });
+
+  it('a link finished after the session that started it ended lands on the sign-in page (#662)', async () => {
+    const { a, app } = await boot();
+    await configure(a, 'github');
+    const s = await start(app, 'github', 'link', a);
+    const code = provider.issue({ id: '13', email: 'x@example.com', emailVerified: true });
+    // Signed out meanwhile: the browser has its binding cookie, and no session.
+    const res = await callback(
+      app,
+      'github',
+      { code, state: s.state },
+      { [OAUTH_COOKIE]: s.binding },
+    );
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe('/login?oauth=not_completed');
+    expect(await oauthRows(app)).toEqual([]);
+    expect(await events(app, 'auth.oauth_bad_state')).toHaveLength(1);
+    expect(provider.calls).toHaveLength(0);
   });
 
   it('never logs the code or state of a callback', async () => {
@@ -1298,7 +1409,7 @@ describe('first password for an account created by OAuth sign-in (rulings R3, M-
       { code: provider.issue(FRESH), state },
       { [OAUTH_COOKIE]: cookieOf(started, OAUTH_COOKIE)!.value, opportun_session: s2.session },
     );
-    expect(crossed.statusCode).toBe(403);
+    expect(crossed.headers.location).toBe('/settings/security?oauth=not_completed');
     // s1's grant survived s2's refused attempt and still works, once.
     const fromS1 = await s1.request('POST', '/api/v1/auth/password', { next: NEXT });
     expect(fromS1.statusCode).toBe(204);
@@ -1466,7 +1577,7 @@ describe('state binding cookie', () => {
         },
         OVER_HTTPS,
       );
-      expect(tossed.statusCode).toBe(403);
+      expect(tossed.headers.location).toBe('/login?oauth=not_completed');
       const ok = await callback(
         app,
         'github',

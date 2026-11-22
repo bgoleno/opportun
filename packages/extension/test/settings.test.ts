@@ -276,6 +276,10 @@ describe('travelsUnencrypted (#655)', () => {
     ['http://opportun.home.arpa', true],
     ['http://opportun', true],
     ['http://localhost:8080', false],
+    // #699 (tl and sec on #695): the other names for this computer.
+    ['http://[::1]:8080', false],
+    ['http://app.localhost:3000', false],
+    ['http://LOCALHOST.', false],
     ['http://127.0.0.1:3000', false],
     ['https://nas.local', false],
     ['https://opportun.example.com', false],

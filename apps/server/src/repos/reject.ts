@@ -17,6 +17,7 @@ import { communications, dismissalFeedback } from '../db/schema';
 import type { RejectionReason } from '../db/schema.shared';
 import { senderAddress } from '../adapters/sources/alertEmail';
 import { HttpError } from '../lib/errors';
+import { racePoint } from '../lib/racePoints';
 import { invalidateTriageContext } from '../jobs/mailIngest';
 import { createRule, updateRule } from './mailFilters';
 import type { UserCtx } from './base';
@@ -107,6 +108,9 @@ export async function rejectCommunication(
     .where(and(eq(communications.userId, ctx.userId), eq(communications.id, id)))
     .get();
   if (row === undefined) throw new HttpError(404, 'not_found', 'No such message');
+  // After the read, before the erase (#678): a test links the message here to show the link check
+  // is the erasing UPDATE's, not this read's.
+  await racePoint('reject.read');
 
   if (row.rejectedAt === null) {
     const now = Date.now();

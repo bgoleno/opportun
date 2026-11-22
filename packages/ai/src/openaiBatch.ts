@@ -16,6 +16,7 @@
 // (`/v1/responses`), which a gateway or proxy at another base URL need not serve, so with the
 // operator's OPENAI_BASE_URL set elsewhere batchProviderFor has no client and ranking is live
 // (criterion 1; isOpenAiBatchBase).
+import { clampTokens, readBatchJson, readBatchText } from './batchRead';
 import { generateText, Output } from 'ai';
 import type { BatchProvider, BatchRequest, BatchResultItem, BatchState, BatchUsage } from './batch';
 import { timedFetches, type BatchCallLimits } from './batchLimits';
@@ -129,7 +130,8 @@ async function liveRequest(
 type Json = Record<string, unknown>;
 const isRecord = (v: unknown): v is Json =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
-const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+// A provider's count as the ledger takes it: a whole number in range (#620 point 4).
+const count = clampTokens;
 
 /** A provider's code or type as a ledger detail: a short word, or `unknown`, never its text. */
 function codeOf(v: unknown): string {
@@ -224,7 +226,7 @@ export function createOpenAiBatchProvider(target: {
     });
     if (res.status === 404) return 'gone';
     if (!res.ok) throw refused('state', res.status);
-    const batch = (await res.json()) as unknown;
+    const batch = await readBatchJson(res);
     if (!isRecord(batch)) throw new Error('OpenAI batch state: an unexpected answer');
     return batch;
   }
@@ -244,7 +246,8 @@ export function createOpenAiBatchProvider(target: {
     if (res.status === 404) return [];
     if (!res.ok) throw refused(what, res.status);
     const out: unknown[] = [];
-    for (const raw of (await res.text()).split('\n')) {
+    // At most 64 MiB, within the transfer limit (#620 point 4): read whole before.
+    for (const raw of (await readBatchText(res)).split('\n')) {
       if (raw.trim() === '') continue;
       try {
         out.push(JSON.parse(raw));
@@ -291,7 +294,7 @@ export function createOpenAiBatchProvider(target: {
         body: form,
       });
       if (!upload.ok) throw refused('upload', upload.status);
-      const file = (await upload.json()) as unknown;
+      const file = await readBatchJson(upload);
       if (!isRecord(file) || typeof file.id !== 'string') {
         throw new Error('OpenAI batch upload: an unexpected answer');
       }
@@ -313,7 +316,7 @@ export function createOpenAiBatchProvider(target: {
           .catch(() => undefined);
         throw refused('submit', res.status);
       }
-      const batch = (await res.json()) as unknown;
+      const batch = await readBatchJson(res);
       if (!isRecord(batch) || typeof batch.id !== 'string') {
         throw new Error('OpenAI batch submit: an unexpected answer');
       }

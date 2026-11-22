@@ -139,6 +139,12 @@ export const sessions = sqliteTable(
     failedAttempts: integer('failed_attempts').notNull().default(0),
     /** pending_2fa only: when the token was redeemed (a replay then reads token_used). */
     usedAt: integer('used_at'),
+    /**
+     * pending_2fa only: why the token was ended before its code step (#662). A password change or
+     * reset marks the user's pending tokens 'password_changed' instead of deleting them, so the
+     * code step can say so; a marked token is never claimed, and is deleted when it is answered.
+     */
+    revokedReason: text('revoked_reason', { enum: ['password_changed'] }),
     createdAt: createdAt(),
   },
   (t) => [index('sessions_user_id_idx').on(t.userId)],
