@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { and, eq, isNull } from 'drizzle-orm';
 import { lockScope, withTransaction, type Db, type Exec } from '../db/client';
 import { deviceTokens, oauthAccounts, users } from '../db/schema';
-import { hashPassword, NO_PEPPERS, passwordScope, type PepperSet } from './passwords';
+import { hashPassword, passwordScope, type PepperSet } from './passwords';
 import { destroyAllSessions } from './sessions';
 import { clearTwoFactor } from './twoFactor';
 
@@ -23,17 +23,25 @@ export interface PasswordReset {
   unlinkedProviders: string[];
 }
 
-/** Resets `userId`'s password and returns the temporary one. */
+/**
+ * Resets `userId`'s password and returns the temporary one. `auditIn` writes the reset's audit
+ * row in the reset's own transaction, as its last write (#661): if that write fails, nothing is
+ * changed, so no account is left reset with a password nobody was shown. The caller shows the
+ * password only once this resolves, which is after the commit.
+ */
 export async function resetUserPassword(
   db: Db,
   userId: string,
-  peppers: PepperSet = NO_PEPPERS,
+  peppers: PepperSet,
+  auditIn: (tx: Exec, unlinkedProviders: string[]) => Promise<void>,
 ): Promise<PasswordReset> {
   const password = temporaryPassword();
   const passwordHash = await hashPassword(password, peppers);
-  const unlinkedProviders = await withTransaction(db, (tx) =>
-    resetPasswordIn(tx, userId, passwordHash),
-  );
+  const unlinkedProviders = await withTransaction(db, async (tx) => {
+    const unlinked = await resetPasswordIn(tx, userId, passwordHash);
+    await auditIn(tx, unlinked);
+    return unlinked;
+  });
   return { password, unlinkedProviders };
 }
 
