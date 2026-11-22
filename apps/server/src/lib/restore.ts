@@ -210,6 +210,7 @@ const STDERR_LIMIT = 4096;
 function run(command: string, args: string[], env: LibpqEnv): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
+      // eslint-disable-next-line no-restricted-properties -- a child process's own environment, passed on, not a setting (#773)
       env: { ...env, PATH: process.env.PATH ?? '' },
       stdio: ['ignore', 'ignore', 'pipe'],
     });

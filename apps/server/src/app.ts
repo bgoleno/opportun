@@ -508,6 +508,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     mailProvider: createGmailProvider(opts.google ?? realGoogleApi, googleConn),
     sourceFetch: opts.sourceFetch ?? safeFetch,
     log: app.log,
+    // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
     env: opts.env ?? process.env,
     submissions: submissionsEnabled(cfg),
     demo: cfg.demo,

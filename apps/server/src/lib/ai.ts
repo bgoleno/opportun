@@ -36,6 +36,7 @@ import {
 } from './aiProviderFetch';
 import { getSecretValue } from './secretBox';
 import { processLogger } from '../obs/log';
+import { aiLoopbackHttpAllowed, operatorEnv } from '../config';
 
 export const DEFAULT_PER_TASK_DAILY_USD = 5;
 
@@ -389,11 +390,9 @@ export async function buildAiDeps(
   // keeps it out of a running server, so a correctly configured production is the only thing
   // that keeps it off. While one is registered, policyFor above ignores the user's stored
   // policies, so a user-supplied baseUrl is never fetched under the override's allowance.
-  const baseUrls = operatorBaseUrls(opts.env ?? process.env);
+  const baseUrls = operatorBaseUrls(opts.env ?? operatorEnv());
   const allowLoopbackHttp =
-    override?.allowLoopbackHttp ??
-    opts.allowLoopbackHttp ??
-    process.env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1';
+    override?.allowLoopbackHttp ?? opts.allowLoopbackHttp ?? aiLoopbackHttpAllowed();
   const fetches = providerFetchesFor(allowLoopbackHttp, baseUrls, resolveOverrides.get(db));
   const limit = callLimits.get(db);
   const stop = currentHoldStop();
