@@ -1,5 +1,6 @@
 import cookie from '@fastify/cookie';
 import Fastify, { type FastifyInstance, LogController } from 'fastify';
+import { removeSchedule, seedSchedule } from './lib/jobQueue';
 import {
   serializerCompiler,
   validatorCompiler,
@@ -77,14 +78,7 @@ import { enqueueRepairCompanyMatchKeysOnce } from './jobs/companyMatchKeyRepair'
 import { enqueueCompanyDomainBackfillOnce } from './jobs/companyDomainResolve';
 import { OPPORTUNITY_DEDUPE_AI_CRON, OPPORTUNITY_DEDUPE_AI_KIND } from './jobs/opportunityDedupeAi';
 import { RETRY_WORKDAY_CAPTURE_CRON, RETRY_WORKDAY_CAPTURE_KIND } from './jobs/retryWorkdayCapture';
-import {
-  queueLagMs,
-  removeSchedule,
-  runDueJobs,
-  seedSchedule,
-  startRunner,
-  type Runner,
-} from './jobs/runner';
+import { queueLagMs, runDueJobs, startRunner, type Runner } from './jobs/runner';
 import { SNAPSHOT_RECONCILE_CRON, SNAPSHOT_RECONCILE_JOB_KIND } from './jobs/submissionSnapshot';
 import { activityRoutes } from './routes/activities';
 import { aiRoutes } from './routes/ai';
@@ -508,6 +502,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     mailProvider: createGmailProvider(opts.google ?? realGoogleApi, googleConn),
     sourceFetch: opts.sourceFetch ?? safeFetch,
     log: app.log,
+    // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
     env: opts.env ?? process.env,
     submissions: submissionsEnabled(cfg),
     demo: cfg.demo,

@@ -8,6 +8,7 @@
 // Rules 0 to 2 judge the sender alone; rules 3 to 7 read the text as well. Stage 2, the gate
 // model, is consulted last and only about a message Stage 1 passed on a positive signal, and
 // a drop there writes the same contentless row under the rule name `ai_gate`.
+import { CLASSIFY_JOB_KIND } from '../src/lib/mailClassifyQueue';
 import { runStructured } from '@opportun/ai';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -15,7 +16,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { communications, discoveryResults, jobs, users } from '../src/db/schema';
 import type { InboundMessage } from '../src/adapters/mailProvider';
 import { backfillClassify } from '../src/jobs/classifyBackfill';
-import { CLASSIFY_JOB_KIND, ingestInbound } from '../src/jobs/mailIngest';
+import { ingestInbound } from '../src/jobs/mailIngest';
 import type { TriageOutput } from '../src/lib/triageGate';
 import { createRule, writeConsumerVeto } from '../src/repos/mailFilters';
 import { listCommunications, upsertInbound } from '../src/repos/communications';

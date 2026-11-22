@@ -2,6 +2,7 @@
 // on #618): a write from a request, a device token or a job that began before the nightly reset
 // never lands in the account the reset reseeds under the same pinned id. Each case parks the
 // other side at a race point, so the order is the test's, not the scheduler's.
+import { enqueue } from '../src/lib/jobQueue';
 import { randomBytes } from 'node:crypto';
 import { connect } from 'node:net';
 import { eq } from 'drizzle-orm';
@@ -12,7 +13,7 @@ import { DEMO_USERS } from '../src/lib/demo/fixture';
 import { deviceTokens, jobs, opportunities, users } from '../src/db/schema';
 import { runDemoResetGated } from '../src/jobs/demoReset';
 import { registerJob, unregisterJob } from '../src/jobs/registry';
-import { enqueue, runDueJobs } from '../src/jobs/runner';
+import { runDueJobs } from '../src/jobs/runner';
 import { DemoResetGate, DemoResetGateTimeout } from '../src/lib/demoResetGate';
 import { racePoint, setRaceHook } from '../src/lib/racePoints';
 import { testApp } from './helpers';

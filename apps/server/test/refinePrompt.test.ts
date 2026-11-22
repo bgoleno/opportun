@@ -1,10 +1,10 @@
+import { enqueue } from '../src/lib/jobQueue';
 import { runStructured, TASK_PROMPT_VARS } from '@opportun/ai';
 import { newId } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dismissalFeedback, jobs, prompts, settings } from '../src/db/schema';
-import { enqueue } from '../src/jobs/runner';
 import { feedbackSummary, REFINE_CRON, REFINE_JOB_KIND } from '../src/jobs/refineClassifyPrompt';
 import { createProposedVersion, getActivePrompt } from '../src/repos/prompts';
 import { useApi } from './api';

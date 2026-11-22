@@ -7,7 +7,7 @@
 import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import type { Db } from '../db/client';
+import type { Db, Exec } from '../db/client';
 import { settings } from '../db/schema';
 import type { OutboundTarget } from '../obs/catalog';
 import { outboundTargetFor } from '../obs/outbound';
@@ -199,14 +199,19 @@ const settingKey = (provider: OAuthProvider) => `oauth_provider:${provider}`;
 
 const StoredCreds = z.object({ clientId: z.string(), sealedSecret: z.string() });
 
+/**
+ * Stores a provider's client. `exec` does the write, so it can commit with an audit row (#802);
+ * `db` supplies the instance key that seals the secret.
+ */
 export async function writeProviderCreds(
   db: Db,
   provider: OAuthProvider,
   creds: ClientCreds,
+  exec: Exec = db,
 ): Promise<void> {
   const now = Date.now();
   const value = { clientId: creds.clientId, sealedSecret: encryptSecret(db, creds.clientSecret) };
-  await db
+  await exec
     .insert(settings)
     .values({ key: settingKey(provider), userId: null, value, updatedAt: now })
     .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: now } })
@@ -254,7 +259,7 @@ export async function providerConfigured(db: Db, provider: OAuthProvider): Promi
   return (await readProviderClientId(db, provider)) !== undefined;
 }
 
-export async function deleteProviderCreds(db: Db, provider: OAuthProvider): Promise<void> {
+export async function deleteProviderCreds(db: Exec, provider: OAuthProvider): Promise<void> {
   await db
     .delete(settings)
     .where(eq(settings.key, settingKey(provider)))

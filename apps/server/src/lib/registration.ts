@@ -89,10 +89,15 @@ export async function insertUserRow(
  * db.insert throws on a duplicate email (isUniqueViolation), unchanged from before this was
  * extracted: the caller still decides what either means (HTTP 403/409 for the route, nothing
  * special for the seeder beyond letting it propagate).
+ *
+ * `inTransaction` runs in the account's own transaction, after the row is written: what must
+ * commit with the account or not at all (its first session and audit row, #779). Not by wrapping
+ * this in a caller's transaction, which would hold the write gate across the wait before it.
  */
 export async function registerUser(
   db: Exec,
   input: RegisterUserInput,
+  inTransaction?: (tx: Exec, row: typeof users.$inferSelect) => Promise<void>,
 ): Promise<typeof users.$inferSelect> {
   const now = input.now ?? Date.now();
   await racePoint('auth.register');
@@ -114,6 +119,7 @@ export async function registerUser(
           .onConflictDoUpdate({ target: settings.key, set: { value: false, updatedAt: now } })
           .run();
       }
+      if (inTransaction !== undefined) await inTransaction(tx, row);
       return row;
     },
     { scope: 'registration' },

@@ -18,11 +18,10 @@
 // new secret under the same version as the server's last start is not caught (#635).
 // First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
 import '../unsetEmptyAiBaseUrls';
-import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { loadDbConfig, loadPeppers, loadSqliteDir } from '../config';
+import { loadDbConfig, loadPeppers, loadSqliteDir, loadDataDir } from '../config';
 import { closeDatabase, connectDatabase, withTransaction, type Db } from '../db/client';
 import { settings, users } from '../db/schema';
 import { audit } from '../lib/audit';
@@ -89,9 +88,8 @@ export async function main({
   const password = temporaryPassword();
   const passwordHash = await hashPassword(password, peppers);
   const now = Date.now();
-  let userId: string;
   try {
-    userId = await withTransaction(
+    await withTransaction(
       db,
       async (tx) => {
         // Seeded first: the seed makes demo-admin the admin, and a database with no demo marker
@@ -118,6 +116,9 @@ export async function main({
           now,
         });
         await writeDedicatedMark(tx, row.id, now);
+        // With the account (#802, as #723 does for a reset): a failed write creates nothing, and
+        // the password below is never shown for an account that does not exist.
+        await audit(tx, 'demo.dedicated_account_created', { userId: row.id });
         return row.id;
       },
       // registerUser's scope: no first registration runs beside this insert.
@@ -128,31 +129,28 @@ export async function main({
     io.stderr(`${err.message} Nothing changed.`);
     return 1;
   }
-  // Shown before the audit write (tl on #567, #570): the account and its mark have committed, so
-  // if that write fails, the account still has a password its owner can be given.
+  // Shown only once the account, its mark and its audit row have committed together (#802).
   io.stderr(
     `Created the dedicated demo account ${parsedEmail.data}. Its password is on stdout, shown ` +
       'this once: give it to its owner, who can change it in Settings.',
   );
   io.stdout(password);
-  await audit(db, 'demo.dedicated_account_created', { userId });
   return 0;
 }
 
 const entry = process.argv[1];
 if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
-  const dataDir = resolve(
-    process.env.DATA_DIR === undefined || process.env.DATA_DIR === ''
-      ? './data'
-      : process.env.DATA_DIR,
-  );
+  const dataDir = loadDataDir();
   const run = async (): Promise<number> => {
     // The server's database, resolved the same way as resetPassword.ts does (issue #179).
+    // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
     const sqliteDir = loadSqliteDir(process.env, dataDir);
+    // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
     const handle = await connectDatabase({ dataDir, sqliteDir, db: loadDbConfig(process.env) });
     try {
       return await main({
         db: handle.db,
+        // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
         env: process.env,
         email: process.argv[2],
         displayName: process.argv[3],

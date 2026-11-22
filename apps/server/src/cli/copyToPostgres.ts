@@ -206,6 +206,7 @@ export async function main({
 
 const entry = process.argv[1];
 if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
+  // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
   main({ argv: process.argv.slice(2), env: process.env }).then(
     (code) => {
       process.exitCode = code;

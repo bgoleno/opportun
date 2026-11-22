@@ -42,13 +42,7 @@ import { applicationSubmissions, attachments, resumes } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
 import { requireService, type JobContext, type JobHandler, type JobServices } from './registry';
-import { enqueue } from './runner';
-
-export const SNAPSHOT_JOB_KIND = 'submission.snapshot';
-
-/** One unfinished snapshot job per attempt and chosen resume (jobs_unfinished_dedupe_uq). */
-export const snapshotJobKey = (submissionId: string, resumeId: string | null): string =>
-  `${SNAPSHOT_JOB_KIND}:${submissionId}:${resumeId ?? 'none'}`;
+import { enqueueSnapshot, SNAPSHOT_JOB_KIND } from '../lib/submissionSnapshotQueue';
 
 /** Design 6.3: three tries with the runner's backoff, then the attempt shows the failure. */
 export const SNAPSHOT_MAX_ATTEMPTS = 3;
@@ -63,19 +57,6 @@ const Payload = z
   .object({ submissionId: z.string().min(1), resumeId: z.string().min(1).nullable() })
   .strict();
 type Payload = z.infer<typeof Payload>;
-
-/** Queues the snapshot of `resumeId` for an attempt; a no-op while that one is queued or running. */
-export async function enqueueSnapshot(
-  db: Db,
-  userId: string,
-  submissionId: string,
-  resumeId: string | null,
-): Promise<void> {
-  await enqueue(db, SNAPSHOT_JOB_KIND, { submissionId, resumeId } satisfies Payload, {
-    dedupeKey: snapshotJobKey(submissionId, resumeId),
-    userId,
-  });
-}
 
 type Resume = typeof resumes.$inferSelect;
 

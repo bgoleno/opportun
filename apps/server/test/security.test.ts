@@ -3,6 +3,7 @@ import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { audit } from '../src/lib/audit';
+import { HttpError } from '../src/lib/errors';
 import { captureLogs, testApp, type TestAppOptions } from './helpers';
 import { queryAll, queryOne } from './db';
 import { WITHHELD } from '../src/obs/log';
@@ -224,8 +225,108 @@ describe('central error handler', () => {
       a.get('/api/v1/__test/boom', async () => {
         throw new Error('database password is hunter2-internal');
       });
+      // #750: an HttpError's message reaches the client only when its thrower marks it.
+      a.get('/api/v1/__test/marked', async () => {
+        throw new HttpError(409, 'pattern_taken', 'That pattern is already in use.', undefined, {
+          userFacing: true,
+        });
+      });
+      a.get('/api/v1/__test/unmarked', async () => {
+        throw new HttpError(409, 'pattern_taken', 'row 42 of another account holds it');
+      });
+      a.get('/api/v1/__test/unmarked-details', async () => {
+        throw new HttpError(422, 'invalid_thing', undefined, { message: 'row 42', field: 'name' });
+      });
+      a.get('/api/v1/__test/marked-bare', async () => {
+        throw new HttpError(403, 'forbidden', undefined, undefined, { userFacing: true });
+      });
+      a.get('/api/v1/__test/marked-details', async () => {
+        throw new HttpError(
+          409,
+          'pattern_taken',
+          'That pattern is already in use.',
+          { code: 'from_details', message: 'from details', existingId: 'p1' },
+          { userFacing: true },
+        );
+      });
+      a.get('/api/v1/__test/marked-long', async () => {
+        throw new HttpError(
+          422,
+          'bad_pattern',
+          `Not a sender pattern: ${'x'.repeat(1000)}`,
+          undefined,
+          {
+            userFacing: true,
+          },
+        );
+      });
+      a.get('/api/v1/__test/marked-retry', async () => {
+        throw new HttpError(429, 'slow_down', 'Try again in half a minute.', undefined, {
+          retryAfterSec: 30,
+          userFacing: true,
+        });
+      });
     },
   };
+
+  // https://github.com/bgoleno/opportun/issues/750: the rule for which error text reaches the client.
+  it("sends a marked HttpError's own sentence", async () => {
+    const a = await boot({}, routes);
+    const res = await a.inject({ method: 'GET', url: '/api/v1/__test/marked' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: { code: 'pattern_taken', message: 'That pattern is already in use.' },
+    });
+  });
+
+  it('never sends the message of an HttpError that is not marked', async () => {
+    const a = await boot({}, routes);
+    const res = await a.inject({ method: 'GET', url: '/api/v1/__test/unmarked' });
+    expect(res.json()).toEqual({ error: { code: 'pattern_taken' } });
+    expect(res.body).not.toContain('row 42');
+  });
+
+  it('never sends a message key from the details of an HttpError that is not marked', async () => {
+    const a = await boot({}, routes);
+    const res = await a.inject({ method: 'GET', url: '/api/v1/__test/unmarked-details' });
+    expect(res.json()).toEqual({ error: { code: 'invalid_thing', field: 'name' } });
+  });
+
+  it('sends no message for a marked HttpError without a sentence, not its code again', async () => {
+    const a = await boot({}, routes);
+    const res = await a.inject({ method: 'GET', url: '/api/v1/__test/marked-bare' });
+    expect(res.json()).toEqual({ error: { code: 'forbidden' } });
+  });
+
+  it('lets no details key override the code or the marked sentence', async () => {
+    const a = await boot({}, routes);
+    const res = await a.inject({ method: 'GET', url: '/api/v1/__test/marked-details' });
+    expect(res.json()).toEqual({
+      error: {
+        code: 'pattern_taken',
+        message: 'That pattern is already in use.',
+        existingId: 'p1',
+      },
+    });
+  });
+
+  it('cuts a long marked sentence short, so a huge input is not echoed back whole', async () => {
+    const a = await boot({}, routes);
+    const res = await a.inject({ method: 'GET', url: '/api/v1/__test/marked-long' });
+    const message = (res.json() as { error: { message: string } }).error.message;
+    expect(message).toHaveLength(300);
+    expect(message.startsWith('Not a sender pattern: xxx')).toBe(true);
+    expect(message.endsWith('\u2026')).toBe(true);
+  });
+
+  it('keeps the retry-after header alongside a marked sentence', async () => {
+    const a = await boot({}, routes);
+    const res = await a.inject({ method: 'GET', url: '/api/v1/__test/marked-retry' });
+    expect(res.headers['retry-after']).toBe('30');
+    expect(res.json()).toEqual({
+      error: { code: 'slow_down', message: 'Try again in half a minute.' },
+    });
+  });
 
   it('maps a thrown zod error to 400 validation with issues', async () => {
     const a = await boot({}, routes);

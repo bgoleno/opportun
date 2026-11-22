@@ -2,6 +2,7 @@
 // (https://github.com/bgoleno/opportun/issues/260, sec's probe on
 // https://github.com/bgoleno/opportun/pull/230). A drain holds its worker for its whole loop and
 // there is one per user. The provider is mocked and every posting is made up.
+import { enqueue } from '../src/lib/jobQueue';
 import { runStructured } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
 import { and, eq, inArray, isNotNull } from 'drizzle-orm';
@@ -14,7 +15,7 @@ import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { enqueueRankWaiting, RANK_WAITING_KIND } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import { registerJob } from '../src/jobs/registry';
-import { enqueue, startRunner } from '../src/jobs/runner';
+import { startRunner } from '../src/jobs/runner';
 import { TITLE_VARIANTS_KIND } from '../src/jobs/titleVariants';
 import type { UserCtx } from '../src/repos/base';
 import { createSource, setRankDeferred, setWaitingNoKey } from '../src/repos/discovery';

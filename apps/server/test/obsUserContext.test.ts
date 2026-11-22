@@ -3,6 +3,7 @@
 // key packages/ai defines, so the AI router can tell a call for the same user (a child span) from
 // one for another (a new trace). The user goes on the span's parent, not on an outer context, so
 // a job always starts from the root: it never inherits the caller's span or user.
+import { enqueue } from '../src/lib/jobQueue';
 import { context, ROOT_CONTEXT, trace, type Context } from '@opentelemetry/api';
 import { USER_CONTEXT_KEY, userInContext } from '@opportun/ai';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -11,7 +12,7 @@ import { z } from 'zod';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { jobs } from '../src/db/schema';
 import { registerJob, unregisterJob } from '../src/jobs/registry';
-import { enqueue, runDueJobs } from '../src/jobs/runner';
+import { runDueJobs } from '../src/jobs/runner';
 import { obs, setCollecting } from '../src/obs';
 import { obsHttpPlugin } from '../src/plugins/obsHttp';
 import { useApi } from './api';

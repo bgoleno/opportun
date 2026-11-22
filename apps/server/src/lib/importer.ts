@@ -70,8 +70,19 @@ const CHAIN: readonly OpportunityStage[] = [
   'offer',
 ];
 
+/**
+ * A pack refused, in a sentence for the user who uploaded it: our own words, the names of their
+ * own files, and our CsvError's text. It never wraps library or zip-reader text (a zip the reader
+ * fails on becomes "not a readable zip file"), so `userText` may be sent as a marked message (#750).
+ */
 export class PackError extends Error {
   override name = 'PackError';
+  readonly userText: string;
+
+  constructor(userText: string) {
+    super(userText);
+    this.userText = userText;
+  }
 }
 
 /**

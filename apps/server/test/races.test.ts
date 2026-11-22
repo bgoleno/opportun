@@ -4,6 +4,7 @@
 // purpose. The invariant must hold for exactly-one outcomes. On SQLite the write gate
 // serializes transactions anyway; these same tests are the Postgres oracle in Task 13. Each
 // compare-and-set statement also gets a unit test of its own (the second CAS finds no row).
+import { enqueue } from '../src/lib/jobQueue';
 import { createHash } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -12,7 +13,7 @@ import { z } from 'zod';
 import type { Db } from '../src/db/client';
 import { jobs, sessions, users } from '../src/db/schema';
 import { registerJob, unregisterJob } from '../src/jobs/registry';
-import { enqueue, reviveDeadJob, runDueJobs } from '../src/jobs/runner';
+import { reviveDeadJob, runDueJobs } from '../src/jobs/runner';
 import { createDeviceToken, revokeDeviceToken } from '../src/lib/deviceTokens';
 import {
   GOOGLE_TOKENS_LABEL,

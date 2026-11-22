@@ -49,7 +49,7 @@ import {
   updateOpportunity,
   type OpportunityView,
 } from '../repos/opportunities';
-import { POSTING_RECONCILE_KIND } from './discoveryKinds';
+import { POSTING_RECONCILE_KIND } from '../lib/jobKinds';
 import { requireService, type JobHandler } from './registry';
 
 export { POSTING_RECONCILE_KIND };

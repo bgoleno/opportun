@@ -4,6 +4,7 @@
 // and the board's pending card, in 3 of 12. A run under its ingest lock had nothing to stop a
 // capture, which looked, then wrote, outside it. Each order is built here with a race point, and a
 // real run of a real source. The provider is mocked and every posting is made up.
+import { enqueue } from '../src/lib/jobQueue';
 import { runStructured } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
 import { eq } from 'drizzle-orm';
@@ -14,7 +15,6 @@ import { onSlowTransaction } from '../src/db/gate';
 import { discoveryResults, discoveryRuns, jobs, opportunities } from '../src/db/schema';
 import { drainWaitingResults } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
-import { enqueue } from '../src/jobs/runner';
 import { resolveCapture } from '../src/lib/captureResolve';
 import type { UserCtx } from '../src/repos/base';
 import { createCompany } from '../src/repos/companies';

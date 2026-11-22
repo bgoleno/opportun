@@ -2,11 +2,11 @@
 // or 1 is on, 0 is off, anything else refuses to start. tl's criteria and sec's conditions are on
 // the issue. Every setting here is read through loadConfig, so the tests hold the parsing an
 // operator's environment goes through, not a Config a test wrote by hand.
+import { readSchedules } from '../src/lib/jobQueue';
 import { randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ConfigError, loadConfig, submissionsEnabled, type Config } from '../src/config';
-import { readSchedules } from '../src/jobs/runner';
 import { SUBMISSION_EXPIRE_JOB_KIND } from '../src/jobs/submissionExpire';
 import { SUBMISSION_FOLLOWUP_JOB_KIND } from '../src/jobs/submissionFollowup';
 import { SNAPSHOT_RECONCILE_JOB_KIND } from '../src/jobs/submissionSnapshot';

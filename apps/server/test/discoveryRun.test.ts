@@ -1,5 +1,6 @@
 // Discovery engine (Task 5): sanitized ingestion, dedupe, source status with retry backoff, and
 // per-source schedule rows.
+import { enqueue } from '../src/lib/jobQueue';
 import { NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -22,7 +23,7 @@ import {
   MULTI_POSTED_PREFIX,
   sourceScheduleName,
 } from '../src/jobs/discoveryRun';
-import { enqueue, materializeSchedules, runDueJobs } from '../src/jobs/runner';
+import { materializeSchedules, runDueJobs } from '../src/jobs/runner';
 import { sanitizePosting } from '../src/lib/postingSanitize';
 import {
   createSource,
