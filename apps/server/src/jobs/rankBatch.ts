@@ -216,6 +216,11 @@ export async function submitRankBatch(
   db: Db,
   ctx: UserCtx,
   services: Partial<JobServices>,
+  /**
+   * The send job's last attempt (#827): a refusal then is not tried again by the runner, so it
+   * counts as a return for its postings, as a send with no answer always does.
+   */
+  opts: { lastAttempt?: boolean } = {},
 ): Promise<SubmitOutcome> {
   const log = services.log;
   if (!(await readRankBatching(db, ctx))) {
@@ -312,15 +317,21 @@ export async function submitRankBatch(
     // Refused, or no answer: there is nothing to collect, so the postings wait again now. If the
     // provider took it after all, this is point 7's double send, bounded the same way.
     log?.warn({ err, 'opportun.rank_batch.id': made.id }, 'sending a ranking batch failed');
+    const answered = refusedSend(err);
+    // The cap on a send that keeps failing (#827, qa on #820): each send the runner will not try
+    // again soon (its last attempt, or one with no answer) counts a return for its postings, and
+    // at MAX_BATCH_RETURNS their wait ends as a provider failure. A send refused every time is so
+    // tried at most 9 times (3 attempts each, by 3 sends: the first and two sweeps), not forever.
+    const counted = !answered || opts.lastAttempt === true;
     const returned = await withTransaction(
       db,
       async (tx) => {
         await setBatchState(tx, made.id, 'failed');
-        return await unlinkBatch(tx, ctx, made.id, { batching: true });
+        return await unlinkBatch(tx, ctx, made.id, { batching: true, returned: counted });
       },
       { scope: lockFor(ctx) },
     );
-    return { status: 'provider_error', returned, answered: refusedSend(err) };
+    return { status: 'provider_error', returned, answered };
   }
   await racePoint('rankBatch.provider_answered');
   if (!(await markBatchSubmitted(db, made.id, providerBatchId))) {
@@ -781,7 +792,12 @@ export const rankBatchSubmitJob: JobHandler<Record<string, never>> = {
   maxAttempts: 3,
   async run(db, _payload, ctx) {
     if (ctx.userId === null) throw new Error(`${RANK_BATCH_SEND_KIND} needs a user`);
-    const outcome = await submitRankBatch(db, { userId: ctx.userId, isAdmin: false }, ctx.services);
+    const outcome = await submitRankBatch(
+      db,
+      { userId: ctx.userId, isAdmin: false },
+      ctx.services,
+      { lastAttempt: ctx.attempt >= ctx.maxAttempts },
+    );
     await ctx.setResult(outcome);
     // A send the provider refused is tried again on the runner's backoff (#784: about one minute,
     // then two), not only at the hourly sweep or when the next posting joins; after its last
