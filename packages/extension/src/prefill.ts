@@ -423,6 +423,10 @@ export const NOT_FILLED_WORDS = new Map<NotFilledReason, string>([
   ],
   // The list reasons (tl's rule 4 on #402): reportLines puts the value in place of {value}.
   ['no_option', 'no option on the form\'s list is exactly "{value}": choose it on the form'],
+  [
+    'option_unclickable',
+    'the form\'s list has "{value}", but inside a link or a label, so Opportun did not click it: choose it on the form',
+  ],
   ['several_options', 'more than one option is exactly "{value}": choose it on the form'],
   ['list_not_shown', "the form's list did not appear in time: choose it on the form"],
   ['not_confirmed', 'the form did not show the choice "{value}": check this field'],

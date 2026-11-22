@@ -115,6 +115,17 @@ export function applyBlockedReason(opp: OpportunityView): string | null {
     if (embeddedGreenhouse(opp)) return EMBEDDED_GREENHOUSE;
     return "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.";
   }
+  // Each state names what the Details tab offers for it (#738, tl): the banner's Confirm for a
+  // posting that needs review; Find posting while there is no description; for a described one
+  // never checked, nothing moves it on yet (#756), so the text says only why.
+  if (opp.postingState === 'searching') {
+    return "Opportun is still checking this posting on the company's board; try again shortly.";
+  }
+  if (opp.postingState === null || opp.postingState === undefined) {
+    return (opp.descriptionMd ?? '').trim() === ''
+      ? "This opportunity's posting hasn't been checked on the company's board yet. Use Find posting on the Details tab."
+      : "This posting hasn't been checked against the company's board, so assisted apply can't use it yet.";
+  }
   if (opp.postingState !== 'confirmed') {
     return "This opportunity's posting needs review. Confirm it on the Details tab first.";
   }

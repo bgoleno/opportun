@@ -994,6 +994,23 @@ describe('#402 slice 2: the fill waits for lists, and the report lists every cho
     );
   });
 
+  // #738 (qa's regression pass): an option the filler would not click because of where it sits
+  // (inside a link or a label) was reported as missing from the list.
+  it('a list option it would not click for where it sits is reported as that, not as missing', () => {
+    const lines = reportLines({
+      ok: true,
+      chosen: [],
+      filled: [],
+      notFilled: [
+        { label: 'School', reason: 'option_unclickable', detail: 'University of Example' },
+      ],
+      resume: null,
+    });
+    expect(lines.notFilled).toEqual([
+      'School: the form\'s list has "University of Example", but inside a link or a label, so Opportun did not click it: choose it on the form',
+    ]);
+  });
+
   it('a value with replacement patterns is shown as it is (sec at 8084132)', () => {
     const lines = reportLines({
       ok: true,

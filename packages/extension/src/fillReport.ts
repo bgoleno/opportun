@@ -14,6 +14,7 @@ export const NOT_FILLED_REASONS: readonly unknown[] = [
   'resume_unchecked',
   'withheld',
   'no_option',
+  'option_unclickable',
   'several_options',
   'list_not_shown',
   'not_confirmed',
