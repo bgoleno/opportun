@@ -1,5 +1,6 @@
 // Nightly backups (FR-I4): openable snapshots, retention, confinement, the nightly schedule
 // and a restore of a snapshot into a fresh data directory.
+import { verifySnapshot } from '../src/lib/backupSnapshots';
 import { enqueue, nextOccurrence } from '../src/lib/jobQueue';
 import {
   copyFile,
@@ -20,15 +21,7 @@ import { and, eq } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import { openDatabase } from '../src/db/client';
 import { jobs, settings } from '../src/db/schema';
-import {
-  BACKUP_JOB_KIND,
-  BACKUP_RETENTION,
-  listBackups,
-  MANUAL_BACKUP_DEDUPE_KEY,
-  runBackup,
-  snapshotName,
-  verifySnapshot,
-} from '../src/jobs/backup';
+import { BACKUP_JOB_KIND, BACKUP_RETENTION, listBackups, MANUAL_BACKUP_DEDUPE_KEY, runBackup, snapshotName } from '../src/jobs/backup';
 import { cancelJob, materializeSchedules } from '../src/jobs/runner';
 import { PathEscapeError } from '../src/lib/storage';
 import { checkSqliteFilesystem } from '../src/lib/sqliteFilesystem';

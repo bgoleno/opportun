@@ -8,6 +8,7 @@
 // back through the app, vault secret included. That one test needs pg_dump and pg_restore
 // 16 on PATH; it checks for them itself and fails with an actionable message naming the
 // missing tool, rather than a bare spawn error, when they are not there (issue #180).
+import { verifySnapshot } from '../src/lib/backupSnapshots';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
@@ -28,15 +29,7 @@ import {
 } from '../src/db/client';
 import * as pgSchema from '../src/db/schema.pg';
 import { TABLE_EXPORTS } from '../src/db/schema.shared';
-import {
-  BACKUP_RETENTION,
-  listBackups,
-  pgDumpInvocation,
-  pruneBackups,
-  runBackup,
-  snapshotName,
-  verifySnapshot,
-} from '../src/jobs/backup';
+import { BACKUP_RETENTION, listBackups, pgDumpInvocation, pruneBackups, runBackup, snapshotName } from '../src/jobs/backup';
 import { bindVaultKey } from '../src/lib/secretBox';
 import { createStorage } from '../src/lib/storage';
 import { search } from '../src/repos/search';

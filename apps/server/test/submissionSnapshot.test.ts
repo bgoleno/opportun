@@ -4,6 +4,7 @@
 // from a map of document refs; the local-file and Reactive Resume stores are the real ones,
 // which answer export_unsupported without reading anything. Nothing here contacts Google, an
 // employer or an ATS.
+import { ATTACHMENT_SWEEP_GRACE_MS, sweepOrphanedAttachments } from '../src/lib/attachmentSweep';
 import { SNAPSHOT_JOB_KIND } from '../src/lib/submissionSnapshotQueue';
 import { readSchedules } from '../src/lib/jobQueue';
 import { createHash } from 'node:crypto';
@@ -23,7 +24,6 @@ import {
   opportunities,
   resumes,
 } from '../src/db/schema';
-import { ATTACHMENT_SWEEP_GRACE_MS, sweepOrphanedAttachments } from '../src/jobs/attachmentSweep';
 import { runNextJob } from '../src/jobs/runner';
 import {
   reconcilePendingSnapshots,
