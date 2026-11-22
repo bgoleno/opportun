@@ -612,6 +612,8 @@ export async function writeRrConfig(
   ctx: UserCtx,
   baseUrl: string,
   apiKey: string | undefined,
+  // What must commit with the save or not at all: its audit row (#819).
+  inTransaction?: (tx: Exec) => Promise<void>,
 ): Promise<void> {
   await racePoint('rr.config');
   // The user's scope: the key row and the address commit together, and a second save cannot
@@ -644,6 +646,7 @@ export async function writeRrConfig(
           .run();
       }
       await writeUserSetting(tx, ctx, RR_URL_SETTING, baseUrl);
+      if (inTransaction !== undefined) await inTransaction(tx);
     },
     { scope: `user:${ctx.userId}` },
   );
