@@ -68,6 +68,7 @@ export const FIXTURE_POSTINGS: readonly NormalizedPosting[] = [
  */
 /** The longest a spec may hold one listing answer (per request; the body schema caps it too). */
 export const MAX_LISTING_HOLD_MS = 20_000;
+const LISTING_HOLD_STEP_MS = 50;
 
 interface ListingControl {
   holdMs: number;
@@ -90,10 +91,11 @@ export const mockGreenhouseSource: DiscoverySource = {
   async *fetchPostings() {
     listingReads += 1;
     const control = listing;
-    // Bounded here as well as by the body schema, so the timer never takes an unchecked duration.
+    // The hold is waited out in fixed steps, so no timer takes a duration from the request
+    // body; the body schema and MAX_LISTING_HOLD_MS bound how many steps there are.
     const holdMs = Math.min(Math.max(control.holdMs, 0), MAX_LISTING_HOLD_MS);
-    if (holdMs > 0 && holdMs <= MAX_LISTING_HOLD_MS) {
-      await new Promise((r) => setTimeout(r, holdMs));
+    for (let waited = 0; waited < holdMs; waited += LISTING_HOLD_STEP_MS) {
+      await new Promise((r) => setTimeout(r, LISTING_HOLD_STEP_MS));
     }
     for (const posting of FIXTURE_POSTINGS) {
       if (posting.externalId != null && control.drop.includes(posting.externalId)) continue;
