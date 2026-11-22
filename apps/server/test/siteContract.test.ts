@@ -11,9 +11,12 @@ import { describe, expect, it } from 'vitest';
 import { sanitizePosting } from '../src/lib/postingSanitize';
 import {
   ATS_ALLOW_HOSTS,
+  createSafeFetch,
   isProhibitedHost,
   PAGE_FETCH_PROHIBITED_HOSTS,
+  type RawResponse,
 } from '../src/lib/safeFetch';
+import type { SourceContext } from '../src/adapters/discoverySource';
 import { SITE_MODULES, type SiteModule } from '../src/sites';
 
 const fixture = (name: string): unknown =>
@@ -206,6 +209,42 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
         expect(ATS_ALLOW_HOSTS, hostOf(rule)).not.toContain(hostOf(rule));
       }
       for (const rule of site.fetchHosts) expect(ATS_ALLOW_HOSTS).toContain(hostOf(rule));
+    });
+
+    // Each API call passes the site's own rules, so a redirect from a fetch host to one of its
+    // subdomains is refused through the real safeFetch: nothing is asked of the subdomain.
+    it('follows no API redirect onto a subdomain of a fetch host (sec, #769 point 3)', async () => {
+      const network = mod.api;
+      if (network === undefined) return;
+      const board = site.board!.fromUrl(new URL(site.samples.boardUrls[0]!))!;
+      const job = site.jobFromUrl(new URL(site.samples.jobUrls[0]!))!;
+      const requested: string[] = [];
+      const fetch = createSafeFetch({
+        now: () => 0,
+        sleep: async () => undefined,
+        resolve: async () => ['93.184.216.34'],
+        request: async (target): Promise<RawResponse> => {
+          requested.push(target.url.hostname);
+          return {
+            status: 302,
+            headers: { location: `https://x.${target.url.hostname}${target.url.pathname}` },
+            body: (async function* () {})(),
+          };
+        },
+      });
+      const log = { warn: () => undefined } as unknown as SourceContext['log'];
+      const sctx: SourceContext = { fetch, log };
+      if (network.listBoard !== undefined) {
+        const run = async () => {
+          for await (const _ of network.listBoard!(sctx, { org: board.slug }, null)) void _;
+        };
+        await expect(run()).rejects.toThrow();
+      }
+      if (network.holdsJob !== undefined) {
+        expect(await network.holdsJob(sctx, board.slug, job.id, undefined)).toBe('unknown');
+      }
+      expect(requested.length).toBeGreaterThan(0);
+      for (const h of requested) expect(matchesAny(h, site.fetchHosts), h).toBe(true);
     });
 
     it('maps its recorded API answer to postings the sanitizer accepts', () => {
