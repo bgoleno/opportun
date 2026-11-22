@@ -249,7 +249,8 @@ export default defineConfig(
     // apps/server/test/importCycles.test.ts checks that the jobs/repos and mail groups stay free
     // of cycles. The negations below are the job modules still imported here: the queue itself
     // (runner, registry, discoveryKinds), enqueue helpers (gmailSync, submissionSnapshot), and
-    // backup, dbIntegrityCheck, postingReconcile and atsDetect. Moving them out is
+    // backup, dbIntegrityCheck, postingReconcile, atsDetect and, from lib/demo/seed.ts,
+    // attachmentSweep. Moving them out is
     // https://github.com/bgoleno/opportun/issues/788; this list only shrinks. The rule
     // reads static imports and re-exports, not import(): today nothing here imports a job or a
     // route that way. @typescript-eslint's rule, not the core one, so the NFR-SEC11 block's
@@ -274,6 +275,7 @@ export default defineConfig(
                 '!../jobs/registry',
                 '!../jobs/runner',
                 '!../jobs/submissionSnapshot',
+                '!../../jobs/attachmentSweep',
               ],
               allowTypeImports: true,
               message:

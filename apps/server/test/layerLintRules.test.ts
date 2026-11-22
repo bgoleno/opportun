@@ -51,6 +51,22 @@ describe('the layer rule (#763)', () => {
     ).not.toContain(RULE);
   });
 
+  it('allows a named job module a folder deeper, and refuses an unnamed one there', async () => {
+    const seed = 'apps/server/src/lib/demo/seed.ts';
+    expect(
+      await rules(
+        "import { removeIfUnreferenced } from '../../jobs/attachmentSweep';\nvoid removeIfUnreferenced;\n",
+        seed,
+      ),
+    ).not.toContain(RULE);
+    expect(
+      await rules(
+        "import { triageMessage } from '../../jobs/mailIngest';\nvoid triageMessage;\n",
+        seed,
+      ),
+    ).toContain(RULE);
+  });
+
   it('leaves jobs/ alone: the rule is for the layers below it', async () => {
     expect(
       await rules("import { triageMessage } from './mailIngest';\nvoid triageMessage;\n", JOB),
