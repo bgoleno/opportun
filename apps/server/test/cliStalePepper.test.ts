@@ -11,7 +11,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { main as createDemoAccount } from '../src/cli/createDemoAccount';
 import { main as resetPassword } from '../src/cli/resetPassword';
-import { DEMO_MARKER_KEY } from '../src/cli/seedDemo';
+import { DEMO_MARKER_KEY } from '../src/lib/demo/seed';
 import type { Db } from '../src/db/client';
 import { deviceTokens, sessions, settings, users } from '../src/db/schema';
 import { createDeviceToken } from '../src/lib/deviceTokens';
@@ -135,6 +135,9 @@ describe('#606: the reset CLI with a pepper version the server is not on', () =>
     const { err, io } = capture();
     expect(await resetPassword({ db, email: 'ada@example.com', io, peppers: STALE })).toBe(1);
     expect(err.join('\n')).toContain('version 2');
+    // As actionable as the row-based refusals (tl's optional 3 on #627, #635): restart the server
+    // once with its own variables, so it records its version, then run this again.
+    expect(err.join('\n')).toMatch(/restart the server once with its own pepper variables/i);
     expect(await snapshot(id)).toBe(before);
   });
 

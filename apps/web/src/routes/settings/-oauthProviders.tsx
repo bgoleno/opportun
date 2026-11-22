@@ -6,7 +6,6 @@
 // values internally, so the secret is never sent to the browser to be sent back again.
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FormError } from '@/components/FormError';
 import { FormField } from '@/components/FormField';
 import { CopyField } from '@/components/google/GoogleSetup';
@@ -17,6 +16,7 @@ import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { api, errorMessage, isForbidden, NOT_AVAILABLE_TO_ACCOUNT } from '@/lib/api';
 import { providerLabel, type OAuthProvider } from '@/lib/oauth';
+import { PasswordDialog, passwordError } from './-twoFactor';
 
 interface ProviderStatus {
   provider: OAuthProvider;
@@ -48,7 +48,8 @@ function consoleHint(provider: OAuthProvider): string {
 /**
  * The one-click reuse of the client already saved under Settings > Integrations. One Google
  * client serves both: a web client holds several redirect URIs, and scopes are asked for per
- * flow. The import is a POST with no body; the secret is copied server side.
+ * flow. The secret is copied server side; the request carries only the admin's own password, which
+ * every change to who can sign in asks for (#620 point 3).
  */
 function ReuseIntegrationClient({
   provider,
@@ -60,21 +61,22 @@ function ReuseIntegrationClient({
   label: string;
 }) {
   const qc = useQueryClient();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
 
-  async function reuse() {
-    setBusy(true);
-    setError(null);
+  /** Resolves to the error to show in the password dialog, or null once it is saved. */
+  async function reuse(password: string): Promise<string | null> {
     try {
-      await api(`/admin/oauth-providers/${provider}/import`, { method: 'POST' });
+      await api(`/admin/oauth-providers/${provider}/import`, {
+        method: 'POST',
+        body: { password },
+      });
+      setAsking(false);
       void qc.invalidateQueries({ queryKey: adminProvidersQuery.queryKey });
       void qc.invalidateQueries({ queryKey: ['auth', 'oauth'] });
       toast({ title: `${label} sign-in saved`, variant: 'success' });
+      return null;
     } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setBusy(false);
+      return passwordError(err);
     }
   }
 
@@ -84,18 +86,17 @@ function ReuseIntegrationClient({
         You already saved a {label} client under Settings &gt; Integrations:{' '}
         <span className="font-mono text-xs break-all">{clientId}</span>
       </p>
-      <FormError message={error} />
       <div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={busy}
-          onClick={() => void reuse()}
-        >
-          {busy ? 'Saving...' : 'Use that client'}
+        <Button type="button" variant="outline" size="sm" onClick={() => setAsking(true)}>
+          Use that client
         </Button>
       </div>
+      <PasswordDialog
+        open={asking}
+        onOpenChange={setAsking}
+        description={`Use the ${label} client saved under Settings > Integrations for sign-in? Enter your own password to continue.`}
+        onConfirm={reuse}
+      />
       <p className="text-muted-foreground">
         One client can do both jobs. Add the redirect URI above to it in the Google console first,
         or sign-in fails with redirect_uri_mismatch.
@@ -136,33 +137,47 @@ function ProviderSection({ status }: { status: ProviderStatus }) {
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [errors, setErrors] = useState<{ clientId?: string; clientSecret?: string }>({});
-  const [formError, setFormError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [removing, setRemoving] = useState(false);
+  // Each change to who can sign in asks for the admin's own password first (#620 point 3).
+  const [asking, setAsking] = useState<'save' | 'remove' | null>(null);
 
-  async function save(e: FormEvent) {
+  function save(e: FormEvent) {
     e.preventDefault();
     const next: typeof errors = {};
     if (clientId.trim() === '') next.clientId = 'Enter the client ID';
     if (clientSecret.trim() === '') next.clientSecret = 'Enter the client secret';
     setErrors(next);
     if (Object.keys(next).length > 0) return;
-    setBusy(true);
-    setFormError(null);
+    setAsking('save');
+  }
+
+  const changed = () => {
+    setAsking(null);
+    void qc.invalidateQueries({ queryKey: adminProvidersQuery.queryKey });
+    void qc.invalidateQueries({ queryKey: ['auth', 'oauth'] });
+  };
+
+  /** Resolves to the error to show in the password dialog, or null once it is done. */
+  async function confirmed(password: string): Promise<string | null> {
     try {
-      await api(`/admin/oauth-providers/${status.provider}`, {
-        method: 'PUT',
-        body: { clientId: clientId.trim(), clientSecret: clientSecret.trim() },
-      });
-      setClientId('');
-      setClientSecret('');
-      void qc.invalidateQueries({ queryKey: adminProvidersQuery.queryKey });
-      void qc.invalidateQueries({ queryKey: ['auth', 'oauth'] });
-      toast({ title: `${label} sign-in saved`, variant: 'success' });
+      if (asking === 'save') {
+        await api(`/admin/oauth-providers/${status.provider}`, {
+          method: 'PUT',
+          body: { clientId: clientId.trim(), clientSecret: clientSecret.trim(), password },
+        });
+        setClientId('');
+        setClientSecret('');
+        changed();
+        toast({ title: `${label} sign-in saved`, variant: 'success' });
+      } else {
+        await api(`/admin/oauth-providers/${status.provider}`, {
+          method: 'DELETE',
+          body: { password },
+        });
+        changed();
+      }
+      return null;
     } catch (err) {
-      setFormError(errorMessage(err));
-    } finally {
-      setBusy(false);
+      return passwordError(err);
     }
   }
 
@@ -212,8 +227,7 @@ function ProviderSection({ status }: { status: ProviderStatus }) {
               <p className="text-sm text-muted-foreground">Or paste a different client:</p>
             </>
           )}
-          <form onSubmit={(e) => void save(e)} noValidate className="grid max-w-md gap-3">
-            <FormError message={formError} />
+          <form onSubmit={save} noValidate className="grid max-w-md gap-3">
             <FormField label="Client ID" error={errors.clientId}>
               {(p) => (
                 <Input
@@ -242,35 +256,25 @@ function ProviderSection({ status }: { status: ProviderStatus }) {
               )}
             </FormField>
             <div className="flex gap-2">
-              <Button type="submit" disabled={busy}>
-                {busy ? 'Saving...' : 'Save'}
-              </Button>
+              <Button type="submit">Save</Button>
               {status.configured ? (
-                <Button variant="outline" onClick={() => setRemoving(true)}>
+                <Button type="button" variant="outline" onClick={() => setAsking('remove')}>
                   Remove
                 </Button>
               ) : null}
             </div>
           </form>
-          <ConfirmDialog
-            open={removing}
-            onOpenChange={setRemoving}
-            title={`Remove ${label} sign-in?`}
-            description={`The ${label} button leaves the login page. Linked accounts stay linked and work again if you set it up later.`}
-            confirmLabel="Remove"
-            onConfirm={async () => {
-              try {
-                await api(`/admin/oauth-providers/${status.provider}`, { method: 'DELETE' });
-                void qc.invalidateQueries({ queryKey: adminProvidersQuery.queryKey });
-                void qc.invalidateQueries({ queryKey: ['auth', 'oauth'] });
-              } catch (err) {
-                toast({
-                  title: 'Could not remove it',
-                  description: errorMessage(err),
-                  variant: 'destructive',
-                });
-              }
+          <PasswordDialog
+            open={asking !== null}
+            onOpenChange={(open) => {
+              if (!open) setAsking(null);
             }}
+            description={
+              asking === 'remove'
+                ? `Remove ${label} sign-in? The ${label} button leaves the login page. Linked accounts stay linked and work again if you set it up later. Enter your own password to continue.`
+                : `Save these ${label} sign-in credentials? Enter your own password to continue.`
+            }
+            onConfirm={confirmed}
           />
         </>
       )}

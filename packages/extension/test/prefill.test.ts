@@ -273,6 +273,8 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
       headers: { authorization: `Bearer ${TOKEN}`, accept: 'application/json' },
       credentials: 'omit',
       redirect: 'error',
+      // The action's time limit (#648).
+      signal: expect.any(AbortSignal),
     });
     expect(snapshot![0]).toBe(`${SERVER}/api/v1/connector/apply/sub-1/snapshot`);
     expect(s.deps.runFill).toHaveBeenCalledTimes(1);
@@ -317,11 +319,12 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
     expect(serialized).not.toContain(SERVER);
   });
 
-  it('a snapshot that is not ready is never fetched, and the report says to attach it yourself', async () => {
+  it('an attempt with no resume chosen fetches nothing, and the report says to attach it yourself', async () => {
+    // What the server sends for an attempt with no resume (connectorApply.ts): all nulls.
     const s = setup({
       current: json(200, {
         attempt: attempt({
-          resume: { snapshotState: 'unsupported', filename: null, bytes: null },
+          resume: { snapshotState: null, filename: null, bytes: null },
         }),
         reason: null,
       }),
@@ -332,19 +335,95 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
     expect(listed(s, 'Not filled in')).toContain('Resume: attach your resume yourself');
   });
 
-  for (const [why, snapshot] of [
-    ['refused (409)', json(409, { error: { code: 'snapshot_not_ready' } })],
-    ['no longer handed off (404)', json(404, { error: { code: 'not_found' } })],
-    ['not a PDF', pdf(PDF, 'text/html')],
-    ['not the announced size', pdf(PDF.slice(0, 10))],
-    ['without the PDF signature', pdf(new TextEncoder().encode('<html>placeholder....</html>'))],
+  // Each says why (#653): still being prepared, could not be downloaded, or not usable.
+  const PREPARING =
+    'Resume: the copy is still being prepared: try again in a minute, or attach your resume yourself';
+  const NOT_DOWNLOADED =
+    'Resume: the copy could not be downloaded from Opportun: try again, or attach your resume yourself';
+  const UNUSABLE = 'Resume: the copy in Opportun is not a usable PDF: attach your resume yourself';
+  for (const [why, snapshot, words] of [
+    [
+      'refused (409) without a state',
+      json(409, { error: { code: 'snapshot_not_ready' } }),
+      'Resume: attach your resume yourself',
+    ],
+    [
+      'refused (409) while still being prepared',
+      json(409, { error: { code: 'snapshot_not_ready', snapshotState: 'pending' } }),
+      PREPARING,
+    ],
+    [
+      // An export that failed (a deleted resume, say) is not "not a usable PDF" (qa on #717).
+      'refused (409) as failed',
+      json(409, { error: { code: 'snapshot_not_ready', snapshotState: 'failed' } }),
+      'Resume: attach your resume yourself',
+    ],
+    [
+      'refused (409) as unsupported',
+      json(409, { error: { code: 'snapshot_not_ready', snapshotState: 'unsupported' } }),
+      UNUSABLE,
+    ],
+    [
+      'refused (409) as deleted',
+      json(409, { error: { code: 'snapshot_not_ready', snapshotState: 'deleted' } }),
+      'Resume: attach your resume yourself',
+    ],
+    ['no longer handed off (404)', json(404, { error: { code: 'not_found' } }), NOT_DOWNLOADED],
+    ['a server error (503)', json(503, { error: { code: 'unavailable' } }), NOT_DOWNLOADED],
+    ['not a PDF', pdf(PDF, 'text/html'), UNUSABLE],
+    ['not the announced size', pdf(PDF.slice(0, 10)), UNUSABLE],
+    [
+      'without the PDF signature',
+      pdf(new TextEncoder().encode('<html>placeholder....</html>')),
+      UNUSABLE,
+    ],
   ] as const) {
-    it(`a copy that is ${why} is not attached: attach it yourself`, async () => {
+    it(`a copy that is ${why} is not attached, and the report says why`, async () => {
       const s = setup({ snapshot });
       await clickFill(s);
       expect(s.plans[0]!.resume).toBeNull();
       expect((s.page.doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(0);
-      expect(listed(s, 'Not filled in')).toContain('Resume: attach your resume yourself');
+      expect(listed(s, 'Not filled in')).toContain(words);
+    });
+  }
+
+  it('a download that fails on the network is not attached: it could not be downloaded (#653)', async () => {
+    const s = setup({});
+    const get = s.get.getMockImplementation()!;
+    s.get.mockImplementation(async (url, init) => {
+      if (url.endsWith('/snapshot')) throw new TypeError('Failed to fetch');
+      return get(url, init);
+    });
+    await clickFill(s);
+    expect(s.plans[0]!.resume).toBeNull();
+    expect(listed(s, 'Not filled in')).toContain(NOT_DOWNLOADED);
+  });
+
+  it('a body that cannot be read is not attached: it could not be downloaded (#653)', async () => {
+    const broken = { ...pdf(), arrayBuffer: async () => Promise.reject(new TypeError('network')) };
+    const s = setup({ snapshot: broken as FetchResponse });
+    await clickFill(s);
+    expect(s.plans[0]!.resume).toBeNull();
+    expect(listed(s, 'Not filled in')).toContain(NOT_DOWNLOADED);
+  });
+
+  for (const [state, filename, words] of [
+    // As the server sends them: a file name only with 'ready' (qa on #717).
+    ['pending', null, PREPARING],
+    ['failed', null, 'Resume: attach your resume yourself'],
+    ['unsupported', null, UNUSABLE],
+  ] as const) {
+    it(`a copy whose state is ${state} is never fetched, and the report says why (#653)`, async () => {
+      const s = setup({
+        current: json(200, {
+          attempt: attempt({ resume: { snapshotState: state, filename, bytes: null } }),
+          reason: null,
+        }),
+      });
+      await clickFill(s);
+      expect(s.get).toHaveBeenCalledTimes(1);
+      expect(s.plans[0]!.resume).toBeNull();
+      expect(listed(s, 'Not filled in')).toContain(words);
     });
   }
 
@@ -1357,5 +1436,110 @@ describe('#531: the resume download is bounded, and the page holds one fill at a
     // The second filler wrote nothing.
     expect(valueOf(s.page.doc, 'first_name')).toBe('');
     expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/648: Fill says it is working at once, and a server
+// that never answers ends in an error with the buttons back and focus on the button.
+describe('Fill in this application against a server that never answers (#648)', () => {
+  it('says it is filling at once, then that the server did not answer, with the buttons back', async () => {
+    const s = setup({});
+    await mountPopup(s.doc, s.deps);
+    await settleOpen(s);
+    s.get.mockImplementation(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          // As fetch does: an already-aborted signal rejects at once.
+          if (init.signal?.aborted === true) reject(new Error('aborted'));
+          init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+    let end: () => void = () => undefined;
+    const ended = new Promise<void>((r) => {
+      end = r;
+    });
+    s.deps.limit = vi.fn(async () => {
+      await ended;
+    });
+    const fill = s.$('prefill') as HTMLButtonElement;
+    fill.focus();
+    fill.click();
+    await vi.waitFor(() => expect(s.$('status').textContent).toBe('Filling…'));
+    expect(fill.disabled).toBe(true);
+    // The request is out, and the server says nothing.
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalled());
+    end();
+    await vi.waitFor(() =>
+      expect(s.$('status').textContent).toMatch(/did not answer within 30 seconds/),
+    );
+    expect(fill.disabled).toBe(false);
+    expect(s.doc.activeElement).toBe(fill);
+    expect(s.plans).toEqual([]);
+  });
+
+  it('a limit that ends while the page is filled, with no request waiting, keeps the fill report (tl on #713)', async () => {
+    const s = setup({});
+    await mountPopup(s.doc, s.deps);
+    await settleOpen(s);
+    let finish: (() => void) | undefined;
+    const run = s.deps.runFill;
+    s.deps.runFill = vi.fn(async (tabId: number, plan: FillPlan) => {
+      await new Promise<void>((r) => {
+        finish = r;
+      });
+      return run(tabId, plan);
+    });
+    let end: () => void = () => undefined;
+    const ended = new Promise<void>((r) => {
+      end = r;
+    });
+    s.deps.limit = vi.fn(async () => {
+      await ended;
+    });
+    const fill = s.$('prefill') as HTMLButtonElement;
+    fill.click();
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    // Every request is answered; only the filler, in the page, is still running.
+    end();
+    await new Promise((r) => setTimeout(r, 20));
+    finish!();
+    await vi.waitFor(() => expect(fill.disabled).toBe(false));
+    expect(s.$('status').textContent).not.toMatch(/did not answer/);
+    expect(s.$('prefill-report').textContent).toContain('First Name');
+  });
+
+  it('a resume download cut at the limit fills nothing, and says the server did not answer (qa on #713)', async () => {
+    const s = setup({});
+    await mountPopup(s.doc, s.deps);
+    await settleOpen(s);
+    const answer = s.get.getMockImplementation()!;
+    s.get.mockImplementation((url, init) =>
+      url.endsWith('/snapshot')
+        ? new Promise((_resolve, reject) => {
+            if (init.signal?.aborted === true) reject(new Error('aborted'));
+            init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+          })
+        : answer(url, init),
+    );
+    let end: () => void = () => undefined;
+    const ended = new Promise<void>((r) => {
+      end = r;
+    });
+    s.deps.limit = vi.fn(async () => {
+      await ended;
+    });
+    const fill = s.$('prefill') as HTMLButtonElement;
+    fill.click();
+    // The download is out, and the server says nothing until the limit.
+    await vi.waitFor(() =>
+      expect(s.get.mock.calls.some(([url]) => url.endsWith('/snapshot'))).toBe(true),
+    );
+    end();
+    await vi.waitFor(() =>
+      expect(s.$('status').textContent).toMatch(/did not answer within 30 seconds/),
+    );
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    expect(s.plans).toEqual([]);
+    expect(fill.disabled).toBe(false);
   });
 });

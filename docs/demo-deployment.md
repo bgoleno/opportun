@@ -433,7 +433,7 @@ the container.
 `docker compose up` refuses to start with neither `OPPORTUN_DEMO_AI_KEY_FILE` nor
 `OPPORTUN_DEMO_AI_KEY` set, the same fail-fast guarantee #311 gave the single inline variable;
 see the `x-opportun-demo-ai-key-required` comment in `compose.demo.yml` for how. If both are
-set, the file wins: `cli/seedDemo.ts`'s `credsFromEnv` reads the file first and only falls back
+set, the file wins: `lib/demo/seed.ts`'s `credsFromEnv` reads the file first and only falls back
 to the inline value when no file variable is present.
 
 The plain env var is kept, not removed: on this single-operator host the AI key's own blast

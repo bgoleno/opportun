@@ -10,7 +10,7 @@ import { newId } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEMO_USERS } from '../src/cli/seedDemoFixture';
+import { DEMO_USERS } from '../src/lib/demo/fixture';
 import type { Config } from '../src/config';
 import { jobs, settings, users } from '../src/db/schema';
 import { writeDedicatedMark } from '../src/lib/demoDedicated';
@@ -224,10 +224,18 @@ const NOT_ALLOWED: {
   {
     method: 'PUT',
     url: '/api/v1/admin/oauth-providers/google',
-    payload: { clientId: 'an id', clientSecret: 'a secret' },
+    payload: { clientId: 'an id', clientSecret: 'a secret', password: PASSWORD },
   },
-  { method: 'POST', url: '/api/v1/admin/oauth-providers/google/import' },
-  { method: 'DELETE', url: '/api/v1/admin/oauth-providers/google' },
+  {
+    method: 'POST',
+    url: '/api/v1/admin/oauth-providers/google/import',
+    payload: { password: PASSWORD },
+  },
+  {
+    method: 'DELETE',
+    url: '/api/v1/admin/oauth-providers/google',
+    payload: { password: PASSWORD },
+  },
   { method: 'GET', url: '/api/v1/backups' },
   { method: 'POST', url: '/api/v1/backups' },
   { method: 'PUT', url: '/api/v1/obs/settings', payload: { collect: true } },

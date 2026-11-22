@@ -10,6 +10,7 @@
 // and never in an error, a log or a span. Written against Anthropic's API reference (see
 // anthropicBatch.fixtures.ts for the pages and the date read): no call to the real API was made to
 // build it, and the owner's own batch confirms it (slice C, #511).
+import { clampTokens, readBatchJson, readBatchText } from './batchRead';
 import { generateText, Output } from 'ai';
 import type { BatchProvider, BatchRequest, BatchResultItem, BatchState, BatchUsage } from './batch';
 import { timedFetches, type BatchCallLimits } from './batchLimits';
@@ -81,7 +82,8 @@ async function liveBody(
 type Json = Record<string, unknown>;
 const isRecord = (v: unknown): v is Json =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
-const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+// A provider's count as the ledger takes it: a whole number in range (#620 point 4).
+const count = clampTokens;
 
 /** One results line, as the reference gives it; anything else is an unexpected answer. */
 function resultItem(line: unknown): BatchResultItem | null {
@@ -194,7 +196,7 @@ export function createAnthropicBatchProvider(target: {
         body: JSON.stringify(body),
       });
       if (!res.ok) throw refused('submit', res.status);
-      const batch = (await res.json()) as unknown;
+      const batch = await readBatchJson(res);
       if (!isRecord(batch) || typeof batch.id !== 'string') {
         throw new Error('Anthropic batch submit: an unexpected answer');
       }
@@ -208,7 +210,7 @@ export function createAnthropicBatchProvider(target: {
       });
       if (res.status === 404) return 'gone';
       if (!res.ok) throw refused('state', res.status);
-      const batch = (await res.json()) as unknown;
+      const batch = await readBatchJson(res);
       const status = isRecord(batch) ? batch.processing_status : undefined;
       if (status === 'in_progress' || status === 'canceling') return 'in_progress';
       if (status === 'ended') return 'ended';
@@ -224,7 +226,9 @@ export function createAnthropicBatchProvider(target: {
       });
       if (!res.ok) throw refused('results', res.status);
       const items: BatchResultItem[] = [];
-      for (const raw of (await res.text()).split('\n')) {
+      // At most 64 MiB, within the transfer limit (#620 point 4): read whole before.
+      // At most 64 MiB, within the transfer limit (#620 point 4): read whole before.
+      for (const raw of (await readBatchText(res)).split('\n')) {
         if (raw.trim() === '') continue;
         let line: unknown;
         try {

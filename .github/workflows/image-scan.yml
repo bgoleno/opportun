@@ -1,0 +1,97 @@
+# Scans the image's OS packages for known vulnerabilities (#728, sec's supply-chain review). The
+# OSV job in security.yml reads pnpm-lock.yaml only; the image also ships Debian packages (the node
+# base, and the PostgreSQL client from PGDG), which nothing else checks.
+#
+# It builds the image from deploy/Dockerfile as the docker CI legs and the publish job do, saves it
+# as an archive, and runs osv-scanner on that archive. The gate (.github/scripts/image-scan-gate.mjs,
+# unit-tested in security.yml's ci-scripts job) fails the job on a finding of CVSS 7.0 or more (High
+# or Critical) that the image's own Debian release already has a fix for: then the base digest, or
+# the package, needs bumping. Findings with no fix in that release, which a Debian base always has,
+# are listed in the job summary and do not fail it.
+#
+# The scanner runs as its container image pinned by digest, not through google/osv-scanner-action:
+# that action is a container action whose image is named by tag (ghcr.io/google/osv-scanner-action:
+# v2.7.0), so pinning the action's commit would not pin the code that scans.
+#
+# When it runs: weekly (new advisories arrive without a commit), on main, and on a pull request
+# that changes what goes into the image or this check. Not on every pull request: a fix Debian
+# publishes for the base would otherwise fail unrelated pull requests until Dependabot's digest
+# bump lands.
+name: Image scan
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'apps/server/package.json'
+      - '.github/workflows/image-scan.yml'
+      - '.github/scripts/image-scan-gate.mjs'
+  pull_request:
+    # The same list as push: above.
+    paths:
+      - 'deploy/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'apps/server/package.json'
+      - '.github/workflows/image-scan.yml'
+      - '.github/scripts/image-scan-gate.mjs'
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Scan the image's OS packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Nothing here pushes with git: the token is not left in .git/config (#619).
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Build the image
+        run: docker build -f deploy/Dockerfile -t opportun-image-scan:ci .
+
+      - name: Save it as an archive
+        run: docker save opportun-image-scan:ci -o "$RUNNER_TEMP/image.tar"
+
+      - name: Scan its packages
+        # osv-scanner exits 1 when it finds anything, which a Debian base always has: the gate below
+        # decides. A scan that wrote no report fails here, so it can never pass as a clean one.
+        run: |
+          set +e
+          docker run --rm -v "$RUNNER_TEMP:/work" \
+            ghcr.io/google/osv-scanner@sha256:4f3b7e2c64b9d38a5febc5a7e4a3dfef1d1362f726dea7a2ef4762b46469fcd0 \
+            scan image --archive /work/image.tar --format json --output /work/osv-image.json
+          status=$?
+          set -e
+          echo "osv-scanner exit status: $status"
+          if [ ! -s "$RUNNER_TEMP/osv-image.json" ]; then
+            echo "::error::osv-scanner wrote no report; see the scan above."
+            exit 1
+          fi
+
+      - name: Fail on a High or Critical finding that has a fix
+        run: node .github/scripts/image-scan-gate.mjs "$RUNNER_TEMP/osv-image.json"
+
+      - name: Keep the report as a run artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: image-scan-report
+          path: ${{ runner.temp }}/osv-image.json
+          if-no-files-found: ignore
+          retention-days: 30

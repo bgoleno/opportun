@@ -12,7 +12,7 @@ import {
   DEMO_IDENTITY_VALUES,
   DEMO_RESUME_BASE_TEXT,
   DEMO_USERS,
-} from '../src/cli/seedDemoFixture';
+} from '../src/lib/demo/fixture';
 import {
   applicationSubmissions,
   auditLog,
@@ -313,6 +313,8 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
     ['email', DEMO_CANDIDATE_EMAIL],
     // #671: the seed's phone, punctuated another way: compared by its digits.
     ['phone', '+1 (415) 555-0134'],
+    // #682 (qa on #676): and without its country code.
+    ['phone', '415-555-0134'],
   ];
 
   it('the seed carries a phone number, and it is one of the demo identity values (#671)', () => {
@@ -413,6 +415,28 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
     await api(a, 'PATCH', `/submissions/${id}`, { fields: { fullName: account.displayName } });
     expect((await review(a, id)).statusCode).toBe(200);
   });
+
+  // #682 (qa on #676): the seeded number typed without "+1", or with the international prefix, or
+  // punctuated any way, is the same number; another number, or another country's, is not.
+  it.each([
+    '415-555-0134',
+    '(415) 555 0134',
+    '4155550134',
+    '1-415-555-0134',
+    '+1.415.555.0134',
+    '00 1 415 555 0134',
+    '+1 415 555 0134',
+  ])('the seeded phone as "%s" is the demo\'s', (value) => {
+    expect(isFixtureIdentity('phone', value)).toBe(true);
+    expect(fixtureField({ phone: value, city: 'Seattle' })).toBe('phone');
+  });
+
+  it.each(['415-555-0135', '+44 415 555 0134', '+1 415 555 01345', '555-0134'])(
+    '"%s" is not the seeded phone',
+    (value) => {
+      expect(isFixtureIdentity('phone', value)).toBe(false);
+    },
+  );
 
   it('compares after case and whitespace, and a phone by its digits', () => {
     expect(isFixtureIdentity('fullName', ' demo   user 1 ')).toBe(true);

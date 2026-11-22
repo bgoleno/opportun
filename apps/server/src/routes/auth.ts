@@ -45,6 +45,7 @@ import {
   hashRecoveryCode,
   pendingTokenOwner,
   pendingTokenStored,
+  takeRevokedPending,
   redeemPendingToken,
 } from '../lib/twoFactor';
 import { clearCsrfCookie, isSecureRequest, issueCsrfCookie } from '../plugins/security';
@@ -493,7 +494,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
           ? await createSession(tx, userId, sessionMeta(req))
           : null,
       );
-      if (session === null) return fail(reply, 401, 'invalid_pending');
+      if (session === null) {
+        // A change or reset since the claim (#662): say so, rather than that it took too long.
+        const changed = await takeRevokedPending(db, pendingToken);
+        return fail(reply, 401, changed ? 'password_changed' : 'invalid_pending');
+      }
       setSessionCookies(req, reply, session);
       await audit(db, 'auth.2fa_verified', { userId, ip: req.ip, detail: { method } });
       if (method === 'recovery') {
@@ -1041,7 +1046,19 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         if (exists === undefined) return 'not_found' as const;
         // Inside the lock, after the re-check (the race tests park here).
         await racePoint('admin.resetPassword.locked');
-        return await resetPasswordIn(tx, target.id, newHash);
+        const unlinked = await resetPasswordIn(tx, target.id, newHash);
+        // The audit row in the reset's transaction, as its last write (#661): a failed write
+        // rolls the reset back, so the target is never left reset with a password the admin was
+        // never sent. Not on the password_changed or not_found returns above: nothing was reset.
+        await audit(tx, 'admin.password_reset', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: {
+            targetUserId: target.id,
+            ...(unlinked.length === 0 ? {} : { unlinkedProviders: unlinked }),
+          },
+        });
+        return unlinked;
       });
       if (unlinkedProviders === 'password_changed') {
         return passwordChanged(req, reply, ctx.userId, 'admin.reset_password', {
@@ -1049,14 +1066,6 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         });
       }
       if (unlinkedProviders === 'not_found') return fail(reply, 404, 'not_found');
-      await audit(db, 'admin.password_reset', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: {
-          targetUserId: target.id,
-          ...(unlinkedProviders.length === 0 ? {} : { unlinkedProviders }),
-        },
-      });
       // Shown once to the admin, who hands it over out of band; never stored or logged.
       return reply.code(200).send({ temporaryPassword, unlinkedProviders });
     },

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { LINKEDIN_DATA_EXPORT_HELP_URL, LINKEDIN_DATA_EXPORT_URL } from '@/lib/externalLinks';
@@ -163,6 +163,50 @@ describe('DataSettings', () => {
     // The pack importer was not used.
     expect(calls.some((c) => c.method === 'POST' && c.path === '/imports')).toBe(false);
   });
+
+  // #694 (tl on #688): a finished import left the network list and an open Referrals tab as they
+  // were for up to ten minutes (the candidates' staleTime).
+  it.each([
+    ['LinkedIn export', 'POST /imports/linkedin', 'LinkedIn export zip', 'Import LinkedIn export'],
+    ['pack (network.csv)', 'POST /imports', 'Zip file', 'Import'],
+  ])(
+    'a finished %s import refreshes the network list and the Referrals tab',
+    async (_, post, label, name) => {
+      mockApi({
+        [post]: () => ({ status: 202, body: { jobId: 'job-c' } }),
+        'GET /imports/job-c': () => ({
+          status: 200,
+          body: {
+            id: 'job-c',
+            status: 'done',
+            attempts: 1,
+            lastError: null,
+            progress: { processed: 2, total: 2 },
+            report: { created: 2, updated: 0, skipped: 0, errors: [] },
+          },
+        }),
+        'GET /backups': () => ({ status: 403, body: { error: { code: 'forbidden' } } }),
+      });
+      const { queryClient } = renderWithProviders(<DataSettings />);
+      const kept = [
+        ['network', 'list', '', 0, 200],
+        ['referral-candidates', 'opp-1'],
+        ['referrals', 'opp-1'],
+      ] as const;
+      for (const key of kept) queryClient.setQueryData(key, { items: [], total: 0 });
+      const user = userEvent.setup();
+      await user.upload(
+        await screen.findByLabelText(label),
+        new File(['PK'], 'export.zip', { type: 'application/zip' }),
+      );
+      await user.click(screen.getByRole('button', { name }));
+      expect(await screen.findByText('Import finished')).toBeInTheDocument();
+      await waitFor(() => {
+        for (const key of kept)
+          expect(queryClient.getQueryState(key)?.isInvalidated, String(key)).toBe(true);
+      });
+    },
+  );
 
   it('offers the export download and lists backups for the admin', async () => {
     mockApi({
