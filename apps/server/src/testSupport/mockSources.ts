@@ -83,8 +83,42 @@ const json = (status: number, body: unknown, url: string) => ({
 });
 
 /** The discovery fetch: a Greenhouse board probe for a fixture slug hits, everything else 404s. */
+/**
+ * Every single-job request (`/v1/boards/<token>/jobs/<id>`) the fake has answered, in order: a
+ * posting-link save asks the company's known boards whether one holds a `gh_jid` job, and an e2e
+ * reads this (GET MOCK_SOURCE_PATH/job-checks) to see that an unchanged link asked none
+ * (apps/web/e2e/postingLink.spec.ts, issue #748).
+ */
+const jobChecks: string[] = [];
+
+/** The fixture job ids, as in their posting URLs (boards.greenhouse.io/vandelay/jobs/1001). */
+const FIXTURE_JOB_IDS: readonly string[] = FIXTURE_POSTINGS.map(
+  (p) => /\/jobs\/(\d+)$/.exec(p.postingUrl ?? '')?.[1] ?? '',
+);
+
 export const mockSourceFetch: typeof safeFetch = async (url) => {
   const u = new URL(url);
+  // A single job on a fixture board (or the fixture postings' own `vandelay` board): it holds the
+  // fixture job ids, and nothing else.
+  const job = /^\/v1\/boards\/([a-z0-9-]+)\/jobs\/(\d+)$/.exec(u.pathname);
+  if (u.hostname === GREENHOUSE_HOST && job !== null) {
+    const [, token = '', id = ''] = job;
+    jobChecks.push(`${token}/${id}`);
+    const known = FIXTURE_BOARDS.has(token) || token === 'vandelay';
+    if (known && FIXTURE_JOB_IDS.includes(id)) {
+      const posting = FIXTURE_POSTINGS[FIXTURE_JOB_IDS.indexOf(id)];
+      return json(
+        200,
+        {
+          id: Number(id),
+          title: posting?.title ?? '',
+          absolute_url: `https://boards.greenhouse.io/${token}/jobs/${id}`,
+        },
+        url,
+      );
+    }
+    return json(404, { error: 'not found' }, url);
+  }
   // Detection probes the jobs list, since a board verifies only while it serves a posting.
   const m = /^\/v1\/boards\/([a-z0-9-]+)\/jobs$/.exec(u.pathname);
   const board = m?.[1] === undefined ? undefined : FIXTURE_BOARDS.get(m[1]);
@@ -115,5 +149,13 @@ export async function mockSourceRoutes(app: FastifyInstance): Promise<void> {
       .get();
     if (user === undefined) return reply.code(404).send({ error: { message: 'no such user' } });
     return reply.send(await suggestCompanies(app.db, { userId: user.id, isAdmin: false }));
+  });
+
+  /** The single-job requests answered so far (see jobChecks). */
+  app.get(`${MOCK_SOURCE_PATH}/job-checks`, async (req, reply) => {
+    if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) {
+      return reply.code(403).send({ error: { message: 'loopback only' } });
+    }
+    return reply.send({ checks: [...jobChecks] });
   });
 }
