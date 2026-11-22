@@ -137,14 +137,14 @@ export function isCollecting(): boolean {
   return collecting;
 }
 
-function countDrop(signal: Signal, reason: DropReason): void {
+function countDrop(signal: Signal, reason: DropReason, n = 1): void {
   if (!collecting || aggregator === undefined || runtime === undefined) return;
   // Known-good attributes, so straight to the aggregator, and always admitted past the series
   // cap: a drop must stay countable when the buffer is full.
   const attributes = { 'opportun.obs.signal': signal, 'opportun.obs.reason': reason };
-  aggregator.add('opportun.obs.dropped', 1, attributes, null, runtime.now(), true);
+  aggregator.add('opportun.obs.dropped', n, attributes, null, runtime.now(), true);
   // And to the exporter, so an operator can see telemetry being dropped (tl on #359, FR-T2).
-  sinks.metrics?.record('opportun.obs.dropped', 1, attributes);
+  sinks.metrics?.record('opportun.obs.dropped', n, attributes);
 }
 
 async function flush(): Promise<void> {
@@ -152,7 +152,14 @@ async function flush(): Promise<void> {
   const points = aggregator.drain();
   if (points.length === 0) return;
   const { db } = runtime;
-  await runSuppressed(() => flushPoints(db, points));
+  try {
+    await runSuppressed(() => flushPoints(db, points));
+  } catch (err) {
+    // Drained, so lost: counted as the span store counts a failed write (#594), in the same
+    // opportun.obs.dropped, which the next flush writes.
+    countDrop('metrics', 'buffer_full', points.length);
+    throw err;
+  }
 }
 
 /** Flushes now, after any flush already running (tests, and the stop path). */
