@@ -235,6 +235,8 @@ export async function buildExport(
       opp.sourceRef ?? '',
       '',
       opp.dismissedReason ?? '',
+      // #736: kept, so a closed opportunity re-imports with its reason.
+      opp.closedReason ?? '',
       '',
       '',
     ]);
