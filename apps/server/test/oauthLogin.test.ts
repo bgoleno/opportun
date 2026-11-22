@@ -14,6 +14,23 @@ import { exec, queryAll, queryOne } from './db';
 import { onSlowTransaction } from '../src/db/gate';
 import { heldApart, holdAt, pauseAt, settledOrWaiting } from './race';
 
+/**
+ * The audit event whose write fails, or null for none (#779): the real insert runs, through
+ * whatever executor the step passed, and then the step throws.
+ */
+let failing: string | null = null;
+
+vi.mock('../src/lib/audit', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/lib/audit')>();
+  return {
+    ...real,
+    audit: async (...args: Parameters<typeof real.audit>) => {
+      await real.audit(...args);
+      if (args[1] === failing) throw new Error('audit write failed');
+    },
+  };
+});
+
 let provider: FakeOAuth;
 const boot = useApi(() => {
   provider = fakeOAuth();
@@ -24,6 +41,7 @@ const CLIENT_SECRET = 'client-secret-value';
 
 afterEach(() => {
   vi.useRealTimers();
+  failing = null;
 });
 
 const INTEGRATION_CLIENT_ID = 'integration-client.apps.googleusercontent.com';
@@ -1510,6 +1528,27 @@ describe('first password for an account created by OAuth sign-in (rulings R3, M-
     });
     expect(res.statusCode).toBe(401);
   });
+
+  // #779: the grant is given only once its audit row is written, so a failed write grants nothing.
+  it('a provider confirmation whose audit write fails grants no password set', async () => {
+    const { a, app } = await boot();
+    const c = await passwordless(app, a);
+    failing = 'auth.password_set_reauth';
+    const res = await c.request('POST', `/api/v1/auth/oauth/github/setpw`, {});
+    const binding = cookieOf(res, OAUTH_COOKIE)!.value;
+    const state = new URL(res.json().authUrl as string).searchParams.get('state')!;
+    const back = await callback(
+      app,
+      'github',
+      { code: provider.issue(FRESH), state },
+      { [OAUTH_COOKIE]: binding, opportun_session: c.session },
+    );
+    failing = null;
+    expect(back.statusCode).toBe(500);
+    const set = await c.request('POST', '/api/v1/auth/password', { next: NEXT });
+    expect(set.statusCode).toBe(403);
+    expect(set.json().error.code).toBe('reauth_required');
+  });
 });
 
 describe('state binding cookie', () => {
@@ -1786,4 +1825,77 @@ describe('a provider flow in flight during a reset leaves nothing behind (#573)'
       expect(await loginsOfB()).toBe(before);
     },
   );
+});
+
+// https://github.com/bgoleno/opportun/issues/779: each OAuth step writes its audit row in the same
+// transaction as the session or credential it changes, and sets the cookie only after that commit.
+describe('oauth: the audit row commits with what it records (#779)', () => {
+  const IDENTITY = { id: '7790', email: A_EMAIL, emailVerified: true };
+  const NEWCOMER = { id: '7791', email: 'newcomer-779@example.com', emailVerified: true };
+
+  const sessionsOf = async (app: FastifyInstance, userId: string) =>
+    (await queryAll(app, 'SELECT id FROM sessions WHERE user_id = ? ORDER BY id', userId)) as {
+      id: string;
+    }[];
+
+  it('a sign-in whose auth.login write fails leaves no session and sets no cookie', async () => {
+    const { a, app } = await boot();
+    await configure(a, 'github');
+    expect((await oauthLink(app, 'github', a, IDENTITY)).headers.location).toBe(
+      '/settings/security?oauth=linked',
+    );
+    const before = await sessionsOf(app, a.userId);
+    failing = 'auth.login';
+    const res = await oauthLogin(app, 'github', IDENTITY);
+    failing = null;
+    expect(res.statusCode).toBe(500);
+    expect(cookieOf(res, 'opportun_session')?.value ?? '').toBe('');
+    expect(await sessionsOf(app, a.userId)).toEqual(before);
+    expect(await events(app, 'auth.login')).toHaveLength(
+      (await events(app, 'auth.login')).filter((e) => !e.detail?.includes('oauth')).length,
+    );
+  });
+
+  it('a sign-up whose auth.register write fails creates no account and no link', async () => {
+    const { a, app } = await boot();
+    await configure(a, 'github');
+    expect((await setRegistration(a, true)).statusCode).toBe(200);
+    const users = await userCount(app);
+    failing = 'auth.register';
+    const res = await oauthLogin(app, 'github', NEWCOMER);
+    failing = null;
+    expect(res.statusCode).toBe(500);
+    expect(cookieOf(res, 'opportun_session')?.value ?? '').toBe('');
+    expect(await userCount(app)).toBe(users);
+    expect(await oauthRows(app)).toEqual([]);
+    // Tried again, it signs up.
+    expect((await oauthLogin(app, 'github', NEWCOMER)).headers.location).toBe('/');
+  });
+
+  it('a link whose auth.oauth_linked write fails links nothing', async () => {
+    const { a, app } = await boot();
+    await configure(a, 'github');
+    failing = 'auth.oauth_linked';
+    const res = await oauthLink(app, 'github', a, IDENTITY);
+    failing = null;
+    expect(res.statusCode).toBe(500);
+    expect(await oauthRows(app)).toEqual([]);
+  });
+
+  it('an unlink whose auth.oauth_unlinked write fails keeps the link', async () => {
+    const { a, app } = await boot();
+    await configure(a, 'github');
+    await oauthLink(app, 'github', a, IDENTITY);
+    const linked = await oauthRows(app);
+    expect(linked).toHaveLength(1);
+    failing = 'auth.oauth_unlinked';
+    const res = await a.request({
+      method: 'DELETE',
+      url: '/api/v1/auth/oauth/github',
+      payload: { password: PASSWORD },
+    });
+    failing = null;
+    expect(res.statusCode).toBe(500);
+    expect(await oauthRows(app)).toEqual(linked);
+  });
 });

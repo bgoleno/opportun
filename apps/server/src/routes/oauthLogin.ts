@@ -426,6 +426,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
   async function resolveLogin(
     provider: OAuthProvider,
     identity: OAuthIdentity,
+    ip: string,
   ): Promise<LoginOutcome> {
     // Scoped to the identity (https://github.com/bgoleno/opportun/issues/56): on Postgres,
     // without it, two callbacks of one new identity can interleave between the reads below
@@ -496,6 +497,12 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
             updatedAt: now,
           })
           .run();
+        // With the account it records (#779): a failed write leaves no account or link behind.
+        await audit(tx, 'auth.register', {
+          userId,
+          ip,
+          detail: { isAdmin: false, method: 'oauth', provider },
+        });
         return { ok: true, userId, how: 'created' };
       },
       { scope: `oauth:${provider}:${identity.providerAccountId}` },
@@ -511,7 +518,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     let outcome: LoginOutcome;
     await racePoint('oauth.login');
     try {
-      outcome = await resolveLogin(provider, identity);
+      outcome = await resolveLogin(provider, identity, req.ip);
     } catch (err) {
       // A concurrent callback linked or created the same thing first: start over.
       if (isUniqueViolation(err)) return reply.redirect(`${LOGIN_PAGE}?oauth=error`);
@@ -526,14 +533,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
       });
       return reply.redirect(`${LOGIN_PAGE}?oauth=${existing ? 'existing_account' : 'unknown'}`);
     }
-    const { userId, how } = outcome;
-    if (how === 'created') {
-      await audit(db, 'auth.register', {
-        userId,
-        ip: req.ip,
-        detail: { isAdmin: false, method: 'oauth', provider },
-      });
-    }
+    const { userId } = outcome;
     // The link is read; a reset can commit from here on (#573).
     await racePoint('oauth.login.linked');
     // The session, or the pending 2FA token, is written only while the link just read still
@@ -559,12 +559,16 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         .where(eq(users.id, userId))
         .get();
       if (user === undefined) return null;
-      return user.totpEnabled
-        ? {
-            kind: 'pending' as const,
-            pendingToken: await createPendingToken(tx, userId, sessionMeta(req)),
-          }
-        : { kind: 'session' as const, session: await createSession(tx, userId, sessionMeta(req)) };
+      // The audit row is written with the session or pending token (#779): a failed write rolls
+      // both back, and no cookie or token is handed out.
+      if (user.totpEnabled) {
+        const pendingToken = await createPendingToken(tx, userId, sessionMeta(req));
+        await audit(tx, 'auth.2fa_challenge', { userId, ip: req.ip, detail: { method: 'oauth' } });
+        return { kind: 'pending' as const, pendingToken };
+      }
+      const session = await createSession(tx, userId, sessionMeta(req));
+      await audit(tx, 'auth.login', { userId, ip: req.ip, detail: { method: 'oauth', provider } });
+      return { kind: 'session' as const, session };
     });
     if (written === null) {
       await audit(db, 'auth.oauth_unknown', {
@@ -577,19 +581,9 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     if (written.kind === 'pending') {
       // The provider stood in for the password; the code step is unchanged. The token rides
       // in the fragment, which browsers never send to a server or put in a Referer.
-      await audit(db, 'auth.2fa_challenge', {
-        userId,
-        ip: req.ip,
-        detail: { method: 'oauth' },
-      });
       return reply.redirect(`${LOGIN_PAGE}#pending2fa=${written.pendingToken}`);
     }
     setSessionCookies(req, reply, written.session);
-    await audit(db, 'auth.login', {
-      userId,
-      ip: req.ip,
-      detail: { method: 'oauth', provider },
-    });
     return reply.redirect('/');
   }
 
@@ -653,6 +647,8 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
             updatedAt: now,
           })
           .run();
+        // With the link it records (#779).
+        await audit(tx, 'auth.oauth_linked', { userId, ip: req.ip, detail: { provider } });
         return 'linked';
       });
     } catch (err) {
@@ -669,11 +665,6 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
       });
       return flash('conflict');
     }
-    await audit(db, 'auth.oauth_linked', {
-      userId: ctx.userId,
-      ip: req.ip,
-      detail: { provider },
-    });
     return flash('linked');
   }
 
@@ -705,12 +696,13 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
       });
       return reply.redirect(`${SECURITY_PAGE}?oauth=setpw_mismatch`);
     }
-    grantPasswordSet(db, sessionId, ctx.userId);
+    // Recorded before it is granted (#779): a failed write grants nothing.
     await audit(db, 'auth.password_set_reauth', {
       userId: ctx.userId,
       ip: req.ip,
       detail: { provider },
     });
+    grantPasswordSet(db, sessionId, ctx.userId);
     return reply.redirect(`${SECURITY_PAGE}?oauth=setpw_ready`);
   }
 
@@ -846,11 +838,14 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
           )?.n ?? 0;
         throw new HttpError(409, linked <= 1 ? 'last_method' : 'password_required');
       }
-      await db.delete(oauthAccounts).where(eq(oauthAccounts.id, row.id)).run();
-      await audit(db, 'auth.oauth_unlinked', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { provider },
+      // The unlink and its audit row commit together (#779).
+      await withTransaction(db, async (tx) => {
+        await tx.delete(oauthAccounts).where(eq(oauthAccounts.id, row.id)).run();
+        await audit(tx, 'auth.oauth_unlinked', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { provider },
+        });
       });
       return reply.code(204).send(null);
     },
