@@ -644,6 +644,7 @@ export const AUDIT_EVENTS = [
   'admin.oauth_provider_configured',
   'admin.oauth_provider_removed',
   'admin.password_reset',
+  'admin.registration_updated',
   'ai.discovery_budget.updated',
   'ai.key.validated',
   'ai.policy.updated',

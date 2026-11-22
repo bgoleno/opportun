@@ -15,6 +15,7 @@ import { attachedExporters, isCollecting, setCollecting } from '../src/obs';
 import { readCollect } from '../src/obs/config';
 import { stopExport } from '../src/obs/export/manager';
 import { readExport } from '../src/obs/export/settings';
+import { isRegistrationOpen } from '../src/lib/registration';
 import { useApi } from './api';
 import { fakeGoogle } from './fakeGoogle';
 import { fakeReactiveResume, RR_ORIGIN } from './fakeReactiveResume';
@@ -166,5 +167,48 @@ describe('turning telemetry off holds when its audit write fails (#819, sec and 
     await stopped500('telemetry.export.updated', () => exportTo127(a, false));
     expect((await readExport(app.db)).enabled).toBe(false);
     expect(attachedExporters()).toEqual([]);
+  });
+});
+
+// #853 (qa's pass 3): turning registration on or off wrote no audit row. Opening it commits with
+// its row, so a failed write leaves it closed; closing it is a stop (#815's rule): it commits,
+// then is recorded, so a failed write never leaves registration open.
+describe('the registration switch writes an audit row (#853)', () => {
+  const setRegistration = (a: TestClient, open: boolean) =>
+    a.request({
+      method: 'PATCH',
+      url: '/api/v1/admin/registration',
+      payload: { open, password: PASSWORD },
+    });
+
+  it('opening and closing it are each recorded, with the state they set', async () => {
+    const { app, a } = await boot();
+    expect((await setRegistration(a, true)).statusCode).toBe(200);
+    expect((await setRegistration(a, false)).statusCode).toBe(200);
+    const rows = await app.db
+      .select({ userId: auditLog.userId, detail: auditLog.detail })
+      .from(auditLog)
+      .where(eq(auditLog.event, 'admin.registration_updated'))
+      .all();
+    expect(rows).toEqual([
+      { userId: a.userId, detail: { open: true } },
+      { userId: a.userId, detail: { open: false } },
+    ]);
+  });
+
+  it('opening it, with its audit write failing, leaves registration closed', async () => {
+    const { app, a } = await boot();
+    await failing500(app, 'admin.registration_updated', () => setRegistration(a, true));
+    expect(await isRegistrationOpen(app.db)).toBe(false);
+  });
+
+  it('closing it, with its audit write failing, still closes it', async () => {
+    const { app, a } = await boot();
+    expect((await setRegistration(a, true)).statusCode).toBe(200);
+    failing = 'admin.registration_updated';
+    const res = await setRegistration(a, false);
+    failing = null;
+    expect(res.statusCode).toBe(500);
+    expect(await isRegistrationOpen(app.db)).toBe(false);
   });
 });
