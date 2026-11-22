@@ -120,6 +120,7 @@ const STDERR_LIMIT = 4096;
 export function pgDumpInvocation(
   connection: LibpqEnv,
   outFile: string,
+  // eslint-disable-next-line no-restricted-properties -- a child process's own environment, passed on, not a setting (#773)
   baseEnv: Record<string, string | undefined> = { PATH: process.env.PATH },
 ): { command: string; args: string[]; env: Record<string, string> } {
   const env: Record<string, string> = {};
@@ -177,6 +178,7 @@ const DETAIL_LIMIT = 2000;
 function runPgRestoreList(file: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn('pg_restore', ['--list', file], {
+      // eslint-disable-next-line no-restricted-properties -- a child process's own environment, passed on, not a setting (#773)
       env: { PATH: process.env.PATH },
       stdio: ['ignore', 'ignore', 'pipe'],
     });

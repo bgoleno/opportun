@@ -1081,6 +1081,7 @@ function callSite(): string | undefined {
 }
 
 function isTestRun(): boolean {
+  // eslint-disable-next-line no-restricted-properties -- test-run detection, not a setting (#773)
   return process.env.NODE_ENV === 'test' || process.env.VITEST !== undefined;
 }
 
@@ -1391,6 +1392,7 @@ export type LibpqEnv = Record<string, string>;
 export function libpqEnvFor(
   url: string,
   ssl: DbSsl,
+  // eslint-disable-next-line no-restricted-properties -- a child process's own environment, passed on, not a setting (#773)
   processEnv: Record<string, string | undefined> = process.env,
 ): LibpqEnv {
   // A socket URL (postgres://user@/db?host=/run/postgresql) has an empty host, which the

@@ -235,11 +235,46 @@ export default defineConfig(
     },
   },
   {
-    // NFR-SEC11: filesystem access in the server only through the storage module.
+    // NFR-SEC11: filesystem access in the server only through the storage module. The same
+    // options also refuse `env` imported from node:process (https://github.com/bgoleno/opportun/issues/773;
+    // the block below refuses process.env itself): in this block, since a second block setting
+    // no-restricted-imports for these files would replace these options rather than add to them.
     files: ['apps/server/src/**'],
     ignores: ['apps/server/src/lib/storage.ts'],
     rules: {
-      'no-restricted-imports': ['error', fsBan],
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            ...fsBan.paths,
+            ...['node:process', 'process'].map((name) => ({
+              name,
+              importNames: ['env'],
+              message: 'Read environment settings in apps/server/src/config.ts (#773).',
+            })),
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // Environment settings are read in config.ts only (https://github.com/bgoleno/opportun/issues/773),
+    // so each keeps one name, default and validation. A read that is not a setting (an entry point
+    // handing the environment to config's loaders, a child process's own environment, test-run
+    // detection) carries an eslint-disable-next-line with its reason on that line, never a file
+    // ignore, so a new read in the same file still fails. no-restricted-properties also sees
+    // `const { env } = process`; `import { env } from 'node:process'` is the block above's.
+    files: ['apps/server/src/**/*.ts'],
+    ignores: ['apps/server/src/config.ts'],
+    rules: {
+      'no-restricted-properties': [
+        'error',
+        {
+          object: 'process',
+          property: 'env',
+          message: 'Read environment settings in apps/server/src/config.ts (#773).',
+        },
+      ],
     },
   },
   {

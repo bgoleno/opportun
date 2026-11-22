@@ -18,11 +18,10 @@
 // new secret under the same version as the server's last start is not caught (#635).
 // First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
 import '../unsetEmptyAiBaseUrls';
-import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { loadDbConfig, loadPeppers, loadSqliteDir } from '../config';
+import { loadDbConfig, loadPeppers, loadSqliteDir, loadDataDir } from '../config';
 import { closeDatabase, connectDatabase, withTransaction, type Db } from '../db/client';
 import { settings, users } from '../db/schema';
 import { audit } from '../lib/audit';
@@ -141,18 +140,17 @@ export async function main({
 
 const entry = process.argv[1];
 if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
-  const dataDir = resolve(
-    process.env.DATA_DIR === undefined || process.env.DATA_DIR === ''
-      ? './data'
-      : process.env.DATA_DIR,
-  );
+  const dataDir = loadDataDir();
   const run = async (): Promise<number> => {
     // The server's database, resolved the same way as resetPassword.ts does (issue #179).
+    // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
     const sqliteDir = loadSqliteDir(process.env, dataDir);
+    // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
     const handle = await connectDatabase({ dataDir, sqliteDir, db: loadDbConfig(process.env) });
     try {
       return await main({
         db: handle.db,
+        // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
         env: process.env,
         email: process.argv[2],
         displayName: process.argv[3],
