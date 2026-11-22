@@ -105,6 +105,8 @@ export const SECURITY_SENSITIVE_GLOBS = [
   '.github/scripts/publish.mjs',
   // decides whether the image's OS-package scan fails (#728): a change to it can turn the scan off
   '.github/scripts/image-scan-gate.mjs',
+  // decides whether the lockfile's OSV scan fails (#733)
+  '.github/scripts/osv-sarif-report.mjs',
   // the merge procedure for protected main, and the script that deletes a deployment's files
   // and data (#256)
   'scripts/merge-when-green.sh',
