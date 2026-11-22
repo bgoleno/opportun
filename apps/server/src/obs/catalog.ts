@@ -954,6 +954,8 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'google token revocation failed': [],
   'google grant revocation after a failed connect failed': [],
   'oauth sign-in exchange failed': ['opportun.oauth.provider'],
+  'oauth callback failed': ['opportun.oauth.provider'],
+  'google callback failed': [],
 };
 
 export const LOG_MESSAGES: ReadonlyMap<string, readonly AttrKey[]> = new Map(

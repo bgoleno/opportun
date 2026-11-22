@@ -1544,7 +1544,9 @@ describe('first password for an account created by OAuth sign-in (rulings R3, M-
       { [OAUTH_COOKIE]: binding, opportun_session: c.session },
     );
     failing = null;
-    expect(back.statusCode).toBe(500);
+    // A callback lands on an app page with a plain error, never raw 500 JSON (#853).
+    expect(back.statusCode).toBe(302);
+    expect(back.headers.location).toBe('/settings/security?oauth=setpw_error');
     const set = await c.request('POST', '/api/v1/auth/password', { next: NEXT });
     expect(set.statusCode).toBe(403);
     expect(set.json().error.code).toBe('reauth_required');
@@ -1838,6 +1840,17 @@ describe('oauth: the audit row commits with what it records (#779)', () => {
       id: string;
     }[];
 
+  // #853: a refused callback whose refusal record cannot be written still lands on an app page.
+  it('a bad state whose audit write fails still lands on the sign-in page', async () => {
+    const { a, app } = await boot();
+    await configure(a, 'github');
+    failing = 'auth.oauth_bad_state';
+    const res = await callback(app, 'github', { code: 'c', state: 'not-a-state' }, {});
+    failing = null;
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe('/login?oauth=not_completed');
+  });
+
   it('a sign-in whose auth.login write fails leaves no session and sets no cookie', async () => {
     const { a, app } = await boot();
     await configure(a, 'github');
@@ -1848,7 +1861,9 @@ describe('oauth: the audit row commits with what it records (#779)', () => {
     failing = 'auth.login';
     const res = await oauthLogin(app, 'github', IDENTITY);
     failing = null;
-    expect(res.statusCode).toBe(500);
+    // A callback lands on an app page with a plain error, never raw 500 JSON (#853).
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe('/login?oauth=error');
     expect(cookieOf(res, 'opportun_session')?.value ?? '').toBe('');
     expect(await sessionsOf(app, a.userId)).toEqual(before);
     expect(await events(app, 'auth.login')).toHaveLength(
@@ -1864,7 +1879,9 @@ describe('oauth: the audit row commits with what it records (#779)', () => {
     failing = 'auth.register';
     const res = await oauthLogin(app, 'github', NEWCOMER);
     failing = null;
-    expect(res.statusCode).toBe(500);
+    // A callback lands on an app page with a plain error, never raw 500 JSON (#853).
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe('/login?oauth=error');
     expect(cookieOf(res, 'opportun_session')?.value ?? '').toBe('');
     expect(await userCount(app)).toBe(users);
     expect(await oauthRows(app)).toEqual([]);
@@ -1878,7 +1895,9 @@ describe('oauth: the audit row commits with what it records (#779)', () => {
     failing = 'auth.oauth_linked';
     const res = await oauthLink(app, 'github', a, IDENTITY);
     failing = null;
-    expect(res.statusCode).toBe(500);
+    // A callback lands on an app page with a plain error, never raw 500 JSON (#853).
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe('/settings/security?oauth=error');
     expect(await oauthRows(app)).toEqual([]);
   });
 

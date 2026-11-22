@@ -69,6 +69,24 @@ async function failing500(event: string, step: () => ReturnType<TestClient['requ
   return res;
 }
 
+/**
+ * For a browser callback whose audit write fails: it lands on an app page with a plain error,
+ * never raw 500 JSON (#853), and its row is rolled back with it.
+ */
+async function callbackFails(
+  app: FastifyInstance,
+  event: string,
+  step: () => ReturnType<TestClient['request']>,
+) {
+  const before = await rowsOf(app, event);
+  failing = event;
+  const res = await step();
+  failing = null;
+  expect(res.statusCode, res.body).toBe(302);
+  expect(res.headers.location).toBe('/settings/integrations?google=error');
+  expect(await rowsOf(app, event)).toBe(before);
+}
+
 /** As failing500, for a creation or an edit: its audit row was rolled back with it (tl). */
 async function rolledBack(
   app: FastifyInstance,
@@ -218,7 +236,7 @@ describe('the Google integration: the audit row commits with the change (#802)',
       url: '/api/v1/integrations/google/connect?scopes=docs',
     });
     const state = new URL(connect.json().authUrl as string).searchParams.get('state') ?? '';
-    await rolledBack(app, 'google.connected', () =>
+    await callbackFails(app, 'google.connected', () =>
       a.request({
         method: 'GET',
         url: `/api/v1/integrations/google/callback?code=auth-code&state=${encodeURIComponent(state)}`,
@@ -254,7 +272,7 @@ describe('the Google integration: the audit row commits with the change (#802)',
     });
     const state = new URL(connect.json().authUrl as string).searchParams.get('state') ?? '';
     expect(google.revoked).toEqual([]);
-    await failing500('google.connected', () =>
+    await callbackFails(app, 'google.connected', () =>
       a.request({
         method: 'GET',
         url: `/api/v1/integrations/google/callback?code=auth-code&state=${encodeURIComponent(state)}`,
@@ -337,7 +355,7 @@ describe('after a failed audit write, what follows a change still does what it m
     });
     const state = new URL(connect.json().authUrl as string).searchParams.get('state') ?? '';
     const revokedBefore = google.revoked.length;
-    await failing500('google.connected', () =>
+    await callbackFails(app, 'google.connected', () =>
       a.request({
         method: 'GET',
         url: `/api/v1/integrations/google/callback?code=auth-code&state=${encodeURIComponent(state)}`,
