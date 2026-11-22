@@ -128,7 +128,8 @@ export interface ReactiveResumeValidation {
 }
 
 /** Where new base resumes are registered. Existing resumes keep their own store. */
-export type DocumentStorePref = 'google' | 'reactive_resume';
+/** Where new base resumes go: a resume store's own name (#771), as the server answers it. */
+export type DocumentStorePref = 'google_doc' | 'reactive_resume';
 
 export const rk = {
   resumes: ['resumes'] as const,

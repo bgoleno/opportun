@@ -17,7 +17,10 @@ const CONNECTED: ReactiveResumeStatus = {
   targetVersions: ['6.0'],
 };
 
-function setup(status: ReactiveResumeStatus, store: 'google' | 'reactive_resume' = 'google') {
+function setup(
+  status: ReactiveResumeStatus,
+  store: 'google_doc' | 'reactive_resume' = 'google_doc',
+) {
   const props = {
     status,
     store,
@@ -93,6 +96,15 @@ describe('ReactiveResumeSettings', () => {
     expect(props.onValidate).toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: 'Disconnect' }));
     expect(props.onDisconnect).toHaveBeenCalled();
+  });
+
+  // #771: the preference is the resume store's own name, google_doc, not a second one.
+  it('switching back to Google sends the store google_doc', async () => {
+    const user = userEvent.setup();
+    const props = setup(CONNECTED, 'reactive_resume');
+    expect(screen.getByLabelText('Reactive Resume')).toBeChecked();
+    await user.click(screen.getByLabelText('Google Docs'));
+    expect(props.onStoreChange).toHaveBeenCalledWith('google_doc');
   });
 
   it('shows the validation result', () => {

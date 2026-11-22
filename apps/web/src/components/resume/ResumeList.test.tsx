@@ -45,7 +45,7 @@ function withResumes(items: Resume[]) {
   return {
     'GET /resumes': { items, total: items.length },
     'GET /integrations/google': { connected: true, scopes: [] },
-    'GET /settings/document-store': { store: 'google' },
+    'GET /settings/document-store': { store: 'google_doc' },
   };
 }
 

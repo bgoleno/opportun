@@ -164,7 +164,7 @@ describe('#618: where resumes are stored, on a shared demo account', () => {
       connected: false,
       targetVersions: ['6.0'],
     },
-    'GET /settings/document-store': { store: 'google' },
+    'GET /settings/document-store': { store: 'google_doc' },
   };
 
   it('the Google card says the connected Drive is used by everyone on the account', async () => {
