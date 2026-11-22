@@ -1,16 +1,15 @@
 // Resume tracking API (FR-R1, R2, R3). Documents live in the user's Google Drive; this API
 // keeps the tracking rows (status, opportunity link, parent base) and reads document text.
 import { RESUME_KINDS, RESUME_STATUSES, RESUME_STORES, type ResumeStore } from '@opportun/core';
-import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { DocumentStore } from '../adapters/documentStore';
 import { docUrl, searchDriveDocuments } from '../adapters/googleDocs';
 import { readDocumentStorePref, readRrBaseUrl, rrResumeUrl } from '../adapters/reactiveResume';
-import { users } from '../db/schema';
 import { requireUser, type Db, type UserCtx } from '../repos/base';
 import { getOpportunity } from '../repos/opportunities';
+import { displayNameOf } from '../repos/users';
 import {
   effectiveSubmission,
   latestSends,
@@ -274,14 +273,7 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
       const opportunity = await getOpportunity(db, ctx, body.opportunityId);
       // The copy lives where its base lives.
       const docs = storeFor(app, base.store);
-      const displayName =
-        (
-          await db
-            .select({ n: users.displayName })
-            .from(users)
-            .where(eq(users.id, ctx.userId))
-            .get()
-        )?.n ?? '';
+      const displayName = (await displayNameOf(db, ctx.userId)) ?? '';
       const name = renderResumeName(await readNamingTemplate(db, ctx), {
         displayName,
         company: opportunity.companyName,
