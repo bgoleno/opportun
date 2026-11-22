@@ -164,6 +164,9 @@ export function errorMessage(err: unknown): string {
         return 'Not found.';
       case 'payload_too_large':
         return 'That file is too large.';
+      // A reject refused because the message was linked or moved since it was seen (#666, #678).
+      case 'message_changed':
+        return 'This message was linked or changed elsewhere, so it was not rejected.';
       case 'mcp_stdio_admin_only':
         return "Only this instance's administrator can add a source that runs a command on the server.";
       default:

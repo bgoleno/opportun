@@ -1,5 +1,6 @@
 // Network API (Task 19, FR-C1): CRUD, company mapping by name on write, list filters, the
 // FTS index (entity_kind 'contact'), and cross-user isolation.
+import { PROHIBITED_HOSTS } from '../src/lib/safeFetch';
 import { describe, expect, it } from 'vitest';
 import { useApi } from './api';
 import { assertIsolated, type TestClient } from './isolation';
@@ -87,6 +88,13 @@ describe('network api', () => {
 
   // #655 (sec): a contact's LinkedIn link names a LinkedIn profile, so it is accepted on LinkedIn's
   // own hosts only, and any other host is refused with a message the form shows.
+  // #699 (tl and sec on #695): the LinkedIn host check (lib/linkedinHost.ts) takes LinkedIn's
+  // domain from safeFetch's PROHIBITED_HOSTS. If that list changes, look at linkedinHost.ts too: a
+  // host added here would be taken as a LinkedIn profile host.
+  it('the prohibited hosts the LinkedIn check reads are exactly LinkedIn and its short links', () => {
+    expect([...PROHIBITED_HOSTS]).toEqual(['linkedin.com', 'lnkd.in']);
+  });
+
   it('a LinkedIn link is accepted on LinkedIn hosts only, and refused elsewhere naming the field', async () => {
     const { a } = await boot();
     for (const good of [

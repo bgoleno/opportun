@@ -554,6 +554,14 @@ async function openWorkspace(
     'Your platform work maps well to this role.',
   );
   await expect(opened.page.getByText(/Summary: You will own/)).toBeVisible();
+  // The flow strip above the document grows by its steps once the resume's flow has loaded (the
+  // resume list, its sends and the opportunity's submissions answer after the two lines above):
+  // measured before that, the document moves down by the strip's growth after the page has been
+  // scrolled, and a scroll check compares against a layout that is gone (#724). Its next-step
+  // heading is that last change, so the geometry is read once it shows.
+  await expect(
+    opened.page.getByRole('region', { name: 'Next step for this resume' }).getByRole('heading'),
+  ).toBeVisible();
   return opened;
 }
 

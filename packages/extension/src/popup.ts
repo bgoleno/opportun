@@ -177,6 +177,7 @@ void mountPopup(document, {
     }
   },
   wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  limit: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   requestOrigin: (pattern) => chrome.permissions.request({ origins: [pattern] }),
   hasOrigin: (pattern) => chrome.permissions.contains({ origins: [pattern] }),
 });

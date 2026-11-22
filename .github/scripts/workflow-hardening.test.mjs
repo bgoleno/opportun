@@ -143,13 +143,14 @@ test('a PR that edits the label workflow, security.yml or the matcher is itself 
 });
 
 test("the image's base digest is kept current by Dependabot, for the Dockerfile only (#619)", () => {
-  // The owner's decision on #619: the docker ecosystem for deploy/, weekly, and nothing else, so
-  // digest bumps arrive as pull requests that go through review like any other.
+  // The owner's decision on #619: the docker ecosystem for deploy/, weekly, so digest bumps arrive
+  // as pull requests that go through review like any other. The npm lockfile stays updated by
+  // hand; the only other ecosystem is the workflows' actions (#728, the test below).
   const text = readFileSync(new URL('../dependabot.yml', import.meta.url), 'utf8');
   const ecosystems = [...text.matchAll(/^\s*-\s*package-ecosystem:\s*["']?([\w-]+)/gm)].map(
     (m) => m[1],
   );
-  assert.deepEqual(ecosystems, ['docker']);
+  assert.deepEqual(ecosystems, ['docker', 'github-actions']);
   assert.match(text, /^\s*directory:\s*["']?\/deploy["']?\s*$/m);
   assert.match(text, /^\s*interval:\s*["']?weekly["']?\s*$/m);
 });
@@ -162,4 +163,37 @@ test('Dependabot never proposes a new major node for the image (#683)', () => {
     text,
     /ignore:\s*\n\s*-\s*dependency-name:\s*["']?node["']?\s*\n\s*update-types:\s*\[\s*["']version-update:semver-major["']\s*\]/,
   );
+});
+
+test("Dependabot keeps the workflows' SHA-pinned actions current (#728)", () => {
+  // Every action is pinned to a full commit SHA (actions-pinned.test.mjs), and a pin
+  // is never updated by itself: without this entry, a fix in an action never reaches CI.
+  const text = readFileSync(new URL('../dependabot.yml', import.meta.url), 'utf8');
+  assert.match(
+    text,
+    /-\s*package-ecosystem:\s*["']?github-actions["']?\s*\n\s*directory:\s*["']?\/["']?\s*\n\s*schedule:\s*\n\s*interval:\s*["']?weekly["']?/,
+  );
+});
+
+test("the image's OS packages are scanned, by a scanner pinned by digest, with read-only access (#728)", () => {
+  const text = readFileSync(new URL('../workflows/image-scan.yml', import.meta.url), 'utf8');
+  // The scanner is its container image by digest: a container action names its image by tag, so
+  // its commit pin would not pin what scans.
+  assert.match(text, /ghcr\.io\/google\/osv-scanner@sha256:[0-9a-f]{64}\s/);
+  assert.doesNotMatch(text, /ghcr\.io\/google\/osv-scanner[^@\s]*:[\w.-]+\s/);
+  assert.match(text, /scan image --archive /);
+  // Read only: the top level and the job, nothing that writes.
+  assert.match(text, /^permissions:\s*\n\s+contents:\s*read\s*$/m);
+  assert.doesNotMatch(text, /:\s*write\b/);
+  // The gate decides, and a missing report fails rather than passing as clean.
+  assert.match(text, /node \.github\/scripts\/image-scan-gate\.mjs /);
+  assert.match(text, /wrote no report/);
+  // Weekly too: a new advisory needs no commit.
+  assert.match(text, /^\s*schedule:\s*\n\s*-\s*cron:/m);
+});
+
+test('pnpm is installed by corepack at an exact, hash-checked release (#728)', () => {
+  // corepack refuses a pnpm whose sha512 differs from the one named here ("Mismatch hashes").
+  const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+  assert.match(pkg.packageManager, /^pnpm@\d+\.\d+\.\d+\+sha512\.[0-9a-f]{128}$/);
 });

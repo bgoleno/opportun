@@ -397,10 +397,14 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       reader.prepare('SELECT count(*) FROM bench_383').get();
       const before = h.checkpointer!.checkpoints;
       await write(h, 100);
+      // The first attempt, however long the worker takes to make it (#716: a fixed 800 ms wait
+      // here failed on a loaded runner, where the worker had not tried yet).
+      await until(() => h.checkpointer!.checkpoints - before >= 1);
+      const first = h.checkpointer!.checkpoints;
+      // Once held back, the next attempt waits a second (RETRY_MS): over the 800 ms from the
+      // first, at most one more, not one per poll (about 40 at this 20 ms poll).
       await new Promise((r) => setTimeout(r, 800));
-      // Once held back, the next attempt waits a second: one or two, not one per poll (about 40).
-      expect(h.checkpointer!.checkpoints - before).toBeGreaterThanOrEqual(1);
-      expect(h.checkpointer!.checkpoints - before).toBeLessThanOrEqual(2);
+      expect(h.checkpointer!.checkpoints - first).toBeLessThanOrEqual(1);
     } finally {
       if (reader.inTransaction) reader.exec('COMMIT');
       reader.close();

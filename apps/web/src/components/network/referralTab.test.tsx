@@ -50,6 +50,7 @@ const janeAsk = {
   status: 'asked',
   note: null,
   occurredAt: Date.UTC(2026, 9, 10),
+  removed: false,
 };
 
 describe('ReferralsTab', () => {
@@ -126,6 +127,32 @@ describe('ReferralsTab', () => {
       'aria-pressed',
       'false',
     );
+  });
+
+  // #694 (qa on #688): an ask whose contact was deleted still linked to them.
+  it('an ask whose contact was deleted names them as recorded, marked removed, with no link', async () => {
+    mockApi({
+      'GET /opportunities/opp-1/referral-candidates': CANDIDATES,
+      'GET /opportunities/opp-1/referrals': {
+        items: [
+          janeAsk,
+          {
+            ...janeAsk,
+            activityId: 'act-gone',
+            contactId: 'c-gone',
+            name: 'Pat Gone',
+            removed: true,
+          },
+        ],
+        total: 2,
+      },
+    });
+    renderWithProviders(<ReferralsTab opportunityId="opp-1" companyName="Initech" />);
+    const asks = await screen.findByRole('list', { name: 'Referral asks' });
+    const [jane, gone] = within(asks).getAllByRole('listitem');
+    expect(within(jane!).getByRole('link', { name: 'Jane Doe' })).toBeInTheDocument();
+    expect(within(gone!).queryByRole('link')).toBeNull();
+    expect(gone).toHaveTextContent('Pat Gone (removed)');
   });
 
   it('shows the unranked set with a note when AI is unavailable, and an empty state', async () => {

@@ -12,7 +12,9 @@ import { bulkTriage } from '../src/repos/communications';
 import { createOpportunity } from '../src/repos/opportunities';
 import { rejectCommunication } from '../src/repos/reject';
 import { search } from '../src/repos/search';
+import { setRaceHook } from '../src/lib/racePoints';
 import { useApi } from './api';
+import { pauseAt } from './race';
 
 const boot = useApi();
 const ctxOf = (userId: string) => ({ userId, isAdmin: false });
@@ -344,9 +346,14 @@ describe('rejectCommunication', () => {
 // confirmed in one could erase a message the other had just linked. A reject now goes through only
 // if the message's link is still the one the user saw, checked in the erasing UPDATE itself.
 describe('a reject takes only messages still linked as the user saw them (#666)', () => {
-  const linkTo = async (app: FastifyInstance, userId: string, id: string) => {
+  const linkTo = async (
+    app: FastifyInstance,
+    userId: string,
+    id: string,
+    companyName = 'Initech',
+  ) => {
     const opp = await createOpportunity(app.db, ctxOf(userId), {
-      companyName: 'Initech',
+      companyName,
       title: 'Staff Engineer',
       sourceKind: 'manual',
     });
@@ -425,5 +432,94 @@ describe('a reject takes only messages still linked as the user saw them (#666)'
     });
     expect(bulk.statusCode).toBe(400);
     expect((await rowById(app, a.userId, id)).rejectedAt).toBeNull();
+  });
+
+  // https://github.com/bgoleno/opportun/issues/678 criterion 3 (qa on #672): mutations of the
+  // guard the tests above let through.
+
+  it('the single route checks the link the user sent, not the one the message has now', async () => {
+    const { app, a } = await boot();
+    await allowSender(app, a.userId, 'recruiter@acme.example');
+    const id = await ingest(app, a.userId, 'recruiter@acme.example', 'Linked elsewhere');
+    await linkTo(app, a.userId, id);
+    const before = JSON.stringify(await rowById(app, a.userId, id));
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/communications/${id}/reject`,
+      payload: { reason: 'spam', expectedOpportunityId: null },
+    });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { error: { code: string } }).error.code).toBe('message_changed');
+    expect(JSON.stringify(await rowById(app, a.userId, id))).toBe(before);
+  });
+
+  it('a message moved from one opportunity to another is refused, on either route', async () => {
+    const { app, a } = await boot();
+    await allowSender(app, a.userId, 'recruiter@acme.example');
+    const single = await ingest(app, a.userId, 'recruiter@acme.example', 'Seen under X');
+    const inBulk = await ingest(app, a.userId, 'recruiter@acme.example', 'Also seen under X');
+    const x = await linkTo(app, a.userId, single);
+    await app.db
+      .update(communications)
+      .set({ opportunityId: x })
+      .where(eq(communications.id, inBulk))
+      .run();
+    // Both seen under X; another session moves both to Y.
+    const y = await linkTo(app, a.userId, single, 'Hooli');
+    await app.db
+      .update(communications)
+      .set({ opportunityId: y })
+      .where(eq(communications.id, inBulk))
+      .run();
+    const before = JSON.stringify([
+      await rowById(app, a.userId, single),
+      await rowById(app, a.userId, inBulk),
+    ]);
+    await expect(
+      rejectCommunication(app.db, ctxOf(a.userId), single, {
+        reason: 'spam',
+        expectedOpportunityId: x,
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'message_changed' });
+    const bulk = await a.request({
+      method: 'POST',
+      url: '/api/v1/communications/bulk',
+      payload: {
+        items: [{ id: inBulk, opportunityId: x }],
+        action: { kind: 'reject', reason: 'spam' },
+      },
+    });
+    expect(bulk.json()).toEqual({ succeeded: 0, skipped: 0, changed: 1 });
+    expect(
+      JSON.stringify([await rowById(app, a.userId, single), await rowById(app, a.userId, inBulk)]),
+    ).toBe(before);
+  });
+
+  it('a link that lands between the reject reading the message and erasing it still wins', async () => {
+    const { app, a } = await boot();
+    await allowSender(app, a.userId, 'recruiter@acme.example');
+    const id = await ingest(app, a.userId, 'recruiter@acme.example', 'Linked mid-reject');
+    // The reject has read the message as unlinked, as a check made before the erase would.
+    const pause = pauseAt('reject.read');
+    const rejecting = rejectCommunication(app.db, ctxOf(a.userId), id, {
+      reason: 'spam',
+      expectedOpportunityId: null,
+    });
+    const outcome = rejecting.then(
+      () => 'rejected',
+      (err: { code?: string }) => err.code ?? 'error',
+    );
+    try {
+      await pause.reached;
+      await linkTo(app, a.userId, id);
+      pause.release();
+      expect(await outcome).toBe('message_changed');
+    } finally {
+      pause.release();
+      setRaceHook(undefined);
+    }
+    const row = await rowById(app, a.userId, id);
+    expect(row.rejectedAt).toBeNull();
+    expect(row.subject).toBe('Linked mid-reject');
   });
 });
