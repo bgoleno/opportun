@@ -19,6 +19,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { withTransaction } from '../db/client';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import { requireAdmin } from '../repos/base';
@@ -174,27 +175,38 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
         if (!(await collectInEffect(db, app.config))) throw new HttpError(409, 'collect_off');
         await assertDestination(next.value);
       }
-      await writeExport(db, next.value);
+      // The type and the signals, never the host or the credential (rule 1).
+      const detailOf = (value: typeof prev) => {
+        const type = value.destination?.type ?? null;
+        return { enabled: value.enabled, type, signals: type === null ? [] : signalsOf(type) };
+      };
+      // The settings and their audit row commit together, and export starts only after (#819): a
+      // failed audit write stores nothing and sends nothing to the new destination.
+      await withTransaction(db, async (tx) => {
+        await writeExport(tx, next.value);
+        await audit(tx, 'telemetry.export.updated', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: detailOf(next.value),
+        });
+      });
       try {
         await applyExport(db, app.config);
       } catch (err) {
         // The exporters could not be built: put the previous settings back, so the stored switch
         // never says export is on while nothing is sent (tl on #377), and report the failure.
-        await writeExport(db, prev);
+        // The restore is a change too, recorded as one with its cause (#819).
+        await withTransaction(db, async (tx) => {
+          await writeExport(tx, prev);
+          await audit(tx, 'telemetry.export.updated', {
+            userId: ctx.userId,
+            ip: req.ip,
+            detail: { ...detailOf(prev), cause: 'apply_failed' },
+          });
+        });
         await applyExport(db, app.config).catch(() => undefined);
         throw err;
       }
-      const type = next.value.destination?.type ?? null;
-      // The type and the signals, never the host or the credential (rule 1).
-      await audit(db, 'telemetry.export.updated', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: {
-          enabled: next.value.enabled,
-          type,
-          signals: type === null ? [] : signalsOf(type),
-        },
-      });
       return await exportView(true);
     },
   );

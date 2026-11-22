@@ -9,7 +9,7 @@
 // as in this process, so turning Collect on again does not resume sending by itself; and boot
 // applies Export after Collect (obs/index.ts refuses an exporter while collection is off).
 import { eq } from 'drizzle-orm';
-import type { Db, Exec } from '../db/client';
+import { withTransaction, type Db, type Exec } from '../db/client';
 import { settings } from '../db/schema';
 import { audit } from '../lib/audit';
 import { applyExport, stopExport, type ExportDeployment } from './export/manager';
@@ -38,21 +38,25 @@ export async function writeCollect(
   actor: { userId?: string; ip?: string } = {},
 ): Promise<void> {
   const now = Date.now();
-  await db
-    .insert(settings)
-    .values({ key: OBS_COLLECT_KEY, userId: null, value: on, updatedAt: now })
-    .onConflictDoUpdate({ target: settings.key, set: { value: on, updatedAt: now } })
-    .run();
-  // Audited with the acting admin (sec's O6 on PR #352). No password re-confirmation, unlike
-  // export: nothing leaves the instance.
-  await audit(db, 'telemetry.collect.updated', { ...actor, detail: { enabled: on } });
-  if (!on && (await readExport(db)).enabled) {
-    await disableExport(db);
-    await audit(db, 'telemetry.export.updated', {
-      ...actor,
-      detail: { enabled: false, cause: 'collect_off' },
-    });
-  }
+  // The switch, the export it turns off and their audit rows commit together (#819); this
+  // process follows only once they have.
+  await withTransaction(db, async (tx) => {
+    await tx
+      .insert(settings)
+      .values({ key: OBS_COLLECT_KEY, userId: null, value: on, updatedAt: now })
+      .onConflictDoUpdate({ target: settings.key, set: { value: on, updatedAt: now } })
+      .run();
+    // Audited with the acting admin (sec's O6 on PR #352). No password re-confirmation, unlike
+    // export: nothing leaves the instance.
+    await audit(tx, 'telemetry.collect.updated', { ...actor, detail: { enabled: on } });
+    if (!on && (await readExport(tx)).enabled) {
+      await disableExport(tx);
+      await audit(tx, 'telemetry.export.updated', {
+        ...actor,
+        detail: { enabled: false, cause: 'collect_off' },
+      });
+    }
+  });
   await setCollecting(on);
   if (!on) await stopExport();
 }

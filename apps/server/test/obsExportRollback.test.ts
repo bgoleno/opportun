@@ -2,7 +2,9 @@
 // install), the PUT that turned export on must not leave it stored as on, or GET would say export
 // is on while nothing is sent (tl on https://github.com/bgoleno/opportun/pull/377). A file of its
 // own, because the mock replaces obs/export/otlp.ts for every test in it.
+import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { auditLog } from '../src/db/schema';
 import { attachedExporters, setCollecting } from '../src/obs';
 import { stopExport } from '../src/obs/export/manager';
 import { readExport } from '../src/obs/export/settings';
@@ -45,5 +47,16 @@ describe('PUT /api/v1/obs/export when the exporters cannot be built', () => {
       enabled: boolean;
     };
     expect(seen.enabled).toBe(false);
+    // The save committed with its audit row before export was applied (#819), so the restore is
+    // recorded too, with its cause: the trail says export was turned on, then put back.
+    const rows = await app.db
+      .select({ detail: auditLog.detail })
+      .from(auditLog)
+      .where(eq(auditLog.event, 'telemetry.export.updated'))
+      .all();
+    expect(rows.map((r) => r.detail)).toEqual([
+      expect.objectContaining({ enabled: true, type: 'otlp' }),
+      expect.objectContaining({ enabled: false, cause: 'apply_failed' }),
+    ]);
   });
 });
