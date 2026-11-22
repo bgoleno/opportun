@@ -236,7 +236,8 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
         req.log.warn('google token exchange failed');
         return reply.redirect(`${SETTINGS_PAGE}?google=error`);
       }
-      const merged = mergeTokens(await readTokens(db, ctx), tokens);
+      const before = await readTokens(db, ctx);
+      const merged = mergeTokens(before, tokens);
       client.setCredentials(tokens);
       try {
         const email = await app.google.accountEmail(client);
@@ -255,9 +256,12 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
         });
       } catch (err) {
         // Nothing was stored, but Google has issued the grant (sec, tl on #815): revoke it, best
-        // effort, so the account does not keep listing the app as authorized.
+        // effort, so the account does not keep listing the app as authorized. Not on a re-connect
+        // (sec on #815, #819): the new token belongs to the grant already stored, and revoking it
+        // at Google would end that one too.
+        const hadGrant = before?.refreshToken != null || before?.accessToken != null;
         const grant = tokens.refresh_token ?? tokens.access_token ?? null;
-        if (grant != null) {
+        if (grant != null && !hadGrant) {
           try {
             await app.google.revokeToken(client, grant);
           } catch {

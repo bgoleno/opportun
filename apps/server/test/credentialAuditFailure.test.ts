@@ -32,6 +32,19 @@ vi.mock('../src/lib/audit', async (importOriginal) => {
   };
 });
 
+/** How many times a key change resumed the waiting rankings (#819). */
+let resumes = 0;
+vi.mock('../src/jobs/discoveryRankWaiting', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/jobs/discoveryRankWaiting')>();
+  return {
+    ...real,
+    resumeAfterKeyChange: async (...args: Parameters<typeof real.resumeAfterKeyChange>) => {
+      resumes += 1;
+      return await real.resumeAfterKeyChange(...args);
+    },
+  };
+});
+
 afterEach(() => {
   failing = null;
 });
@@ -308,5 +321,47 @@ describe("the admin's OAuth providers: the audit row commits with the change (#8
       }),
     );
     expect(await providerRows(app)).toEqual([]);
+  });
+});
+
+// The criteria added to https://github.com/bgoleno/opportun/issues/819 from sec's points on #815.
+describe('after a failed audit write, what follows a change still does what it must (#819)', () => {
+  it('a failed re-connect leaves the grant already stored alone at Google', async () => {
+    const { app, a } = await boot();
+    await connectGoogle(a, 'docs', google);
+    const stored = await readTokens(app.db, ctxOf(a));
+    expect(stored?.refreshToken).toBeTruthy();
+    const connect = await a.request({
+      method: 'GET',
+      url: '/api/v1/integrations/google/connect?scopes=docs',
+    });
+    const state = new URL(connect.json().authUrl as string).searchParams.get('state') ?? '';
+    const revokedBefore = google.revoked.length;
+    await failing500('google.connected', () =>
+      a.request({
+        method: 'GET',
+        url: `/api/v1/integrations/google/callback?code=auth-code&state=${encodeURIComponent(state)}`,
+      }),
+    );
+    // Revoking the new token would end the grant the stored one belongs to.
+    expect(google.revoked).toHaveLength(revokedBefore);
+    expect(await readTokens(app.db, ctxOf(a))).toEqual(stored);
+  });
+
+  it('a secret delete whose audit write fails still resumes the waiting rankings', async () => {
+    const { app, a } = await boot();
+    const created = await a.request({
+      method: 'POST',
+      url: '/api/v1/secrets',
+      payload: { kind: 'ai_api_key', label: 'Anthropic', value: 'sk-ant-key-819' },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const id = created.json<{ id: string }>().id;
+    const before = resumes;
+    await failing500('secret.deleted', () =>
+      a.request({ method: 'DELETE', url: `/api/v1/secrets/${id}` }),
+    );
+    expect(await secretsOf(app, a.userId)).toEqual([]);
+    expect(resumes).toBe(before + 1);
   });
 });
