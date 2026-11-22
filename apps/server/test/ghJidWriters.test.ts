@@ -225,7 +225,7 @@ describe("Find posting resolves the opportunity's own careers link (tl on #414, 
 
   // #756: no board holds the job, so the board is read (unconfirmed) and nothing is found; with the
   // posting confirmed, the refusal stands as before.
-  it('a description the user wrote and no board holds the job: no identity, refused once confirmed', async () => {
+  it('a description the user wrote and no board holds the job: no identity, and once confirmed still none, the description kept (#812)', async () => {
     const { app, a } = await boot();
     const id = await seed(app, a);
     await updateOpportunity(app.db, ctxOf(a), id, {
@@ -244,7 +244,12 @@ describe("Find posting resolves the opportunity's own careers link (tl on #414, 
       postingState: 'confirmed',
       postingStateDetail: null,
     });
-    expect((await find()).statusCode).toBe(409);
+    // #812 (tl): a Refetch on it re-checks the board and keeps the description; nothing found.
+    expect((await find()).statusCode).toBe(200);
+    expect(await refOf(app, a, id)).toBeNull();
+    expect((await getOpportunity(app.db, ctxOf(a), id)).descriptionMd).toBe(
+      'My own notes about this role.',
+    );
   });
 
   it('the same careers link arriving only in mail gets no identity, and no request (criterion 6)', async () => {

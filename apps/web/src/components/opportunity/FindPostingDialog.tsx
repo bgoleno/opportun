@@ -40,7 +40,11 @@ function headline(result: FindPostingResult, company: string): string {
     return `This posting came from a link in a message, on a board that is not ${company}'s own board. Check it before attaching.`;
   }
   if (result.outcome === 'candidates') {
-    return `More than one posting on the ${company} board matches. Pick the one you applied to.`;
+    // One candidate is offered rather than attached when the server would not settle it alone
+    // (#812, qa on #804): its note, shown below, says why.
+    return result.candidates?.length === 1
+      ? `One posting on the ${company} board may match. Attach it only if it is the one you applied to.`
+      : `More than one posting on the ${company} board matches. Pick the one you applied to.`;
   }
   if (result.outcome === 'none') {
     return 'No close match on the board. Search it, or add the posting by hand.';
