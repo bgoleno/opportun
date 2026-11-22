@@ -12,11 +12,19 @@ import {
 import { PASTE_TEXT_HINT } from '../src/routes/capture';
 import type { safeFetch } from '../src/lib/safeFetch';
 import { eq } from 'drizzle-orm';
-import { communications } from '../src/db/schema';
+import { communications, opportunities } from '../src/db/schema';
+import { atsJobRefOfUrl } from '../src/lib/atsJobRef';
 import { descriptionFingerprint } from '../src/lib/postingFingerprint';
 import { createCompany } from '../src/repos/companies';
 import { upsertInbound } from '../src/repos/communications';
-import { createOpportunity, setPostingState, updateOpportunity } from '../src/repos/opportunities';
+import {
+  createOpportunity,
+  getOpportunity,
+  setPostingState,
+  updateOpportunity,
+} from '../src/repos/opportunities';
+import { reconcilePosting } from '../src/jobs/postingReconcile';
+import { rederivePosting } from '../src/lib/postingRederive';
 import { createActivity, listActivities } from '../src/repos/activities';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
@@ -58,7 +66,13 @@ function boardServes(postings: NormalizedPosting[]): void {
 async function seed(
   app: { db: Db },
   client: TestClient,
-  opts: { title: string; company?: string; ats?: boolean; descriptionMd?: string },
+  opts: {
+    title: string;
+    company?: string;
+    ats?: boolean;
+    descriptionMd?: string;
+    postingUrl?: string;
+  },
 ): Promise<string> {
   const db = app.db;
   const ctx = ctxOf(client);
@@ -74,6 +88,7 @@ async function seed(
     title: opts.title,
     sourceKind: 'import',
     ...(opts.descriptionMd === undefined ? {} : { descriptionMd: opts.descriptionMd }),
+    ...(opts.postingUrl === undefined ? {} : { postingUrl: opts.postingUrl }),
   });
   return opp.id;
 }
@@ -228,11 +243,120 @@ describe('POST /opportunities/:id/find-posting', () => {
     });
   });
 
-  it('refuses an opportunity that already has a description', async () => {
+  // #756 (tl): a described posting never checked had no way on (Find posting hid, a link save sets
+  // only the identity). Find posting now confirms it from the board, keeping the user's own
+  // description (design D11), and marks it user_confirmed so no later pass reads the description
+  // as the employer's copy.
+  it('a described posting never checked is confirmed from the board, its description kept', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, {
+      title: 'Product Manager, SIEM',
+      descriptionMd: 'my own notes on the role',
+    });
+    boardServes([posting('Staff Product Manager, SIEM', '7663059003')]);
+
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ outcome: 'attached' });
+    const out = await getOpportunity(app.db, ctxOf(a), id);
+    expect(out).toMatchObject({
+      descriptionMd: 'my own notes on the role',
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+      postingUrl: 'https://job-boards.greenhouse.io/sentineledge/jobs/7663059003',
+    });
+    expect(out.atsJobRef).not.toBeNull();
+    // A later reconcile or re-derive leaves the kept description alone.
+    const sctx = { fetch: missingFetch, log: { warn: () => undefined } } as never;
+    const noBoard = (async () => {
+      throw new Error('no board should be read');
+    }) as never;
+    await reconcilePosting(app.db, ctxOf(a), id, sctx, { board: noBoard });
+    await rederivePosting(app.db, ctxOf(a), id, sctx, { board: noBoard }).catch(() => undefined);
+    expect((await getOpportunity(app.db, ctxOf(a), id)).descriptionMd).toBe(
+      'my own notes on the role',
+    );
+  });
+
+  // qa and tl on #804: the opportunity's own job, named by its stored identity or its board link,
+  // is the posting. Missing from the board, no title match stands in for it: it is offered, never
+  // attached or confirmed, with or without a description the user wrote.
+  const OWN_LINK = 'https://job-boards.greenhouse.io/sentineledge/jobs/1003';
+  for (const descriptionMd of ['my own notes on the role', undefined]) {
+    const which = descriptionMd === undefined ? 'with no description' : 'with a user description';
+    it(`a board link whose job is missing: a title match is a candidate only, ${which}`, async () => {
+      const { app, a } = await boot();
+      const id = await seed(app, a, {
+        title: 'Staff Platform Engineer',
+        postingUrl: OWN_LINK,
+        ...(descriptionMd === undefined ? {} : { descriptionMd }),
+      });
+      // qa's state: the identity a link save stores, posting state still null.
+      await app.db
+        .update(opportunities)
+        .set({ atsJobRef: atsJobRefOfUrl(OWN_LINK) })
+        .where(eq(opportunities.id, id))
+        .run();
+      const before = await getOpportunity(app.db, ctxOf(a), id);
+      expect(before).toMatchObject({ postingState: null, atsJobRef: { externalId: '1003' } });
+      boardServes([posting('Staff Platform Engineer II', '1002')]);
+
+      const res = await a.request({
+        method: 'POST',
+        url: `/api/v1/opportunities/${id}/find-posting`,
+      });
+
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().outcome).not.toBe('attached');
+      const out = await getOpportunity(app.db, ctxOf(a), id);
+      expect(out.postingUrl).toBe(OWN_LINK);
+      expect(out.atsJobRef).toMatchObject({ externalId: '1003' });
+      expect(out.postingState).not.toBe('confirmed');
+      expect(out.descriptionMd ?? null).toBe(descriptionMd ?? before.descriptionMd ?? null);
+    });
+  }
+
+  it('a board link whose job is on the board: that job is attached, not a closer title', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, {
+      title: 'Staff Platform Engineer',
+      postingUrl: OWN_LINK,
+      descriptionMd: 'my own notes on the role',
+    });
+    boardServes([
+      posting('Staff Platform Engineer', '1002'),
+      posting('Platform Engineer (Infra)', '1003'),
+    ]);
+
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ outcome: 'attached' });
+    const out = await getOpportunity(app.db, ctxOf(a), id);
+    expect(out).toMatchObject({
+      postingUrl: OWN_LINK,
+      postingState: 'confirmed',
+      descriptionMd: 'my own notes on the role',
+    });
+    expect(out.atsJobRef).toMatchObject({ externalId: '1003' });
+  });
+
+  it('a described posting already confirmed is still refused', async () => {
     const { app, a } = await boot();
     const id = await seed(app, a, {
       title: 'Product Manager, SIEM',
       descriptionMd: 'already here',
+    });
+    await setPostingState(app.db, ctxOf(a), id, {
+      postingState: 'confirmed',
+      postingStateDetail: null,
     });
     boardServes([posting('Staff Product Manager, SIEM', '7663059003')]);
 

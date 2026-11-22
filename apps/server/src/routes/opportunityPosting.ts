@@ -41,6 +41,7 @@ import type { UserCtx } from '../repos/base';
 import {
   getOpportunity,
   recordAtsJobRef,
+  setPostingState,
   type OpportunityView as OpportunityRowView,
 } from '../repos/opportunities';
 import { extract, fetchPageText, PASTE_TEXT_HINT } from './capture';
@@ -138,17 +139,34 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       const { id } = req.params;
       const sctx = { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log };
       const current = await getOpportunity(db, ctx, id);
-      // Checked before any board is read: the user's own description has nothing to find. An
-      // embedded Greenhouse link still gets its identity, from Greenhouse's API, with the
-      // description left as it is (#398, tl on #414).
+      // Checked before any board is read: the user's own description, on a posting already
+      // confirmed, has nothing to find. An embedded Greenhouse link still gets its identity, from
+      // Greenhouse's API, with the description left as it is (#398, tl on #414). Not confirmed
+      // yet, the board is read and a match confirms it, the description kept (#756).
       if (userWritten(current)) {
         const identified = await identifyOwnLink(ctx, current, sctx);
-        if (identified !== null) return { outcome: 'identified' as const, opportunity: identified };
-        throw new HttpError(
-          409,
-          'already_described',
-          'This opportunity already has a description. Edit it instead.',
-        );
+        if (current.postingState === 'confirmed') {
+          if (identified !== null) {
+            return { outcome: 'identified' as const, opportunity: identified };
+          }
+          throw new HttpError(
+            409,
+            'already_described',
+            'This opportunity already has a description. Edit it instead.',
+          );
+        }
+        // Not confirmed yet (#756, tl): Greenhouse's own answer for its embedded link is the
+        // proof, one request and no listing read (#398, #414). It now confirms the posting too,
+        // user_confirmed so no later pass reads the user's description as the employer's copy.
+        if (identified !== null) {
+          const confirmed = await setPostingState(db, ctx, id, {
+            postingState: 'confirmed',
+            postingStateDetail: 'user_confirmed',
+            atsJobRef: identified.atsJobRef,
+          });
+          return { outcome: 'identified' as const, opportunity: confirmed };
+        }
+        // Otherwise the board is read, and a match confirms it, the description kept.
       }
       const outcome = await findPosting(db, ctx, id, sctx, { readBody });
       if (outcome.status === 'exact' || outcome.status === 'single') {
@@ -177,6 +195,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
                 },
               }
             : { readFrom: outcome.readFrom },
+          { keepDescription: true },
         );
         const note = outcome.note === undefined ? {} : { note: outcome.note };
         return { outcome: 'attached' as const, opportunity, candidate: outcome.candidate, ...note };
@@ -229,7 +248,11 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
             { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log },
             posting,
           );
-          return attachPosting(db, ctx, id, described, 'board', undefined, identity);
+          // A row picked from the board confirms a posting the user described themselves, the
+          // description kept, as Find posting's own match does (#756).
+          return attachPosting(db, ctx, id, described, 'board', undefined, identity, {
+            keepDescription: true,
+          });
         }
         if (text !== undefined) {
           return attachPosting(

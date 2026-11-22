@@ -318,7 +318,7 @@ describe('#395: a refused Apply button says why, and never swallows a click', ()
       { postingState: null, descriptionMd: 'Own the platform.' },
       [RESUME],
       'Apply on Greenhouse',
-      "This posting hasn't been checked against the company's board, so assisted apply can't use it yet.",
+      "This opportunity's posting hasn't been checked on the company's board yet. Use Find posting on the Details tab.",
     ],
     [
       'a posting still being checked',

@@ -186,10 +186,11 @@ export async function verifyEmbeddedGreenhouse(
 }
 
 /**
- * Sets the identity a check found, only while the opportunity's link is still the one checked
- * and it has none yet (#685): a check that finishes after a later save changed the link, or after
- * another found an identity, writes nothing. The condition is in the UPDATE itself, so there is no
- * window between a read and this write. Answers whether it was set.
+ * Sets the identity a check found, only while the opportunity's link and company are still the
+ * ones checked and it has none yet (#685, #785): a check that finishes after a later save changed
+ * the link or the company (whose boards the check did not ask), or after another found an
+ * identity, writes nothing. The condition is in the UPDATE itself, so there is no window between
+ * a read and this write. Answers whether it was set.
  */
 export async function setCheckedPostingRef(
   db: Db,
@@ -197,6 +198,7 @@ export async function setCheckedPostingRef(
   id: string,
   link: string,
   ref: AtsJobRef,
+  companyId: string | null,
 ): Promise<boolean> {
   const updated = await db
     .update(opportunities)
@@ -206,6 +208,9 @@ export async function setCheckedPostingRef(
         eq(opportunities.userId, ctx.userId),
         eq(opportunities.id, id),
         eq(opportunities.postingUrl, link),
+        companyId === null
+          ? isNull(opportunities.companyId)
+          : eq(opportunities.companyId, companyId),
         isNull(opportunities.atsJobRef),
       ),
     )

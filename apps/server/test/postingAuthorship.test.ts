@@ -65,9 +65,15 @@ describe('posting writes are guarded on authorship', () => {
     expect(res.statusCode, res.body).toBe(200);
   });
 
-  it('still refuses Find posting on a description the user wrote', async () => {
+  // #756: refused once its posting is confirmed; before that, Find posting may confirm it from
+  // the board while keeping the description (test/opportunityPosting.test.ts).
+  it('still refuses Find posting on a description the user wrote, once its posting is confirmed', async () => {
     const { app, a } = await boot();
     const opp = await opportunity(app, ctxOf(a), 'my own notes', false);
+    await setPostingState(app.db, ctxOf(a), opp.id, {
+      postingState: 'confirmed',
+      postingStateDetail: null,
+    });
 
     const res = await find(a, opp.id);
 
@@ -75,12 +81,21 @@ describe('posting writes are guarded on authorship', () => {
     expect(res.json().error.code).toBe('already_described');
   });
 
-  it('refuses Find posting once the user has edited what the capture wrote', async () => {
+  // #756 (tl): once the user edited what the capture wrote, Find posting may still confirm an
+  // unconfirmed posting, the edit kept; with the posting confirmed it is refused as before.
+  it('Find posting on a description the user edited: kept while unconfirmed, refused once confirmed', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
     const opp = await opportunity(app, ctx, 'the captured page text', true);
     await updateOpportunity(app.db, ctx, opp.id, { descriptionMd: 'my own notes' });
 
+    expect((await find(a, opp.id)).statusCode).toBe(200);
+    expect((await getOpportunity(app.db, ctx, opp.id)).descriptionMd).toBe('my own notes');
+
+    await setPostingState(app.db, ctx, opp.id, {
+      postingState: 'confirmed',
+      postingStateDetail: null,
+    });
     expect((await find(a, opp.id)).statusCode).toBe(409);
   });
 
@@ -103,7 +118,9 @@ describe('posting writes are guarded on authorship', () => {
     expect((await getOpportunity(app.db, ctx, opp.id)).descriptionMd).toBe('the board copy');
   });
 
-  it('still refuses when the user has not asked, even on a flagged opportunity', async () => {
+  // #756: on a flagged, unconfirmed posting, Find posting runs and keeps the user's text; pasted
+  // text is still refused over it.
+  it('on a flagged opportunity, Find posting keeps the description and pasted text is still refused', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
     const opp = await opportunity(app, ctx, 'my own notes', false);
@@ -112,8 +129,34 @@ describe('posting writes are guarded on authorship', () => {
       postingStateDetail: 'none_found',
     });
 
-    expect((await find(a, opp.id)).statusCode).toBe(409);
+    expect((await find(a, opp.id)).statusCode).toBe(200);
+    expect((await getOpportunity(app.db, ctx, opp.id)).descriptionMd).toBe('my own notes');
     expect((await attach(a, opp.id, { text: 'the board copy' })).statusCode).toBe(409);
+  });
+
+  // #756: a row picked from the board's candidates confirms an unconfirmed posting the user
+  // described, the description kept and the posting marked as the user's own.
+  it('a picked board row confirms the posting and keeps the description the user wrote', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const opp = await opportunity(app, ctx, 'my own notes', false);
+    const res = await attach(a, opp.id, {
+      posting: {
+        company: 'Soylent',
+        title: 'Staff Product Manager',
+        descriptionMd: 'the board copy',
+        postingUrl: 'https://job-boards.greenhouse.io/soylent/jobs/123',
+        location: null,
+        externalId: '123',
+      },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(await getOpportunity(app.db, ctx, opp.id)).toMatchObject({
+      descriptionMd: 'my own notes',
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+      postingUrl: 'https://job-boards.greenhouse.io/soylent/jobs/123',
+    });
   });
 
   it('attaching pasted text replaces a system description and refreshes the fingerprint', async () => {

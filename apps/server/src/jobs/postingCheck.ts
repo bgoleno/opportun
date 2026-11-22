@@ -49,7 +49,14 @@ export const postingCheckJob: JobHandler<z.infer<typeof PostingCheckPayload>> = 
       null,
     );
     if (found.ref !== null) {
-      const set = await setCheckedPostingRef(db, ctx, opp.id, payload.link, found.ref);
+      const set = await setCheckedPostingRef(
+        db,
+        ctx,
+        opp.id,
+        payload.link,
+        found.ref,
+        opp.companyId,
+      );
       await jctx.setResult({ outcome: set ? 'identity' : 'unchanged' });
       return;
     }
