@@ -2,12 +2,11 @@
 // job; its progress and report are read back by job id. The export is built from the
 // caller's rows only and streamed as a zip.
 import multipart from '@fastify/multipart';
-import { enqueue } from '../lib/jobQueue';
-import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { JOB_STATUSES, jobs } from '../db/schema';
+import { JOB_STATUSES } from '../db/schema';
+import { enqueue } from '../lib/jobQueue';
 import { audit } from '../lib/audit';
 import { HttpError, notFound } from '../lib/errors';
 import { isSharedDemoAccount } from '../lib/demoAccounts';
@@ -27,6 +26,7 @@ import {
   type LinkedInPack,
 } from '../lib/linkedinExport';
 import { requireUser } from '../repos/base';
+import { userJobOfKinds } from '../repos/jobs';
 
 const MAX_FILES = 2000;
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
@@ -169,17 +169,7 @@ export async function importExportRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req) => {
       const ctx = requireUser(req);
-      const job = await db
-        .select()
-        .from(jobs)
-        .where(
-          and(
-            eq(jobs.id, req.params.jobId),
-            inArray(jobs.kind, IMPORT_KINDS),
-            eq(jobs.userId, ctx.userId),
-          ),
-        )
-        .get();
+      const job = await userJobOfKinds(db, ctx, req.params.jobId, IMPORT_KINDS);
       if (job === undefined) throw notFound();
       const result = (job.result ?? null) as ImportResult | null;
       return {

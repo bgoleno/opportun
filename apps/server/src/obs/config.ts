@@ -9,7 +9,7 @@
 // as in this process, so turning Collect on again does not resume sending by itself; and boot
 // applies Export after Collect (obs/index.ts refuses an exporter while collection is off).
 import { eq } from 'drizzle-orm';
-import type { Db, Exec } from '../db/client';
+import { withTransaction, type Db, type Exec } from '../db/client';
 import { settings } from '../db/schema';
 import { audit } from '../lib/audit';
 import { applyExport, stopExport, type ExportDeployment } from './export/manager';
@@ -38,23 +38,43 @@ export async function writeCollect(
   actor: { userId?: string; ip?: string } = {},
 ): Promise<void> {
   const now = Date.now();
-  await db
-    .insert(settings)
-    .values({ key: OBS_COLLECT_KEY, userId: null, value: on, updatedAt: now })
-    .onConflictDoUpdate({ target: settings.key, set: { value: on, updatedAt: now } })
-    .run();
+  const store = (tx: Exec) =>
+    tx
+      .insert(settings)
+      .values({ key: OBS_COLLECT_KEY, userId: null, value: on, updatedAt: now })
+      .onConflictDoUpdate({ target: settings.key, set: { value: on, updatedAt: now } })
+      .run();
   // Audited with the acting admin (sec's O6 on PR #352). No password re-confirmation, unlike
   // export: nothing leaves the instance.
-  await audit(db, 'telemetry.collect.updated', { ...actor, detail: { enabled: on } });
-  if (!on && (await readExport(db)).enabled) {
-    await disableExport(db);
+  const recordCollect = (exec: Exec) =>
+    audit(exec, 'telemetry.collect.updated', { ...actor, detail: { enabled: on } });
+  if (on) {
+    // Turning on commits with its audit row (#819), and this process follows once it has.
+    await withTransaction(db, async (tx) => {
+      await store(tx);
+      await recordCollect(tx);
+    });
+    await setCollecting(true);
+    return;
+  }
+  // Turning off is a stop (sec, tl on #826, as #815 ruled for removals): it commits, and this
+  // process stops collecting and exporting, before it is recorded. A failed audit write never
+  // leaves export sending after the admin turned it off.
+  const exportWasOn = await withTransaction(db, async (tx) => {
+    await store(tx);
+    if (!(await readExport(tx)).enabled) return false;
+    await disableExport(tx);
+    return true;
+  });
+  await setCollecting(false);
+  await stopExport();
+  await recordCollect(db);
+  if (exportWasOn) {
     await audit(db, 'telemetry.export.updated', {
       ...actor,
       detail: { enabled: false, cause: 'collect_off' },
     });
   }
-  await setCollecting(on);
-  if (!on) await stopExport();
 }
 
 /**

@@ -14,6 +14,7 @@
 // on how the job was invoked.
 import type { FastifyBaseLogger } from 'fastify';
 import { credsFromEnv, seedDemo, type SeedDemoReport } from '../lib/demo/seed';
+import { queueInFlightBatchCleanups } from '../jobs/rankBatch';
 import type { Db } from '../db/client';
 import { audit } from '../lib/audit';
 import { DemoResetGateTimeout, type DemoResetGate } from '../lib/demoResetGate';
@@ -48,7 +49,8 @@ export async function runDemoReset(
         "seedDemo CLI's own usage check, reached here instead of at a terminal.",
     );
   }
-  return seedDemo(db, creds, now, env);
+  // A demo account's ranking batch in flight gets its cleanup queued with the delete (#784).
+  return seedDemo(db, creds, now, env, { beforeDelete: queueInFlightBatchCleanups });
 }
 
 /**

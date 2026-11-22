@@ -6,7 +6,7 @@ import { sql } from 'drizzle-orm';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { describe, expect, it, vi } from 'vitest';
 import { rawAll } from '../src/db/client';
-import { jobsListQuery } from '../src/routes/jobs';
+import { jobsListQuery } from '../src/repos/jobs';
 import { useApi } from './api';
 import { testDialect } from './db';
 import type { TestClient } from './isolation';
@@ -75,7 +75,7 @@ describe('the dashboard counts nothing it does not show (#592)', () => {
 describe('the jobs poll reads only what the screen shows, by an index (#592)', () => {
   it('selects the shown columns, never a payload or a result', async () => {
     const { app } = await boot();
-    const text = jobsListQuery(app.db, undefined, 200).toSQL().sql;
+    const text = jobsListQuery(app.db, { kind: 'all' }, { limit: 200 }).toSQL().sql;
     expect(text).not.toMatch(/"payload"|"result"/);
     expect(text).toMatch(/"updated_at"/);
   });
@@ -84,7 +84,7 @@ describe('the jobs poll reads only what the screen shows, by an index (#592)', (
     'its plan walks an index in updated_at order: no table scan, no sort of every row',
     async () => {
       const { app } = await boot();
-      const q = jobsListQuery(app.db, undefined, 200).toSQL();
+      const q = jobsListQuery(app.db, { kind: 'all' }, { limit: 200 }).toSQL();
       // Its only parameter is the limit, a number: inlined for EXPLAIN.
       const params = [...q.params] as number[];
       const inlined = q.sql.replace(/\?/g, () => String(params.shift()));

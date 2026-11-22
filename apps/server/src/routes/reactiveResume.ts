@@ -79,11 +79,13 @@ export async function reactiveResumeRoutes(app: FastifyInstance): Promise<void> 
     async (req) => {
       const ctx = requireUser(req);
       const baseUrl = parseRrBaseUrl(req.body.baseUrl);
-      await writeRrConfig(db, ctx, baseUrl, req.body.apiKey);
-      await audit(db, 'integration.reactive_resume_saved', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { baseUrl, keyChanged: req.body.apiKey !== undefined },
+      // The key, the address and the audit row commit together (#819).
+      await writeRrConfig(db, ctx, baseUrl, req.body.apiKey, async (tx) => {
+        await audit(tx, 'integration.reactive_resume_saved', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { baseUrl, keyChanged: req.body.apiKey !== undefined },
+        });
       });
       return await status(ctx);
     },
