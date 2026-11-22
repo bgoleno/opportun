@@ -538,6 +538,43 @@ describe('POST /opportunities/:id/find-posting', () => {
     }
   });
 
+  // qa on #830: a picked row stores its link's slug (vandelay), and a Refetch afterwards must find
+  // that job again on the board read under its own token, not offer it back as a candidate.
+  it('a row picked, then Refetch: the picked job is found on the board again (#812)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, {
+      title: 'Staff Platform Engineer',
+      descriptionMd: 'my own notes on the role',
+    });
+    const picked: NormalizedPosting = {
+      ...posting('Staff Platform Engineer II', '1002'),
+      postingUrl: 'https://job-boards.greenhouse.io/sentinel/jobs/1002',
+    };
+    boardServes([picked]);
+    const pick = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/posting`,
+      payload: { posting: picked },
+    });
+    expect(pick.statusCode, pick.body).toBe(200);
+    expect((await getOpportunity(app.db, ctxOf(a), id)).atsJobRef).toMatchObject({
+      externalId: '1002',
+      org: 'sentinel',
+    });
+
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ outcome: 'attached' });
+    expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject({
+      descriptionMd: 'my own notes on the role',
+      postingState: 'confirmed',
+      atsJobRef: { externalId: '1002', org: 'sentinel' },
+    });
+  });
+
   it('a board row picked on a confirmed posting is logged as the change it is, not a check (#812)', async () => {
     const { app, a } = await boot();
     const id = await seed(app, a, {
