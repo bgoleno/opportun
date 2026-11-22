@@ -8,7 +8,7 @@
 // made for one person on a demo server, and every account off the demo, is untouched. The checks run at review,
 // at handoff and when the extension asks for the attempt (/connector/apply/current), so a fixture
 // value put back behind the server's back is still never sent.
-import { DEMO_IDENTITY_VALUES } from '../cli/seedDemoFixture';
+import { DEMO_IDENTITY_VALUES } from './demo/fixture';
 import type { Config } from '../config';
 import { isSharedDemoAccount } from './demoAccounts';
 import { HttpError } from './errors';

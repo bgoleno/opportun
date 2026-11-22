@@ -12,7 +12,7 @@ import {
   DEMO_IDENTITY_VALUES,
   DEMO_RESUME_BASE_TEXT,
   DEMO_USERS,
-} from '../src/cli/seedDemoFixture';
+} from '../src/lib/demo/fixture';
 import {
   applicationSubmissions,
   auditLog,
