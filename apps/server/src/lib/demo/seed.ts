@@ -2,6 +2,7 @@
 // by the nightly reset job (jobs/demoReset.ts) and by the CLI (cli/seedDemo.ts, which says how
 // to run it by hand). Runtime code, so it lives under lib/ and the CLI imports it, never the
 // other way round (#765; docs/architecture.md 6.2).
+import { removeIfUnreferenced } from '../attachmentSweep';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { eq, inArray, sql } from 'drizzle-orm';
@@ -23,7 +24,6 @@ import {
   users,
   communications,
 } from '../../db/schema';
-import { removeIfUnreferenced } from '../../jobs/attachmentSweep';
 import { budgetKey, writeSetting } from '../../lib/ai';
 import { bindVaultKey, putSecretIn } from '../../lib/secretBox';
 import { hashPassword } from '../../lib/passwords';

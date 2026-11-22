@@ -1,5 +1,6 @@
 // Per-user settings. The settings table has a single-column key, so a per-user value is
 // stored under a namespaced key (`theme:<userId>`) with user_id set for cascade deletes.
+import { CronSchema, discoveryDefaultCron, setDiscoveryDefaultCron } from '../lib/atsDetect';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -11,7 +12,6 @@ import {
   SendersSchema,
 } from '../adapters/sources/alertEmail';
 import { settings } from '../db/schema';
-import { CronSchema, discoveryDefaultCron, setDiscoveryDefaultCron } from '../jobs/atsDetect';
 import { NETWORK_BOARD_CHECK_SETTING, readNetworkBoardCheck } from '../jobs/networkBoardProbe';
 import type { UserCtx } from '../repos/base';
 import { deleteUserSetting, userSettingExists, writeUserSetting } from '../repos/userSettings';

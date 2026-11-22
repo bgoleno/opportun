@@ -3,12 +3,12 @@
 // strongest strength, its follow state and its board state; Follow does what accepting a
 // suggestion does. Built from the user's own rows only: no AI call and no outbound request,
 // which the last tests prove. All names and companies are made up.
+import { ATS_DETECT_KIND } from '../src/lib/atsDetect';
 import { runStructured } from '@opportun/ai';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { companies, discoverySources, jobs, networkContacts, taskRuns } from '../src/db/schema';
-import { ATS_DETECT_KIND } from '../src/jobs/atsDetect';
 import type { safeFetch } from '../src/lib/safeFetch';
 import type { UserCtx } from '../src/repos/base';
 import { createContact } from '../src/repos/contacts';

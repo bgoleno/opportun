@@ -39,9 +39,9 @@
 // context to make up for data that was never kept. The deterministic extraction has no such
 // gap: it is already the accepted quality bar for a live capture with no AI key, so re-derive
 // holds itself to the same bar rather than inventing a second, approximate path.
+import { capturedPage, confirm } from './postingReconcile';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
-import { capturedPage, confirm } from '../jobs/postingReconcile';
 import { createActivity } from '../repos/activities';
 import type { UserCtx } from '../repos/base';
 import { getOpportunity, updateOpportunity, type OpportunityView } from '../repos/opportunities';
