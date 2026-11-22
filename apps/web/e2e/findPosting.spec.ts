@@ -177,9 +177,9 @@ test.describe('Find posting from each posting state (#859)', () => {
     expect(await description(page, careers)).toBe(TYPED);
   });
 
-  test.fixme('a gh_jid identification writes its timeline entry (#847)', async ({ page }) => {
-    // Enable once #847 merges: Find posting by the opportunity's own gh_jid link is on the record,
-    // as every other way a posting is found.
+  test('a gh_jid identification writes its timeline entry (#847)', async ({ page }) => {
+    // Find posting by the opportunity's own gh_jid link is on the record, as every other way a
+    // posting is found.
     await registerUser(page);
     await details(page, await opportunity(page, 'Office Coordinator'));
     await page.getByRole('button', { name: 'Find posting' }).click();
