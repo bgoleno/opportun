@@ -248,9 +248,9 @@ export default defineConfig(
     // lib/ (lib/atsBoard.ts, lib/titleMatch.ts, lib/triageContext.ts and others), and
     // apps/server/test/importCycles.test.ts checks that the jobs/repos and mail groups stay free
     // of cycles. The negations below are the job modules still imported here: the queue itself
-    // (runner, registry, discoveryKinds), enqueue helpers (gmailSync, submissionSnapshot), and
-    // backup, dbIntegrityCheck, postingReconcile, atsDetect and, from lib/demo/seed.ts,
-    // attachmentSweep. Moving them out is
+    // (runner, discoveryKinds), enqueue helpers (gmailSync, submissionSnapshot), and backup,
+    // dbIntegrityCheck, postingReconcile, atsDetect and, from lib/demo/seed.ts, attachmentSweep.
+    // The job handlers are defined in jobs/, so lib/ needs no registry. Moving the rest out is
     // https://github.com/bgoleno/opportun/issues/788; this list only shrinks. The rule
     // reads static imports and re-exports, not import(): today nothing here imports a job or a
     // route that way. @typescript-eslint's rule, not the core one, so the NFR-SEC11 block's
@@ -272,7 +272,6 @@ export default defineConfig(
                 '!../jobs/discoveryKinds',
                 '!../jobs/gmailSync',
                 '!../jobs/postingReconcile',
-                '!../jobs/registry',
                 '!../jobs/runner',
                 '!../jobs/submissionSnapshot',
                 '!../../jobs/attachmentSweep',

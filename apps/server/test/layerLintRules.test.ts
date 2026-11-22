@@ -67,6 +67,22 @@ describe('the layer rule (#763)', () => {
     ).toContain(RULE);
   });
 
+  it('refuses the registry from lib/: the job handlers are defined in jobs/ (#788)', async () => {
+    expect(
+      await rules(
+        "import { requireService } from '../jobs/registry';\nvoid requireService;\n",
+        LIB,
+      ),
+    ).toContain(RULE);
+    // A type-only import of a handler's types is still fine.
+    expect(
+      await rules(
+        "import type { JobHandler } from '../jobs/registry';\nexport type X = JobHandler<unknown>;\n",
+        LIB,
+      ),
+    ).not.toContain(RULE);
+  });
+
   it('leaves jobs/ alone: the rule is for the layers below it', async () => {
     expect(
       await rules("import { triageMessage } from './mailIngest';\nvoid triageMessage;\n", JOB),
