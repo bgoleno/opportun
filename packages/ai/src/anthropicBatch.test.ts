@@ -16,7 +16,7 @@ import {
   succeededLine,
   succeededToolLine,
 } from './anthropicBatch.fixtures';
-import { batchProviderFor, type BatchRequest } from './batch';
+import { BatchRefusedError, batchProviderFor, type BatchRequest } from './batch';
 import { resolvePolicy } from './policies';
 
 import { runStructured, structuredRequest } from './router';
@@ -178,6 +178,23 @@ describe('submit (criteria 1 and 2)', () => {
     expect(err!.message).toMatch(/401/);
     expect(err!.message).not.toContain(KEY);
     expect(String(err!.stack)).not.toContain(KEY);
+    // A refusal, told apart from no answer (#784, tl): only this lets the send be tried again.
+    expect(err).toBeInstanceOf(BatchRefusedError);
+    expect(err).toMatchObject({ call: 'submit', status: 401 });
+  });
+
+  it('a 2xx whose body is cut short is not a refusal: the batch may exist (#784, tl)', async () => {
+    const { fetch } = recordingFetch(
+      () => new Response('{"id":"msgbatch_x","processing_st', { status: 200 }),
+    );
+    const err = await client(fetch)
+      .submit([request(POSTING)])
+      .then(
+        () => null,
+        (e: unknown) => e as Error,
+      );
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(BatchRefusedError);
   });
 });
 
@@ -465,5 +482,31 @@ describe('cleanup: the batch deleted once the results are applied (#634)', () =>
       );
     expect(err?.message).toBe('Anthropic batch delete: HTTP 500');
     expect(String(err?.stack)).not.toContain(KEY);
+  });
+});
+
+describe('cancel: a batch nobody will collect is stopped (#784)', () => {
+  it('POSTs the cancel on the operator host, with the key', async () => {
+    const { fetch, sent } = recordingFetch(() =>
+      json({ id: BATCH_ID, type: 'message_batch', processing_status: 'canceling' }),
+    );
+    await client(fetch).cancel(BATCH_ID);
+    expect(sent.map((s) => `${s.method} ${s.url}`)).toEqual([
+      `POST ${OFFICIAL_BASE_URLS.anthropic}/messages/batches/${BATCH_ID}/cancel`,
+    ]);
+    expect(sent[0]!.headers['x-api-key']).toBe(KEY);
+  });
+
+  it('a batch already gone counts as stopped; a refusal throws naming the status only', async () => {
+    const gone = recordingFetch(() =>
+      json({ type: 'error', error: { type: 'not_found_error', message: 'x' } }, 404),
+    );
+    await expect(client(gone.fetch).cancel(BATCH_ID)).resolves.toBeUndefined();
+    const refused = recordingFetch(() =>
+      json({ type: 'error', error: { type: 'api_error', message: `key ${KEY}` } }, 500),
+    );
+    await expect(client(refused.fetch).cancel(BATCH_ID)).rejects.toThrow(
+      /^Anthropic batch cancel: HTTP 500$/,
+    );
   });
 });

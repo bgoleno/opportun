@@ -227,10 +227,20 @@ function LinkEditor({ opp, onDone }: { opp: OpportunityView; onDone: () => void 
     setFieldError(undefined);
     setError(null);
     cancelled.current = false;
+    const sent = raw === '' ? null : raw;
     try {
-      await update.mutateAsync({ postingUrl: raw === '' ? null : raw });
-      if (cancelled.current) toast({ title: 'Posting link saved', variant: 'success' });
-      else onDone();
+      const saved = await update.mutateAsync({ postingUrl: sent });
+      if (cancelled.current) {
+        // Named (#785): a later save of another link may have landed first, and the answer is the
+        // row as it now is (#714), so this one says when it was replaced rather than reading as
+        // that save's.
+        const replaced = saved.postingUrl !== sent;
+        toast({
+          title: replaced ? 'Posting link saved, then replaced' : 'Posting link saved',
+          description: sent ?? 'The link was cleared.',
+          variant: replaced ? 'default' : 'success',
+        });
+      } else onDone();
     } catch (err) {
       if (cancelled.current) {
         toast({
@@ -367,7 +377,9 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
           <CardTitle>Description</CardTitle>
           {editing === null ? (
             <div className="flex flex-wrap gap-2">
-              {described ? null : (
+              {/* Until the posting is confirmed, Find posting is what confirms it, a described
+                  one included (#756): the user's own description is kept. */}
+              {described && opp.postingState === 'confirmed' ? null : (
                 <Button
                   type="button"
                   size="sm"

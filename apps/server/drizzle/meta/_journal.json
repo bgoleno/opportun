@@ -526,6 +526,13 @@
       "when": 1797100000000,
       "tag": "0074_obs_metric_points_bucket_index",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "6",
+      "when": 1797200000000,
+      "tag": "0075_rank_batch_applied_counts",
+      "breakpoints": true
     }
   ]
 }

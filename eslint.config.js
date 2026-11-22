@@ -282,12 +282,11 @@ export default defineConfig(
     // repos and lib sit below jobs and routes, so they import neither. Their pure helpers live in
     // lib/ (lib/atsBoard.ts, lib/titleMatch.ts, lib/triageContext.ts and others), and
     // apps/server/test/importCycles.test.ts checks that the jobs/repos and mail groups stay free
-    // of cycles. The negation below is the last job module imported here, the registry
-    // (lib/greenhouseEmbed.ts defines a job handler); the queue API, the kinds and the helpers
-    // repos/ and lib/ used from jobs/ are in lib/ now. Moving it out is
-    // https://github.com/bgoleno/opportun/issues/788; this list only shrinks. The rule
-    // reads static imports and re-exports, not import(): today nothing here imports a job or a
-    // route that way. @typescript-eslint's rule, not the core one, so the NFR-SEC11 block's
+    // of cycles. No job module is an exception: the queue API and the kinds (lib/jobQueue.ts,
+    // lib/jobKinds.ts), the enqueue helpers and the helpers repos/ and lib/ used from jobs/ are in
+    // lib/, and the job handlers are defined in jobs/ (https://github.com/bgoleno/opportun/issues/788).
+    // apps/server/test/layerLintRules.test.ts checks the group names none. The rule reads static
+    // imports and re-exports, not import(): today nothing here imports a job or a route that way. @typescript-eslint's rule, not the core one, so the NFR-SEC11 block's
     // no-restricted-imports (fsBan, all of apps/server/src) still applies: a second block
     // setting that same rule would replace its options for these files.
     files: ['apps/server/src/repos/**/*.ts', 'apps/server/src/lib/**/*.ts'],
@@ -297,7 +296,7 @@ export default defineConfig(
         {
           patterns: [
             {
-              group: ['../jobs/*', '../../jobs/*', '!../jobs/registry'],
+              group: ['../jobs/*', '../../jobs/*'],
               allowTypeImports: true,
               message:
                 'repos/ and lib/ do not import jobs/ (docs/architecture.md 6.2): move the helper to lib/.',

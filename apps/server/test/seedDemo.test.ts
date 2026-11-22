@@ -36,6 +36,7 @@ import {
   companies,
   jobs,
   opportunities,
+  rankBatches,
   resumeMatchReports,
   resumes,
   roleTargets,
@@ -57,6 +58,13 @@ import { getOpportunity } from '../src/repos/opportunities';
 import { search } from '../src/repos/search';
 import { candidateSet } from '../src/routes/referrals';
 import { openTestDb } from './helpers';
+import { newId } from '@opportun/core';
+import { resolvePolicy, type BatchProvider, type BatchState } from '@opportun/ai';
+import {
+  cleanupRankBatch,
+  RANK_BATCH_CLEANUP_KIND,
+  type RankBatchCleanup,
+} from '../src/jobs/rankBatch';
 
 const CREDS: SeedDemoCredentials = {
   adminPassword: 'demo admin password 1!',
@@ -323,6 +331,86 @@ describe('seedDemo', () => {
         .all();
       expect(theirOpportunities).toHaveLength(DEMO_OPPORTUNITIES.length);
     }
+  });
+
+  // #784 (qa's regression pass): an account deleted with a batch in flight left the provider's
+  // copy, since no collect runs for it. The reset queues its cleanup in its own transaction, with
+  // no provider call inside the reset (tl on #715), and the job outlives the account's rows.
+  it("a reset queues the cleanup of a demo account's batch in flight, and it cancels then deletes it (#784)", async () => {
+    await seedDemo(db, CREDS, Date.UTC(2026, 9, 1), TEST_ENV);
+    const user = DEMO_USERS[1]!;
+    const policy = resolvePolicy('discovery.rank', undefined);
+    await db
+      .insert(rankBatches)
+      .values({
+        id: newId(),
+        userId: user.id,
+        provider: policy.provider,
+        policy: policy as unknown as Record<string, unknown>,
+        providerBatchId: 'msgbatch_in_flight',
+        state: 'submitted',
+        requestCount: 3,
+        estCostUsd: 0.01,
+        submittedAt: Date.UTC(2026, 9, 1),
+        createdAt: Date.UTC(2026, 9, 1),
+        updatedAt: Date.UTC(2026, 9, 1),
+      })
+      .run();
+    // The nightly reset's own entry point: it passes the cleanup queueing to the reseed.
+    await runDemoReset(
+      db,
+      {
+        ...TEST_ENV,
+        OPPORTUN_DEMO_ADMIN_PASSWORD: CREDS.adminPassword,
+        OPPORTUN_DEMO_USER1_PASSWORD: CREDS.userPasswords[0],
+        OPPORTUN_DEMO_USER2_PASSWORD: CREDS.userPasswords[1],
+        OPPORTUN_DEMO_USER3_PASSWORD: CREDS.userPasswords[2],
+        OPPORTUN_DEMO_USER4_PASSWORD: CREDS.userPasswords[3],
+        OPPORTUN_DEMO_AI_KEY: CREDS.aiApiKey,
+      },
+      Date.UTC(2026, 9, 2),
+    );
+    // The batch row went with the account; its cleanup did not.
+    expect(await db.select().from(rankBatches).all()).toEqual([]);
+    const queued = await db.select().from(jobs).where(eq(jobs.kind, RANK_BATCH_CLEANUP_KIND)).all();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ status: 'pending', userId: null });
+    const payload = queued[0]!.payload as RankBatchCleanup;
+    expect(payload).toMatchObject({
+      userId: user.id,
+      providerBatchId: 'msgbatch_in_flight',
+      refs: [],
+      cancel: true,
+    });
+    // Never a key in the payload (sec on #686).
+    expect(JSON.stringify(payload)).not.toContain(CREDS.aiApiKey);
+
+    // Run as the reseeded account, with its key: cancelled while in progress, then deleted.
+    const calls: string[] = [];
+    let state: BatchState = 'in_progress';
+    const fake: BatchProvider = {
+      submit: async () => ({ batchId: 'unused' }),
+      state: async (id) => {
+        calls.push(`state ${id}`);
+        return state;
+      },
+      results: async () => [],
+      cleanupRefs: async () => [],
+      cancel: async (id) => {
+        calls.push(`cancel ${id}`);
+        state = 'ended';
+      },
+      cleanup: async (id) => {
+        calls.push(`delete ${id}`);
+      },
+    };
+    await cleanupRankBatch(db, payload, { rankBatchProvider: () => fake });
+    expect(calls).toEqual([
+      'state msgbatch_in_flight',
+      'cancel msgbatch_in_flight',
+      'state msgbatch_in_flight',
+      'delete msgbatch_in_flight',
+    ]);
   });
 
   it('a bookmarked opportunity id survives a reset unchanged', async () => {

@@ -15,13 +15,11 @@ import { boardFromUrl, boardOfSource } from './atsBoard';
 import { greenhouseJidOf } from '@opportun/core';
 import { createHash } from 'node:crypto';
 import { and, desc, eq, isNull, ne } from 'drizzle-orm';
-import { z } from 'zod';
 import { GREENHOUSE_HOST } from '../adapters/sources/greenhouse';
 import { ATS_MAX_BYTES } from '../adapters/sources/atsCommon';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
 import { companies, discoverySources, opportunities } from '../db/schema';
-import { requireService, type JobHandler } from '../jobs/registry';
 import { splitConfig } from '../repos/discovery';
 import type { UserCtx } from '../repos/base';
 import { postingAtsJobRefKeeping, verifiedGreenhouseRef, type AtsJobRef } from './atsJobRef';
@@ -188,10 +186,11 @@ export async function verifyEmbeddedGreenhouse(
 }
 
 /**
- * Sets the identity a check found, only while the opportunity's link is still the one checked
- * and it has none yet (#685): a check that finishes after a later save changed the link, or after
- * another found an identity, writes nothing. The condition is in the UPDATE itself, so there is no
- * window between a read and this write. Answers whether it was set.
+ * Sets the identity a check found, only while the opportunity's link and company are still the
+ * ones checked and it has none yet (#685, #785): a check that finishes after a later save changed
+ * the link or the company (whose boards the check did not ask), or after another found an
+ * identity, writes nothing. The condition is in the UPDATE itself, so there is no window between
+ * a read and this write. Answers whether it was set.
  */
 export async function setCheckedPostingRef(
   db: Db,
@@ -199,6 +198,7 @@ export async function setCheckedPostingRef(
   id: string,
   link: string,
   ref: AtsJobRef,
+  companyId: string | null,
 ): Promise<boolean> {
   const updated = await db
     .update(opportunities)
@@ -208,6 +208,9 @@ export async function setCheckedPostingRef(
         eq(opportunities.userId, ctx.userId),
         eq(opportunities.id, id),
         eq(opportunities.postingUrl, link),
+        companyId === null
+          ? isNull(opportunities.companyId)
+          : eq(opportunities.companyId, companyId),
         isNull(opportunities.atsJobRef),
       ),
     )
@@ -219,57 +222,10 @@ export async function setCheckedPostingRef(
 /** The background check of a saved link whose boards did not all answer in time (#685). */
 export const POSTING_CHECK_KIND = 'opportunity.greenhouse_check';
 
-const PostingCheckPayload = z.object({
-  opportunityId: z.string().min(1).max(64),
-  link: z.string().min(1).max(4096),
-});
-
 /** One job per opportunity and link at a time: the link itself is hashed into the key. */
 export function postingCheckKey(opportunityId: string, link: string): string {
   return `${opportunityId}:${createHash('sha256').update(link).digest('hex').slice(0, 32)}`;
 }
-
-export const postingCheckJob: JobHandler<z.infer<typeof PostingCheckPayload>> = {
-  kind: POSTING_CHECK_KIND,
-  payloadSchema: PostingCheckPayload,
-  maxAttempts: 3,
-  async run(db, payload, jctx) {
-    if (jctx.userId === null) throw new Error(`${POSTING_CHECK_KIND} needs a user`);
-    const ctx: UserCtx = { userId: jctx.userId, isAdmin: false };
-    const opp = await db
-      .select({
-        id: opportunities.id,
-        companyId: opportunities.companyId,
-        postingUrl: opportunities.postingUrl,
-        atsJobRef: opportunities.atsJobRef,
-      })
-      .from(opportunities)
-      .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, payload.opportunityId)))
-      .get();
-    // Gone, changed since, or already given an identity: nothing left to check.
-    if (opp === undefined || opp.postingUrl !== payload.link || opp.atsJobRef !== null) {
-      await jctx.setResult({ outcome: 'unchanged' });
-      return;
-    }
-    const found = await checkEmbeddedGreenhouse(
-      db,
-      ctx,
-      opp,
-      payload.link,
-      { fetch: requireService(jctx, 'sourceFetch'), log: requireService(jctx, 'log') },
-      Date.now(),
-      null,
-    );
-    if (found.ref !== null) {
-      const set = await setCheckedPostingRef(db, ctx, opp.id, payload.link, found.ref);
-      await jctx.setResult({ outcome: set ? 'identity' : 'unchanged' });
-      return;
-    }
-    // A board still gave no answer: the runner retries with backoff, up to maxAttempts.
-    if (found.undecided) throw new Error('a known board gave no answer');
-    await jctx.setResult({ outcome: 'none' });
-  },
-};
 
 /**
  * The identity a posting link gets when it is set or changed outside a board read (attach of a

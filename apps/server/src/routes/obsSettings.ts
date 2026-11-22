@@ -19,6 +19,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { withTransaction, type Exec } from '../db/client';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import { requireAdmin } from '../repos/base';
@@ -174,27 +175,40 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
         if (!(await collectInEffect(db, app.config))) throw new HttpError(409, 'collect_off');
         await assertDestination(next.value);
       }
-      await writeExport(db, next.value);
+      // The type and the signals, never the host or the credential (rule 1).
+      const detailOf = (value: typeof prev) => {
+        const type = value.destination?.type ?? null;
+        return { enabled: value.enabled, type, signals: type === null ? [] : signalsOf(type) };
+      };
+      const record = (exec: Exec, detail: Record<string, unknown>) =>
+        audit(exec, 'telemetry.export.updated', { userId: ctx.userId, ip: req.ip, detail });
+      if (!next.value.enabled) {
+        // Turning export off is a stop (sec, tl on #826, as #815 ruled for removals): it commits
+        // and takes effect, then is recorded, so a failed audit write never keeps it sending.
+        await writeExport(db, next.value);
+        await applyExport(db, app.config);
+        await record(db, detailOf(next.value));
+        return await exportView(true);
+      }
+      // Turning it on, or to a new destination: the settings and their audit row commit
+      // together, and export starts only after (#819). A failed audit write stores nothing and
+      // sends nothing to the new destination.
+      await withTransaction(db, async (tx) => {
+        await writeExport(tx, next.value);
+        await record(tx, detailOf(next.value));
+      });
       try {
         await applyExport(db, app.config);
       } catch (err) {
         // The exporters could not be built: put the previous settings back, so the stored switch
-        // never says export is on while nothing is sent (tl on #377), and report the failure.
+        // never says export is on while nothing is sent (tl on #377), and report the failure. The
+        // restore is a stop: it commits and takes effect whatever its record does (tl, sec on
+        // #826), and is then recorded with its cause (#819).
         await writeExport(db, prev);
         await applyExport(db, app.config).catch(() => undefined);
+        await record(db, { ...detailOf(prev), cause: 'apply_failed' });
         throw err;
       }
-      const type = next.value.destination?.type ?? null;
-      // The type and the signals, never the host or the credential (rule 1).
-      await audit(db, 'telemetry.export.updated', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: {
-          enabled: next.value.enabled,
-          type,
-          signals: type === null ? [] : signalsOf(type),
-        },
-      });
       return await exportView(true);
     },
   );

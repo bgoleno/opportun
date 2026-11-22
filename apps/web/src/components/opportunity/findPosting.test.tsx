@@ -55,14 +55,26 @@ function setup(routes: Record<string, unknown>) {
 }
 
 describe('Find posting', () => {
-  it('offers Find posting only while the description is empty', async () => {
+  // #756 (tl): offered until the posting is confirmed, a described one included, since Find
+  // posting is what confirms it; a confirmed posting with a description has nothing to find.
+  it('offers Find posting while the description is empty or the posting is not confirmed', async () => {
     setup({});
     const { unmount } = renderWithProviders(<DetailsPanel opp={BARE} />);
     expect(await screen.findByRole('button', { name: /find posting/i })).toBeInTheDocument();
     unmount();
 
     setup({});
-    renderWithProviders(<DetailsPanel opp={{ ...BARE, descriptionMd: 'already here' }} />);
+    const described = renderWithProviders(
+      <DetailsPanel opp={{ ...BARE, descriptionMd: 'my own notes', postingState: null }} />,
+    );
+    expect(await screen.findByText('my own notes')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /find posting/i })).toBeInTheDocument();
+    described.unmount();
+
+    setup({});
+    renderWithProviders(
+      <DetailsPanel opp={{ ...BARE, descriptionMd: 'already here', postingState: 'confirmed' }} />,
+    );
     expect(await screen.findByText('already here')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /find posting/i })).not.toBeInTheDocument();
   });

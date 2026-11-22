@@ -13,6 +13,7 @@ export {
 } from './router';
 export {
   BATCH_ESTIMATE_MIN_CALLS,
+  BatchRefusedError,
   batchProviderFor,
   batchRunRecord,
   estimateBatchRequestUsd,

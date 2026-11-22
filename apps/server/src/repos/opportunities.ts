@@ -522,11 +522,19 @@ export async function updateOpportunity(
       opts.atsJobRef !== undefined
         ? opts.atsJobRef
         : postingAtsJobRefKeeping(fields.postingUrl, current.atsJobRef);
+    // A `gh_jid` identity was proven on the company's own boards (#398), so it holds only for the
+    // company it was checked against (#785): a company change drops it, and the route checks the
+    // new company's boards. A board link's identity is the link's own, and stays.
+    const kept = urlChanged ? newRef : current.atsJobRef;
+    const dropForCompany =
+      companyId !== current.companyId &&
+      opts.atsJobRef === undefined &&
+      kept?.verifiedVia === 'gh_jid';
     await tx
       .update(opportunities)
       .set({
         ...fields,
-        ...(urlChanged ? { atsJobRef: newRef } : {}),
+        ...(dropForCompany ? { atsJobRef: null } : urlChanged ? { atsJobRef: newRef } : {}),
         companyId,
         dedupeKey: key,
         updatedAt: now,

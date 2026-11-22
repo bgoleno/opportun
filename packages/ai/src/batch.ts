@@ -56,6 +56,8 @@ export type BatchResultItem =
  */
 export type BatchState = 'in_progress' | 'ended' | 'gone';
 
+export { BatchRefusedError } from './batchLimits';
+
 export interface BatchProvider {
   /** Sends the requests as one batch; resolves with the provider's id for it. */
   submit(requests: readonly BatchRequest[]): Promise<{ batchId: string }>;
@@ -74,6 +76,12 @@ export interface BatchProvider {
    * cleanup needs only the batch id. Never a key or any request text.
    */
   cleanupRefs(batchId: string): Promise<string[]>;
+  /**
+   * Asks the provider to stop a batch still in progress (#784: its account was deleted, so nobody
+   * will collect it). It ends on its own time, cancelled; its copy is then removed by cleanup. A
+   * batch the provider no longer has counts as stopped. Throws when the cancel is refused.
+   */
+  cancel(batchId: string): Promise<void>;
 }
 
 // Each call's time limit (#686): batchLimits.ts, which the two clients import (no cycle here).
@@ -127,6 +135,7 @@ function withBatchSpans(provider: BatchProvider, policy: ModelPolicy): BatchProv
     // No span: it carries no tokens or cost, and its failure is the cleanup job's to log.
     cleanup: (batchId, refs) => provider.cleanup(batchId, refs),
     cleanupRefs: (batchId) => provider.cleanupRefs(batchId),
+    cancel: (batchId) => provider.cancel(batchId),
     results: (batchId) =>
       inBatchSpan(OPERATION_BATCH_COLLECT, policy, async (set) => {
         set({ [ATTR.batchId]: batchId });

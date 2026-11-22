@@ -75,6 +75,12 @@ export async function attachPosting(
    * to check a link on Greenhouse's API. With neither, a verified identity is only kept.
    */
   identity: { readFrom?: ReadFrom; sctx?: Pick<SourceContext, 'fetch' | 'log'> } = {},
+  /**
+   * #756 (tl): when the user wrote the description and the posting is not confirmed yet, confirm
+   * the posting from this board copy without touching the description (design D11), instead of
+   * refusing. Find posting and a picked board row only; pasted text is still refused.
+   */
+  opts: { keepDescription?: boolean } = {},
 ): Promise<OpportunityView> {
   const posting = sanitizePosting(raw);
   if (posting.descriptionMd == null || posting.descriptionMd === '') {
@@ -83,10 +89,13 @@ export async function attachPosting(
   const current = await getOpportunity(db, ctx, opportunityId);
   // The user's own writing outranks any board (design D11). A description the system wrote,
   // such as a browser capture's page text, is replaceable by the posting it was waiting for.
-  if (
+  const usersOwn =
     !replaceAllowedByFlag(current) &&
-    !isSystemWritten(current.descriptionMd, current.descriptionFingerprint)
-  ) {
+    !isSystemWritten(current.descriptionMd, current.descriptionFingerprint);
+  // The user's own description is kept, and the posting only confirmed, when asked to and the
+  // posting is not settled yet (#756); otherwise their writing still refuses the attach.
+  const keep = usersOwn && opts.keepDescription === true && current.postingState !== 'confirmed';
+  if (usersOwn && !keep) {
     throw new HttpError(
       409,
       'already_described',
@@ -96,15 +105,20 @@ export async function attachPosting(
   // Issue #255: a Refetch calls this on an opportunity already `confirmed`; the timeline says
   // so distinctly rather than reading identically to the first match.
   const refetch = current.postingState === 'confirmed';
-  const patch: UpdateOpportunityInput = {
-    descriptionMd: posting.descriptionMd,
-    // Written together, or the next board run reads this write as a user edit.
-    descriptionFingerprint: descriptionFingerprint(posting.descriptionMd),
-    postingUrl: posting.postingUrl ?? current.postingUrl,
-  };
-  if (current.location == null && posting.location != null) patch.location = posting.location;
-  if (current.remote == null && posting.remote != null) patch.remote = posting.remote;
-  if (current.compNote == null && posting.compNote != null) patch.compNote = posting.compNote;
+  const patch: UpdateOpportunityInput = keep
+    ? // Only the link: the description, and the facts beside it, stay the user's (#756).
+      { postingUrl: posting.postingUrl ?? current.postingUrl }
+    : {
+        descriptionMd: posting.descriptionMd,
+        // Written together, or the next board run reads this write as a user edit.
+        descriptionFingerprint: descriptionFingerprint(posting.descriptionMd),
+        postingUrl: posting.postingUrl ?? current.postingUrl,
+      };
+  if (!keep) {
+    if (current.location == null && posting.location != null) patch.location = posting.location;
+    if (current.remote == null && posting.remote != null) patch.remote = posting.remote;
+    if (current.compNote == null && posting.compNote != null) patch.compNote = posting.compNote;
+  }
   // Worked out before any write: a check on Greenhouse's API is a request (#398).
   // The identity is the stored link's: a posting without a link of its own keeps the one already
   // stored (as reconcile's confirm does), and is judged by it (tl on #414).
@@ -125,10 +139,17 @@ export async function attachPosting(
   // `gh_jid` link's is the board's, proven above (#398).
   const updated = await setPostingState(db, ctx, opportunityId, {
     postingState: 'confirmed',
-    postingStateDetail: null,
+    // A kept description is the user's: user_confirmed, so a later reconcile or re-derive never
+    // reads it as the employer's copy (tl on #756; as postingConfirm does).
+    postingStateDetail: keep ? 'user_confirmed' : null,
     atsJobRef,
   });
-  const howSaid = (refetch ? HOW_SAID_REFETCH : HOW_SAID).get(how) ?? '';
+  const howSaid = [
+    (refetch ? HOW_SAID_REFETCH : HOW_SAID).get(how) ?? '',
+    keep ? 'Your own description was kept.' : '',
+  ]
+    .filter((l) => l !== '')
+    .join(' ');
   await createActivity(db, ctx, opportunityId, {
     kind: 'link',
     title: 'Job posting attached',

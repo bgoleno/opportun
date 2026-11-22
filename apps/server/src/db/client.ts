@@ -1071,7 +1071,9 @@ export interface TransactionOptions {
 /** The first stack frame outside db/client.ts: who opened the transaction. */
 function callSite(): string | undefined {
   const limit = Error.stackTraceLimit;
-  Error.stackTraceLimit = 4;
+  // Deep enough to get past this file's own frames to the caller: at most callSite, the
+  // Postgres or SQLite path, runTransaction and withTransaction (#807 added runTransaction).
+  Error.stackTraceLimit = 5;
   const stack = new Error().stack;
   Error.stackTraceLimit = limit;
   return stack
@@ -1094,10 +1096,66 @@ function isTestRun(): boolean {
  * independent transaction. The body must not do external I/O (fetch, AI, files, argon2, timers): every
  * other request waits while it runs.
  */
+/**
+ * What runs once a transaction commits (#807), per open transaction's executor: the `tx` that
+ * withTransaction handed its callback. A savepoint's list moves to its parent's when it is
+ * released, and the outermost one's runs after the commit. A rollback, of either, drops it.
+ */
+const afterCommitQueues = new WeakMap<object, (() => void)[]>();
+
+/**
+ * Runs `fn` once the transaction `exec` belongs to has committed, or now when `exec` is no
+ * transaction withTransaction opened (a plain statement on `db` commits as it runs). Dropped when
+ * that transaction rolls back. For effects that must not report a change that did not happen,
+ * such as an audit row's telemetry event (lib/audit.ts). Outside a transaction `fn` runs as any
+ * call does, so what it throws reaches the caller. After a commit, a throw cannot undo the change,
+ * so in production it is dropped; under the test runner it is rethrown (tl on #822), as obs/gate.ts
+ * does, so a telemetry key missing from the catalog still fails CI.
+ */
+export function afterCommit(exec: Exec, fn: () => void): void {
+  const queue = afterCommitQueues.get(exec as object);
+  if (queue === undefined) fn();
+  else queue.push(fn);
+}
+
+function runAfterCommit(fn: () => void): void {
+  try {
+    fn();
+  } catch (err) {
+    if (isTestRun()) throw err;
+    // Production: telemetry, never a reason to fail a change that has committed.
+  }
+}
+
+/**
+ * Runs `fn` in a transaction on `exec` (a savepoint when `exec` is a transaction), and, once the
+ * outermost one has committed, what afterCommit queued in it (#807).
+ */
 export async function withTransaction<T>(
   exec: Exec,
   fn: (tx: Exec) => Promise<T>,
   opts: TransactionOptions = {},
+): Promise<T> {
+  const queue: (() => void)[] = [];
+  const parent = afterCommitQueues.get(exec as object);
+  const result = await runTransaction(
+    exec,
+    async (tx) => {
+      afterCommitQueues.set(tx as object, queue);
+      return await fn(tx);
+    },
+    opts,
+  );
+  // Committed (or, for a savepoint, released into its parent, which may still roll back).
+  if (parent !== undefined) parent.push(...queue);
+  else for (const queued of queue) runAfterCommit(queued);
+  return result;
+}
+
+async function runTransaction<T>(
+  exec: Exec,
+  fn: (tx: Exec) => Promise<T>,
+  opts: TransactionOptions,
 ): Promise<T> {
   const body =
     opts.scope === undefined

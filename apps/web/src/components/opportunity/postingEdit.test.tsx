@@ -193,3 +193,72 @@ describe('posting link: Cancel while a save is in flight (#737)', () => {
     expect(screen.queryByText('Posting link not saved')).toBeNull();
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/785 (qa on #787): a late "Posting link saved" from a
+// cancelled save named no link, so after a later save of another link it read as that one's. It
+// names the link it sent, and says when a later save has replaced it: a save answers with the row
+// as it now is (#714), the last link sent.
+describe('posting link: the late toast of a cancelled save names its link (#785)', () => {
+  const FIRST = 'https://job-boards.greenhouse.io/sentineledge/jobs/7663059003';
+  const SECOND = 'https://job-boards.greenhouse.io/sentineledge/jobs/7663059004';
+
+  function Page() {
+    const { data } = useOpportunity('opp-1');
+    return data === undefined ? null : <DetailsPanel opp={data} />;
+  }
+
+  /** The server writes each save as it arrives (#714) and holds only the first one's answer. */
+  function firstHeld() {
+    let server = { ...OPP };
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let saves = 0;
+    mockApi({
+      'GET /opportunities/opp-1': () => server,
+      'GET /opportunities/opp-1/attachments': { items: [], total: 0 },
+      'GET /opportunities/opp-1/timeline': { items: [], total: 0 },
+      'PATCH /opportunities/opp-1': async (c: ApiCall) => {
+        saves += 1;
+        server = { ...server, ...(c.body as object) };
+        if (saves === 1) await held;
+        return server;
+      },
+    });
+    return { release };
+  }
+
+  async function saveLink(user: ReturnType<typeof userEvent.setup>, value: string) {
+    await user.click(await screen.findByRole('button', { name: 'Edit link' }));
+    const field = screen.getByLabelText('Posting link');
+    await user.clear(field);
+    await user.type(field, value);
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+  }
+
+  it('Cancel, then the save lands: the toast names the link saved', async () => {
+    const user = userEvent.setup();
+    const { release } = firstHeld();
+    renderWithProviders(<Page />);
+    await saveLink(user, FIRST);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    release();
+    expect(await screen.findByText('Posting link saved')).toBeInTheDocument();
+    expect(screen.getByText(FIRST, { selector: ':not(a)' })).toBeInTheDocument();
+  });
+
+  it('Cancel, reopen and save another link first: the late toast says the first was replaced', async () => {
+    const user = userEvent.setup();
+    const { release } = firstHeld();
+    renderWithProviders(<Page />);
+    await saveLink(user, FIRST);
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await saveLink(user, SECOND);
+    expect(await screen.findByRole('link', { name: SECOND })).toBeInTheDocument();
+    release();
+    expect(await screen.findByText('Posting link saved, then replaced')).toBeInTheDocument();
+    expect(screen.getByText(FIRST, { selector: ':not(a)' })).toBeInTheDocument();
+    expect(screen.queryByText('Posting link saved')).toBeNull();
+    // The card keeps the later link.
+    expect(screen.getByRole('link', { name: SECOND })).toBeInTheDocument();
+  });
+});
