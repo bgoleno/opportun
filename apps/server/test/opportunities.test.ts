@@ -1,8 +1,8 @@
+import { COMPANY_DOMAIN_RESOLVE_KIND } from '../src/lib/companyDomainQueue';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jobs } from '../src/db/schema';
-import { COMPANY_DOMAIN_RESOLVE_KIND } from '../src/jobs/companyDomainResolve';
 import { useApi } from './api';
 import { assertIsolated, type TestClient } from './isolation';
 import { queryAll, queryOne } from './db';

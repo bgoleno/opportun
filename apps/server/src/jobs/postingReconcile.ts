@@ -15,6 +15,8 @@
 //   - a description the user edited by hand is left alone and flagged instead (D11);
 //   - fields are filled where empty and never blanked (D7);
 //   - anything short of one confident match writes nothing and raises a flag (D8).
+import { CAPTURE_MAX_TEXT } from '../lib/captureText';
+import { boardFromUrl } from '../lib/atsBoard';
 import {
   AiUnavailableError,
   PostingMergeOutputSchema,
@@ -28,8 +30,6 @@ import type { Db } from '../db/client';
 import { buildAiDeps } from '../lib/ai';
 import { HttpError } from '../lib/errors';
 import { boardReadAtsJobRef, postingAtsJobRefKeeping } from '../lib/atsJobRef';
-import { boardFromUrl } from './atsDetect';
-import { CAPTURE_MAX_TEXT } from '../routes/capture';
 import { descriptionFingerprint, isSystemWritten } from '../lib/postingFingerprint';
 import { mergePostingText } from '../lib/postingMerge';
 import {
