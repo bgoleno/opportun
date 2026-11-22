@@ -303,17 +303,22 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
   it('keeps up under steady writes: the retry delay is only for a checkpoint a reader held back', async () => {
     const opened = await openTestDb({
       backgroundCheckpoint: true,
-      checkpointerTuning: { maxPages: 50, pollMs: 20 },
+      // A retry delay of ten minutes: a burst whose checkpoint waited for it would never come
+      // within the 10 s each one is given below, while a checkpoint that did not wait comes within
+      // a poll or two even on a loaded host. A bound under the real 1 s delay measured the host
+      // instead (#732: on a starved host the first burst's 900 ms ran out).
+      checkpointerTuning: { maxPages: 50, pollMs: 20, retryMs: 600_000 },
     });
     try {
       const h = opened.handle as SqliteHandle;
-      // Six bursts of 60 pages, each over the threshold. Each one's checkpoint comes within
-      // 900 ms, so none waited the 1 s retry delay: a burst that did times out here. That wait
-      // is the assertion; a bound on the whole run's time would only measure the machine's load.
+      // The worker thread first: its start is not what is measured (#732).
+      await h.checkpointer!.ready;
+      // Six bursts of 60 pages, each over the threshold. Each one's checkpoint comes, so none
+      // waited the retry delay: a burst that did times out here. That wait is the assertion.
       for (let burst = 0; burst < 6; burst++) {
         const before = h.checkpointer!.checkpoints;
         await write(h, 60);
-        await until(() => h.checkpointer!.checkpoints > before, 900);
+        await until(() => h.checkpointer!.checkpoints > before, 10_000);
       }
       expect(h.checkpointer!.checkpoints).toBeGreaterThanOrEqual(6);
     } finally {

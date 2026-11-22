@@ -176,4 +176,33 @@ describe('the server import graph (#763, docs/architecture.md 6.1)', () => {
     const through = found.filter((c) => c.some((f) => MAIL_AND_REJECTS.includes(f)));
     expect(through).toEqual([]);
   });
+
+  // Cycle 1 (#764): the catalog read lists its own callers own (lib/safeFetch.ts, jobs/registry.ts).
+  // Now handed to it as data, so no cycle joins obs/ to lib/ or jobs/ (tl's reading of #764's
+  // criterion). What is left is db/client with obs/, a cycle of its own, named here so a change to
+  // it shows: https://github.com/bgoleno/opportun/issues/803 ends it.
+  it('has no cycle through lib/ or jobs/ via obs/ (#764)', () => {
+    const across = found.filter(
+      (c) =>
+        c.some((f) => f.startsWith('obs/')) &&
+        c.some((f) => f.startsWith('lib/') || f.startsWith('jobs/')),
+    );
+    expect(across).toEqual([]);
+  });
+
+  it('leaves only the known db/client and obs/ cycle there (#803)', () => {
+    expect(found.filter((c) => c.some((f) => f.startsWith('obs/')))).toEqual([
+      [
+        'db/client.ts',
+        'obs/database.ts',
+        'obs/index.ts',
+        'obs/metrics.ts',
+        'obs/outbound.ts',
+        'obs/spanRebuild.ts',
+        'obs/spanStore.ts',
+        'obs/tracing.ts',
+        'obs/workflow.ts',
+      ],
+    ]);
+  });
 });
