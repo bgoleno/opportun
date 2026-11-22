@@ -131,6 +131,44 @@ describe('reconcilePosting', () => {
     expect(out.postingUrl).toBe('https://job-boards.greenhouse.io/soylent/jobs/1000000001');
   });
 
+  // #852 (qa's regression pass 3): Find posting clicked while the background check reads the
+  // board wrote a second attach, recorded as a Refetch. While the posting is searching, Find
+  // posting is refused, so the check's own result is the one attach.
+  it('Find posting while the check reads the board is refused; the check attaches once (#852)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const opp = await seedCaptured(app, ctx);
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    let reading: () => void = () => undefined;
+    const started = new Promise<void>((r) => {
+      reading = r;
+    });
+    const board: BoardLookup = async (...args) => {
+      reading();
+      await held;
+      return boardWith([atsPosting()])(...args);
+    };
+
+    const check = run(app, ctx, opp.id, board);
+    await started;
+    const click = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${opp.id}/find-posting`,
+    });
+    expect(click.statusCode).toBe(409);
+    expect(click.json().error).toMatchObject({ code: 'posting_searching' });
+    release();
+    await check;
+
+    expect((await getOpportunity(app.db, ctx, opp.id)).postingState).toBe('confirmed');
+    const { items } = await listActivities(app.db, ctx, opp.id, { limit: 50, offset: 0 });
+    expect(items.filter((i) => i.title === 'Job posting attached')).toEqual([]);
+  });
+
   it('re-fingerprints what it wrote, so its own text is not read as a user edit', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);

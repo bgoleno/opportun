@@ -380,15 +380,27 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
               {/* Until the posting is confirmed, Find posting is what confirms it, a described
                   one included (#756): the user's own description is kept. */}
               {described && opp.postingState === 'confirmed' ? null : (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void runFind()}
-                  disabled={find.isPending}
-                >
-                  {find.isPending ? 'Searching...' : 'Find posting'}
-                </Button>
+                <>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void runFind()}
+                    // A background check is reading the board now (#852): a click would race
+                    // it into a second attach. Its own result lands shortly.
+                    disabled={find.isPending || opp.postingState === 'searching'}
+                    aria-describedby={
+                      opp.postingState === 'searching' ? 'find-posting-searching' : undefined
+                    }
+                  >
+                    {find.isPending ? 'Searching...' : 'Find posting'}
+                  </Button>
+                  {opp.postingState === 'searching' ? (
+                    <span id="find-posting-searching" className="text-sm text-muted-foreground">
+                      Opportun is still checking this posting on the company's board.
+                    </span>
+                  ) : null}
+                </>
               )}
               <Button
                 type="button"

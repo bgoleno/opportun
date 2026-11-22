@@ -24,6 +24,7 @@ import { NormalizedPostingSchema } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { HttpError } from '../lib/errors';
 import { isSystemWritten, replaceAllowedByFlag } from '../lib/postingFingerprint';
 import { attachPosting } from '../lib/postingAttach';
 import { confirmPosting, unconfirmPosting } from '../lib/postingConfirm';
@@ -138,6 +139,15 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       const { id } = req.params;
       const sctx = { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log };
       const current = await getOpportunity(db, ctx, id);
+      // A background check is reading the board for this posting now (#852, qa): a click then
+      // would be a second search racing it, writing a second attach. Its own result lands soon.
+      if (current.postingState === 'searching') {
+        throw new HttpError(
+          409,
+          'posting_searching',
+          "Opportun is still checking this posting on the company's board. Try again shortly.",
+        );
+      }
       // Checked before any board is read: the user's own description, on a posting already
       // confirmed, has nothing to find. An embedded Greenhouse link still gets its identity, from
       // Greenhouse's API, with the description left as it is (#398, tl on #414). Not confirmed
