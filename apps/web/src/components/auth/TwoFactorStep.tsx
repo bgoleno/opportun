@@ -29,6 +29,14 @@ export function TwoFactorStep(props: {
             await verifyTwoFactor(qc, { pendingToken: props.pendingToken, ...factor });
             await props.onSignedIn();
           } catch (err) {
+            // A password change or reset since the password step ended the sign-in (#662): not
+            // a matter of time, so it is not said to be one.
+            if (err instanceof ApiError && err.code === 'password_changed') {
+              props.onRestart(
+                'Your password was changed while you were signing in. Sign in again with your new password.',
+              );
+              return;
+            }
             if (
               err instanceof ApiError &&
               (err.code === 'invalid_pending' || err.code === 'token_used')
