@@ -514,9 +514,11 @@ describe('the mouseup and click helpers refuse anything but the control’s own 
       standInList(p, 'degree--0', { options: () => ["Bachelor's Degree"], optionMarkup });
       const report = await settle(p, plan({ lists: [LISTS[3]!] }));
       expect(p.events.filter((e) => e.type === 'click')).toEqual([]);
+      // An option that is a link or a button is there but not clickable, and is reported so
+      // (#738); an entry with no option role is not an option at all.
       expect(report.notFilled).toContainEqual({
         label: 'Degree',
-        reason: 'no_option',
+        reason: optionMarkup === 'no-role' ? 'no_option' : 'option_unclickable',
         detail: "Bachelor's Degree",
       });
     },
@@ -818,6 +820,25 @@ describe('the helpers themselves refuse anything but the control’s own box and
   // #620 point 1 (sec's second audit): the check goes all the way up, not only to the listbox. A
   // list that sits inside a link or a label (a page that wraps a whole field in one) has no option
   // the filler may click, since the click would follow the link or press the label's control.
+  // #738: the fill then says why it did not choose, rather than that the option is missing.
+  it('a list wrapped in a label whose option equals the value: reported as not clickable', async () => {
+    const p = page();
+    standInList(p, 'school--0', { options: () => ['University of Example'] });
+    const shell = p.doc.getElementById('school--0')!.closest('.select-shell')!;
+    const wrap = p.doc.createElement('label');
+    shell.parentElement!.insertBefore(wrap, shell);
+    wrap.append(shell);
+    const run = fillGreenhouseForm(plan({ lists: [LISTS[2]!] }), p.doc);
+    await new Promise((r) => setTimeout(r, 30));
+    p.timers.fire();
+    const report = ok(await run);
+    expect(report.notFilled).toContainEqual({
+      label: 'School',
+      reason: 'option_unclickable',
+      detail: 'University of Example',
+    });
+  });
+
   it('optionsOf refuses every option when the listbox sits inside a link or a label', () => {
     for (const tag of ['a', 'label', 'button', 'summary']) {
       const { p, h, byId } = helpers();

@@ -426,17 +426,29 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
     '+1.415.555.0134',
     '00 1 415 555 0134',
     '+1 415 555 0134',
+    // #726 (tl and qa on #725): the 011 exit prefix, and a trailing extension.
+    '011 1 415 555 0134',
+    '+1 415 555 0134 ext 2',
+    '415-555-0134 x12',
+    '(415) 555-0134 #3',
+    '415.555.0134 extension 45',
+    // qa on #762: an extension of seven digits or more.
+    '+1 415 555 0134 ext 1234567',
   ])('the seeded phone as "%s" is the demo\'s', (value) => {
     expect(isFixtureIdentity('phone', value)).toBe(true);
     expect(fixtureField({ phone: value, city: 'Seattle' })).toBe('phone');
   });
 
-  it.each(['415-555-0135', '+44 415 555 0134', '+1 415 555 01345', '555-0134'])(
-    '"%s" is not the seeded phone',
-    (value) => {
-      expect(isFixtureIdentity('phone', value)).toBe(false);
-    },
-  );
+  it.each([
+    '415-555-0135',
+    '+44 415 555 0134',
+    '+1 415 555 01345',
+    '555-0134',
+    '+1 415 555 0135 ext 2',
+    '011 44 415 555 0134',
+  ])('"%s" is not the seeded phone', (value) => {
+    expect(isFixtureIdentity('phone', value)).toBe(false);
+  });
 
   it('compares after case and whitespace, and a phone by its digits', () => {
     expect(isFixtureIdentity('fullName', ' demo   user 1 ')).toBe(true);

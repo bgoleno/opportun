@@ -2,6 +2,7 @@
 // issuecomment-6794239917, "Tests that matter most", and ruling on #441), against a fake batch
 // provider: no provider has a real batch client in this slice. The live call is mocked, every key
 // and posting is made up.
+import { rankAnyway, rankBelowCut } from '../src/lib/discoveryIngest';
 import {
   AiUnavailableError,
   estimateBatchRequestUsd,
@@ -26,7 +27,7 @@ import { discoveryResults, jobs, rankBatches, secrets, taskRuns, users } from '.
 import { MULTI_POSTED_PREFIX } from '../src/jobs/discoveryKinds';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { drainWaitingResults, sweepWaitingResults } from '../src/jobs/discoveryRankWaiting';
-import { DISCOVERY_RUN_KIND, rankAnyway, rankBelowCut } from '../src/jobs/discoveryRun';
+import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import {
   collectRankBatch,
   RANK_BATCH_CLEANUP_KIND,

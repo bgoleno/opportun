@@ -304,6 +304,29 @@ describe('#395: a refused Apply button says why, and never swallows a click', ()
       'Apply on Greenhouse',
       "This opportunity's posting needs review. Confirm it on the Details tab first.",
     ],
+    // #738 (qa's regression pass): with no posting state the Details tab has no Confirm; each
+    // state's text names what is there, or says plainly that nothing is (tl on #738).
+    [
+      'a posting never checked, with no description yet',
+      { postingState: null, descriptionMd: null },
+      [RESUME],
+      'Apply on Greenhouse',
+      "This opportunity's posting hasn't been checked on the company's board yet. Use Find posting on the Details tab.",
+    ],
+    [
+      'a posting never checked, with a description',
+      { postingState: null, descriptionMd: 'Own the platform.' },
+      [RESUME],
+      'Apply on Greenhouse',
+      "This posting hasn't been checked against the company's board, so assisted apply can't use it yet.",
+    ],
+    [
+      'a posting still being checked',
+      { postingState: 'searching' },
+      [RESUME],
+      'Apply on Greenhouse',
+      "Opportun is still checking this posting on the company's board; try again shortly.",
+    ],
     ['no resume at all', {}, [], 'Apply on Greenhouse', 'Add a base resume to start.'],
     // Brian's third case on #395: a resume is attached, but not Final. Say so, and how to fix it.
     [

@@ -17,6 +17,7 @@
 // capture already on the opportunity's timeline, for a record whose description was corrupted
 // by something else (#238) or whose company never had a readable board for Refetch (#255) to
 // find anything on.
+import { CAPTURE_MAX_TEXT } from '../lib/captureText';
 import { keyedFetch } from '../lib/safeFetch';
 import { buffer } from 'node:stream/consumers';
 import { NormalizedPostingSchema } from '@opportun/core';
@@ -42,7 +43,7 @@ import {
   recordAtsJobRef,
   type OpportunityView as OpportunityRowView,
 } from '../repos/opportunities';
-import { CAPTURE_MAX_TEXT, extract, fetchPageText, PASTE_TEXT_HINT } from './capture';
+import { extract, fetchPageText, PASTE_TEXT_HINT } from './capture';
 import { HttpsUrl, IdParams } from './common';
 import { OpportunityView } from './opportunities';
 import { workflow } from '../obs/workflow';

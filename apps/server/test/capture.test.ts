@@ -2,6 +2,7 @@
 // through capture.extract (mocked here) and lands as a pending result of the user's manual
 // source, ranked like any discovered posting. Prohibited hosts get the paste-the-text hint with
 // no fetch; private addresses are blocked; without AI the endpoint answers 503.
+import { insertLeads } from '../src/lib/discoveryIngest';
 import { AiUnavailableError, runStructured } from '@opportun/ai';
 import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,7 +10,6 @@ import { jobs } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { createSafeFetch, type RawResponse, type safeFetch } from '../src/lib/safeFetch';
 import { PASTE_TEXT_HINT } from '../src/routes/capture';
-import { insertLeads } from '../src/jobs/discoveryRun';
 import {
   ensureChannelSource,
   getResult,

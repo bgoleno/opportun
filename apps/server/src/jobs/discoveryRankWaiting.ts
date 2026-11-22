@@ -9,6 +9,7 @@
 // user's drain ranks one posting at a time, so it adds one call in flight at most, and it stops as
 // soon as the budget is spent. The best pre-filter match goes first, then the oldest:
 // listWaitingResultIds has the order, and why a posting that failed goes behind the others.
+import { enqueueFollowUps } from '../lib/discoveryIngest';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import { z } from 'zod';
@@ -37,7 +38,6 @@ import {
   POSTING_CHANGED,
   rankResult,
 } from './discoveryRank';
-import { enqueueFollowUps } from './discoveryRun';
 import { LEAD_RESOLVE_KIND, RANK_WAITING_KIND } from './discoveryKinds';
 import { enqueueRankBatchSubmit } from './rankBatchClient';
 import { rankBudgetHasRoom } from './rankBudget';

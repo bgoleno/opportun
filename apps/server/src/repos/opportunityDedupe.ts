@@ -21,10 +21,10 @@
 // opportunities.ts; a future AI pass's own "no" would write the same way) is never revisited,
 // and a 'confirmed' pair is never re-scored. Without this, re-running on a later edit to
 // either opportunity's title or company would undo a user's own dismissal.
+import { TITLE_MATCH_THRESHOLD, titleOverlap } from '../lib/titleMatch';
 import { and, eq, isNull, ne, or } from 'drizzle-orm';
 import { companyMatchKey, newId } from '@opportun/core';
 import type { DedupeCandidateDecidedBy, DedupeCandidateDecision } from '../db/schema.shared';
-import { TITLE_MATCH_THRESHOLD, titleOverlap } from '../jobs/leadResolve';
 import { companies, opportunities, opportunityDedupeCandidates } from '../db/schema';
 import type { Exec, UserCtx } from './base';
 

@@ -7,6 +7,8 @@
 // footgun into an obvious one, and the suggestion is offered, never applied: these rules decide
 // what Opportun may look at, and quietly broadening one is the surprise the page exists to
 // prevent.
+import { senderAddress } from '../lib/mailAddress';
+import { invalidateTriageContext } from '../lib/triageContext';
 import {
   JOB_SENDER_SEEDS,
   matchesMailPattern,
@@ -18,8 +20,6 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { MAIL_LABEL_SETTING } from '../adapters/gmail';
-import { invalidateTriageContext } from '../jobs/mailIngest';
-import { senderAddress } from '../adapters/sources/alertEmail';
 import { communications } from '../db/schema';
 import { MAIL_FILTER_EFFECTS } from '../db/schema.shared';
 import { HttpError } from '../lib/errors';
