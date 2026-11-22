@@ -2,7 +2,7 @@
 // resource it creates: each user creates, the other must get 404, and the owner still reads it.
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { expect, it } from 'vitest';
-import { DEMO_USERS } from '../src/cli/seedDemoFixture';
+import { DEMO_USERS } from '../src/lib/demo/fixture';
 import { settings, users } from '../src/db/schema';
 import { hashPassword, NO_PEPPERS } from '../src/lib/passwords';
 import { REGISTRATION_OPEN_KEY } from '../src/lib/registration';

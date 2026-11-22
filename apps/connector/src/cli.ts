@@ -177,13 +177,21 @@ async function init(io: ConnectorIo, args: string[]): Promise<ExitCode> {
     throw new ConnectorError('A server address is required.', EXIT.USAGE);
   const serverUrl = normalizeServerUrl(serverInput);
 
+  // The saved token belongs to the saved server (#702, sec on #673): with another address, Enter
+  // must not send the old server's token to it. As the extension does (a blank token keeps the
+  // saved one only on the same origin).
+  const sameAsSaved = existing !== null && sameServer(existing.serverUrl, serverUrl);
+  const tokenFlag = values.token !== undefined || tokenFile !== undefined || fromStdin;
+  if (existing !== null && !sameAsSaved && !tokenFlag) {
+    io.stdout('The server changed, so the saved token is not reused: paste a token for this one.');
+  }
   const tokenInput =
     values.token ??
     (tokenFile !== undefined ? await tokenFromFile(io, tokenFile) : undefined) ??
     (fromStdin ? await io.readStdin() : undefined) ??
     (await ask(
       'Device token (Settings > Integrations > Extensions and Connectors)',
-      existing?.token ?? '',
+      sameAsSaved ? (existing?.token ?? '') : '',
       { secret: true },
     ));
   const token = checkToken(tokenInput);

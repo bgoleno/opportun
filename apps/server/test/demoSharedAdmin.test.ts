@@ -10,7 +10,7 @@ import { newId } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEMO_USERS } from '../src/cli/seedDemoFixture';
+import { DEMO_USERS } from '../src/lib/demo/fixture';
 import type { Config } from '../src/config';
 import { jobs, settings, users } from '../src/db/schema';
 import { writeDedicatedMark } from '../src/lib/demoDedicated';

@@ -147,6 +147,8 @@ export const SECURITY_SENSITIVE_GLOBS = [
   'packages/ai/src/tasks.ts',
   // the demo boundary: shared and dedicated accounts, the seed, and the nightly reset
   'apps/server/src/lib/demo*.ts',
+  // the seed and its fixture (moved out of cli/ in #765)
+  'apps/server/src/lib/demo/*.ts',
   'apps/server/src/cli/seedDemo*.ts',
   'apps/server/src/cli/createDemoAccount.ts',
   'apps/server/src/jobs/demoReset.ts',

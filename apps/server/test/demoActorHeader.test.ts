@@ -4,7 +4,7 @@
 // seeded account name and never an email, it appears only on a demo deployment, and a request
 // with no session carries none.
 import { describe, expect, it } from 'vitest';
-import { DEMO_USERS } from '../src/cli/seedDemoFixture';
+import { DEMO_USERS } from '../src/lib/demo/fixture';
 import { users } from '../src/db/schema';
 import { createSession } from '../src/lib/sessions';
 import { testApp } from './helpers';

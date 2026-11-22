@@ -71,7 +71,9 @@ export async function stalePepperProblem(db: Db, peppers: PepperSet): Promise<st
     .filter((h) => hasUsablePassword(h.passwordHash))
     .reduce((n, h) => Math.max(n, hashVersion(h.passwordHash)), 0);
   if (newest > mine) {
-    return `Some stored passwords are hashed with pepper version ${newest}, newer than this run's ${mine === 0 ? 'none' : `version ${mine}`}. Run it with the server's own: ${variablesFor(newest)}.`;
+    // As actionable as the row-based refusals (tl on #627, #635): the newest stored version is a
+    // floor, and the server may be past it; a restart records its own, which the check then uses.
+    return `Some stored passwords are hashed with pepper version ${newest}, newer than this run's ${mine === 0 ? 'none' : `version ${mine}`}. Run it with the server's own: ${variablesFor(newest)}. If the server has moved past that, restart the server once with its own pepper variables, so it records its version, then run this again.`;
   }
   return null;
 }

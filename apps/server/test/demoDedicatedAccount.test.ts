@@ -15,8 +15,8 @@ import {
   UnexpectedUsersError,
   seedDemo,
   type SeedDemoCredentials,
-} from '../src/cli/seedDemo';
-import { DEMO_USERS } from '../src/cli/seedDemoFixture';
+} from '../src/lib/demo/seed';
+import { DEMO_USERS } from '../src/lib/demo/fixture';
 import { rawRun, type Db } from '../src/db/client';
 import { companies, settings, users } from '../src/db/schema';
 import { DEDICATED_MARK_PREFIX, dedicatedMarkKey } from '../src/lib/demoDedicated';
