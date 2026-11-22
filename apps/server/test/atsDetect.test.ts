@@ -1,7 +1,17 @@
 // ATS board detection (Task 10, FR-D9). Every request goes through the real safeFetch logic
 // (createSafeFetch over a scripted DNS table and transport), so the SSRF rules that guard the
 // careers-page fetch are exercised as they run in production (Review Focus 2).
-import { ATS_DETECT_KIND, ATS_REVERIFY_CRON, ATS_REVERIFY_KIND, DEFAULT_DISCOVERY_CRON, detectAts, domainLabel, REVERIFY_AFTER_MS, scanCareersHtml, slugCandidates } from '../src/lib/atsDetect';
+import {
+  ATS_DETECT_KIND,
+  ATS_REVERIFY_CRON,
+  ATS_REVERIFY_KIND,
+  DEFAULT_DISCOVERY_CRON,
+  detectAts,
+  domainLabel,
+  REVERIFY_AFTER_MS,
+  scanCareersHtml,
+  slugCandidates,
+} from '../src/lib/atsDetect';
 import { boardFromUrl } from '../src/lib/atsBoard';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';

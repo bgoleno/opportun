@@ -29,7 +29,14 @@ import {
 } from '../src/db/client';
 import * as pgSchema from '../src/db/schema.pg';
 import { TABLE_EXPORTS } from '../src/db/schema.shared';
-import { BACKUP_RETENTION, listBackups, pgDumpInvocation, pruneBackups, runBackup, snapshotName } from '../src/jobs/backup';
+import {
+  BACKUP_RETENTION,
+  listBackups,
+  pgDumpInvocation,
+  pruneBackups,
+  runBackup,
+  snapshotName,
+} from '../src/jobs/backup';
 import { bindVaultKey } from '../src/lib/secretBox';
 import { createStorage } from '../src/lib/storage';
 import { search } from '../src/repos/search';
