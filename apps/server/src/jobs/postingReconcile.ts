@@ -390,6 +390,16 @@ async function reconcile(
         'none_found',
         `Checked ${opp.companyName}'s board and found no posting matching "${opp.title}".`,
       );
+    case 'unreachable':
+      // Its boards could not be read (#835): the check did not finish, which is not "found
+      // nothing". Find posting tries again from the banner.
+      return await flag(
+        db,
+        ctx,
+        opportunityId,
+        'failed',
+        `Couldn't read ${opp.companyName}'s board just now, so nothing was checked. Try Find posting again.`,
+      );
     default:
       return await flag(
         db,

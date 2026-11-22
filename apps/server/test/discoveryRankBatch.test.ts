@@ -1237,6 +1237,11 @@ describe('the rules tl found untested (blocking 6)', () => {
     expect(tries).toBe(9);
     const [ended] = await results(app, a);
     expect(ended).toMatchObject({ rankSkipReason: 'provider_error', aiScore: null });
+    // #835 (qa on #840): the last attempt's error says what happened, not "sending it again".
+    const last = await sendJob();
+    expect(last.status).toBe('dead');
+    expect(last.lastError).toContain('1 posting stopped waiting');
+    expect(last.lastError).not.toContain('sending it again');
   });
 
   it('a refused attempt the runner will try again counts no return (#827)', async () => {

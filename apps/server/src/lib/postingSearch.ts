@@ -109,6 +109,8 @@ export type FindOutcome = (
       via: 'board' | 'email_link_unverified';
     }
   | { status: 'none'; candidates: PostingCandidate[]; via: 'board' }
+  /** The company has boards, and none of them could be read (#835): not "no match". */
+  | { status: 'unreachable' }
   | { status: 'no_board'; needsCareersUrl: boolean }
 ) & {
   /** Said to the user beside the outcome (a large board read only in part). */
@@ -546,6 +548,12 @@ export async function findPosting(
   if (direct !== null) return { status: 'exact', candidate: exactly(direct), via: 'email_link' };
 
   const reads = await readBoards(sctx, lookup, owned);
+  // Every board failed to read (a network error, a timeout, a 5xx: #835, qa on #830). That is not
+  // "no close match", which would say the board was read; it is said as such, and tried again.
+  // Only when nothing a message names could stand in: a reference from another board still can.
+  if (owned.length > 0 && reads.length === 0 && foreign.length === 0) {
+    return { status: 'unreachable' };
+  }
   const cut = reads.find((r) => r.cut !== undefined)?.cut;
   let note: { note?: string } =
     cut === undefined
