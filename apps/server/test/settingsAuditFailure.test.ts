@@ -112,3 +112,59 @@ describe('the Reactive Resume key: the audit row commits with it (#819)', () => 
     expect(await readRrBaseUrl(app.db, ctx)).toBeNull();
   });
 });
+
+// sec and tl on #826 (as #815 ruled for removals): turning Collect or export off is a stop. It
+// commits and takes effect first, and is recorded after, so a failed audit write never leaves
+// export sending after the admin turned it off.
+describe('turning telemetry off holds when its audit write fails (#819, sec and tl on #826)', () => {
+  const exportTo127 = (a: TestClient, enabled: boolean) =>
+    a.request({
+      method: 'PUT',
+      url: '/api/v1/obs/export',
+      payload: {
+        password: PASSWORD,
+        enabled,
+        ...(enabled
+          ? { destination: { type: 'otlp', scheme: 'http', host: '127.0.0.1', port: 4318 } }
+          : {}),
+      },
+    });
+
+  async function exporting(a: TestClient) {
+    const on = await a.request({
+      method: 'PUT',
+      url: '/api/v1/obs/settings',
+      payload: { collect: true },
+    });
+    expect(on.statusCode).toBe(200);
+    expect((await exportTo127(a, true)).statusCode).toBe(200);
+    expect(attachedExporters().length).toBeGreaterThan(0);
+  }
+
+  async function stopped500(event: string, step: () => ReturnType<TestClient['request']>) {
+    failing = event;
+    const res = await step();
+    failing = null;
+    expect(res.statusCode, res.body).toBe(500);
+  }
+
+  it('Collect turned off stays off, and export with it', async () => {
+    const { app, a } = await boot({ telemetryAllowPrivate: true });
+    await exporting(a);
+    await stopped500('telemetry.collect.updated', () =>
+      a.request({ method: 'PUT', url: '/api/v1/obs/settings', payload: { collect: false } }),
+    );
+    expect(await readCollect(app.db)).toBe(false);
+    expect(isCollecting()).toBe(false);
+    expect((await readExport(app.db)).enabled).toBe(false);
+    expect(attachedExporters()).toEqual([]);
+  });
+
+  it('export turned off stays off, and sends nothing', async () => {
+    const { app, a } = await boot({ telemetryAllowPrivate: true });
+    await exporting(a);
+    await stopped500('telemetry.export.updated', () => exportTo127(a, false));
+    expect((await readExport(app.db)).enabled).toBe(false);
+    expect(attachedExporters()).toEqual([]);
+  });
+});

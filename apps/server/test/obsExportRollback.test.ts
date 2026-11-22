@@ -14,10 +14,26 @@ vi.mock('../src/obs/export/otlp', () => {
   throw new Error('export module failed to load');
 });
 
+/** When set, the audit write of the restore after a failed apply fails (tl, sec on #826). */
+let failRestoreAudit = false;
+vi.mock('../src/lib/audit', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/lib/audit')>();
+  return {
+    ...real,
+    audit: async (...args: Parameters<typeof real.audit>) => {
+      await real.audit(...args);
+      if (failRestoreAudit && args[2].detail?.cause === 'apply_failed') {
+        throw new Error('audit write failed');
+      }
+    },
+  };
+});
+
 const boot = useApi();
 const PASSWORD = 'correct horse battery';
 
 afterEach(async () => {
+  failRestoreAudit = false;
   await stopExport();
   await setCollecting(false);
 });
@@ -58,5 +74,31 @@ describe('PUT /api/v1/obs/export when the exporters cannot be built', () => {
       expect.objectContaining({ enabled: true, type: 'otlp' }),
       expect.objectContaining({ enabled: false, cause: 'apply_failed' }),
     ]);
+  });
+
+  // The restore is a stop (tl, sec on #826): it commits and takes effect whatever its record does.
+  it("keeps the previous settings when the restore's audit write fails too", async () => {
+    const { app, a } = await boot({ telemetryAllowPrivate: true });
+    const on = await a.request({
+      method: 'PUT',
+      url: '/api/v1/obs/settings',
+      payload: { collect: true },
+    });
+    expect(on.statusCode).toBe(200);
+    const before = await readExport(app.db);
+    failRestoreAudit = true;
+    const r = await a.request({
+      method: 'PUT',
+      url: '/api/v1/obs/export',
+      payload: {
+        password: PASSWORD,
+        enabled: true,
+        destination: { type: 'otlp', scheme: 'http', host: '127.0.0.1', port: 4318 },
+      },
+    });
+    failRestoreAudit = false;
+    expect(r.statusCode).toBe(500);
+    expect(await readExport(app.db)).toEqual(before);
+    expect(attachedExporters()).toEqual([]);
   });
 });

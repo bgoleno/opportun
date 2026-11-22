@@ -38,27 +38,43 @@ export async function writeCollect(
   actor: { userId?: string; ip?: string } = {},
 ): Promise<void> {
   const now = Date.now();
-  // The switch, the export it turns off and their audit rows commit together (#819); this
-  // process follows only once they have.
-  await withTransaction(db, async (tx) => {
-    await tx
+  const store = (tx: Exec) =>
+    tx
       .insert(settings)
       .values({ key: OBS_COLLECT_KEY, userId: null, value: on, updatedAt: now })
       .onConflictDoUpdate({ target: settings.key, set: { value: on, updatedAt: now } })
       .run();
-    // Audited with the acting admin (sec's O6 on PR #352). No password re-confirmation, unlike
-    // export: nothing leaves the instance.
-    await audit(tx, 'telemetry.collect.updated', { ...actor, detail: { enabled: on } });
-    if (!on && (await readExport(tx)).enabled) {
-      await disableExport(tx);
-      await audit(tx, 'telemetry.export.updated', {
-        ...actor,
-        detail: { enabled: false, cause: 'collect_off' },
-      });
-    }
+  // Audited with the acting admin (sec's O6 on PR #352). No password re-confirmation, unlike
+  // export: nothing leaves the instance.
+  const recordCollect = (exec: Exec) =>
+    audit(exec, 'telemetry.collect.updated', { ...actor, detail: { enabled: on } });
+  if (on) {
+    // Turning on commits with its audit row (#819), and this process follows once it has.
+    await withTransaction(db, async (tx) => {
+      await store(tx);
+      await recordCollect(tx);
+    });
+    await setCollecting(true);
+    return;
+  }
+  // Turning off is a stop (sec, tl on #826, as #815 ruled for removals): it commits, and this
+  // process stops collecting and exporting, before it is recorded. A failed audit write never
+  // leaves export sending after the admin turned it off.
+  const exportWasOn = await withTransaction(db, async (tx) => {
+    await store(tx);
+    if (!(await readExport(tx)).enabled) return false;
+    await disableExport(tx);
+    return true;
   });
-  await setCollecting(on);
-  if (!on) await stopExport();
+  await setCollecting(false);
+  await stopExport();
+  await recordCollect(db);
+  if (exportWasOn) {
+    await audit(db, 'telemetry.export.updated', {
+      ...actor,
+      detail: { enabled: false, cause: 'collect_off' },
+    });
+  }
 }
 
 /**
