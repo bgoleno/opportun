@@ -234,7 +234,9 @@ the dependencies are scanned for known vulnerabilities.
     checksum in `package.json`'s `packageManager`, which corepack checks. Installs use the
     lockfile as committed (`--frozen-lockfile`).
   - **Kept current by Dependabot:** the action and base-image pins are bumped weekly
-    (`.github/dependabot.yml`).
+    (`.github/dependabot.yml`). Dependabot does not read the images named inside workflows (the
+    Postgres and Playwright images in `.github/workflows/ci.yml`, and the OSV scanner's), so their
+    digests are bumped by hand.
 - **Scanned:**
   - **The lockfile:** OSV scans `pnpm-lock.yaml` on every push to `main`, on every pull request
     and weekly. Any known vulnerability fails the check (`.github/workflows/security.yml`).
