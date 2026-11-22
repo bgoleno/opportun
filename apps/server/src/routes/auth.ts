@@ -462,7 +462,17 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req, reply) => {
       const { pendingToken, code, recoveryCode } = req.body;
-      const result = await redeemPendingToken(db, pendingToken, { code, recoveryCode });
+      // A recovery code's spend is recorded with the spend itself (tl on #801): it commits here,
+      // before the session's transaction below, and stays spent if that one fails.
+      const result = await redeemPendingToken(
+        db,
+        pendingToken,
+        { code, recoveryCode },
+        Date.now(),
+        (userId) => async (tx, remaining) => {
+          await audit(tx, 'auth.2fa_recovery_used', { userId, ip: req.ip, detail: { remaining } });
+        },
+      );
       if (!result.ok) {
         if (result.code !== 'invalid_code') return fail(reply, 401, result.code);
         await audit(db, 'auth.2fa_failed', {
@@ -484,19 +494,13 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // The session is written only while the pending token is still stored, under the password
       // lock: a change or reset deletes every one of the user's under the same lock (#561).
       // Its audit rows are written with it (#779): a failed write leaves no session and sets no
-      // cookie. The code redeemed above stays spent: that claim commits on its own, before the
-      // lock (#561), and the user starts again from the password step.
+      // cookie. The code redeemed above stays spent, and a recovery code's spend was recorded with
+      // it: that claim commits on its own, before the lock (#561), and the user starts again from
+      // the password step.
       const session = await withPasswordLock(db, userId, async (tx) => {
         if (!(await pendingTokenStored(tx, pendingToken))) return null;
         const written = await createSession(tx, userId, sessionMeta(req));
         await audit(tx, 'auth.2fa_verified', { userId, ip: req.ip, detail: { method } });
-        if (method === 'recovery') {
-          await audit(tx, 'auth.2fa_recovery_used', {
-            userId,
-            ip: req.ip,
-            detail: { remaining: user.totpRecovery?.length ?? 0 },
-          });
-        }
         await audit(tx, 'auth.login', { userId, ip: req.ip, detail: { twoFactor: true } });
         return written;
       });
@@ -705,7 +709,20 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       if (user === undefined) return fail(reply, 401, 'unauthorized');
       if (!user.enabled || user.secret === null) return fail(reply, 409, 'not_enabled');
       const { code, recoveryCode } = req.body;
-      const method = await checkSecondFactor(db, ctx.userId, { code, recoveryCode });
+      // A recovery code's spend is recorded with the spend (tl on #801), as at sign-in.
+      const method = await checkSecondFactor(
+        db,
+        ctx.userId,
+        { code, recoveryCode },
+        Date.now(),
+        async (tx, remaining) => {
+          await audit(tx, 'auth.2fa_recovery_used', {
+            userId: ctx.userId,
+            ip: req.ip,
+            detail: { remaining, step: 'disable' },
+          });
+        },
+      );
       if (method === null) {
         await audit(db, 'auth.2fa_failed', {
           userId: ctx.userId,

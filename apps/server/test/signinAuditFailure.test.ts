@@ -266,3 +266,64 @@ describe('credential changes: the audit row commits with the change (#779)', () 
     expect((await state(app, a.userId, 'auth.2fa_disabled')).user?.totpEnabled).toBe(true);
   });
 });
+
+// tl on #801 (P2): a recovery code is spent before the session's transaction (#561's claim), so
+// the audit row that records the spend commits with the spend, not with the session: a failed
+// sign-in after it still leaves the row, and so does a failed 2FA removal.
+describe('a spent recovery code always leaves its audit row (#779, tl on #801)', () => {
+  const recoveryRows = async (app: FastifyInstance, userId: string) =>
+    (
+      await app.db.select().from(auditLog).where(eq(auditLog.event, 'auth.2fa_recovery_used')).all()
+    ).filter((r) => r.userId === userId).length;
+
+  it('a sign-in that fails after its recovery code was spent still records the spend', async () => {
+    const { app, a } = await boot();
+    const { recovery } = await enable(a);
+    const token = await pendingToken(app);
+    failing = 'auth.login';
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/verify',
+      payload: { pendingToken: token, recoveryCode: recovery[0] },
+    });
+    failing = null;
+    expect(res.statusCode, res.body).toBe(500);
+    expect(sessionCookie(res)).toBeUndefined();
+    expect(await recoveryRows(app, a.userId)).toBe(1);
+  });
+
+  it('a 2FA removal that fails after its recovery code was spent still records the spend', async () => {
+    const { app, a } = await boot();
+    const { recovery } = await enable(a);
+    failing = 'auth.2fa_disabled';
+    const res = await a.request({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/disable',
+      payload: { password: PASSWORD, recoveryCode: recovery[0] },
+    });
+    failing = null;
+    expect(res.statusCode, res.body).toBe(500);
+    expect(await recoveryRows(app, a.userId)).toBe(1);
+  });
+
+  it('a recovery code whose audit write fails is not spent', async () => {
+    const { app, a } = await boot();
+    const { recovery } = await enable(a);
+    const token = await pendingToken(app);
+    failing = 'auth.2fa_recovery_used';
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/verify',
+      payload: { pendingToken: token, recoveryCode: recovery[0] },
+    });
+    failing = null;
+    expect(res.statusCode, res.body).toBe(500);
+    // The code is still there: a later sign-in can use it.
+    const again = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/verify',
+      payload: { pendingToken: await pendingToken(app), recoveryCode: recovery[0] },
+    });
+    expect(again.statusCode, again.body).toBe(200);
+  });
+});
