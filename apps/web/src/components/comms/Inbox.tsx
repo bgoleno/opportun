@@ -204,9 +204,12 @@ function FilterBar({
 
 function BulkBar({
   rows,
+  loading,
   onDone,
 }: {
   rows: { id: string; opportunityId: string | null }[];
+  /** The list is still loading (a new filter or page): the rows shown may be about to go. */
+  loading: boolean;
   onDone: () => void;
 }) {
   const ids = rows.map((r) => r.id);
@@ -250,7 +253,13 @@ function BulkBar({
           </option>
         ))}
       </Select>
-      <Button type="button" size="sm" onClick={() => setConfirming(true)} disabled={bulk.isPending}>
+      {/* Not while the list loads (#678): a row the new filter hides still looks selected. */}
+      <Button
+        type="button"
+        size="sm"
+        onClick={() => setConfirming(true)}
+        disabled={bulk.isPending || loading}
+      >
         {bulk.isPending ? 'Rejecting...' : `Reject ${ids.length}`}
       </Button>
       <ConfirmDialog
@@ -425,9 +434,12 @@ function InboxList({
         />
       ) : null}
 
-      {selectable && bulkShown ? <BulkBar rows={actOn} onDone={clear} /> : null}
+      {selectable && bulkShown ? (
+        <BulkBar rows={actOn} loading={isPlaceholderData} onDone={clear} />
+      ) : null}
 
-      {data !== undefined && data.total > data.items.length ? (
+      {/* Not over an empty page: during a step-back that page stands in for the next (#678). */}
+      {data !== undefined && data.items.length > 0 && data.total > data.items.length ? (
         <Pager
           page={page}
           pageSize={pageSize}
@@ -440,6 +452,9 @@ function InboxList({
       {error ? (
         <FormError message={errorMessage(error)} />
       ) : isPending ? (
+        <p className="text-sm text-muted-foreground">Loading...</p>
+      ) : data.items.length === 0 && data.total > 0 ? (
+        // An empty page of a tab that has messages: a step-back to a page not cached yet (#678).
         <p className="text-sm text-muted-foreground">Loading...</p>
       ) : data.items.length === 0 ? (
         <p className="text-sm text-muted-foreground">

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { Button } from '@/components/ui/button';
 import {
@@ -35,6 +35,15 @@ export function ConfirmDialog(props: {
   // Whether the dialog is still open when the action settles: read then, not when it started.
   const open = useRef(props.open);
   open.current = props.open;
+  // And whether it is still mounted (tl on #712): a parent can take it away mid-request, as the bulk
+  // bar goes when its rows leave, and a failure then has no dialog left to be shown in.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   return (
     <Dialog
       open={props.open}
@@ -63,7 +72,7 @@ export function ConfirmDialog(props: {
                 await props.onConfirm();
                 props.onOpenChange(false);
               } catch (err) {
-                if (open.current) setError(errorMessage(err));
+                if (open.current && mounted.current) setError(errorMessage(err));
                 else {
                   toast({
                     title: `${props.confirmLabel} failed`,

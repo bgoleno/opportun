@@ -954,3 +954,104 @@ describe('Inbox bulk Reject: focus and filters (#678)', () => {
     expect(screen.getByText('1 selected')).toBeInTheDocument();
   });
 });
+
+// The EM's points for #712's final head (from tl and qa on #706 and #712).
+describe('Inbox bulk Reject: what a loading list may and may not do (#678)', () => {
+  const rows = [
+    { ...BASE, id: 'a1', subject: 'alpha one', opportunityId: null, needsReview: true },
+    { ...BASE, id: 'b1', subject: 'beta one', opportunityId: null, needsReview: true },
+  ];
+
+  // qa: the selection is pruned of rows that leave, so a row that comes back is not selected
+  // again on its own. Without the pruning, the bar's on-screen filter hid it, and nothing failed.
+  it('a selected row that leaves and comes back is no longer selected', async () => {
+    const user = userEvent.setup();
+    let items = rows;
+    mockApi({
+      'GET /communications': () => ({ status: 200, body: { items, total: items.length } }),
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    const { queryClient } = renderWithProviders(<Inbox />);
+    await screen.findByText('alpha one');
+    await user.click(screen.getAllByRole('checkbox', { name: /Select message from/ })[0]!);
+    expect(await screen.findByText('1 selected')).toBeInTheDocument();
+    items = [rows[1]!];
+    await queryClient.invalidateQueries();
+    await waitFor(() => expect(screen.queryByText('alpha one')).toBeNull());
+    items = rows;
+    await queryClient.invalidateQueries();
+    expect(await screen.findByText('alpha one')).toBeInTheDocument();
+    expect(screen.getAllByRole('checkbox', { name: /Select message from/ })[0]).not.toBeChecked();
+    expect(screen.queryByText(/selected$/)).toBeNull();
+  });
+
+  // The EM's main point: while a new filter loads, the rows before it stay on screen, and a row
+  // that filter is about to hide still looked selected. Confirming then rejected it unseen.
+  it('Reject is not offered while the list is still loading a new filter', async () => {
+    const user = userEvent.setup();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    mockApi({
+      'GET /communications': async (call: { search: string }) => {
+        if (call.search.includes('q=')) {
+          await held;
+          return { status: 200, body: { items: [rows[1]], total: 1 } };
+        }
+        return { status: 200, body: { items: rows, total: 2 } };
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    renderWithProviders(<Inbox />);
+    await screen.findByText('alpha one');
+    await user.click(screen.getAllByRole('checkbox', { name: /Select message from/ })[0]!);
+    await user.type(screen.getByRole('searchbox', { name: 'Keyword' }), 'beta');
+    // The filter has applied and is loading; the old rows are still shown.
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Reject 1/ })).toBeDisabled());
+    release();
+    // The answer hides the selected row: it leaves the selection, and the bar with it.
+    await waitFor(() => expect(screen.queryByText('alpha one')).toBeNull());
+    expect(screen.queryByRole('button', { name: /^Reject \d/ })).toBeNull();
+  });
+
+  // tl and qa on #706: after a step-back to a page no longer cached, the emptied page stood in
+  // for it, so the tab's empty text and a pager ("Showing 200-200 of 400") showed at once.
+  it('a step-back to a page not cached shows neither the empty text nor a pager while it loads', async () => {
+    const user = userEvent.setup();
+    let all = [
+      ...rows,
+      { ...BASE, id: 'c1', subject: 'gamma one', opportunityId: null, needsReview: true },
+    ];
+    let release!: () => void;
+    let holdFirst = false;
+    const held = new Promise<void>((r) => (release = r));
+    mockApi({
+      'GET /communications': async (call: { search: string }) => {
+        const params = new URLSearchParams(call.search);
+        const limit = Number(params.get('limit'));
+        const offset = Number(params.get('offset') ?? 0);
+        if (offset === 0 && limit === 2 && holdFirst) await held;
+        return {
+          status: 200,
+          body: { items: all.slice(offset, offset + limit), total: all.length },
+        };
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    const { queryClient } = renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('alpha one');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('gamma one');
+    // Page 1's cache has expired; then page 2's only message leaves the tab.
+    queryClient.removeQueries({
+      predicate: (q) => q.queryKey.includes(0) && q.queryKey.includes(2),
+    });
+    holdFirst = true;
+    all = rows;
+    await queryClient.invalidateQueries();
+    await waitFor(() => expect(screen.queryByText('gamma one')).toBeNull());
+    expect(screen.queryByText('Nothing needs review.')).toBeNull();
+    expect(screen.queryByText(/^Showing /)).toBeNull();
+    release();
+    expect(await screen.findByText('alpha one')).toBeInTheDocument();
+  });
+});

@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
@@ -94,5 +94,68 @@ describe('ConfirmDialog', () => {
     const escape = new Event('cancel', { cancelable: true });
     dialog.dispatchEvent(escape);
     expect(escape.defaultPrevented).toBe(false);
+  });
+
+  // tl on #712: a dialog whose parent unmounts mid-request (the bulk bar going as its rows leave)
+  // still reported a late failure into its own, now unmounted, state: shown nowhere.
+  it('a failure that lands after its parent unmounted it is toasted', async () => {
+    const user = userEvent.setup();
+    let fail!: (err: Error) => void;
+    const pending = new Promise<void>((_, reject) => {
+      fail = reject;
+    });
+    let unmount!: () => void;
+    function Host() {
+      const [shown, setShown] = useState(true);
+      unmount = () => setShown(false);
+      return shown ? <Harness onConfirm={() => pending} /> : null;
+    }
+    renderWithProviders(<Host />);
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    act(() => unmount());
+    expect(screen.queryByText('Delete this thing?')).toBeNull();
+    fail(new ApiError(500, 'internal'));
+    expect(await screen.findByText('Delete failed')).toBeInTheDocument();
+  });
+
+  // qa's stale-error case (the EM on #712): closed while in flight, then answered 500, the dialog
+  // reopened showing that old failure. A late failure is toasted, never kept for the next opening.
+  it('reopened after a failure that landed while it was closed, it starts clean', async () => {
+    const user = userEvent.setup();
+    let fail!: (err: Error) => void;
+    let calls = 0;
+    function Reopenable() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Open it
+          </button>
+          <ConfirmDialog
+            open={open}
+            onOpenChange={setOpen}
+            title="Delete this thing?"
+            description="It is gone for good."
+            confirmLabel="Delete"
+            onConfirm={() => {
+              calls += 1;
+              return new Promise<void>((_, reject) => {
+                fail = reject;
+              });
+            }}
+          />
+        </>
+      );
+    }
+    renderWithProviders(<Reopenable />);
+    await user.click(await screen.findByRole('button', { name: 'Open it' }));
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    fail(new ApiError(500, 'internal'));
+    expect(await screen.findByText('Delete failed')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open it' }));
+    expect(await screen.findByText('Delete this thing?')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(calls).toBe(1);
   });
 });
