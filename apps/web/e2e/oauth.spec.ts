@@ -69,6 +69,10 @@ async function configureGithubSignIn(browser: Browser): Promise<void> {
     await github.getByLabel('Client ID').fill('e2e-github-client');
     await github.getByLabel('Client secret').fill('e2e-github-secret');
     await github.getByRole('button', { name: 'Save' }).click();
+    // A change to who can sign in asks for the admin's own password (#620 point 3).
+    const confirm = admin.getByRole('dialog', { name: 'Confirm your password' });
+    await confirm.getByLabel('Current password').fill(ADMIN.password);
+    await confirm.getByRole('button', { name: 'Continue' }).click();
     await expect(github.getByText('Configured')).toBeVisible();
   } finally {
     await adminContext.close();

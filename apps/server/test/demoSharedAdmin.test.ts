@@ -224,10 +224,18 @@ const NOT_ALLOWED: {
   {
     method: 'PUT',
     url: '/api/v1/admin/oauth-providers/google',
-    payload: { clientId: 'an id', clientSecret: 'a secret' },
+    payload: { clientId: 'an id', clientSecret: 'a secret', password: PASSWORD },
   },
-  { method: 'POST', url: '/api/v1/admin/oauth-providers/google/import' },
-  { method: 'DELETE', url: '/api/v1/admin/oauth-providers/google' },
+  {
+    method: 'POST',
+    url: '/api/v1/admin/oauth-providers/google/import',
+    payload: { password: PASSWORD },
+  },
+  {
+    method: 'DELETE',
+    url: '/api/v1/admin/oauth-providers/google',
+    payload: { password: PASSWORD },
+  },
   { method: 'GET', url: '/api/v1/backups' },
   { method: 'POST', url: '/api/v1/backups' },
   { method: 'PUT', url: '/api/v1/obs/settings', payload: { collect: true } },
