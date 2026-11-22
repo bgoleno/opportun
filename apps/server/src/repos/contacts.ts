@@ -2,9 +2,9 @@
 // within the caller's companies). linkedin_url is metadata only: nothing ever fetches it (C-1).
 // Name and notes are kept in the FTS index (entity_kind 'contact') in the same transaction.
 import { newId } from '@opportun/core';
-import { and, asc, eq, or, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, or, type SQL } from 'drizzle-orm';
 import { jsonContains } from '../db/dialect';
-import { companies, networkContacts } from '../db/schema';
+import { companies, networkContacts, referralRankings } from '../db/schema';
 import { notFound } from '../lib/errors';
 import { profileSlugOf } from '../lib/linkedinCapture';
 import type { Db, Exec, UserCtx } from './base';
@@ -220,7 +220,37 @@ export async function deleteContact(db: Db, ctx: UserCtx, id: string): Promise<v
     const changes = await runCount(tx.delete(networkContacts).where(owned(ctx, id)));
     if (changes === 0) throw notFound();
     await removeFromIndex(tx, ctx, 'contact', id);
+    await dropRankingsNaming(tx, ctx, id);
   });
+}
+
+/**
+ * The user's kept referral rankings that name `contactId` (#710): each holds that contact's AI
+ * rationale, and a deletion must not leave it behind. The row goes, not just the entry: the
+ * candidate set a ranking was made from is part of its key, so it would be made afresh on the
+ * next open anyway. The user's own rows only, read and filtered here (one per opportunity), so the
+ * JSON match is the same on both dialects.
+ */
+async function dropRankingsNaming(tx: Exec, ctx: UserCtx, contactId: string): Promise<void> {
+  const rows = await tx
+    .select({ id: referralRankings.id, ranking: referralRankings.ranking })
+    .from(referralRankings)
+    .where(eq(referralRankings.userId, ctx.userId))
+    .all();
+  const naming = rows.filter((r) => r.ranking.some((e) => e.contactId === contactId));
+  if (naming.length === 0) return;
+  await tx
+    .delete(referralRankings)
+    .where(
+      and(
+        eq(referralRankings.userId, ctx.userId),
+        inArray(
+          referralRankings.id,
+          naming.map((r) => r.id),
+        ),
+      ),
+    )
+    .run();
 }
 
 // ---------------------------------------------------------------------------

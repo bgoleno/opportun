@@ -195,7 +195,18 @@ export function InboxRow({
                 size="sm"
                 variant="ghost"
                 disabled={dismiss.isPending}
-                onClick={() => dismiss.mutate(comm.id)}
+                onClick={() =>
+                  // A failure says so, as Move to and Not spam do (#652); the suggestion stays,
+                  // since nothing removes it before the server confirms.
+                  dismiss.mutate(comm.id, {
+                    onError: (err) =>
+                      toast({
+                        title: 'Suggestion not dismissed',
+                        description: errorMessage(err),
+                        variant: 'destructive',
+                      }),
+                  })
+                }
               >
                 Ignore
               </Button>

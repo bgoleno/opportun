@@ -18,6 +18,8 @@ export interface GetInit {
   headers: Record<string, string>;
   credentials: 'omit';
   redirect: 'error';
+  /** Ends the request at the action's time limit (#648). */
+  signal?: AbortSignal;
 }
 export type GetLike = (url: string, init: GetInit) => Promise<FetchResponse>;
 

@@ -815,6 +815,26 @@ describe('the helpers themselves refuse anything but the control’s own box and
     ]);
   });
 
+  // #620 point 1 (sec's second audit): the check goes all the way up, not only to the listbox. A
+  // list that sits inside a link or a label (a page that wraps a whole field in one) has no option
+  // the filler may click, since the click would follow the link or press the label's control.
+  it('optionsOf refuses every option when the listbox sits inside a link or a label', () => {
+    for (const tag of ['a', 'label', 'button', 'summary']) {
+      const { p, h, byId } = helpers();
+      const box = byId('degree--0');
+      standInList(p, 'degree--0', { options: () => ["Bachelor's Degree"] });
+      h.press(box, true);
+      const shell = box.closest('.select-shell')!;
+      const wrap = p.doc.createElement(tag);
+      shell.parentElement!.insertBefore(wrap, shell);
+      wrap.append(shell);
+      expect(h.optionsOf(box), tag).toEqual([]);
+      expect(h.pick(box, p.doc.getElementById('react-select-degree--0-option-0')!), tag).toBe(
+        false,
+      );
+    }
+  });
+
   it("pick clicks only an option of this box's own list, once", () => {
     const { p, h, byId } = helpers();
     standInList(p, 'degree--0', { options: () => ["Bachelor's Degree"] });

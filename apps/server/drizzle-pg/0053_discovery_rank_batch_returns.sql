@@ -1,0 +1,1 @@
+ALTER TABLE "discovery_results" ADD COLUMN "rank_batch_returns" bigint DEFAULT 0 NOT NULL;
