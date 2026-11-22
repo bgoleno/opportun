@@ -197,7 +197,7 @@ flowchart LR
   - `lib/safeFetch.ts` covers the ATS boards and pages, the sign-in providers' token and profile calls, Reactive Resume, and the telemetry export. It resolves and pins addresses, checks redirects, and applies a per-host rate and a body cap.
   - Google's own client libraries (`lib/google.ts`, through `google-auth-library` and `@googleapis/*`) call the Gmail, Docs and Drive APIs with the user's tokens.
   - `lib/aiProviderFetch.ts` covers the AI providers. An operator can point a provider at its own endpoint (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` and an `openai_compatible` policy, described in `docs/install.md`), so not every AI call goes to a provider's public host.
-  - `lib/mcpClient.ts` covers MCP discovery sources. They use the MCP SDK's own transports, stdio or Streamable HTTP, with the address checked first by `checkMcpUrl`.
+  - `lib/mcpClient.ts` covers MCP discovery sources. They use the MCP SDK's own transports: Streamable HTTP, its URL checked first by `checkMcpUrl`, or stdio, a local command (`docs/install.md`, section 7).
 
   `SECURITY.md` states how the last two differ from `safeFetch` (its deviation on HTTP MCP sources, the AI provider path, and DNS rebinding). Users' third-party credentials are sealed at rest with the instance key (`lib/secretBox.ts`).
 
