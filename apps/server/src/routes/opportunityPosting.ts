@@ -212,6 +212,10 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       const identified = await identifyOwnLink(ctx, current, sctx);
       const note = outcome.note === undefined ? {} : { note: outcome.note };
       if (identified !== null && outcome.status !== 'candidates') {
+        // On the timeline, as the user-described cases above are (#813, tl on #847).
+        await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+          kept: false,
+        });
         return { outcome: 'identified' as const, opportunity: identified, ...note };
       }
       if (outcome.status === 'candidates') {

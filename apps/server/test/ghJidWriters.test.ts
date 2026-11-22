@@ -754,6 +754,29 @@ describe('Find posting by the own gh_jid link writes a timeline entry (#813)', (
     ]);
   });
 
+  // tl on #847: the third way Find posting identifies by the own link, with no description of the
+  // user's, when no board read answered the careers link.
+  it('identifying a posting with no description, when no board read answered, says so too', async () => {
+    const { app, a } = await boot();
+    api = greenhouseApi({ examplecorp: [JID] });
+    const id = await seed(app, a, { title: 'Staff Platform Engineer' });
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: CAREERS });
+    embeddedBoardServes([]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.json().outcome).toBe('identified');
+    expect(await linkEntries(app, id)).toEqual([
+      {
+        kind: 'link',
+        title: 'Job posting identified',
+        bodyMd: 'Recognised on Greenhouse, by the job its posting link names.',
+        externalUrl: BOARD_PAGE,
+      },
+    ]);
+  });
+
   it('identifying a posting already confirmed says so too', async () => {
     const { app, a } = await boot();
     api = greenhouseApi({ examplecorp: [JID] });
