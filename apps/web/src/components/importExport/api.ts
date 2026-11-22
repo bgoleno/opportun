@@ -1,5 +1,7 @@
 // Import, export and backup data for Settings > Import/Export (FR-I1 to I4).
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
+import { contactsChanged } from '@/components/network/api';
 import { api } from '@/lib/api';
 
 export interface ImportReport {
@@ -77,9 +79,14 @@ export function useStartLinkedInImport() {
   });
 }
 
-/** Polls an import job until it is done or dead. */
+/**
+ * Polls an import job until it is done or dead. Once done, what it may have brought in is shown
+ * afresh (#694, tl on #688): a pack's network.csv and a LinkedIn export add contacts, which the
+ * network list and any open Referrals tab (kept ten minutes) would otherwise still show as before.
+ */
 export function useImportStatus(jobId: string | undefined) {
-  return useQuery({
+  const qc = useQueryClient();
+  const status = useQuery({
     queryKey: dk.import(jobId ?? ''),
     queryFn: () => api<ImportStatus>(`/imports/${encodeURIComponent(jobId ?? '')}`),
     enabled: jobId !== undefined,
@@ -89,6 +96,11 @@ export function useImportStatus(jobId: string | undefined) {
       return s === 'done' || s === 'dead' ? false : POLL_MS;
     },
   });
+  const done = jobId !== undefined && status.data?.status === 'done';
+  useEffect(() => {
+    if (done) void contactsChanged(qc);
+  }, [done, jobId, qc]);
+  return status;
 }
 
 export function useBackups() {
