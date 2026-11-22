@@ -185,6 +185,57 @@ describe('AI mock', () => {
   });
 });
 
+describe('Job run-now hook (#747)', () => {
+  it('queues an allowed sweep due now, which the runner runs to done', async () => {
+    const { app } = await mockedApp();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/__mock/jobs/opportunity.dedupe_ai_pass/run',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(res.statusCode).toBe(200);
+    const { jobId } = res.json<{ jobId: string }>();
+    await drainAll(app);
+    const status = await app.inject({
+      method: 'GET',
+      url: `/__mock/jobs/${jobId}`,
+      remoteAddress: '127.0.0.1',
+    });
+    // The hook owns the run, not the sweep's result: its shape is the job's own (#751 added
+    // failed and capped), so only that the job ran to done with a result is asserted here.
+    const body = status.json<{ status: string; result: Record<string, unknown> | null }>();
+    expect(body.status).toBe('done');
+    expect(body.result).toMatchObject({ scanned: 0 });
+  });
+
+  it('runs only the allowed kinds, answers only loopback callers, and is off without the AI mock', async () => {
+    const { app } = await mockedApp();
+    const other = await app.inject({
+      method: 'POST',
+      url: '/__mock/jobs/demo.reset/run',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(other.statusCode).toBe(404);
+    expect(await queryAll(app, "SELECT id FROM jobs WHERE kind = 'demo.reset'")).toEqual([]);
+    const remote = await app.inject({
+      method: 'POST',
+      url: '/__mock/jobs/opportunity.dedupe_ai_pass/run',
+      remoteAddress: '10.0.0.5',
+    });
+    expect(remote.statusCode).toBe(403);
+
+    const support = testSupportFromEnv({ OPPORTUN_SOURCE_MOCK: '1' }, CFG);
+    const { app: plain } = await testApp({}, { build: support?.build, setup: support?.register });
+    open.push(plain);
+    const off = await plain.inject({
+      method: 'POST',
+      url: '/__mock/jobs/opportunity.dedupe_ai_pass/run',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(off.statusCode).toBe(404);
+  });
+});
+
 describe('Gmail mock', () => {
   it('syncs the fixture mailbox: targeted creates, broadcast is spam, interview proposes', async () => {
     const { app, a } = await mockedApp();
