@@ -2,12 +2,12 @@
 // owner's option A): the attempt keeps its pinned destination and the user's work, a review
 // goes back to draft, and a review screen shown before the change cannot be confirmed.
 // Organised by the issue's acceptance criteria. Every URL is synthetic; nothing is fetched.
+import { confirm } from '../src/lib/postingReconcile';
 import { newId, type AtsJobRef, type NormalizedPosting } from '@opportun/core';
 import { and, count, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { applicationSubmissions, auditLog, opportunities, resumes } from '../src/db/schema';
-import { confirm } from '../src/jobs/postingReconcile';
 import type { UserCtx } from '../src/repos/base';
 import {
   createOpportunity,

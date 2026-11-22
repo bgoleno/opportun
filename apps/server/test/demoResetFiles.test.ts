@@ -3,6 +3,7 @@
 // token, submission, snapshot row, snapshot file or uploaded file of a demo user remains, and a
 // token minted before the reset gets 401. The seed's own resume files are rewritten with the same
 // content, so the same hashes, and must survive (sec on #544).
+import { removeIfUnreferenced } from '../src/lib/attachmentSweep';
 import { randomBytes } from 'node:crypto';
 import { newId } from '@opportun/core';
 import { eq, inArray } from 'drizzle-orm';
@@ -25,7 +26,6 @@ import {
   users,
 } from '../src/db/schema';
 import { runDemoReset } from '../src/jobs/demoReset';
-import { removeIfUnreferenced } from '../src/jobs/attachmentSweep';
 import { isFixtureIdentity } from '../src/lib/demoOwnData';
 import { createDeviceToken } from '../src/lib/deviceTokens';
 import { createSubmissionDraft } from '../src/repos/submissions';
