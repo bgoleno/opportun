@@ -29,7 +29,7 @@ import { temporaryPassword } from '../lib/passwordReset';
 import { hashPassword } from '../lib/passwords';
 import { stalePepperProblem } from '../lib/pepperVersion';
 import { insertUserRow } from '../lib/registration';
-import { DEMO_MARKER_KEY } from './seedDemo';
+import { DEMO_MARKER_KEY } from '../lib/demo/seed';
 import type { CliIo } from './resetPassword';
 
 // The registration route's own rules for both (routes/auth.ts RegisterBody).
