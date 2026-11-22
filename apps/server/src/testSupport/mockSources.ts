@@ -67,12 +67,20 @@ export const mockGreenhouseSource: DiscoverySource = {
   },
 };
 
+/** A company whose fixture board answers its probe slowly (see FIXTURE_BOARDS). */
+export const SLOW_BOARD_COMPANY = 'QA Slow Board';
+/** How long the slow board takes to answer its probe: past a 3 s poll, inside the 30 s fetch limit. */
+export const SLOW_BOARD_MS = 5000;
+
 /** Greenhouse board slugs the fake discovery fetch reports as existing boards. */
 export const FIXTURE_BOARDS: ReadonlyMap<string, string> = new Map([
   ['piedpiper', 'Pied Piper'],
   // slugCandidates('Vandelay Industries') probes this first, so board detection for the fixture
   // company hits and the find-posting flow reaches the fixture postings.
   ['vandelayindustries', FIXTURE_COMPANY],
+  // Answers its probe after SLOW_BOARD_MS (#809): a board check on it is still pending past one
+  // of the companies screen's 3 s polls, so a spec can count on seeing the poll.
+  ['qaslowboard', SLOW_BOARD_COMPANY],
 ]);
 
 const json = (status: number, body: unknown, url: string) => ({
@@ -123,6 +131,7 @@ export const mockSourceFetch: typeof safeFetch = async (url) => {
   const m = /^\/v1\/boards\/([a-z0-9-]+)\/jobs$/.exec(u.pathname);
   const board = m?.[1] === undefined ? undefined : FIXTURE_BOARDS.get(m[1]);
   if (u.hostname === GREENHOUSE_HOST && board !== undefined) {
+    if (board === SLOW_BOARD_COMPANY) await new Promise((r) => setTimeout(r, SLOW_BOARD_MS));
     return json(
       200,
       { jobs: FIXTURE_POSTINGS.map((p, i) => ({ id: i + 1, title: p.title })) },
