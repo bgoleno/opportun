@@ -79,7 +79,13 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
         req.body.scopes.includes('apply:assist') &&
         (!submissionsEnabled(app.config) || sharedAssistedApplyOff(app.config, ctx.userId))
       ) {
-        throw new HttpError(422, 'scope_unavailable', 'Assisted apply is not available here.');
+        throw new HttpError(
+          422,
+          'scope_unavailable',
+          'Assisted apply is not available here.',
+          undefined,
+          { userFacing: true },
+        );
       }
       const verified = await confirmedPasswordHash(req, reply, {
         userId: ctx.userId,

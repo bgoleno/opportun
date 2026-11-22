@@ -216,7 +216,9 @@ export async function recordResumeSend(
   const now = Date.now();
   const sentAt = input.sentAt ?? now;
   if (sentAt > now + CLOCK_SKEW_MS) {
-    throw new HttpError(422, 'sent_at_in_future', 'That time has not happened yet.');
+    throw new HttpError(422, 'sent_at_in_future', 'That time has not happened yet.', undefined, {
+      userFacing: true,
+    });
   }
   // Ownership first, outside any lock: another user's resume is a 404 and takes no lock in
   // their scope (sec on #164; #129's rule for the submission routes).
@@ -226,7 +228,13 @@ export async function recordResumeSend(
     // Read under the lock: a delete that went first has removed it, and this is a 404.
     const resume = await ownedResume(tx, ctx, input.resumeId);
     if (resume.archivedAt !== null) {
-      throw new HttpError(422, 'resume_archived', 'An archived resume cannot be recorded as sent.');
+      throw new HttpError(
+        422,
+        'resume_archived',
+        'An archived resume cannot be recorded as sent.',
+        undefined,
+        { userFacing: true },
+      );
     }
     await ownedOpportunity(tx, ctx, opportunityId);
     await racePoint('resumeSends.record.locked');

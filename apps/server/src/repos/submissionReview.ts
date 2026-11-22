@@ -214,6 +214,8 @@ const reviewStale = (): HttpError =>
     409,
     'review_stale',
     'This application changed since you reviewed it. Review it again.',
+    undefined,
+    { userFacing: true },
   );
 
 export interface ReviewInput {
@@ -305,9 +307,15 @@ export async function reviewSubmission(
     // themselves, and the review shows that), may go ahead. Under the lock, like every check.
     const blocked = snapshotBlocksReview(row);
     if (blocked !== null) {
-      throw new HttpError(409, blocked, SNAPSHOT_BLOCK_MESSAGES.get(blocked), {
-        submissionId: row.id,
-      });
+      throw new HttpError(
+        409,
+        blocked,
+        SNAPSHOT_BLOCK_MESSAGES.get(blocked),
+        {
+          submissionId: row.id,
+        },
+        { userFacing: true },
+      );
     }
     if (submissionDigest(row) !== input.reviewDigest) throw reviewStale();
 
@@ -327,6 +335,7 @@ export async function reviewSubmission(
         'reapply_reason_required',
         'You already applied for this job, or have an application to it on the way. Say why you are applying again.',
         { submissionId: earlier.id },
+        { userFacing: true },
       );
     }
 
@@ -374,6 +383,7 @@ export async function reviewSubmission(
     'daily_review_cap',
     'You reached the most applications you can review in 24 hours.',
     { resetAt: outcome.resetAt },
+    { userFacing: true },
   );
 }
 
@@ -415,7 +425,13 @@ export async function handoffSubmission(
     if (opts.demo === true) refuseFixtureData(row);
     const now = Date.now();
     if (row.reviewExpiresAt === null || row.reviewExpiresAt <= now) {
-      throw new HttpError(409, 'review_expired', 'This review has expired. Review it again.');
+      throw new HttpError(
+        409,
+        'review_expired',
+        'This review has expired. Review it again.',
+        undefined,
+        { userFacing: true },
+      );
     }
     if (row.reviewDigest === null || submissionDigest(row) !== row.reviewDigest) {
       throw reviewStale();
@@ -425,6 +441,8 @@ export async function handoffSubmission(
         422,
         'destination_not_allowed',
         "This application's destination is not the employer's posting for this requisition.",
+        undefined,
+        { userFacing: true },
       );
     }
     const [updated] = await tx

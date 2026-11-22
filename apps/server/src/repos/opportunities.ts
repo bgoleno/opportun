@@ -834,6 +834,7 @@ export async function mergeOpportunities(
         'live_submission_conflict',
         'Both opportunities have an open application. Cancel one of them before merging.',
         { submissionId: otherLive.id },
+        { userFacing: true },
       );
     }
     const [movedAttempts] = await tx

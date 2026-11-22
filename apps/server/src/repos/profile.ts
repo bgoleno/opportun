@@ -206,7 +206,14 @@ export async function saveDetailsToProfile(
   for (const key of new Set(keys)) {
     const value = (values.get(key) ?? '').trim();
     const problem = value === '' ? null : profileValueProblem(key, value);
-    if (problem !== null) throw new HttpError(422, problem, PROFILE_VALUE_MESSAGE, { field: key });
+    if (problem !== null)
+      throw new HttpError(
+        422,
+        problem,
+        PROFILE_VALUE_MESSAGE,
+        { field: key },
+        { userFacing: true },
+      );
     saved.set(key, value);
   }
   if (saved.size === 0) return;

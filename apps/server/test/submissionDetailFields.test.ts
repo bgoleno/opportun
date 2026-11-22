@@ -124,11 +124,15 @@ describe('acceptance 4: refusals are named 422 reasons, and nothing is saved', (
     const before = await read(c, id);
     const res = await patchFields(c, id, fields);
     expect(res.statusCode, `${JSON.stringify(fields)}: ${res.body}`).toBe(422);
-    const error = res.json<{ error: { code: string; field: string } }>().error;
+    const error = res.json<{ error: { code: string; field: string; message?: string } }>().error;
     expect(error).toMatchObject({ code, field });
-    // The value itself is never echoed back: the field's name says which one to fix.
+    // The value itself is never echoed back: the field's name says which one to fix. The sentence
+    // marked for users (#750) is fixed per code, so it is set aside here: it may contain a value
+    // such as `https://` as its own words, never as an echo.
+    const sentence = error.message ?? '';
+    const echoed = res.body.replace(sentence, '');
     for (const value of Object.values(fields)) {
-      if (value.length > 3) expect(res.body).not.toContain(value);
+      if (value.length > 3) expect(echoed).not.toContain(value);
     }
     const after = await read(c, id);
     expect(after.fields).toEqual(before.fields);

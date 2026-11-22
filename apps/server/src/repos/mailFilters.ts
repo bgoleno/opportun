@@ -44,7 +44,10 @@ async function getOwned(db: Db, ctx: UserCtx, id: string): Promise<MailFilterRul
     .from(mailFilterRules)
     .where(and(eq(mailFilterRules.userId, ctx.userId), eq(mailFilterRules.id, id)))
     .get();
-  if (row === undefined) throw new HttpError(404, 'not_found', 'No such mail filter rule');
+  if (row === undefined)
+    throw new HttpError(404, 'not_found', 'No such mail filter rule', undefined, {
+      userFacing: true,
+    });
   return row;
 }
 
@@ -73,7 +76,13 @@ export async function createRule(
 ): Promise<MailFilterRuleRow> {
   const pattern = input.pattern.trim().toLowerCase();
   if (parseMailPattern(pattern) === null) {
-    throw new HttpError(400, 'invalid_pattern', `Not a sender pattern: ${input.pattern}`);
+    throw new HttpError(
+      400,
+      'invalid_pattern',
+      `Not a sender pattern: ${input.pattern}`,
+      undefined,
+      { userFacing: true },
+    );
   }
   const now = Date.now();
   const row = {
@@ -102,9 +111,15 @@ export async function createRule(
       )
       .get();
     if (existing === undefined) throw err;
-    throw new HttpError(409, 'duplicate', `Already a ${input.effect} rule: ${pattern}`, {
-      existingId: existing.id,
-    });
+    throw new HttpError(
+      409,
+      'duplicate',
+      `Already a ${input.effect} rule: ${pattern}`,
+      {
+        existingId: existing.id,
+      },
+      { userFacing: true },
+    );
   }
   return row;
 }

@@ -153,6 +153,8 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
             409,
             'already_described',
             'This opportunity already has a description. Edit it instead.',
+            undefined,
+            { userFacing: true },
           );
         }
         // Not confirmed yet (#756, tl): Greenhouse's own answer for its embedded link is the

@@ -118,7 +118,10 @@ async function demoResetHold(app: FastifyInstance, opts: DemoResetHoldOptions): 
       clearTimeout(starts.get(req));
       // Ended before it could start (out of time, or its client gone): nothing runs.
       const ref = req.demoResetHoldLost ? null : hold.retain();
-      if (ref === null) throw new HttpError(503, 'try_again', 'Try again in a moment.');
+      if (ref === null)
+        throw new HttpError(503, 'try_again', 'Try again in a moment.', undefined, {
+          userFacing: true,
+        });
       try {
         // Its AI calls and streamed replies end on the hold's stop signal (#684).
         return await runWithHoldStop(hold.signal, () => handler.call(this, req, reply));
