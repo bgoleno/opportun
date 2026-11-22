@@ -2,7 +2,7 @@
 // sync and how many messages are stored. Nothing here can change the user's mailbox (FR-M7).
 import { CLASSIFY_JOB_KIND } from '../lib/mailClassifyQueue';
 import type { CommChannel } from '@opportun/core';
-import { and, count, eq, inArray } from 'drizzle-orm';
+import { and, count, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -12,12 +12,13 @@ import {
   gmailQueryForDays,
   writeGmailQuery,
 } from '../adapters/gmail';
-import { communications, jobs } from '../db/schema';
+import { communications } from '../db/schema';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import { appleMailState, gmailGranted as gmailGrantedFor } from '../lib/mailStatus';
 import { MAX_LOOKBACK_DAYS } from '../lib/lookback';
 import { requireUser, type UserCtx } from '../repos/base';
+import { countUnfinished } from '../repos/jobs';
 import { getSyncState, putSyncState } from '../repos/communications';
 import { readUserSetting } from '../repos/userSettings';
 import type { Db } from '../db/client';
@@ -32,18 +33,7 @@ async function gmailAccountAddress(db: Db, ctx: UserCtx): Promise<string | null>
 
 /** The user's classify jobs not yet finished: queued, or running now. */
 async function pendingClassify(db: Db, ctx: UserCtx): Promise<number> {
-  const row = await db
-    .select({ n: count() })
-    .from(jobs)
-    .where(
-      and(
-        eq(jobs.userId, ctx.userId),
-        eq(jobs.kind, CLASSIFY_JOB_KIND),
-        inArray(jobs.status, ['pending', 'running']),
-      ),
-    )
-    .get();
-  return row?.n ?? 0;
+  return countUnfinished(db, ctx, CLASSIFY_JOB_KIND);
 }
 
 const StatusSchema = z.object({

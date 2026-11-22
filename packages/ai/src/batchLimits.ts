@@ -32,3 +32,20 @@ export function timedFetches(doFetch: typeof fetch, limits: BatchCallLimits = DE
       doFetch(url, { ...init, signal: AbortSignal.timeout(ms) });
   return { control: timed(limits.controlMs), transfer: timed(limits.transferMs) };
 }
+
+/**
+ * A batch call the provider answered with a non-2xx status (#784, tl): it refused, so nothing was
+ * made by that call. Anything else (a timeout, a dropped or cut-short body after a 2xx) is no
+ * answer: the provider may have made the batch. The message names the call and the status only,
+ * never the key or the provider's text.
+ */
+export class BatchRefusedError extends Error {
+  constructor(
+    readonly call: string,
+    readonly status: number,
+    provider: string,
+  ) {
+    super(`${provider} batch ${call}: HTTP ${status}`);
+    this.name = 'BatchRefusedError';
+  }
+}

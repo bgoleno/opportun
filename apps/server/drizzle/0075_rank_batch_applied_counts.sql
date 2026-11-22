@@ -1,0 +1,1 @@
+ALTER TABLE `rank_batches` ADD `applied_counts` text;

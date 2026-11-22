@@ -20,6 +20,7 @@
 // submit job hands any waiting posting to the live drain. The setting itself stays hidden (#511).
 import { enqueue } from '../lib/jobQueue';
 import {
+  BatchRefusedError,
   batchRunRecord,
   estimateBatchRequestUsd,
   parseStructuredText,
@@ -31,9 +32,9 @@ import {
 } from '@opportun/ai';
 import type { FastifyBaseLogger } from 'fastify';
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import { withTransaction, type Db, type Exec } from '../db/client';
-import { jobs, users } from '../db/schema';
+import { jobs, rankBatches, users } from '../db/schema';
 import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
@@ -52,6 +53,7 @@ import {
   batchHoldUsd,
   failIfSubmitting,
   findInFlightBatch,
+  countApplied,
   getBatch,
   hasResult,
   listBatchWaitingIds,
@@ -179,12 +181,32 @@ export async function failStaleSubmitting(
 
 export type SubmitOutcome =
   | { status: 'submitted'; batchId: string; requests: number }
+  /** Made at the provider, but its row was gone or failed meanwhile: its removal is queued. */
+  | { status: 'unclaimed'; providerBatchId: string }
   | { status: 'off'; released: number }
   | { status: 'no_batches'; released: number }
   | { status: 'in_flight' }
   | { status: 'nothing_waiting' }
   | { status: 'no_room'; waiting: number }
-  | { status: 'provider_error'; returned: number };
+  | {
+      status: 'provider_error';
+      returned: number;
+      /**
+       * The provider refused the create call (#784, tl on #820): the send job is tried again on
+       * the runner's backoff. False for any other failure: see refusedSend.
+       */
+      answered: boolean;
+    };
+
+/**
+ * Whether the provider refused the send itself: a non-2xx answer to the create call, or to
+ * OpenAI's upload before it, so no batch was made (tl on #820). Anything else is no answer: a
+ * timeout, a stalled read, a body cut short after a 2xx; the batch may exist, and a resend would
+ * pay for it twice.
+ */
+function refusedSend(err: unknown): boolean {
+  return err instanceof BatchRefusedError && (err.call === 'submit' || err.call === 'upload');
+}
 
 /**
  * Sends the user's postings waiting for a batch as one batch, in the live drain's order, as many as
@@ -298,10 +320,27 @@ export async function submitRankBatch(
       },
       { scope: lockFor(ctx) },
     );
-    return { status: 'provider_error', returned };
+    return { status: 'provider_error', returned, answered: refusedSend(err) };
   }
   await racePoint('rankBatch.provider_answered');
-  await markBatchSubmitted(db, made.id, providerBatchId);
+  if (!(await markBatchSubmitted(db, made.id, providerBatchId))) {
+    // Its row went while it was being sent (the demo reset deleted the account) or the stale
+    // sweep failed it (tl on #820): nothing will collect it, and the provider holds it. Cancelled
+    // and removed as a deleted account's batch is (queueInFlightBatchCleanups), as the account
+    // named here: on the demo the reseeded account, with the same key.
+    await enqueueRankBatchCleanup(db, {
+      userId: ctx.userId,
+      policy: client.policy,
+      providerBatchId,
+      refs: [],
+      cancel: true,
+    });
+    log?.warn(
+      { 'opportun.rank_batch.id': made.id },
+      'a ranking batch was sent after its row went: its removal at the provider is queued',
+    );
+    return { status: 'unclaimed', providerBatchId };
+  }
   return { status: 'submitted', batchId: made.id, requests: send.length };
 }
 
@@ -332,6 +371,15 @@ async function applyBatchResult(
   item: BatchResultItem,
 ): Promise<Applied> {
   return await withTransaction(db, async (tx) => {
+    const applied = await applyInTx(tx);
+    // Counted with the result it describes (#784): a collect retried after a later failure reports
+    // what the first attempt applied. A result applied already ('done') or with no posting of the
+    // user's ('unmatched') applies nothing here.
+    if (applied !== 'done' && applied !== 'unmatched') await countApplied(tx, batch.id, applied);
+    return applied;
+  });
+
+  async function applyInTx(tx: Exec): Promise<Applied> {
     await racePoint('rankBatch.applying');
     const link = await takeBatchLink(tx, ctx, batch.id, item.customId);
     if (link === undefined) {
@@ -391,7 +439,7 @@ async function applyBatchResult(
       result.aiRationale,
     );
     return stored ? 'ranked' : 'changed';
-  });
+  }
 }
 
 type Counted = Exclude<Applied, 'done'> | 'errors';
@@ -493,13 +541,18 @@ export async function collectRankBatch(
     await racePoint('rankBatch.result_applied');
   }
   const n = (kind: Applied | 'errors'): number => tally.get(kind) ?? 0;
+  // What the batch's results did, this attempt and any before it (#784): an earlier attempt that
+  // applied them and then failed has left them counted on the batch. Unmatched and errors are this
+  // attempt's own: each attempt meets them again.
+  const kept = new Map(Object.entries((await getBatch(db, batch.id))?.appliedCounts ?? {}));
+  const k = (kind: Exclude<Counted, 'unmatched' | 'errors'>): number => kept.get(kind) ?? 0;
   const counts: Record<Counted, number> = {
-    ranked: n('ranked'),
-    changed: n('changed'),
-    dropped: n('dropped'),
-    invalid_output: n('invalid_output'),
-    failed: n('failed'),
-    returned: n('returned'),
+    ranked: k('ranked'),
+    changed: k('changed'),
+    dropped: k('dropped'),
+    invalid_output: k('invalid_output'),
+    failed: k('failed'),
+    returned: k('returned'),
     unmatched: n('unmatched'),
     errors: n('errors'),
   };
@@ -556,8 +609,54 @@ const CleanupPayload = z.object({
   policy: ModelPolicySchema,
   providerBatchId: z.string().min(1).max(256),
   refs: z.array(z.string().min(1).max(256)).max(8),
+  /**
+   * A batch still in flight whose account was deleted (#784): nobody will collect it, so it is
+   * cancelled before its copy is removed. Absent for a collected batch.
+   */
+  cancel: z.boolean().optional(),
 });
 export type RankBatchCleanup = z.infer<typeof CleanupPayload>;
+
+/**
+ * Queues the cleanup (cancel, then delete) of each of these accounts' batches still in flight, in
+ * the caller's transaction, before the accounts are deleted (#784: no collect will run for them,
+ * so the provider's copy would stay). An instance job, so it outlives the rows (jobs.user_id
+ * cascades); no provider call is made here (tl on #715). It runs as the account named in its
+ * payload, with that account's key: on the demo, where only the reset deletes users, the
+ * reseeded account has the same key, the instance's OPPORTUN_DEMO_AI_KEY. A general user delete
+ * would have to resolve the key before the user's stored key goes; never put a key in the payload
+ * (sec on #686).
+ */
+export async function queueInFlightBatchCleanups(
+  tx: Exec,
+  userIds: readonly string[],
+): Promise<void> {
+  if (userIds.length === 0) return;
+  const inFlight = await tx
+    .select({
+      userId: rankBatches.userId,
+      policy: rankBatches.policy,
+      providerBatchId: rankBatches.providerBatchId,
+    })
+    .from(rankBatches)
+    .where(
+      and(
+        inArray(rankBatches.userId, [...userIds]),
+        eq(rankBatches.state, 'submitted'),
+        isNotNull(rankBatches.providerBatchId),
+      ),
+    )
+    .all();
+  for (const batch of inFlight) {
+    await enqueueRankBatchCleanup(tx, {
+      userId: batch.userId,
+      policy: batch.policy as unknown as RankBatchCleanup['policy'],
+      providerBatchId: batch.providerBatchId as string,
+      refs: [],
+      cancel: true,
+    });
+  }
+}
 
 /** One unfinished cleanup per provider batch, however often its collect runs (sec on #686). */
 export async function enqueueRankBatchCleanup(
@@ -591,6 +690,19 @@ export async function cleanupRankBatch(
   const ctx: UserCtx = { userId: cleanup.userId, isAdmin: false };
   const client = await rankBatchClient(db, ctx, services, cleanup.policy as ModelPolicy);
   if (client === null) throw new Error('rank batch cleanup: no batch client for its user now');
+  if (
+    cleanup.cancel === true &&
+    (await client.provider.state(cleanup.providerBatchId)) === 'in_progress'
+  ) {
+    await client.provider.cancel(cleanup.providerBatchId);
+    // A cancel takes a while to land (OpenAI: up to ten minutes, its files written at the end).
+    // Removed on a later try, with the runner's backoff, once it has ended.
+    if ((await client.provider.state(cleanup.providerBatchId)) === 'in_progress') {
+      throw new Error(
+        'rank batch cleanup: the batch is still being cancelled; removed on a later try',
+      );
+    }
+  }
   await client.provider.cleanup(cleanup.providerBatchId, cleanup.refs);
   return { status: 'removed' };
 }
@@ -626,7 +738,7 @@ export async function cleanupPendingRankBatches(
     }
     await db
       .update(jobs)
-      .set({ status: 'done', updatedAt: Date.now() })
+      .set({ status: 'done', lastError: null, updatedAt: Date.now() })
       .where(and(eq(jobs.id, job.id), eq(jobs.status, 'pending')))
       .run();
     removed += 1;
@@ -669,9 +781,17 @@ export const rankBatchSubmitJob: JobHandler<Record<string, never>> = {
   maxAttempts: 3,
   async run(db, _payload, ctx) {
     if (ctx.userId === null) throw new Error(`${RANK_BATCH_SEND_KIND} needs a user`);
-    await ctx.setResult(
-      await submitRankBatch(db, { userId: ctx.userId, isAdmin: false }, ctx.services),
-    );
+    const outcome = await submitRankBatch(db, { userId: ctx.userId, isAdmin: false }, ctx.services);
+    await ctx.setResult(outcome);
+    // A send the provider refused is tried again on the runner's backoff (#784: about one minute,
+    // then two), not only at the hourly sweep or when the next posting joins; after its last
+    // attempt the sweep still sends it. Its postings already wait again, so each try is a fresh
+    // send. Not after a timeout (tl on #784): with no answer the provider may have made the batch
+    // after all, and a quick resend would leave that one an orphan no collect ever sees (point 7's
+    // double send, sooner); that wait stays the sweep's, as before.
+    if (outcome.status === 'provider_error' && outcome.answered) {
+      throw new Error('the provider refused the ranking batch; sending it again');
+    }
   },
 };
 
