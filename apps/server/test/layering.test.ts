@@ -47,7 +47,10 @@ describe('the runtime never imports from cli/ (#765)', () => {
     expect(specifiers(cli)).toContain('../lib/demo/seed');
     for (const runtime of ['lib/demoAccounts.ts', 'lib/demoOwnData.ts', 'plugins/session.ts']) {
       const specs = specifiers(await readFile(join(SRC, runtime), 'utf8'));
-      expect(specs.some((s) => s.endsWith('demo/fixture')), runtime).toBe(true);
+      expect(
+        specs.some((s) => s.endsWith('demo/fixture')),
+        runtime,
+      ).toBe(true);
     }
     const reset = specifiers(await readFile(join(SRC, 'jobs/demoReset.ts'), 'utf8'));
     expect(reset).toContain('../lib/demo/seed');
