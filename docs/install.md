@@ -1072,7 +1072,8 @@ name (`Recruiting`) matches that mailbox in every account and On My Mac, and
 `Account/Mailbox` (`iCloud/Recruiting`) picks one account's mailbox. The answers go to
 `~/.config/opportun-connector/config.json`, readable only by you (0600). `init` then sends
 an empty batch to check the token and prints the server's answer. Re-run `init` at any
-time; it offers your current answers as defaults and keeps the token if you press Enter.
+time; it offers your current answers as defaults and keeps the token if you press Enter,
+for the same server address: with another address it asks for that server's token.
 Every answer can also be given as a flag (`opportun-connector --help`). `init` asks for
 the server, the token, the mailboxes and the days only when you give none of `--server`, a
 token flag (`--token`, `--token-file` or `--token-stdin`), `--mailbox` and `--days`; once you

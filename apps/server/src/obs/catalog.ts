@@ -912,6 +912,11 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'opportunity dedupe AI call failed': ['opportun.dedupe_candidate.id', 'error.type'],
   'opportunity dedupe AI pass failed on a row': ['opportun.dedupe_candidate.id', 'error.type'],
   'opportunity dedupe AI returned an unrecognized ref': ['opportun.dedupe_candidate.id'],
+  // #742: the row stops being sent to the model; error.type is why its last pass failed.
+  'opportunity dedupe AI gave up on a row at its failure cap': [
+    'opportun.dedupe_candidate.id',
+    'error.type',
+  ],
   'failed to record a streamed AI call': [ATTR.aiTask],
   'could not read the base resume': ['opportun.resume.id'],
   // Accounts and integrations
