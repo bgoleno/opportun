@@ -65,11 +65,13 @@ describe('the dedicated account CLI: the audit row commits with the account (#80
     const err: string[] = [];
     const io = { stdout: (s: string) => out.push(s), stderr: (s: string) => err.push(s) };
     failing = 'demo.dedicated_account_created';
-    const code = await createDemoAccount({ db, env: ENV, email, displayName: 'A Reporter', io });
+    // As the reset CLI does (#723): the failure propagates, and the CLI exits nonzero.
+    await expect(
+      createDemoAccount({ db, env: ENV, email, displayName: 'A Reporter', io }),
+    ).rejects.toThrow('audit write failed');
     failing = null;
-    expect(code).not.toBe(0);
     expect(out).toEqual([]);
-    expect(err.join('\n')).toMatch(/Nothing changed/);
+    expect(err).toEqual([]);
     expect(await db.select().from(users).where(eq(users.email, email)).get()).toBeUndefined();
     // Run again with the audit write working, it creates the account.
     const again = await createDemoAccount({
