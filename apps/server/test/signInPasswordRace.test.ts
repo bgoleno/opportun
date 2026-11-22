@@ -397,6 +397,73 @@ describe('a code step after a password change or reset is refused as password_ch
     expect(pending[0]!.usedAt).not.toBeNull();
   });
 
+  it('a change removes pending tokens already marked or expired, and marks only the live one (tl and sec on #741)', async () => {
+    const { app, a, b } = await boot();
+    await enable(b);
+    const loginWith = (password: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: EMAIL.b, password },
+      });
+    const pendingIds = async () =>
+      (await rowsOf(app, b.userId)).filter((r) => r.kind === 'pending_2fa').map((r) => r.id);
+    // One token marked by a first change, one past its expiry, and one live.
+    expect((await loginWith(PASSWORD)).statusCode).toBe(200);
+    expect((await changeOwn(b)).statusCode).toBe(204);
+    const [marked] = await pendingIds();
+    expect((await loginWith(NEW_PASSWORD)).statusCode).toBe(200);
+    const expired = (await pendingIds()).find((id) => id !== marked)!;
+    await app.db
+      .update(sessions)
+      .set({ expiresAt: Date.now() - 1000 })
+      .where(eq(sessions.id, expired))
+      .run();
+    expect((await loginWith(NEW_PASSWORD)).statusCode).toBe(200);
+    const live = (await pendingIds()).find((id) => id !== marked && id !== expired)!;
+
+    expect((await resetBy(a, b)).statusCode).toBe(200);
+    const left = (await rowsOf(app, b.userId)).filter((r) => r.kind === 'pending_2fa');
+    expect(left.map((r) => r.id)).toEqual([live]);
+    expect(left[0]!.revokedReason).toBe('password_changed');
+  });
+
+  it('a marked token whose claim was released (a wrong code meanwhile) is still refused, and the code is not spent (tl on #741)', async () => {
+    const { app, b } = await boot();
+    const secret = await enable(b);
+    const { pendingToken } = (await login(app, EMAIL.b)).json() as { pendingToken: string };
+    expect((await changeOwn(b)).statusCode).toBe(204);
+    // As the wrong-code release leaves a row a change marked during that code check.
+    await app.db
+      .update(sessions)
+      .set({ usedAt: null })
+      .where(and(eq(sessions.userId, b.userId), eq(sessions.kind, 'pending_2fa')))
+      .run();
+    const code = totpCode(secret, Date.now() + 30_000);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/verify',
+      payload: { pendingToken, code },
+    });
+    expect(res.statusCode, res.body).toBe(401);
+    expect(codeOf(res)).toBe('password_changed');
+    expect((await rowsOf(app, b.userId)).map((r) => r.kind)).toEqual(['session']);
+    // The refused step never checked the code, so the same code still signs in afresh.
+    const again = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: EMAIL.b, password: NEW_PASSWORD },
+      })
+    ).json() as { pendingToken: string };
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/verify',
+      payload: { pendingToken: again.pendingToken, code },
+    });
+    expect(ok.statusCode, ok.body).toBe(200);
+  });
+
   it('an unknown token is still invalid_pending (the control)', async () => {
     const { app, b } = await boot();
     const secret = await enable(b);
