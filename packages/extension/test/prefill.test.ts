@@ -1369,6 +1369,26 @@ describe('#403: opening the popup on the handed-off posting fills it, once', () 
     expect(s.deps.runFill).not.toHaveBeenCalled();
   });
 
+  it('giving up at the bound aborts the lookup it sent (#783)', async () => {
+    const s = setup({ current: () => new Promise<FetchResponse>(() => undefined) });
+    await open(s);
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalledTimes(1));
+    const signal = s.get.mock.calls[0]?.[1]?.signal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal?.aborted).toBe(false);
+    s.endOpenBound();
+    await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+  });
+
+  it('a lookup answered within the bound is not aborted (#783)', async () => {
+    const s = setup({ current: first({ firstRead: false }) });
+    await open(s);
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+    s.endOpenBound();
+    for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0));
+    expect(s.get.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+  });
+
   it('a first read that arrives after the bound starts no fill', async () => {
     let release: (r: FetchResponse) => void = () => undefined;
     const held = new Promise<FetchResponse>((r) => {
