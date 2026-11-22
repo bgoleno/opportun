@@ -1,7 +1,7 @@
 // Append-only security audit trail (NFR-SEC7). Detail is redacted before it is stored,
 // so callers can pass context objects without first stripping credentials.
 import { newId } from '@opportun/core';
-import type { Exec } from '../db/client';
+import { afterCommit, type Exec } from '../db/client';
 import { auditLog } from '../db/schema';
 import { obs } from '../obs';
 import { isEventName } from '../obs/catalog';
@@ -62,8 +62,11 @@ export async function audit(
     .run();
   // Every audit action is also an event (design 14.9), emitted here so no call site changes:
   // its name and its user only, never its detail or address. With collection off this returns
-  // after one check. A name the catalog does not list (a test's) is not an event.
+  // after one check. A name the catalog does not list (a test's) is not an event. Only once the
+  // row's transaction has committed (#807): a change rolled back after this write never appears
+  // in the logs or the telemetry export as if it had happened.
   if (isEventName(event)) {
-    obs.event(event, {}, opts.userId === undefined ? {} : { userId: opts.userId });
+    const userId = opts.userId;
+    afterCommit(exec, () => obs.event(event, {}, userId === undefined ? {} : { userId }));
   }
 }
