@@ -159,7 +159,7 @@ and never keeps alive something the user asked to end.
   - a password change, a password reset (the administrator's or the command line's) and the first
     password set after a provider sign-in;
   - two-factor enrolment, activation and removal, and a spent recovery code;
-  - linking and unlinking a sign-in provider;
+  - linking a sign-in provider;
   - a device token's creation and renaming;
   - a stored secret's creation and edit, the Google client and connection, the Reactive Resume key,
     and the administrator's sign-in provider settings;
@@ -168,7 +168,7 @@ and never keeps alive something the user asked to end.
   - the demo's command-line account, whose password is shown only after it commits.
 - **Something removed or stopped commits first, then is recorded.** A failed audit write fails the
   request, but the removal or stop has already taken effect:
-  - signing out;
+  - signing out, and unlinking a sign-in provider;
   - revoking a device token (only the call that revoked it writes a row);
   - deleting a stored secret, disconnecting Google, removing the Reactive Resume key, and the
     administrator removing a sign-in provider;
