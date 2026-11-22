@@ -2,6 +2,7 @@
 // with the account). Readers validate the stored value and fall back to their default.
 import { and, eq } from 'drizzle-orm';
 import type { z } from 'zod';
+import { afterCommit } from '../db/client';
 import { settings } from '../db/schema';
 import type { Exec, UserCtx } from './base';
 import { obs } from '../obs';
@@ -39,8 +40,11 @@ export async function writeUserSetting(
     .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: now } })
     .run();
   // Which setting, never its value (design 14.9). A name not in SETTING_NAMES is dropped and
-  // counted by the gate, never written.
-  obs.event('settings.updated', { 'opportun.setting': name }, { userId: ctx.userId });
+  // counted by the gate, never written. Only once the write's transaction has committed (#824,
+  // via #807's afterCommit): a rolled-back write never appears as one that happened.
+  afterCommit(exec, () =>
+    obs.event('settings.updated', { 'opportun.setting': name }, { userId: ctx.userId }),
+  );
 }
 
 /**
