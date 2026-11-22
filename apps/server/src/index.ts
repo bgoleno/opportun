@@ -14,6 +14,7 @@ export async function main(): Promise<void> {
   installProcessHandlers();
   const cfg = loadConfig();
   // End-to-end fakes (OPPORTUN_*_MOCK=1, never in production): loaded only when asked for.
+  // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
   const env = process.env;
   const wantsMocks = [
     env.OPPORTUN_AI_MOCK,

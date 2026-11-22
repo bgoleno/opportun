@@ -25,6 +25,7 @@ import { errorType } from '../obs/outbound';
 import { RANK_BATCH_CLEANUP_KIND, RANK_WAITING_KIND } from './discoveryKinds';
 import { finishInterruptedRuns } from './interruptedRuns';
 import { getJobHandler, type JobContext, type JobHandler, type JobServices } from './registry';
+import { jobWorkersSetting } from '../config';
 
 /**
  * The services a job gets: a job that belongs to a user fetches under that user's rate key
@@ -78,10 +79,7 @@ export const DEFAULT_KIND_LIMITS: Readonly<Record<string, number>> = {
 };
 
 function envWorkers(): number {
-  const raw = process.env.OPPORTUN_JOB_WORKERS;
-  if (raw === undefined || raw.trim() === '') return DEFAULT_WORKERS;
-  const n = Number(raw);
-  return Number.isSafeInteger(n) && n >= 1 ? n : DEFAULT_WORKERS;
+  return jobWorkersSetting() ?? DEFAULT_WORKERS;
 }
 
 export type JobRow = typeof jobs.$inferSelect;

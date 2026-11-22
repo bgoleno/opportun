@@ -21,4 +21,5 @@ export function unsetEmptyAiBaseUrls(env: NodeJS.ProcessEnv): void {
   if (env.OPENAI_BASE_URL?.trim() === '') delete env.OPENAI_BASE_URL;
 }
 
+// eslint-disable-next-line no-restricted-properties -- clears empty AI base URLs in the environment before the AI SDK reads it, not a setting (#773)
 unsetEmptyAiBaseUrls(process.env);

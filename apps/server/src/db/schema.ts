@@ -6,15 +6,16 @@
 // row types (InferSelectModel/InferInsertModel) are identical and their names, defaults, keys
 // and indexes match (test/schemaConformance.test.ts). db/client.ts refuses to open a database
 // whose dialect differs from SCHEMA_DIALECT, so a process never mixes the two.
-import { parseDbDialect, type DbDialect } from './dialectName';
+import type { DbDialect } from './dialectName';
 import * as pgTables from './schema.pg';
 import type { TableExport } from './schema.shared';
 import * as sqliteTables from './schema.sqlite';
+import { schemaDialect } from '../config';
 
 export * from './schema.shared';
 
 /** The dialect this process's tables belong to (DB_DIALECT at load time). */
-export const SCHEMA_DIALECT: DbDialect = parseDbDialect(process.env.DB_DIALECT);
+export const SCHEMA_DIALECT: DbDialect = schemaDialect();
 
 type Tables = Pick<typeof sqliteTables, TableExport>;
 
