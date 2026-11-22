@@ -7,7 +7,7 @@
 // registerBuiltinSource) and overrides (registerSource: tests and the end-to-end source mock
 // replace a kind). getSource prefers an override; resetSources drops every override so the
 // built-ins come back.
-import type { DiscoverySourceKind, NormalizedPosting } from '@opportun/core';
+import { AtsOrgConfig, type DiscoverySourceKind, type NormalizedPosting } from '@opportun/core';
 import type { FastifyBaseLogger } from 'fastify';
 import { z } from 'zod';
 import type { safeFetch } from '../lib/safeFetch';
@@ -87,8 +87,8 @@ export function getSource(kind: SourceKind): DiscoverySource {
 // ---------------------------------------------------------------------------
 // Per-kind configuration (validated on create and update)
 
-/** An ATS board slug, as the board's public API names it. */
-export const AtsConfig = z.object({ org: z.string().regex(/^[a-z0-9-]{1,100}$/) }).strict();
+/** An ATS board slug, as the board's public API names it: the ATS sites' shared config (#769). */
+export const AtsConfig = AtsOrgConfig;
 
 /**
  * A Workday career site's host: `<tenant>.<datacenter>.myworkdayjobs.com`. The datacenter label

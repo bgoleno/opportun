@@ -17,6 +17,7 @@
 //
 // With collection off, or inside the exporter's own requests (runSuppressed), it calls straight
 // through after one check.
+import { SITES } from '@opportun/core';
 import { fixedServiceHosts, HTTP_METHODS, OTHER, type OutboundTarget } from './catalog';
 import { isCollecting, isSuppressed, obs } from './index';
 
@@ -174,8 +175,18 @@ export function outboundTargetFor(req: {
 
 const WORKDAY_SUFFIX = '.myworkdayjobs.com';
 
+// A registered site's exact fetch hosts are its own target, its source kind (#769); the rest are
+// written out until their sites move (step 6).
+const SITE_TARGETS: [string, OutboundTarget][] = SITES.flatMap((site) =>
+  site.sourceKind === undefined
+    ? []
+    : site.fetchHosts.flatMap((rule): [string, OutboundTarget][] =>
+        'exact' in rule ? [[rule.exact, site.sourceKind as OutboundTarget]] : [],
+      ),
+);
+
 const TARGET_BY_HOST = new Map<string, OutboundTarget>([
-  ['boards-api.greenhouse.io', 'ats_greenhouse'],
+  ...SITE_TARGETS,
   ['api.lever.co', 'ats_lever'],
   ['api.ashbyhq.com', 'ats_ashby'],
   ['api.smartrecruiters.com', 'ats_smartrecruiters'],

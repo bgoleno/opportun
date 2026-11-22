@@ -15,8 +15,7 @@ import { boardFromUrl, boardOfSource } from './atsBoard';
 import { greenhouseJidOf } from '@opportun/core';
 import { createHash } from 'node:crypto';
 import { and, desc, eq, isNull, ne } from 'drizzle-orm';
-import { GREENHOUSE_HOST } from '../adapters/sources/greenhouse';
-import { ATS_MAX_BYTES } from '../adapters/sources/atsCommon';
+import { greenhouseModule } from '../sites/greenhouse';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
 import { companies, discoverySources, opportunities } from '../db/schema';
@@ -93,39 +92,6 @@ export async function knownGreenhouseTokens(
   return out.slice(0, MAX_TOKENS_TRIED);
 }
 
-/**
- * What Greenhouse's API says about board `token` and job `jid`: it holds it, it does not, or no
- * answer came (the request failed, timed out, or the board was busy: #685, a later check can ask
- * again). `timeoutMs` undefined is the fetch's own limit.
- */
-async function boardHoldsJob(
-  sctx: Pick<SourceContext, 'fetch' | 'log'>,
-  token: string,
-  jid: string,
-  timeoutMs: number | undefined,
-): Promise<'yes' | 'no' | 'unknown'> {
-  let res;
-  try {
-    res = await sctx.fetch(`https://${GREENHOUSE_HOST}/v1/boards/${token}/jobs/${jid}`, {
-      allowHosts: [GREENHOUSE_HOST],
-      maxBytes: ATS_MAX_BYTES,
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
-    });
-  } catch (err) {
-    // The token names the company's board: only the kind is logged (design 14.8).
-    sctx.log.warn({ 'opportun.ats.kind': 'ats_greenhouse', err }, 'greenhouse job check failed');
-    return 'unknown';
-  }
-  if (res.status === 429 || res.status >= 500) return 'unknown';
-  if (res.status !== 200) return 'no';
-  try {
-    const body = JSON.parse(res.body.toString('utf8')) as { id?: unknown };
-    return String(body.id) === jid ? 'yes' : 'no';
-  } catch {
-    return 'no';
-  }
-}
-
 /** What a check found: an identity, or none, and whether some board gave no answer (#685). */
 export interface EmbedCheck {
   ref: AtsJobRef | null;
@@ -161,7 +127,7 @@ export async function checkEmbeddedGreenhouse(
       if (left <= 0) return { ref: null, undecided: true };
       share = Math.max(1, Math.floor(left / (tokens.length - i)));
     }
-    const said = await boardHoldsJob(sctx, token, jid, share);
+    const said = await greenhouseModule.api!.holdsJob!(sctx, token, jid, share);
     if (said === 'yes') return { ref: verifiedGreenhouseRef(token, jid, now), undecided: false };
     if (said === 'unknown') undecided = true;
   }

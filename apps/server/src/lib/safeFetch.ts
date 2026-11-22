@@ -16,6 +16,7 @@ import { lookup } from 'node:dns/promises';
 import type { IncomingHttpHeaders } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP, type LookupFunction } from 'node:net';
+import { hostMatchesRule, SITES, type HostRule } from '@opportun/core';
 import { provideAtsHosts, type OutboundTarget } from '../obs/catalog';
 import { observeOutbound, outboundTargetFor } from '../obs/outbound';
 
@@ -44,7 +45,14 @@ export class FetchBlockedError extends Error {
 }
 
 export interface SafeFetchOptions {
-  allowHosts: string[];
+  /**
+   * The hosts this call may reach, checked on every redirect hop. A string is that host and its
+   * subdomains, as before #769. A site's HostRule (packages/core/src/sites) matches exactly what
+   * it says: `{ exact }` that host only, `{ pattern }` the whole host. Both kinds stay while the
+   * sites move to the registry (https://github.com/bgoleno/opportun/issues/769, step 6): do not
+   * make one match like the other in the meantime.
+   */
+  allowHosts: readonly (string | HostRule)[];
   /**
    * Any public https host instead of the allowlist (user-entered URLs). PROHIBITED_HOSTS stay
    * refused and the private-address and redirect checks are unchanged.
@@ -156,11 +164,16 @@ export const OFFICIAL_API_URLS = {
 const OFFICIAL_API_URL_SET: ReadonlySet<string> = new Set(Object.values(OFFICIAL_API_URLS));
 
 /**
- * Public, unauthenticated applicant-tracking APIs for discovery adapters (M3). Kept here so
- * the compliance grep in safeFetch.test.ts sees every allowlist in one place.
+ * Public, unauthenticated applicant-tracking APIs for discovery adapters (M3): the fetch hosts of
+ * the registered sites (packages/core/src/sites, https://github.com/bgoleno/opportun/issues/769),
+ * then the ones written out here until their sites move (step 6). test/siteContract.test.ts
+ * compares the whole list with one written out in the test, so a new host shows in review.
  */
+const SITE_FETCH_HOSTS: readonly string[] = SITES.flatMap((site) =>
+  site.fetchHosts.flatMap((rule) => ('exact' in rule ? [rule.exact] : [])),
+);
 export const ATS_ALLOW_HOSTS: readonly string[] = [
-  'boards-api.greenhouse.io',
+  ...SITE_FETCH_HOSTS,
   'api.lever.co',
   'api.ashbyhq.com',
   'api.smartrecruiters.com',
@@ -335,10 +348,14 @@ function normalizeHost(host: string): string {
   return host.trim().toLowerCase().replace(/\.+$/, '');
 }
 
-/** True when `host` is an entry of `entries` or a subdomain of one, both sides normalized. */
-function hostMatches(host: string, entries: readonly string[]): boolean {
+/**
+ * True when `host` is allowed by one of `entries`, both sides normalized: a string entry is that
+ * host or a subdomain of it, a HostRule exactly what it says (see SafeFetchOptions.allowHosts).
+ */
+function hostMatches(host: string, entries: readonly (string | HostRule)[]): boolean {
   const h = normalizeHost(host);
   return entries.some((raw) => {
+    if (typeof raw !== 'string') return hostMatchesRule(h, raw);
     const entry = normalizeHost(raw);
     return entry.length > 0 && (h === entry || h.endsWith(`.${entry}`));
   });
@@ -492,7 +509,7 @@ export function createSafeFetch(deps: SafeFetchDeps) {
   /** Scheme, prohibited and allowed hosts, and a public pinned address for one hop. */
   async function checkHop(
     url: URL,
-    allowHosts: readonly string[],
+    allowHosts: readonly (string | HostRule)[],
     allowPublic: boolean,
     officialApiUrl: string | undefined,
   ): Promise<FetchTarget> {

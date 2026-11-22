@@ -18,12 +18,12 @@ import { enqueue } from '../lib/jobQueue';
 import { TITLE_MATCH_THRESHOLD, titleOverlap } from '../lib/titleMatch';
 import { boardConfig, boardFromUrl } from '../lib/atsBoard';
 import { AiUnavailableError, CaptureOutputSchema, renderPrompt, runStructured } from '@opportun/ai';
-import { decodeEntities, newId } from '@opportun/core';
+import { decodeEntities, greenhouse, type HostRule, newId } from '@opportun/core';
 import { and, asc, eq, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { htmlToText } from '../adapters/gmail';
 import { ASHBY_HOST } from '../adapters/sources/ashby';
-import { GREENHOUSE_HOST } from '../adapters/sources/greenhouse';
+import { greenhouseModule } from '../sites/greenhouse';
 import { LEVER_HOST } from '../adapters/sources/lever';
 import { fetchWorkdayDetail, workdayBoard } from '../adapters/sources/workday';
 import type { Db } from '../db/client';
@@ -412,16 +412,26 @@ export async function workdayPostingText(
   }
 }
 
+function greenhouseListingUrl(slug: string): string | null {
+  try {
+    return greenhouseModule.api!.urls.board(slug);
+  } catch {
+    return null;
+  }
+}
+
 /** Public board APIs of the three known ATS providers, as title+url anchors. */
 export async function boardAnchors(
   fetch: typeof safeFetch,
   board: { kind: string; slug: string },
 ): Promise<PageAnchor[]> {
+  // Greenhouse's URL is its site module's (#769), which refuses a slug no board has: no anchors.
+  const greenhouseUrl = board.kind === 'ats_greenhouse' ? greenhouseListingUrl(board.slug) : null;
   const spec =
-    board.kind === 'ats_greenhouse'
+    greenhouseUrl !== null
       ? {
-          host: GREENHOUSE_HOST,
-          url: `https://${GREENHOUSE_HOST}/v1/boards/${board.slug}/jobs`,
+          host: greenhouse.fetchHosts[0]! as string | HostRule,
+          url: greenhouseUrl,
           pick: (body: unknown): PageAnchor[] => {
             const jobs = (body as { jobs?: unknown[] })?.jobs ?? [];
             return jobs.flatMap((j) => {

@@ -4,7 +4,7 @@
 // source shows the error, and the runner does not retry it.
 import { enqueue } from '../src/lib/jobQueue';
 import { readFileSync } from 'node:fs';
-import type { NormalizedPosting } from '@opportun/core';
+import type { HostRule, NormalizedPosting } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -38,7 +38,7 @@ const fixture = (name: string) =>
 
 interface Call {
   url: string;
-  allowHosts: string[];
+  allowHosts: (string | HostRule)[];
 }
 
 /** A recording safeFetch stand-in that answers every request with `respond(url)`. */
@@ -82,7 +82,8 @@ describe('greenhouse adapter', () => {
     expect(calls).toEqual([
       {
         url: 'https://boards-api.greenhouse.io/v1/boards/initech/jobs?content=true',
-        allowHosts: ['boards-api.greenhouse.io'],
+        // The site's exact rule since #769: that host only, not its subdomains.
+        allowHosts: [{ exact: 'boards-api.greenhouse.io' }],
       },
     ]);
     expect(postings).toHaveLength(2);
