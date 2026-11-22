@@ -210,24 +210,36 @@ describe("Find posting resolves the opportunity's own careers link (tl on #414, 
     expect(res.json().outcome).toBe('identified');
     expect(board.reads).toBe(0);
     expect(await refOf(app, a, id)).toMatchObject({ org: 'examplecorp', url: BOARD_PAGE });
-    expect((await getOpportunity(app.db, ctxOf(a), id)).descriptionMd).toBe(
-      'My own notes about this role.',
-    );
+    // #756 (tl): the API's answer now confirms the posting too, as the user's own.
+    expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject({
+      descriptionMd: 'My own notes about this role.',
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+    });
   });
 
-  it('a description the user wrote and no board holds the job: 409 as before, and no identity', async () => {
+  // #756: no board holds the job, so the board is read (unconfirmed) and nothing is found; with the
+  // posting confirmed, the refusal stands as before.
+  it('a description the user wrote and no board holds the job: no identity, refused once confirmed', async () => {
     const { app, a } = await boot();
     const id = await seed(app, a);
     await updateOpportunity(app.db, ctxOf(a), id, {
       postingUrl: CAREERS,
       descriptionMd: 'My own notes about this role.',
     });
-    const res = await a.request({
-      method: 'POST',
-      url: `/api/v1/opportunities/${id}/find-posting`,
-    });
-    expect(res.statusCode).toBe(409);
+    const find = () =>
+      a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    const res = await find();
+    expect(res.statusCode, res.body).toBe(200);
     expect(await refOf(app, a, id)).toBeNull();
+    expect((await getOpportunity(app.db, ctxOf(a), id)).descriptionMd).toBe(
+      'My own notes about this role.',
+    );
+    await setPostingState(app.db, ctxOf(a), id, {
+      postingState: 'confirmed',
+      postingStateDetail: null,
+    });
+    expect((await find()).statusCode).toBe(409);
   });
 
   it('the same careers link arriving only in mail gets no identity, and no request (criterion 6)', async () => {
