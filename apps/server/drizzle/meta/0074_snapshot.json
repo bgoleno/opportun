@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "273472d7-f818-44d4-ab32-3339fd30777c",
+  "id": "c947ac91-5ef6-470b-adc4-4da148b4dcc1",
   "prevId": "e74a8113-ed67-4ea7-9cc9-9f19dc1c7f76",
   "tables": {
     "activities": {
@@ -2949,6 +2949,14 @@
           ],
           "isUnique": false
         },
+        "obs_metric_points_bucket_idx": {
+          "name": "obs_metric_points_bucket_idx",
+          "columns": [
+            "bucket_start",
+            "series"
+          ],
+          "isUnique": false
+        },
         "obs_metric_points_user_id_idx": {
           "name": "obs_metric_points_user_id_idx",
           "columns": [
@@ -4094,13 +4102,6 @@
         "collected_at": {
           "name": "collected_at",
           "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "applied_counts": {
-          "name": "applied_counts",
-          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

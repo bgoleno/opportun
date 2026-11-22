@@ -1,5 +1,5 @@
 {
-  "id": "19a2994b-ca34-4860-b486-6b1f766d9a8a",
+  "id": "9a67e92f-f77a-4023-8817-6b598c853686",
   "prevId": "b496dc75-3b30-483a-b5c1-8f20167419a3",
   "version": "7",
   "dialect": "postgresql",
@@ -3243,6 +3243,27 @@
           "method": "btree",
           "with": {}
         },
+        "obs_metric_points_bucket_idx": {
+          "name": "obs_metric_points_bucket_idx",
+          "columns": [
+            {
+              "expression": "bucket_start",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "series",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "obs_metric_points_user_id_idx": {
           "name": "obs_metric_points_user_id_idx",
           "columns": [
@@ -4498,12 +4519,6 @@
         "collected_at": {
           "name": "collected_at",
           "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "applied_counts": {
-          "name": "applied_counts",
-          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },

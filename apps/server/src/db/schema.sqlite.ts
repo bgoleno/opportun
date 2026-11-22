@@ -1344,6 +1344,8 @@ export const obsMetricPoints = sqliteTable(
     primaryKey({ columns: [t.series, t.resolution, t.bucketStart] }),
     index('obs_metric_points_metric_idx').on(t.metric, t.resolution, t.bucketStart),
     index('obs_metric_points_age_idx').on(t.resolution, t.bucketStart),
+    // The point cap's order, oldest first across both resolutions (#594).
+    index('obs_metric_points_bucket_idx').on(t.bucketStart, t.series),
     index('obs_metric_points_user_id_idx').on(t.userId),
   ],
 );

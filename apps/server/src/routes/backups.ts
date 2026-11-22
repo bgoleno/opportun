@@ -9,8 +9,7 @@ import { BACKUP_JOB_KIND, listBackups, MANUAL_BACKUP_DEDUPE_KEY } from '../jobs/
 import { readLiveCheck } from '../jobs/dbIntegrityCheck';
 import { enqueue, readSchedules, SCHEDULE_PREFIX } from '../jobs/runner';
 import { audit } from '../lib/audit';
-import { forbidden } from '../lib/errors';
-import { requireUser } from '../repos/base';
+import { requireAdmin } from '../repos/base';
 
 /** issue #170: "exists and completed" is not "restorable". null: never checked (a snapshot
  *  from before this shipped, or the most recent boot's first night). */
@@ -56,7 +55,7 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
   const db = app.db;
 
   api.get('/backups', { schema: { response: { 200: BackupList } } }, async (req) => {
-    if (!requireUser(req).isAdmin) throw forbidden();
+    requireAdmin(req);
     const schedule =
       (await readSchedules(db)).find((s) => s.kind === BACKUP_JOB_KIND)?.schedule ?? null;
     const next = await db
@@ -99,8 +98,7 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
     '/backups',
     { schema: { response: { 202: z.object({ jobId: z.string() }) } } },
     async (req, reply) => {
-      const ctx = requireUser(req);
-      if (!ctx.isAdmin) throw forbidden();
+      const ctx = requireAdmin(req);
       const jobId = await enqueue(db, BACKUP_JOB_KIND, {}, { dedupeKey: MANUAL_BACKUP_DEDUPE_KEY });
       await audit(db, 'backup.requested', {
         userId: ctx.userId,
