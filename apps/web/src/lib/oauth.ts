@@ -42,6 +42,11 @@ const LOGIN_FLASH = new Map<string, string>([
   ],
   ['denied', 'Sign-in was cancelled at the provider.'],
   ['session', 'Your session ended before linking finished. Sign in and try again.'],
+  // A callback whose state did not verify (#662): the server sends it here when no one is signed in.
+  [
+    'not_completed',
+    'That sign-in or account link was not completed: it was out of date, already used, or started in another session. Sign in, then try again.',
+  ],
 ]);
 const GENERIC_ERROR = 'Something went wrong signing in with that provider. Try again.';
 

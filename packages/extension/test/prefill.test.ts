@@ -319,11 +319,12 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
     expect(serialized).not.toContain(SERVER);
   });
 
-  it('a snapshot that is not ready is never fetched, and the report says to attach it yourself', async () => {
+  it('an attempt with no resume chosen fetches nothing, and the report says to attach it yourself', async () => {
+    // What the server sends for an attempt with no resume (connectorApply.ts): all nulls.
     const s = setup({
       current: json(200, {
         attempt: attempt({
-          resume: { snapshotState: 'unsupported', filename: null, bytes: null },
+          resume: { snapshotState: null, filename: null, bytes: null },
         }),
         reason: null,
       }),
@@ -334,19 +335,95 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
     expect(listed(s, 'Not filled in')).toContain('Resume: attach your resume yourself');
   });
 
-  for (const [why, snapshot] of [
-    ['refused (409)', json(409, { error: { code: 'snapshot_not_ready' } })],
-    ['no longer handed off (404)', json(404, { error: { code: 'not_found' } })],
-    ['not a PDF', pdf(PDF, 'text/html')],
-    ['not the announced size', pdf(PDF.slice(0, 10))],
-    ['without the PDF signature', pdf(new TextEncoder().encode('<html>placeholder....</html>'))],
+  // Each says why (#653): still being prepared, could not be downloaded, or not usable.
+  const PREPARING =
+    'Resume: the copy is still being prepared: try again in a minute, or attach your resume yourself';
+  const NOT_DOWNLOADED =
+    'Resume: the copy could not be downloaded from Opportun: try again, or attach your resume yourself';
+  const UNUSABLE = 'Resume: the copy in Opportun is not a usable PDF: attach your resume yourself';
+  for (const [why, snapshot, words] of [
+    [
+      'refused (409) without a state',
+      json(409, { error: { code: 'snapshot_not_ready' } }),
+      'Resume: attach your resume yourself',
+    ],
+    [
+      'refused (409) while still being prepared',
+      json(409, { error: { code: 'snapshot_not_ready', snapshotState: 'pending' } }),
+      PREPARING,
+    ],
+    [
+      // An export that failed (a deleted resume, say) is not "not a usable PDF" (qa on #717).
+      'refused (409) as failed',
+      json(409, { error: { code: 'snapshot_not_ready', snapshotState: 'failed' } }),
+      'Resume: attach your resume yourself',
+    ],
+    [
+      'refused (409) as unsupported',
+      json(409, { error: { code: 'snapshot_not_ready', snapshotState: 'unsupported' } }),
+      UNUSABLE,
+    ],
+    [
+      'refused (409) as deleted',
+      json(409, { error: { code: 'snapshot_not_ready', snapshotState: 'deleted' } }),
+      'Resume: attach your resume yourself',
+    ],
+    ['no longer handed off (404)', json(404, { error: { code: 'not_found' } }), NOT_DOWNLOADED],
+    ['a server error (503)', json(503, { error: { code: 'unavailable' } }), NOT_DOWNLOADED],
+    ['not a PDF', pdf(PDF, 'text/html'), UNUSABLE],
+    ['not the announced size', pdf(PDF.slice(0, 10)), UNUSABLE],
+    [
+      'without the PDF signature',
+      pdf(new TextEncoder().encode('<html>placeholder....</html>')),
+      UNUSABLE,
+    ],
   ] as const) {
-    it(`a copy that is ${why} is not attached: attach it yourself`, async () => {
+    it(`a copy that is ${why} is not attached, and the report says why`, async () => {
       const s = setup({ snapshot });
       await clickFill(s);
       expect(s.plans[0]!.resume).toBeNull();
       expect((s.page.doc.getElementById('resume') as HTMLInputElement).files).toHaveLength(0);
-      expect(listed(s, 'Not filled in')).toContain('Resume: attach your resume yourself');
+      expect(listed(s, 'Not filled in')).toContain(words);
+    });
+  }
+
+  it('a download that fails on the network is not attached: it could not be downloaded (#653)', async () => {
+    const s = setup({});
+    const get = s.get.getMockImplementation()!;
+    s.get.mockImplementation(async (url, init) => {
+      if (url.endsWith('/snapshot')) throw new TypeError('Failed to fetch');
+      return get(url, init);
+    });
+    await clickFill(s);
+    expect(s.plans[0]!.resume).toBeNull();
+    expect(listed(s, 'Not filled in')).toContain(NOT_DOWNLOADED);
+  });
+
+  it('a body that cannot be read is not attached: it could not be downloaded (#653)', async () => {
+    const broken = { ...pdf(), arrayBuffer: async () => Promise.reject(new TypeError('network')) };
+    const s = setup({ snapshot: broken as FetchResponse });
+    await clickFill(s);
+    expect(s.plans[0]!.resume).toBeNull();
+    expect(listed(s, 'Not filled in')).toContain(NOT_DOWNLOADED);
+  });
+
+  for (const [state, filename, words] of [
+    // As the server sends them: a file name only with 'ready' (qa on #717).
+    ['pending', null, PREPARING],
+    ['failed', null, 'Resume: attach your resume yourself'],
+    ['unsupported', null, UNUSABLE],
+  ] as const) {
+    it(`a copy whose state is ${state} is never fetched, and the report says why (#653)`, async () => {
+      const s = setup({
+        current: json(200, {
+          attempt: attempt({ resume: { snapshotState: state, filename, bytes: null } }),
+          reason: null,
+        }),
+      });
+      await clickFill(s);
+      expect(s.get).toHaveBeenCalledTimes(1);
+      expect(s.plans[0]!.resume).toBeNull();
+      expect(listed(s, 'Not filled in')).toContain(words);
     });
   }
 
@@ -992,6 +1069,23 @@ describe('#402 slice 2: the fill waits for lists, and the report lists every cho
     expect(listed(s, 'Not filled in')).toContain(
       'School: no option on the form\'s list is exactly "University of Example": choose it on the form',
     );
+  });
+
+  // #738 (qa's regression pass): an option the filler would not click because of where it sits
+  // (inside a link or a label) was reported as missing from the list.
+  it('a list option it would not click for where it sits is reported as that, not as missing', () => {
+    const lines = reportLines({
+      ok: true,
+      chosen: [],
+      filled: [],
+      notFilled: [
+        { label: 'School', reason: 'option_unclickable', detail: 'University of Example' },
+      ],
+      resume: null,
+    });
+    expect(lines.notFilled).toEqual([
+      'School: the form\'s list has "University of Example", but inside a link or a label, so Opportun did not click it: choose it on the form',
+    ]);
   });
 
   it('a value with replacement patterns is shown as it is (sec at 8084132)', () => {

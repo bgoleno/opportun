@@ -163,6 +163,8 @@ export function useInbox(
         `/communications?view=${view}&limit=${pageSize}&offset=${page * pageSize}` +
           filterQuery(filters),
       ),
+    // The rows on screen stay while the next page or a new filter loads (#646, #678): without
+    // them the selection, and a confirmation open for it, would be dropped for that moment.
     placeholderData: keepPreviousData,
   });
 }

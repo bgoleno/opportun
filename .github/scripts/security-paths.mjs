@@ -103,6 +103,8 @@ export const SECURITY_SENSITIVE_GLOBS = [
   // decides what the Publish image jobs holding packages: write and contents: write publish:
   // which image tags, git tag and Release, and which refusals stop them (#478)
   '.github/scripts/publish.mjs',
+  // decides whether the image's OS-package scan fails (#728): a change to it can turn the scan off
+  '.github/scripts/image-scan-gate.mjs',
   // the merge procedure for protected main, and the script that deletes a deployment's files
   // and data (#256)
   'scripts/merge-when-green.sh',
@@ -145,6 +147,8 @@ export const SECURITY_SENSITIVE_GLOBS = [
   'packages/ai/src/tasks.ts',
   // the demo boundary: shared and dedicated accounts, the seed, and the nightly reset
   'apps/server/src/lib/demo*.ts',
+  // the seed and its fixture (moved out of cli/ in #765)
+  'apps/server/src/lib/demo/*.ts',
   'apps/server/src/cli/seedDemo*.ts',
   'apps/server/src/cli/createDemoAccount.ts',
   'apps/server/src/jobs/demoReset.ts',

@@ -7,14 +7,14 @@ import { randomBytes } from 'node:crypto';
 import { newId } from '@opportun/core';
 import { eq, inArray } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { DEMO_SEED_ACK_KEY, derivedId } from '../src/cli/seedDemo';
+import { DEMO_SEED_ACK_KEY, derivedId } from '../src/lib/demo/seed';
 import {
   DEMO_IDENTITY_VALUES,
   DEMO_RESUME_BASE_ID,
   DEMO_RESUME_BASE_TEXT,
   DEMO_TAILORED_RESUMES,
   DEMO_USERS,
-} from '../src/cli/seedDemoFixture';
+} from '../src/lib/demo/fixture';
 import {
   applicationSubmissions,
   attachments,

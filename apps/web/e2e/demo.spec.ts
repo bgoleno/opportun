@@ -40,7 +40,7 @@ const Database = createRequire(new URL('../../server/package.json', import.meta.
   close(): void;
 };
 
-/** demo-user1, a shared account (seedDemoFixture's DEMO_USERS). */
+/** demo-user1, a shared account (lib/demo/fixture.ts's DEMO_USERS). */
 const SHARED = { email: 'demo-user1@opportun-demo.example', password: DEMO_PASSWORDS.user1 };
 const SHARED_WARNING =
   'This is a shared demo account. Anything you enter here is visible to others using it, and is cleared at the nightly reset.';
@@ -289,15 +289,42 @@ function dedicatedAccount(name: string): { email: string; password: string } {
   return { email, password };
 }
 
-async function noticesShown(page: Page, id: string): Promise<{ files: number; twoFactor: number }> {
+/**
+ * The shared-account notices a page shows, counted only once the page knows what account this is
+ * (#778). A notice renders only after /onboarding has answered (useSharedDemoAccount is undefined
+ * until then), so a count taken as soon as the page's heading shows read 0 on a slow run, and the
+ * dedicated account's expected 0 held whether or not the notice would come. Each page is read
+ * after its own /onboarding answer and the control that its other query renders (the upload
+ * control; the two-factor button), and the count is a retrying toHaveCount.
+ */
+async function expectNotices(
+  page: Page,
+  id: string,
+  want: { files: number; twoFactor: number },
+): Promise<void> {
+  const onboarded = () =>
+    page.waitForResponse(
+      (r) => new URL(r.url()).pathname === '/api/v1/onboarding' && r.status() === 200,
+    );
+  // A rendered frame after the answer, so a notice that will show is in the page before a 0 is
+  // taken as the answer.
+  const settled = () =>
+    page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+
+  let answered = onboarded();
   await page.goto(`/opportunities/${id}`);
   await page.getByRole('tab', { name: 'Details' }).click();
   await expect(page.getByText('Upload a file')).toBeVisible();
-  const files = await page.getByText(FILES_NOTICE).count();
+  await answered;
+  await settled();
+  await expect(page.getByText(FILES_NOTICE)).toHaveCount(want.files);
+
+  answered = onboarded();
   await page.goto('/settings/security');
-  await expect(page.getByRole('heading', { name: /Two-factor/ }).first()).toBeVisible();
-  const twoFactor = await page.getByText(TWO_FACTOR_NOTICE).count();
-  return { files, twoFactor };
+  await expect(page.getByRole('button', { name: 'Enable two-factor' })).toBeVisible();
+  await answered;
+  await settled();
+  await expect(page.getByText(TWO_FACTOR_NOTICE)).toHaveCount(want.twoFactor);
 }
 
 test('a shared account shows the attachment and two-factor notices, and refuses the demo phone by field (#671)', async ({
@@ -307,7 +334,7 @@ test('a shared account shows the attachment and two-factor notices, and refuses 
   const user = { email: 'demo-user2@opportun-demo.example', password: DEMO_PASSWORDS.user2 };
   await signIn(page, user.email, user.password);
   const id = await captured(page, playwright, user.password);
-  expect(await noticesShown(page, id)).toEqual({ files: 1, twoFactor: 1 });
+  await expectNotices(page, id, { files: 1, twoFactor: 1 });
   // A shared account keeps the demo's own tour: no setup checklist on the dashboard (#586).
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
@@ -338,7 +365,7 @@ test('a dedicated account shows neither notice, and gets the normal setup checkl
   await signIn(page, email, password);
   await expect(page.getByText('Get set up')).toBeVisible();
   const id = await captured(page, playwright, password);
-  expect(await noticesShown(page, id)).toEqual({ files: 0, twoFactor: 0 });
+  await expectNotices(page, id, { files: 0, twoFactor: 0 });
 });
 
 test('the nightly reset reseeds the shared accounts and ends their sessions, and leaves a dedicated account as it was (#638)', async ({

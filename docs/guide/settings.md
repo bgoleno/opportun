@@ -327,15 +327,23 @@ queue.
 
 - **Import**: a zip or folder with `opportunities.csv` (and optionally `network.csv` and the
   Markdown notes it refers to). A pack made before the Network section was renamed calls that
-  file `contacts.csv`, and it imports the same way; a pack holding both is refused. Importing
-  the same pack again changes nothing: rows match on company, title and location, and stages
-  only move forward.
+  file `contacts.csv`, and it imports the same way; a pack holding both is refused. A pack whose
+  `opportunities.csv` has no `closed_reason` column, from an older build, imports too, its
+  closed opportunities with no reason. Importing the same pack again changes nothing: rows match
+  on company, title and location, and stages only move forward.
 - **LinkedIn export**: see [Network](network.md#import-your-linkedin-export).
 - **Export**: a zip of everything you own (`export.json` with every table, a Markdown summary
   per opportunity, and an `opportunities.csv` you can import again). Stored keys and tokens
   are never included. A CSV cell that would otherwise begin with `=`, `+`, `-` or `@` is
   written with a leading apostrophe, so a spreadsheet shows the text instead of running it as
   a formula; the importer drops that apostrophe again.
+
+  Importing an export brings back only what `opportunities.csv` holds: each opportunity's
+  company, title, stage (with its dismissed or closed reason), posting link, location and
+  source. Everything else stays in the export only, in `export.json` and the summaries: notes,
+  activities and next steps, contacts and referral asks, resumes and attachments, and inbox
+  messages. Keep the zip for those.
+
 - **Backups** (administrators): the server snapshots its database every night at 03:00 server
   time and keeps the 14 newest. **Back up now** takes one immediately. Restoring is done on
   the server: see [install guide section 6](../install.md#6-upgrades-and-backups).

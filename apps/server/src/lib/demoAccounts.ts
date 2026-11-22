@@ -4,7 +4,7 @@
 // account the owner makes on a demo server for one person. Shared means one of the seed's pinned
 // ids, the set the nightly reset deletes and reseeds, never a stored flag: a flag could be changed
 // at runtime, and the shared demo admin's password is known to every invitee.
-import { DEMO_USERS } from '../cli/seedDemoFixture';
+import { DEMO_USERS } from './demo/fixture';
 import type { Config } from '../config';
 
 /** The seed's pinned account ids: the shared demo accounts. */

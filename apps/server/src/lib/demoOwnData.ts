@@ -8,7 +8,7 @@
 // made for one person on a demo server, and every account off the demo, is untouched. The checks run at review,
 // at handoff and when the extension asks for the attempt (/connector/apply/current), so a fixture
 // value put back behind the server's back is still never sent.
-import { DEMO_IDENTITY_VALUES } from '../cli/seedDemoFixture';
+import { DEMO_IDENTITY_VALUES } from './demo/fixture';
 import type { Config } from '../config';
 import { isSharedDemoAccount } from './demoAccounts';
 import { HttpError } from './errors';
@@ -23,14 +23,20 @@ const normalise = (v: string): string =>
 const digits = (v: string): string => v.replace(/\D/g, '');
 
 /**
- * A phone's national number (#682, qa on #676): its digits, less the international prefix (00)
- * and North America's country code (1) on an 11-digit number, so the seeded +1 number typed as
- * 415-555-0134, 1-415-555-0134 or 00 1 415 555 0134 is the same number. The seed's numbers are
+ * A phone's national number (#682, qa on #676): its digits, less a trailing extension, the
+ * international exit prefix (00, or North America's 011: #726) and North America's country code
+ * (1) on an 11-digit number, so the seeded +1 number typed as 415-555-0134, 1-415-555-0134,
+ * 011 1 415 555 0134 or 415-555-0134 ext 2 is the same number. The seed's numbers are
  * North American; another country's code stays, so +44 415 555 0134 is another number.
  */
 function nationalDigits(v: string): string {
-  let d = digits(v);
-  if (d.startsWith('00')) d = d.slice(2);
+  // A trailing extension, of any length (qa on #762), is not part of the number (#726): "ext 2",
+  // "x12", "#3", "extension 45".
+  // Trimmed first, so the pattern has no run of spaces next to another (linear on any input).
+  let d = digits(v.trim().replace(/(?:ext(?:ension)?\.?|x|#)\s*\d+$/i, ''));
+  // The international exit prefix: 00, or North America's 011 (#726).
+  if (d.startsWith('011')) d = d.slice(3);
+  else if (d.startsWith('00')) d = d.slice(2);
   if (d.length === 11 && d.startsWith('1')) d = d.slice(1);
   return d;
 }
