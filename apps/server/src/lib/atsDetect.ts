@@ -15,6 +15,7 @@ import { ASHBY_HOST } from '../adapters/sources/ashby';
 import { arr, ATS_MAX_BYTES, obj } from '../adapters/sources/atsCommon';
 import { greenhouse, type HostRule } from '@opportun/core';
 import { GREENHOUSE_HOST } from '../adapters/sources/greenhouse';
+import { greenhouseModule } from '../sites/greenhouse';
 import { LEVER_HOST } from '../adapters/sources/lever';
 import { fetchWorkdayPage, workdayBoard } from '../adapters/sources/workday';
 import { withTransaction, type Db, type Exec } from '../db/client';
@@ -87,7 +88,7 @@ export const ATS_PROBES: readonly Probe[] = [
     allow: greenhouse.fetchHosts,
     // The jobs list rather than the board's metadata, which cannot show whether it is serving
     // anything. Without `content=true` the response carries titles and ids only.
-    url: (slug) => `https://${GREENHOUSE_HOST}/v1/boards/${slug}/jobs`,
+    url: (slug) => greenhouseModule.api!.urls.board(slug),
     verify: (body) => arr(obj(body).jobs).length > 0,
   },
   {
