@@ -157,6 +157,16 @@ describe('init', () => {
       expect(fs.writes).toEqual([]);
     });
 
+    it('refuses a token file over 4 KiB, before reading it (tl and sec on #740)', async () => {
+      const { io, fs, err } = makeIo();
+      await fs.writeText('/home/me/token', 'x'.repeat(5_000), 0o600);
+      fs.writes = [];
+      const code = await main(['init', ...FLAGS, '--token-file', '/home/me/token'], io);
+      expect(code).toBe(EXIT.USAGE);
+      expect(err.join('\n')).toMatch(/larger than a device token file/);
+      expect(fs.writes).toEqual([]);
+    });
+
     it('refuses a token file that is not there', async () => {
       const { io, fs, err } = makeIo();
       const code = await main(['init', ...FLAGS, '--token-file', '/home/me/nope'], io);

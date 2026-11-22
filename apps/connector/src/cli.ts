@@ -22,6 +22,7 @@ import {
   EXIT,
   maskTokens,
   redact,
+  TOKEN_FILE_LIMIT,
   VERSION,
   type ConnectorIo,
   type ExitCode,
@@ -106,11 +107,21 @@ const mailboxList = (s: string): string[] =>
  * is, since a token there is as good as a password for pushing mail.
  */
 async function tokenFromFile(io: ConnectorIo, path: string): Promise<string> {
-  const mode = await io.fs.permissions(path);
-  const text = mode === null ? null : await io.fs.readText(path);
-  if (mode === null || text === null) {
-    throw new ConnectorError(`No token file at ${path}.`, EXIT.USAGE);
+  // One open for both (#699, sec on #695): the mode checked is the mode of the file read.
+  const file = await io.fs.readTextAndMode(path);
+  if (file === null) throw new ConnectorError(`No token file at ${path}.`, EXIT.USAGE);
+  // Bounded as --token-stdin is (tl and sec on #740): a FIFO or a huge file would hang init.
+  if (!file.isFile) {
+    throw new ConnectorError(`${path} is not a regular file.`, EXIT.USAGE);
   }
+  if (file.size > TOKEN_FILE_LIMIT) {
+    throw new ConnectorError(
+      `${path} is larger than a device token file can be (${TOKEN_FILE_LIMIT} bytes).`,
+      EXIT.USAGE,
+    );
+  }
+  const { mode } = file;
+  const text = file.text ?? '';
   if ((mode & 0o077) !== 0) {
     throw new ConnectorError(
       `${path} can be read by others (mode ${mode.toString(8)}). A token file must be yours ` +
