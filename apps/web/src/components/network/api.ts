@@ -80,10 +80,13 @@ export interface ReferralCandidates extends Page<ReferralCandidate> {
 export interface OpportunityReferral {
   activityId: string;
   contactId: string;
+  /** The contact's current name, or the one the ask recorded once they were deleted (#694). */
   name: string;
   status: ReferralStatus | null;
   note: string | null;
   occurredAt: number;
+  /** The contact was deleted: there is nobody to link to (#694). */
+  removed: boolean;
 }
 
 /** The server's own cap (routes/common.ts MAX_LIMIT): the most a page can ever hold. */
@@ -131,7 +134,7 @@ export function useContact(id: string) {
  * (useReferralCandidates), so without this the tab showed the contacts as they were. The server
  * keys its kept ranking on the candidate set, so a changed set is ranked afresh on the next read.
  */
-function contactsChanged(qc: QueryClient) {
+export function contactsChanged(qc: QueryClient) {
   return Promise.all([
     qc.invalidateQueries({ queryKey: ck.network }),
     qc.invalidateQueries({ queryKey: ['referral-candidates'] }),
