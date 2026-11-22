@@ -274,7 +274,11 @@ export function postingAtsJobRefKeeping(
  *   parameter can name another board, #140);
  * - the id is the posting's own id in the API's answer, and it counts only when the link's
  *   numeric `gh_jid` is that id.
- * A board-host link gives its identity as postingAtsJobRef. Nothing else gives one here.
+ * A board-host link gives its identity as postingAtsJobRef, with the token of the board that was
+ * read when the link names that same kind of board (qa and tl on #830): the link's own path can
+ * carry another spelling of the company (vandelay for the vandelayindustries board), and the
+ * read is the proof. Recorded from the link, the stored identity would never match the board
+ * again, and a Refetch could not find the posting's own job. Nothing else gives one here.
  */
 export function boardReadAtsJobRef(
   posting: { postingUrl?: string | null; externalId?: string | null },
@@ -283,7 +287,10 @@ export function boardReadAtsJobRef(
 ): AtsJobRef | null {
   const link = posting.postingUrl;
   if (link == null) return null;
-  if (boardFromUrl(link) !== null) return postingAtsJobRef(link);
+  if (boardFromUrl(link) !== null) {
+    const ref = postingAtsJobRef(link);
+    return ref !== null && ref.kind === read.kind ? { ...ref, org: read.org } : ref;
+  }
   if (read.kind !== 'ats_greenhouse' || posting.externalId == null) return null;
   const jid = greenhouseJidOf(link);
   if (jid === null || jid !== posting.externalId) return null;

@@ -145,12 +145,19 @@ export async function attachPosting(
     postingStateDetail: keep ? 'user_confirmed' : null,
     atsJobRef,
   });
+  // A Refetch that kept the user's description and found the same job changed no text: a check
+  // (#812, tl). Another job (a row the user picked) is a change, and said as one (qa on #830).
+  const sameJob =
+    refetch &&
+    current.atsJobRef != null &&
+    atsJobRef != null &&
+    current.atsJobRef.kind === atsJobRef.kind &&
+    current.atsJobRef.externalId === atsJobRef.externalId;
   const howSaid = [
-    // A Refetch that kept the user's description changed no text (#812, tl).
-    keep && refetch
+    keep && sameJob
       ? "Checked on the company's board; your description was kept."
       : ((refetch ? HOW_SAID_REFETCH : HOW_SAID).get(how) ?? ''),
-    keep && !refetch ? 'Your own description was kept.' : '',
+    keep && !sameJob ? 'Your own description was kept.' : '',
   ]
     .filter((l) => l !== '')
     .join(' ');
