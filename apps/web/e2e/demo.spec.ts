@@ -40,7 +40,7 @@ const Database = createRequire(new URL('../../server/package.json', import.meta.
   close(): void;
 };
 
-/** demo-user1, a shared account (seedDemoFixture's DEMO_USERS). */
+/** demo-user1, a shared account (lib/demo/fixture.ts's DEMO_USERS). */
 const SHARED = { email: 'demo-user1@opportun-demo.example', password: DEMO_PASSWORDS.user1 };
 const SHARED_WARNING =
   'This is a shared demo account. Anything you enter here is visible to others using it, and is cleared at the nightly reset.';
