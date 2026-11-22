@@ -90,7 +90,7 @@ const AttachBody = z
 const RederiveBody = z.object({ force: z.boolean().optional() }).strict();
 
 const RederiveResponse = z.object({
-  outcome: z.enum(['merged', 'capture_only', 'no_description_found']),
+  outcome: z.enum(['merged', 'capture_only', 'no_description_found', 'left_alone']),
   /** Present unless the outcome is 'no_description_found', which changes nothing. */
   opportunity: OpportunityView.optional(),
 });

@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { runStructured } from '@opportun/ai';
 import type { FastifyInstance } from 'fastify';
 import { reconcilePosting } from '../src/jobs/postingReconcile';
+import { rederivePosting } from '../src/lib/postingRederive';
 import { descriptionFingerprint } from '../src/lib/postingFingerprint';
 import type { BoardLookup } from '../src/lib/postingSearch';
 import type { safeFetch } from '../src/lib/safeFetch';
@@ -166,6 +167,54 @@ describe('reconcilePosting', () => {
     const out = await getOpportunity(app.db, ctx, opp.id);
     expect(out.descriptionMd).toBe('My own notes, saved while the check ran.');
     expect(out.postingState).not.toBe('confirmed');
+  });
+
+  // qa on #855: a forced re-derive whose confirm() left a description saved meanwhile alone must
+  // say so, not answer "merged" and log that it merged with the captured page.
+  it('a re-derive racing a save answers left_alone, with no "merged" note (#851)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const opp = await seedCaptured(app, ctx);
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    let reading: () => void = () => undefined;
+    const started = new Promise<void>((r) => {
+      reading = r;
+    });
+    const board: BoardLookup = async (...args) => {
+      reading();
+      await held;
+      return boardWith([atsPosting()])(...args);
+    };
+
+    const rederive = rederivePosting(
+      app.db,
+      ctx,
+      opp.id,
+      { fetch: missingFetch, log },
+      { force: true, board },
+    );
+    await started;
+    const saved = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/opportunities/${opp.id}`,
+      payload: { descriptionMd: 'Saved during the re-derive.' },
+    });
+    expect(saved.statusCode, saved.body).toBe(200);
+    release();
+    const out = await rederive;
+
+    expect(out.kind).toBe('left_alone');
+    expect((await getOpportunity(app.db, ctx, opp.id)).descriptionMd).toBe(
+      'Saved during the re-derive.',
+    );
+    const { items } = await listActivities(app.db, ctx, opp.id, { limit: 50, offset: 0 });
+    expect(items.some((i) => (i.bodyMd ?? '').includes('merged with the captured page'))).toBe(
+      false,
+    );
   });
 
   it('re-fingerprints what it wrote, so its own text is not read as a user edit', async () => {

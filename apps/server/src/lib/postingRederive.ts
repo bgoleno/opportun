@@ -57,7 +57,9 @@ export type RederiveOutcome =
   | { kind: 'merged'; opportunity: OpportunityView }
   | { kind: 'capture_only'; opportunity: OpportunityView }
   /** The capture's site found no description in it (or has no recognizer); nothing was changed. */
-  | { kind: 'no_description_found' };
+  | { kind: 'no_description_found' }
+  /** The description changed while the board was read, so nothing was written (#851). */
+  | { kind: 'left_alone'; opportunity: OpportunityView };
 
 /**
  * Whether re-deriving would silently overrule a decision only the user gets to make, and so
@@ -119,7 +121,12 @@ export async function rederivePosting(
   });
 
   if (outcome.status === 'exact' || outcome.status === 'single') {
-    await confirm(db, ctx, opp, outcome.candidate.posting, outcome.readFrom);
+    const confirmed = await confirm(db, ctx, opp, outcome.candidate.posting, outcome.readFrom);
+    // confirm() wrote nothing when the description changed under it (#851, qa on #855): said as
+    // such, not as a merge.
+    if (confirmed.status !== 'confirmed') {
+      return { kind: 'left_alone', opportunity: await getOpportunity(db, ctx, opportunityId) };
+    }
     await note(
       db,
       ctx,

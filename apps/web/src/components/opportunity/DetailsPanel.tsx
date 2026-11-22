@@ -347,13 +347,17 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
       const title =
         result.outcome === 'no_description_found'
           ? 'Nothing to re-derive'
-          : result.outcome === 'merged'
-            ? 'Description re-derived from a board match'
-            : 'Description re-derived from the capture';
+          : result.outcome === 'left_alone'
+            ? 'Left as it is'
+            : result.outcome === 'merged'
+              ? 'Description re-derived from a board match'
+              : 'Description re-derived from the capture';
       const description =
         result.outcome === 'no_description_found'
           ? "The captured page didn't carry a recognizable job description."
-          : undefined;
+          : result.outcome === 'left_alone'
+            ? 'The description changed while the board was being checked, so it was kept.'
+            : undefined;
       toast({ title, description, variant: 'success' });
     } catch (err) {
       toast({
