@@ -79,19 +79,28 @@ export function hashDeviceToken(token: string): string {
  * Both happen in one transaction, in this order (sec on #557): the password lock, the hash check,
  * then the tokens' lock, the revokes and the insert. A 403 for a changed password therefore
  * revokes nothing, and two mints at once cannot leave more than `maxActive`.
+ *
+ * `onCreated` runs in that transaction after the insert (#802): what must commit with the token or
+ * not at all, its audit row.
  */
 export async function createDeviceToken(
   db: Db,
   ctx: UserCtx,
   input: { name: string; scopes: DeviceTokenScope[] },
-  opts: { passwordHash?: string; maxActive?: number; ip?: string; actor?: string | null } = {},
+  opts: {
+    passwordHash?: string;
+    maxActive?: number;
+    ip?: string;
+    actor?: string | null;
+    onCreated?: (tx: Exec, meta: DeviceTokenMeta) => Promise<void>;
+  } = {},
 ): Promise<{ meta: DeviceTokenMeta; token: string }> {
   const token = DEVICE_TOKEN_PREFIX + randomBytes(32).toString('base64url');
   const now = Date.now();
   const scopes = [...new Set(input.scopes)];
   const { passwordHash, maxActive } = opts;
   const actor = opts.actor ?? null;
-  if (passwordHash === undefined && maxActive === undefined) {
+  if (passwordHash === undefined && maxActive === undefined && opts.onCreated === undefined) {
     return { meta: await insertToken(db, ctx, input.name, token, scopes, now, actor), token };
   }
   // The cap (#550), then the insert, in whichever transaction holds the write.
@@ -118,7 +127,9 @@ export async function createDeviceToken(
         });
       }
     }
-    return { meta: await insertToken(tx, ctx, input.name, token, scopes, now, actor), token };
+    const meta = await insertToken(tx, ctx, input.name, token, scopes, now, actor);
+    if (opts.onCreated !== undefined) await opts.onCreated(tx, meta);
+    return { meta, token };
   };
   if (passwordHash === undefined) return await withTransaction(db, write);
   // Only while the hash the password was proven against is still the user's, under the lock a
@@ -128,11 +139,14 @@ export async function createDeviceToken(
     point: 'deviceTokens.create.locked',
   });
   if (!created.current) {
-    // The sentence goes in the details too (#743): the error handler sends an HttpError's code and
-    // details, not its message, and this one is meant for the user to read.
-    const message =
-      'Your password changed while this was being checked. Sign in again and try once more.';
-    throw new HttpError(403, 'password_changed', message, { message });
+    // A sentence written for the user to read (#743), so marked for the client (#750).
+    throw new HttpError(
+      403,
+      'password_changed',
+      'Your password changed while this was being checked. Sign in again and try once more.',
+      undefined,
+      { userFacing: true },
+    );
   }
   return created.value;
 }
@@ -171,11 +185,17 @@ export async function listDeviceTokens(db: Db, ctx: UserCtx): Promise<DeviceToke
     .all();
 }
 
-/** Revokes the caller's own token (idempotent: the first revocation time sticks); 404 otherwise. */
+/**
+ * Revokes the caller's own token (idempotent: the first revocation time sticks); 404 otherwise.
+ * `onRevoked` runs only for the call that revoked it, after that conditional UPDATE has
+ * committed (#802, sec): its audit row. A revocation never waits on its record, so a failed audit
+ * write leaves the token revoked, as a logout leaves the session ended.
+ */
 export async function revokeDeviceToken(
   db: Db,
   ctx: UserCtx,
   id: string,
+  onRevoked?: (meta: DeviceTokenMeta) => Promise<void>,
 ): Promise<DeviceTokenMeta> {
   const owned = and(eq(deviceTokens.id, id), eq(deviceTokens.userId, ctx.userId));
   const row = await db.select(META_COLUMNS).from(deviceTokens).where(owned).get();
@@ -190,7 +210,10 @@ export async function revokeDeviceToken(
     .where(and(owned, isNull(deviceTokens.revokedAt)))
     .returning(META_COLUMNS)
     .get();
-  if (revoked !== undefined) return revoked;
+  if (revoked !== undefined) {
+    if (onRevoked !== undefined) await onRevoked(revoked);
+    return revoked;
+  }
   const current = await db.select(META_COLUMNS).from(deviceTokens).where(owned).get();
   if (current === undefined) throw notFound();
   return current;
@@ -219,7 +242,7 @@ export async function revokeAllDeviceTokens(db: Exec, userId: string): Promise<n
  * creating a token this needs no password.
  */
 export async function renameDeviceToken(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   id: string,
   name: string,

@@ -1,4 +1,5 @@
 // Opportunities and lifecycle transitions (FR-O1, O2, O5, O9 partial).
+import { enqueue } from '../lib/jobQueue';
 import { keyedFetch } from '../lib/safeFetch';
 import {
   CLOSED_REASONS,
@@ -28,7 +29,6 @@ import {
   postingCheckKey,
   setCheckedPostingRef,
 } from '../lib/greenhouseEmbed';
-import { enqueue } from '../jobs/runner';
 import { search, SEARCH_KINDS } from '../repos/search';
 import { HttpUrl, IdParams, listQuery, optionalText, pageOf } from './common';
 

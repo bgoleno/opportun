@@ -2,10 +2,10 @@
 // Hourly: 1-minute points older than 48 hours, 1-hour points older than 30 days, traces (with
 // their spans) older than 30 days, then the row caps, oldest first and whole traces only. The
 // boundary tests pin "strictly older than": a row at the cutoff stays, one a millisecond older goes.
+import { readSchedules } from '../src/lib/jobQueue';
 import { describe, expect, it } from 'vitest';
 import { obsMetricPoints, obsSpans, obsTraces } from '../src/db/schema';
 import { getJobHandler } from '../src/jobs/registry';
-import { readSchedules } from '../src/jobs/runner';
 import {
   OBS_CAPS,
   OBS_PRUNE_CRON,

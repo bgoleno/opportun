@@ -12,9 +12,8 @@
 // itself failed (pg_dump's error, or a database error from VACUUM INTO).
 // First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
 import '../unsetEmptyAiBaseUrls';
-import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadDbConfig, loadSqliteDir } from '../config';
+import { loadDbConfig, loadSqliteDir, loadDataDir } from '../config';
 import { closeDatabase, connectDatabase, type Db } from '../db/client';
 import { runBackup, type BackupResult } from '../jobs/backup';
 import { createStorage, type Storage } from '../lib/storage';
@@ -65,13 +64,11 @@ export async function main({ db, storage, io = processIo, now }: BackupArgs): Pr
 
 const entry = process.argv[1];
 if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
-  const dataDir = resolve(
-    process.env.DATA_DIR === undefined || process.env.DATA_DIR === ''
-      ? './data'
-      : process.env.DATA_DIR,
-  );
+  const dataDir = loadDataDir();
   const run = async (): Promise<number> => {
+    // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
     const sqliteDir = loadSqliteDir(process.env, dataDir);
+    // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
     const handle = await connectDatabase({ dataDir, sqliteDir, db: loadDbConfig(process.env) });
     const storage = createStorage(dataDir, sqliteDir);
     try {

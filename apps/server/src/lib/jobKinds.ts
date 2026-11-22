@@ -1,6 +1,7 @@
 // Discovery job kinds and shared constants, in a leaf module so the engine, ranking, lead
 // resolution and the discovery repo can reference each other's kinds without import cycles.
-// Each job module re-exports its own kind.
+// Each job module re-exports its own kind. In lib/ (moved from jobs/discoveryKinds.ts, #788) so
+// repos/ and lib/ name a kind without importing jobs/.
 
 /** One run of one source; payload {sourceId}. */
 export const DISCOVERY_RUN_KIND = 'discovery.run';

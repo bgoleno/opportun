@@ -16,6 +16,7 @@
 // company the user already has, whatever its status, is skipped (normalized compare), so a
 // denied company is never suggested again and a pending suggestion is not duplicated. Each new
 // suggestion then gets one board probe (jobs/companyBoardProbe.ts), with no AI call.
+import { enqueue } from '../lib/jobQueue';
 import { AiUnavailableError, renderPrompt, runStructured, SuggestOutputSchema } from '@opportun/ai';
 import { isNaicsCode, naicsTitle, newId, type NaicsTier } from '@opportun/core';
 import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
@@ -33,7 +34,6 @@ import { line } from '../lib/promptText';
 import { roleTargetsText } from './classify';
 import { enqueueBoardProbe } from './companyBoardProbe';
 import type { JobHandler } from './registry';
-import { enqueue } from './runner';
 
 export const COMPANY_SUGGEST_KIND = 'company.suggest'; // per user via the job's user_id
 /** Weekly, Tuesday 08:00. */

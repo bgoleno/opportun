@@ -235,11 +235,46 @@ export default defineConfig(
     },
   },
   {
-    // NFR-SEC11: filesystem access in the server only through the storage module.
+    // NFR-SEC11: filesystem access in the server only through the storage module. The same
+    // options also refuse `env` imported from node:process (https://github.com/bgoleno/opportun/issues/773;
+    // the block below refuses process.env itself): in this block, since a second block setting
+    // no-restricted-imports for these files would replace these options rather than add to them.
     files: ['apps/server/src/**'],
     ignores: ['apps/server/src/lib/storage.ts'],
     rules: {
-      'no-restricted-imports': ['error', fsBan],
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            ...fsBan.paths,
+            ...['node:process', 'process'].map((name) => ({
+              name,
+              importNames: ['env'],
+              message: 'Read environment settings in apps/server/src/config.ts (#773).',
+            })),
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // Environment settings are read in config.ts only (https://github.com/bgoleno/opportun/issues/773),
+    // so each keeps one name, default and validation. A read that is not a setting (an entry point
+    // handing the environment to config's loaders, a child process's own environment, test-run
+    // detection) carries an eslint-disable-next-line with its reason on that line, never a file
+    // ignore, so a new read in the same file still fails. no-restricted-properties also sees
+    // `const { env } = process`; `import { env } from 'node:process'` is the block above's.
+    files: ['apps/server/src/**/*.ts'],
+    ignores: ['apps/server/src/config.ts'],
+    rules: {
+      'no-restricted-properties': [
+        'error',
+        {
+          object: 'process',
+          property: 'env',
+          message: 'Read environment settings in apps/server/src/config.ts (#773).',
+        },
+      ],
     },
   },
   {
@@ -247,10 +282,10 @@ export default defineConfig(
     // repos and lib sit below jobs and routes, so they import neither. Their pure helpers live in
     // lib/ (lib/atsBoard.ts, lib/titleMatch.ts, lib/triageContext.ts and others), and
     // apps/server/test/importCycles.test.ts checks that the jobs/repos and mail groups stay free
-    // of cycles. The negations below are the job modules still imported here: the queue itself
-    // (runner, registry, discoveryKinds), enqueue helpers (gmailSync, submissionSnapshot), and
-    // backup, dbIntegrityCheck, postingReconcile, atsDetect and, from lib/demo/seed.ts,
-    // attachmentSweep. Moving them out is
+    // of cycles. The negations below are the job modules still imported here: the registry
+    // (lib/greenhouseEmbed.ts defines a job handler), and backup, dbIntegrityCheck,
+    // postingReconcile, atsDetect and, from lib/demo/seed.ts, attachmentSweep. The queue API and
+    // the kinds are in lib/ (lib/jobQueue.ts, lib/jobKinds.ts). Moving the rest out is
     // https://github.com/bgoleno/opportun/issues/788; this list only shrinks. The rule
     // reads static imports and re-exports, not import(): today nothing here imports a job or a
     // route that way. @typescript-eslint's rule, not the core one, so the NFR-SEC11 block's
@@ -269,12 +304,8 @@ export default defineConfig(
                 '!../jobs/atsDetect',
                 '!../jobs/backup',
                 '!../jobs/dbIntegrityCheck',
-                '!../jobs/discoveryKinds',
-                '!../jobs/gmailSync',
                 '!../jobs/postingReconcile',
                 '!../jobs/registry',
-                '!../jobs/runner',
-                '!../jobs/submissionSnapshot',
                 '!../../jobs/attachmentSweep',
               ],
               allowTypeImports: true,

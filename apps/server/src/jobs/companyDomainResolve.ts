@@ -13,6 +13,7 @@
 // reached through it is used for that one opportunity only). No AI or search lookup is used: a
 // guess that fails verification is discarded, and the company stays unlinked rather than linked
 // wrong.
+import { enqueue } from '../lib/jobQueue';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { ACTIVE_PIPELINE_STAGES } from '@opportun/core';
@@ -26,7 +27,6 @@ import {
 } from '../lib/companyDomainQueue';
 import { candidateDomains, getPage, pageNamesCompany } from './opportunityEnrich';
 import { requireService, type JobContext, type JobHandler } from './registry';
-import { enqueue } from './runner';
 
 export type ResolveOutcome =
   | { outcome: 'resolved'; domain: string }

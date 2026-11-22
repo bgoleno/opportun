@@ -561,13 +561,22 @@ export interface GoogleClientCreds {
   clientSecret: string;
 }
 
+/**
+ * Stores the client id and secret in one transaction; `inTransaction` runs in it after them
+ * (#802): what must commit with the client or not at all, its validation and audit row.
+ */
 export async function writeClientCreds(
   db: Db,
   ctx: UserCtx,
   creds: GoogleClientCreds,
+  inTransaction?: (tx: Exec) => Promise<void>,
 ): Promise<void> {
-  await replaceSecret(db, ctx, GOOGLE_CLIENT_ID_LABEL, creds.clientId);
-  await replaceSecret(db, ctx, GOOGLE_CLIENT_SECRET_LABEL, creds.clientSecret);
+  await racePoint('google.replaceSecret');
+  await withTransaction(db, async (tx) => {
+    await replaceSecretIn(tx, db, ctx, GOOGLE_CLIENT_ID_LABEL, creds.clientId);
+    await replaceSecretIn(tx, db, ctx, GOOGLE_CLIENT_SECRET_LABEL, creds.clientSecret);
+    if (inTransaction !== undefined) await inTransaction(tx);
+  });
 }
 
 /**
@@ -617,8 +626,22 @@ async function readTokensIn(exec: Exec, db: Db, ctx: UserCtx): Promise<StoredTok
   return parsed.success ? parsed.data : undefined;
 }
 
-export async function writeTokens(db: Db, ctx: UserCtx, tokens: StoredTokens): Promise<void> {
-  await replaceSecret(db, ctx, GOOGLE_TOKENS_LABEL, JSON.stringify(tokens));
+/** Stores the token record; `inTransaction` runs in its transaction after it (#802). */
+export async function writeTokens(
+  db: Db,
+  ctx: UserCtx,
+  tokens: StoredTokens,
+  inTransaction?: (tx: Exec) => Promise<void>,
+): Promise<void> {
+  if (inTransaction === undefined) {
+    await replaceSecret(db, ctx, GOOGLE_TOKENS_LABEL, JSON.stringify(tokens));
+    return;
+  }
+  await racePoint('google.replaceSecret');
+  await withTransaction(db, async (tx) => {
+    await replaceSecretIn(tx, db, ctx, GOOGLE_TOKENS_LABEL, JSON.stringify(tokens));
+    await inTransaction(tx);
+  });
 }
 
 /**
@@ -666,7 +689,7 @@ export function mergeTokens(prev: StoredTokens | undefined, next: Credentials): 
 }
 
 /** Removes every Google secret the caller holds (tokens and client credentials). */
-export async function deleteGoogleSecrets(db: Db, ctx: UserCtx): Promise<void> {
+export async function deleteGoogleSecrets(db: Exec, ctx: UserCtx): Promise<void> {
   for (const label of GOOGLE_SECRET_LABELS) {
     await db
       .delete(secrets)

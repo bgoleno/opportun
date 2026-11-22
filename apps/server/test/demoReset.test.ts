@@ -3,6 +3,7 @@
 // survives a run completely untouched -- the delete seedDemo performs is bounded by construction
 // (five pinned ids that do not exist on a real database), and this proves that bound holds
 // through this job's own wrapper, not just inside seedDemo's own unit tests.
+import { enqueue, readSchedules } from '../src/lib/jobQueue';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -16,8 +17,6 @@ import {
   DemoCredentialsMissingError,
   runDemoReset,
 } from '../src/jobs/demoReset';
-import { enqueue } from '../src/jobs/runner';
-import { readSchedules } from '../src/jobs/runner';
 import { registerTwoUsers } from './isolation';
 import { testApp } from './helpers';
 

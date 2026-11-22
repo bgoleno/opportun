@@ -7,6 +7,7 @@
 // tested on its own; the queued ones go through the runner and check that the second is skipped
 // and every posting is still stored and ranked once. The provider is mocked and every posting is
 // made up.
+import { enqueue } from '../src/lib/jobQueue';
 import { runStructured } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -23,7 +24,7 @@ import {
   MULTI_POSTED_PREFIX,
   runDiscoverySource,
 } from '../src/jobs/discoveryRun';
-import { enqueue, runNextJob, startRunner } from '../src/jobs/runner';
+import { runNextJob, startRunner } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import { createSource } from '../src/repos/discovery';
 import { useApi } from './api';

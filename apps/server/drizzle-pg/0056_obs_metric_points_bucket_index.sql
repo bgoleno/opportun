@@ -1,0 +1,1 @@
+CREATE INDEX "obs_metric_points_bucket_idx" ON "obs_metric_points" USING btree ("bucket_start","series");

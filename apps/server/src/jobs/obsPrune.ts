@@ -141,22 +141,29 @@ async function pruneOldTraces(db: Db, cutoff: number, batch: number) {
   return out;
 }
 
+/**
+ * The oldest `limit` points, the point cap's next batch: in the order of
+ * obs_metric_points_bucket_idx (#594), so it reads those rows and sorts nothing.
+ */
+export function pointCapQuery(db: Db, limit: number) {
+  return db
+    .select({
+      series: obsMetricPoints.series,
+      bucketStart: obsMetricPoints.bucketStart,
+      resolution: obsMetricPoints.resolution,
+    })
+    .from(obsMetricPoints)
+    .orderBy(asc(obsMetricPoints.bucketStart), asc(obsMetricPoints.series))
+    .limit(limit);
+}
+
 async function enforcePointCap(db: Db, cap: number, batch: number): Promise<number> {
   let total = 0;
   for (;;) {
     const n = (await db.select({ n: count() }).from(obsMetricPoints).get())?.n ?? 0;
     const over = Number(n) - cap;
     if (over <= 0) break;
-    const rows = await db
-      .select({
-        series: obsMetricPoints.series,
-        bucketStart: obsMetricPoints.bucketStart,
-        resolution: obsMetricPoints.resolution,
-      })
-      .from(obsMetricPoints)
-      .orderBy(asc(obsMetricPoints.bucketStart), asc(obsMetricPoints.series))
-      .limit(Math.min(over, batch))
-      .all();
+    const rows = await pointCapQuery(db, Math.min(over, batch)).all();
     for (const resolution of [MINUTE_MS, HOUR_MS]) {
       total += await deletePoints(
         db,

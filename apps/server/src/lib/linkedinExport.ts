@@ -9,6 +9,7 @@
 // (external_id: conversation id plus a hash of the row, thread_key: conversation id, snippet and
 // no body), and each new message queues comms.classify carrying the text. The rows are applied by
 // a job with the pack importer's report shape, so re-importing the same export changes nothing.
+import { enqueueClassify } from './mailClassifyQueue';
 import { isLinkedInHost } from './linkedinHost';
 import { createHash } from 'node:crypto';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -17,7 +18,6 @@ import { z } from 'zod';
 import { withTransaction, type Db } from '../db/client';
 import { communications, companies, networkContacts, jobs } from '../db/schema';
 import { ingestLookbackDays } from '../adapters/gmail';
-import { enqueueClassify } from '../jobs/gmailSync';
 import type { JobHandler } from '../jobs/registry';
 import type { UserCtx } from '../repos/base';
 import { upsertInbound, sameCompany } from '../repos/communications';

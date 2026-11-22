@@ -42,6 +42,7 @@ export class McpTimeoutError extends Error {
  * not leak through (issue #298): vitest's threads pool shares process.env with every test file
  * scheduled onto the same worker, so a mutation there is a cross-file hazard even restored after.
  */
+// eslint-disable-next-line no-restricted-properties -- a child process's own environment, passed on, not a setting (#773)
 export function minimalEnv(ambient: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return { PATH: ambient.PATH ?? '/usr/local/bin:/usr/bin:/bin' };
 }

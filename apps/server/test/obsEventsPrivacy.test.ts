@@ -5,6 +5,7 @@
 // data, a child logger's bindings, an error's message and extra properties, a library's warning,
 // an audit entry's detail and address, with the production behaviour for unknown keys. None of
 // those bytes may reach the log output or a captured export batch.
+import { enqueue } from '../src/lib/jobQueue';
 import { context, trace, TraceFlags } from '@opentelemetry/api';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { audit } from '../src/lib/audit';
@@ -22,7 +23,6 @@ import { useApi } from './api';
 import { captureLogs } from './helpers';
 import { useTestContextManager } from './otelContext';
 import { z } from 'zod';
-import { enqueue } from '../src/jobs/runner';
 import { registerJob } from '../src/jobs/registry';
 
 const NAME = 'Jane Doe';

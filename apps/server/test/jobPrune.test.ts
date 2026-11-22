@@ -2,6 +2,7 @@
 // done and dead rows get different retention windows (#258: a dead row is the diagnostic
 // record a failure left behind, kept longer than a done row's bookkeeping); pending and
 // running rows are never touched regardless of age.
+import { enqueue } from '../src/lib/jobQueue';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { newId } from '@opportun/core';
@@ -12,7 +13,6 @@ import {
   JOB_PRUNE_JOB_KIND,
   pruneCompletedJobs,
 } from '../src/jobs/jobPrune';
-import { enqueue } from '../src/jobs/runner';
 import { useApi } from './api';
 
 const boot = useApi();

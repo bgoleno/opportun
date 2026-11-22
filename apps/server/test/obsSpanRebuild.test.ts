@@ -10,6 +10,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { obs } from '../src/obs';
 import { OTHER } from '../src/obs/catalog';
 import { rebuildSpan } from '../src/obs/spanRebuild';
+// opportun.job.kind's values come from the registry as it loads (#764).
+import '../src/jobs/registry';
 
 const T: HrTime = [1_790_000_000, 0];
 

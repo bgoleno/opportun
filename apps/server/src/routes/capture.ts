@@ -12,6 +12,7 @@
 // needs_capture result) in place: the extracted description fills that lead, which becomes
 // 'full' and is ranked again. No second result is stored, so the lead is never flagged
 // multi-posted against itself.
+import { enqueue } from '../lib/jobQueue';
 import { insertLeads } from '../lib/discoveryIngest';
 import { AiUnavailableError, CaptureOutputSchema, renderPrompt, runStructured } from '@opportun/ai';
 import { NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
@@ -19,8 +20,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { withTransaction, type Db } from '../db/client';
-import { DISCOVERY_RANK_KIND } from '../jobs/discoveryKinds';
-import { enqueue } from '../jobs/runner';
+import { DISCOVERY_RANK_KIND } from '../lib/jobKinds';
 import { buildAiDeps, expiredKeyHint } from '../lib/ai';
 import { CAPTURE_SLOT, captureUserLimit, withCaptureSlot } from '../lib/captureLimit';
 import { HttpError } from '../lib/errors';

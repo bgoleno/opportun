@@ -2,6 +2,7 @@
 // submitted it", the user's outcome reports, the follow-up when no confirmation is seen, and the
 // re-apply guard. Organised by the issue's acceptance criteria. Every opportunity, resume and
 // posting is synthetic; nothing here, or in the code under test, contacts an employer or an ATS.
+import { readSchedules } from '../src/lib/jobQueue';
 import { newId, type AtsJobRef } from '@opportun/core';
 import { and, count, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -17,7 +18,6 @@ import {
   resumeSends,
   stageHistory,
 } from '../src/db/schema';
-import { readSchedules } from '../src/jobs/runner';
 import { SUBMISSION_FOLLOWUP_JOB_KIND } from '../src/jobs/submissionFollowup';
 import type { safeFetch } from '../src/lib/safeFetch';
 import type { UserCtx } from '../src/repos/base';

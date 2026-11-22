@@ -1,5 +1,6 @@
 // Mail ingestion API (FR-M1; Apple Mail status for FR-M5). Sync runs as a job; status reports the read-only grant, the last
 // sync and how many messages are stored. Nothing here can change the user's mailbox (FR-M7).
+import { CLASSIFY_JOB_KIND } from '../lib/mailClassifyQueue';
 import type { CommChannel } from '@opportun/core';
 import { and, count, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -21,7 +22,7 @@ import { countUnfinished } from '../repos/jobs';
 import { getSyncState, putSyncState } from '../repos/communications';
 import { readUserSetting } from '../repos/userSettings';
 import type { Db } from '../db/client';
-import { CLASSIFY_JOB_KIND, enqueueGmailSync, GMAIL_INTEGRATION } from '../jobs/gmailSync';
+import { enqueueGmailSync, GMAIL_INTEGRATION } from '../jobs/gmailSync';
 import { withTransaction } from '../db/client';
 
 /** The synced mailbox's address, stored by the sync (adapters/gmail). */

@@ -3,6 +3,7 @@
 // Organised by the issue's acceptance criteria. Every opportunity, resume and answer here is
 // synthetic. Opportun never transmits an application: the destination is returned to the
 // browser, never fetched (criterion 4 records every outbound request to prove it).
+import { enqueue } from '../src/lib/jobQueue';
 import { newId, type AtsJobRef } from '@opportun/core';
 import { and, count, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -16,7 +17,7 @@ import {
   resumes,
   stageHistory,
 } from '../src/db/schema';
-import { enqueue, runDueJobs } from '../src/jobs/runner';
+import { runDueJobs } from '../src/jobs/runner';
 import { setRaceHook } from '../src/lib/racePoints';
 import type { safeFetch } from '../src/lib/safeFetch';
 import { submissionDigest } from '../src/lib/submissionDigest';

@@ -1,6 +1,7 @@
 // Company industry tags (https://github.com/bgoleno/opportun/issues/220, #190 N4b): candidates get a
 // code from the NAICS table in batched calls, a tag is kept, and a correction is never overwritten.
 // The provider is mocked, and every person and company is made up.
+import { enqueue, readSchedules } from '../src/lib/jobQueue';
 import { AiUnavailableError, renderPrompt, runStructured } from '@opportun/ai';
 import { NAICS_2022_INDUSTRY_GROUPS, newId } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
@@ -32,7 +33,6 @@ import { createCompany } from '../src/repos/companies';
 import { createRun, createSource } from '../src/repos/discovery';
 import { discoverySpentTodayUsd, writeDiscoveryBudget } from '../src/repos/discoveryBudget';
 import { getActivePrompt } from '../src/repos/prompts';
-import { enqueue, readSchedules } from '../src/jobs/runner';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 

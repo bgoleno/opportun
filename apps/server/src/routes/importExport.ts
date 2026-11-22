@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { JOB_STATUSES } from '../db/schema';
-import { enqueue } from '../jobs/runner';
+import { enqueue } from '../lib/jobQueue';
 import { audit } from '../lib/audit';
 import { HttpError, notFound } from '../lib/errors';
 import { isSharedDemoAccount } from '../lib/demoAccounts';
@@ -61,6 +61,11 @@ function yyyymmdd(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10).replace(/-/g, '');
 }
 
+/** A refused pack, its sentence marked for the client (PackError's text is written for users). */
+function packRefused(problem: PackError): HttpError {
+  return new HttpError(422, 'invalid_pack', problem.userText, undefined, { userFacing: true });
+}
+
 export async function importExportRoutes(app: FastifyInstance): Promise<void> {
   await app.register(multipart, {
     // Directory uploads name each part by its relative path; it only indexes the pack.
@@ -101,7 +106,7 @@ export async function importExportRoutes(app: FastifyInstance): Promise<void> {
             : packFromFiles(files);
       } catch (err) {
         if (err instanceof PackError) {
-          throw new HttpError(422, 'invalid_pack', err.message, { message: err.message });
+          throw packRefused(err);
         }
         throw err;
       }
@@ -140,7 +145,7 @@ export async function importExportRoutes(app: FastifyInstance): Promise<void> {
         pack = linkedInPackFromZip(upload);
       } catch (err) {
         if (err instanceof PackError) {
-          throw new HttpError(422, 'invalid_pack', err.message, { message: err.message });
+          throw packRefused(err);
         }
         throw err;
       }

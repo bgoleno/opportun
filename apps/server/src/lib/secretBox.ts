@@ -210,7 +210,7 @@ export async function getSecretValueIn(
   return open(keyFor(db), row);
 }
 
-export async function getSecretMeta(db: Db, ctx: UserCtx, id: string): Promise<SecretMeta> {
+export async function getSecretMeta(db: Exec, ctx: UserCtx, id: string): Promise<SecretMeta> {
   const row = await db
     .select(META_COLUMNS)
     .from(secrets)
@@ -230,7 +230,7 @@ export async function listSecrets(db: Db, ctx: UserCtx): Promise<SecretMeta[]> {
 }
 
 /** Deletes the caller's own secret; 404 HttpError when it is missing or not theirs. */
-export async function deleteSecret(db: Db, ctx: UserCtx, id: string): Promise<SecretMeta> {
+export async function deleteSecret(db: Exec, ctx: UserCtx, id: string): Promise<SecretMeta> {
   const row = await db
     .delete(secrets)
     .where(and(eq(secrets.id, id), eq(secrets.userId, ctx.userId)))
@@ -242,7 +242,7 @@ export async function deleteSecret(db: Db, ctx: UserCtx, id: string): Promise<Se
 
 /** Updates only the display name and expiry of the caller's own secret; 404 otherwise. */
 export async function updateSecretMeta(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   id: string,
   patch: SecretMetaPatch,

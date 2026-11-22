@@ -11,6 +11,7 @@
 // starts and ends at 0.6875, and the 12th does not start. Ranking spend is written one call to a
 // ledger row, as the router writes it, since the floor is priced from the day's average call. The
 // #317 tests at the end use calls a usual size, where the line is 90%.
+import { enqueue } from '../src/lib/jobQueue';
 import { AiUnavailableError, runStructured } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
 import { eq } from 'drizzle-orm';
@@ -35,7 +36,7 @@ import {
 import { DISCOVERY_RUN_KIND, FIRST_RUN_RANK_CAP } from '../src/jobs/discoveryRun';
 import { rankBudgetHasRoom } from '../src/jobs/rankBudget';
 import { suggestIndustries } from '../src/lib/industryProfile';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { runNextJob } from '../src/jobs/runner';
 import { setRaceHook } from '../src/lib/racePoints';
 import type { UserCtx } from '../src/repos/base';
 import { createCompany } from '../src/repos/companies';

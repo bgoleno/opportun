@@ -17,7 +17,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client';
 import { secrets, settings } from '../db/schema';
-import type { UserCtx } from '../repos/base';
+import type { Exec, UserCtx } from '../repos/base';
 import { buildAiDeps, readSetting, writeSetting } from './ai';
 import { notFound } from './errors';
 import { getSecretValue } from './secretBox';
@@ -369,7 +369,7 @@ export async function readKeyValidation(
   return parsed.success ? parsed.data : null;
 }
 
-export async function deleteKeyValidation(db: Db, ctx: UserCtx, secretId: string): Promise<void> {
+export async function deleteKeyValidation(db: Exec, ctx: UserCtx, secretId: string): Promise<void> {
   await db
     .delete(settings)
     .where(

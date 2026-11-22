@@ -2,8 +2,8 @@
 // job's kind, its dedupe key and the enqueue call, in lib/ so the opportunities repo queues it
 // without importing the job module (jobs/companyDomainResolve.ts), which reaches that repo back
 // through opportunityEnrich.
+import { enqueue } from './jobQueue';
 import type { Db } from '../db/client';
-import { enqueue } from '../jobs/runner';
 
 export const COMPANY_DOMAIN_RESOLVE_KIND = 'company.domain_resolve'; // payload {companyId}
 export const companyDomainResolveDedupeKey = (companyId: string): string =>

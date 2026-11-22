@@ -12,7 +12,7 @@ import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { z } from 'zod';
 import { networkContacts, jobs } from '../src/db/schema';
-import { DISCOVERY_RANK_KIND, POSTING_RECONCILE_KIND } from '../src/jobs/discoveryKinds';
+import { DISCOVERY_RANK_KIND, POSTING_RECONCILE_KIND } from '../src/lib/jobKinds';
 import type { safeFetch } from '../src/lib/safeFetch';
 import { createContact, getContactSync } from '../src/repos/contacts';
 import { getOpportunity } from '../src/repos/opportunities';
