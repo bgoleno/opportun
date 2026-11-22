@@ -128,11 +128,14 @@ export async function createDeviceToken(
     point: 'deviceTokens.create.locked',
   });
   if (!created.current) {
-    // The sentence goes in the details too (#743): the error handler sends an HttpError's code and
-    // details, not its message, and this one is meant for the user to read.
-    const message =
-      'Your password changed while this was being checked. Sign in again and try once more.';
-    throw new HttpError(403, 'password_changed', message, { message });
+    // A sentence written for the user to read (#743), so marked for the client (#750).
+    throw new HttpError(
+      403,
+      'password_changed',
+      'Your password changed while this was being checked. Sign in again and try once more.',
+      undefined,
+      { userFacing: true },
+    );
   }
   return created.value;
 }

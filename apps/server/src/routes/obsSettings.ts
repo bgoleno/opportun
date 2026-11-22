@@ -21,6 +21,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
+import { requireAdmin } from '../repos/base';
 import { confirmPassword, reauthLimits } from '../lib/reauth';
 import { encryptSecret } from '../lib/secretBox';
 import { collectAvailable, collectInEffect, writeCollect } from '../obs/config';
@@ -90,13 +91,13 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
     '/obs/settings',
     { schema: { body: ObsSettings, response: { 200: ObsSettings } } },
     async (req) => {
-      const ctx = app.requireUser(req);
+      app.requireUser(req);
       // The demo deployment's admin account is public, so any visitor could turn collection on
       // (sec's O2 on #359; design 14.1). Refused before the admin check, so every caller gets
       // the same answer there, and for false as well as true: the switch is never on there.
       // The code is shared with export, which 14.10 rule 6 refuses on the demo too.
       if (app.config.demo) throw new HttpError(403, 'unavailable_on_demo');
-      if (!ctx.isAdmin) throw new HttpError(403, 'forbidden');
+      const ctx = requireAdmin(req);
       await writeCollect(db, req.body.collect, { userId: ctx.userId, ip: req.ip });
       return { collect: await collectInEffect(db, app.config) };
     },
@@ -141,9 +142,9 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
       schema: { body: ExportChangeBody, response: { 200: ExportView } },
     },
     async (req, reply) => {
-      const ctx = app.requireUser(req);
+      app.requireUser(req);
       if (app.config.demo) throw new HttpError(403, 'unavailable_on_demo');
-      if (!ctx.isAdmin) throw new HttpError(403, 'forbidden');
+      const ctx = requireAdmin(req);
       const confirmed = await confirmPassword(req, reply, {
         userId: ctx.userId,
         password: req.body.password,
@@ -216,9 +217,9 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
       schema: { body: PasswordBody, response: { 200: TestResult } },
     },
     async (req, reply) => {
-      const ctx = app.requireUser(req);
+      app.requireUser(req);
       if (app.config.demo) throw new HttpError(403, 'unavailable_on_demo');
-      if (!ctx.isAdmin) throw new HttpError(403, 'forbidden');
+      const ctx = requireAdmin(req);
       const confirmed = await confirmPassword(req, reply, {
         userId: ctx.userId,
         password: req.body.password,

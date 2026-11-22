@@ -1287,6 +1287,21 @@ describe('discovery sources API', () => {
       payload: { kind: 'ats_lever', config: { org: 'Not A Slug' } },
     });
     expect(bad.statusCode).toBe(422);
+    // Both refusals say what is wrong in words, as a marked sentence (#750).
+    expect(bad.json().error).toEqual({
+      code: 'invalid_config',
+      message: expect.stringMatching(/org/),
+    });
+    const badCron = await a.request({
+      method: 'POST',
+      url: '/api/v1/discovery/sources',
+      payload: { kind: 'ats_lever', config: { org: 'initech' }, scheduleCron: 'every tuesday' },
+    });
+    expect(badCron.statusCode).toBe(422);
+    expect(badCron.json().error).toEqual({
+      code: 'invalid_cron',
+      message: 'must be a valid cron expression',
+    });
 
     const run = await a.request({ method: 'POST', url: `/api/v1/discovery/sources/${id}/run` });
     expect(run.statusCode).toBe(202);

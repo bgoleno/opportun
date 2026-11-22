@@ -16,7 +16,7 @@ import { lookup } from 'node:dns/promises';
 import type { IncomingHttpHeaders } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP, type LookupFunction } from 'node:net';
-import type { OutboundTarget } from '../obs/catalog';
+import { provideAtsHosts, type OutboundTarget } from '../obs/catalog';
 import { observeOutbound, outboundTargetFor } from '../obs/outbound';
 
 /**
@@ -166,6 +166,8 @@ export const ATS_ALLOW_HOSTS: readonly string[] = [
   'api.smartrecruiters.com',
   'apply.workable.com',
 ];
+// The catalog names these hosts in server.address (14.8); it takes them from here (#764).
+provideAtsHosts(ATS_ALLOW_HOSTS);
 
 // ---------------------------------------------------------------------------
 // Address classification
