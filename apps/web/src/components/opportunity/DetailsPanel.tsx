@@ -377,7 +377,9 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
           <CardTitle>Description</CardTitle>
           {editing === null ? (
             <div className="flex flex-wrap gap-2">
-              {described ? null : (
+              {/* Until the posting is confirmed, Find posting is what confirms it, a described
+                  one included (#756): the user's own description is kept. */}
+              {described && opp.postingState === 'confirmed' ? null : (
                 <Button
                   type="button"
                   size="sm"

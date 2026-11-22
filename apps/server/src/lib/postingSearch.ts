@@ -38,7 +38,7 @@ import type { UserCtx } from '../repos/base';
 import { getCompany } from '../repos/companies';
 import { splitConfig } from '../repos/discovery';
 import { getOpportunity } from '../repos/opportunities';
-import { extractAtsJobRefs, workdayPosting, type AtsJobRef } from './atsJobRef';
+import { atsJobRefOfUrl, extractAtsJobRefs, workdayPosting, type AtsJobRef } from './atsJobRef';
 import { rankCandidates, type PostingCandidate } from './postingCandidates';
 import { sanitizePosting } from './postingSanitize';
 
@@ -410,6 +410,21 @@ export function ownGreenhouseRef(opp: {
   return jid === null ? null : { kind: 'ats_greenhouse', org: null, externalId: jid, url: link };
 }
 
+/**
+ * The job the opportunity itself names (qa and tl on #804): its stored identity, else the job its
+ * own posting link names on a board, else the Greenhouse `gh_jid` its careers link carries. Found
+ * on a board that was read, it is the posting; missing there, no title match stands in for it.
+ */
+export function ownJobRef(opp: {
+  postingUrl?: string | null;
+  atsJobRef?: AtsJobRef | null;
+}): AtsJobRef | null {
+  if (opp.atsJobRef != null) return opp.atsJobRef;
+  const link = opp.postingUrl;
+  if (link == null) return null;
+  return atsJobRefOfUrl(link) ?? ownGreenhouseRef(opp);
+}
+
 /** The board a posting of `reads` came from, by identity: ranking keeps the posting objects. */
 function readFromOf(reads: BoardRead[], posting: NormalizedPosting): ReadFrom | undefined {
   const read = reads.find((r) => r.postings.includes(posting));
@@ -525,10 +540,11 @@ export async function findPosting(
       : {
           note: `Large Workday board: showing the first ${cut.shown} of ${cut.total} postings. Paste the posting link or text if yours is not among them.`,
         };
-  // The opportunity's own careers link names its Greenhouse job (#398, tl on #414): that job on
-  // the company's own board is the posting, ahead of any message's link and any title match,
-  // and the read is the proof of its board. Only the company's own boards are searched for it.
-  const ownRef = ownGreenhouseRef(opp);
+  // The opportunity's own job (ownJobRef: its stored identity, its board link, or its careers
+  // link's gh_jid, #398 and tl on #414 and #804): that job on the company's own board is the
+  // posting, ahead of any message's link and any title match, and the read is the proof of its
+  // board. Only the company's own boards are searched for it.
+  const ownRef = ownJobRef(opp);
   const own = ownRef === null ? null : referenceHit(reads, [ownRef]);
   if (own !== null) {
     const candidate = exactly(own.posting);
@@ -538,10 +554,10 @@ export async function findPosting(
       : unattachable(candidate);
   }
 
-  // The own link names a job the company's boards were read without (qa and tl on #414): any
-  // other posting found below is for the user to choose, never attached or confirmed by itself,
-  // or a title match would swap the link for another job's. Boards that could not be read at
-  // all change nothing.
+  // The opportunity names a job the company's boards were read without (qa and tl on #414 and
+  // #804): any other posting found below is for the user to choose, never attached or confirmed by
+  // itself, or a title match would swap its identity for another job's. Boards that could not be
+  // read at all change nothing.
   const ownMissed = ownRef !== null && reads.length > 0;
 
   const hit = referenceHit(reads, refs);
