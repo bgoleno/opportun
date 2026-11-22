@@ -10,6 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { aiAvailable, buildAiDeps, expiredKeyHint } from '../lib/ai';
+import { withTransaction } from '../db/client';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import {
@@ -102,12 +103,14 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
       // A malformed id is refused before storage; a failed or unreachable probe is stored
       // anyway (never block storage on Google being down) with its status and fix.
       if (validation.error === 'client_id_format') return { stored: false, validation };
-      await writeClientCreds(db, ctx, req.body);
-      await storeGoogleValidation(db, ctx, validation);
-      await audit(db, 'google.client_configured', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { validation: validation.status },
+      // The client, its validation and the audit row commit together (#802).
+      await writeClientCreds(db, ctx, req.body, async (tx) => {
+        await storeGoogleValidation(tx, ctx, validation);
+        await audit(tx, 'google.client_configured', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { validation: validation.status },
+        });
       });
       return { stored: true, validation };
     },
@@ -241,12 +244,29 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
       } catch {
         // Best effort: status shows no address.
       }
-      await writeTokens(db, ctx, merged);
-      await audit(db, 'google.connected', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { scopeSet, scopes: merged.scopes },
-      });
+      // The tokens and the audit row commit together (#802).
+      try {
+        await writeTokens(db, ctx, merged, async (tx) => {
+          await audit(tx, 'google.connected', {
+            userId: ctx.userId,
+            ip: req.ip,
+            detail: { scopeSet, scopes: merged.scopes },
+          });
+        });
+      } catch (err) {
+        // Nothing was stored, but Google has issued the grant (sec, tl on #815): revoke it, best
+        // effort, so the account does not keep listing the app as authorized.
+        const grant = tokens.refresh_token ?? tokens.access_token ?? null;
+        if (grant != null) {
+          try {
+            await app.google.revokeToken(client, grant);
+          } catch {
+            // Never the token, nor the error (it carries the request).
+            req.log.warn('google grant revocation after a failed connect failed');
+          }
+        }
+        throw err;
+      }
       return reply.redirect(SETTINGS_PAGE);
     },
   );
@@ -288,8 +308,12 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
           req.log.warn('google token revocation failed');
         }
       }
-      await deleteGoogleSecrets(db, ctx);
-      await deleteGoogleValidation(db, ctx);
+      // The deletes commit together, and the audit row after (#802, sec): a removal never waits on
+      // its record, so a failed write leaves the connection removed, here as at Google above.
+      await withTransaction(db, async (tx) => {
+        await deleteGoogleSecrets(tx, ctx);
+        await deleteGoogleValidation(tx, ctx);
+      });
       await audit(db, 'google.disconnected', { userId: ctx.userId, ip: req.ip });
       return reply.code(204).send(null);
     },

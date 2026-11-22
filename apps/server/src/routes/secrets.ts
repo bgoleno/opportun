@@ -7,6 +7,7 @@ import { SECRET_KINDS } from '../db/schema';
 import { enqueueClassifyBackfill } from '../jobs/classifyBackfill';
 import { resumeAfterKeyChange } from '../jobs/discoveryRankWaiting';
 import { sweepTitleVariantsFor } from '../jobs/titleVariants';
+import { withTransaction } from '../db/client';
 import { audit } from '../lib/audit';
 import {
   deleteKeyValidation,
@@ -17,7 +18,7 @@ import {
   deleteSecret,
   getSecretMeta,
   listSecrets,
-  putSecret,
+  putSecretIn,
   updateSecretMeta,
 } from '../lib/secretBox';
 import { requireUser } from '../repos/base';
@@ -78,16 +79,20 @@ export async function secretRoutes(app: FastifyInstance): Promise<void> {
       const ctx = requireUser(req);
       const { kind, label, value } = req.body;
       const displayName = emptyToNull(req.body.displayName);
-      const { id } = await putSecret(db, ctx, kind, label, value, {
-        ...(displayName === undefined ? {} : { displayName }),
-        ...(req.body.expiresAt === undefined ? {} : { expiresAt: req.body.expiresAt }),
+      // The secret and its audit row commit together (#802): a failed write stores nothing.
+      const meta = await withTransaction(db, async (tx) => {
+        const { id } = await putSecretIn(tx, db, ctx, kind, label, value, {
+          ...(displayName === undefined ? {} : { displayName }),
+          ...(req.body.expiresAt === undefined ? {} : { expiresAt: req.body.expiresAt }),
+        });
+        await audit(tx, 'secret.created', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { id, kind, label },
+        });
+        return await getSecretMeta(tx, ctx, id);
       });
-      const meta = await getSecretMeta(db, ctx, id);
-      await audit(db, 'secret.created', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { id, kind, label },
-      });
+      const { id } = meta;
       // Messages synced before the user had an AI key were never classified.
       if (kind !== 'ai_api_key') return reply.code(201).send(meta);
       await enqueueClassifyBackfill(db, ctx);
@@ -114,16 +119,19 @@ export async function secretRoutes(app: FastifyInstance): Promise<void> {
     async (req) => {
       const ctx = requireUser(req);
       const displayName = emptyToNull(req.body.displayName);
-      const updated = await updateSecretMeta(db, ctx, req.params.id, {
-        ...(displayName === undefined ? {} : { displayName }),
-        ...(req.body.expiresAt === undefined ? {} : { expiresAt: req.body.expiresAt }),
+      // The edit and its audit row commit together (#802).
+      return await withTransaction(db, async (tx) => {
+        const updated = await updateSecretMeta(tx, ctx, req.params.id, {
+          ...(displayName === undefined ? {} : { displayName }),
+          ...(req.body.expiresAt === undefined ? {} : { expiresAt: req.body.expiresAt }),
+        });
+        await audit(tx, 'secret.updated', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { id: updated.id, kind: updated.kind, label: updated.label },
+        });
+        return updated;
       });
-      await audit(db, 'secret.updated', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { id: updated.id, kind: updated.kind, label: updated.label },
-      });
-      return updated;
     },
   );
 
@@ -132,8 +140,13 @@ export async function secretRoutes(app: FastifyInstance): Promise<void> {
     { schema: { params: IdParams, response: { 204: z.null() } } },
     async (req, reply) => {
       const ctx = requireUser(req);
-      const removed = await deleteSecret(db, ctx, req.params.id);
-      await deleteKeyValidation(db, ctx, removed.id);
+      // The delete and its key check record commit together, and the audit row after (#802,
+      // sec): a removal never waits on its record, so a failed write leaves the secret deleted.
+      const removed = await withTransaction(db, async (tx) => {
+        const gone = await deleteSecret(tx, ctx, req.params.id);
+        await deleteKeyValidation(tx, ctx, gone.id);
+        return gone;
+      });
       await audit(db, 'secret.deleted', {
         userId: ctx.userId,
         ip: req.ip,
