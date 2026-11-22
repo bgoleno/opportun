@@ -4,8 +4,8 @@ import { GREENHOUSE_API_HOST } from '@opportun/core';
 import { greenhouseModule } from '../../sites/greenhouse';
 import { registerBuiltinSource, type DiscoverySource } from '../discoverySource';
 
-// Kept for jobs/atsDetect.ts until its Greenhouse probe moves to the site module (#769 step 2,
-// after https://github.com/bgoleno/opportun/pull/842 moves atsDetect to lib/).
+// Kept for lib/atsDetect.ts until its Greenhouse probe moves to the site module, with the other
+// boards' probes (#769 step 4).
 export const GREENHOUSE_HOST = GREENHOUSE_API_HOST;
 
 export const greenhouseSource: DiscoverySource = {
