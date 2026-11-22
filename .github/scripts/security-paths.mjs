@@ -103,6 +103,8 @@ export const SECURITY_SENSITIVE_GLOBS = [
   // decides what the Publish image jobs holding packages: write and contents: write publish:
   // which image tags, git tag and Release, and which refusals stop them (#478)
   '.github/scripts/publish.mjs',
+  // decides whether the image's OS-package scan fails (#728): a change to it can turn the scan off
+  '.github/scripts/image-scan-gate.mjs',
   // the merge procedure for protected main, and the script that deletes a deployment's files
   // and data (#256)
   'scripts/merge-when-green.sh',
