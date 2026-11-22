@@ -14,6 +14,9 @@ import { settings } from '../db/schema';
 import { audit } from '../lib/audit';
 import { applyExport, stopExport, type ExportDeployment } from './export/manager';
 import { disableExport, readExport } from './export/settings';
+// For its load: it hands db/client the statement observer (https://github.com/bgoleno/opportun/issues/803),
+// and every boot starts observability through this module.
+import './database';
 import { type ObsLogger, setCollecting, startObs } from './index';
 
 export const OBS_COLLECT_KEY = 'obs_collect';
