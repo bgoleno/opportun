@@ -6,6 +6,7 @@ import { attachments } from '../db/schema';
 import { notFound } from '../lib/errors';
 import { assertOpportunityOwned } from './activities';
 import type { Db, UserCtx } from './base';
+import { ownedBy } from './base';
 import { countWhere, type Page } from './list';
 import { runCount, withTransaction } from '../db/client';
 
@@ -22,7 +23,7 @@ export interface NewAttachment {
 }
 
 function owned(ctx: UserCtx, id: string): SQL | undefined {
-  return and(eq(attachments.userId, ctx.userId), eq(attachments.id, id));
+  return and(ownedBy(attachments.userId, ctx), eq(attachments.id, id));
 }
 
 function toMeta(row: AttachmentRow): AttachmentMeta {
@@ -67,10 +68,7 @@ export async function listAttachments(
   page: { limit: number; offset: number },
 ): Promise<Page<AttachmentMeta>> {
   await assertOpportunityOwned(db, ctx, opportunityId);
-  const where = and(
-    eq(attachments.userId, ctx.userId),
-    eq(attachments.opportunityId, opportunityId),
-  );
+  const where = and(ownedBy(attachments.userId, ctx), eq(attachments.opportunityId, opportunityId));
   const rows = await db
     .select()
     .from(attachments)

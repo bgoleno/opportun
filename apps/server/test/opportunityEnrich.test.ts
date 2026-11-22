@@ -1,3 +1,4 @@
+import { ATS_DETECT_KIND } from '../src/lib/atsDetect';
 import { AiUnavailableError, runStructured } from '@opportun/ai';
 import { newId } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
@@ -23,7 +24,6 @@ import {
   pageNamesCompany,
   senderDomain,
 } from '../src/jobs/opportunityEnrich';
-import { ATS_DETECT_KIND } from '../src/jobs/atsDetect';
 import { createSafeFetch } from '../src/lib/safeFetch';
 import type { UserCtx } from '../src/repos/base';
 import { createOpportunity } from '../src/repos/opportunities';

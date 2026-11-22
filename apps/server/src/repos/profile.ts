@@ -12,6 +12,7 @@ import { profiles, resumeRules, roleTargets } from '../db/schema';
 import { audit } from '../lib/audit';
 import { HttpError, notFound } from '../lib/errors';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { countWhere, orderBy, sortColumns, type ListOpts, type Page } from './list';
 import {
   createPromptVersion,
@@ -43,7 +44,7 @@ export async function getProfile(db: Exec, ctx: UserCtx): Promise<ProfileRow> {
     .values({ userId: ctx.userId, createdAt: now, updatedAt: now })
     .onConflictDoNothing()
     .run();
-  const row = await db.select().from(profiles).where(eq(profiles.userId, ctx.userId)).get();
+  const row = await db.select().from(profiles).where(ownedBy(profiles.userId, ctx)).get();
   if (row === undefined) throw notFound();
   return row;
 }
@@ -132,7 +133,7 @@ async function changeProfile(
   await exec
     .update(profiles)
     .set({ ...next, updatedAt: Date.now() })
-    .where(eq(profiles.userId, ctx.userId))
+    .where(ownedBy(profiles.userId, ctx))
     .run();
   // `changed`, not `fields`: the audit log redacts a `fields` key (lib/audit.ts), because a
   // submission's fields hold values; this one holds names only.
@@ -249,7 +250,7 @@ export async function listRoleTargets(
   ctx: UserCtx,
   opts: ListOpts,
 ): Promise<Page<RoleTargetRow>> {
-  const where = eq(roleTargets.userId, ctx.userId);
+  const where = ownedBy(roleTargets.userId, ctx);
   const items = await db
     .select()
     .from(roleTargets)
@@ -265,7 +266,7 @@ export async function getRoleTarget(db: Db, ctx: UserCtx, id: string): Promise<R
   const row = await db
     .select()
     .from(roleTargets)
-    .where(and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.id, id)))
+    .where(and(ownedBy(roleTargets.userId, ctx), eq(roleTargets.id, id)))
     .get();
   if (row === undefined) throw notFound();
   return row;
@@ -295,7 +296,7 @@ export async function updateRoleTarget(
     db
       .update(roleTargets)
       .set({ ...patch, updatedAt: Date.now() })
-      .where(and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.id, id))),
+      .where(and(ownedBy(roleTargets.userId, ctx), eq(roleTargets.id, id))),
   );
   if (changes === 0) throw notFound();
   return getRoleTarget(db, ctx, id);
@@ -303,7 +304,7 @@ export async function updateRoleTarget(
 
 export async function deleteRoleTarget(db: Db, ctx: UserCtx, id: string): Promise<void> {
   const changes = await runCount(
-    db.delete(roleTargets).where(and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.id, id))),
+    db.delete(roleTargets).where(and(ownedBy(roleTargets.userId, ctx), eq(roleTargets.id, id))),
   );
   if (changes === 0) throw notFound();
 }
@@ -331,7 +332,7 @@ async function roleTargetSync(exec: Exec, ctx: UserCtx, id: string): Promise<Rol
   const row = await exec
     .select()
     .from(roleTargets)
-    .where(and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.id, id)))
+    .where(and(ownedBy(roleTargets.userId, ctx), eq(roleTargets.id, id)))
     .get();
   if (row === undefined) throw notFound();
   return row;
@@ -383,7 +384,7 @@ export async function editRoleTargetDiscoveryPrompt(
   await db
     .update(roleTargets)
     .set({ discoveryPromptId: created.id, updatedAt: Date.now() })
-    .where(and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.id, roleTargetId)))
+    .where(and(ownedBy(roleTargets.userId, ctx), eq(roleTargets.id, roleTargetId)))
     .run();
   return await getRoleTargetDiscoveryPrompt(db, ctx, roleTargetId);
 }
@@ -404,7 +405,7 @@ export async function linkRoleTargetDiscoveryPrompt(
       await tx
         .update(roleTargets)
         .set({ discoveryPromptId: null, updatedAt: Date.now() })
-        .where(and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.id, roleTargetId)))
+        .where(and(ownedBy(roleTargets.userId, ctx), eq(roleTargets.id, roleTargetId)))
         .run();
       return;
     }
@@ -430,7 +431,7 @@ export async function listResumeRules(
   ctx: UserCtx,
   opts: ListOpts,
 ): Promise<Page<ResumeRuleRow>> {
-  const where = eq(resumeRules.userId, ctx.userId);
+  const where = ownedBy(resumeRules.userId, ctx);
   const items = await db
     .select()
     .from(resumeRules)
@@ -446,7 +447,7 @@ export async function getResumeRule(db: Db, ctx: UserCtx, id: string): Promise<R
   const row = await db
     .select()
     .from(resumeRules)
-    .where(and(eq(resumeRules.userId, ctx.userId), eq(resumeRules.id, id)))
+    .where(and(ownedBy(resumeRules.userId, ctx), eq(resumeRules.id, id)))
     .get();
   if (row === undefined) throw notFound();
   return row;
@@ -476,7 +477,7 @@ export async function updateResumeRule(
     db
       .update(resumeRules)
       .set({ ...patch, updatedAt: Date.now() })
-      .where(and(eq(resumeRules.userId, ctx.userId), eq(resumeRules.id, id))),
+      .where(and(ownedBy(resumeRules.userId, ctx), eq(resumeRules.id, id))),
   );
   if (changes === 0) throw notFound();
   return getResumeRule(db, ctx, id);
@@ -484,7 +485,7 @@ export async function updateResumeRule(
 
 export async function deleteResumeRule(db: Db, ctx: UserCtx, id: string): Promise<void> {
   const changes = await runCount(
-    db.delete(resumeRules).where(and(eq(resumeRules.userId, ctx.userId), eq(resumeRules.id, id))),
+    db.delete(resumeRules).where(and(ownedBy(resumeRules.userId, ctx), eq(resumeRules.id, id))),
   );
   if (changes === 0) throw notFound();
 }

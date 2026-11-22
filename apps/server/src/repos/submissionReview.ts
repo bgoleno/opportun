@@ -34,6 +34,7 @@ import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { submissionDigest } from '../lib/submissionDigest';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import {
   getRow,
   notNow,
@@ -117,7 +118,7 @@ async function reviewsInWindow(
     .from(auditLog)
     .where(
       and(
-        eq(auditLog.userId, ctx.userId),
+        ownedBy(auditLog.userId, ctx),
         eq(auditLog.event, 'submission.reviewed'),
         gt(auditLog.createdAt, now - REVIEW_CAP_WINDOW_MS),
       ),
@@ -245,7 +246,7 @@ async function earlierApplication(
     .from(applicationSubmissions)
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         ne(applicationSubmissions.id, row.id),
         eq(applicationSubmissions.atsKind, row.atsKind),
         row.atsRef === null

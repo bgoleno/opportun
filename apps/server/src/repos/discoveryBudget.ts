@@ -4,12 +4,13 @@
 // it a posting waits for a later budget day (jobs/discoveryRankWaiting.ts). The $5 per task per day
 // in @opportun/ai's router stays as the hard stop behind it.
 import type { TaskKey } from '@opportun/ai';
-import { and, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, gte, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Exec } from '../db/client';
 import { taskRuns } from '../db/schema';
 import { readSetting, writeSetting } from '../lib/ai';
 import type { Db, UserCtx } from './base';
+import { ownedBy } from './base';
 import { batchHoldUsd } from './rankBatches';
 import { startOfUtcDay } from './taskRuns';
 
@@ -85,7 +86,7 @@ async function ledgerSpentTodayUsd(db: Db, ctx: UserCtx, now: number): Promise<n
     .from(taskRuns)
     .where(
       and(
-        eq(taskRuns.userId, ctx.userId),
+        ownedBy(taskRuns.userId, ctx),
         inArray(taskRuns.taskKey, [...DISCOVERY_BUDGET_TASKS]),
         gte(taskRuns.createdAt, startOfUtcDay(now)),
       ),

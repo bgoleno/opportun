@@ -1,5 +1,8 @@
 // Registers the instance administrator (the first account) and reopens registration, so
 // every test can register its own user and see only its own data.
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { request, type FullConfig } from '@playwright/test';
 
 export const ADMIN = {
@@ -30,6 +33,17 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
       headers: { 'x-csrf-token': csrf },
     });
     if (!tour.ok()) throw new Error(`declining the admin's tour failed: ${tour.status()}`);
+    // The admin's session, kept for every spec that acts as the admin, so the suite signs the
+    // admin in through the form only where sign-in itself is under test: each sign-in spends the
+    // login limit, 10 per address and email in 15 minutes (routes/auth.ts LOGIN_LIMIT; #776).
+    // Stored in a directory of its own, made fresh for the run (mode 0700 from mkdtemp), and read
+    // by helpers.ts (adminContext, signInAsAdmin) through E2E_ADMIN_STATE: an environment
+    // variable set here is passed on to every worker. global-teardown.ts removes the directory.
+    const dir = await mkdtemp(join(tmpdir(), 'opportun-e2e-admin-'));
+    const path = join(dir, 'admin-state.json');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- this run's own temp file
+    await writeFile(path, JSON.stringify(await api.storageState()), { mode: 0o600 });
+    process.env.E2E_ADMIN_STATE = path;
   } finally {
     await api.dispose();
   }

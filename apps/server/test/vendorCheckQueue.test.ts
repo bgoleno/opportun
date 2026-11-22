@@ -5,20 +5,20 @@
 // VENDOR_CHECK_CAP checks go just ahead of every other user's waiting ones; the rest go to the back
 // of the line. No job runs here: claimNextJob is the runner's own claim, and the jobs are only
 // claimed to see their order.
+import { ATS_DETECT_KIND, atsDetectDedupeKey, enqueueAtsDetect } from '../src/lib/atsDetect';
 import { newId } from '@opportun/core';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { claimNextJob } from '../src/db/dialect';
 import { jobs } from '../src/db/schema';
-import { ATS_DETECT_KIND, atsDetectDedupeKey, enqueueAtsDetect } from '../src/jobs/atsDetect';
 import { BOARD_PROBE_KIND, enqueueBoardProbe } from '../src/jobs/companyBoardProbe';
 import { NETWORK_PROBE_KIND } from '../src/jobs/networkBoardProbe';
 import {
   VENDOR_CHECK_CAP,
   VENDOR_CHECK_KINDS,
   VENDOR_CHECK_WINDOW_MS,
-} from '../src/jobs/vendorCheckQueue';
+} from '../src/lib/vendorCheckQueue';
 import type { UserCtx } from '../src/repos/base';
 import { useApi } from './api';
 import type { TestClient } from './isolation';

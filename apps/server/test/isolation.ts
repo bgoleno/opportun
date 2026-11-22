@@ -113,7 +113,7 @@ async function register(app: FastifyInstance, email: string): Promise<TestClient
 // Written directly, not through PATCH /admin/registration: that route re-asks for the admin's
 // password (issue #10) and draws on the same 10-attempt budget the re-authentication tests
 // assert about, so a harness that used it would start every test with part of that spent.
-async function setRegistrationOpen(app: FastifyInstance, open: boolean): Promise<void> {
+export async function setRegistrationOpen(app: FastifyInstance, open: boolean): Promise<void> {
   const now = Date.now();
   await app.db
     .insert(settings)

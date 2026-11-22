@@ -76,7 +76,7 @@ export const OAUTH_BINDING_COOKIE_DEV = 'opportun_oauth';
 const LOGIN_PAGE = '/login';
 const SECURITY_PAGE = '/settings/security';
 /** Starts and callbacks per IP: generous for people, tight for a script. */
-const OAUTH_IP_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
+export const OAUTH_IP_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
 
 const ProviderParams = z.object({ provider: z.enum(OAUTH_PROVIDERS) });
 /**
@@ -814,14 +814,13 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
           )?.n ?? 0;
         throw new HttpError(409, linked <= 1 ? 'last_method' : 'password_required');
       }
-      // The unlink and its audit row commit together (#779).
-      await withTransaction(db, async (tx) => {
-        await tx.delete(oauthAccounts).where(eq(oauthAccounts.id, row.id)).run();
-        await audit(tx, 'auth.oauth_unlinked', {
-          userId: ctx.userId,
-          ip: req.ip,
-          detail: { provider },
-        });
+      // A removal (#846, #815's rule): the unlink commits first and is recorded after, so a failed
+      // audit write never leaves a provider able to sign in that its owner unlinked.
+      await db.delete(oauthAccounts).where(eq(oauthAccounts.id, row.id)).run();
+      await audit(db, 'auth.oauth_unlinked', {
+        userId: ctx.userId,
+        ip: req.ip,
+        detail: { provider },
       });
       return reply.code(204).send(null);
     },

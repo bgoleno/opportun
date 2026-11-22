@@ -1057,3 +1057,74 @@ describe('Inbox bulk Reject: what a loading list may and may not do (#678)', () 
     expect(await screen.findByText('alpha one')).toBeInTheDocument();
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/758 (qa on #712): a confirmation opened while the
+// keyword was still in its debounce could still be confirmed once the new filter loaded, and act on
+// a row that filter was about to hide. The dialog's Confirm waits for the list, as the bar's button
+// does.
+describe('Inbox bulk Reject: the confirmation waits for the list too (#758)', () => {
+  const rows = [
+    { ...BASE, id: 'a1', subject: 'alpha one', opportunityId: null, needsReview: true },
+    { ...BASE, id: 'b1', subject: 'beta one', opportunityId: null, needsReview: true },
+  ];
+
+  function heldFilter(answer: typeof rows) {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const { calls } = mockApi({
+      'GET /communications': async (call: { search: string }) => {
+        if (call.search.includes('q=')) {
+          await held;
+          return { status: 200, body: { items: answer, total: answer.length } };
+        }
+        return { status: 200, body: { items: rows, total: 2 } };
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+      'POST /communications/bulk': { succeeded: 1, skipped: 0, changed: 0 },
+    });
+    return { calls, release };
+  }
+
+  async function confirmOpenThenFilter(user: ReturnType<typeof userEvent.setup>, keyword: string) {
+    await screen.findByText('alpha one');
+    await user.click(screen.getAllByRole('checkbox', { name: /Select message from/ })[0]!);
+    // Typed, then the confirmation opened before the keyword's short delay has applied it.
+    await user.type(screen.getByRole('searchbox', { name: 'Keyword' }), keyword);
+    await user.click(screen.getByRole('button', { name: /^Reject 1/ }));
+    return await screen.findByRole('dialog', { name: 'Reject 1 message?' });
+  }
+
+  it('Confirm is not offered while the new filter loads, and a hidden row is never rejected', async () => {
+    const user = userEvent.setup();
+    const { calls, release } = heldFilter([rows[1]!]);
+    renderWithProviders(<Inbox />);
+    const dialog = await confirmOpenThenFilter(user, 'beta');
+    // The filter has applied and is loading; the row about to go is still shown, and selected.
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Reject 1' })).toBeDisabled(),
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 1' }));
+    expect(posts(calls, '/communications/bulk')).toHaveLength(0);
+    release();
+    // The answer hides it: it leaves the selection, and the bar and its dialog with it.
+    await waitFor(() => expect(screen.queryByText('alpha one')).toBeNull());
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(posts(calls, '/communications/bulk')).toHaveLength(0);
+  });
+
+  it('once the list has loaded and still holds the row, Confirm rejects it', async () => {
+    const user = userEvent.setup();
+    const { calls, release } = heldFilter(rows);
+    renderWithProviders(<Inbox />);
+    const dialog = await confirmOpenThenFilter(user, 'one');
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Reject 1' })).toBeDisabled(),
+    );
+    release();
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Reject 1' })).toBeEnabled(),
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 1' }));
+    await waitFor(() => expect(posts(calls, '/communications/bulk')).toHaveLength(1));
+  });
+});
