@@ -265,22 +265,18 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const { email, password, displayName } = req.body;
       const passwordHash = await hashPassword(password, peppers);
-      let registered: {
-        created: typeof users.$inferSelect;
-        session: Awaited<ReturnType<typeof createSession>>;
-      };
+      let session: Awaited<ReturnType<typeof createSession>> | undefined;
+      let created: typeof users.$inferSelect;
       try {
         // The account, its first session and the audit row commit together (#779): a failed
         // audit write leaves no account behind, so the same registration can be tried again.
-        registered = await withTransaction(db, async (tx) => {
-          const created = await registerUser(tx, { email, passwordHash, displayName });
-          const session = await createSession(tx, created.id, sessionMeta(req));
+        created = await registerUser(db, { email, passwordHash, displayName }, async (tx, row) => {
+          session = await createSession(tx, row.id, sessionMeta(req));
           await audit(tx, 'auth.register', {
-            userId: created.id,
+            userId: row.id,
             ip: req.ip,
-            detail: { isAdmin: created.isAdmin },
+            detail: { isAdmin: row.isAdmin },
           });
-          return { created, session };
         });
       } catch (err) {
         if (err instanceof RegistrationClosedError) {
@@ -289,7 +285,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         if (isUniqueViolation(err)) return fail(reply, 409, 'email_taken');
         throw err;
       }
-      const { created, session } = registered;
+      // Written with the account, in its transaction: set once that has committed.
+      if (session === undefined) throw new Error('registration committed without its session');
       setSessionCookies(req, reply, session);
       return reply.code(201).send({ user: toPublic(created) });
     },
