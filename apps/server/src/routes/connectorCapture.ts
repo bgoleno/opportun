@@ -18,6 +18,7 @@
 // gap behind it). A profile capture is unchanged.
 //
 // C-1: the URL is provenance metadata. This route never fetches it, or anything else.
+import { CAPTURE_MAX_TEXT } from '../lib/captureText';
 import {
   AiUnavailableError,
   JobCaptureOutputSchema,
@@ -45,7 +46,6 @@ import { recognizeCapturedPage, type RecognizedPage } from '../lib/captureRecogn
 import { isGroundedIn, profileSlugOf } from '../lib/linkedinCapture';
 import { upsertCapturedProfile } from '../repos/contacts';
 import { getActivePrompt } from '../repos/prompts';
-import { CAPTURE_MAX_TEXT } from './capture';
 import { HttpsUrl } from './common';
 import { workflow } from '../obs/workflow';
 

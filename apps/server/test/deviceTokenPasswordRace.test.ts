@@ -53,7 +53,14 @@ describe('a token minted during a password change or reset is not created (#539)
       expect(changed.statusCode, changed.body).toBe(204);
     });
     expect(res.statusCode, res.body).toBe(403);
-    expect(res.json<{ error: { code: string } }>().error.code).toBe('password_changed');
+    // The sentence reaches the user, not just the code (#743: the 403 schema stripped it).
+    expect(res.json()).toMatchObject({
+      error: {
+        code: 'password_changed',
+        message:
+          'Your password changed while this was being checked. Sign in again and try once more.',
+      },
+    });
     expect(await activeTokens(app, a)).toEqual([]);
     expect(
       await app.db.select().from(deviceTokens).where(eq(deviceTokens.userId, a.userId)).all(),
@@ -71,7 +78,14 @@ describe('a token minted during a password change or reset is not created (#539)
       expect(reset.statusCode, reset.body).toBe(200);
     });
     expect(res.statusCode, res.body).toBe(403);
-    expect(res.json<{ error: { code: string } }>().error.code).toBe('password_changed');
+    // The sentence reaches the user, not just the code (#743: the 403 schema stripped it).
+    expect(res.json()).toMatchObject({
+      error: {
+        code: 'password_changed',
+        message:
+          'Your password changed while this was being checked. Sign in again and try once more.',
+      },
+    });
     expect(await activeTokens(app, b)).toEqual([]);
   });
 

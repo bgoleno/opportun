@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
-import { DEMO_USERS } from '../cli/seedDemoFixture';
+import { DEMO_USERS } from '../lib/demo/fixture';
 import '../lib/deviceTokens';
 import { narrowSharedDemoAdmin } from '../lib/demoSharedAdmin';
 import { getSessionUser } from '../lib/sessions';

@@ -1,13 +1,13 @@
 // Finding an existing opportunity's posting (Task 3, FR-O1 via FR-D7's machinery): the job id in
 // a linked email resolves exactly; otherwise the company's board is title-matched, and a board
 // that cannot be read leaves the opportunity as it was.
+import { TITLE_MATCH_THRESHOLD } from '../src/lib/titleMatch';
 import type { Db } from '../src/db/client';
 import type { NormalizedPosting } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import type { SourceKind } from '../src/adapters/discoverySource';
 import { communications } from '../src/db/schema';
-import { TITLE_MATCH_THRESHOLD } from '../src/jobs/leadResolve';
 import type { safeFetch } from '../src/lib/safeFetch';
 import { findPosting, type BoardLookup } from '../src/lib/postingSearch';
 import { createCompany } from '../src/repos/companies';

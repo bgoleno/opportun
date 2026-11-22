@@ -1,6 +1,6 @@
 // Nightly reset for the invitation-only demo instance (issue #280, PR2). Deliberately thin:
 // the destructive work (a delete scoped to five pinned user ids, gated by an in-database
-// marker, then a reseed) lives entirely in cli/seedDemo.ts's seedDemo(), which the delete-
+// marker, then a reseed) lives entirely in lib/demo/seed.ts's seedDemo(), which the delete-
 // and-reseed design made a single function precisely so a caller never orchestrates the two
 // steps itself and has to keep them consistent. This file is a JobHandler around that one
 // call, plus the credentials it needs to make it.
@@ -13,7 +13,7 @@
 // would still delete zero rows on a real database, because the first two layers do not depend
 // on how the job was invoked.
 import type { FastifyBaseLogger } from 'fastify';
-import { credsFromEnv, seedDemo, type SeedDemoReport } from '../cli/seedDemo';
+import { credsFromEnv, seedDemo, type SeedDemoReport } from '../lib/demo/seed';
 import type { Db } from '../db/client';
 import { audit } from '../lib/audit';
 import { DemoResetGateTimeout, type DemoResetGate } from '../lib/demoResetGate';

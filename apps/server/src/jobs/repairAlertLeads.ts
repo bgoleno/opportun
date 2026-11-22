@@ -10,11 +10,12 @@
 // re-insert all of them as fresh leads. Re-parsing also recovers the dropped location.
 // `externalId` came from the `View job:` link rather than the block, so it survived the shift
 // and is the join key back to the digest.
+import { senderAddress } from '../lib/mailAddress';
 import { buffer } from 'node:stream/consumers';
 import { dedupeKey, NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { alertSenders, parseAlertDigest, senderAddress } from '../adapters/sources/alertEmail';
+import { alertSenders, parseAlertDigest } from '../adapters/sources/alertEmail';
 import type { Db } from '../db/client';
 import { communications, discoveryResults, settings, users } from '../db/schema';
 import { ALERT_HEADER } from '../lib/alertParsers/linkedin';

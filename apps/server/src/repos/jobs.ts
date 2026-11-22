@@ -15,11 +15,16 @@ export type JobListScope =
   | { kind: 'users_and_instance'; userIds: Iterable<string> }
   | { kind: 'all' };
 
-/** The jobs list (Settings > Jobs), newest change first. */
-export async function listJobs(
+/**
+ * The jobs list, newest change first (#592). Settings > Jobs polls it every 5 s for 200 rows: only
+ * the columns the screen shows (never a payload or a result, which can be large), in the order of
+ * jobs_updated_at_idx, so its cost does not grow with the done jobs kept in retention. The query
+ * itself, for its plan to be checked (test/requestPathReads.test.ts).
+ */
+export function jobsListQuery(
   db: Db,
   scope: JobListScope,
-  opts: { status?: JobStatus; limit: number },
+  opts: { status?: JobStatus | undefined; limit: number },
 ) {
   const owner =
     scope.kind === 'user'
@@ -30,12 +35,31 @@ export async function listJobs(
   const where = and(owner, opts.status === undefined ? undefined : eq(jobs.status, opts.status)) as
     SQL | undefined;
   return db
-    .select()
+    .select({
+      id: jobs.id,
+      kind: jobs.kind,
+      status: jobs.status,
+      attempts: jobs.attempts,
+      maxAttempts: jobs.maxAttempts,
+      runAt: jobs.runAt,
+      lastError: jobs.lastError,
+      userId: jobs.userId,
+      createdAt: jobs.createdAt,
+      updatedAt: jobs.updatedAt,
+    })
     .from(jobs)
     .where(where)
     .orderBy(desc(jobs.updatedAt), desc(jobs.id))
-    .limit(opts.limit)
-    .all();
+    .limit(opts.limit);
+}
+
+/** The jobs list (Settings > Jobs): jobsListQuery's rows. */
+export async function listJobs(
+  db: Db,
+  scope: JobListScope,
+  opts: { status?: JobStatus | undefined; limit: number },
+) {
+  return jobsListQuery(db, scope, opts).all();
 }
 
 /** A job's owner (null for the instance's own), or undefined when there is no such job. */

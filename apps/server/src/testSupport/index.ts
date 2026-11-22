@@ -1,6 +1,7 @@
 // Env-gated providers for end-to-end tests (apps/web/e2e). Each flag swaps one external
 // boundary for an in-process fake so the full app runs with no network and no real accounts:
-//   OPPORTUN_AI_MOCK=1     every AI task answers from a canned model (mockAi.ts)
+//   OPPORTUN_AI_MOCK=1     every AI task answers from a canned model (mockAi.ts), and a spec
+//                          can run a scheduled AI sweep now (mockJobs.ts)
 //   OPPORTUN_DOCS_MOCK=1   resume documents live in memory (mockDocs.ts)
 //   OPPORTUN_GMAIL_MOCK=1  Google OAuth and Gmail are a fixture mailbox (mockGoogle.ts)
 //   OPPORTUN_SOURCE_MOCK=1 Greenhouse boards serve fixture postings and board detection answers
@@ -13,6 +14,7 @@ import { registerSource, resetSources } from '../adapters/discoverySource';
 import type { BuildOptions } from '../app';
 import type { Config } from '../config';
 import { mockAiOverride, mockAiRoutes } from './mockAi';
+import { mockJobRoutes } from './mockJobs';
 import { createMockDocumentStore } from './mockDocs';
 import { createMockGoogleApi, mockGoogleTokenFetch } from './mockGoogle';
 import { mockOAuthFetch } from './mockOAuth';
@@ -70,7 +72,10 @@ export function testSupportFromEnv(env: NodeJS.ProcessEnv, cfg: Config): TestSup
     enabled,
     build,
     async register(app) {
-      if (on('OPPORTUN_AI_MOCK')) await app.register(mockAiRoutes);
+      if (on('OPPORTUN_AI_MOCK')) {
+        await app.register(mockAiRoutes);
+        await app.register(mockJobRoutes);
+      }
       if (on('OPPORTUN_SOURCE_MOCK')) {
         registerSource(mockGreenhouseSource);
         app.addHook('onClose', async () => resetSources());

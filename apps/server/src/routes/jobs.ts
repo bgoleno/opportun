@@ -27,7 +27,21 @@ export const JobView = z.object({
   updatedAt: z.number().int(),
 });
 
-function toJobView(j: JobRow): z.infer<typeof JobView> {
+function toJobView(
+  j: Pick<
+    JobRow,
+    | 'id'
+    | 'kind'
+    | 'status'
+    | 'attempts'
+    | 'maxAttempts'
+    | 'runAt'
+    | 'lastError'
+    | 'userId'
+    | 'createdAt'
+    | 'updatedAt'
+  >,
+): z.infer<typeof JobView> {
   return {
     id: j.id,
     kind: j.kind,

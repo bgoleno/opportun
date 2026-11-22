@@ -2,6 +2,7 @@
 // N2b on #190; the owner's decision 5): once recall on the user's own decisions holds, a filtered
 // board posting gets no ranking call and says why, with Rank anyway. The provider is mocked, and
 // every posting and role target is made up.
+import { insertLeads } from '../src/lib/discoveryIngest';
 import { runStructured } from '@opportun/ai';
 import type { NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
@@ -16,7 +17,7 @@ import { discoveryResults, jobs, roleTargets, taskRuns } from '../src/db/schema'
 import { LEAD_RESOLVE_KIND } from '../src/jobs/discoveryKinds';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { drainWaitingResults } from '../src/jobs/discoveryRankWaiting';
-import { DISCOVERY_RUN_KIND, insertLeads } from '../src/jobs/discoveryRun';
+import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import { enqueue } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import {

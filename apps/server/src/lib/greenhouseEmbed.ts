@@ -11,6 +11,7 @@
 // The request is made only when a posting link is set or changed (attach, a URL edit) and on
 // Find posting, never on a page view, and never by the writers that keep or drop an identity
 // without asking (postingAtsJobRefKeeping).
+import { boardFromUrl, boardOfSource } from './atsBoard';
 import { greenhouseJidOf } from '@opportun/core';
 import { createHash } from 'node:crypto';
 import { and, desc, eq, isNull, ne } from 'drizzle-orm';
@@ -20,7 +21,6 @@ import { ATS_MAX_BYTES } from '../adapters/sources/atsCommon';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
 import { companies, discoverySources, opportunities } from '../db/schema';
-import { boardFromUrl, boardOfSource } from '../jobs/atsDetect';
 import { requireService, type JobHandler } from '../jobs/registry';
 import { splitConfig } from '../repos/discovery';
 import type { UserCtx } from '../repos/base';
