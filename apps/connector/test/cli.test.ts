@@ -225,6 +225,80 @@ describe('init', () => {
 
   // #650: a cursor is the old server's position. A different server has none of that mail, so
   // init with another address starts the next sync from the start of the lookback window.
+  // #702 (sec on #673): with a new server address, Enter at the token prompt kept the old token,
+  // and init then sent the previous server's mail:push token to whatever address was typed.
+  describe('the saved token and the server address (#702)', () => {
+    const NEW = `odt_${'N'.repeat(43)}`;
+
+    it('a changed address offers no saved token: it asks for one and says why', async () => {
+      const p = answering({
+        'Server URL': 'https://other-opportun.example',
+        'Device token': '',
+        Mailboxes: '',
+        'Lookback window': '',
+      });
+      const f = scriptedFetch([ok()]);
+      const { io, fs, out, err } = makeIo({ fetch: f.fetch, prompt: p.prompt });
+      await withConfig(fs);
+      fs.writes = [];
+      expect(await main(['init'], io)).toBe(EXIT.USAGE);
+      const tokenQuestion = p.asked.find((a) => a.question.includes('Device token'))!;
+      expect(tokenQuestion.question).not.toMatch(/keep current/);
+      expect(out.join('\n')).toMatch(/server changed, so the saved token is not reused/i);
+      expect(err.join('\n')).toMatch(/odt_/);
+      // Nothing was sent anywhere, and nothing written.
+      expect(f.calls).toHaveLength(0);
+      expect(fs.writes).toEqual([]);
+    });
+
+    it('a changed address takes the token typed for it', async () => {
+      const p = answering({
+        'Server URL': 'https://other-opportun.example',
+        'Device token': NEW,
+        Mailboxes: '',
+        'Lookback window': '',
+      });
+      const { io, fs } = makeIo({ fetch: scriptedFetch([ok()]).fetch, prompt: p.prompt });
+      await withConfig(fs);
+      expect(await main(['init'], io)).toBe(EXIT.OK);
+      expect(await loadConfig(io)).toMatchObject({
+        serverUrl: 'https://other-opportun.example',
+        token: NEW,
+      });
+    });
+
+    it('the same address, typed another way, still keeps the saved token on Enter', async () => {
+      const p = answering({
+        'Server URL': 'HTTPS://OPPORTUN.EXAMPLE/',
+        'Device token': '',
+        Mailboxes: '',
+        'Lookback window': '',
+      });
+      const { io, fs, out } = makeIo({ fetch: scriptedFetch([ok()]).fetch, prompt: p.prompt });
+      await withConfig(fs);
+      expect(await main(['init'], io)).toBe(EXIT.OK);
+      expect((await loadConfig(io)).token).toBe(TOKEN);
+      expect(p.asked.find((a) => a.question.includes('Device token'))!.question).toMatch(
+        /keep current/,
+      );
+      expect(out.join('\n')).not.toMatch(/saved token is not reused/);
+    });
+
+    it('--server with another address and no token flag asks for a token with no default', async () => {
+      const p = answering({ 'Device token': '' });
+      const { io, fs } = makeIo({ prompt: p.prompt });
+      await withConfig(fs);
+      const code = await main(
+        ['init', '--server', 'https://other-opportun.example', '--mailbox', 'Inbox'],
+        io,
+      );
+      expect(code).toBe(EXIT.USAGE);
+      expect(p.asked.find((a) => a.question.includes('Device token'))!.question).not.toMatch(
+        /keep current/,
+      );
+    });
+  });
+
   describe('the sync cursor and the server address (#650)', () => {
     const flags = (server: string) => [
       'init',
