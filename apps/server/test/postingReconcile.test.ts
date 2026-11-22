@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { runStructured } from '@opportun/ai';
 import type { FastifyInstance } from 'fastify';
 import { reconcilePosting } from '../src/jobs/postingReconcile';
+import { POSTING_RECONCILE_KIND } from '../src/lib/jobKinds';
+import { enqueue } from '../src/lib/jobQueue';
 import { descriptionFingerprint } from '../src/lib/postingFingerprint';
 import type { BoardLookup } from '../src/lib/postingSearch';
 import type { safeFetch } from '../src/lib/safeFetch';
@@ -153,6 +155,17 @@ describe('reconcilePosting', () => {
       return boardWith([atsPosting()])(...args);
     };
 
+    // The check's own job row, unfinished while it runs, as captureResolve queues it.
+    await enqueue(
+      app.db,
+      POSTING_RECONCILE_KIND,
+      { opportunityId: opp.id },
+      {
+        dedupeKey: `${POSTING_RECONCILE_KIND}:${opp.id}`,
+        userId: a.userId,
+        runAt: Date.now() + 3_600_000,
+      },
+    );
     const check = run(app, ctx, opp.id, board);
     await started;
     const click = await a.request({
@@ -167,6 +180,20 @@ describe('reconcilePosting', () => {
     expect((await getOpportunity(app.db, ctx, opp.id)).postingState).toBe('confirmed');
     const { items } = await listActivities(app.db, ctx, opp.id, { limit: 50, offset: 0 });
     expect(items.filter((i) => i.title === 'Job posting attached')).toEqual([]);
+  });
+
+  // tl on #865: 'searching' left behind by a check that died, or whose job row is gone, must not
+  // take Find posting away: with no unfinished check, it runs.
+  it('searching with no unfinished check: Find posting runs (#852)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const opp = await seedCaptured(app, ctx);
+    expect((await getOpportunity(app.db, ctx, opp.id)).postingState).toBe('searching');
+    const click = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${opp.id}/find-posting`,
+    });
+    expect(click.statusCode, click.body).toBe(200);
   });
 
   it('re-fingerprints what it wrote, so its own text is not read as a user edit', async () => {

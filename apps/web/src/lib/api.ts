@@ -176,6 +176,9 @@ export function errorMessage(err: unknown): string {
       // A reject refused because the message was linked or moved since it was seen (#666, #678).
       case 'message_changed':
         return 'This message was linked or changed elsewhere, so it was not rejected.';
+      // A background check is reading the company's board for this posting now (#852).
+      case 'posting_searching':
+        return "Opportun is still checking this posting on the company's board. Try again shortly.";
       case 'mcp_stdio_admin_only':
         return "Only this instance's administrator can add a source that runs a command on the server.";
       default:

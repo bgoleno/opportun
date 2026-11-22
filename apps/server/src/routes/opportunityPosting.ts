@@ -38,6 +38,8 @@ import {
   type BodyReader,
 } from '../lib/postingSearch';
 import type { UserCtx } from '../repos/base';
+import { unfinishedDedupeKeys } from '../repos/jobs';
+import { POSTING_RECONCILE_KIND } from '../lib/jobKinds';
 import {
   getOpportunity,
   recordAtsJobRef,
@@ -141,7 +143,16 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       const current = await getOpportunity(db, ctx, id);
       // A background check is reading the board for this posting now (#852, qa): a click then
       // would be a second search racing it, writing a second attach. Its own result lands soon.
-      if (current.postingState === 'searching') {
+      // Its unfinished job is the signal, not the state alone (tl on #865): 'searching' left by a
+      // check that died, or whose job is gone, must not take Find posting away.
+      if (
+        current.postingState === 'searching' &&
+        (
+          await unfinishedDedupeKeys(db, ctx, POSTING_RECONCILE_KIND, [
+            `${POSTING_RECONCILE_KIND}:${id}`,
+          ])
+        ).length > 0
+      ) {
         throw new HttpError(
           409,
           'posting_searching',

@@ -79,14 +79,21 @@ describe('Find posting', () => {
     expect(screen.queryByRole('button', { name: /find posting/i })).not.toBeInTheDocument();
   });
 
-  // #852 (qa): while a background check is reading the board, Find posting is disabled with the
-  // reason, so a click cannot race the check into a second attach.
-  it('Find posting is disabled with a reason while the posting is being searched (#852)', async () => {
-    setup({});
+  // #852 (qa; tl on #865): while a background check is reading the board, the server refuses a
+  // second search, and the panel says why. The button stays enabled: a 'searching' left by a
+  // check that died must not take Find posting away, and the server knows which it is.
+  it('a Find posting refused while a check runs says why (#852)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 409,
+        body: { error: { code: 'posting_searching' } },
+      }),
+    });
     renderWithProviders(<DetailsPanel opp={{ ...BARE, postingState: 'searching' }} />);
     const button = await screen.findByRole('button', { name: /find posting/i });
-    expect(button).toBeDisabled();
-    expect(button).toHaveAccessibleDescription(/still checking this posting/i);
+    expect(button).toBeEnabled();
+    await userEvent.click(button);
+    expect(await screen.findByText(/still checking this posting/i)).toBeInTheDocument();
   });
 
   it('attaches a single match without opening the picker', async () => {
