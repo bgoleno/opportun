@@ -168,7 +168,11 @@ const PublicUser = z.object({
   isAdmin: z.boolean(),
 });
 const UserResponse = z.object({ user: PublicUser });
-const ErrorResponse = z.object({ error: z.object({ code: z.string() }) });
+// The message is kept (#743): a response schema drops what it does not name, and a refusal such as
+// password_changed (#643) carries the sentence the user is meant to read.
+const ErrorResponse = z.object({
+  error: z.object({ code: z.string(), message: z.string().optional() }),
+});
 
 type PublicUserT = z.infer<typeof PublicUser>;
 

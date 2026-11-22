@@ -164,6 +164,10 @@ export function errorMessage(err: unknown): string {
         return 'Not found.';
       case 'payload_too_large':
         return 'That file is too large.';
+      // A write refused because the password changed during its check (#643, #743): the server's
+      // own sentence, kept here too so a body without it still reads plainly.
+      case 'password_changed':
+        return 'Your password changed while this was being checked. Sign in again and try once more.';
       case 'mcp_stdio_admin_only':
         return "Only this instance's administrator can add a source that runs a command on the server.";
       default:
