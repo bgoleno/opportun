@@ -35,10 +35,10 @@
 // entirely ordinary restart (an upgrade, a host reboot): the detail message says so plainly and
 // points at Settings -> Jobs, where a backup failure with the matching "server closed the
 // connection unexpectedly" text is the other half of actually telling those apart.
+import { BACKUP_DIR, LIVE_CHECK_FILE } from '../lib/backupSnapshots';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { pgClientEnv, rawAll, rawGet, type Db } from '../db/client';
-import { BACKUP_DIR } from './backup';
 import { requireService, type JobHandler } from './registry';
 import type { Storage } from '../lib/storage';
 
@@ -69,12 +69,6 @@ export const DB_INTEGRITY_CHECK_CRON = '30 2 * * *';
  *  explicitly exempt, rather than silently inheriting the hour-long one meant for a person
  *  typing a cron by hand. */
 export const DB_INTEGRITY_CHECK_CRON_POSTGRES = '*/15 * * * *';
-/** Alongside the backup snapshots' own sidecars (backup.ts), not a new top-level concern: the
- *  live check is the other half of "can this instance's data be trusted". Exported for
- *  restore.ts (issue #205): a successful restore replaces the live database, so a failed
- *  result recorded here before the restore is no longer a true statement about it, and
- *  nothing else would re-read it until the next scheduled run, up to a day later. */
-export const LIVE_CHECK_FILE = `${BACKUP_DIR}/.live-check.json`;
 /** The Postgres postmaster's own start time at the last check, so the next one can tell
  *  whether it restarted since (issue #241). Kept apart from LIVE_CHECK_FILE itself: that file's
  *  shape is the result an admin reads, not the raw value this job diffs against. */

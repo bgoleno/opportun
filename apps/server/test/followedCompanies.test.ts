@@ -2,12 +2,12 @@
 // board is a discovery source, enabled on the user's default cron; unfollowing disables it. The
 // default cron is a per-user setting (PATCH /settings/discovery) and changing it moves every
 // company source still on the old default to the new one.
+import { ATS_DETECT_KIND, DEFAULT_DISCOVERY_CRON, detectAts } from '../src/lib/atsDetect';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import type { SourceContext } from '../src/adapters/discoverySource';
 import { companies, jobs, settings } from '../src/db/schema';
-import { ATS_DETECT_KIND, DEFAULT_DISCOVERY_CRON, detectAts } from '../src/jobs/atsDetect';
 import { createCompany } from '../src/repos/companies';
 import { createSource, listSources, sourceScheduleName } from '../src/repos/discovery';
 import { useApi } from './api';

@@ -39,10 +39,7 @@ describe('the layer rule (#763)', () => {
     );
   });
 
-  it('allows the job modules it names, and a type-only import of any', async () => {
-    expect(
-      await rules("import { verifySnapshot } from '../jobs/backup';\nvoid verifySnapshot;\n", LIB),
-    ).not.toContain(RULE);
+  it('allows a type-only import of any job module', async () => {
     expect(
       await rules(
         "import type { RunStats } from '../jobs/mailIngest';\nexport type X = RunStats;\n",
@@ -51,20 +48,13 @@ describe('the layer rule (#763)', () => {
     ).not.toContain(RULE);
   });
 
-  it('allows a named job module a folder deeper, and refuses an unnamed one there', async () => {
+  it('refuses a job module a folder deeper too', async () => {
     const seed = 'apps/server/src/lib/demo/seed.ts';
-    expect(
-      await rules(
-        "import { removeIfUnreferenced } from '../../jobs/attachmentSweep';\nvoid removeIfUnreferenced;\n",
-        seed,
-      ),
-    ).not.toContain(RULE);
-    expect(
-      await rules(
-        "import { triageMessage } from '../../jobs/mailIngest';\nvoid triageMessage;\n",
-        seed,
-      ),
-    ).toContain(RULE);
+    for (const mod of ['attachmentSweep', 'mailIngest']) {
+      expect(await rules(`import { x } from '../../jobs/${mod}';\nvoid x;\n`, seed), mod).toContain(
+        RULE,
+      );
+    }
   });
 
   it('refuses the registry from lib/: the job handlers are defined in jobs/ (#788)', async () => {
@@ -84,11 +74,29 @@ describe('the layer rule (#763)', () => {
   });
 
   it('refuses the job modules taken off the list as lib/ took their place (#788)', async () => {
-    for (const mod of ['runner', 'discoveryKinds', 'gmailSync', 'submissionSnapshot']) {
+    for (const mod of [
+      'runner',
+      'discoveryKinds',
+      'gmailSync',
+      'submissionSnapshot',
+      'backup',
+      'dbIntegrityCheck',
+      'postingReconcile',
+      'atsDetect',
+    ]) {
       expect(await rules(`import { x } from '../jobs/${mod}';\nvoid x;\n`, LIB), mod).toContain(
         RULE,
       );
     }
+  });
+
+  it('names no job module as an exception any more: repos/ and lib/ import none (#788)', async () => {
+    const config = (await eslint.calculateConfigForFile(join(repoRoot, LIB))) as {
+      rules: Record<string, [unknown, { patterns: { group: string[] }[] }]>;
+    };
+    const [, options] = config.rules['@typescript-eslint/no-restricted-imports']!;
+    const negations = options.patterns.flatMap((p) => p.group.filter((g) => g.startsWith('!')));
+    expect(negations).toEqual([]);
   });
 
   it('leaves jobs/ alone: the rule is for the layers below it', async () => {

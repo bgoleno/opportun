@@ -2,7 +2,7 @@
 // up another's (https://github.com/bgoleno/opportun/issues/321; tl's design on
 // https://github.com/bgoleno/opportun/issues/321#issuecomment-6767502359, as changed on
 // https://github.com/bgoleno/opportun/pull/330#issuecomment-6768955332).
-import { enqueue } from '../lib/jobQueue';
+import { enqueue } from './jobQueue';
 import { and, eq, gte, inArray, min, ne, or } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { jobs } from '../db/schema';

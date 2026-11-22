@@ -4,13 +4,13 @@
 // a detection job, can get there together. discovery_sources has no unique index, and the check
 // is a read then a create. Every request goes through the real safeFetch logic over a scripted
 // network, and nothing here reaches the internet.
+import { detectAts, syncFollowedCompany } from '../src/lib/atsDetect';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { resetSources, type SourceContext } from '../src/adapters/discoverySource';
 import { onSlowTransaction } from '../src/db/gate';
 import { companies, settings } from '../src/db/schema';
-import { detectAts, syncFollowedCompany } from '../src/jobs/atsDetect';
 import { createSafeFetch } from '../src/lib/safeFetch';
 import type { UserCtx } from '../src/repos/base';
 import { createCompany, getCompany } from '../src/repos/companies';

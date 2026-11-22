@@ -2,11 +2,11 @@
 // dependency, so unlike googleDocs/reactiveResume this runs against the real db and storage
 // rather than a fake. useApi() gives both for free (app.localFileStore, app.db), plus two
 // real registered users for the ownership checks.
+import { sweepOrphanedAttachments } from '../src/lib/attachmentSweep';
 import { and, eq, inArray } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { onSlowTransaction } from '../src/db/gate';
 import { attachments, resumes } from '../src/db/schema';
-import { sweepOrphanedAttachments } from '../src/jobs/attachmentSweep';
 import { HttpError } from '../src/lib/errors';
 import { setRaceHook } from '../src/lib/racePoints';
 import { insertResume, updateResumeDocRef } from '../src/repos/resumes';

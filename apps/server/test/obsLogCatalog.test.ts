@@ -2,13 +2,13 @@
 // https://github.com/bgoleno/opportun/issues/345). Read from the source, so a new audit action, a
 // new log message or a new setting fails CI until the catalog lists it, instead of reaching the log
 // as a withheld marker in silence.
+import { DISCOVERY_DEFAULT_CRON_SETTING } from '../src/lib/atsDetect';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DOCUMENT_STORE_SETTING, RR_URL_SETTING } from '../src/adapters/reactiveResume';
 import { GMAIL_ADDRESS_SETTING, MAIL_LABEL_SETTING } from '../src/adapters/gmail';
 import { ALERT_SENDERS_SETTING } from '../src/adapters/sources/alertEmail';
-import { DISCOVERY_DEFAULT_CRON_SETTING } from '../src/jobs/atsDetect';
 import { CONSUMER_VETO_SETTING } from '../src/repos/mailFilters';
 import { DAILY_REVIEW_CAP_SETTING } from '../src/repos/submissionReview';
 import { CHECKLIST_SETTING, TOUR_SETTING } from '../src/routes/onboarding';
