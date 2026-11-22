@@ -28,7 +28,15 @@ export interface SiteUrl {
 export type HostRule =
   { readonly exact: string } | { readonly pattern: RegExp; readonly example: string };
 
-const normalizeHost = (host: string): string => host.trim().toLowerCase().replace(/\.+$/, '');
+/**
+ * Lowercased, trimmed, with every trailing dot removed, in one pass over the host.
+ */
+function normalizeHost(host: string): string {
+  const h = host.trim().toLowerCase();
+  let end = h.length;
+  while (end > 0 && h.charCodeAt(end - 1) === 46 /* . */) end -= 1;
+  return h.slice(0, end);
+}
 
 /** Whether `host` is the host `rule` names, both sides lowercased with trailing dots removed. */
 export function hostMatchesRule(host: string, rule: HostRule): boolean {
