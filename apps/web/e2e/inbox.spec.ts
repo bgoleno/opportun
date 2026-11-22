@@ -246,7 +246,7 @@ test('Reject from two sessions: a message linked in the other leaves its content
   expect(await readMessage(page.request, b!.subject)).toBeUndefined();
 });
 
-test('a row: Reclassify takes it out of Needs review, Link moves it to Linked, a filter clears the selection', async ({
+test('a row: Reclassify takes it out of Needs review, Link moves it to Linked, a filter keeps a selection it still lists and drops one it hides (#678)', async ({
   page,
 }) => {
   await registerUser(page);
@@ -270,14 +270,22 @@ test('a row: Reclassify takes it out of Needs review, Link moves it to Linked, a
   await page.getByRole('tab', { name: /^Linked/ }).click();
   await expect(row(page, b!)).toContainText('Initech');
 
-  // A filter change clears a selection, though the row is still listed.
+  // A filter that still lists the selected row keeps it selected (#678); a filter that hides it
+  // drops it from the selection (#647), and it is not selected again when it comes back.
   await needsReview.click();
   await box(page, c!).check();
   await expect(page.getByText('1 selected')).toBeVisible();
   await page.getByLabel('Sender').fill('r3');
   await expect(row(page, c!)).toBeVisible();
+  await expect(page.getByText('1 selected')).toBeVisible();
+  await expect(box(page, c!)).toBeChecked();
+  await page.getByLabel('Sender').fill('nobody-matches-this-sender');
+  await expect(row(page, c!)).toBeHidden();
   await expect(page.getByText('1 selected')).toBeHidden();
+  await page.getByLabel('Sender').fill('');
+  await expect(row(page, c!)).toBeVisible();
   await expect(box(page, c!)).not.toBeChecked();
+  await expect(page.getByText('1 selected')).toBeHidden();
 });
 
 test('a single Reject from a row wipes that one; a row linked elsewhere since is left as it is (#666)', async ({

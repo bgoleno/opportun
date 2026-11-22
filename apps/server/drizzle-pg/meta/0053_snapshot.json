@@ -1,5 +1,5 @@
 {
-  "id": "e0a2f865-34c5-4580-a24b-27d431cc0405",
+  "id": "c1142ca5-16f7-4da3-9b67-6e8277f59f60",
   "prevId": "9845c73c-c155-4602-8991-2f402b04405a",
   "version": "7",
   "dialect": "postgresql",
@@ -1604,6 +1604,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "rank_batch_returns": {
+          "name": "rank_batch_returns",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
         "resolution": {
           "name": "resolution",
           "type": "text",
@@ -3205,27 +3212,6 @@
             },
             {
               "expression": "bucket_start",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "obs_metric_points_bucket_idx": {
-          "name": "obs_metric_points_bucket_idx",
-          "columns": [
-            {
-              "expression": "bucket_start",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "series",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

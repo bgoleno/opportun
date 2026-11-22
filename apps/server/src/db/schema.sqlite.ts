@@ -139,6 +139,12 @@ export const sessions = sqliteTable(
     failedAttempts: integer('failed_attempts').notNull().default(0),
     /** pending_2fa only: when the token was redeemed (a replay then reads token_used). */
     usedAt: integer('used_at'),
+    /**
+     * pending_2fa only: why the token was ended before its code step (#662). A password change or
+     * reset marks the user's pending tokens 'password_changed' instead of deleting them, so the
+     * code step can say so; a marked token is never claimed, and is deleted when it is answered.
+     */
+    revokedReason: text('revoked_reason', { enum: ['password_changed'] }),
     createdAt: createdAt(),
   },
   (t) => [index('sessions_user_id_idx').on(t.userId)],
@@ -817,6 +823,11 @@ export const discoveryResults = sqliteTable(
     rankBatchId: text('rank_batch_id').references(() => rankBatches.id, { onDelete: 'set null' }),
     rankBatchBasis: text('rank_batch_basis'),
     rankBatchPromptId: text('rank_batch_prompt_id'),
+    /**
+     * How many times a sent batch handed this posting back with no result (#686): expired, a batch
+     * the provider no longer has, or none given. The third ends its wait (MAX_BATCH_RETURNS).
+     */
+    rankBatchReturns: integer('rank_batch_returns').notNull().default(0),
     resolution: text('resolution', { enum: RESOLUTIONS }).notNull(),
     /** ATS posting reference when resolved. */
     resolvedSourceRef: text('resolved_source_ref'),
@@ -1278,6 +1289,8 @@ export const jobs = sqliteTable(
       .on(t.kind, t.dedupeKey)
       .where(sql`${t.dedupeKey} IS NOT NULL AND ${t.status} IN ('pending', 'running')`),
     index('jobs_user_id_idx').on(t.userId),
+    // The jobs list's order (#592: Settings > Jobs polls it).
+    index('jobs_updated_at_idx').on(t.updatedAt, t.id),
   ],
 );
 

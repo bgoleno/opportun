@@ -276,6 +276,14 @@ function messageText(content: unknown): string {
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
 const USAGE = { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160 };
+/**
+ * A prompt carrying this text is answered as usual, but reports a million input tokens: at the
+ * fallback price (the mock's model is not in the price table) that one call spends a task's
+ * default daily budget, so an e2e can reach the budget-spent path (apps/web/e2e/referrals.spec.ts,
+ * issue #692) without a way to change the budget itself.
+ */
+export const MOCK_HEAVY_USAGE_MARKER = 'qa-mock: heavy usage';
+const HEAVY_USAGE = { prompt_tokens: 1_000_000, completion_tokens: 0, total_tokens: 1_000_000 };
 
 /** Registers the mock endpoint on the app (no session, outside /api, loopback callers only). */
 export async function mockAiRoutes(app: FastifyInstance): Promise<void> {
@@ -331,7 +339,7 @@ export async function mockAiRoutes(app: FastifyInstance): Promise<void> {
           finish_reason: 'stop',
         },
       ],
-      usage: USAGE,
+      usage: promptText.includes(MOCK_HEAVY_USAGE_MARKER) ? HEAVY_USAGE : USAGE,
     });
   });
 }

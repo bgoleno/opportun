@@ -16,8 +16,12 @@ import { whilePasswordCurrent } from './passwordLock';
 import { racePoint } from './racePoints';
 
 export const DEVICE_TOKEN_PREFIX = 'odt_';
-/** odt_ + 32 random bytes as base64url (43 characters). */
-const TOKEN_SHAPE = /^odt_[A-Za-z0-9_-]{43}$/;
+/**
+ * odt_ + 32 random bytes as base64url (43 characters). Exported for the parity test with the
+ * extension's and the connector's copies (test/deviceTokenShape.test.ts, #655).
+ */
+export const DEVICE_TOKEN_SHAPE = /^odt_[A-Za-z0-9_-]{43}$/;
+const TOKEN_SHAPE = DEVICE_TOKEN_SHAPE;
 /** Skip the last_used_at write when the token was used this recently. */
 const TOUCH_INTERVAL_MS = 60 * 1000;
 

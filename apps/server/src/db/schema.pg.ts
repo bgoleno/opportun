@@ -148,6 +148,7 @@ export const sessions = pgTable(
     kind: text('kind', { enum: SESSION_KINDS }).notNull().default('session'),
     failedAttempts: int('failed_attempts').notNull().default(0),
     usedAt: int('used_at'),
+    revokedReason: text('revoked_reason', { enum: ['password_changed'] }),
     createdAt: createdAt(),
   },
   (t) => [index('sessions_user_id_idx').on(t.userId)],
@@ -780,6 +781,11 @@ export const discoveryResults = pgTable(
     rankBatchId: text('rank_batch_id').references(() => rankBatches.id, { onDelete: 'set null' }),
     rankBatchBasis: text('rank_batch_basis'),
     rankBatchPromptId: text('rank_batch_prompt_id'),
+    /**
+     * How many times a sent batch handed this posting back with no result (#686): expired, a batch
+     * the provider no longer has, or none given. The third ends its wait (MAX_BATCH_RETURNS).
+     */
+    rankBatchReturns: int('rank_batch_returns').notNull().default(0),
     resolution: text('resolution', { enum: RESOLUTIONS }).notNull(),
     resolvedSourceRef: text('resolved_source_ref'),
     disposition: text('disposition', { enum: DISPOSITIONS }).notNull().default('pending'),
@@ -1215,6 +1221,8 @@ export const jobs = pgTable(
       .on(t.kind, t.dedupeKey)
       .where(sql`${t.dedupeKey} IS NOT NULL AND ${t.status} IN ('pending', 'running')`),
     index('jobs_user_id_idx').on(t.userId),
+    // The jobs list's order (#592: Settings > Jobs polls it).
+    index('jobs_updated_at_idx').on(t.updatedAt, t.id),
   ],
 );
 

@@ -1,5 +1,6 @@
 // Network API (Task 19, FR-C1): CRUD, company mapping by name on write, list filters, the
 // FTS index (entity_kind 'contact'), and cross-user isolation.
+import { PROHIBITED_HOSTS } from '../src/lib/safeFetch';
 import { describe, expect, it } from 'vitest';
 import { useApi } from './api';
 import { assertIsolated, type TestClient } from './isolation';
@@ -83,6 +84,58 @@ describe('network api', () => {
     expect(del.statusCode).toBe(204);
     const gone = await a.request({ method: 'GET', url: `/api/v1/network/${created.id}` });
     expect(gone.statusCode).toBe(404);
+  });
+
+  // #655 (sec): a contact's LinkedIn link names a LinkedIn profile, so it is accepted on LinkedIn's
+  // own hosts only, and any other host is refused with a message the form shows.
+  // #699 (tl and sec on #695): the LinkedIn host check (lib/linkedinHost.ts) takes LinkedIn's
+  // domain from safeFetch's PROHIBITED_HOSTS. If that list changes, look at linkedinHost.ts too: a
+  // host added here would be taken as a LinkedIn profile host.
+  it('the prohibited hosts the LinkedIn check reads are exactly LinkedIn and its short links', () => {
+    expect([...PROHIBITED_HOSTS]).toEqual(['linkedin.com', 'lnkd.in']);
+  });
+
+  it('a LinkedIn link is accepted on LinkedIn hosts only, and refused elsewhere naming the field', async () => {
+    const { a } = await boot();
+    for (const good of [
+      'https://www.linkedin.com/in/jane-doe',
+      'https://linkedin.com/in/jane-doe',
+      'https://uk.linkedin.com/in/jane-doe',
+      'http://www.LinkedIn.com/in/jane-doe',
+    ]) {
+      const res = await a.request({
+        method: 'POST',
+        url: '/api/v1/network',
+        payload: { name: 'X', linkedinUrl: good },
+      });
+      expect(res.statusCode, good).toBe(201);
+    }
+    for (const bad of [
+      'https://example.com/in/jane-doe',
+      'https://linkedin.com.example.com/in/jane',
+      'https://notlinkedin.com/in/jane',
+      'https://lnkd.in/abc123',
+      'https://evil.example/https://www.linkedin.com/in/jane',
+    ]) {
+      const res = await a.request({
+        method: 'POST',
+        url: '/api/v1/network',
+        payload: { name: 'X', linkedinUrl: bad },
+      });
+      expect(res.statusCode, bad).toBe(400);
+      const issue = res.json<{ error: { issues: { path: string[]; message: string }[] } }>().error
+        .issues[0]!;
+      expect(issue.path).toContain('linkedinUrl');
+      expect(issue.message).toMatch(/LinkedIn profile URL/);
+    }
+    // A PATCH too.
+    const created = await createContact(a, { name: 'Y' });
+    const patched = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/network/${created.id}`,
+      payload: { linkedinUrl: 'https://example.com/jane' },
+    });
+    expect(patched.statusCode).toBe(400);
   });
 
   it('validates input: strength 1-3, http(s) linkedin url, emails', async () => {

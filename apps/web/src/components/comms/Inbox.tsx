@@ -1,7 +1,7 @@
 import type { CommChannel } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { ArrowDownWideNarrow, ArrowUpWideNarrow, RefreshCw } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FormError } from '@/components/FormError';
 import { PageHeader } from '@/components/PageHeader';
@@ -204,9 +204,12 @@ function FilterBar({
 
 function BulkBar({
   rows,
+  loading,
   onDone,
 }: {
   rows: { id: string; opportunityId: string | null }[];
+  /** The list is still loading (a new filter or page): the rows shown may be about to go. */
+  loading: boolean;
   onDone: () => void;
 }) {
   const ids = rows.map((r) => r.id);
@@ -250,7 +253,13 @@ function BulkBar({
           </option>
         ))}
       </Select>
-      <Button type="button" size="sm" onClick={() => setConfirming(true)} disabled={bulk.isPending}>
+      {/* Not while the list loads (#678): a row the new filter hides still looks selected. */}
+      <Button
+        type="button"
+        size="sm"
+        onClick={() => setConfirming(true)}
+        disabled={bulk.isPending || loading}
+      >
         {bulk.isPending ? 'Rejecting...' : `Reject ${ids.length}`}
       </Button>
       <ConfirmDialog
@@ -283,8 +292,10 @@ function Pager({
   total: number;
   onPage: (page: number) => void;
 }) {
-  const first = page * pageSize + 1;
-  const last = page * pageSize + shown;
+  // Never past the total: while the next page loads, the page before is still on screen, and
+  // its rows counted from the new page read ahead ("401–600 of 450": #646's review).
+  const last = Math.min(page * pageSize + shown, total);
+  const first = Math.min(page * pageSize + 1, last);
   return (
     <nav aria-label="Message pages" className="flex flex-wrap items-center gap-2 text-sm">
       <span className="tabular-nums text-muted-foreground">
@@ -338,24 +349,30 @@ function InboxList({
     channel: channel === '' ? undefined : channel,
     order,
   };
-  const { data, error, isPending } = useInbox(tab, filters, page, pageSize);
+  const { data, error, isPending, isPlaceholderData } = useInbox(tab, filters, page, pageSize);
+  // What was asked for, not what is being typed: the list on screen answers the debounced values.
+  const filtered =
+    (filters.q ?? '').trim() !== '' ||
+    (filters.sender ?? '').trim() !== '' ||
+    filters.channel !== undefined;
 
-  // Clear the selection whenever the filters change: a row that scrolls out of the filtered
-  // view must not stay selected and get rejected while the user can no longer see it. A new
-  // filter starts again from its first page (#646).
+  // A new filter starts again from its first page (#646). The selection is not cleared with it
+  // (#678): the pruning below drops a row the filter hides, and keeps one still listed.
   useEffect(() => {
-    setSelected(new Set());
     setPage(0);
   }, [filters.q, filters.sender, filters.channel, filters.order]);
   // A page left empty (its last messages rejected or linked away) steps back to the last page
   // that has any, rather than showing the tab's empty message with messages still in it.
+  // Only on the page's own answer, never on the page before still shown while it loads (tl).
   useEffect(() => {
+    if (isPlaceholderData) return;
     if (data !== undefined && page > 0 && data.items.length === 0 && data.total > 0) {
       setPage(Math.max(0, Math.ceil(data.total / pageSize) - 1));
     }
-  }, [data, page, pageSize]);
-  // And a row that leaves the list any other way (linked or reclassified from its own buttons, or
-  // gone on a refetch) leaves the selection (#647): only rows on screen are ever selected.
+  }, [data, isPlaceholderData, page, pageSize]);
+  // A row that leaves the list leaves the selection (#647): only rows on screen are ever selected.
+  // That covers a filter change too, a row the new filter hides is dropped, so a row still listed
+  // stays selected, and a confirmation open for it stays open (#678).
   const onScreen = useMemo(() => new Set((data?.items ?? []).map((c) => c.id)), [data]);
   useEffect(() => {
     setSelected((prev) => {
@@ -383,8 +400,27 @@ function InboxList({
     });
   const clear = () => setSelected(new Set());
 
+  // When the bulk bar goes (its reject done, or its rows gone), focus that was in it or in its
+  // dialog would fall to the page body (#678): it moves to this list instead.
+  const bulkShown = actOn.length > 0;
+  const root = useRef<HTMLDivElement>(null);
+  const wasShown = useRef(false);
+  useEffect(() => {
+    if (wasShown.current && !bulkShown) {
+      const active = document.activeElement;
+      if (active === null || active === document.body) root.current?.focus();
+    }
+    wasShown.current = bulkShown;
+  }, [bulkShown]);
+
   return (
-    <div className="grid grid-cols-1 gap-3">
+    <div
+      ref={root}
+      tabIndex={-1}
+      role="region"
+      aria-label={`${TABS.find((t) => t.tab === tab)?.label ?? 'Inbox'} messages`}
+      className="grid grid-cols-1 gap-3 outline-none"
+    >
       {selectable ? (
         <FilterBar
           q={q}
@@ -398,9 +434,12 @@ function InboxList({
         />
       ) : null}
 
-      {selectable && actOn.length > 0 ? <BulkBar rows={actOn} onDone={clear} /> : null}
+      {selectable && bulkShown ? (
+        <BulkBar rows={actOn} loading={isPlaceholderData} onDone={clear} />
+      ) : null}
 
-      {data !== undefined && data.total > data.items.length ? (
+      {/* Not over an empty page: during a step-back that page stands in for the next (#678). */}
+      {data !== undefined && data.items.length > 0 && data.total > data.items.length ? (
         <Pager
           page={page}
           pageSize={pageSize}
@@ -414,8 +453,14 @@ function InboxList({
         <FormError message={errorMessage(error)} />
       ) : isPending ? (
         <p className="text-sm text-muted-foreground">Loading...</p>
+      ) : data.items.length === 0 && data.total > 0 ? (
+        // An empty page of a tab that has messages: a step-back to a page not cached yet (#678).
+        <p className="text-sm text-muted-foreground">Loading...</p>
       ) : data.items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{empty}</p>
+        <p className="text-sm text-muted-foreground">
+          {/* With a filter set, an empty list is about the filter, not the tab (#652). */}
+          {filtered ? 'No messages match these filters.' : empty}
+        </p>
       ) : (
         <ul className="grid grid-cols-1 gap-3" aria-label="Messages">
           {data.items.map((c) =>

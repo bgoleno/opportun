@@ -246,6 +246,24 @@ describe('#671: the attachment upload and two-factor setup, on a shared demo acc
     expect(notice).toHaveTextContent(/locks/);
   });
 
+  // #682 (qa on #676): once two-factor sign-in is on, the account is locked to whoever turned it
+  // on; telling the next visitor that turning it on would lock others out says nothing true.
+  it('once two-factor sign-in is on, the two-factor notice is gone', async () => {
+    const api = mockApi({
+      ...onboarding(true),
+      ...places,
+      'GET /auth/2fa': { enabled: true, recoveryCodesLeft: 8 },
+    });
+    renderWithProviders(<TwoFactorCard />);
+    const heading = await screen.findByRole('heading', { name: /Two-factor sign-in/ });
+    const twoFactor = heading.closest('[data-slot="card"]') as HTMLElement;
+    await answered(api);
+    // The card shows it is on, so the answer is in.
+    await within(twoFactor).findByText(/8 recovery codes left/);
+    expect(within(twoFactor).queryByRole('status', { name: 'Shared demo account' })).toBeNull();
+    expect(twoFactor).not.toHaveTextContent(SHARED_DEMO_TWO_FACTOR_WARNING);
+  });
+
   it('a dedicated account sees neither', async () => {
     const api = mockApi({ ...onboarding(false), ...places });
     renderWithProviders(both());

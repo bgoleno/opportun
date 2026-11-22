@@ -108,7 +108,35 @@ export async function pendingTokenStored(exec: Exec, token: string): Promise<boo
   const row = await exec
     .select({ id: sessions.id })
     .from(sessions)
-    .where(and(eq(sessions.id, sha256(token)), eq(sessions.kind, 'pending_2fa')))
+    .where(
+      and(
+        eq(sessions.id, sha256(token)),
+        eq(sessions.kind, 'pending_2fa'),
+        // A token a change or reset marked is not stored for this check (#662, tl): it may have
+        // been claimed before the change, and must still start no session.
+        isNull(sessions.revokedReason),
+      ),
+    )
+    .get();
+  return row !== undefined;
+}
+
+/**
+ * Deletes the pending token if a password change or reset marked it, and says whether it did
+ * (#662): its code step then answers password_changed. Asked again, the token is simply unknown.
+ */
+export async function takeRevokedPending(exec: Exec, token: string): Promise<boolean> {
+  if (token.length === 0) return false;
+  const row = await exec
+    .delete(sessions)
+    .where(
+      and(
+        eq(sessions.id, sha256(token)),
+        eq(sessions.kind, 'pending_2fa'),
+        eq(sessions.revokedReason, 'password_changed'),
+      ),
+    )
+    .returning({ id: sessions.id })
     .get();
   return row !== undefined;
 }
@@ -239,7 +267,7 @@ export async function checkSecondFactor(
 
 export type RedeemResult =
   | { ok: true; userId: string; method: 'totp' | 'recovery' }
-  | { ok: false; code: 'invalid_pending' | 'token_used' }
+  | { ok: false; code: 'invalid_pending' | 'token_used' | 'password_changed' }
   | { ok: false; code: 'invalid_code'; userId: string; tokenRevoked: boolean };
 
 /**
@@ -262,6 +290,7 @@ export async function claimPendingToken(
         eq(sessions.id, id),
         eq(sessions.kind, 'pending_2fa'),
         isNull(sessions.usedAt),
+        isNull(sessions.revokedReason),
         gt(sessions.expiresAt, now),
       ),
     )
@@ -287,6 +316,7 @@ export async function redeemPendingToken(
   await racePoint('twoFactor.pendingClaim');
   const claimed = await claimPendingToken(db, id, now);
   if (claimed === undefined) {
+    if (await takeRevokedPending(db, token)) return { ok: false, code: 'password_changed' };
     const row = await db
       .select({ usedAt: sessions.usedAt, expiresAt: sessions.expiresAt })
       .from(sessions)

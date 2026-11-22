@@ -82,7 +82,7 @@ describe('google connection', () => {
   // final character carries only 4 bits of data, so its low 2 bits are ignored on decode: ending
   // the state in a different last character can still decode to the same signature. Overwriting
   // the last two characters with `xx` was therefore a no-op for about 1 state in 1000, and the
-  // callback then correctly accepted it (302) instead of the 403 this test expects. Change the
+  // callback then correctly accepted it instead of refusing it as this test expects. Change the
   // FIRST signature character instead: every bit of it is significant, so any other character
   // decodes to different bytes.
   function tamperState(state: string): string {
@@ -100,7 +100,7 @@ describe('google connection', () => {
     }
   });
 
-  it('answers 403 to a callback with a bad, foreign or missing state, without exchanging the code', async () => {
+  it('sends a callback with a bad, foreign or missing state to the Integrations page, without exchanging the code (#662)', async () => {
     const { app, a, b } = await boot();
     await saveClient(a);
     await saveClient(b);
@@ -123,8 +123,9 @@ describe('google connection', () => {
       }),
     ];
     for (const res of await Promise.all(cases)) {
-      expect(res.statusCode).toBe(403);
-      expect(res.json().error.code).toBe('bad_state');
+      // An app page, not a raw JSON 403 (#662).
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe('/settings/integrations?google=not_completed');
     }
     // A second session of the same user cannot use it either.
     const login = await app.inject({
@@ -141,7 +142,7 @@ describe('google connection', () => {
       url: `/api/v1/integrations/google/callback?code=c&state=${encodeURIComponent(state)}`,
       cookies,
     });
-    expect(other.statusCode).toBe(403);
+    expect(other.headers.location).toBe('/settings/integrations?google=not_completed');
     expect(google.exchanged).toEqual([]);
   });
 
@@ -211,8 +212,8 @@ describe('google connection', () => {
     });
     // The same state again, from the same session and inside the ten minute window.
     const replay = await a.request({ method: 'GET', url });
-    expect(replay.statusCode).toBe(403);
-    expect(replay.json().error.code).toBe('bad_state');
+    expect(replay.statusCode).toBe(302);
+    expect(replay.headers.location).toBe('/settings/integrations?google=not_completed');
     // The replayed code never reached Google, and the attempt is on the record.
     expect(google.exchanged).toEqual(['auth-code']);
     expect(

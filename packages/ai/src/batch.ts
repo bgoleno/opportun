@@ -5,6 +5,7 @@
 // result is parsed, and its run record. Anthropic's client is anthropicBatch.ts (#509) and
 // OpenAI's is openaiBatch.ts (#510); for every other provider batchProviderFor finds none and every
 // request is made live.
+import type { BatchCallLimits } from './batchLimits';
 import type { z } from 'zod';
 import { createAnthropicBatchProvider } from './anthropicBatch';
 import { createOpenAiBatchProvider, isOpenAiBatchBase } from './openaiBatch';
@@ -14,6 +15,13 @@ import { ATTR, inBatchSpan, OPERATION_BATCH_COLLECT, OPERATION_BATCH_SUBMIT } fr
 import type { ModelPolicy, ProviderFetchOptions, TaskKey, TaskRunRecord } from './types';
 
 export { batchMultiplier };
+export {
+  BATCH_ANSWER_MAX_BYTES,
+  BATCH_RESULTS_MAX_BYTES,
+  clampTokens,
+  MAX_TOKEN_COUNT,
+  readBatchText,
+} from './batchRead';
 
 /** One request in a batch: the caller's id for it, and what structuredRequest built. */
 export interface BatchRequest {
@@ -59,8 +67,21 @@ export interface BatchProvider {
    * its results (#634). Throws when a removal is refused, so the caller can try again later; what
    * is already gone counts as removed.
    */
-  cleanup(batchId: string): Promise<void>;
+  cleanup(batchId: string, refs?: readonly string[]): Promise<void>;
+  /**
+   * What cleanup will need to remove, read when the results are (#686, sec): OpenAI's file ids,
+   * so a later cleanup does not depend on the batch still naming them. None for a provider whose
+   * cleanup needs only the batch id. Never a key or any request text.
+   */
+  cleanupRefs(batchId: string): Promise<string[]>;
 }
+
+// Each call's time limit (#686): batchLimits.ts, which the two clients import (no cycle here).
+export {
+  BATCH_CONTROL_LIMIT_MS,
+  BATCH_TRANSFER_LIMIT_MS,
+  type BatchCallLimits,
+} from './batchLimits';
 
 /**
  * The batch client for this policy's provider, or null when it has none: then every request is
@@ -73,6 +94,7 @@ export function batchProviderFor(target: {
   policy: ModelPolicy;
   apiKey: string;
   providerFetch: ProviderFetchOptions;
+  limits?: BatchCallLimits;
 }): BatchProvider | null {
   switch (target.policy.provider) {
     case 'anthropic':
@@ -103,7 +125,8 @@ function withBatchSpans(provider: BatchProvider, policy: ModelPolicy): BatchProv
       }),
     state: (batchId) => provider.state(batchId),
     // No span: it carries no tokens or cost, and its failure is the cleanup job's to log.
-    cleanup: (batchId) => provider.cleanup(batchId),
+    cleanup: (batchId, refs) => provider.cleanup(batchId, refs),
+    cleanupRefs: (batchId) => provider.cleanupRefs(batchId),
     results: (batchId) =>
       inBatchSpan(OPERATION_BATCH_COLLECT, policy, async (set) => {
         set({ [ATTR.batchId]: batchId });

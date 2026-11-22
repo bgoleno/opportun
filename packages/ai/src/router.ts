@@ -8,6 +8,7 @@ import {
   Output,
   RetryError,
   streamText,
+  wrapLanguageModel,
   type Instructions,
   type LanguageModel,
   type LanguageModelUsage,
@@ -43,6 +44,27 @@ interface Tokens {
   /** Part of `input` already; priced at their own rates (#356) and given to the span. */
   cacheRead: number;
   cacheWrite: number;
+}
+
+/**
+ * Characters a token, for counting a chat stream that ended before the provider reported its
+ * usage. Three errs high: English text averages about four characters a token, so the count is
+ * at least what the provider billed for the text, never less.
+ */
+const CHARS_PER_ESTIMATED_TOKEN = 3;
+
+function estimateTokens(chars: number): number {
+  return Math.ceil(chars / CHARS_PER_ESTIMATED_TOKEN);
+}
+
+/** The characters of a prompt as sent: the system text and every message's content. */
+function promptChars(system: string, messages: readonly ModelMessage[]): number {
+  let chars = system.length;
+  for (const m of messages) {
+    // A structured content (parts) is counted as its JSON, which is longer than its text.
+    chars += typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content).length;
+  }
+  return chars;
 }
 
 function addUsage(acc: Tokens, usage: LanguageModelUsage | undefined): void {
@@ -431,9 +453,89 @@ export async function streamChat(
   run.attempts = 1;
   // The caller's own signal and the deps' one deadline for the call (#656), whichever ends first.
   const abortSignal = anyOf([opts.abortSignal, callDeadline(deps)]);
+
+  // A stream that ends early (stopped, a provider error part, or the stream itself failing) is
+  // still billed for what the provider read and wrote, but the provider reports usage only when
+  // a step ends. So the run counts the steps that ended, plus an estimate for the one cut: the
+  // prompt as sent, and the text streamed so far. The estimate is said in the run's error.
+  const ended: Tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const step = { open: false, responded: false, chars: 0 };
+  let cut = false;
+  const recordCut = async (failure: Failure, sent: boolean): Promise<void> => {
+    if (cut) return;
+    cut = true;
+    run.tokens.input += ended.input;
+    run.tokens.output += ended.output;
+    run.tokens.cacheRead += ended.cacheRead;
+    run.tokens.cacheWrite += ended.cacheWrite;
+    // A stop counts the cut step's prompt even before an answer: the request was sent. An error
+    // before any answer is a provider that refused the call, which it does not bill.
+    const estimated = step.open && (sent || step.responded);
+    if (estimated) {
+      run.tokens.input += estimateTokens(promptChars(opts.system, opts.messages));
+      run.tokens.output += estimateTokens(step.chars);
+    }
+    const detail = estimated
+      ? `${failure.detail ?? ''} (tokens estimated)`.trimStart()
+      : failure.detail;
+    await recordSafely('error', { reason: failure.reason, detail });
+  };
+
+  // The provider's stream, watched as the SDK reads it: it counts what the cut step has streamed,
+  // and records usage for a stream that ends without the SDK's callbacks below. One that fails
+  // outright is seen only by its reader, so it is recorded here, before the reader sees the error.
+  const watched =
+    typeof model === 'string'
+      ? model
+      : wrapLanguageModel({
+          model,
+          middleware: {
+            specificationVersion: 'v4',
+            wrapStream: async ({ doStream }) => {
+              step.open = true;
+              step.responded = false;
+              step.chars = 0;
+              const out = await doStream();
+              const reader = out.stream.getReader();
+              return {
+                ...out,
+                stream: new ReadableStream({
+                  async pull(controller) {
+                    let next;
+                    try {
+                      next = await reader.read();
+                    } catch (err) {
+                      // A stop errors the stream too; onAbort records that one.
+                      if (abortSignal?.aborted !== true) {
+                        await recordCut(
+                          { reason: 'provider_error', detail: errorDetail(err, apiKey) },
+                          false,
+                        );
+                      }
+                      controller.error(err);
+                      return;
+                    }
+                    if (next.done) {
+                      controller.close();
+                      return;
+                    }
+                    step.responded = true;
+                    const part = next.value;
+                    if (part.type === 'text-delta' || part.type === 'reasoning-delta') {
+                      step.chars += part.delta.length;
+                    }
+                    controller.enqueue(part);
+                  },
+                  cancel: async (reason) => await reader.cancel(reason),
+                }),
+              };
+            },
+          },
+        });
+
   return run.span.run(() =>
     streamText<ToolSet>({
-      model,
+      model: watched,
       system: opts.system,
       messages: opts.messages,
       ...(abortSignal === undefined ? {} : { abortSignal }),
@@ -457,14 +559,15 @@ export async function streamChat(
         });
         await recordSafely('ok');
       },
+      onStepEnd: (event) => {
+        addUsage(ended, event.usage);
+        step.open = false;
+      },
       onError: async ({ error }) => {
-        await recordSafely('error', {
-          reason: 'provider_error',
-          detail: errorDetail(error, apiKey),
-        });
+        await recordCut({ reason: 'provider_error', detail: errorDetail(error, apiKey) }, false);
       },
       onAbort: async () => {
-        await recordSafely('error', { reason: 'provider_error', detail: 'aborted' });
+        await recordCut({ reason: 'provider_error', detail: 'aborted' }, true);
       },
     }),
   );
