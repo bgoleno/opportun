@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { formatDateTime } from '@/lib/opportunities';
@@ -1007,8 +1007,12 @@ describe('Inbox bulk Reject: what a loading list may and may not do (#678)', () 
     await screen.findByText('alpha one');
     await user.click(screen.getAllByRole('checkbox', { name: /Select message from/ })[0]!);
     await user.type(screen.getByRole('searchbox', { name: 'Keyword' }), 'beta');
-    // The filter has applied and is loading; the old rows are still shown.
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Reject 1/ })).toBeDisabled());
+    // The filter has applied and is loading; the old rows are still shown. The button is marked
+    // unavailable rather than disabled (#841), so focus can return to it, and a press does nothing.
+    const reject = screen.getByRole('button', { name: /^Reject 1/ });
+    await waitFor(() => expect(reject).toHaveAttribute('aria-disabled', 'true'));
+    await user.click(reject);
+    expect(screen.queryByRole('dialog')).toBeNull();
     release();
     // The answer hides the selected row: it leaves the selection, and the bar with it.
     await waitFor(() => expect(screen.queryByText('alpha one')).toBeNull());
@@ -1126,5 +1130,130 @@ describe('Inbox bulk Reject: the confirmation waits for the list too (#758)', ()
     );
     await user.click(within(dialog).getByRole('button', { name: 'Reject 1' }));
     await waitFor(() => expect(posts(calls, '/communications/bulk')).toHaveLength(1));
+  });
+});
+
+// qa on #838: what the list's reload does to a selection and its open confirmation (#841).
+describe('Inbox bulk Reject: a reload behind the confirmation (#841)', () => {
+  const rows = [
+    { ...BASE, id: 'a1', subject: 'alpha one', opportunityId: null, needsReview: true },
+    { ...BASE, id: 'b1', subject: 'beta one', opportunityId: null, needsReview: true },
+  ];
+
+  /** The filtered list is held until released, then answers `answer` (or fails). */
+  function heldFilter(answer: typeof rows | 'fail') {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const { calls } = mockApi({
+      'GET /communications': async (call: { search: string }) => {
+        if (call.search.includes('q=')) {
+          await held;
+          if (answer === 'fail') {
+            return {
+              status: 500,
+              body: { error: { code: 'server_error', message: 'The server could not do that.' } },
+            };
+          }
+          return { status: 200, body: { items: answer, total: answer.length } };
+        }
+        return { status: 200, body: { items: rows, total: 2 } };
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+      'POST /communications/bulk': { succeeded: 1, skipped: 0, changed: 0 },
+    });
+    return { calls, release };
+  }
+
+  /** Selects `count` rows, types `keyword`, and opens the confirmation before it applies. */
+  async function openThenFilter(
+    user: ReturnType<typeof userEvent.setup>,
+    keyword: string,
+    count: 1 | 2,
+  ) {
+    await screen.findByText('alpha one');
+    const boxes = screen.getAllByRole('checkbox', { name: /Select message from/ });
+    for (const box of boxes.slice(0, count)) await user.click(box);
+    await user.type(screen.getByRole('searchbox', { name: 'Keyword' }), keyword);
+    await user.click(screen.getByRole('button', { name: count === 1 ? /^Reject 1/ : /^Reject 2/ }));
+    const name = count === 1 ? 'Reject 1 message?' : 'Reject 2 messages?';
+    return await screen.findByRole('dialog', { name });
+  }
+
+  it('a reload that fails keeps the selection, and says the list could not refresh', async () => {
+    const user = userEvent.setup();
+    const { release } = heldFilter('fail');
+    renderWithProviders(<Inbox />);
+    await screen.findByText('alpha one');
+    await user.click(screen.getAllByRole('checkbox', { name: /Select message from/ })[0]!);
+    await user.type(screen.getByRole('searchbox', { name: 'Keyword' }), 'beta');
+    release();
+    expect(await screen.findByText(/couldn't refresh/)).toBeInTheDocument();
+    expect(screen.getByText('alpha one')).toBeInTheDocument();
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    expect(screen.getAllByRole('checkbox', { name: /Select message from/ })[0]).toBeChecked();
+  });
+
+  it('a reload that drops some of the rows closes the confirmation, says so, and rejects nothing', async () => {
+    const user = userEvent.setup();
+    const { calls, release } = heldFilter([rows[1]!]);
+    renderWithProviders(<Inbox />);
+    await openThenFilter(user, 'beta', 2);
+    release();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(await screen.findByText('Nothing was rejected')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '1 of the 2 selected messages is no longer listed. Check the selection and reject again.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    expect(posts(calls, '/communications/bulk')).toHaveLength(0);
+  });
+
+  it('a reload that drops every row closes the confirmation and says so', async () => {
+    const user = userEvent.setup();
+    const { calls, release } = heldFilter([]);
+    renderWithProviders(<Inbox />);
+    await openThenFilter(user, 'zeta', 1);
+    release();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(await screen.findByText('Nothing was rejected')).toBeInTheDocument();
+    expect(screen.getByText('The selected message is no longer listed.')).toBeInTheDocument();
+    expect(posts(calls, '/communications/bulk')).toHaveLength(0);
+  });
+
+  it('Escape during the reload returns focus to the Reject button that opened it', async () => {
+    const user = userEvent.setup();
+    const { release } = heldFilter(rows);
+    renderWithProviders(<Inbox />);
+    const dialog = await openThenFilter(user, 'one', 1);
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Reject 1' })).toBeDisabled(),
+    );
+    // jsdom has no native <dialog> behaviour: as a browser does, focus is inside the dialog, and
+    // Escape closes it (its close event).
+    within(dialog).getByRole('button', { name: 'Cancel' }).focus();
+    fireEvent(dialog, new Event('close'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    const opener = screen.getByRole('button', { name: /^Reject 1/ });
+    expect(opener).toHaveFocus();
+    // Still not offered while the list loads (#678), but focusable, so focus can return to it.
+    expect(opener).toHaveAttribute('aria-disabled', 'true');
+    await user.click(opener);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    release();
+  });
+
+  it('a reload that keeps every row leaves the confirmation open, with no message', async () => {
+    const user = userEvent.setup();
+    const { release } = heldFilter(rows);
+    renderWithProviders(<Inbox />);
+    const dialog = await openThenFilter(user, 'one', 2);
+    release();
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Reject 2' })).toBeEnabled(),
+    );
+    expect(screen.getByRole('dialog', { name: 'Reject 2 messages?' })).toBeInTheDocument();
+    expect(screen.queryByText('Nothing was rejected')).toBeNull();
   });
 });
