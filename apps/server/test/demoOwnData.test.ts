@@ -1,6 +1,7 @@
 // Assisted apply on the demo fills only the visitor's own data
 // (https://github.com/bgoleno/opportun/issues/544, slice 1 of #542). The switch is on for the
 // demo since #545, which binds each attempt to its visitor (test/demoActorBinding.test.ts).
+import { SNAPSHOT_JOB_KIND } from '../src/lib/submissionSnapshotQueue';
 import { newId } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -22,7 +23,6 @@ import {
   profiles,
   resumes,
 } from '../src/db/schema';
-import { SNAPSHOT_JOB_KIND } from '../src/jobs/submissionSnapshot';
 import { createDeviceToken } from '../src/lib/deviceTokens';
 import { fixtureField, isFixtureIdentity } from '../src/lib/demoOwnData';
 import { submissionDigest } from '../src/lib/submissionDigest';

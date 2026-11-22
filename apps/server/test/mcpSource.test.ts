@@ -3,6 +3,7 @@
 // the configured paths, caps hostile strings, and the engine sanitizes what is stored. The child
 // runs without a shell and with PATH only, and is gone (reaped) after every call, including a
 // call that times out against a server that ignores SIGTERM.
+import { enqueue } from '../src/lib/jobQueue';
 import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,7 +14,6 @@ import { resetSources, type SourceContext } from '../src/adapters/discoverySourc
 import { MCP_FIELD_CAPS, mcpSource, valueAt } from '../src/adapters/sources/mcp';
 import { McpConfigSchema } from '../src/adapters/sources/mcpConfig';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
-import { enqueue } from '../src/jobs/runner';
 import {
   callMcpTool,
   guardedMcpFetch,

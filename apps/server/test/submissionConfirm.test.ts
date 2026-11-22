@@ -3,6 +3,7 @@
 // Every message goes through the real ingest (jobs/mailIngest.ts ingestInbound), with the AI
 // gate and the classifier mocked as in mailIngest.test.ts. Companies, domains and jobs are
 // synthetic.
+import { CLASSIFY_JOB_KIND } from '../src/lib/mailClassifyQueue';
 import { runStructured } from '@opportun/ai';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -16,7 +17,7 @@ import {
   nextSteps,
   opportunities,
 } from '../src/db/schema';
-import { CLASSIFY_JOB_KIND, ingestInbound } from '../src/jobs/mailIngest';
+import { ingestInbound } from '../src/jobs/mailIngest';
 import { ATS_SENDER_DOMAINS } from '../src/lib/submissionMatch';
 import { createOpportunity } from '../src/repos/opportunities';
 import { followUpSubmissions } from '../src/repos/submissionOutcome';

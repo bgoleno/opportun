@@ -1,5 +1,6 @@
 // Backup status (FR-I4): the snapshots on disk, the nightly schedule, and an on-demand
 // backup. Snapshots hold every user's data, so this is admin only.
+import { enqueue, readSchedules, SCHEDULE_PREFIX } from '../lib/jobQueue';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -7,7 +8,6 @@ import { z } from 'zod';
 import { jobs } from '../db/schema';
 import { BACKUP_JOB_KIND, listBackups, MANUAL_BACKUP_DEDUPE_KEY } from '../jobs/backup';
 import { readLiveCheck } from '../jobs/dbIntegrityCheck';
-import { enqueue, readSchedules, SCHEDULE_PREFIX } from '../jobs/runner';
 import { audit } from '../lib/audit';
 import { forbidden } from '../lib/errors';
 import { requireUser } from '../repos/base';

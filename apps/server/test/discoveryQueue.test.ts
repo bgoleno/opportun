@@ -1,5 +1,6 @@
 // Review queue API (Task 7, FR-D3, FR-O7, FR-O10): list, accept (create or attach), dismiss,
 // opportunity merge, and the discovery sources API, each isolated between users.
+import { enqueue } from '../src/lib/jobQueue';
 import { dedupeKey, newId, type NormalizedPosting } from '@opportun/core';
 import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -17,7 +18,6 @@ import {
   stageHistory,
 } from '../src/db/schema';
 import { DISCOVERY_RUN_KIND, MULTI_POSTED_PREFIX } from '../src/jobs/discoveryRun';
-import { enqueue } from '../src/jobs/runner';
 import {
   createRun,
   createSource,

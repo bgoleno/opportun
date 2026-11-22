@@ -1,6 +1,7 @@
 // Connector mail ingest (FR-M5, plan Task 9, Review Focus 1 and 4): the Apple Mail connector
 // pushes batches with a mail:push device token. Bearer only, scoped, idempotent, capped, and
 // the pushed mail is hostile input handled exactly like Gmail's.
+import { CLASSIFY_JOB_KIND } from '../src/lib/mailClassifyQueue';
 import { runStructured } from '@opportun/ai';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -8,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InboundMessage } from '../src/adapters/mailProvider';
 import { communications, jobs, syncState, users } from '../src/db/schema';
 import type { ClassifyOutput } from '../src/jobs/classify';
-import { CLASSIFY_JOB_KIND } from '../src/jobs/gmailSync';
 import { ingestInbound } from '../src/jobs/mailIngest';
 import { useApi } from './api';
 import { HTML_BODY, htmlBomb, INJECTION_BODY } from './fixtures/hostileMail';

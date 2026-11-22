@@ -1,6 +1,7 @@
 // A board's first run ranks at most 25 postings; the rest wait below the cut until the user sends
 // them through the budget (https://github.com/bgoleno/opportun/issues/215, #190 N1b). The provider
 // is mocked and every posting is made up.
+import { enqueue } from '../src/lib/jobQueue';
 import { insertLeads, rankBelowCut } from '../src/lib/discoveryIngest';
 import { runStructured } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
@@ -17,7 +18,7 @@ import { discoveryResults, discoveryRuns, jobs, taskRuns } from '../src/db/schem
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { DISCOVERY_RUN_KIND, FIRST_RUN_RANK_CAP } from '../src/jobs/discoveryRun';
 import { LEAD_RESOLVE_KIND } from '../src/jobs/leadResolve';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { runNextJob } from '../src/jobs/runner';
 import { setRaceHook } from '../src/lib/racePoints';
 import type { UserCtx } from '../src/repos/base';
 import { createCompany } from '../src/repos/companies';

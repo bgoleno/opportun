@@ -2,6 +2,7 @@
 // NormalizedPosting from recorded-shape fixtures, fetched only through safeFetch with exactly the
 // adapter's API host allowed. An unknown org is a SourceConfigError: the run fails once, the
 // source shows the error, and the runner does not retry it.
+import { enqueue } from '../src/lib/jobQueue';
 import { readFileSync } from 'node:fs';
 import type { NormalizedPosting } from '@opportun/core';
 import { eq } from 'drizzle-orm';
@@ -18,7 +19,6 @@ import { greenhouseSource } from '../src/adapters/sources/greenhouse';
 import { LEVER_PAGE_SIZE, leverSource } from '../src/adapters/sources/lever';
 import { discoveryRuns, jobs } from '../src/db/schema';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
-import { enqueue } from '../src/jobs/runner';
 import {
   createSafeFetch,
   FetchBlockedError,

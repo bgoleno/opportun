@@ -2,6 +2,7 @@
 // issuecomment-6794239917, "Tests that matter most", and ruling on #441), against a fake batch
 // provider: no provider has a real batch client in this slice. The live call is mocked, every key
 // and posting is made up.
+import { enqueue } from '../src/lib/jobQueue';
 import { rankAnyway, rankBelowCut } from '../src/lib/discoveryIngest';
 import {
   AiUnavailableError,
@@ -24,7 +25,7 @@ import {
   type DiscoverySource,
 } from '../src/adapters/discoverySource';
 import { discoveryResults, jobs, rankBatches, secrets, taskRuns, users } from '../src/db/schema';
-import { MULTI_POSTED_PREFIX } from '../src/jobs/discoveryKinds';
+import { MULTI_POSTED_PREFIX } from '../src/lib/jobKinds';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { drainWaitingResults, sweepWaitingResults } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
@@ -41,7 +42,7 @@ import {
   rankBatchCleanupJob,
 } from '../src/jobs/rankBatch';
 import { rankBudgetHasRoom } from '../src/jobs/rankBudget';
-import { backoffMs, DEFAULT_KIND_LIMITS, enqueue } from '../src/jobs/runner';
+import { backoffMs, DEFAULT_KIND_LIMITS } from '../src/jobs/runner';
 import { budgetKey, writeSetting } from '../src/lib/ai';
 import { setRaceHook } from '../src/lib/racePoints';
 import type { UserCtx } from '../src/repos/base';
@@ -1266,7 +1267,7 @@ describe('the rules tl found untested (blocking 6)', () => {
     await submit(app, a);
     fake!.end(1, succeeded(95));
     await collect(app, a);
-    const { MULTI_POSTED_SCORE_CAP } = await import('../src/jobs/discoveryKinds');
+    const { MULTI_POSTED_SCORE_CAP } = await import('../src/lib/jobKinds');
     expect((await getResult(app.db, ctxOf(a), r!.id)).aiScore).toBe(MULTI_POSTED_SCORE_CAP);
   });
 

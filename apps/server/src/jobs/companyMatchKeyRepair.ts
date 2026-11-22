@@ -12,6 +12,7 @@
 // never run. That is a narrower miss than the scan silently loading every active opportunity
 // used to risk, and it closes itself out as soon as this job runs, which is immediately on
 // the next boot after this ships.
+import { enqueue } from '../lib/jobQueue';
 import { companyMatchKey } from '@opportun/core';
 import { and, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
@@ -19,7 +20,6 @@ import type { Db } from '../db/client';
 import { companies, settings, users } from '../db/schema';
 import type { UserCtx } from '../repos/base';
 import type { JobHandler } from './registry';
-import { enqueue } from './runner';
 
 export const REPAIR_COMPANY_MATCH_KEYS_KIND = 'companies.repair_match_keys';
 /** Global marker (user_id NULL): the repair has been queued for this deployment. */

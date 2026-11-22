@@ -2,6 +2,7 @@
 // sanitize, dedupe, denylist and pre-filter path every posting takes, and insertLeads, which runs
 // it for leads that arrive outside a source run (alert mail, a capture). In lib/ so the alert-mail
 // adapter and the capture route store leads without importing the discovery-run job.
+import { enqueue } from './jobQueue';
 import { dedupeKey, newId, NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import { isLockTimeout, lockScope, withTransaction, type Db } from '../db/client';
@@ -32,12 +33,7 @@ import {
   type DiscoveryResultView,
   ingestScope,
 } from '../repos/discovery';
-import {
-  DISCOVERY_RANK_KIND,
-  LEAD_RESOLVE_KIND,
-  MULTI_POSTED_PREFIX,
-} from '../jobs/discoveryKinds';
-import { enqueue } from '../jobs/runner';
+import { DISCOVERY_RANK_KIND, LEAD_RESOLVE_KIND, MULTI_POSTED_PREFIX } from './jobKinds';
 import { continuesTrace } from '../obs/workflow';
 
 export interface RunStats {

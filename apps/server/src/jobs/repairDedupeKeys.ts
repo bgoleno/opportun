@@ -12,6 +12,7 @@
 // past a duplicate (createOpportunity's `force`), which is a sticky, intentional opt-out the
 // same way an ordinary edit already respects it: updateOpportunity never reclaims a null key
 // either. This repair must not silently undo that choice.
+import { enqueue } from '../lib/jobQueue';
 import { dedupeKey } from '@opportun/core';
 import { and, eq, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
@@ -19,7 +20,6 @@ import type { Db } from '../db/client';
 import { companies, discoveryResults, opportunities, settings, users } from '../db/schema';
 import type { UserCtx } from '../repos/base';
 import type { JobHandler } from './registry';
-import { enqueue } from './runner';
 
 export const REPAIR_DEDUPE_KEYS_KIND = 'discovery.repair_dedupe_keys';
 /** Global marker (user_id NULL): the repair has been queued for this deployment. */

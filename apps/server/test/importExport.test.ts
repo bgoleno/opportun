@@ -1,5 +1,6 @@
 // Import pipeline and data export (FR-I1, I2, I3). The fixture pack under
 // fixtures/import/ is synthetic: every company, person, address and URL in it is made up.
+import { enqueue } from '../src/lib/jobQueue';
 import { randomBytes } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -24,7 +25,7 @@ import {
 import { formatCsv, parseCsv, unguardFormula } from '../src/lib/csv';
 import { EXPORT_EXCLUDED_TABLES } from '../src/lib/exporter';
 import { IMPORT_JOB_KIND, packFromZip } from '../src/lib/importer';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { runNextJob } from '../src/jobs/runner';
 import { useApi } from './api';
 import { fakeReactiveResume, RR_BASE_ID, RR_ORIGIN } from './fakeReactiveResume';
 import { assertIsolated, type TestClient } from './isolation';
