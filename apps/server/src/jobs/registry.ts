@@ -9,6 +9,7 @@ import type { MailProvider } from '../adapters/mailProvider';
 import type { Db } from '../db/client';
 import type { safeFetch } from '../lib/safeFetch';
 import type { Storage } from '../lib/storage';
+import { provideJobKinds } from '../obs/catalog';
 
 /** App services a handler may need; the runner passes what the app was built with. */
 export interface JobServices {
@@ -95,6 +96,9 @@ export function unregisterJob(kind: string): void {
 export function registeredJobKinds(): string[] {
   return [...handlers.keys()].sort();
 }
+
+// The catalog's opportun.job.kind values are these, read at each use (#764).
+provideJobKinds(registeredJobKinds);
 
 export function getJobHandler(kind: string): JobHandler<unknown> | undefined {
   return handlers.get(kind);
