@@ -104,6 +104,34 @@ describe.skipIf(!sqliteOnly)('the CLI password reset under a rotated pepper (#56
     });
     expect(login.statusCode).toBe(200);
   }, 60_000);
+
+  // https://github.com/bgoleno/opportun/issues/635 (tl's optional 4 on #627): qa's repro of #606,
+  // through the environment as an operator runs it. The server is on version 2; a run with only
+  // OPPORTUN_PEPPER (the new secret, version 1) is refused and changes nothing.
+  it('only OPPORTUN_PEPPER set, against a server on version 2: refused, nothing changed', async () => {
+    const booted = await testApp({ peppers: pepperSet(2, { 1: OLD, 2: NEW }) });
+    app = booted.app;
+    const registered = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/register',
+      payload: { email: 'ada@example.com', password: 'correct horse battery', displayName: 'Ada' },
+    });
+    expect(registered.statusCode).toBe(201);
+    const hashOf = async () =>
+      await app!.db
+        .select({ passwordHash: users.passwordHash })
+        .from(users)
+        .where(eq(users.email, 'ada@example.com'))
+        .get();
+    const before = await hashOf();
+
+    const cli = await runCli(booted.dataDir, ['ada@example.com'], { OPPORTUN_PEPPER: NEW });
+    expect(cli.code).toBe(1);
+    expect(cli.stdout).toBe('');
+    expect(cli.stderr).toContain('pepper version 2');
+    expect(cli.stderr).toContain('Nothing changed');
+    expect(await hashOf()).toEqual(before);
+  }, 60_000);
 });
 
 describe.skipIf(!sqliteOnly)('the demo dedicated-account CLI under a rotated pepper (#568)', () => {
