@@ -135,6 +135,9 @@ describe('#606: the reset CLI with a pepper version the server is not on', () =>
     const { err, io } = capture();
     expect(await resetPassword({ db, email: 'ada@example.com', io, peppers: STALE })).toBe(1);
     expect(err.join('\n')).toContain('version 2');
+    // As actionable as the row-based refusals (tl's optional 3 on #627, #635): restart the server
+    // once with its own variables, so it records its version, then run this again.
+    expect(err.join('\n')).toMatch(/restart the server once with its own pepper variables/i);
     expect(await snapshot(id)).toBe(before);
   });
 
