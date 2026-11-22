@@ -144,6 +144,108 @@ What this does not do: it cannot undo what a credential was used for before the 
 reset, and it does not sign anyone out of the Google, GitHub or LinkedIn account itself. Those are
 the user's to secure with that provider.
 
+### Audit records commit with what they record
+
+Every change to a session, a credential or a stored secret writes a row to the audit log
+(`audit_log`, `apps/server/src/lib/audit.ts`). How the change and its row commit depends on what
+the change does, so that a failed audit write never leaves a change unrecorded where that matters,
+and never keeps alive something the user asked to end.
+
+- **Something created or changed commits with its row, or not at all.** If the row cannot be
+  written, the change is rolled back and the request fails. This covers:
+  - a sign-in by password, by the two-factor step or through a provider (the session and its row
+    commit together, and the session cookie is set only after);
+  - a registration, through the form or a provider;
+  - a password change, a password reset (the administrator's or the command line's) and the first
+    password set after a provider sign-in;
+  - two-factor enrolment, activation and removal, and a spent recovery code;
+  - linking and unlinking a sign-in provider;
+  - a device token's creation and renaming;
+  - a stored secret's creation and edit, the Google client and connection, the Reactive Resume key,
+    and the administrator's sign-in provider settings;
+  - turning telemetry collection or export on, or pointing export at a new destination (export
+    starts only after the commit);
+  - the demo's command-line account, whose password is shown only after it commits.
+- **Something removed or stopped commits first, then is recorded.** A failed audit write fails the
+  request, but the removal or stop has already taken effect:
+  - signing out;
+  - revoking a device token (only the call that revoked it writes a row);
+  - deleting a stored secret, disconnecting Google, removing the Reactive Resume key, and the
+    administrator removing a sign-in provider;
+  - turning telemetry collection or export off, and putting the previous export settings back when
+    new ones could not be started.
+- **A failed first Google connection revokes its grant.** If the tokens Google issued cannot be
+  stored, the server revokes them at Google (best effort) so the account does not list the app as
+  authorized. It does not on a reconnection, where that would end the connection already stored.
+- **Logs and telemetry report only what committed.** An audit row's event reaches the server log
+  and the telemetry export only once the transaction that wrote the row has committed. A rolled-back
+  change sends nothing (`afterCommit` in `apps/server/src/db/client.ts`).
+
+### What error text reaches a client
+
+A request that fails answers with a code, and a sentence only when one was written for the person
+using the app (`HttpError` in `apps/server/src/lib/errors.ts`, the handler in
+`apps/server/src/plugins/security.ts`).
+
+- **An expected refusal** sends its code and its details. It sends its message only when the code
+  that threw it marks it as written for the user. Such a sentence may repeat what that person sent
+  or owns, never another error's text, a stack, a path, someone else's data or configuration. It is
+  cut to 300 characters. A `message` in the details is dropped, so the details cannot carry text
+  around that rule. A test reads every throw in the server and fails on a marked one that passes on a
+  caught error's text (`apps/server/test/userFacingErrors.test.ts`).
+- **A stage change the pipeline does not allow** gets `invalid_transition` with the pipeline's own
+  sentence and the two stages.
+- **A request that fails validation** gets the code `validation` and the list of what was wrong
+  with its own input. A request the framework refuses (malformed JSON, a body too large) gets a
+  code only.
+- **Anything unexpected** gets the code `internal` and "Internal server error". The error itself
+  goes only to the server log.
+
+### Test-support switches are refused in production
+
+The end-to-end tests run the server with fakes in place of outside services, each turned on by an
+environment variable: `OPPORTUN_AI_MOCK`, `OPPORTUN_DOCS_MOCK`, `OPPORTUN_GMAIL_MOCK`,
+`OPPORTUN_SOURCE_MOCK` and `OPPORTUN_OAUTH_MOCK` (`apps/server/src/testSupport/index.ts`). Some also
+add test-only routes under `/__mock/`.
+
+- **A production server refuses to start** with any of them set to `1`: under `NODE_ENV=production`,
+  which the shipped image sets (`deploy/Dockerfile`), the server stops at startup with an error that
+  names them.
+- **The fakes are loaded only when one is set.** A server with none of them set does not load the
+  test-support code at all.
+- **Their routes answer only local callers.** That is a second guard, not the first: behind a proxy
+  on the same host every caller looks local, so the production refusal is what keeps them off a real
+  server.
+
+### What CI pins and scans
+
+What builds and checks the code is pinned, so that a tag someone moves cannot change it unseen, and
+the dependencies are scanned for known vulnerabilities.
+
+- **Pinned:**
+  - **Workflow actions:** every action is pinned to a full commit SHA, which a test checks
+    (`.github/scripts/actions-pinned.test.mjs`).
+  - **Container images:** every image a workflow runs or pulls is pinned by digest (`@sha256:`).
+    That covers a job's container and service images, and the scanners run with `docker run`.
+    A test reads each of those, a bare Docker Hub name included (`.github/scripts/images-pinned.test.mjs`).
+    No workflow uses a container action that names its image by tag.
+  - **The image's base:** `node:22-slim` in `deploy/Dockerfile` is pinned by digest.
+  - **The package manager and its lockfile:** the package manager is pinned by version and
+    checksum in `package.json`'s `packageManager`, which corepack checks. Installs use the
+    lockfile as committed (`--frozen-lockfile`).
+  - **Kept current by Dependabot:** the action and base-image pins are bumped weekly
+    (`.github/dependabot.yml`).
+- **Scanned:**
+  - **The lockfile:** OSV scans `pnpm-lock.yaml` on every push to `main`, on every pull request
+    and weekly. Any known vulnerability fails the check (`.github/workflows/security.yml`).
+  - **The image's OS packages:** OSV scans the built image weekly, on `main`, and on a pull request
+    that changes what goes into it. It fails on a finding of CVSS 7.0 or more that the image's own
+    Debian release already has a fix for, and lists the rest (`.github/workflows/image-scan.yml`).
+  - **New dependencies in a pull request:** dependency review refuses one with a known
+    vulnerability of moderate severity or more, or a license outside its list of OSI-approved
+    licenses (two data packages are named exceptions).
+  - **The code and the workflows:** CodeQL analyses both.
+
 ### Requests to job sites, shared fairly
 
 Requests the server makes through its fetch layer (`apps/server/src/lib/safeFetch.ts`) to a job
