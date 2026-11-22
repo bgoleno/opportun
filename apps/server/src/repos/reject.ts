@@ -21,6 +21,7 @@ import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { createRule, updateRule } from './mailFilters';
 import type { UserCtx } from './base';
+import { ownedBy } from './base';
 import { removeFromIndex } from './search';
 
 export interface RejectInput {
@@ -105,7 +106,7 @@ export async function rejectCommunication(
   const row = await db
     .select()
     .from(communications)
-    .where(and(eq(communications.userId, ctx.userId), eq(communications.id, id)))
+    .where(and(ownedBy(communications.userId, ctx), eq(communications.id, id)))
     .get();
   if (row === undefined) throw new HttpError(404, 'not_found', 'No such message');
   // After the read, before the erase (#678): a test links the message here to show the link check
@@ -134,7 +135,7 @@ export async function rejectCommunication(
         })
         .where(
           and(
-            eq(communications.userId, ctx.userId),
+            ownedBy(communications.userId, ctx),
             eq(communications.id, id),
             isNull(communications.rejectedAt),
             input.expectedOpportunityId === null

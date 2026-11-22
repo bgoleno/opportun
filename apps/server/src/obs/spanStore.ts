@@ -24,8 +24,9 @@ import { withTransaction, type Db, type Exec } from '../db/client';
 import { obsSpans, obsTraces, users } from '../db/schema';
 import { OTHER } from './catalog';
 import { checkValue } from './gate';
-import { isCollecting, runSuppressed, type GatedSpan } from './index';
-import { countSpanDrop, guarded, rebuildSpan } from './spanRebuild';
+import type { GatedSpan } from './index';
+import { guarded, rebuildSpan } from './spanRebuild';
+import { countSpanDrop, isCollecting, runSuppressed } from './state';
 
 export const SPAN_BUFFER_MAX = 2_000;
 export const SPAN_FLUSH_AT = 200;

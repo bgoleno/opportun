@@ -11,6 +11,7 @@ import {
   connectGoogle,
   createOpportunity,
   moveTo,
+  adminContext,
   PASSWORD,
   registerUser,
   toasts,
@@ -18,10 +19,12 @@ import {
 
 const PACK_DIR = fileURLToPath(new URL('./fixtures/pack', import.meta.url));
 
+// Signs up through /register, the suite's end-to-end sign-up: every other spec's registerUser()
+// takes the test server's shortcut (#776).
 test('register, set up, track opportunities, and see correct dashboard counts', async ({
   page,
 }) => {
-  await registerUser(page);
+  await registerUser(page, undefined, { viaForm: true });
 
   // Onboarding: the first-run setup the install guide walks through (profile, role target).
   await page.goto('/settings/profile');
@@ -354,14 +357,9 @@ test('two-factor sign-in: enable, sign out, sign in with a code, turn off (FR-S3
 test('admin resets a member password from Settings > Users (FR-S1)', async ({ page, browser }) => {
   const email = await registerUser(page, 'Reset Member');
 
-  const adminContext = await browser.newContext();
+  const admins = await adminContext(browser);
   try {
-    const admin = await adminContext.newPage();
-    await admin.goto('/login');
-    await admin.getByLabel('Email').fill(ADMIN.email);
-    await admin.getByLabel('Password', { exact: true }).fill(ADMIN.password);
-    await admin.getByRole('button', { name: 'Sign in' }).click();
-    await expect(admin.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
+    const admin = await admins.newPage();
     await admin.goto('/settings/users');
     const row = admin.getByRole('row').filter({ hasText: email });
     await row.getByRole('button', { name: 'Reset password for Reset Member' }).click();
@@ -385,6 +383,6 @@ test('admin resets a member password from Settings > Users (FR-S1)', async ({ pa
     await page.getByRole('button', { name: 'Sign in' }).click();
     await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
   } finally {
-    await adminContext.close();
+    await admins.close();
   }
 });

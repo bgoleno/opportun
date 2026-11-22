@@ -18,6 +18,7 @@ import { descNullsLast } from '../db/dialect';
 import { discoveryResults, rankBatches, taskRuns, type RankBatchState } from '../db/schema';
 import { readSetting, writeSetting } from '../lib/ai';
 import type { UserCtx } from './base';
+import { ownedBy } from './base';
 import { verdictOrder } from './discovery';
 
 export type RankBatchRow = typeof rankBatches.$inferSelect;
@@ -65,7 +66,7 @@ export function basisFingerprint(basis: string): string {
 }
 
 const owned = (ctx: UserCtx, id: string) =>
-  and(eq(discoveryResults.userId, ctx.userId), eq(discoveryResults.id, id));
+  and(ownedBy(discoveryResults.userId, ctx), eq(discoveryResults.id, id));
 
 const batchWaiting = eq(discoveryResults.rankSkipReason, 'batch_waiting');
 
@@ -102,7 +103,7 @@ export async function listBatchWaitingIds(exec: Exec, ctx: UserCtx): Promise<str
     .from(discoveryResults)
     .where(
       and(
-        eq(discoveryResults.userId, ctx.userId),
+        ownedBy(discoveryResults.userId, ctx),
         batchWaiting,
         isNull(discoveryResults.rankBatchId),
         isNotNull(discoveryResults.rankDeferredAt),
@@ -148,7 +149,7 @@ export async function releaseBatchWaiting(exec: Exec, ctx: UserCtx): Promise<num
     .set({ rankSkipReason: null, rankBatchReturns: 0 })
     .where(
       and(
-        eq(discoveryResults.userId, ctx.userId),
+        ownedBy(discoveryResults.userId, ctx),
         batchWaiting,
         isNull(discoveryResults.rankBatchId),
       ),
@@ -168,7 +169,7 @@ export async function findInFlightBatch(
   return await exec
     .select()
     .from(rankBatches)
-    .where(and(eq(rankBatches.userId, ctx.userId), inArray(rankBatches.state, IN_FLIGHT)))
+    .where(and(ownedBy(rankBatches.userId, ctx), inArray(rankBatches.state, IN_FLIGHT)))
     .limit(1)
     .get();
 }
@@ -217,7 +218,7 @@ export async function batchHoldUsd(
     .leftJoin(discoveryResults, eq(discoveryResults.rankBatchId, rankBatches.id))
     .where(
       and(
-        eq(rankBatches.userId, ctx.userId),
+        ownedBy(rankBatches.userId, ctx),
         inArray(rankBatches.state, IN_FLIGHT),
         gte(sql`coalesce(${rankBatches.submittedAt}, ${rankBatches.createdAt})`, now - HOLD_MS),
       ),
@@ -245,7 +246,7 @@ export async function rankOutputHistory(
     .from(taskRuns)
     .where(
       and(
-        eq(taskRuns.userId, ctx.userId),
+        ownedBy(taskRuns.userId, ctx),
         eq(taskRuns.taskKey, RANK_TASK),
         eq(taskRuns.status, 'ok'),
         gte(taskRuns.createdAt, now - HISTORY_MS),
@@ -408,7 +409,7 @@ export async function unlinkBatch(
       rankBatchPromptId: null,
       ...(opts.batching ? {} : { rankSkipReason: null }),
     })
-    .where(and(eq(discoveryResults.userId, ctx.userId), eq(discoveryResults.rankBatchId, batchId)))
+    .where(and(ownedBy(discoveryResults.userId, ctx), eq(discoveryResults.rankBatchId, batchId)))
     .returning({ id: discoveryResults.id })
     .all();
   if (opts.returned === true)
@@ -435,7 +436,7 @@ export const MAX_BATCH_RETURNS = 3;
  */
 export async function countBatchReturns(tx: Exec, ctx: UserCtx, ids: string[]): Promise<void> {
   if (ids.length === 0) return;
-  const mine = and(eq(discoveryResults.userId, ctx.userId), inArray(discoveryResults.id, ids));
+  const mine = and(ownedBy(discoveryResults.userId, ctx), inArray(discoveryResults.id, ids));
   await tx
     .update(discoveryResults)
     .set({ rankBatchReturns: sql`${discoveryResults.rankBatchReturns} + 1` })

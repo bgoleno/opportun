@@ -17,13 +17,7 @@ import { ATTR, OPERATION_INVOKE_WORKFLOW, withUser } from '@opportun/ai';
 import { trace } from '@opentelemetry/api';
 import type { Workflow } from './catalog';
 import { isCollecting, obs } from './index';
-
-/** Set by obs/tracing.ts once the span store runs: whether it keeps the span with this id. */
-let keptCheck: (spanId: string) => boolean = () => false;
-
-export function setKeptCheck(check: (spanId: string) => boolean): void {
-  keptCheck = check;
-}
+import { isKept } from './state';
 
 export interface WorkflowOptions {
   /** The user the action is for: the workflow's trace is theirs (14.6, 14.7). */
@@ -59,5 +53,5 @@ export async function workflow<T>(
 export function continuesTrace(): boolean {
   if (!isCollecting()) return false;
   const active = trace.getActiveSpan();
-  return active !== undefined && keptCheck(active.spanContext().spanId);
+  return active !== undefined && isKept(active.spanContext().spanId);
 }

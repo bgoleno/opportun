@@ -9,7 +9,6 @@
 //
 // One process, one runtime: the server binds it to its database at boot (app.ts), and the module
 // state below is that binding. A test that builds an app binds it to that app's database.
-import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   type Context,
   context,
@@ -35,6 +34,18 @@ import {
 } from './catalog';
 import { gateAttributes } from './gate';
 import { setLogDropCounter } from './log';
+import {
+  isCollecting,
+  isSuppressed,
+  provideSpanDropCounter,
+  runSuppressed,
+  setCollectingFlag,
+  type Sinks,
+  sinks,
+} from './state';
+// The shared state lives in obs/state.ts, a leaf, so obs/tracing (loaded below) need not import
+// this module (https://github.com/bgoleno/opportun/issues/803). Re-exported as the same functions.
+export { isCollecting, isSuppressed, runSuppressed, spanExportSink } from './state';
 import { flushPoints, MetricAggregator, seriesKey } from './metrics';
 
 /** The logger obs.event() writes to: today's (app.log, pino). FR-T5 moves it to obs/log.ts. */
@@ -84,12 +95,6 @@ export interface LogExportSink {
   shutdown(): Promise<void>;
 }
 
-interface Sinks {
-  metrics?: MetricExportSink;
-  spans?: SpanExportSink;
-  logs?: LogExportSink;
-}
-
 // ---------------------------------------------------------------------------
 // State
 
@@ -100,12 +105,10 @@ interface Runtime {
   flushIntervalMs: number;
 }
 
-let collecting = false;
 let runtime: Runtime | undefined;
 let aggregator: MetricAggregator | undefined;
 let timer: NodeJS.Timeout | undefined;
 let flushing: Promise<void> = Promise.resolve();
-const sinks: Sinks = {};
 /** Whether obs/tracing.ts (and with it the SDK) was loaded: only once collection was first on. */
 let tracingLoaded = false;
 
@@ -120,25 +123,8 @@ const tracing = async () => {
 
 export const FLUSH_INTERVAL_MS = 60_000;
 
-/** Telemetry about telemetry is suppressed (14.6): the store's writes run inside this. */
-const suppressed = new AsyncLocalStorage<true>();
-
-export function runSuppressed<T>(fn: () => T): T {
-  return suppressed.run(true, fn);
-}
-
-/** True inside the store's own writes, which the database and outbound wrappers skip. */
-export function isSuppressed(): boolean {
-  return suppressed.getStore() === true;
-}
-
-/** Whether collection is on: the one check every entry point makes first. */
-export function isCollecting(): boolean {
-  return collecting;
-}
-
 function countDrop(signal: Signal, reason: DropReason, n = 1): void {
-  if (!collecting || aggregator === undefined || runtime === undefined) return;
+  if (!isCollecting() || aggregator === undefined || runtime === undefined) return;
   // Known-good attributes, so straight to the aggregator, and always admitted past the series
   // cap: a drop must stay countable when the buffer is full.
   const attributes = { 'opportun.obs.signal': signal, 'opportun.obs.reason': reason };
@@ -182,11 +168,11 @@ async function shutdownSinks(): Promise<void> {
  * collection is (14.1).
  */
 export async function setCollecting(on: boolean): Promise<void> {
-  if (on === collecting) return;
+  if (on === isCollecting()) return;
   if (on) {
     if (runtime === undefined) throw new Error('obs: setCollecting(true) before startObs');
     aggregator = new MetricAggregator();
-    collecting = true;
+    setCollectingFlag(true);
     timer = setInterval(() => {
       void flushNow().catch(() => undefined);
     }, runtime.flushIntervalMs);
@@ -194,7 +180,7 @@ export async function setCollecting(on: boolean): Promise<void> {
     await (await tracing()).startTracing(runtime.db, runtime.now);
     return;
   }
-  collecting = false;
+  setCollectingFlag(false);
   if (timer !== undefined) clearInterval(timer);
   timer = undefined;
   aggregator = undefined;
@@ -230,8 +216,8 @@ export async function startObs(db: Db, opts: StartObsOptions): Promise<void> {
  */
 export async function stopObs(db?: Db): Promise<void> {
   if (db !== undefined && runtime?.db !== db) return;
-  if (collecting) await flushNow().catch(() => undefined);
-  if (collecting && tracingLoaded) await (await tracing()).flushSpans().catch(() => undefined);
+  if (isCollecting()) await flushNow().catch(() => undefined);
+  if (isCollecting() && tracingLoaded) await (await tracing()).flushSpans().catch(() => undefined);
   await setCollecting(false);
   runtime = undefined;
 }
@@ -241,7 +227,7 @@ export async function stopObs(db?: Db): Promise<void> {
  * nothing to export, and export may be on only while collection is. Returns whether it attached.
  */
 export function attachExporter<S extends Signal>(signal: S, sink: Required<Sinks>[S]): boolean {
-  if (!collecting) return false;
+  if (!isCollecting()) return false;
   if (signal === 'metrics') sinks.metrics = sink as MetricExportSink;
   else if (signal === 'spans') sinks.spans = sink as SpanExportSink;
   else sinks.logs = sink as LogExportSink;
@@ -254,11 +240,6 @@ export async function detachExporter(signal: Signal): Promise<void> {
   else if (signal === 'spans') sinks.spans = undefined;
   else sinks.logs = undefined;
   await sink?.shutdown();
-}
-
-/** The span slot's exporter, which obs/tracing.ts hands each rebuilt span to (FR-T4 part 2). */
-export function spanExportSink(): SpanExportSink | undefined {
-  return sinks.spans;
 }
 
 /** Which signals have an exporter attached. */
@@ -281,7 +262,7 @@ function record(
   attributes?: Readonly<Record<string, unknown>>,
   opts: { userId?: string } = {},
 ): void {
-  if (!collecting) return;
+  if (!isCollecting()) return;
   if (aggregator === undefined || runtime === undefined) return;
   if (!Number.isFinite(value)) {
     countDrop('metrics', 'invalid_value');
@@ -336,7 +317,7 @@ export function prepareRecord(
 
 /** Records one value with attributes prepareRecord() already gated. */
 export function recordPrepared(prepared: PreparedRecord, value: number): void {
-  if (!collecting || aggregator === undefined || runtime === undefined) return;
+  if (!isCollecting() || aggregator === undefined || runtime === undefined) return;
   if (!Number.isFinite(value)) {
     countDrop('metrics', 'invalid_value');
     return;
@@ -495,7 +476,7 @@ async function span<T>(
   fn: (span: ObsSpan) => Promise<T>,
   opts: SpanOptions = {},
 ): Promise<T> {
-  if (!collecting || isSuppressed()) return fn(NOOP_SPAN);
+  if (!isCollecting() || isSuppressed()) return fn(NOOP_SPAN);
   const { span: s, handle, failed } = open(name, attributes, opts);
   try {
     return await context.with(trace.setSpan(opts.parent ?? context.active(), s), () => fn(handle));
@@ -517,14 +498,16 @@ function startSpan(
   opts: SpanOptions = {},
 ): StartedSpan {
   const parent = opts.parent ?? context.active();
-  if (!collecting || isSuppressed()) return { ...NOOP_SPAN, context: parent, end: () => undefined };
+  if (!isCollecting() || isSuppressed())
+    return { ...NOOP_SPAN, context: parent, end: () => undefined };
   return started(open(name, attributes, { ...opts, parent }), parent);
 }
 
 /** startSpan with attributes prepareSpan() already gated. */
 function startPreparedSpan(prepared: PreparedSpan, opts: SpanOptions = {}): StartedSpan {
   const parent = opts.parent ?? context.active();
-  if (!collecting || isSuppressed()) return { ...NOOP_SPAN, context: parent, end: () => undefined };
+  if (!isCollecting() || isSuppressed())
+    return { ...NOOP_SPAN, context: parent, end: () => undefined };
   return started(openPrepared(prepared, { ...opts, parent }), parent);
 }
 
@@ -565,7 +548,7 @@ export function contextFromTraceparent(
 
 /** The active span's W3C traceparent, for enqueue's continueTrace (14.6); null when none. */
 export function currentTraceparent(): string | null {
-  if (!collecting) return null;
+  if (!isCollecting()) return null;
   const ctx = trace.getActiveSpan()?.spanContext();
   if (ctx === undefined || !trace.isSpanContextValid(ctx)) return null;
   return `00-${ctx.traceId}-${ctx.spanId}-${(ctx.traceFlags & 0xff).toString(16).padStart(2, '0')}`;
@@ -580,7 +563,7 @@ function event(
   fields: Readonly<Record<string, unknown>> = {},
   opts: { userId?: string } = {},
 ): void {
-  if (!collecting || runtime === undefined) return;
+  if (!isCollecting() || runtime === undefined) return;
   const gated = gateAttributes('logs', eventDef(name).fields, fields, countDrop);
   const user = gateAttributes('logs', ['user.id'], { 'user.id': opts.userId }, countDrop);
   const ctx = trace.getActiveSpan()?.spanContext();
@@ -594,3 +577,13 @@ function event(
 }
 
 export const obs = { record, span, startSpan, startPreparedSpan, event, isCollecting };
+
+// How the span store and the span rebuild count a dropped span: a recorded opportun.obs.dropped,
+// handed to obs/state.ts so they need not import this module (#803). Through `obs.record`, as
+// they called it before, so a spy on the facade still sees it.
+provideSpanDropCounter((reason) => {
+  obs.record('opportun.obs.dropped', 1, {
+    'opportun.obs.signal': 'spans',
+    'opportun.obs.reason': reason,
+  });
+});

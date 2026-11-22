@@ -7,6 +7,7 @@ import { and, eq, inArray, isNotNull, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { companies, networkContacts } from '../db/schema';
 import type { UserCtx } from './base';
+import { ownedBy } from './base';
 import type { Company } from './companies';
 
 /** found: a board kind is recorded; not_found: detection ran and found none; not_checked: never run. */
@@ -64,11 +65,11 @@ export async function listNetworkCompanies(
     .from(networkContacts)
     .innerJoin(
       companies,
-      and(eq(companies.id, networkContacts.currentCompanyId), eq(companies.userId, ctx.userId)),
+      and(eq(companies.id, networkContacts.currentCompanyId), ownedBy(companies.userId, ctx)),
     )
     .where(
       and(
-        eq(networkContacts.userId, ctx.userId),
+        ownedBy(networkContacts.userId, ctx),
         isNotNull(networkContacts.currentCompanyId),
         opts.showDenied ? undefined : ne(companies.status, 'denied'),
         opts.ids === undefined ? undefined : inArray(companies.id, [...opts.ids]),
@@ -93,7 +94,7 @@ export async function listNetworkCompanies(
   const rows = await db
     .select()
     .from(companies)
-    .where(and(eq(companies.userId, ctx.userId), inArray(companies.id, pageIds)))
+    .where(and(ownedBy(companies.userId, ctx), inArray(companies.id, pageIds)))
     .all();
   const contacts = await db
     .select({
@@ -104,10 +105,7 @@ export async function listNetworkCompanies(
     })
     .from(networkContacts)
     .where(
-      and(
-        eq(networkContacts.userId, ctx.userId),
-        inArray(networkContacts.currentCompanyId, pageIds),
-      ),
+      and(ownedBy(networkContacts.userId, ctx), inArray(networkContacts.currentCompanyId, pageIds)),
     )
     .all();
   const grouped = new Map<string, NetworkContact[]>();
