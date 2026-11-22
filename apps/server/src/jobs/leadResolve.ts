@@ -10,6 +10,7 @@
 //      ever fetched are those adapters' fixed ATS API hosts through safeFetch.
 // The lead's own posting URL is never fetched: it is often a LinkedIn job link, which stays
 // metadata only (and safeFetch refuses prohibited hosts in any case).
+import { enqueue } from '../lib/jobQueue';
 import type { NormalizedPosting } from '@opportun/core';
 import { and, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
@@ -33,9 +34,8 @@ import {
   type DiscoveryResultView,
   type DiscoverySourceRow,
 } from '../repos/discovery';
-import { DISCOVERY_RANK_KIND, LEAD_RESOLVE_KIND } from './discoveryKinds';
+import { DISCOVERY_RANK_KIND, LEAD_RESOLVE_KIND } from '../lib/jobKinds';
 import { requireService, type JobHandler } from './registry';
-import { enqueue } from './runner';
 import { continuesTrace } from '../obs/workflow';
 
 export { LEAD_RESOLVE_KIND };

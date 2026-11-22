@@ -2,6 +2,7 @@
 // decision 2): a budget the user sets, default $1 a day. Over it a posting waits and is ranked on
 // the next budget day, oldest first; nothing is ever skipped for budget. The provider is mocked
 // and every posting is made up.
+import { enqueue, readSchedules, removeSchedule } from '../src/lib/jobQueue';
 import { AiUnavailableError, runStructured } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -22,7 +23,7 @@ import {
   sweepWaitingResults,
 } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND, FIRST_RUN_RANK_CAP } from '../src/jobs/discoveryRun';
-import { enqueue, readSchedules, removeSchedule, startRunner } from '../src/jobs/runner';
+import { startRunner } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import {
   createSource,

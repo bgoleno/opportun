@@ -7,7 +7,7 @@ import {
   createRouter,
   RouterProvider,
 } from '@tanstack/react-router';
-import { render } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { vi } from 'vitest';
 import { Toaster } from '@/components/ui/toast';
@@ -30,6 +30,16 @@ export function renderWithProviders(ui: ReactNode, opts: { path?: string } = {})
     </QueryClientProvider>,
   );
   return { ...result, queryClient, router };
+}
+
+/**
+ * Queries inside the toast viewport, for a toast's own text. Radix Toast also copies each new
+ * toast's title and description into a visually hidden live region outside the viewport, a frame
+ * after the toast shows and for about a second, so a query on the whole screen can find a toast's
+ * text twice or once depending on timing (https://github.com/bgoleno/opportun/issues/816).
+ */
+export function toastRegion() {
+  return within(screen.getByRole('region', { name: /^Notifications/ }));
 }
 
 export interface ApiCall {

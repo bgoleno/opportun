@@ -9,10 +9,11 @@
 // Every other pending job is held aside for the one claim (run_at moved to the far future) and put
 // back exactly as it was. The harness starts no polling runner (helpers.ts), so nothing else claims
 // in between. Throws if the job was not the one that ran: not due yet, already taken, or unknown.
+import { readSchedules, SCHEDULE_PREFIX } from '../src/lib/jobQueue';
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { jobs } from '../src/db/schema';
-import { readSchedules, runNextJob, SCHEDULE_PREFIX, type RunOptions } from '../src/jobs/runner';
+import { runNextJob, type RunOptions } from '../src/jobs/runner';
 
 /** A run_at no job comes due at: far enough ahead of any clock a test pins. */
 const HELD = Date.UTC(9999, 0, 1);

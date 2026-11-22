@@ -2,6 +2,7 @@
 // senders skip the AI classifier: a deterministic parser turns each job into a partial lead in
 // the review queue (through the engine's insert path, so dedupe and lead resolution apply), the
 // message is kept as 'other' with no activity, and the LinkedIn job links stay metadata only.
+import { CLASSIFY_JOB_KIND, enqueueClassify } from '../src/lib/mailClassifyQueue';
 import { MAX_FROM_HEADER_CHARS, senderAddress } from '../src/lib/mailAddress';
 import { readFileSync } from 'node:fs';
 import { runStructured } from '@opportun/ai';
@@ -10,7 +11,6 @@ import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ALERT_SENDERS_SETTING, DEFAULT_ALERT_SENDERS } from '../src/adapters/sources/alertEmail';
 import { activities, communications, jobs } from '../src/db/schema';
-import { CLASSIFY_JOB_KIND, enqueueClassify } from '../src/jobs/gmailSync';
 import { LEAD_RESOLVE_KIND } from '../src/jobs/leadResolve';
 import { parseIndeedAlert } from '../src/lib/alertParsers/indeed';
 import { parseLinkedInAlert } from '../src/lib/alertParsers/linkedin';

@@ -3,6 +3,8 @@
 // image stays in the WAL and in free pages, readable with any tool that opens the file
 // (https://github.com/bgoleno/opportun/issues/175). So the body is sealed with the instance's
 // secretBox key before it is ever written, and only the job, holding that key, opens it.
+import { CLASSIFY_JOB_KIND, enqueueClassify } from '../src/lib/mailClassifyQueue';
+import { enqueue } from '../src/lib/jobQueue';
 import { runStructured } from '@opportun/ai';
 import { randomBytes } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
@@ -13,8 +15,7 @@ import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { communications, jobs } from '../src/db/schema';
 import type { ClassifyOutput } from '../src/jobs/classify';
-import { CLASSIFY_JOB_KIND, enqueueClassify } from '../src/jobs/mailIngest';
-import { enqueue, runDueJobs } from '../src/jobs/runner';
+import { runDueJobs } from '../src/jobs/runner';
 import { bindVaultKey, decryptSecret } from '../src/lib/secretBox';
 import { useApi } from './api';
 import { queryAll, testDialect } from './db';

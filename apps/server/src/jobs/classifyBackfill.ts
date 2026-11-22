@@ -3,14 +3,14 @@
 // queues comms.classify for each of them. It reads in (createdAt, id) order, 100 at a time, and
 // only rows with classification IS NULL. Classify jobs are deduped per message, so a second key
 // add while earlier ones are still pending queues nothing new.
+import { enqueueClassify } from '../lib/mailClassifyQueue';
+import { enqueue } from '../lib/jobQueue';
 import { and, asc, eq, gt, isNull, ne, or } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client';
 import { communications } from '../db/schema';
 import type { UserCtx } from '../repos/base';
-import { enqueueClassify } from './gmailSync';
 import type { JobHandler } from './registry';
-import { enqueue } from './runner';
 
 export const CLASSIFY_BACKFILL_KIND = 'comms.classify_backfill';
 export const CLASSIFY_BACKFILL_BATCH = 100;

@@ -1,11 +1,11 @@
 // The user's rate key reaches safeFetch (https://github.com/bgoleno/opportun/issues/617): a job that
 // belongs to a user, and a request a user makes, fetch under that user's key, so the per-host bucket
 // shares a vendor host between users. safeFetch's own fairness is tested in safeFetch.test.ts.
+import { enqueue } from '../src/lib/jobQueue';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createReactiveResumeStore } from '../src/adapters/reactiveResume';
 import { registerJob, requireService, unregisterJob } from '../src/jobs/registry';
-import { enqueue } from '../src/jobs/runner';
 import type { SafeFetchOptions } from '../src/lib/safeFetch';
 import { useApi } from './api';
 

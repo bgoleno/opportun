@@ -154,8 +154,13 @@ export class SpanStore {
 
   private onEnd(span: ReadableSpan): void {
     if (!isCollecting() || this.db === undefined) return;
-    const kept = this.kept.get(span.spanContext().spanId);
+    const spanId = span.spanContext().spanId;
+    const kept = this.kept.get(spanId);
     if (kept === undefined) return;
+    // An ended span's children have started by now (a child starts inside its parent), so its
+    // entry goes (#594): the map holds open spans only, and a long workflow's root is never the
+    // oldest entry pushed out at KEPT_MEMORY while it still runs.
+    this.kept.delete(spanId);
     const rebuilt = rebuildSpan(span, 'local');
     if (rebuilt === undefined) return;
     const userId = kept.userId ?? str(rebuilt.attributes[ATTR.userId]);

@@ -3,6 +3,7 @@
 // user's active one, which is the system seed unless they changed it). The posting is passed as
 // posting_untrusted, so renderPrompt fences it. Without AI the result stays pending, unranked:
 // the user triages it by hand (manual path).
+import { enqueue } from '../lib/jobQueue';
 import {
   AiUnavailableError,
   RankOutputSchema as AiRankOutputSchema,
@@ -40,11 +41,10 @@ import {
   MULTI_POSTED_PREFIX,
   MULTI_POSTED_SCORE_CAP,
   RANK_WAITING_KIND,
-} from './discoveryKinds';
+} from '../lib/jobKinds';
 import { enqueueRankBatchSubmit, ranksInBatch, SUBMIT_GATHER_MS } from './rankBatchClient';
 import { rankBudgetHasRoom } from './rankBudget';
 import type { JobHandler } from './registry';
-import { enqueue } from './runner';
 
 export { DISCOVERY_RANK_KIND };
 

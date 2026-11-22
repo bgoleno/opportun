@@ -4,6 +4,7 @@
 // board was read twice at once, and nothing told the user. Now a run that finds another of its
 // source in progress records a Skipped run and reads nothing, and Run now during a run is refused
 // with 409 run_in_progress. Every posting is made up.
+import { enqueue } from '../src/lib/jobQueue';
 import type { NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -15,7 +16,7 @@ import {
 } from '../src/adapters/discoverySource';
 import { discoveryRuns, jobs } from '../src/db/schema';
 import { DISCOVERY_RUN_KIND, sourceScheduleName } from '../src/jobs/discoveryRun';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { runNextJob } from '../src/jobs/runner';
 import { newId } from '@opportun/core';
 import type { UserCtx } from '../src/repos/base';
 import { createSource, getSourceRow, hasSucceededRun, listResults } from '../src/repos/discovery';

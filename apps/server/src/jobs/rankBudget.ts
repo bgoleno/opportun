@@ -14,7 +14,7 @@ import type { Db, UserCtx } from '../repos/base';
 import { discoverySpentTodayUsd, readDiscoveryBudget } from '../repos/discoveryBudget';
 import { startOfUtcDay } from '../repos/taskRuns';
 import { hasUntaggedCandidates } from './companyTags';
-import { DISCOVERY_RANK_KIND } from './discoveryKinds';
+import { DISCOVERY_RANK_KIND } from '../lib/jobKinds';
 
 /** The share of the budget ranking may use while a company waits for a tag. */
 export const RANK_BUDGET_SHARE = 0.9;

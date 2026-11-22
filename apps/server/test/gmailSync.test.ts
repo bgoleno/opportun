@@ -1,10 +1,11 @@
+import { CLASSIFY_JOB_KIND } from '../src/lib/mailClassifyQueue';
+import { enqueue } from '../src/lib/jobQueue';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import { bodyTextOf, DEFAULT_GMAIL_QUERY, htmlToText } from '../src/adapters/gmail';
 import { communications, jobs, settings, syncState } from '../src/db/schema';
-import { CLASSIFY_JOB_KIND, GMAIL_SYNC_ALL_KIND, GMAIL_SYNC_KIND } from '../src/jobs/gmailSync';
-import { enqueue } from '../src/jobs/runner';
+import { GMAIL_SYNC_ALL_KIND, GMAIL_SYNC_KIND } from '../src/jobs/gmailSync';
 import { MAIL_LABEL_SETTING } from '../src/adapters/gmail';
 import { writeUserSetting } from '../src/repos/userSettings';
 import { useApi } from './api';

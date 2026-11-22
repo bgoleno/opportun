@@ -1,5 +1,6 @@
 // Durable job runner (NFR-OPS4, design section 8): claim, retry with backoff, dead letters,
 // dedupe, graceful stop, the scheduler, and the /jobs API.
+import { enqueue, removeSchedule, setSchedule } from '../src/lib/jobQueue';
 import { newId } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,14 +13,11 @@ import { registerJob, unregisterJob } from '../src/jobs/registry';
 import {
   backoffMs,
   cancelJob,
-  enqueue,
   materializeSchedules,
   queueLagMs,
   recoverStaleJobs,
-  removeSchedule,
   runDueJobs,
   runNextJob,
-  setSchedule,
   startRunner,
 } from '../src/jobs/runner';
 import { useApi } from './api';

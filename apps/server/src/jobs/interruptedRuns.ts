@@ -11,7 +11,7 @@ import { and, eq, isNull, notExists, sql } from 'drizzle-orm';
 import { runCount, type Db } from '../db/client';
 import { jsonText } from '../db/dialect';
 import { discoveryRuns, jobs } from '../db/schema';
-import { DISCOVERY_RUN_KIND } from './discoveryKinds';
+import { DISCOVERY_RUN_KIND } from '../lib/jobKinds';
 
 /** The `interrupted` stat on a run a server stop cut short; Run history reads it as ended. */
 export const INTERRUPTED = 'server_restart';

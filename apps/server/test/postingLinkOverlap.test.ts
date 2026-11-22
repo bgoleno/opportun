@@ -339,7 +339,9 @@ describe('an identity already set is never replaced by a later check (#685)', ()
       .where(eq(opportunities.id, opp.id))
       .run();
     const other = { kind: 'ats_greenhouse', org: 'other', externalId: '7101' } as never;
-    expect(await setCheckedPostingRef(app.db, ctx, opp.id, link('7101'), other)).toBe(false);
+    expect(
+      await setCheckedPostingRef(app.db, ctx, opp.id, link('7101'), other, opp.companyId),
+    ).toBe(false);
     expect((await stored(app, opp.id)).atsJobRef).toMatchObject({ org: 'chosen' });
   });
 

@@ -38,7 +38,7 @@ import {
   POSTING_CHANGED,
   rankResult,
 } from './discoveryRank';
-import { LEAD_RESOLVE_KIND, RANK_WAITING_KIND } from './discoveryKinds';
+import { LEAD_RESOLVE_KIND, RANK_WAITING_KIND } from '../lib/jobKinds';
 import { enqueueRankBatchSubmit } from './rankBatchClient';
 import { rankBudgetHasRoom } from './rankBudget';
 import { requireService, type JobHandler } from './registry';

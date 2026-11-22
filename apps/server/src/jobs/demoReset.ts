@@ -36,6 +36,7 @@ export class DemoCredentialsMissingError extends Error {}
  */
 export async function runDemoReset(
   db: Db,
+  // eslint-disable-next-line no-restricted-properties -- the default for an environment parameter a test replaces (#292); its parser reads it (#773)
   env: NodeJS.ProcessEnv = process.env,
   now: number = Date.now(),
 ): Promise<SeedDemoReport> {

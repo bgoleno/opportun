@@ -18,6 +18,7 @@
 // Anthropic (#509) and OpenAI on its own API (#510) have a batch client; for any other provider
 // batchProviderFor finds none, so with the setting on its rankings are still made live, and the
 // submit job hands any waiting posting to the live drain. The setting itself stays hidden (#511).
+import { enqueue } from '../lib/jobQueue';
 import {
   batchRunRecord,
   estimateBatchRequestUsd,
@@ -78,11 +79,10 @@ import {
   RankOutputSchema,
   storeRankOutput,
 } from './discoveryRank';
-import { RANK_BATCH_CLEANUP_KIND, RANK_BATCH_COLLECT_KIND } from './discoveryKinds';
+import { RANK_BATCH_CLEANUP_KIND, RANK_BATCH_COLLECT_KIND } from '../lib/jobKinds';
 import { enqueueRankBatchSubmit, rankBatchClient, RANK_BATCH_SEND_KIND } from './rankBatchClient';
 import { rankBudgetHasRoom, rankBudgetRoomUsd } from './rankBudget';
 import { requireService, type JobHandler, type JobServices } from './registry';
-import { enqueue } from './runner';
 
 export { RANK_BATCH_CLEANUP_KIND, RANK_BATCH_COLLECT_KIND, RANK_BATCH_SEND_KIND };
 

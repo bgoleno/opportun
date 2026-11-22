@@ -4,6 +4,7 @@
 // to the discovery queue deterministically and the AI classifier never sees them. The cursor
 // is saved after every message, so a crash resumes close to where it stopped; a re-delivered
 // message is an update, never a duplicate.
+import { enqueue } from '../lib/jobQueue';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { runSync, type MailProvider } from '../adapters/mailProvider';
@@ -16,12 +17,10 @@ import type { UserCtx } from '../repos/base';
 import { getSyncState, putSyncState } from '../repos/communications';
 import { ingestInbound, type IngestOptions } from './mailIngest';
 import { requireService, type JobHandler } from './registry';
-import { enqueue } from './runner';
 import { workflow } from '../obs/workflow';
 
 export const GMAIL_SYNC_KIND = 'gmail.sync';
 export const GMAIL_INTEGRATION = 'gmail';
-export { CLASSIFY_JOB_KIND, classifyDedupeKey, enqueueClassify } from './mailIngest';
 
 export const gmailSyncDedupeKey = (userId: string): string => `gmail:${userId}`;
 

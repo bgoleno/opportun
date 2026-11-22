@@ -33,6 +33,7 @@ import {
   type Signal,
 } from './catalog';
 import { gateAttributes } from './gate';
+import { logLevelSetting } from '../config';
 
 /** What replaces a message the catalog does not list. */
 export const WITHHELD = '[message withheld]';
@@ -455,7 +456,7 @@ export function processLogger(): Logger {
   // stderr, as the console.warn it replaces wrote: a CLI's own output (a reset password, a copy's
   // report) keeps stdout to itself.
   return (process_logger ??= createLogger({
-    level: process.env.LOG_LEVEL ?? 'info',
+    level: logLevelSetting(),
     stream: process.stderr,
   }));
 }

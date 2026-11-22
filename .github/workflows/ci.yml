@@ -34,8 +34,9 @@ jobs:
         db: [sqlite, postgres]
     services:
       postgres:
-        # An empty image skips the service on the sqlite leg.
-        image: ${{ matrix.db == 'postgres' && 'postgres:16' || '' }}
+        # An empty image skips the service on the sqlite leg. Pinned by digest (#733): update the
+        # tag and the digest together.
+        image: ${{ matrix.db == 'postgres' && 'postgres:16@sha256:3950ad7c3148ca2175ef1b6c36c9efbf78957ae8fbe8b3a5d7c35af50500382f' || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           # Same collation as docs/install.md requires (byte order, like SQLite).
@@ -192,13 +193,15 @@ jobs:
       matrix:
         db: [sqlite, postgres]
     container:
-      # Keep the tag equal to the @playwright/test version in apps/web/package.json.
-      image: mcr.microsoft.com/playwright:v1.64.0-noble
+      # Keep the tag equal to the @playwright/test version in apps/web/package.json. Pinned by
+      # digest (#733): update the tag and the digest together.
+      image: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
       options: --user 1001
     services:
       postgres:
-        # An empty image skips the service on the sqlite leg.
-        image: ${{ matrix.db == 'postgres' && 'postgres:16' || '' }}
+        # An empty image skips the service on the sqlite leg. Pinned by digest (#733): update the
+        # tag and the digest together.
+        image: ${{ matrix.db == 'postgres' && 'postgres:16@sha256:3950ad7c3148ca2175ef1b6c36c9efbf78957ae8fbe8b3a5d7c35af50500382f' || '' }}
         env:
           POSTGRES_PASSWORD: postgres
           # Same collation as docs/install.md requires (byte order, like SQLite).

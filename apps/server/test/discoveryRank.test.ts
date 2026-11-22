@@ -1,6 +1,7 @@
 // AI ranking (Task 6, FR-D4, FR-P3, FR-D6 discovery variant): per-result scoring with the posting
 // fenced, per-role-target prompt overrides, the manual path when AI is unavailable, and
 // dismissal-driven refinement proposals that never activate anything.
+import { enqueue } from '../src/lib/jobQueue';
 import { AiUnavailableError, promptVariables, runStructured, TASK_PROMPT_VARS } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
@@ -22,7 +23,6 @@ import {
 import { DISCOVERY_RANK_KIND, RankOutputSchema } from '../src/jobs/discoveryRank';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import { DISCOVERY_REFINE_CRON, DISCOVERY_REFINE_KIND } from '../src/jobs/refineDiscoveryPrompt';
-import { enqueue } from '../src/jobs/runner';
 import { createSource, listResults } from '../src/repos/discovery';
 import { createRoleTarget } from '../src/repos/profile';
 import { getActivePrompt } from '../src/repos/prompts';

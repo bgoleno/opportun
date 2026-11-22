@@ -3,6 +3,7 @@
 // safeFetch with exactly the board's own host allowed. Workday's weekly service window answers
 // with redirects, 406/422 and 5xx; every one of those signals is transient (the run retries),
 // never a SourceConfigError that would mark the board as wrong.
+import { enqueue } from '../src/lib/jobQueue';
 import { readFileSync } from 'node:fs';
 import type { NormalizedPosting } from '@opportun/core';
 import { eq } from 'drizzle-orm';
@@ -25,7 +26,6 @@ import {
 } from '../src/adapters/sources/workday';
 import { discoveryRuns } from '../src/db/schema';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
-import { enqueue } from '../src/jobs/runner';
 import {
   createSafeFetch,
   FetchBlockedError,
