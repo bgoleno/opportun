@@ -218,11 +218,14 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         return reply;
       }
       const { clientId, clientSecret } = req.body;
-      await writeProviderCreds(db, provider, { clientId, clientSecret });
-      await audit(db, 'admin.oauth_provider_configured', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { provider },
+      // The client and its audit row commit together (#802).
+      await withTransaction(db, async (tx) => {
+        await writeProviderCreds(db, provider, { clientId, clientSecret }, tx);
+        await audit(tx, 'admin.oauth_provider_configured', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { provider },
+        });
       });
       return await status(provider, ctx);
     },
@@ -259,11 +262,14 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
       // The integration client belongs to the admin asking, never to another user (FR-S5).
       const creds = await readClientCreds(db, ctx);
       if (creds === undefined) throw new HttpError(409, 'integration_client_missing');
-      await writeProviderCreds(db, provider, creds);
-      await audit(db, 'admin.oauth_provider_configured', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { provider, source: 'google_integration' },
+      // The client and its audit row commit together (#802).
+      await withTransaction(db, async (tx) => {
+        await writeProviderCreds(db, provider, creds, tx);
+        await audit(tx, 'admin.oauth_provider_configured', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { provider, source: 'google_integration' },
+        });
       });
       return await status(provider, ctx);
     },
@@ -289,11 +295,14 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
       ) {
         return reply;
       }
-      await deleteProviderCreds(db, provider);
-      await audit(db, 'admin.oauth_provider_removed', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { provider },
+      // The removal and its audit row commit together (#802).
+      await withTransaction(db, async (tx) => {
+        await deleteProviderCreds(tx, provider);
+        await audit(tx, 'admin.oauth_provider_removed', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { provider },
+        });
       });
       return reply.code(204).send(null);
     },
