@@ -3,10 +3,10 @@
 // test/submissionReview.test.ts), so each guard is pinned here by the reason it gives: a guard
 // that another one already covers (LinkedIn and Indeed are never a recognised ATS board) would
 // otherwise have no test that fails without it.
+import { destinationAllowed, destinationRefusal } from '../src/lib/submissionDestination';
 import { describe, expect, it } from 'vitest';
 import { atsJobRefOfUrl, postingAtsJobRef } from '../src/lib/atsJobRef';
 import { confirmationPageVerdict } from '../src/repos/submissionConfirm';
-import { destinationAllowed, destinationRefusal } from '../src/repos/submissionReview';
 
 const SUB = { atsKind: 'ats_greenhouse', atsExternalId: '1000001', atsRef: 'examplecorp' } as const;
 const POSTING = 'https://boards.greenhouse.io/examplecorp/jobs/1000001';

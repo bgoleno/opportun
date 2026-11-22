@@ -6,8 +6,8 @@
 // One role is often posted once per location. Those rows carry the same title and the same
 // description, so they collapse to a single candidate for the location the user cares about,
 // with the rest named on otherLocations.
+import { titleOverlap } from './titleMatch';
 import type { NormalizedPosting } from '@opportun/core';
-import { titleOverlap } from '../jobs/leadResolve';
 
 export interface PostingCandidate {
   posting: NormalizedPosting;

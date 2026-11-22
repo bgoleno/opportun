@@ -3,12 +3,13 @@
 // device token. Bearer only (no session, no CSRF), write only. Every message goes through the
 // same ingest as Gmail (mailIngest), so pushed mail is capped, upserted and fenced exactly
 // like synced mail: it is hostile input from the classifier's point of view.
+import { APPLE_MAIL_INTEGRATION } from '../lib/mailStatus';
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, onRequestAsyncHookHandler } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { submissionsEnabled } from '../config';
-import { APPLE_MAIL_INTEGRATION, ingestInbound } from '../jobs/mailIngest';
+import { ingestInbound } from '../jobs/mailIngest';
 import { deviceRoute, requireDevice, requireDeviceToken } from '../lib/deviceTokens';
 import { HttpError } from '../lib/errors';
 import { rateLimit } from '../lib/rateLimit';
