@@ -317,6 +317,7 @@ const KNOWN: Record<string, string> = {
   'lib/sessions.ts': 'reads the column into the session context the plugin narrows',
   'repos/base.ts': 'requireAdmin, the one check the admin routes below call (#767)',
   'repos/discovery.ts': 'NOT_ALLOWED: POST /discovery/sources',
+  'repos/users.ts': 'lists the column for Settings > Users (#766); not a gate',
   'routes/auth.ts': 'NOT_ALLOWED: /admin/registration; allowlist: users, peppers, reset',
   'routes/backups.ts': 'NOT_ALLOWED: /backups',
   'routes/jobs.ts': 'allowlist: /jobs and its retry',

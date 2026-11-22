@@ -21,7 +21,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
-import { oauthAccounts, users } from '../db/schema';
+import { oauthAccounts } from '../db/schema';
 import { audit } from '../lib/audit';
 import { readClientCreds, readClientId } from '../lib/google';
 import { racePoint } from '../lib/racePoints';
@@ -61,6 +61,7 @@ import { isRegistrationOpen } from '../lib/registration';
 import { createSession, sessionStored } from '../lib/sessions';
 import { isSecureRequest } from '../plugins/security';
 import { requireAdmin, requireUser, type UserCtx } from '../repos/base';
+import { findUserIdByEmail, insertUser, passwordHashRow, totpEnabledRow } from '../repos/users';
 import { sessionMeta, setSessionCookies } from './auth';
 
 /** HttpOnly cookie holding the browser binding of an in-flight OAuth flow. */
@@ -366,11 +367,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const ctx = requireUser(req);
       const { provider } = req.params;
-      const user = await db
-        .select({ hash: users.passwordHash })
-        .from(users)
-        .where(eq(users.id, ctx.userId))
-        .get();
+      const user = await passwordHashRow(db, ctx.userId);
       if (user === undefined) throw new HttpError(401, 'unauthorized');
       if (hasUsablePassword(user.hash)) throw new HttpError(409, 'has_password');
       const linked = await db
@@ -397,11 +394,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const ctx = requireUser(req);
       const { provider } = req.params;
-      const user = await db
-        .select({ hash: users.passwordHash })
-        .from(users)
-        .where(eq(users.id, ctx.userId))
-        .get();
+      const user = await passwordHashRow(db, ctx.userId);
       if (user === undefined) throw new HttpError(401, 'unauthorized');
       // An account created by OAuth sign-in has no password to confirm: it sets one first.
       if (!hasUsablePassword(user.hash)) throw new HttpError(409, 'password_required');
@@ -446,11 +439,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         // sign-in here and checks that another of the same identity cannot get past its lock
         // and commit in between (see the scope comment above).
         await racePoint('oauth.login.locked');
-        const match = await tx
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.email, identity.email))
-          .get();
+        const match = await findUserIdByEmail(tx, identity.email);
         // Review Focus 2 / ruling R2: an email never joins a provider account to an existing
         // one. Unverified proves nothing; verified proves only the mailbox.
         if (!identity.emailVerified) {
@@ -467,18 +456,15 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         const displayName = (identity.displayName ?? identity.email.split('@')[0] ?? 'New user')
           .trim()
           .slice(0, 100);
-        await tx
-          .insert(users)
-          .values({
-            id: userId,
-            email: identity.email,
-            passwordHash: unusablePasswordHash(),
-            displayName: displayName.length > 0 ? displayName : 'New user',
-            isAdmin: false,
-            createdAt: now,
-            updatedAt: now,
-          })
-          .run();
+        await insertUser(tx, {
+          id: userId,
+          email: identity.email,
+          passwordHash: unusablePasswordHash(),
+          displayName: displayName.length > 0 ? displayName : 'New user',
+          isAdmin: false,
+          createdAt: now,
+          updatedAt: now,
+        });
         await tx
           .insert(oauthAccounts)
           .values({
@@ -547,11 +533,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         )
         .get();
       if (link === undefined) return null;
-      const user = await tx
-        .select({ totpEnabled: users.totpEnabled })
-        .from(users)
-        .where(eq(users.id, userId))
-        .get();
+      const user = await totpEnabledRow(tx, userId);
       if (user === undefined) return null;
       return user.totpEnabled
         ? {
@@ -779,11 +761,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     { schema: { response: { 200: LinkedAccounts } } },
     async (req) => {
       const ctx = requireUser(req);
-      const user = await db
-        .select({ hash: users.passwordHash })
-        .from(users)
-        .where(eq(users.id, ctx.userId))
-        .get();
+      const user = await passwordHashRow(db, ctx.userId);
       const accounts = (
         await db
           .select({ provider: oauthAccounts.provider, createdAt: oauthAccounts.createdAt })
@@ -813,11 +791,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         .where(and(eq(oauthAccounts.userId, ctx.userId), eq(oauthAccounts.provider, provider)))
         .get();
       if (row === undefined) throw new HttpError(404, 'not_linked');
-      const user = await db
-        .select({ hash: users.passwordHash })
-        .from(users)
-        .where(eq(users.id, ctx.userId))
-        .get();
+      const user = await passwordHashRow(db, ctx.userId);
       if (user === undefined) throw new HttpError(401, 'unauthorized');
       if (hasUsablePassword(user.hash)) {
         // The Wave-1 re-auth convention: a credential change takes the current password.

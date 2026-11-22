@@ -3,11 +3,11 @@
 // toggle, users list and password reset.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { and, asc, eq, inArray, max } from 'drizzle-orm';
+import { and, eq, inArray, max } from 'drizzle-orm';
 import QRCode from 'qrcode';
 import { z } from 'zod';
 import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
-import { auditLog, settings, users } from '../db/schema';
+import { auditLog, settings } from '../db/schema';
 import { audit } from '../lib/audit';
 import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
 import { isSharedDemoAdmin } from '../lib/demoSharedAdmin';
@@ -50,6 +50,22 @@ import {
 } from '../lib/twoFactor';
 import { clearCsrfCookie, isSecureRequest, issueCsrfCookie } from '../plugins/security';
 import { requireAdmin, requireUser, type UserCtx } from '../repos/base';
+import {
+  activateTotp,
+  findUserId,
+  isTotpEnabled,
+  listAccountHashes,
+  listAccounts,
+  passwordHashIs,
+  setEnrollmentSecret,
+  setPasswordIfUnchanged,
+  totpSecretRow,
+  twoFactorStatusRow,
+  userByEmail,
+  userById,
+  type AccountScope,
+  type UserRow,
+} from '../repos/users';
 
 export const SESSION_COOKIE = 'opportun_session';
 export { REGISTRATION_OPEN_KEY };
@@ -173,7 +189,7 @@ const ErrorResponse = z.object({ error: z.object({ code: z.string() }) });
 
 type PublicUserT = z.infer<typeof PublicUser>;
 
-function toPublic(u: typeof users.$inferSelect): PublicUserT {
+function toPublic(u: UserRow): PublicUserT {
   return { id: u.id, email: u.email, displayName: u.displayName, isAdmin: u.isAdmin };
 }
 
@@ -247,8 +263,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
   const db = app.db;
   /** The users an admin list shows: every one, or the pinned ones for the shared demo admin. */
-  const sharedOnly = (ctx: UserCtx) =>
-    isSharedDemoAdmin(app.config, ctx) ? inArray(users.id, [...SHARED_DEMO_IDS]) : undefined;
+  const sharedOnly = (ctx: UserCtx): AccountScope =>
+    isSharedDemoAdmin(app.config, ctx) ? { only: SHARED_DEMO_IDS } : {};
   const peppers = app.config.peppers ?? NO_PEPPERS;
   /** Session cookie attributes, Secure following the request's scheme (ADR-14). */
   const cookieOpts = (req: FastifyRequest) =>
@@ -276,7 +292,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const { email, password, displayName } = req.body;
       const passwordHash = await hashPassword(password, peppers);
-      let created: typeof users.$inferSelect;
+      let created: UserRow;
       try {
         created = await registerUser(db, { email, passwordHash, displayName });
       } catch (err) {
@@ -357,7 +373,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req, reply) => {
       const { email, password } = req.body;
-      const user = await db.select().from(users).where(eq(users.email, email)).get();
+      const user = await userByEmail(db, email);
       // Unknown emails verify against a dummy hash so both failures cost the same.
       const { ok, rehash } = await verifyPasswordWithUpgrade(
         user?.passwordHash ?? DUMMY_HASH,
@@ -391,13 +407,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         // Whether 2FA is on is read here, under the lock, not with the password above (#620): an
         // activation that committed during the check gives a pending token, never a full session.
         async (tx) =>
-          (
-            await tx
-              .select({ totpEnabled: users.totpEnabled })
-              .from(users)
-              .where(eq(users.id, user.id))
-              .get()
-          )?.totpEnabled === true
+          (await isTotpEnabled(tx, user.id))
             ? {
                 kind: 'pending' as const,
                 pendingToken: await createPendingToken(tx, user.id, sessionMeta(req)),
@@ -481,7 +491,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       const { userId, method } = result;
       // The code is proven; a change or reset can commit from here on (#561).
       await racePoint('auth.2faVerify.redeemed');
-      const user = await db.select().from(users).where(eq(users.id, userId)).get();
+      const user = await userById(db, userId);
       if (user === undefined) return fail(reply, 401, 'invalid_pending');
       // The session is written only while the pending token is still stored, under the password
       // lock: a change or reset deletes every one of the user's under the same lock (#561).
@@ -520,15 +530,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     { schema: { response: { 200: TwoFactorStatus, 401: ErrorResponse } } },
     async (req, reply) => {
       const ctx = requireUser(req);
-      const user = await db
-        .select({
-          enabled: users.totpEnabled,
-          recovery: users.totpRecovery,
-          hash: users.passwordHash,
-        })
-        .from(users)
-        .where(eq(users.id, ctx.userId))
-        .get();
+      const user = await twoFactorStatusRow(db, ctx.userId);
       if (user === undefined) return fail(reply, 401, 'unauthorized');
       return reply.code(200).send({
         enabled: user.enabled,
@@ -561,7 +563,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         action: '2fa.enroll',
       });
       if (verified === null) return reply;
-      const user = await db.select().from(users).where(eq(users.id, ctx.userId)).get();
+      const user = await userById(db, ctx.userId);
       if (user === undefined) return fail(reply, 401, 'unauthorized');
       if (user.totpEnabled) return fail(reply, 409, 'already_enabled');
       // A fresh pending secret each time: enrolling again replaces an unconfirmed one. The
@@ -572,12 +574,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // Only while the password just proven is still the user's (#620): a change or reset that
       // committed since the check wins, as for a sign-in (#561).
       const written = await whilePasswordCurrent(db, user.id, verified, (tx) =>
-        tx
-          .update(users)
-          .set({ totpSecret: encryptSecret(db, secret), updatedAt: Date.now() })
-          .where(and(eq(users.id, user.id), eq(users.totpEnabled, false)))
-          .returning({ id: users.id })
-          .get(),
+        setEnrollmentSecret(tx, user.id, encryptSecret(db, secret)),
       );
       if (!written.current) return passwordChanged(req, reply, user.id, '2fa.enroll');
       if (written.value === undefined) return fail(reply, 409, 'already_enabled');
@@ -612,7 +609,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         action: '2fa.activate',
       });
       if (verified === null) return reply;
-      const user = await db.select().from(users).where(eq(users.id, ctx.userId)).get();
+      const user = await userById(db, ctx.userId);
       if (user === undefined) return fail(reply, 401, 'unauthorized');
       if (user.totpEnabled) return fail(reply, 409, 'already_enabled');
       if (user.totpSecret === null) return fail(reply, 409, 'not_enrolled');
@@ -632,33 +629,16 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // no second set of recovery codes is handed out.
       // And only while the password just proven is still the user's (#620).
       const written = await whilePasswordCurrent(db, user.id, verified, (tx) =>
-        tx
-          .update(users)
-          .set({
-            totpEnabled: true,
-            totpRecovery: recoveryCodes.map(hashRecoveryCode),
-            totpLastStep: step,
-            updatedAt: Date.now(),
-          })
-          .where(
-            and(
-              eq(users.id, user.id),
-              eq(users.totpEnabled, false),
-              eq(users.totpSecret, user.totpSecret as string),
-            ),
-          )
-          .returning({ id: users.id })
-          .get(),
+        activateTotp(tx, user.id, user.totpSecret as string, {
+          recoveryHashes: recoveryCodes.map(hashRecoveryCode),
+          lastStep: step,
+        }),
       );
       if (!written.current) return passwordChanged(req, reply, user.id, '2fa.activate');
       const activated = written.value;
       if (activated === undefined) {
-        const now = await db
-          .select({ enabled: users.totpEnabled })
-          .from(users)
-          .where(eq(users.id, user.id))
-          .get();
-        return fail(reply, 409, now?.enabled === true ? 'already_enabled' : 'enrollment_changed');
+        const enabledNow = await isTotpEnabled(db, user.id);
+        return fail(reply, 409, enabledNow ? 'already_enabled' : 'enrollment_changed');
       }
       await audit(db, 'auth.2fa_enabled', { userId: user.id, ip: req.ip });
       // Shown exactly once; only their hashes are stored.
@@ -690,11 +670,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         action: '2fa.disable',
       });
       if (!confirmed) return reply;
-      const user = await db
-        .select({ enabled: users.totpEnabled, secret: users.totpSecret })
-        .from(users)
-        .where(eq(users.id, ctx.userId))
-        .get();
+      const user = await totpSecretRow(db, ctx.userId);
       if (user === undefined) return fail(reply, 401, 'unauthorized');
       if (!user.enabled || user.secret === null) return fail(reply, 409, 'not_enabled');
       const { code, recoveryCode } = req.body;
@@ -737,7 +713,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     { schema: { response: { 200: UserResponse, 401: ErrorResponse } } },
     async (req, reply) => {
       const ctx = requireUser(req);
-      const user = await db.select().from(users).where(eq(users.id, ctx.userId)).get();
+      const user = await userById(db, ctx.userId);
       if (user === undefined) return fail(reply, 401, 'unauthorized');
       return reply.code(200).send({ user: toPublic(user) });
     },
@@ -760,7 +736,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req, reply) => {
       const ctx = requireUser(req);
-      const user = await db.select().from(users).where(eq(users.id, ctx.userId)).get();
+      const user = await userById(db, ctx.userId);
       if (user === undefined) return fail(reply, 401, 'unauthorized');
       // An OAuth-created account has no password to prove: its session sets the first one.
       // Every other account proves the current password, as before.
@@ -793,12 +769,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         // The lock a token minted after a password check takes (#539): such a mint waits for
         // this change, then finds the hash it verified gone and creates nothing.
         await lockScope(tx, passwordScope(user.id));
-        const row = await tx
-          .update(users)
-          .set({ passwordHash, updatedAt: Date.now() })
-          .where(and(eq(users.id, user.id), eq(users.passwordHash, user.passwordHash)))
-          .returning({ id: users.id })
-          .get();
+        const row = await setPasswordIfUnchanged(tx, user.id, user.passwordHash, passwordHash);
         if (row === undefined) return undefined;
         const revoked =
           req.body.revokeDeviceTokens === true ? await revokeAllDeviceTokens(tx, user.id) : 0;
@@ -890,22 +861,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // createSession (sign-in) and getSessionUser's throttled touch (lib/sessions.ts) -- not
       // derived from live session rows here, since a derived max(sessions.last_seen_at) cannot
       // answer a question about history once destroySession deletes the row on sign-out.
-      const items = await db
-        .select({
-          id: users.id,
-          email: users.email,
-          displayName: users.displayName,
-          isAdmin: users.isAdmin,
-          totpEnabled: users.totpEnabled,
-          createdAt: users.createdAt,
-          lastSeenAt: users.lastSeenAt,
-        })
-        .from(users)
-        // The shared demo admin sees the pinned accounts only (#563): a dedicated account's email
-        // and name are not every invitee's to read.
-        .where(sharedOnly(ctx))
-        .orderBy(asc(users.createdAt), asc(users.id))
-        .all();
+      // The shared demo admin sees the pinned accounts only (#563): a dedicated account's email
+      // and name are not every invitee's to read.
+      const items = await listAccounts(db, sharedOnly(ctx));
       return reply.code(200).send({ items });
     },
   );
@@ -919,17 +877,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       // Accounts whose stored hash predates the current pepper version, so an operator can tell
       // when install.md's rotation step 4 ("drop the previous secret") is actually safe. OAuth-only
       // accounts have no password to rehash and are never pending.
-      const rows = await db
-        .select({
-          id: users.id,
-          email: users.email,
-          displayName: users.displayName,
-          passwordHash: users.passwordHash,
-        })
-        .from(users)
-        .where(sharedOnly(ctx))
-        .orderBy(asc(users.createdAt), asc(users.id))
-        .all();
+      const rows = await listAccountHashes(db, sharedOnly(ctx));
       const notYetCurrent = rows.filter(
         (u) => hasUsablePassword(u.passwordHash) && hashVersion(u.passwordHash) !== peppers.current,
       );
@@ -1007,11 +955,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       if (isSharedDemoAdmin(app.config, ctx) && !SHARED_DEMO_IDS.has(targetId)) {
         return fail(reply, 403, 'forbidden');
       }
-      const target = await db
-        .select({ id: users.id })
-        .from(users)
-        .where(eq(users.id, targetId))
-        .get();
+      const target = await findUserId(db, targetId);
       if (target === undefined) return fail(reply, 404, 'not_found');
       const temporaryPassword = temporaryResetPassword();
       const newHash = await hashPassword(temporaryPassword, peppers);
@@ -1022,18 +966,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         for (const scope of [passwordScope(ctx.userId), passwordScope(target.id)].sort()) {
           await lockScope(tx, scope);
         }
-        const still = await tx
-          .select({ id: users.id })
-          .from(users)
-          .where(and(eq(users.id, ctx.userId), eq(users.passwordHash, verified)))
-          .get();
-        if (still === undefined) return 'password_changed' as const;
+        if (!(await passwordHashIs(tx, ctx.userId, verified))) return 'password_changed' as const;
         // The account is looked up again under the lock: one deleted since gets no password.
-        const exists = await tx
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.id, target.id))
-          .get();
+        const exists = await findUserId(tx, target.id);
         if (exists === undefined) return 'not_found' as const;
         // Inside the lock, after the re-check (the race tests park here).
         await racePoint('admin.resetPassword.locked');
