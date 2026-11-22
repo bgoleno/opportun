@@ -22,6 +22,10 @@
 // as "candidate" (opportunityIdB); which one plays which role has no bearing on the outcome,
 // since "same role at the same company" does not depend on which side asked first.
 //
+// A row whose AI call fails with a provider error or a malformed answer counts toward
+// OPPORTUNITY_DEDUPE_AI_MAX_FAILURES (#742), as an unexpected error or a made-up ref does (#687);
+// the AI unavailable for the user's setup (no key, budget, a refused key) does not.
+//
 // A row the sweep passes over without a decision (no prompt for its user, the AI unavailable, an
 // unrecognized ref, an unexpected error) has its updated_at moved to now, and the sweep takes the
 // pending rows least recently looked at first (https://github.com/bgoleno/opportun/issues/593). By
@@ -55,6 +59,20 @@ export interface OpportunityDedupeAiOutcome {
   scanned: number;
   confirmed: number;
   rejected: number;
+  /** Rows whose pass failed and was counted (#742). */
+  failed: number;
+  /** Of those, the rows that reached OPPORTUNITY_DEDUPE_AI_MAX_FAILURES on this run (#742). */
+  capped: number;
+}
+
+/**
+ * Whether an AI failure is this row's or this call's, so it counts toward the cap (#742; tl on
+ * #742, correcting #701): a provider error or a malformed answer is, retried for ever otherwise. A
+ * missing key, a spent budget or a key the provider refused is the user's setup: passed over.
+ */
+function countsAsRowFailure(err: AiUnavailableError): boolean {
+  if (err.keyRejected) return false;
+  return err.reason === 'provider_error' || err.reason === 'invalid_output';
 }
 
 interface OppForPrompt {
@@ -118,6 +136,12 @@ export async function runOpportunityDedupeAi(
     .limit(OPPORTUNITY_DEDUPE_AI_MAX_PER_RUN)
     .all();
 
+  let scanned = 0;
+  let confirmed = 0;
+  let rejected = 0;
+  let failed = 0;
+  let capped = 0;
+
   /** This row was looked at and is still pending: it goes behind the rows not looked at yet. */
   const passOver = async (id: string) => {
     await db
@@ -135,8 +159,8 @@ export async function runOpportunityDedupeAi(
    * The pass failed on this row (#687): it is passed over and its failures counted, so a row that
    * keeps failing stops being sent to the model at OPPORTUNITY_DEDUPE_AI_MAX_FAILURES.
    */
-  const failOn = async (id: string) => {
-    await db
+  const failOn = async (id: string, reason: string) => {
+    const counted = await db
       .update(opportunityDedupeCandidates)
       .set({
         updatedAt: Date.now(),
@@ -148,12 +172,19 @@ export async function runOpportunityDedupeAi(
           eq(opportunityDedupeCandidates.decision, 'pending'),
         ),
       )
-      .run();
+      .returning({ failures: opportunityDedupeCandidates.aiFailures })
+      .all();
+    failed += 1;
+    // The cap and why are recorded here, once (#742): the row now waits for the user.
+    if (counted[0]?.failures === OPPORTUNITY_DEDUPE_AI_MAX_FAILURES) {
+      capped += 1;
+      sctx.log.warn(
+        { 'opportun.dedupe_candidate.id': id, 'error.type': reason },
+        'opportunity dedupe AI gave up on a row at its failure cap',
+      );
+    }
   };
 
-  let scanned = 0;
-  let confirmed = 0;
-  let rejected = 0;
   for (const row of rows) {
     // Anything that fails for one row is that row's (#687): the pass goes on with the rest.
     try {
@@ -204,8 +235,20 @@ export async function runOpportunityDedupeAi(
             'opportunity dedupe AI call failed',
           );
         }
-        // Unavailable is the user's setup, not this row's: passed over, not counted (#687).
-        await (err instanceof AiUnavailableError ? passOver(row.id) : failOn(row.id));
+        // The user's setup (no key, a spent budget, a refused key) is passed over, not counted
+        // (#687); a provider error or a malformed answer is this call's, and counted (#742).
+        if (err instanceof AiUnavailableError && !countsAsRowFailure(err)) {
+          await passOver(row.id);
+        } else {
+          await failOn(
+            row.id,
+            err instanceof AiUnavailableError
+              ? err.reason
+              : err instanceof Error
+                ? err.name
+                : typeof err,
+          );
+        }
         continue;
       }
 
@@ -228,7 +271,7 @@ export async function runOpportunityDedupeAi(
           'opportunity dedupe AI returned an unrecognized ref',
         );
         // A made-up ref, again and again, costs a call a day: counted (tl on #644, #687).
-        await failOn(row.id);
+        await failOn(row.id, 'unrecognized_ref');
       }
     } catch (err) {
       sctx.log.warn(
@@ -239,10 +282,10 @@ export async function runOpportunityDedupeAi(
         },
         'opportunity dedupe AI pass failed on a row',
       );
-      await failOn(row.id).catch(() => undefined);
+      await failOn(row.id, err instanceof Error ? err.name : typeof err).catch(() => undefined);
     }
   }
-  return { scanned, confirmed, rejected };
+  return { scanned, confirmed, rejected, failed, capped };
 }
 
 const PayloadSchema = z.object({}).strict() as unknown as z.ZodType<Record<string, never>>;
