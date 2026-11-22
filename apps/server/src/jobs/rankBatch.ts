@@ -19,6 +19,7 @@
 // batchProviderFor finds none, so with the setting on its rankings are still made live, and the
 // submit job hands any waiting posting to the live drain. The setting itself stays hidden (#511).
 import {
+  BatchRefusedError,
   batchRunRecord,
   estimateBatchRequestUsd,
   parseStructuredText,
@@ -180,6 +181,8 @@ export async function failStaleSubmitting(
 
 export type SubmitOutcome =
   | { status: 'submitted'; batchId: string; requests: number }
+  /** Made at the provider, but its row was gone or failed meanwhile: its removal is queued. */
+  | { status: 'unclaimed'; providerBatchId: string }
   | { status: 'off'; released: number }
   | { status: 'no_batches'; released: number }
   | { status: 'in_flight' }
@@ -189,15 +192,20 @@ export type SubmitOutcome =
       status: 'provider_error';
       returned: number;
       /**
-       * The provider answered, refusing it (#784): the send job is tried again on the runner's
-       * backoff. False when the call timed out: see submitRankBatch.
+       * The provider refused the create call (#784, tl on #820): the send job is tried again on
+       * the runner's backoff. False for any other failure: see refusedSend.
        */
       answered: boolean;
     };
 
-/** A batch call that ended on its time limit (batchLimits.ts: AbortSignal.timeout) got no answer. */
-function timedOut(err: unknown): boolean {
-  return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+/**
+ * Whether the provider refused the send itself: a non-2xx answer to the create call, or to
+ * OpenAI's upload before it, so no batch was made (tl on #820). Anything else is no answer: a
+ * timeout, a stalled read, a body cut short after a 2xx; the batch may exist, and a resend would
+ * pay for it twice.
+ */
+function refusedSend(err: unknown): boolean {
+  return err instanceof BatchRefusedError && (err.call === 'submit' || err.call === 'upload');
 }
 
 /**
@@ -312,10 +320,27 @@ export async function submitRankBatch(
       },
       { scope: lockFor(ctx) },
     );
-    return { status: 'provider_error', returned, answered: !timedOut(err) };
+    return { status: 'provider_error', returned, answered: refusedSend(err) };
   }
   await racePoint('rankBatch.provider_answered');
-  await markBatchSubmitted(db, made.id, providerBatchId);
+  if (!(await markBatchSubmitted(db, made.id, providerBatchId))) {
+    // Its row went while it was being sent (the demo reset deleted the account) or the stale
+    // sweep failed it (tl on #820): nothing will collect it, and the provider holds it. Cancelled
+    // and removed as a deleted account's batch is (queueInFlightBatchCleanups), as the account
+    // named here: on the demo the reseeded account, with the same key.
+    await enqueueRankBatchCleanup(db, {
+      userId: ctx.userId,
+      policy: client.policy,
+      providerBatchId,
+      refs: [],
+      cancel: true,
+    });
+    log?.warn(
+      { 'opportun.rank_batch.id': made.id },
+      'a ranking batch was sent after its row went: its removal at the provider is queued',
+    );
+    return { status: 'unclaimed', providerBatchId };
+  }
   return { status: 'submitted', batchId: made.id, requests: send.length };
 }
 

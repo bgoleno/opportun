@@ -56,6 +56,8 @@ export type BatchResultItem =
  */
 export type BatchState = 'in_progress' | 'ended' | 'gone';
 
+export { BatchRefusedError } from './batchLimits';
+
 export interface BatchProvider {
   /** Sends the requests as one batch; resolves with the provider's id for it. */
   submit(requests: readonly BatchRequest[]): Promise<{ batchId: string }>;

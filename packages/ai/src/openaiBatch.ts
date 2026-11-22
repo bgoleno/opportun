@@ -19,7 +19,7 @@
 import { clampTokens, readBatchJson, readBatchText } from './batchRead';
 import { generateText, Output } from 'ai';
 import type { BatchProvider, BatchRequest, BatchResultItem, BatchState, BatchUsage } from './batch';
-import { timedFetches, type BatchCallLimits } from './batchLimits';
+import { BatchRefusedError, timedFetches, type BatchCallLimits } from './batchLimits';
 import { createLanguageModel } from './providers';
 import { SDK_TELEMETRY_OFF } from './telemetry';
 import { OFFICIAL_BASE_URLS, type ModelPolicy, type ProviderFetchOptions } from './types';
@@ -208,8 +208,7 @@ export function createOpenAiBatchProvider(target: {
   const base = trimmed(providerFetch.baseUrls?.openai ?? OFFICIAL_BASE_URLS.openai);
   const auth = { authorization: `Bearer ${apiKey}` };
   /** A refusal names what was asked and the status only: never the key or the provider's text. */
-  const refused = (what: string, status: number) =>
-    new Error(`OpenAI batch ${what}: HTTP ${status}`);
+  const refused = (what: string, status: number) => new BatchRefusedError(what, status, 'OpenAI');
   const id = (v: string) => encodeURIComponent(v);
 
   /** A batch's input, output and error file ids, those it names. */

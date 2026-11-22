@@ -357,12 +357,16 @@ export async function markBatchSubmitted(
   id: string,
   providerBatchId: string,
   now: number = Date.now(),
-): Promise<void> {
-  await exec
+): Promise<boolean> {
+  // Whether the batch was still being sent (#784, tl on #820): false when its row is gone (its
+  // account deleted) or the stale sweep failed it meanwhile.
+  const rows = await exec
     .update(rankBatches)
     .set({ providerBatchId, state: 'submitted', submittedAt: now, updatedAt: now })
     .where(and(eq(rankBatches.id, id), eq(rankBatches.state, 'submitting')))
-    .run();
+    .returning({ id: rankBatches.id })
+    .all();
+  return rows.length > 0;
 }
 
 export async function setBatchState(

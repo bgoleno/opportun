@@ -16,7 +16,7 @@ import {
   succeededLine,
   succeededToolLine,
 } from './anthropicBatch.fixtures';
-import { batchProviderFor, type BatchRequest } from './batch';
+import { BatchRefusedError, batchProviderFor, type BatchRequest } from './batch';
 import { resolvePolicy } from './policies';
 
 import { runStructured, structuredRequest } from './router';
@@ -178,6 +178,23 @@ describe('submit (criteria 1 and 2)', () => {
     expect(err!.message).toMatch(/401/);
     expect(err!.message).not.toContain(KEY);
     expect(String(err!.stack)).not.toContain(KEY);
+    // A refusal, told apart from no answer (#784, tl): only this lets the send be tried again.
+    expect(err).toBeInstanceOf(BatchRefusedError);
+    expect(err).toMatchObject({ call: 'submit', status: 401 });
+  });
+
+  it('a 2xx whose body is cut short is not a refusal: the batch may exist (#784, tl)', async () => {
+    const { fetch } = recordingFetch(
+      () => new Response('{"id":"msgbatch_x","processing_st', { status: 200 }),
+    );
+    const err = await client(fetch)
+      .submit([request(POSTING)])
+      .then(
+        () => null,
+        (e: unknown) => e as Error,
+      );
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(BatchRefusedError);
   });
 });
 

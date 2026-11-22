@@ -5,6 +5,7 @@
 import { rankAnyway, rankBelowCut } from '../src/lib/discoveryIngest';
 import {
   AiUnavailableError,
+  BatchRefusedError,
   estimateBatchRequestUsd,
   resolvePolicy,
   runStructured,
@@ -1177,7 +1178,7 @@ describe('the rules tl found untested (blocking 6)', () => {
     const { app, a } = await boot();
     await batching(app, a);
     await discover(app, a, 2);
-    fake!.submitError = new Error('400 from the provider');
+    fake!.submitError = new BatchRefusedError('submit', 400, 'Anthropic');
     expect(await submit(app, a)).toEqual({ status: 'provider_error', returned: 2, answered: true });
     expect((await batchRows(app, a))[0]).toMatchObject({ state: 'failed' });
     for (const r of await results(app, a)) {
@@ -1195,7 +1196,7 @@ describe('the rules tl found untested (blocking 6)', () => {
     await discover(app, a, 2);
     const sendJob = async () =>
       (await app.db.select().from(jobs).where(eq(jobs.kind, RANK_BATCH_SEND_KIND)).all())[0]!;
-    fake!.submitError = new Error('Anthropic batch submit: HTTP 529');
+    fake!.submitError = new BatchRefusedError('submit', 529, 'Anthropic');
     vi.setSystemTime(Date.now() + 5 * 60_000 + 1_000);
     await app.jobs.drain();
     let job = await sendJob();
@@ -1207,6 +1208,14 @@ describe('the rules tl found untested (blocking 6)', () => {
     // Not before then.
     await app.jobs.drain();
     expect(fake!.sent).toEqual([]);
+    // Refused again when due: the second backoff, 4 * 30 s plus up to 10 s (tl on #820).
+    vi.setSystemTime(job.runAt + 1);
+    await app.jobs.drain();
+    job = await sendJob();
+    expect(job).toMatchObject({ status: 'pending', attempts: 2 });
+    expect(job.runAt - job.updatedAt).toBeGreaterThanOrEqual(120_000);
+    expect(job.runAt - job.updatedAt).toBeLessThanOrEqual(130_000);
+    expect(fake!.sent).toEqual([]);
     // Then sent, once the provider answers again.
     fake!.submitError = null;
     vi.setSystemTime(job.runAt + 1);
@@ -1216,18 +1225,68 @@ describe('the rules tl found untested (blocking 6)', () => {
     expect(job).toMatchObject({ status: 'done', lastError: null });
   });
 
-  it('a send that timed out is not retried sooner: the provider may hold it (#784, tl)', async () => {
+  // tl on #820: only a refusal on the create call is an answer. A timeout, a stalled read or a body
+  // cut short after a 2xx may have left a batch made: not resent sooner, or it is paid twice.
+  for (const [what, make] of [
+    [
+      'timed out',
+      () =>
+        Object.assign(new Error('The operation was aborted due to timeout'), {
+          name: 'TimeoutError',
+        }),
+    ],
+    ['stalled reading the answer', () => new Error('Anthropic batch: the answer stopped arriving')],
+    ['cut short after a 2xx', () => new SyntaxError('Unexpected end of JSON input')],
+    ['refused on a later call', () => new BatchRefusedError('state', 500, 'Anthropic')],
+  ] as const) {
+    it(`a send that ${what} is not retried sooner: the provider may hold it (#784, tl)`, async () => {
+      const { app, a } = await boot();
+      await batching(app, a);
+      await discover(app, a, 1);
+      fake!.submitError = make();
+      vi.setSystemTime(Date.now() + 5 * 60_000 + 1_000);
+      await app.jobs.drain();
+      const [job] = await app.db
+        .select()
+        .from(jobs)
+        .where(eq(jobs.kind, RANK_BATCH_SEND_KIND))
+        .all();
+      expect(job).toMatchObject({ status: 'done' });
+      expect(job!.result).toEqual({ status: 'provider_error', returned: 1, answered: false });
+    });
+  }
+
+  // tl on #820: a batch still being sent when its row goes (the demo reset deleted the account, or
+  // the stale sweep failed it) has no row to be collected by. Its create answered, so the
+  // provider holds it: a cancel and a delete are queued, as for a deleted account's batch.
+  it("a create that answers after its batch row is gone queues the batch's cancel and removal (#784)", async () => {
     const { app, a } = await boot();
     await batching(app, a);
     await discover(app, a, 1);
-    const timeout = new Error('The operation was aborted due to timeout');
-    timeout.name = 'TimeoutError';
-    fake!.submitError = timeout;
-    vi.setSystemTime(Date.now() + 5 * 60_000 + 1_000);
+    setRaceHook(async (p) => {
+      if (p === 'rankBatch.provider_answered') {
+        await app.db.delete(rankBatches).where(eq(rankBatches.userId, a.userId)).run();
+      }
+    });
+    const out = await submit(app, a);
+    setRaceHook(undefined);
+    const providerId = fake!.sent[0]!.batchId;
+    expect(out).toMatchObject({ status: 'unclaimed', providerBatchId: providerId });
+    const [cleanup] = await app.db
+      .select()
+      .from(jobs)
+      .where(eq(jobs.kind, RANK_BATCH_CLEANUP_KIND))
+      .all();
+    expect(cleanup).toMatchObject({ status: 'pending', userId: null });
+    expect(cleanup!.payload).toMatchObject({
+      userId: a.userId,
+      providerBatchId: providerId,
+      refs: [],
+      cancel: true,
+    });
     await app.jobs.drain();
-    const [job] = await app.db.select().from(jobs).where(eq(jobs.kind, RANK_BATCH_SEND_KIND)).all();
-    expect(job).toMatchObject({ status: 'done' });
-    expect(job!.result).toEqual({ status: 'provider_error', returned: 1, answered: false });
+    expect(fake!.cancelled).toEqual([providerId]);
+    expect(fake!.cleaned).toEqual([providerId]);
   });
 
   it('a send queued before batching was turned off hands the wait to live ranking', async () => {

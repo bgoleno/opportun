@@ -915,6 +915,9 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.count.returned',
   ],
   'sending a ranking batch failed': ['opportun.rank_batch.id'],
+  'a ranking batch was sent after its row went: its removal at the provider is queued': [
+    'opportun.rank_batch.id',
+  ],
   'applying a ranking batch result failed': [
     'opportun.rank_batch.id',
     'opportun.discovery_result.id',
