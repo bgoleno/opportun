@@ -79,7 +79,7 @@ describe('opportunity.dedupe AI pass', () => {
 
     const outcome = await runOpportunityDedupeAi(app.db, { log });
 
-    expect(outcome).toEqual({ scanned: 1, confirmed: 1, rejected: 0 });
+    expect(outcome).toEqual({ scanned: 1, confirmed: 1, rejected: 0, failed: 0, capped: 0 });
     expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(1);
     const [, task] = vi.mocked(runStructured).mock.calls[0]!;
     expect(task).toBe('opportunity.dedupe');
@@ -98,7 +98,7 @@ describe('opportunity.dedupe AI pass', () => {
 
     const outcome = await runOpportunityDedupeAi(app.db, { log });
 
-    expect(outcome).toEqual({ scanned: 1, confirmed: 0, rejected: 1 });
+    expect(outcome).toEqual({ scanned: 1, confirmed: 0, rejected: 1, failed: 0, capped: 0 });
     expect(await decisionRow(app, a.userId)).toEqual({ decision: 'rejected', decidedBy: 'ai' });
     expect(await possibleDuplicateOf(app, candidateId)).toBeNull();
   });
@@ -114,7 +114,7 @@ describe('opportunity.dedupe AI pass', () => {
 
     const outcome = await runOpportunityDedupeAi(app.db, { log });
 
-    expect(outcome).toEqual({ scanned: 1, confirmed: 0, rejected: 0 });
+    expect(outcome).toEqual({ scanned: 1, confirmed: 0, rejected: 0, failed: 1, capped: 0 });
     expect((await decisionRow(app, a.userId)).decision).toBe('pending');
   });
 
@@ -125,7 +125,7 @@ describe('opportunity.dedupe AI pass', () => {
 
     const outcome = await runOpportunityDedupeAi(app.db, { log });
 
-    expect(outcome).toEqual({ scanned: 1, confirmed: 0, rejected: 0 });
+    expect(outcome).toEqual({ scanned: 1, confirmed: 0, rejected: 0, failed: 0, capped: 0 });
     expect((await decisionRow(app, a.userId)).decision).toBe('pending');
   });
 
@@ -140,7 +140,7 @@ describe('opportunity.dedupe AI pass', () => {
 
     const outcome = await runOpportunityDedupeAi(app.db, { log });
 
-    expect(outcome).toEqual({ scanned: 0, confirmed: 0, rejected: 0 });
+    expect(outcome).toEqual({ scanned: 0, confirmed: 0, rejected: 0, failed: 0, capped: 0 });
     expect(vi.mocked(runStructured)).not.toHaveBeenCalled();
   });
 
@@ -163,6 +163,8 @@ describe('opportunity.dedupe AI pass', () => {
       scanned: OPPORTUNITY_DEDUPE_AI_MAX_PER_RUN,
       confirmed: 0,
       rejected: OPPORTUNITY_DEDUPE_AI_MAX_PER_RUN,
+      failed: 0,
+      capped: 0,
     });
     const stillPending = (await queryAll(
       app,
@@ -233,7 +235,7 @@ describe('opportunity.dedupe AI pass: rows that stay pending (#593)', () => {
 
     const outcome = await runOpportunityDedupeAi(app.db, { log });
 
-    expect(outcome).toEqual({ scanned: 2, confirmed: 0, rejected: 1 });
+    expect(outcome).toEqual({ scanned: 2, confirmed: 0, rejected: 1, failed: 1, capped: 0 });
     expect(await pending()).toHaveLength(1);
   });
 });
