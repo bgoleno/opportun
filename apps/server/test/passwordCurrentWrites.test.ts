@@ -63,7 +63,14 @@ describe('#620 point 2: a write after a password check needs that password still
       },
     );
     expect(res.statusCode, res.body).toBe(403);
-    expect(res.json()).toMatchObject({ error: { code: 'password_changed' } });
+    // The sentence reaches the user, not just the code (#743: the 403 schema stripped it).
+    expect(res.json()).toMatchObject({
+      error: {
+        code: 'password_changed',
+        message:
+          'Your password changed while this was being checked. Sign in again and try once more.',
+      },
+    });
     expect((await userRow(app, b.userId)).totpSecret).toBeNull();
   });
 
@@ -83,7 +90,14 @@ describe('#620 point 2: a write after a password check needs that password still
       },
     );
     expect(res.statusCode, res.body).toBe(403);
-    expect(res.json()).toMatchObject({ error: { code: 'password_changed' } });
+    // The sentence reaches the user, not just the code (#743: the 403 schema stripped it).
+    expect(res.json()).toMatchObject({
+      error: {
+        code: 'password_changed',
+        message:
+          'Your password changed while this was being checked. Sign in again and try once more.',
+      },
+    });
     const row = await userRow(app, b.userId);
     expect(row.totpEnabled).toBe(false);
     expect(row.totpRecovery).toBeNull();
@@ -105,7 +119,14 @@ describe('#620 point 2: a write after a password check needs that password still
       },
     );
     expect(res.statusCode, res.body).toBe(403);
-    expect(res.json()).toMatchObject({ error: { code: 'password_changed' } });
+    // The sentence reaches the user, not just the code (#743: the 403 schema stripped it).
+    expect(res.json()).toMatchObject({
+      error: {
+        code: 'password_changed',
+        message:
+          'Your password changed while this was being checked. Sign in again and try once more.',
+      },
+    });
     expect((await userRow(app, b.userId)).passwordHash).toBe(before);
   });
 

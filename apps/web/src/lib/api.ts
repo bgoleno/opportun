@@ -164,6 +164,10 @@ export function errorMessage(err: unknown): string {
         return 'Not found.';
       case 'payload_too_large':
         return 'That file is too large.';
+      // A write refused because the password changed during its check (#643, #743): the server's
+      // own sentence, kept here too so a body without it still reads plainly.
+      case 'password_changed':
+        return 'Your password changed while this was being checked. Sign in again and try once more.';
       // A reject refused because the message was linked or moved since it was seen (#666, #678).
       case 'message_changed':
         return 'This message was linked or changed elsewhere, so it was not rejected.';
