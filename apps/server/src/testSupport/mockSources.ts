@@ -66,6 +66,9 @@ export const FIXTURE_POSTINGS: readonly NormalizedPosting[] = [
  * names is no longer on the board), or add text to a job's description (the board's copy changed).
  * Set with POST MOCK_SOURCE_PATH/listing and cleared with DELETE; a spec clears it when it is done.
  */
+/** The longest a spec may hold one listing answer (per request; the body schema caps it too). */
+export const MAX_LISTING_HOLD_MS = 20_000;
+
 interface ListingControl {
   holdMs: number;
   drop: readonly string[];
@@ -87,7 +90,11 @@ export const mockGreenhouseSource: DiscoverySource = {
   async *fetchPostings() {
     listingReads += 1;
     const control = listing;
-    if (control.holdMs > 0) await new Promise((r) => setTimeout(r, control.holdMs));
+    // Bounded here as well as by the body schema, so the timer never takes an unchecked duration.
+    const holdMs = Math.min(Math.max(control.holdMs, 0), MAX_LISTING_HOLD_MS);
+    if (holdMs > 0 && holdMs <= MAX_LISTING_HOLD_MS) {
+      await new Promise((r) => setTimeout(r, holdMs));
+    }
     for (const posting of FIXTURE_POSTINGS) {
       if (posting.externalId != null && control.drop.includes(posting.externalId)) continue;
       const extra = posting.externalId == null ? undefined : control.append[posting.externalId];
@@ -176,7 +183,7 @@ const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const SuggestBody = z.object({ email: z.string().min(1).max(320) });
 const JobId = z.string().regex(/^\d{1,12}$/);
 const ListingBody = z.object({
-  holdMs: z.number().int().min(0).max(20_000).default(0),
+  holdMs: z.number().int().min(0).max(MAX_LISTING_HOLD_MS).default(0),
   drop: z.array(JobId).max(10).default([]),
   append: z.record(JobId, z.string().max(500)).default({}),
 });
