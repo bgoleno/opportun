@@ -3,9 +3,12 @@
 import type { Db } from '../db/client';
 import { getSyncState } from '../repos/communications';
 import type { UserCtx } from '../repos/base';
-import { APPLE_MAIL_INTEGRATION } from '../jobs/mailIngest';
 import { listDeviceTokens } from './deviceTokens';
 import { GMAIL_SCOPES, readTokens } from './google';
+
+/** The sync_state row the Apple Mail connector's batches update (lastSyncAt, status). In lib/
+ * so this status reads it without importing the mail-ingest job (#763). */
+export const APPLE_MAIL_INTEGRATION = 'apple_mail';
 
 /** Google tokens are stored and carry every Gmail scope. */
 export async function gmailGranted(db: Db, ctx: UserCtx): Promise<boolean> {

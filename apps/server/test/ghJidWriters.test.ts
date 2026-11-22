@@ -1,6 +1,7 @@
 // Every writer of a posting's identity, for a Greenhouse job embedded on a company's own careers
 // page (https://github.com/bgoleno/opportun/issues/398, criteria 2, 3 and 6, with tl's note on
 // board reads). Every host here is synthetic; the only "requests" are to a counting fake.
+import { destinationRefusal } from '../src/lib/submissionDestination';
 import type { AtsJobRef, NormalizedPosting } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -26,7 +27,6 @@ import {
   updateOpportunity,
 } from '../src/repos/opportunities';
 import { insertResume } from '../src/repos/resumes';
-import { destinationRefusal } from '../src/repos/submissionReview';
 import { createSubmissionDraft } from '../src/repos/submissions';
 import { useApi } from './api';
 import type { TestClient } from './isolation';

@@ -174,6 +174,12 @@ function classify(promptText: string): Record<string, unknown> {
   return CLASSIFY_RULES.find((r) => r.subject.test(subject))?.output ?? NONE;
 }
 
+/**
+ * A duplicate-check prompt carrying this text (the candidate's company, say) is answered as a
+ * duplicate of the tracked opportunity; without it, as not a duplicate.
+ */
+export const MOCK_DEDUPE_CONFIRM_MARKER = 'QA Dupe Confirm';
+
 /** A schema-valid answer for every structured task. */
 function structured(task: string, promptText: string): Record<string, unknown> {
   switch (task) {
@@ -194,8 +200,16 @@ function structured(task: string, promptText: string): Record<string, unknown> {
       return { proposedPrompt: 'Mock refined prompt.', changeSummary: 'No change (mock).' };
     case 'discovery.rank':
       return rank(promptText);
-    case 'opportunity.dedupe':
+    case 'opportunity.dedupe': {
+      // A pair whose candidate carries MOCK_DEDUPE_CONFIRM_MARKER (in its company or title) is
+      // confirmed as a duplicate of the tracked one, by the Ref the prompt gives it; any other
+      // pair is not a duplicate (apps/web/e2e/dedupe.spec.ts, issue #747).
+      const ref = /^Ref: (\S+)$/m.exec(promptText)?.[1];
+      if (promptText.includes(MOCK_DEDUPE_CONFIRM_MARKER) && ref !== undefined) {
+        return { duplicateOfRef: ref, confidence: 0.9, reason: 'Mock answer.' };
+      }
       return { duplicateOfRef: null, confidence: 0.5, reason: 'Mock answer.' };
+    }
     case 'referral.rationale': {
       // Ranks the candidates in the order sent (ids echoed from the contacts lines).
       const ids = [...promptText.matchAll(/^- id: (\S+) \|/gm)].map((m) => m[1] ?? '');
@@ -272,7 +286,11 @@ function messageText(content: unknown): string {
   return '';
 }
 
-/** The mock answers only this process's own calls (IPv4, IPv6 and IPv4-mapped loopback). */
+/**
+ * The mock answers only this process's own calls (IPv4, IPv6 and IPv4-mapped loopback). A second
+ * guard only (sec on #754): behind a proxy on the same host every caller looks local; what keeps
+ * the mock off a real server is that it is refused under NODE_ENV=production.
+ */
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
 const USAGE = { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160 };

@@ -567,17 +567,32 @@ function toItem(row: TimelineRow): TimelineItem {
   };
 }
 
+/** A page of the timeline, newest first, without its total (the dashboard's recent activity). */
+async function timelineItems(
+  exec: Exec,
+  scope: TimelineScope,
+  page: { limit: number; offset: number },
+): Promise<TimelineItem[]> {
+  const rows = await rawAll<TimelineRow>(
+    exec,
+    // The derived table needs an alias on Postgres (SQLite accepts one too).
+    sql`SELECT * FROM (${timelineUnion(scope)}) AS timeline ORDER BY occurred_at DESC, id DESC LIMIT ${page.limit} OFFSET ${page.offset}`,
+  );
+  return rows.map(toItem);
+}
+
+/**
+ * A page of the timeline and its total, for a timeline that pages (an opportunity's). The total
+ * counts the whole UNION, every activity, stage change and linked message in scope, so a caller
+ * that shows only a few entries uses timelineItems instead (#592: the dashboard).
+ */
 async function timeline(
   exec: Exec,
   scope: TimelineScope,
   page: { limit: number; offset: number },
 ): Promise<Page<TimelineItem>> {
   const union = timelineUnion(scope);
-  const rows = await rawAll<TimelineRow>(
-    exec,
-    // The derived table needs an alias on Postgres (SQLite accepts one too).
-    sql`SELECT * FROM (${union}) AS timeline ORDER BY occurred_at DESC, id DESC LIMIT ${page.limit} OFFSET ${page.offset}`,
-  );
+  const items = await timelineItems(exec, scope, page);
   const total = Number(
     (
       await rawGet<{ n: number | string }>(
@@ -586,7 +601,7 @@ async function timeline(
       )
     )?.n ?? 0,
   );
-  return { items: rows.map(toItem), total };
+  return { items, total };
 }
 
 /**
@@ -707,9 +722,12 @@ export async function dashboard(db: Db, ctx: UserCtx, now = Date.now()): Promise
     .limit(MAX_DUE_STEPS)
     .all();
 
-  const recentActivity = (
-    await timeline(db, { userId: ctx.userId }, { limit: RECENT_ACTIVITY, offset: 0 })
-  ).items;
+  // The newest few only: counting the whole timeline here grew with the user's history (#592).
+  const recentActivity = await timelineItems(
+    db,
+    { userId: ctx.userId },
+    { limit: RECENT_ACTIVITY, offset: 0 },
+  );
 
   // The Inbox "Needs review" view: flagged messages that are not spam or irrelevant outreach.
   const triage = await countWhere(

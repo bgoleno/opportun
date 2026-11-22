@@ -10,7 +10,7 @@
 //
 // The report names the ids of dropped job mail, because "two were dropped" is not actionable
 // and "these two were dropped, by this rule" is.
-import { senderAddress } from '../adapters/sources/alertEmail';
+import { senderAddress } from './mailAddress';
 import type { MailFilterRuleRow } from '../repos/mailFilters';
 import { triageMessage, type TriageRule } from './mailTriage';
 

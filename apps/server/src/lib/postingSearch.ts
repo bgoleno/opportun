@@ -13,6 +13,8 @@
 // A Workday board (FR-D10) is read from its listing only, since its descriptions cost one detail
 // request per posting; the posting the flow settles on is then described from its detail
 // endpoint (describeWorkdayPosting), as is a Workday candidate the user picks later.
+import { TITLE_MATCH_THRESHOLD } from './titleMatch';
+import { boardConfig, boardFromUrl, boardOfSource } from './atsBoard';
 import { greenhouseJidOf, NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import {
@@ -30,14 +32,7 @@ import {
 } from '../adapters/sources/workday';
 import type { Db } from '../db/client';
 import { communications, discoverySources } from '../db/schema';
-import {
-  AtsDetectTransientError,
-  boardConfig,
-  boardFromUrl,
-  boardOfSource,
-  detectAts,
-} from '../jobs/atsDetect';
-import { TITLE_MATCH_THRESHOLD } from '../jobs/leadResolve';
+import { AtsDetectTransientError, detectAts } from '../jobs/atsDetect';
 import type { AtsJobRefRecord } from '../db/schema.shared';
 import type { UserCtx } from '../repos/base';
 import { getCompany } from '../repos/companies';

@@ -213,6 +213,10 @@ function LinkEditor({ opp, onDone }: { opp: OpportunityView; onDone: () => void 
   const [value, setValue] = useState(opp.postingUrl ?? '');
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+  // Cancelled while a save was in flight (#737). The server stores the link whatever the editor
+  // does, and the card then switches to it, so a save that settles after Cancel says how it ended
+  // rather than changing the card with nothing said.
+  const cancelled = useRef(false);
 
   async function save() {
     const raw = value.trim();
@@ -222,12 +226,25 @@ function LinkEditor({ opp, onDone }: { opp: OpportunityView; onDone: () => void 
     }
     setFieldError(undefined);
     setError(null);
+    cancelled.current = false;
     try {
       await update.mutateAsync({ postingUrl: raw === '' ? null : raw });
-      onDone();
+      if (cancelled.current) toast({ title: 'Posting link saved', variant: 'success' });
+      else onDone();
     } catch (err) {
-      setError(errorMessage(err));
+      if (cancelled.current) {
+        toast({
+          title: 'Posting link not saved',
+          description: errorMessage(err),
+          variant: 'destructive',
+        });
+      } else setError(errorMessage(err));
     }
+  }
+
+  function cancel() {
+    if (update.isPending) cancelled.current = true;
+    onDone();
   }
 
   return (
@@ -249,7 +266,7 @@ function LinkEditor({ opp, onDone }: { opp: OpportunityView; onDone: () => void 
         <Button type="button" size="sm" onClick={() => void save()} disabled={update.isPending}>
           Save
         </Button>
-        <Button type="button" size="sm" variant="outline" onClick={onDone}>
+        <Button type="button" size="sm" variant="outline" onClick={cancel}>
           Cancel
         </Button>
       </div>

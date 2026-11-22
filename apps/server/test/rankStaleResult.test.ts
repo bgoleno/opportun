@@ -3,6 +3,7 @@
 // and a posting's text can change during it: the user completes a partial lead, or a lead job finds
 // it on a board. The real route completes the lead here, and real jobs rank it. The provider is
 // mocked, and its score says which text it was given. Every posting is made up.
+import { insertLeads } from '../src/lib/discoveryIngest';
 import { runStructured } from '@opportun/ai';
 import { newId } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
@@ -12,7 +13,6 @@ import { discoveryResults, jobs, taskRuns } from '../src/db/schema';
 import { RANK_WAITING_KIND } from '../src/jobs/discoveryKinds';
 import { DISCOVERY_RANK_KIND, POSTING_CHANGED, rankResult } from '../src/jobs/discoveryRank';
 import { drainWaitingResults } from '../src/jobs/discoveryRankWaiting';
-import { insertLeads } from '../src/jobs/discoveryRun';
 import { enqueue, runNextJob } from '../src/jobs/runner';
 import type { safeFetch } from '../src/lib/safeFetch';
 import type { UserCtx } from '../src/repos/base';

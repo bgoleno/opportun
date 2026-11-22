@@ -9,16 +9,16 @@
 // the provider's id — plus the reason code. What goes is everything that says what the message
 // was about: subject, snippet, body, and the search-index rows that would otherwise keep the
 // text findable after the row stopped showing it.
+import { senderAddress } from '../lib/mailAddress';
+import { invalidateTriageContext } from '../lib/triageContext';
 import { newId, parseMailPattern } from '@opportun/core';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { withTransaction } from '../db/client';
 import { communications, dismissalFeedback } from '../db/schema';
 import type { RejectionReason } from '../db/schema.shared';
-import { senderAddress } from '../adapters/sources/alertEmail';
 import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
-import { invalidateTriageContext } from '../jobs/mailIngest';
 import { createRule, updateRule } from './mailFilters';
 import type { UserCtx } from './base';
 import { removeFromIndex } from './search';
