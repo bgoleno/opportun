@@ -579,9 +579,10 @@ function event(
 export const obs = { record, span, startSpan, startPreparedSpan, event, isCollecting };
 
 // How the span store and the span rebuild count a dropped span: a recorded opportun.obs.dropped,
-// handed to obs/state.ts so they need not import this module (#803).
+// handed to obs/state.ts so they need not import this module (#803). Through `obs.record`, as
+// they called it before, so a spy on the facade still sees it.
 provideSpanDropCounter((reason) => {
-  record('opportun.obs.dropped', 1, {
+  obs.record('opportun.obs.dropped', 1, {
     'opportun.obs.signal': 'spans',
     'opportun.obs.reason': reason,
   });
