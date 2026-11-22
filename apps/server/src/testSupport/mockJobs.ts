@@ -17,6 +17,11 @@ export const MOCK_JOBS_PATH = '/__mock/jobs';
 /** The kinds a spec may run now: scheduled sweeps whose next run is too far off to wait for. */
 export const MOCK_RUNNABLE_KINDS: readonly string[] = [OPPORTUNITY_DEDUPE_AI_KIND];
 
+/**
+ * A second guard only (sec on #754): behind a proxy on the same host every caller looks local.
+ * The guard that matters is that the AI mock, and this hook with it, is never on in production
+ * (testSupportFromEnv refuses every mock under NODE_ENV=production).
+ */
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
 const KindParams = z.object({ kind: z.string().max(100) });

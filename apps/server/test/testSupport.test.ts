@@ -201,10 +201,11 @@ describe('Job run-now hook (#747)', () => {
       url: `/__mock/jobs/${jobId}`,
       remoteAddress: '127.0.0.1',
     });
-    expect(status.json()).toEqual({
-      status: 'done',
-      result: { scanned: 0, confirmed: 0, rejected: 0 },
-    });
+    // The hook owns the run, not the sweep's result: its shape is the job's own (#751 added
+    // failed and capped), so only that the job ran to done with a result is asserted here.
+    const body = status.json<{ status: string; result: Record<string, unknown> | null }>();
+    expect(body.status).toBe('done');
+    expect(body.result).toMatchObject({ scanned: 0 });
   });
 
   it('runs only the allowed kinds, answers only loopback callers, and is off without the AI mock', async () => {

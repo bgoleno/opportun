@@ -286,7 +286,11 @@ function messageText(content: unknown): string {
   return '';
 }
 
-/** The mock answers only this process's own calls (IPv4, IPv6 and IPv4-mapped loopback). */
+/**
+ * The mock answers only this process's own calls (IPv4, IPv6 and IPv4-mapped loopback). A second
+ * guard only (sec on #754): behind a proxy on the same host every caller looks local; what keeps
+ * the mock off a real server is that it is refused under NODE_ENV=production.
+ */
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
 const USAGE = { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160 };
