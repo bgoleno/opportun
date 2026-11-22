@@ -155,6 +155,32 @@ describe('job queue', () => {
     expect(await runNextJob(db, opts)).toBe(false);
   });
 
+  it('a job done after a failed attempt keeps no error from it (#784)', async () => {
+    const { db } = await freshDb();
+    let calls = 0;
+    registerJob({
+      kind: 'test.flaky',
+      payloadSchema: z.object({}),
+      maxAttempts: 3,
+      run: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('first attempt failed');
+      },
+    });
+    let now = 1_800_000_000_000;
+    const opts = { now: () => now, random: () => 0.5 };
+    const id = await enqueue(db, 'test.flaky', {}, { runAt: now });
+    expect(await runNextJob(db, opts)).toBe(true);
+    const retried = await jobRow(db, id);
+    expect(retried.lastError).toContain('first attempt failed');
+    now = retried.runAt;
+    expect(await runNextJob(db, opts)).toBe(true);
+    const done = await jobRow(db, id);
+    expect(done.status).toBe('done');
+    // Settings > Jobs shows a done job's error as its own; one from an attempt before is stale.
+    expect(done.lastError).toBeNull();
+  });
+
   // Issue #258: found while investigating #241 -- a failed job used to leave no trace at all
   // in the server's own logs, whether it retried or exhausted its attempts. Driven through a
   // real app (not runDueJobs directly) so this exercises the same services.log the runner

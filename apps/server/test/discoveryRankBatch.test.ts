@@ -1168,13 +1168,56 @@ describe('the rules tl found untested (blocking 6)', () => {
     await batching(app, a);
     await discover(app, a, 2);
     fake!.submitError = new Error('400 from the provider');
-    expect(await submit(app, a)).toEqual({ status: 'provider_error', returned: 2 });
+    expect(await submit(app, a)).toEqual({ status: 'provider_error', returned: 2, answered: true });
     expect((await batchRows(app, a))[0]).toMatchObject({ state: 'failed' });
     for (const r of await results(app, a)) {
       expect(r).toMatchObject({ rankSkipReason: 'batch_waiting', rankBatchId: null });
     }
     fake!.submitError = null;
     expect(await submit(app, a)).toMatchObject({ status: 'submitted', requests: 2 });
+  });
+
+  // #784 (qa's regression pass): a refused send is sent again on the runner's backoff, not only at
+  // the hourly sweep or when the next posting joins.
+  it('a refused send is retried on the backoff: about a minute, then two, then the sweep (#784)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 2);
+    const sendJob = async () =>
+      (await app.db.select().from(jobs).where(eq(jobs.kind, RANK_BATCH_SEND_KIND)).all())[0]!;
+    fake!.submitError = new Error('Anthropic batch submit: HTTP 529');
+    vi.setSystemTime(Date.now() + 5 * 60_000 + 1_000);
+    await app.jobs.drain();
+    let job = await sendJob();
+    expect(job).toMatchObject({ status: 'pending', attempts: 1 });
+    // The runner's backoff for a first failure: 2 * 30 s, plus up to 10 s of jitter.
+    expect(job.runAt - job.updatedAt).toBeGreaterThanOrEqual(60_000);
+    expect(job.runAt - job.updatedAt).toBeLessThanOrEqual(70_000);
+    expect(job.result).toEqual({ status: 'provider_error', returned: 2, answered: true });
+    // Not before then.
+    await app.jobs.drain();
+    expect(fake!.sent).toEqual([]);
+    // Then sent, once the provider answers again.
+    fake!.submitError = null;
+    vi.setSystemTime(job.runAt + 1);
+    await app.jobs.drain();
+    expect(fake!.sent).toHaveLength(1);
+    job = await sendJob();
+    expect(job).toMatchObject({ status: 'done', lastError: null });
+  });
+
+  it('a send that timed out is not retried sooner: the provider may hold it (#784, tl)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    const timeout = new Error('The operation was aborted due to timeout');
+    timeout.name = 'TimeoutError';
+    fake!.submitError = timeout;
+    vi.setSystemTime(Date.now() + 5 * 60_000 + 1_000);
+    await app.jobs.drain();
+    const [job] = await app.db.select().from(jobs).where(eq(jobs.kind, RANK_BATCH_SEND_KIND)).all();
+    expect(job).toMatchObject({ status: 'done' });
+    expect(job!.result).toEqual({ status: 'provider_error', returned: 1, answered: false });
   });
 
   it('a send queued before batching was turned off hands the wait to live ranking', async () => {

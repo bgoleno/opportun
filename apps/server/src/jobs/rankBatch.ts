@@ -184,7 +184,20 @@ export type SubmitOutcome =
   | { status: 'in_flight' }
   | { status: 'nothing_waiting' }
   | { status: 'no_room'; waiting: number }
-  | { status: 'provider_error'; returned: number };
+  | {
+      status: 'provider_error';
+      returned: number;
+      /**
+       * The provider answered, refusing it (#784): the send job is tried again on the runner's
+       * backoff. False when the call timed out: see submitRankBatch.
+       */
+      answered: boolean;
+    };
+
+/** A batch call that ended on its time limit (batchLimits.ts: AbortSignal.timeout) got no answer. */
+function timedOut(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+}
 
 /**
  * Sends the user's postings waiting for a batch as one batch, in the live drain's order, as many as
@@ -298,7 +311,7 @@ export async function submitRankBatch(
       },
       { scope: lockFor(ctx) },
     );
-    return { status: 'provider_error', returned };
+    return { status: 'provider_error', returned, answered: !timedOut(err) };
   }
   await racePoint('rankBatch.provider_answered');
   await markBatchSubmitted(db, made.id, providerBatchId);
@@ -626,7 +639,7 @@ export async function cleanupPendingRankBatches(
     }
     await db
       .update(jobs)
-      .set({ status: 'done', updatedAt: Date.now() })
+      .set({ status: 'done', lastError: null, updatedAt: Date.now() })
       .where(and(eq(jobs.id, job.id), eq(jobs.status, 'pending')))
       .run();
     removed += 1;
@@ -669,9 +682,17 @@ export const rankBatchSubmitJob: JobHandler<Record<string, never>> = {
   maxAttempts: 3,
   async run(db, _payload, ctx) {
     if (ctx.userId === null) throw new Error(`${RANK_BATCH_SEND_KIND} needs a user`);
-    await ctx.setResult(
-      await submitRankBatch(db, { userId: ctx.userId, isAdmin: false }, ctx.services),
-    );
+    const outcome = await submitRankBatch(db, { userId: ctx.userId, isAdmin: false }, ctx.services);
+    await ctx.setResult(outcome);
+    // A send the provider refused is tried again on the runner's backoff (#784: about one minute,
+    // then two), not only at the hourly sweep or when the next posting joins; after its last
+    // attempt the sweep still sends it. Its postings already wait again, so each try is a fresh
+    // send. Not after a timeout (tl on #784): with no answer the provider may have made the batch
+    // after all, and a quick resend would leave that one an orphan no collect ever sees (point 7's
+    // double send, sooner); that wait stays the sweep's, as before.
+    if (outcome.status === 'provider_error' && outcome.answered) {
+      throw new Error('the provider refused the ranking batch; sending it again');
+    }
   },
 };
 
