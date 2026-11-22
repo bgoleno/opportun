@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { FetchInit, FetchLike, FetchResponse } from '../src/api';
 import { CONFIRMATION_TEXT_MAX, readConfirmationPage, type ReadPage } from '../src/confirmation';
 import type { GetLike } from '../src/prefill';
-import { mountPopup, type PopupDeps } from '../src/popupController';
+import { ACTION_TIMEOUT_MS, mountPopup, type PopupDeps } from '../src/popupController';
 import type { SettingsStorage } from '../src/settings';
 
 const TOKEN = `odt_${'D'.repeat(43)}`;
@@ -244,5 +244,48 @@ describe('readConfirmationPage', () => {
     expect(page.title).toBe('Thanks!');
     expect(page.text).toContain('Thank you');
     expect(page.text).toContain('We got it.');
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/648: Record says it is working at once, and a server
+// that never answers ends in an error with the buttons back and focus on Record.
+describe('Record confirmation page against a server that never answers (#648)', () => {
+  it('says it is recording at once, then that the server did not answer, with the buttons back', async () => {
+    const s = setup();
+    s.get.mockImplementation(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          // As fetch does: an already-aborted signal rejects at once.
+          if (init.signal?.aborted === true) reject(new Error('aborted'));
+          init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+    let end: () => void = () => undefined;
+    const ended = new Promise<void>((r) => {
+      end = r;
+    });
+    s.deps.limit = vi.fn(async (ms: number) => {
+      expect(ms).toBe(ACTION_TIMEOUT_MS);
+      await ended;
+    });
+    await mountPopup(s.doc, s.deps);
+    const record = s.$('record') as HTMLButtonElement;
+    record.focus();
+    record.click();
+    await vi.waitFor(() =>
+      expect(s.$('status').textContent).toBe('Recording the confirmation page…'),
+    );
+    expect(record.disabled).toBe(true);
+    // The request is out, and the server says nothing.
+    await vi.waitFor(() => expect(s.get).toHaveBeenCalled());
+    end();
+    await vi.waitFor(() =>
+      expect(s.$('status').textContent).toMatch(/did not answer within 30 seconds/),
+    );
+    expect(record.disabled).toBe(false);
+    expect(s.doc.activeElement).toBe(record);
+    // Record writes: the post may have reached the server (sec on #713).
+    expect(s.$('status').textContent).toMatch(/check Opportun before you try again/);
+    expect(s.posts).toEqual([]);
   });
 });
