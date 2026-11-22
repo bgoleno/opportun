@@ -16,7 +16,7 @@ import {
   derivedId,
   seedDemo,
   type SeedDemoCredentials,
-} from '../src/cli/seedDemo';
+} from '../src/lib/demo/seed';
 import {
   DEMO_COMMUNICATIONS,
   DEMO_COMPANIES,
@@ -29,7 +29,7 @@ import {
   DEMO_TAILORED_RESUMES,
   DEMO_TITLE_VARIANTS,
   DEMO_USERS,
-} from '../src/cli/seedDemoFixture';
+} from '../src/lib/demo/fixture';
 import { rawAll, type Db } from '../src/db/client';
 import {
   communications,

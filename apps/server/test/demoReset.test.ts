@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { auditLog, jobs, users } from '../src/db/schema';
-import { DEMO_SEED_ACK_KEY, UnexpectedUsersError } from '../src/cli/seedDemo';
+import { DEMO_SEED_ACK_KEY, UnexpectedUsersError } from '../src/lib/demo/seed';
 import {
   DEMO_RESET_JOB_KIND,
   DemoCredentialsMissingError,
