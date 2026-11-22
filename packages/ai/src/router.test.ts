@@ -429,6 +429,171 @@ describe('streamChat', () => {
     expect(h.model.doStreamCalls).toHaveLength(0);
     expect(h.runs).toEqual([expect.objectContaining({ error: 'budget_exceeded' })]);
   });
+
+  describe('a chat stream that ends early records the tokens it used', () => {
+    /**
+     * A stream that sends `deltas`, then ends early: `abort` waits for the caller's signal,
+     * `error` reports a provider error part (as a provider does for an overloaded model), and
+     * `fail` errors the stream itself (as a connection reset mid-response does).
+     */
+    type End = 'abort' | 'error' | 'fail';
+    function cutModel(deltas: string[], end: End): MockLanguageModelV4 {
+      return new MockLanguageModelV4({
+        doStream: async ({ abortSignal }) => ({
+          stream: new ReadableStream<LanguageModelV4StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'text-start', id: 't' });
+              for (const delta of deltas)
+                controller.enqueue({ type: 'text-delta', id: 't', delta });
+              // After the deltas are read: an errored stream drops what it still holds.
+              setTimeout(() => {
+                if (end === 'error') {
+                  controller.enqueue({ type: 'error', error: new Error('overloaded') });
+                  controller.close();
+                } else if (end === 'fail') {
+                  controller.error(new Error('connection reset'));
+                }
+              }, 5);
+              abortSignal?.addEventListener('abort', () =>
+                controller.error(new DOMException('aborted', 'AbortError')),
+              );
+            },
+          }),
+        }),
+      });
+    }
+
+    const DELTAS = ['Here is a ', 'first draft of ', 'your summary'];
+    const SYSTEM = 'You tailor resumes.';
+    const MESSAGES = [{ role: 'user' as const, content: 'Tailor my summary for this posting.' }];
+
+    async function cut(h: Harness, end: End): Promise<void> {
+      const before = h.runs.length;
+      const stop = new AbortController();
+      const res = await streamChat(h.deps, 'resume.tailor', {
+        system: SYSTEM,
+        messages: MESSAGES,
+        abortSignal: stop.signal,
+      });
+      let seen = 0;
+      try {
+        for await (const delta of res.textStream) {
+          expect(delta.length).toBeGreaterThan(0);
+          seen += 1;
+          if (end === 'abort' && seen === DELTAS.length) stop.abort();
+        }
+      } catch {
+        // The stream ends with the cut or the error; what is recorded is the point here.
+      }
+      await vi.waitFor(() => expect(h.runs).toHaveLength(before + 1));
+    }
+
+    const HOW: Record<End, string> = {
+      abort: 'being stopped',
+      error: 'a provider error',
+      fail: 'the stream failing',
+    };
+    for (const end of ['abort', 'error', 'fail'] as const) {
+      it(`a stream that ends early by ${HOW[end]} records its estimated tokens and cost`, async () => {
+        const h = harness({ model: cutModel(DELTAS, end) });
+        await cut(h, end);
+        const run = h.runs[0]!;
+        expect(run.status).toBe('error');
+        // At least the prompt as sent and the text streamed, four characters a token or more.
+        const promptChars = SYSTEM.length + MESSAGES[0]!.content.length;
+        expect(run.inputTokens).toBeGreaterThanOrEqual(Math.ceil(promptChars / 4));
+        expect(run.outputTokens).toBeGreaterThanOrEqual(Math.ceil(DELTAS.join('').length / 4));
+        expect(run.estCostUsd).toBeGreaterThan(0);
+        expect(run.error).toMatch(/estimated/);
+      });
+
+      it(`the cost of a stream that ends early by ${HOW[end]} counts for the calls that follow`, async () => {
+        const h = harness({ model: cutModel(DELTAS, end) });
+        h.deps.spentTodayUsd = async () => h.runs.reduce((sum, r) => sum + r.estCostUsd, 0);
+        await cut(h, end);
+        const one = h.runs[0]!.estCostUsd;
+        expect(one).toBeGreaterThan(0);
+        // With a limit of one and a half such costs, the second call opens and the third does
+        // not: both recorded costs count.
+        h.deps.budget = { perTaskDailyUsd: one * 1.5 };
+        await cut(h, end);
+        expect(h.runs).toHaveLength(2);
+        await expect(
+          streamChat(h.deps, 'resume.tailor', { system: SYSTEM, messages: MESSAGES }),
+        ).rejects.toMatchObject({ reason: 'budget_exceeded' });
+        expect(h.model.doStreamCalls).toHaveLength(2);
+      });
+    }
+
+    it('a provider that refuses the call before answering records no tokens', async () => {
+      const refused = new APICallError({
+        message: 'bad request',
+        url: 'https://provider.test/v1',
+        requestBodyValues: {},
+        statusCode: 400,
+        isRetryable: false,
+      });
+      const h = harness({
+        model: new MockLanguageModelV4({
+          doStream: async () => {
+            throw refused;
+          },
+        }),
+      });
+      const res = await streamChat(h.deps, 'resume.tailor', { system: SYSTEM, messages: MESSAGES });
+      for await (const part of res.fullStream) expect(part.type).not.toBe('text-delta');
+      await vi.waitFor(() => expect(h.runs).toHaveLength(1));
+      expect(h.runs[0]).toMatchObject({ status: 'error', inputTokens: 0, outputTokens: 0 });
+      expect(h.runs[0]!.error).not.toMatch(/estimated/);
+    });
+
+    it('a stream stopped before any text counts the prompt it sent', async () => {
+      // A provider that has sent nothing yet, not even the start of its answer.
+      const silent = new MockLanguageModelV4({
+        doStream: async ({ abortSignal }) => ({
+          stream: new ReadableStream<LanguageModelV4StreamPart>({
+            start(controller) {
+              abortSignal?.addEventListener('abort', () =>
+                controller.error(new DOMException('aborted', 'AbortError')),
+              );
+            },
+          }),
+        }),
+      });
+      const h = harness({ model: silent });
+      const stop = new AbortController();
+      const res = await streamChat(h.deps, 'resume.tailor', {
+        system: SYSTEM,
+        messages: MESSAGES,
+        abortSignal: stop.signal,
+      });
+      // Once the request is out: a stop before the SDK calls the provider sends nothing.
+      const reading = (async () => {
+        for await (const delta of res.textStream) expect(delta).toBe('');
+      })();
+      await vi.waitFor(() => expect(h.model.doStreamCalls).toHaveLength(1));
+      stop.abort();
+      try {
+        await reading;
+      } catch {
+        // Ends with the stop.
+      }
+      await vi.waitFor(() => expect(h.runs).toHaveLength(1));
+      const promptChars = SYSTEM.length + MESSAGES[0]!.content.length;
+      expect(h.runs[0]!.inputTokens).toBeGreaterThanOrEqual(Math.ceil(promptChars / 4));
+      expect(h.runs[0]!.outputTokens).toBe(0);
+    });
+
+    it('a stream that finishes still records the usage the provider reported, not an estimate', async () => {
+      const h = harness({ model: streamModel('Hello there') });
+      const res = await streamChat(h.deps, 'resume.tailor', { system: SYSTEM, messages: MESSAGES });
+      expect(await res.text).toBe('Hello there');
+      await vi.waitFor(() => expect(h.runs).toHaveLength(1));
+      expect(h.runs[0]).toMatchObject({ status: 'ok', inputTokens: 30, outputTokens: 7 });
+      expect(h.runs[0]!.error).toBeUndefined();
+    });
+  });
 });
 
 // https://github.com/bgoleno/opportun/issues/356: the fixed part of a prompt is marked for the
