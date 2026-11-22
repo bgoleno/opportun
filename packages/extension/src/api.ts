@@ -10,6 +10,8 @@ export interface FetchInit {
   body: string;
   credentials: 'omit';
   redirect: 'error';
+  /** Ends the request at the action's time limit (#648). */
+  signal?: AbortSignal;
 }
 
 export interface FetchResponse {
