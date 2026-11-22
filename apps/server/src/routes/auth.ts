@@ -49,7 +49,7 @@ import {
   redeemPendingToken,
 } from '../lib/twoFactor';
 import { clearCsrfCookie, isSecureRequest, issueCsrfCookie } from '../plugins/security';
-import { requireUser, type UserCtx } from '../repos/base';
+import { requireAdmin, requireUser, type UserCtx } from '../repos/base';
 
 export const SESSION_COOKIE = 'opportun_session';
 export { REGISTRATION_OPEN_KEY };
@@ -846,8 +846,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       },
     },
     async (req, reply) => {
-      const ctx = requireUser(req);
-      if (!ctx.isAdmin) return fail(reply, 403, 'forbidden');
+      const ctx = requireAdmin(req);
       const confirmed = await confirmPassword(req, reply, {
         userId: ctx.userId,
         password: req.body.password,
@@ -868,8 +867,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     '/admin/registration',
     { schema: { response: { 200: RegistrationBody, 401: ErrorResponse, 403: ErrorResponse } } },
     async (req, reply) => {
-      const ctx = requireUser(req);
-      if (!ctx.isAdmin) return fail(reply, 403, 'forbidden');
+      requireAdmin(req);
       return reply.code(200).send({ open: await isRegistrationOpen(db) });
     },
   );
@@ -886,8 +884,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       },
     },
     async (req, reply) => {
-      const ctx = requireUser(req);
-      if (!ctx.isAdmin) return fail(reply, 403, 'forbidden');
+      const ctx = requireAdmin(req);
       // Instance-level by design: the admin sees every account, never any credential column.
       // lastSeenAt (issue #281, persisted per #320): users.last_seen_at itself, written by
       // createSession (sign-in) and getSessionUser's throttled touch (lib/sessions.ts) -- not
@@ -917,8 +914,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     '/admin/peppers',
     { schema: { response: { 200: PepperStatus, 401: ErrorResponse, 403: ErrorResponse } } },
     async (req, reply) => {
-      const ctx = requireUser(req);
-      if (!ctx.isAdmin) return fail(reply, 403, 'forbidden');
+      const ctx = requireAdmin(req);
       if (peppers.current === 0) return reply.code(200).send({ currentVersion: 0, pending: [] });
       // Accounts whose stored hash predates the current pepper version, so an operator can tell
       // when install.md's rotation step 4 ("drop the previous secret") is actually safe. OAuth-only
@@ -993,8 +989,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       },
     },
     async (req, reply) => {
-      const ctx = requireUser(req);
-      if (!ctx.isAdmin) return fail(reply, 403, 'forbidden');
+      const ctx = requireAdmin(req);
       const targetId = req.params.id;
       // An admin changes their own password with the current one; a stolen admin session must
       // not be able to lock the real admin out by resetting it.

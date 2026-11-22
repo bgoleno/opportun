@@ -315,6 +315,7 @@ const KNOWN: Record<string, string> = {
   'lib/exporter.ts': 'copies the column into an export; not a gate',
   'lib/registration.ts': 'writes the column; not a gate',
   'lib/sessions.ts': 'reads the column into the session context the plugin narrows',
+  'repos/base.ts': 'requireAdmin, the one check the admin routes below call (#767)',
   'repos/discovery.ts': 'NOT_ALLOWED: POST /discovery/sources',
   'routes/auth.ts': 'NOT_ALLOWED: /admin/registration; allowlist: users, peppers, reset',
   'routes/backups.ts': 'NOT_ALLOWED: /backups',

@@ -11,7 +11,7 @@ import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
 import { isSharedDemoAdmin, withinSharedDemo } from '../lib/demoSharedAdmin';
 import { forbidden, HttpError, notFound } from '../lib/errors';
 import { reviveDeadJob, type JobRow } from '../jobs/runner';
-import { requireUser } from '../repos/base';
+import { requireAdmin, requireUser } from '../repos/base';
 import { IdParams } from './common';
 
 export const JobView = z.object({
@@ -84,8 +84,7 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
     '/jobs/:id/retry',
     { schema: { params: IdParams, response: { 200: JobView } } },
     async (req) => {
-      const ctx = requireUser(req);
-      if (!ctx.isAdmin) throw forbidden();
+      const ctx = requireAdmin(req);
       if (isSharedDemoAdmin(app.config, ctx)) {
         const job = await db
           .select({ userId: jobs.userId })
