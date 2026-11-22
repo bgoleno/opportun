@@ -9,27 +9,7 @@ import { rawGet, type Db, type Exec } from '../db/client';
 import { jobs, settings } from '../db/schema';
 import { racePoint } from './racePoints';
 import { currentTraceparent } from '../obs';
-
-/** What enqueue needs of a kind's handler: its payload schema and its attempts. */
-interface QueuedKind {
-  payloadSchema: { parse(value: unknown): unknown };
-  maxAttempts: number;
-}
-
-/**
- * The handler of a kind, as jobs/registry.ts hands it over when that module loads
- * (https://github.com/bgoleno/opportun/issues/788): lib/ does not import jobs/. Until then it
- * answers undefined, and that is the true answer, not a gap to fill with a throw: a handler is
- * registered only through jobs/registry.ts, so before the handover no kind has one, and enqueue
- * treats every kind as unregistered (its payload as given, DEFAULT_MAX_ATTEMPTS), exactly as an
- * empty registry did when this lived in jobs/runner.ts.
- */
-let handlerOf: (kind: string) => QueuedKind | undefined = () => undefined;
-
-/** Called by jobs/registry.ts as it loads, with its getJobHandler. */
-export function provideHandlerLookup(lookup: (kind: string) => QueuedKind | undefined): void {
-  handlerOf = lookup;
-}
+import { queuedHandlerOf } from './jobHandlerLookup';
 
 export const DEFAULT_MAX_ATTEMPTS = 5;
 
@@ -55,7 +35,7 @@ export async function insertJob(
   payload: unknown,
   opts: EnqueueOptions,
 ): Promise<string> {
-  const handler = handlerOf(kind);
+  const handler = queuedHandlerOf(kind);
   const value = handler === undefined ? payload : handler.payloadSchema.parse(payload);
   await racePoint('jobs.enqueue');
   const traceContext = opts.continueTrace === true ? currentTraceparent() : null;

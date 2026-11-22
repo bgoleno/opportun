@@ -9,7 +9,7 @@ import type { MailProvider } from '../adapters/mailProvider';
 import type { Db } from '../db/client';
 import type { safeFetch } from '../lib/safeFetch';
 import type { Storage } from '../lib/storage';
-import { provideHandlerLookup } from '../lib/jobQueue';
+import { provideHandlerLookup } from '../lib/jobHandlerLookup';
 
 /** App services a handler may need; the runner passes what the app was built with. */
 export interface JobServices {
