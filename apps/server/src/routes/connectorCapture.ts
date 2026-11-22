@@ -51,7 +51,8 @@ import { workflow } from '../obs/workflow';
 
 export const CAPTURE_TEXT_MAX = 200_000;
 
-const CaptureBody = z
+/** Exported for the parity test with the extension's caps (test/clientLimitsParity.test.ts). */
+export const CaptureBody = z
   .object({
     /** The tab's URL: provenance only, never fetched. */
     url: HttpsUrl,

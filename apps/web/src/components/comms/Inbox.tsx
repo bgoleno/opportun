@@ -18,6 +18,7 @@ import {
   useGmailStatus,
   useGmailSyncRefresh,
   useGmailSync,
+  INBOX_PAGE,
   useInbox,
   type InboxFilters,
   type InboxTab,
@@ -79,7 +80,14 @@ const BULK_REASONS: { value: RejectionReason; label: string }[] = [
   { value: 'other', label: 'Other' },
 ];
 
-export function Inbox({ initialTab }: { initialTab?: InboxTab }) {
+/** `pageSize` is INBOX_PAGE for everyone who uses the app; a test passes a small one (#646). */
+export function Inbox({
+  initialTab,
+  pageSize = INBOX_PAGE,
+}: {
+  initialTab?: InboxTab;
+  pageSize?: number;
+}) {
   return (
     <section>
       <PageHeader
@@ -101,7 +109,7 @@ export function Inbox({ initialTab }: { initialTab?: InboxTab }) {
           // row's min-content, so a long sender address widened every row past the phone screen.
           <TabsContent key={t.tab} value={t.tab} className="grid grid-cols-1 gap-3 pt-2">
             {t.note ? <p className="text-sm text-muted-foreground">{t.note}</p> : null}
-            <InboxList tab={t.tab} mode={t.mode} empty={t.empty} />
+            <InboxList tab={t.tab} mode={t.mode} empty={t.empty} pageSize={pageSize} />
           </TabsContent>
         ))}
       </Tabs>
@@ -261,12 +269,70 @@ function BulkBar({
   );
 }
 
-function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: string }) {
+/** "Showing 201–400 of 523", and the way to the pages before and after (#646). */
+function Pager({
+  page,
+  pageSize,
+  shown,
+  total,
+  onPage,
+}: {
+  page: number;
+  pageSize: number;
+  shown: number;
+  total: number;
+  onPage: (page: number) => void;
+}) {
+  // Never past the total: while the next page loads, the page before is still on screen, and
+  // its rows counted from the new page read ahead ("401–600 of 450": #646's review).
+  const last = Math.min(page * pageSize + shown, total);
+  const first = Math.min(page * pageSize + 1, last);
+  return (
+    <nav aria-label="Message pages" className="flex flex-wrap items-center gap-2 text-sm">
+      <span className="tabular-nums text-muted-foreground">
+        Showing {first}–{last} of {total}
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Previous page"
+        disabled={page === 0}
+        onClick={() => onPage(page - 1)}
+      >
+        Previous
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Next page"
+        disabled={last >= total}
+        onClick={() => onPage(page + 1)}
+      >
+        Next
+      </Button>
+    </nav>
+  );
+}
+
+function InboxList({
+  tab,
+  mode,
+  empty,
+  pageSize,
+}: {
+  tab: InboxTab;
+  mode: RowMode;
+  empty: string;
+  pageSize: number;
+}) {
   const [q, setQ] = useState('');
   const [sender, setSender] = useState('');
   const [channel, setChannel] = useState<CommChannel | ''>('');
   const [order, setOrder] = useState<'newest' | 'oldest'>('newest');
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [page, setPage] = useState(0);
 
   const filters: InboxFilters = {
     q: useDebounced(q),
@@ -274,12 +340,30 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
     channel: channel === '' ? undefined : channel,
     order,
   };
-  const { data, error, isPending } = useInbox(tab, filters);
+  const { data, error, isPending, isPlaceholderData } = useInbox(tab, filters, page, pageSize);
+  // What was asked for, not what is being typed: the list on screen answers the debounced values.
+  const filtered =
+    (filters.q ?? '').trim() !== '' ||
+    (filters.sender ?? '').trim() !== '' ||
+    filters.channel !== undefined;
 
+  // A new filter starts again from its first page (#646). The selection is not cleared with it
+  // (#678): the pruning below drops a row the filter hides, and keeps one still listed.
+  useEffect(() => {
+    setPage(0);
+  }, [filters.q, filters.sender, filters.channel, filters.order]);
+  // A page left empty (its last messages rejected or linked away) steps back to the last page
+  // that has any, rather than showing the tab's empty message with messages still in it.
+  // Only on the page's own answer, never on the page before still shown while it loads (tl).
+  useEffect(() => {
+    if (isPlaceholderData) return;
+    if (data !== undefined && page > 0 && data.items.length === 0 && data.total > 0) {
+      setPage(Math.max(0, Math.ceil(data.total / pageSize) - 1));
+    }
+  }, [data, isPlaceholderData, page, pageSize]);
   // A row that leaves the list leaves the selection (#647): only rows on screen are ever selected.
-  // That covers a filter change too, a row the new filter hides is dropped, so the selection is no
-  // longer cleared wholesale on one (#678): a row still listed stays selected, and a confirmation
-  // open for it stays open.
+  // That covers a filter change too, a row the new filter hides is dropped, so a row still listed
+  // stays selected, and a confirmation open for it stays open (#678).
   const onScreen = useMemo(() => new Set((data?.items ?? []).map((c) => c.id)), [data]);
   useEffect(() => {
     setSelected((prev) => {
@@ -343,12 +427,25 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
 
       {selectable && bulkShown ? <BulkBar rows={actOn} onDone={clear} /> : null}
 
+      {data !== undefined && data.total > data.items.length ? (
+        <Pager
+          page={page}
+          pageSize={pageSize}
+          shown={data.items.length}
+          total={data.total}
+          onPage={setPage}
+        />
+      ) : null}
+
       {error ? (
         <FormError message={errorMessage(error)} />
       ) : isPending ? (
         <p className="text-sm text-muted-foreground">Loading...</p>
       ) : data.items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{empty}</p>
+        <p className="text-sm text-muted-foreground">
+          {/* With a filter set, an empty list is about the filter, not the tab (#652). */}
+          {filtered ? 'No messages match these filters.' : empty}
+        </p>
       ) : (
         <ul className="grid grid-cols-1 gap-3" aria-label="Messages">
           {data.items.map((c) =>

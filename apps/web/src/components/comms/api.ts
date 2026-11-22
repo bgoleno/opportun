@@ -142,13 +142,29 @@ function filterQuery(f: InboxFilters): string {
   return parts.length > 0 ? `&${parts.join('&')}` : '';
 }
 
-export function useInbox(view: InboxTab, filters: InboxFilters = {}) {
+/** One page of a tab: the server's cap (routes/common.ts MAX_LIMIT), and so the most it returns. */
+export const INBOX_PAGE = 200;
+
+/**
+ * One page of a tab (#646): `page` is 0-based. Each page is its own cache entry under the view's
+ * key, so a refresh of the view refreshes every page. The page on screen stays while the next
+ * loads, rather than flashing to a loading state.
+ */
+export function useInbox(
+  view: InboxTab,
+  filters: InboxFilters = {},
+  page = 0,
+  pageSize: number = INBOX_PAGE,
+) {
   return useQuery({
-    queryKey: [...ck.view(view), filterKey(filters)] as const,
+    queryKey: [...ck.view(view), filterKey(filters), page, pageSize] as const,
     queryFn: () =>
-      api<Page<CommunicationView>>(`/communications?view=${view}&limit=200${filterQuery(filters)}`),
-    // The rows on screen stay while a new filter's load (#678): without them the selection, and a
-    // confirmation open for it, would be dropped for the moment the list is empty.
+      api<Page<CommunicationView>>(
+        `/communications?view=${view}&limit=${pageSize}&offset=${page * pageSize}` +
+          filterQuery(filters),
+      ),
+    // The rows on screen stay while the next page or a new filter loads (#646, #678): without
+    // them the selection, and a confirmation open for it, would be dropped for that moment.
     placeholderData: keepPreviousData,
   });
 }

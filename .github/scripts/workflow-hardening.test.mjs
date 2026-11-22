@@ -83,26 +83,63 @@ for (const file of WORKFLOWS) {
   });
 }
 
-test("the security label job runs the base branch's matcher, not the PR's", () => {
-  const text = read('security.yml');
-  const start = text.indexOf('  label-security-sensitive:');
-  assert.ok(start >= 0, 'the label job is gone');
-  const next = /\n {2}[\w-]+:\s*\n/.exec(text.slice(start + 1));
-  const job = text.slice(start, next === null ? undefined : start + 1 + next.index);
-  const steps = stepsOf(job);
-  // A checkout of the base commit into its own directory...
-  const base = steps.find(
-    (s) =>
-      isCheckout(s) &&
-      /ref:\s*\$\{\{\s*github\.event\.pull_request\.base\.sha\s*\}\}/.test(s.text) &&
-      /path:\s*base\s*$/m.test(s.text),
+// https://github.com/bgoleno/opportun/issues/663 (sec and tl on #642): on `pull_request` a workflow
+// runs as the PR has it, so a PR could edit the label job out of its own run. The label job is in
+// its own workflow on `pull_request_target`, which runs as the base branch has it: a PR that edits
+// it, security.yml or the matcher still gets the label, decided by the base copy of both.
+test('the security label is decided on pull_request_target, by base code only, with no PR code run', () => {
+  const text = read('security-label.yml');
+  // Its only trigger.
+  assert.match(text, /^on:\s*\n\s+pull_request_target:/m);
+  assert.doesNotMatch(text, /^\s+pull_request:/m);
+  assert.doesNotMatch(text, /^\s+push:/m);
+  // Nothing at the workflow level, and the job holds only what it needs.
+  assert.match(text, /^permissions:\s*\{\}\s*$/m);
+  const perms = [...text.matchAll(/^ {6}([\w-]+):\s*(read|write|none)\s*$/gm)].map(
+    (m) => `${m[1]}:${m[2]}`,
   );
-  assert.ok(base !== undefined, 'no checkout of the base commit into ./base');
-  // ...and the step that decides the label runs the matcher from there, never from the PR's tree.
-  const check = steps.find((s) => s.text.includes('check-security-paths.mjs'));
+  assert.deepEqual(perms.sort(), ['contents:read', 'pull-requests:write']);
+  // Every checkout is the base commit: never the PR's head or its merge ref.
+  const checkouts = stepsOf(text).filter(isCheckout);
+  assert.ok(checkouts.length > 0, 'no checkout of the base');
+  for (const c of checkouts) {
+    assert.match(c.text, /ref:\s*\$\{\{\s*github\.event\.pull_request\.base\.sha\s*\}\}/);
+    assert.match(c.text, /^\s*persist-credentials:\s*false\s*$/m);
+  }
+  assert.doesNotMatch(text, /pull_request\.head|refs\/pull|github\.head_ref/);
+  // No PR-controlled text is expanded into a script: the number goes through the environment.
+  assert.doesNotMatch(text, /\$\{\{\s*github\.event\.pull_request\.(title|body|head)/);
+  const runs = stepsOf(text).filter((s) => /^\s*run:/m.test(s.text));
+  // The script itself, from `run:` on: the `env:` above it is where an expression belongs.
+  const script = (r) => r.text.slice(r.text.search(/^\s*run:/m));
+  for (const r of runs)
+    assert.doesNotMatch(script(r), /\$\{\{/, `expression in a script: ${script(r)}`);
+  // The PR's changed paths come from the API, through the base copy of the matcher.
+  const check = runs.find((r) => r.text.includes('check-security-paths.mjs'));
   assert.ok(check !== undefined, 'no step runs the matcher');
-  assert.match(check.text, /node base\/\.github\/scripts\/check-security-paths\.mjs/);
-  assert.doesNotMatch(check.text, /node \.github\/scripts\/check-security-paths\.mjs/);
+  assert.match(check.text, /gh pr diff "\$PR_NUMBER" --name-only/);
+  assert.match(check.text, /node \.github\/scripts\/check-security-paths\.mjs/);
+  assert.ok(
+    runs.some((r) => r.text.includes('--add-label security')),
+    'no step applies the label',
+  );
+});
+
+test('the pull_request workflows no longer label: a PR cannot edit away a label they never apply', () => {
+  for (const file of WORKFLOWS.filter((f) => f !== 'security-label.yml')) {
+    assert.doesNotMatch(read(file), /--add-label/, `${file} applies a label`);
+  }
+});
+
+test('a PR that edits the label workflow, security.yml or the matcher is itself labelled', async () => {
+  const { matchingSecurityPaths } = await import('./security-paths.mjs');
+  const files = [
+    '.github/workflows/security-label.yml',
+    '.github/workflows/security.yml',
+    '.github/scripts/security-paths.mjs',
+    '.github/scripts/check-security-paths.mjs',
+  ];
+  assert.deepEqual(matchingSecurityPaths(files), files);
 });
 
 test("the image's base digest is kept current by Dependabot, for the Dockerfile only (#619)", () => {
@@ -115,4 +152,14 @@ test("the image's base digest is kept current by Dependabot, for the Dockerfile 
   assert.deepEqual(ecosystems, ['docker']);
   assert.match(text, /^\s*directory:\s*["']?\/deploy["']?\s*$/m);
   assert.match(text, /^\s*interval:\s*["']?weekly["']?\s*$/m);
+});
+
+test('Dependabot never proposes a new major node for the image (#683)', () => {
+  // It opened node 22 -> 26 (#675) against .nvmrc 22. The runtime's major follows .nvmrc and is
+  // changed on purpose; Dependabot keeps the digest and minor or patch updates within it.
+  const text = readFileSync(new URL('../dependabot.yml', import.meta.url), 'utf8');
+  assert.match(
+    text,
+    /ignore:\s*\n\s*-\s*dependency-name:\s*["']?node["']?\s*\n\s*update-types:\s*\[\s*["']version-update:semver-major["']\s*\]/,
+  );
 });

@@ -608,6 +608,262 @@ describe('Inbox bulk Reject (#647)', () => {
   });
 });
 
+// https://github.com/bgoleno/opportun/issues/652: a failed Ignore said nothing (Move to and Not spam
+// both toast theirs), and a filter that matched nothing showed the tab's own empty text, which
+// reads as an empty inbox.
+describe('Inbox: a failed Ignore, and a filter that matches nothing (#652)', () => {
+  it('a failed Ignore says so, and the suggestion stays', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'DELETE /communications/c1/proposed-transition': () => ({
+        status: 500,
+        body: { error: { code: 'server_error', message: 'The server could not do that.' } },
+      }),
+    });
+    renderWithProviders(
+      <ul>
+        <InboxRow comm={BASE} mode="linked" />
+      </ul>,
+    );
+    const row = await screen.findByRole('listitem', { name: 'Your application at Acme' });
+    await user.click(within(row).getByRole('button', { name: 'Ignore' }));
+    expect(await screen.findByText('Suggestion not dismissed')).toBeInTheDocument();
+    expect(within(row).getByText('Suggested stage')).toBeInTheDocument();
+  });
+
+  it('a filter that matches nothing says so, not that the tab is empty', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /communications': (call: { search: string }) => ({
+        status: 200,
+        body: call.search.includes('q=')
+          ? { items: [], total: 0 }
+          : { items: [{ ...BASE, id: 'nr1', subject: 'needs_review subject' }], total: 1 },
+      }),
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    renderWithProviders(<Inbox />);
+    await screen.findByText('needs_review subject');
+    await user.type(screen.getByLabelText('Keyword'), 'nothing like this');
+    expect(await screen.findByText('No messages match these filters.')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing needs review.')).toBeNull();
+  });
+
+  // qa on #706: a sender or a source alone counts as a filter too, not just a keyword.
+  it.each([
+    ['a sender', 'sender='],
+    ['a source', 'channel='],
+  ])('%s that matches nothing says so too', async (_what, param) => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /communications': (call: { search: string }) => ({
+        status: 200,
+        body: call.search.includes(param)
+          ? { items: [], total: 0 }
+          : { items: [{ ...BASE, id: 'nr1', subject: 'needs_review subject' }], total: 1 },
+      }),
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    renderWithProviders(<Inbox />);
+    await screen.findByText('needs_review subject');
+    if (param === 'sender=') {
+      await user.type(screen.getByLabelText('Sender'), 'nobody@nowhere.example');
+    } else {
+      const source = screen.getByLabelText('Source') as HTMLSelectElement;
+      const option = [...source.options].find((o) => o.value !== '')!;
+      await user.selectOptions(source, option.value);
+    }
+    expect(await screen.findByText('No messages match these filters.')).toBeInTheDocument();
+    expect(screen.queryByText('Nothing needs review.')).toBeNull();
+  });
+
+  it('with no filter set, an empty tab still says its own empty text', async () => {
+    mockApi({
+      'GET /communications': { items: [], total: 0 },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    renderWithProviders(<Inbox />);
+    expect(await screen.findByText('Nothing needs review.')).toBeInTheDocument();
+    expect(screen.queryByText('No messages match these filters.')).toBeNull();
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/646: each tab asked for 200 and rendered only those,
+// with no paging and no "of N", while its badge showed the true total. Paged here at 2 a page (the
+// app's page is 200, the server's cap) so the test renders a few rows.
+describe('Inbox: a tab over one page (#646)', () => {
+  let ALL = Array.from({ length: 5 }, (_, i) => ({
+    ...BASE,
+    id: `m${i + 1}`,
+    subject: `message ${i + 1}`,
+    opportunityId: null,
+    needsReview: true,
+  }));
+
+  function serve() {
+    return mockApi({
+      'GET /communications': (call: { search: string }) => {
+        const params = new URLSearchParams(call.search);
+        const limit = Number(params.get('limit'));
+        const offset = Number(params.get('offset') ?? 0);
+        return {
+          status: 200,
+          body: { items: ALL.slice(offset, offset + limit), total: ALL.length },
+        };
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+  }
+
+  it('every message can be reached, and the tab says how many are shown of the total', async () => {
+    const user = userEvent.setup();
+    serve();
+    renderWithProviders(<Inbox pageSize={2} />);
+    expect(await screen.findByText('message 1')).toBeInTheDocument();
+    expect(screen.getByText('Showing 1–2 of 5')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(await screen.findByText('message 3')).toBeInTheDocument();
+    expect(screen.queryByText('message 1')).toBeNull();
+    expect(screen.getByText('Showing 3–4 of 5')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(await screen.findByText('message 5')).toBeInTheDocument();
+    expect(screen.getByText('Showing 5–5 of 5')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Previous page' }));
+    expect(await screen.findByText('message 3')).toBeInTheDocument();
+  });
+
+  it('a page left empty steps back to the last page with messages', async () => {
+    const user = userEvent.setup();
+    serve();
+    const { queryClient } = renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 3');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 5');
+    // Its only message leaves the tab (rejected or linked from its own buttons).
+    const kept = ALL;
+    ALL = ALL.slice(0, 4);
+    try {
+      await queryClient.invalidateQueries();
+      expect(await screen.findByText('Showing 3–4 of 4')).toBeInTheDocument();
+      expect(screen.getByText('message 3')).toBeInTheDocument();
+    } finally {
+      ALL = kept;
+    }
+  });
+
+  it('a tab that fits on one page shows no pager', async () => {
+    mockApi({
+      'GET /communications': { items: ALL.slice(0, 2), total: 2 },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    renderWithProviders(<Inbox pageSize={2} />);
+    expect(await screen.findByText('message 1')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Next page' })).toBeNull();
+    expect(screen.queryByText(/^Showing /)).toBeNull();
+  });
+
+  it('a filter change goes back to the first page', async () => {
+    const user = userEvent.setup();
+    const { calls } = serve();
+    renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 3');
+    await user.type(screen.getByRole('searchbox', { name: 'Keyword' }), 'message');
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.search.includes('q=message') && !/offset=[1-9]/.test(c.search)),
+      ).toBe(true),
+    );
+    expect(await screen.findByText('Showing 1–2 of 5')).toBeInTheDocument();
+  });
+});
+
+// Refs #646, its review (qa, tl): while the next page loads, the page before stays on screen
+// (keepPreviousData), and the pager read ahead past the total ("Showing 401-600 of 450"); and the
+// step-back for an emptied page must not act on those placeholder rows.
+describe('Inbox paging while the next page loads (#646 review)', () => {
+  const ALL = Array.from({ length: 5 }, (_, i) => ({
+    ...BASE,
+    id: `m${i + 1}`,
+    subject: `message ${i + 1}`,
+    opportunityId: null,
+    needsReview: true,
+  }));
+
+  it('the range never reads past the total, even with the page before still on screen', async () => {
+    const user = userEvent.setup();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    mockApi({
+      'GET /communications': async (call: { search: string }) => {
+        const params = new URLSearchParams(call.search);
+        const limit = Number(params.get('limit'));
+        const offset = Number(params.get('offset') ?? 0);
+        if (offset === 4) await held;
+        return {
+          status: 200,
+          body: { items: ALL.slice(offset, offset + limit), total: ALL.length },
+        };
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 3');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    // The last page is loading: messages 3 and 4 are still shown.
+    expect(await screen.findByText('Showing 5–5 of 5')).toBeInTheDocument();
+    expect(screen.queryByText(/of 5$/)?.textContent).not.toMatch(/5–6/);
+    release();
+    expect(await screen.findByText('message 5')).toBeInTheDocument();
+    expect(screen.getByText('Showing 5–5 of 5')).toBeInTheDocument();
+  });
+
+  it('a page still loading is not stepped back from, even when the rows on screen run out', async () => {
+    const user = userEvent.setup();
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    let rows = ALL;
+    const { calls } = mockApi({
+      'GET /communications': async (call: { search: string }) => {
+        const params = new URLSearchParams(call.search);
+        const limit = Number(params.get('limit'));
+        const offset = Number(params.get('offset') ?? 0);
+        if (offset === 2 && rows.length === 0) await held;
+        return {
+          status: 200,
+          body: { items: rows.slice(offset, offset + limit), total: rows.length },
+        };
+      },
+      'GET /integrations/gmail': { connected: true, lastSyncAt: null, count: 0, status: null },
+    });
+    const { queryClient } = renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 3');
+    const pageReads = () =>
+      calls.filter((c) => c.path === '/communications' && /limit=2&offset=0/.test(c.search)).length;
+    const before = pageReads();
+    // Everything leaves the tab; page 2 refetches, and its answer is held.
+    rows = [];
+    void queryClient.invalidateQueries();
+    await new Promise((r) => setTimeout(r, 50));
+    // While page 2 is still loading, the list does not jump back to page 1 on its own.
+    expect(pageReads()).toBe(before);
+    release();
+    expect(await screen.findByText('Nothing needs review.')).toBeInTheDocument();
+  });
+});
+
 // https://github.com/bgoleno/opportun/issues/678 criterion 3 (qa on #672): with only unlinked rows
 // in the bulk tests, a bar that always sent null links passed. A linked row sends its link.
 describe('Inbox bulk Reject sends each row its own link (#678)', () => {

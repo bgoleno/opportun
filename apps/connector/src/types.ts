@@ -29,6 +29,8 @@ export interface FileSystem {
   writeText(path: string, text: string, mode: number): Promise<void>;
   /** Creates the directory (and parents) and sets its mode. */
   mkdir(path: string, mode: number): Promise<void>;
+  /** The file's permission bits (0o777 at most), or null when it does not exist. */
+  permissions(path: string): Promise<number | null>;
 }
 
 export interface FetchInit {
@@ -74,6 +76,8 @@ export interface ConnectorIo {
   /** Where config.json and state.json live. */
   configDir: string;
   prompt: Prompt;
+  /** Standard input to its end (init --token-stdin), at most a few KiB. */
+  readStdin(): Promise<string>;
 }
 
 /** Process exit codes, documented in the README. */

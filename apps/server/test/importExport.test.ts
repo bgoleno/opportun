@@ -963,6 +963,19 @@ describe('network.csv, and contacts.csv from before the rename', () => {
     }
   });
 
+  it('refuses a row whose LinkedIn link is on another host (#655)', async () => {
+    const { app, a } = await boot();
+    const bad = `${NETWORK_HEADER}\nJordan Example,,https://example.com/in/jordan,,\n`;
+    const status = await importAndRun(
+      app,
+      a,
+      zip({ 'opportunities.csv': HEADER, 'network.csv': bad }),
+    );
+    expect(status.report?.errors).toEqual([
+      { line: 2, message: 'network.csv: linkedin_url must be a LinkedIn profile URL' },
+    ]);
+  });
+
   it('queues networkCsv only, whichever name the pack used', async () => {
     const { app, a } = await boot();
     const res = await uploadZip(a, zip(asOldPack(await fixtureFiles())));
