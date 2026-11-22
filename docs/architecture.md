@@ -154,25 +154,35 @@ flowchart LR
     dev["lib/deviceTokens.ts<br/>device token and scope"]
     gate["Route checks<br/>requireUser, admin, re-auth,<br/>2FA, rate limits"]
     data["repos/ per-user queries<br/>(ctx.userId)"]
-    fetch["lib/safeFetch.ts and<br/>lib/aiProviderFetch.ts<br/>(every outbound call)"]
+    fetch["lib/safeFetch.ts<br/>(boards, pages, sign-in,<br/>Reactive Resume, telemetry)"]
+    gapi["Google client libraries<br/>(lib/google.ts)"]
+    aifetch["lib/aiProviderFetch.ts<br/>(AI providers)"]
+    mcpc["lib/mcpClient.ts<br/>(MCP SDK transport,<br/>checkMcpUrl)"]
   end
 
   subgraph ext3["Third parties (network)"]
     ats["ATS boards"]
     ai["AI providers"]
-    g["Google, GitHub,<br/>LinkedIn, Reactive Resume"]
+    g["GitHub, LinkedIn and<br/>Google sign-in,<br/>Reactive Resume"]
+    gws["Gmail, Docs, Drive APIs"]
+    mcp["MCP servers<br/>(user-configured)"]
   end
 
   dbx[("Database and<br/>data directory")]
 
   browser -->|"cookie + CSRF header"| sess --> csrf --> gate
   ext -->|"Bearer device token,<br/>no cookie"| dev --> gate
-  conn -->|"Bearer device token"| dev
+  conn -->|"Bearer device token"| dev --> gate
   gate --> data --> dbx
   gate --> fetch
+  gate --> gapi
+  gate --> aifetch
+  gate --> mcpc
   fetch -->|"HTTPS"| ats
-  fetch -->|"HTTPS, the user's key"| ai
   fetch -->|"HTTPS, the user's tokens"| g
+  gapi -->|"HTTPS, the user's tokens"| gws
+  aifetch -->|"the user's key"| ai
+  mcpc -->|"stdio or Streamable HTTP"| mcp
 ```
 
 - **Browser to server:** a session cookie, resolved in an `onRequest` hook (`plugins/session.ts`, `lib/sessions.ts`) and required by `requireUser` (`repos/base.ts`). Unsafe methods also need a double-submit CSRF token (`plugins/security.ts`).
@@ -183,7 +193,14 @@ flowchart LR
   - sign-in may require a second factor (`lib/twoFactor.ts`);
   - writes that depend on a just-proven password run under a per-user lock (`lib/passwordLock.ts`);
   - every repo query is scoped to the caller's `userId`.
-- **Server to third parties:** every outbound call goes through one of two fetch layers. `lib/safeFetch.ts` covers boards and pages, with resolved and pinned addresses, redirect checks, a per-host rate and a body cap. `lib/aiProviderFetch.ts` covers the AI providers. Users' third-party credentials are sealed at rest with the instance key (`lib/secretBox.ts`).
+- **Server to third parties:** outbound calls take one of four paths.
+  - `lib/safeFetch.ts` covers the ATS boards and pages, the sign-in providers' token and profile calls, Reactive Resume, and the telemetry export. It resolves and pins addresses, checks redirects, and applies a per-host rate and a body cap.
+  - Google's own client libraries (`lib/google.ts`, through `google-auth-library` and `@googleapis/*`) call the Gmail, Docs and Drive APIs with the user's tokens.
+  - `lib/aiProviderFetch.ts` covers the AI providers. An operator can point a provider at its own endpoint (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` and an `openai_compatible` policy, described in `docs/install.md`), so not every AI call goes to a provider's public host.
+  - `lib/mcpClient.ts` covers MCP discovery sources. They use the MCP SDK's own transports, stdio or Streamable HTTP, with the address checked first by `checkMcpUrl`.
+
+  `SECURITY.md` states how the last two differ from `safeFetch` (its deviation on HTTP MCP sources, the AI provider path, and DNS rebinding). Users' third-party credentials are sealed at rest with the instance key (`lib/secretBox.ts`).
+
 - **Demo servers** add a reset gate and narrow the shared accounts (`plugins/demoResetHold.ts`, `lib/demoSharedAdmin.ts`). `docs/demo-deployment.md` describes them.
 
 `SECURITY.md` is the threat model. This diagram only places its mechanisms.
