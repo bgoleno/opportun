@@ -786,6 +786,11 @@ export const rankBatches = sqliteTable(
     /** When collecting last asked the provider about it (every 10 minutes, then 30). */
     lastCheckedAt: integer('last_checked_at'),
     collectedAt: integer('collected_at'),
+    /**
+     * What applying its results did so far, by outcome (#784): each result's count is added in the
+     * transaction that applies it, so a collect retried after a failure reports what landed.
+     */
+    appliedCounts: json<Record<string, number>>('applied_counts'),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

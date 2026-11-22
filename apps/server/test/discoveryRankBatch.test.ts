@@ -493,7 +493,9 @@ describe('through a crash at each step: sent once, scored once, costed once', ()
       ledger + batch!.estCostUsd / 3,
       12,
     );
-    expect(await collect(app, a)).toMatchObject({ status: 'collected', ranked: 1 });
+    // The batch's counts (#784): the two applied before the crash and the one applied now. Each
+    // was applied once: three scores, three cost rows.
+    expect(await collect(app, a)).toMatchObject({ status: 'collected', ranked: 3 });
     expect((await results(app, a)).map((r) => r.aiScore)).toEqual([50, 50, 50]);
     expect(await rankRows(app, a)).toHaveLength(3);
     expect(fake!.sent).toHaveLength(1);
@@ -517,8 +519,10 @@ describe('through a crash at each step: sent once, scored once, costed once', ()
     });
     const first = await collectRankBatch(app.db, batch!.id, app.jobs.services);
     setRaceHook(undefined);
+    // Both report the batch's rankings (#784), though only the second applied them: two scores and
+    // two cost rows, not four.
     expect(second).toMatchObject({ status: 'collected', ranked: 2 });
-    expect(first).toMatchObject({ status: 'collected', ranked: 0 });
+    expect(first).toMatchObject({ status: 'collected', ranked: 2 });
     expect((await results(app, a)).map((r) => r.aiScore)).toEqual([55, 55]);
     expect(await rankRows(app, a)).toHaveLength(2);
   });
@@ -1539,6 +1543,29 @@ describe("the provider's copy of a collected batch (#634)", () => {
     expect(await cleanupJobs(app)).toHaveLength(1);
     await app.jobs.drain();
     expect(fake!.cleaned).toEqual([fake!.sent[0]!.batchId]);
+  });
+
+  // #784 (qa's regression pass): the retried collect said ranked: 0, though the first attempt's
+  // rankings had landed. The counts are the batch's, kept with each result as it is applied.
+  it('a collect retried after a refused cleanup insert reports the rankings that landed (#784)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 3);
+    await submit(app, a);
+    const [first, second] = fake!.sent[0]!.requests;
+    // Two ranked; the third has no result and waits again.
+    fake!.end(1, (r) =>
+      r.customId === first!.customId || r.customId === second!.customId ? succeeded(70)(r) : null,
+    );
+    const undo = await withFailingInsert(app, 'jobs', `NEW.kind = '${RANK_BATCH_CLEANUP_KIND}'`);
+    await expect(collect(app, a)).rejects.toThrow(/injected/);
+    await undo();
+    expect(await collect(app, a)).toMatchObject({
+      status: 'collected',
+      ranked: 2,
+      returned: 1,
+      errors: 0,
+    });
   });
 
   it('a collect that runs twice queues one cleanup (sec on #686)', async () => {

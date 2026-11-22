@@ -1,0 +1,1 @@
+ALTER TABLE "rank_batches" ADD COLUMN "applied_counts" jsonb;

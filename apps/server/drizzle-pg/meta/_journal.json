@@ -393,6 +393,13 @@
       "when": 1797000000000,
       "tag": "0055_jobs_updated_at_index",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1797200000000,
+      "tag": "0056_rank_batch_applied_counts",
+      "breakpoints": true
     }
   ]
 }

@@ -51,6 +51,7 @@ import {
   batchHoldUsd,
   failIfSubmitting,
   findInFlightBatch,
+  countApplied,
   getBatch,
   hasResult,
   listBatchWaitingIds,
@@ -345,6 +346,15 @@ async function applyBatchResult(
   item: BatchResultItem,
 ): Promise<Applied> {
   return await withTransaction(db, async (tx) => {
+    const applied = await applyInTx(tx);
+    // Counted with the result it describes (#784): a collect retried after a later failure reports
+    // what the first attempt applied. A result applied already ('done') or with no posting of the
+    // user's ('unmatched') applies nothing here.
+    if (applied !== 'done' && applied !== 'unmatched') await countApplied(tx, batch.id, applied);
+    return applied;
+  });
+
+  async function applyInTx(tx: Exec): Promise<Applied> {
     await racePoint('rankBatch.applying');
     const link = await takeBatchLink(tx, ctx, batch.id, item.customId);
     if (link === undefined) {
@@ -404,7 +414,7 @@ async function applyBatchResult(
       result.aiRationale,
     );
     return stored ? 'ranked' : 'changed';
-  });
+  }
 }
 
 type Counted = Exclude<Applied, 'done'> | 'errors';
@@ -506,13 +516,18 @@ export async function collectRankBatch(
     await racePoint('rankBatch.result_applied');
   }
   const n = (kind: Applied | 'errors'): number => tally.get(kind) ?? 0;
+  // What the batch's results did, this attempt and any before it (#784): an earlier attempt that
+  // applied them and then failed has left them counted on the batch. Unmatched and errors are this
+  // attempt's own: each attempt meets them again.
+  const kept = new Map(Object.entries((await getBatch(db, batch.id))?.appliedCounts ?? {}));
+  const k = (kind: Exclude<Counted, 'unmatched' | 'errors'>): number => kept.get(kind) ?? 0;
   const counts: Record<Counted, number> = {
-    ranked: n('ranked'),
-    changed: n('changed'),
-    dropped: n('dropped'),
-    invalid_output: n('invalid_output'),
-    failed: n('failed'),
-    returned: n('returned'),
+    ranked: k('ranked'),
+    changed: k('changed'),
+    dropped: k('dropped'),
+    invalid_output: k('invalid_output'),
+    failed: k('failed'),
+    returned: k('returned'),
     unmatched: n('unmatched'),
     errors: n('errors'),
   };

@@ -173,6 +173,26 @@ export async function findInFlightBatch(
     .get();
 }
 
+/**
+ * Adds one applied result's outcome to the batch's counts (#784), in the caller's transaction:
+ * the one that applies the result, so the count lands with it or not at all.
+ */
+export async function countApplied(exec: Exec, batchId: string, outcome: string): Promise<void> {
+  const row = await exec
+    .select({ counts: rankBatches.appliedCounts })
+    .from(rankBatches)
+    .where(eq(rankBatches.id, batchId))
+    .get();
+  if (row === undefined) return;
+  const counts = new Map(Object.entries(row.counts ?? {}));
+  counts.set(outcome, (counts.get(outcome) ?? 0) + 1);
+  await exec
+    .update(rankBatches)
+    .set({ appliedCounts: Object.fromEntries(counts) })
+    .where(eq(rankBatches.id, batchId))
+    .run();
+}
+
 export async function getBatch(exec: Exec, id: string): Promise<RankBatchRow | undefined> {
   return await exec.select().from(rankBatches).where(eq(rankBatches.id, id)).get();
 }
