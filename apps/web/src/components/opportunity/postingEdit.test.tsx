@@ -155,7 +155,7 @@ describe('posting link: Cancel while a save is in flight (#737)', () => {
     expect(screen.getByText('No posting link.')).toBeInTheDocument();
     release();
     expect(await screen.findByText('Posting link saved')).toBeInTheDocument();
-    expect(await screen.findByRole('link', { name: new RegExp(NEW_LINK) })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: NEW_LINK })).toBeInTheDocument();
   });
 
   it('Cancel, then the save fails: the old link stays and the failure is said', async () => {
@@ -176,7 +176,7 @@ describe('posting link: Cancel while a save is in flight (#737)', () => {
     renderWithProviders(<Page />);
     await startSave(user);
     release();
-    expect(await screen.findByRole('link', { name: new RegExp(NEW_LINK) })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: NEW_LINK })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
     expect(screen.queryByText('Posting link saved')).toBeNull();
   });
