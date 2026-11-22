@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEMO_SEED_ACK_KEY, seedDemo, type SeedDemoCredentials } from '../src/cli/seedDemo';
+import { DEMO_SEED_ACK_KEY, seedDemo, type SeedDemoCredentials } from '../src/lib/demo/seed';
 import { users } from '../src/db/schema';
 import { hashVersion } from '../src/lib/passwords';
 import { pepperSet } from '../src/lib/pepperSet';

@@ -11,7 +11,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { main as createDemoAccount } from '../src/cli/createDemoAccount';
 import { main as resetPassword } from '../src/cli/resetPassword';
-import { DEMO_MARKER_KEY } from '../src/cli/seedDemo';
+import { DEMO_MARKER_KEY } from '../src/lib/demo/seed';
 import type { Db } from '../src/db/client';
 import { deviceTokens, sessions, settings, users } from '../src/db/schema';
 import { createDeviceToken } from '../src/lib/deviceTokens';

@@ -45,7 +45,7 @@ import {
 } from './api';
 
 const PACK_COLUMNS =
-  'company, title, stage, posting_url, location, source, applied_at, dismissed_reason, notes_file, resume_doc_ref';
+  'company, title, stage, posting_url, location, source, applied_at, dismissed_reason, closed_reason, notes_file, resume_doc_ref';
 
 export function DataSettings() {
   return (
@@ -89,8 +89,9 @@ function ImportCard() {
           Upload a zip or a folder with <code>opportunities.csv</code> (columns: {PACK_COLUMNS}),
           optionally <code>network.csv</code> (name, email, linkedin_url, company, notes; a pack
           that still calls it <code>contacts.csv</code> works too) and the Markdown notes it refers
-          to. Importing the same pack again changes nothing: rows match on company, title and
-          location, and stages only move forward.
+          to. A pack from before closed_reason was added still imports. Importing the same pack
+          again changes nothing: rows match on company, title and location, and stages only move
+          forward.
         </CardDescription>
       </CardHeader>
       <CardContent>
