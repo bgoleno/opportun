@@ -15,13 +15,11 @@ import { boardFromUrl, boardOfSource } from './atsBoard';
 import { greenhouseJidOf } from '@opportun/core';
 import { createHash } from 'node:crypto';
 import { and, desc, eq, isNull, ne } from 'drizzle-orm';
-import { z } from 'zod';
 import { GREENHOUSE_HOST } from '../adapters/sources/greenhouse';
 import { ATS_MAX_BYTES } from '../adapters/sources/atsCommon';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
 import { companies, discoverySources, opportunities } from '../db/schema';
-import { requireService, type JobHandler } from '../jobs/registry';
 import { splitConfig } from '../repos/discovery';
 import type { UserCtx } from '../repos/base';
 import { postingAtsJobRefKeeping, verifiedGreenhouseRef, type AtsJobRef } from './atsJobRef';
@@ -224,64 +222,10 @@ export async function setCheckedPostingRef(
 /** The background check of a saved link whose boards did not all answer in time (#685). */
 export const POSTING_CHECK_KIND = 'opportunity.greenhouse_check';
 
-const PostingCheckPayload = z.object({
-  opportunityId: z.string().min(1).max(64),
-  link: z.string().min(1).max(4096),
-});
-
 /** One job per opportunity and link at a time: the link itself is hashed into the key. */
 export function postingCheckKey(opportunityId: string, link: string): string {
   return `${opportunityId}:${createHash('sha256').update(link).digest('hex').slice(0, 32)}`;
 }
-
-export const postingCheckJob: JobHandler<z.infer<typeof PostingCheckPayload>> = {
-  kind: POSTING_CHECK_KIND,
-  payloadSchema: PostingCheckPayload,
-  maxAttempts: 3,
-  async run(db, payload, jctx) {
-    if (jctx.userId === null) throw new Error(`${POSTING_CHECK_KIND} needs a user`);
-    const ctx: UserCtx = { userId: jctx.userId, isAdmin: false };
-    const opp = await db
-      .select({
-        id: opportunities.id,
-        companyId: opportunities.companyId,
-        postingUrl: opportunities.postingUrl,
-        atsJobRef: opportunities.atsJobRef,
-      })
-      .from(opportunities)
-      .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, payload.opportunityId)))
-      .get();
-    // Gone, changed since, or already given an identity: nothing left to check.
-    if (opp === undefined || opp.postingUrl !== payload.link || opp.atsJobRef !== null) {
-      await jctx.setResult({ outcome: 'unchanged' });
-      return;
-    }
-    const found = await checkEmbeddedGreenhouse(
-      db,
-      ctx,
-      opp,
-      payload.link,
-      { fetch: requireService(jctx, 'sourceFetch'), log: requireService(jctx, 'log') },
-      Date.now(),
-      null,
-    );
-    if (found.ref !== null) {
-      const set = await setCheckedPostingRef(
-        db,
-        ctx,
-        opp.id,
-        payload.link,
-        found.ref,
-        opp.companyId,
-      );
-      await jctx.setResult({ outcome: set ? 'identity' : 'unchanged' });
-      return;
-    }
-    // A board still gave no answer: the runner retries with backoff, up to maxAttempts.
-    if (found.undecided) throw new Error('a known board gave no answer');
-    await jctx.setResult({ outcome: 'none' });
-  },
-};
 
 /**
  * The identity a posting link gets when it is set or changed outside a board read (attach of a
