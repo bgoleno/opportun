@@ -215,7 +215,8 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
           ip: req.ip,
           detail: { replay: verified !== null },
         });
-        throw new HttpError(403, 'bad_state');
+        // An app page, not a raw JSON 403 (#662), as for a callback with no session above.
+        return reply.redirect(`${SETTINGS_PAGE}?google=not_completed`);
       }
       const scopeSet = verified.scopeSet;
       if (error !== undefined || code === undefined) {

@@ -737,7 +737,12 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
           ip: req.ip,
           detail: { provider, replay: verified !== null },
         });
-        throw new HttpError(403, 'bad_state');
+        // An app page that says the sign-in or link was not completed, not a raw JSON 403
+        // (#662): the Security page for a signed-in browser, else the sign-in page. Nothing in
+        // the request is trusted for this, the mode included: the state did not verify.
+        return reply.redirect(
+          `${req.userCtx === null ? LOGIN_PAGE : SECURITY_PAGE}?oauth=not_completed`,
+        );
       }
       const mode: OAuthMode = verified.mode;
       // Where a failure lands, and its flash (setpw flashes are the Set-a-password card's).

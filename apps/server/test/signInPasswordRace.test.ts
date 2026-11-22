@@ -333,3 +333,142 @@ describe('a change holding the password lock (#561)', () => {
     expect((await rowsOf(app, b.userId)).map((r) => r.kind)).toEqual(['session']);
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/662: a code step refused because the password changed
+// says so (password_changed), not that the sign-in took too long (invalid_pending).
+describe('a code step after a password change or reset is refused as password_changed (#662)', () => {
+  const verify = (app: FastifyInstance, pendingToken: string, secret: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/verify',
+      payload: { pendingToken, code: totpCode(secret, Date.now() + 30_000) },
+    });
+  const codeOf = (res: { json: () => unknown }) =>
+    (res.json() as { error: { code: string } }).error.code;
+
+  it('a password change between the password and the code', async () => {
+    const { app, b } = await boot();
+    const secret = await enable(b);
+    const { pendingToken } = (await login(app, EMAIL.b)).json() as { pendingToken: string };
+    expect((await changeOwn(b)).statusCode).toBe(204);
+    const res = await verify(app, pendingToken, secret);
+    expect(res.statusCode, res.body).toBe(401);
+    expect(codeOf(res)).toBe('password_changed');
+    // Only the changer's own new session: no session for the code step, and the token is gone.
+    expect((await rowsOf(app, b.userId)).map((r) => r.kind)).toEqual(['session']);
+    // Spent: asking again is the plain refusal.
+    expect(codeOf(await verify(app, pendingToken, secret))).toBe('invalid_pending');
+  });
+
+  it('an admin reset between the password and the code', async () => {
+    const { app, a, b } = await boot();
+    const secret = await enable(b);
+    const { pendingToken } = (await login(app, EMAIL.b)).json() as { pendingToken: string };
+    expect((await resetBy(a, b)).statusCode).toBe(200);
+    const res = await verify(app, pendingToken, secret);
+    expect(res.statusCode, res.body).toBe(401);
+    expect(codeOf(res)).toBe('password_changed');
+    expect(await rowsOf(app, b.userId)).toEqual([]);
+  });
+
+  it('a change after the code step claimed its token (tl on #662): refused, and no session', async () => {
+    const { app, b } = await boot();
+    const secret = await enable(b);
+    const { pendingToken } = (await login(app, EMAIL.b)).json() as { pendingToken: string };
+    const pause = pauseAt('auth.2faVerify.redeemed');
+    const verifying = verify(app, pendingToken, secret);
+    await pause.reached;
+    expect((await changeOwn(b)).statusCode).toBe(204);
+    pause.release();
+    const res = await verifying;
+    expect(res.statusCode, res.body).toBe(401);
+    expect(codeOf(res)).toBe('password_changed');
+    expect((await rowsOf(app, b.userId)).map((r) => r.kind)).toEqual(['session']);
+  });
+
+  it('a change leaves no live pending token: a marked one is never claimed', async () => {
+    const { app, b } = await boot();
+    await enable(b);
+    expect((await login(app, EMAIL.b)).statusCode).toBe(200);
+    expect((await changeOwn(b)).statusCode).toBe(204);
+    const pending = (await rowsOf(app, b.userId)).filter((r) => r.kind === 'pending_2fa');
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.revokedReason).toBe('password_changed');
+    expect(pending[0]!.usedAt).not.toBeNull();
+  });
+
+  it('a change removes pending tokens already marked or expired, and marks only the live one (tl and sec on #741)', async () => {
+    const { app, a, b } = await boot();
+    await enable(b);
+    const loginWith = (password: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: EMAIL.b, password },
+      });
+    const pendingIds = async () =>
+      (await rowsOf(app, b.userId)).filter((r) => r.kind === 'pending_2fa').map((r) => r.id);
+    // One token marked by a first change, one past its expiry, and one live.
+    expect((await loginWith(PASSWORD)).statusCode).toBe(200);
+    expect((await changeOwn(b)).statusCode).toBe(204);
+    const [marked] = await pendingIds();
+    expect((await loginWith(NEW_PASSWORD)).statusCode).toBe(200);
+    const expired = (await pendingIds()).find((id) => id !== marked)!;
+    await app.db
+      .update(sessions)
+      .set({ expiresAt: Date.now() - 1000 })
+      .where(eq(sessions.id, expired))
+      .run();
+    expect((await loginWith(NEW_PASSWORD)).statusCode).toBe(200);
+    const live = (await pendingIds()).find((id) => id !== marked && id !== expired)!;
+
+    expect((await resetBy(a, b)).statusCode).toBe(200);
+    const left = (await rowsOf(app, b.userId)).filter((r) => r.kind === 'pending_2fa');
+    expect(left.map((r) => r.id)).toEqual([live]);
+    expect(left[0]!.revokedReason).toBe('password_changed');
+  });
+
+  it('a marked token whose claim was released (a wrong code meanwhile) is still refused, and the code is not spent (tl on #741)', async () => {
+    const { app, b } = await boot();
+    const secret = await enable(b);
+    const { pendingToken } = (await login(app, EMAIL.b)).json() as { pendingToken: string };
+    expect((await changeOwn(b)).statusCode).toBe(204);
+    // As the wrong-code release leaves a row a change marked during that code check.
+    await app.db
+      .update(sessions)
+      .set({ usedAt: null })
+      .where(and(eq(sessions.userId, b.userId), eq(sessions.kind, 'pending_2fa')))
+      .run();
+    const code = totpCode(secret, Date.now() + 30_000);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/verify',
+      payload: { pendingToken, code },
+    });
+    expect(res.statusCode, res.body).toBe(401);
+    expect(codeOf(res)).toBe('password_changed');
+    expect((await rowsOf(app, b.userId)).map((r) => r.kind)).toEqual(['session']);
+    // The refused step never checked the code, so the same code still signs in afresh.
+    const again = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { email: EMAIL.b, password: NEW_PASSWORD },
+      })
+    ).json() as { pendingToken: string };
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/2fa/verify',
+      payload: { pendingToken: again.pendingToken, code },
+    });
+    expect(ok.statusCode, ok.body).toBe(200);
+  });
+
+  it('an unknown token is still invalid_pending (the control)', async () => {
+    const { app, b } = await boot();
+    const secret = await enable(b);
+    const res = await verify(app, 'not-a-pending-token-aaaaaaaaaaaaaaaa', secret);
+    expect(res.statusCode).toBe(401);
+    expect(codeOf(res)).toBe('invalid_pending');
+  });
+});
