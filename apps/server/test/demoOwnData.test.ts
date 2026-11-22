@@ -432,6 +432,8 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
     '415-555-0134 x12',
     '(415) 555-0134 #3',
     '415.555.0134 extension 45',
+    // qa on #762: an extension of seven digits or more.
+    '+1 415 555 0134 ext 1234567',
   ])('the seeded phone as "%s" is the demo\'s', (value) => {
     expect(isFixtureIdentity('phone', value)).toBe(true);
     expect(fixtureField({ phone: value, city: 'Seattle' })).toBe('phone');

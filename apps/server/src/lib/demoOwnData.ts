@@ -30,9 +30,10 @@ const digits = (v: string): string => v.replace(/\D/g, '');
  * North American; another country's code stays, so +44 415 555 0134 is another number.
  */
 function nationalDigits(v: string): string {
-  // A trailing extension is not part of the number (#726): "ext 2", "x12", "#3", "extension 45".
+  // A trailing extension, of any length (qa on #762), is not part of the number (#726): "ext 2",
+  // "x12", "#3", "extension 45".
   // Trimmed first, so the pattern has no run of spaces next to another (linear on any input).
-  let d = digits(v.trim().replace(/(?:ext(?:ension)?\.?|x|#)\s*\d{1,6}$/i, ''));
+  let d = digits(v.trim().replace(/(?:ext(?:ension)?\.?|x|#)\s*\d+$/i, ''));
   // The international exit prefix: 00, or North America's 011 (#726).
   if (d.startsWith('011')) d = d.slice(3);
   else if (d.startsWith('00')) d = d.slice(2);
