@@ -175,6 +175,30 @@ async function finish(
     .run();
 }
 
+/**
+ * Hands a job just marked dead to its handler (JobHandler.onDead, #869). Its payload is read as it
+ * was stored; one that does not validate has nothing to hand over. A throw is only logged: the job
+ * is dead either way.
+ */
+async function afterDead(
+  db: Db,
+  job: { id: string; kind: string; payload: unknown; userId: string | null },
+  log: JobServices['log'] | undefined,
+): Promise<void> {
+  const handler = getJobHandler(job.kind);
+  if (handler?.onDead === undefined) return;
+  const parsed = handler.payloadSchema.safeParse(job.payload);
+  if (!parsed.success) return;
+  try {
+    await handler.onDead(db, parsed.data, { userId: job.userId });
+  } catch (err) {
+    log?.error(
+      { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind, err },
+      'a dead job was not settled by its handler',
+    );
+  }
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? `${err.name}: ${err.message}` : String(err);
 }
@@ -370,6 +394,7 @@ async function runHandler(
     if (job.attempts >= job.maxAttempts) {
       log?.error(fields, 'job exhausted its retries; marked dead');
       await finish(db, job.id, 'dead', at, errorText(err), transient);
+      await afterDead(db, job, log);
       return { outcome: 'dead', errorType: errorType(err) };
     } else {
       log?.warn(fields, 'job failed; will retry');
@@ -423,6 +448,7 @@ export async function recoverStaleJobs(
       id: jobs.id,
       kind: jobs.kind,
       payload: jobs.payload,
+      userId: jobs.userId,
       attempts: jobs.attempts,
       maxAttempts: jobs.maxAttempts,
     })
@@ -446,6 +472,7 @@ export async function recoverStaleJobs(
         { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
         'a job left running at its last attempt when the process ended: dead',
       );
+      await afterDead(db, job, opts.log);
       continue;
     }
     // With attempts left it waits out the backoff a failure would have given it (#588), rather
@@ -467,7 +494,7 @@ export async function recoverStaleJobs(
   // such rows: an orphan put back with its attempts unchanged. Dead, saying why; a schedule then
   // queues its next occurrence (safeMaterialize, after this).
   const spent = await db
-    .select({ id: jobs.id, kind: jobs.kind, payload: jobs.payload })
+    .select({ id: jobs.id, kind: jobs.kind, payload: jobs.payload, userId: jobs.userId })
     .from(jobs)
     .where(and(eq(jobs.status, 'pending'), gte(jobs.attempts, jobs.maxAttempts)))
     .all();
@@ -484,6 +511,7 @@ export async function recoverStaleJobs(
       { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
       'a pending job at its attempt limit: dead',
     );
+    await afterDead(db, job, opts.log);
   }
   return orphans.length + spent.length;
 }
