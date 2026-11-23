@@ -17,6 +17,7 @@ import {
 } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { api } from '@/lib/api';
+import { INBOX_FILTER_MAX } from './limits';
 import type { RejectPayload } from './RejectForm';
 import { qk, type OpportunityView, type Page } from '@/lib/opportunities';
 
@@ -122,7 +123,7 @@ export interface InboxFilters {
 }
 
 /** A stable, serializable key for a filter set, so each distinct filter caches on its own. */
-function filterKey(f: InboxFilters): string {
+export function filterKey(f: InboxFilters): string {
   return JSON.stringify({
     channel: f.channel ?? null,
     sender: f.sender?.trim() ?? '',
@@ -142,6 +143,24 @@ function filterQuery(f: InboxFilters): string {
   return parts.length > 0 ? `&${parts.join('&')}` : '';
 }
 
+/** The typed filters that are too long to send (#894), by the names the Inbox gives them. */
+export function tooLongFilters(f: InboxFilters): ('keyword' | 'sender')[] {
+  const over = (v: string | undefined) => (v?.trim().length ?? 0) > INBOX_FILTER_MAX;
+  return [
+    ...(over(f.q) ? (['keyword'] as const) : []),
+    ...(over(f.sender) ? (['sender'] as const) : []),
+  ];
+}
+
+/**
+ * A page of a tab, with what it answers (#894): the page on screen can be an older one, while the
+ * next loads or after it failed, and what is said about the rows has to be about that one.
+ */
+export interface InboxPageView extends Page<CommunicationView> {
+  page: number;
+  filters: string;
+}
+
 /** One page of a tab: the server's cap (routes/common.ts MAX_LIMIT), and so the most it returns. */
 export const INBOX_PAGE = 200;
 
@@ -158,11 +177,16 @@ export function useInbox(
 ) {
   return useQuery({
     queryKey: [...ck.view(view), filterKey(filters), page, pageSize] as const,
-    queryFn: () =>
-      api<Page<CommunicationView>>(
+    queryFn: async (): Promise<InboxPageView> => ({
+      ...(await api<Page<CommunicationView>>(
         `/communications?view=${view}&limit=${pageSize}&offset=${page * pageSize}` +
           filterQuery(filters),
-      ),
+      )),
+      page,
+      filters: filterKey(filters),
+    }),
+    // Never sent: the server would only refuse it (#894). The Inbox says so instead.
+    enabled: tooLongFilters(filters).length === 0,
     // The rows on screen stay while the next page or a new filter loads (#646, #678): without
     // them the selection, and a confirmation open for it, would be dropped for that moment.
     placeholderData: keepPreviousData,
