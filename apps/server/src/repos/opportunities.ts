@@ -792,7 +792,7 @@ export async function transitionOpportunityIn(
   // Issue #240: a card never inherits a rank from the stage it left, and self-transitions
   // are invalid (see applyTransition), so this always runs on a real stage change.
   const sortOrder = await nextSortOrder(tx, ctx, result.stage);
-  await tx
+  const moved = await tx
     .update(opportunities)
     .set({
       stage: result.stage,
@@ -802,7 +802,9 @@ export async function transitionOpportunityIn(
       updatedAt: historyEntry.at,
     })
     .where(owned(ctx, id))
-    .run();
+    .returning({ id: opportunities.id });
+  // Deleted while this waited for its row (#925): the history below names it.
+  if (moved.length === 0) throw notFound();
   await tx
     .insert(stageHistory)
     .values({ id: newId(), userId: ctx.userId, opportunityId: id, ...historyEntry })
