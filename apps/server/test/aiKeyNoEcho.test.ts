@@ -26,6 +26,7 @@ const REFUSED: [string, string, string[]][] = [
   ['two', 'zq-madeup-alpha\nbravo-0123', ['madeup', 'alpha', 'bravo', '0123']],
   ['three', 'zq-madeup-alpha\nbravo-0123\n', ['madeup', 'alpha', 'bravo', '0123']],
   ['four', 'zq-madeup-alpha\u0000bravo-0123', ['madeup', 'alpha', 'bravo', '0123']],
+  ['six', 'zq-madeup-alpha\u007fbravo-0123', ['madeup', 'alpha', 'bravo', '0123']],
   ['five', ' \n ', []],
 ];
 const GOOD = 'zq-madeup-good-0123';
@@ -92,6 +93,15 @@ it.each(['zq-madeup-caf\u00e9-0123', 'zq madeup good 0123'])(
     expect(await getSecretValue(app.db, ctxOf(a), res.json().id as string)).toBe(value);
   },
 );
+
+it('control: any other kind of secret is kept exactly as it is given', async () => {
+  const { app, a } = await boot();
+  for (const value of ['  zq-madeup\nbravo \n', 'zq-madeup-\u4f60']) {
+    const res = await save(a, value, 'oauth_token');
+    expect(res.statusCode, res.body).toBe(201);
+    expect(await getSecretValue(app.db, ctxOf(a), res.json().id as string)).toBe(value);
+  }
+});
 
 it.each(REFUSED)(
   'checking, key %s already stored: not sent, and the result says nothing of it',
