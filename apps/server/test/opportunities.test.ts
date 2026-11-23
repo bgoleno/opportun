@@ -1,8 +1,9 @@
 import { COMPANY_DOMAIN_RESOLVE_KIND } from '../src/lib/companyDomainQueue';
-import { and, eq } from 'drizzle-orm';
+import { newId } from '@opportun/core';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { jobs } from '../src/db/schema';
+import { jobs, opportunities } from '../src/db/schema';
 import { useApi } from './api';
 import { assertIsolated, type TestClient } from './isolation';
 import { queryAll, queryOne } from './db';
@@ -856,6 +857,79 @@ describe('manual order (issue #240)', () => {
         url: '/api/v1/opportunities?sort=sortOrder&limit=200',
       });
       expect(list.json().items.map((o: { id: string }) => o.id)).toEqual([...ids.slice(1), ids[0]]);
+    });
+
+    // In statements of 500 (#944): one on, at, and one off the edge of one, and the most there can be.
+    it.each([499, 500, 501, 1999, 2000])('%i cards end in the order asked for', async (n) => {
+      const { app, a } = await boot();
+      const first = (await createOpp(a)).json<{ id: string }>();
+      const row = await app.db
+        .select()
+        .from(opportunities)
+        .where(eq(opportunities.id, first.id))
+        .get();
+      const ids = [first.id, ...Array.from({ length: n }, () => newId())];
+      for (let i = 1; i < ids.length; i += 100) {
+        const more = ids.slice(i, i + 100);
+        await app.db
+          .insert(opportunities)
+          .values(more.map((id) => ({ ...row!, id, dedupeKey: null })))
+          .run();
+      }
+      // All but the first, the last of them first; and one of them twice, which its last value wins.
+      const asked = ids.slice(1).reverse();
+      const changes = asked.map((id, i) => ({ id, sortOrder: i - 1000 }));
+      const twice = changes[n - 1]!;
+      const res = await a.request({
+        method: 'POST',
+        url: '/api/v1/opportunities/reorder',
+        payload: { changes: [{ id: twice.id, sortOrder: 5 }, ...changes.slice(1)] },
+      });
+      expect(res.statusCode, res.body).toBe(204);
+      const after = await app.db
+        .select({ id: opportunities.id, sortOrder: opportunities.sortOrder })
+        .from(opportunities)
+        .all();
+      const byId = new Map(after.map((o) => [o.id, o.sortOrder]));
+      expect(asked.slice(1).map((id) => byId.get(id))).toEqual(
+        changes.slice(1).map((c) => c.sortOrder),
+      );
+      // Neither of these two was asked for.
+      expect([byId.get(first.id), byId.get(asked[0]!)]).toEqual([0, 0]);
+      // One request, one time.
+      const times = await app.db
+        .select({ at: opportunities.updatedAt })
+        .from(opportunities)
+        .where(inArray(opportunities.id, asked.slice(1, 400)))
+        .all();
+      expect(new Set(times.map((t) => t.at)).size).toBe(1);
+    });
+
+    it('an id of another user, and one of none, between others of a long one change nothing', async () => {
+      const { app, a, b } = await boot();
+      const mine = (await createOpp(a)).json<{ id: string }>();
+      const last = (await createOpp(a, { title: 'Last' })).json<{ id: string }>();
+      const theirs = (await createOpp(b)).json<{ id: string }>();
+      const none = Array.from({ length: 600 }, (_, i) => ({ id: newId(), sortOrder: i }));
+      const res = await a.request({
+        method: 'POST',
+        url: '/api/v1/opportunities/reorder',
+        payload: {
+          changes: [
+            { id: mine.id, sortOrder: 7 },
+            ...none,
+            { id: theirs.id, sortOrder: 8 },
+            { id: last.id, sortOrder: 9 },
+          ],
+        },
+      });
+      expect(res.statusCode, res.body).toBe(204);
+      const after = await app.db
+        .select({ id: opportunities.id, sortOrder: opportunities.sortOrder })
+        .from(opportunities)
+        .all();
+      const byId = new Map(after.map((o) => [o.id, o.sortOrder]));
+      expect([byId.get(mine.id), byId.get(theirs.id), byId.get(last.id)]).toEqual([7, 0, 9]);
     });
 
     it('scopes every row to the caller: another user id in the batch is silently skipped', async () => {

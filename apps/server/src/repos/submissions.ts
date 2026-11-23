@@ -39,6 +39,7 @@ import type { Db, Exec, UserCtx } from './base';
 import { ownedBy } from './base';
 // A cycle (submissionReview imports this module's row helpers), safe because neither module uses
 // the other at load time: destinationAllowed is only called inside functions here.
+import { holdOpportunity } from './activities';
 import { countWhere, type ListOpts, type Page } from './list';
 import { effectiveSubmission, latestSends } from './resumeSends';
 import { applicationDetailsFor } from './applicationDetails';
@@ -351,33 +352,37 @@ export async function createSubmissionDraft(
 
   const now = Date.now();
   try {
-    const [row] = await db
-      .insert(applicationSubmissions)
-      .values({
-        id: newId(),
-        userId: ctx.userId,
-        opportunityId,
-        resumeId: resume?.id ?? null,
-        atsKind: ref.kind,
-        atsRef: ref.org,
-        atsExternalId: ref.externalId,
-        destinationUrl: destination.href,
-        status: 'draft',
-        idempotencyKey: input.idempotencyKey,
-        actor: demo ? (opts.actor ?? null) : null,
-        resumeTitle: resume?.title ?? null,
-        resumeStore: resume?.store ?? null,
-        resumeDocRef: resume?.docRef ?? null,
-        // With no resume there is nothing to snapshot: unsupported, as for a store with no PDF,
-        // which review allows (the user attaches a file themselves).
-        snapshotState: resume === null ? 'unsupported' : 'pending',
-        fields,
-        answers: [],
-        createdAt: now,
-        updatedAt: now,
-      })
-      .returning();
-    const created = row as SubmissionRow;
+    const created = await withTransaction(db, async (tx) => {
+      // Gone since it was read above is not found (#944), as for anything added to one (#925).
+      await holdOpportunity(tx, ctx, opportunityId);
+      const [row] = await tx
+        .insert(applicationSubmissions)
+        .values({
+          id: newId(),
+          userId: ctx.userId,
+          opportunityId,
+          resumeId: resume?.id ?? null,
+          atsKind: ref.kind,
+          atsRef: ref.org,
+          atsExternalId: ref.externalId,
+          destinationUrl: destination.href,
+          status: 'draft',
+          idempotencyKey: input.idempotencyKey,
+          actor: demo ? (opts.actor ?? null) : null,
+          resumeTitle: resume?.title ?? null,
+          resumeStore: resume?.store ?? null,
+          resumeDocRef: resume?.docRef ?? null,
+          // With no resume there is nothing to snapshot: unsupported, as for a store with no PDF,
+          // which review allows (the user attaches a file themselves).
+          snapshotState: resume === null ? 'unsupported' : 'pending',
+          fields,
+          answers: [],
+          createdAt: now,
+          updatedAt: now,
+        })
+        .returning();
+      return row as SubmissionRow;
+    });
     // The payload names the attempt and the resume by id; the job reads both from storage.
     if (resume !== null) await enqueueSnapshot(db, ctx.userId, created.id, resume.id);
     return { submission: view(created), replayed: false };
@@ -808,7 +813,18 @@ export async function lockAttemptsOf(
   tx: Exec,
   ctx: UserCtx,
   opportunityIds: readonly string[],
-): Promise<void> {
+): Promise<ReadonlySet<string>> {
+  const ids = await attemptIdsOf(tx, ctx, opportunityIds);
+  for (const id of ids) await lockScope(tx, `submission:${id}`);
+  return new Set(ids);
+}
+
+/** The ids of every attempt on these opportunities, whatever its status, in order. */
+export async function attemptIdsOf(
+  tx: Exec,
+  ctx: UserCtx,
+  opportunityIds: readonly string[],
+): Promise<string[]> {
   const rows = await tx
     .select({ id: applicationSubmissions.id })
     .from(applicationSubmissions)
@@ -819,7 +835,7 @@ export async function lockAttemptsOf(
       ),
     )
     .all();
-  for (const id of rows.map((r) => r.id).sort()) await lockScope(tx, `submission:${id}`);
+  return rows.map((r) => r.id).sort();
 }
 
 const NOT_YET_OPENED: SubmissionStatus[] = [...NOT_YET_OPENED_STATUSES];
