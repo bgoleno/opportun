@@ -87,11 +87,11 @@ one batch, not a promise for yours.
 | Filtered     | Not-a-fit outreach, with the reason it does not fit                                                                                                                            |
 | Blocked      | Messages kept out before classification (see above), each shown with its sender, its date and the rule that decided, and a link to the original where there is one             |
 
-![The Linked tab: a targeted Apple Mail message, and a Gmail interview request with a suggested move to In process](images/inbox-linked.png)
+![The Linked tab: a row of filters above the list (keyword, sender, source and sort order), then a targeted Apple Mail message and a Gmail interview request with a suggested move to In process](images/inbox-linked.png)
 
 _Linked mail with its channel badges (Apple Mail, Gmail). The interview request suggests moving Contoso to In process._
 
-![The Spam tab with one broadcast message and a Not spam button](images/inbox-spam.png)
+![The Spam tab: the row of filters above the list, then one broadcast message with a Not spam button](images/inbox-spam.png)
 
 _Broadcast outreach lands in Spam and never creates an opportunity._
 
