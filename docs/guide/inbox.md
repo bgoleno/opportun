@@ -25,8 +25,9 @@ label to watch, allow and deny lists, and the checks every message passes before
 classified.
 
 Opportun syncs every 15 minutes on its own. **Sync now** (on the Inbox or the Gmail card)
-runs one immediately, and when it finishes the new mail, the tab counts and the sync time
-appear on their own, without a reload.
+runs one immediately. With the Inbox open, the sync time, the tab counts and each new message
+update on their own as messages are classified, for up to two minutes after you press it; after a
+longer sync, reload to see the rest. (The Gmail card updates its own message count and sync time.)
 
 ![The Gmail card showing read-only access granted, 4 messages stored and the lookback window, with the Extensions and Connectors card below it reporting Apple Mail connected](images/integrations-gmail-devices.png)
 
@@ -138,12 +139,12 @@ Above the list, **Keyword** searches subject, text and sender, **Sender** filter
 the order. Each row has a checkbox (every tab except Blocked). Ticking rows shows a bar with the
 count, a reason and **Reject N**. **Reject N** asks first ("Reject N messages?"), saying that
 the subject, snippet and body of those messages are removed for good and this cannot be undone;
-confirming rejects them all with that reason. A bulk reject does the same deletion as a single
+confirming rejects them with that reason. A bulk reject does the same deletion as a single
 one but never blocks senders and takes no note; to block a sender, reject one of their messages
 on its own. Only rows on screen can be selected, so a message on another page is never rejected:
 a row that leaves the list (hidden by a filter you change, linked, reclassified or gone on a
 refresh) leaves the selection, and one still listed stays selected. Each message is rejected only if it is still linked
-as you saw it: one that was linked or moved in another tab or session since you selected it is
+as you saw it: one that was linked or moved in another tab or session since the list last loaded is
 left as it is, and the result says so ("2 were changed elsewhere and left as they are"), next to
 the count rejected and any skipped because they are not yours or already gone.
 
