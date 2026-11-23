@@ -259,6 +259,15 @@ function workspaceScoped(error: string): string {
     : error;
 }
 
+/**
+ * An Anthropic key is checked with one 1-token call per distinct model the user's policies name
+ * (https://github.com/bgoleno/opportun/issues/828): with the defaults, three (Opus, Sonnet, Haiku).
+ * One call is not enough because only a call to a model proves this key can use that model:
+ * workspace scoping and a refusal for that model (403, 404, 429) answer per model, and Settings
+ * shows each model's answer. A call also shows a key with no credit left, which Anthropic's model
+ * list would pass. A key rejected outright stops at the first call.
+ * test/aiKeySaveRequests.test.ts counts the requests a save sends.
+ */
 async function validateAnthropic(
   apiKey: string,
   policies: ModelPolicy[],
