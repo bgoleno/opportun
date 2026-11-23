@@ -227,6 +227,22 @@ describe('a server that cannot start, as a process', () => {
 
   // A configuration error is printed as it is (design 14.9), so what it says of a connection
   // setting is checked the same way.
+  it(
+    'a master key file that holds something else is not named',
+    async () => {
+      const file = join(tempDir(), 'key');
+      writeFileSync(file, PASSWORD);
+      const started = await startServer({
+        OPPORTUN_MASTER_KEY: '',
+        OPPORTUN_MASTER_KEY_FILE: file,
+      });
+      expect(started.output).toMatch(/^OPPORTUN_MASTER_KEY_FILE must hold 32 bytes/m);
+      expect(started.code).toBe(1);
+      for (const canary of CANARIES) expect(started.output.toLowerCase()).not.toContain(canary);
+    },
+    T,
+  );
+
   it.each<[string, Record<string, string>, RegExp]>([
     [
       'a DATABASE_URL of another kind',
@@ -239,6 +255,21 @@ describe('a server that cannot start, as a process', () => {
       /DATABASE_URL must not set sslpassword/,
     ],
     ['a master key that is not one', { OPPORTUN_MASTER_KEY: `${KEY}${PASSWORD}` }, /MASTER_KEY/],
+    [
+      "DATABASE_URL_FILE that can't be read",
+      { DATABASE_URL_FILE: `postgres://${USER}:${PASSWORD}@${HOST}/${DB_NAME}` },
+      /^DATABASE_URL_FILE could not be read \(ENOENT\)/m,
+    ],
+    [
+      "OPPORTUN_MASTER_KEY_FILE that can't be read",
+      { OPPORTUN_MASTER_KEY: '', OPPORTUN_MASTER_KEY_FILE: KEY },
+      /^OPPORTUN_MASTER_KEY_FILE could not be read \(ENOENT\)/m,
+    ],
+    [
+      'a path too long to be one',
+      { OPPORTUN_MASTER_KEY: '', OPPORTUN_MASTER_KEY_FILE: KEY.repeat(100) },
+      /^OPPORTUN_MASTER_KEY_FILE could not be read \(ENAMETOOLONG\)/m,
+    ],
   ])(
     'a configuration error: %s',
     async (_what, settings, says) => {
