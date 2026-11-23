@@ -292,12 +292,15 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
   const rederive = useRederivePosting(opp.id);
   const [found, setFound] = useState<FindPostingResult | null>(null);
   const [findError, setFindError] = useState<string | null>(null);
+  /** The board could not be read (#835): said as such, with a retry, not as "no match". */
+  const [unreachable, setUnreachable] = useState(false);
   const [editing, setEditing] = useState<'description' | 'link' | null>(null);
   const described = opp.descriptionMd != null && opp.descriptionMd.trim() !== '';
 
   // The posting is looked up only when asked for: nothing searches a board on its own.
   async function runFind() {
     setFindError(null);
+    setUnreachable(false);
     try {
       const result = await find.mutateAsync(opp.postingState ?? 'none');
       if (result.outcome === 'already_confirmed') {
@@ -305,6 +308,19 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
         toast({
           title: 'Already confirmed',
           description: "The board check finished while this page was open; it's up to date now.",
+          variant: 'success',
+        });
+        return;
+      }
+      if (result.outcome === 'unreachable') {
+        setUnreachable(true);
+        return;
+      }
+      if (result.outcome === 'attached' && result.unchanged === true) {
+        // A Refetch that found the same job, link and description (#835, qa on #830).
+        toast({
+          title: 'Nothing changed',
+          description: "The posting matches the company's board.",
           variant: 'success',
         });
         return;
@@ -412,6 +428,22 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
         </CardHeader>
         <CardContent className="grid gap-3">
           {findError !== null ? <FormError message={findError} /> : null}
+          {unreachable ? (
+            <div role="status" className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="flex-1">
+                Couldn't read the company's board just now, so nothing was checked.
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={find.isPending}
+                onClick={() => void runFind()}
+              >
+                Try again
+              </Button>
+            </div>
+          ) : null}
           <PostingStateBanner
             opp={opp}
             busy={find.isPending}

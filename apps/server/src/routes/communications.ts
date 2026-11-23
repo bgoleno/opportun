@@ -282,7 +282,13 @@ export async function communicationRoutes(app: FastifyInstance): Promise<void> {
     async (req) => {
       const ctx = requireUser(req);
       if (req.body.confirm !== PURGE_CONFIRMATION) {
-        throw new HttpError(400, 'not_confirmed', `Type ${PURGE_CONFIRMATION} to confirm`);
+        throw new HttpError(
+          400,
+          'not_confirmed',
+          `Type ${PURGE_CONFIRMATION} to confirm`,
+          undefined,
+          { userFacing: true },
+        );
       }
       const what = req.body.what;
       const purgesMail = what !== 'discovery';

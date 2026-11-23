@@ -112,6 +112,38 @@ describe('Find posting', () => {
     expect(call?.search).toContain('seen=searching');
   });
 
+  // #835 (qa on #830): a board that could not be read says so and offers a retry; it is never
+  // "no close match".
+  it('a board that cannot be read says so, with Try again (#835)', async () => {
+    const api = setup({ 'POST /opportunities/opp-1/find-posting': { outcome: 'unreachable' } });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+
+    expect(await screen.findByText(/couldn't read the company's board/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no close match/i)).not.toBeInTheDocument();
+    const finds = () =>
+      api.calls.filter((c: ApiCall) => c.path === '/opportunities/opp-1/find-posting').length;
+    expect(finds()).toBe(1);
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(finds()).toBe(2));
+  });
+
+  it('a Refetch that changes nothing says so, not "Posting attached" (#835)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'attached',
+        unchanged: true,
+        opportunity: BARE,
+        candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(await screen.findByText('Nothing changed')).toBeInTheDocument();
+    expect(screen.queryByText('Posting attached')).not.toBeInTheDocument();
+  });
+
   it('attaches a single match without opening the picker', async () => {
     const api = setup({
       'POST /opportunities/opp-1/find-posting': {

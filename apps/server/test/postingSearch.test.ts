@@ -490,7 +490,7 @@ describe('findPosting', () => {
     expect(out).toEqual({ status: 'no_board', needsCareersUrl: true });
   });
 
-  it('survives an unreachable board', async () => {
+  it('survives an unreachable board, and says it could not be read (#835)', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
     await createCompany(app.db, ctx, {
@@ -511,7 +511,7 @@ describe('findPosting', () => {
       board: boom,
     });
 
-    expect(out).toMatchObject({ status: 'none' });
+    expect(out).toMatchObject({ status: 'unreachable' });
   });
 
   it("404s for another user's opportunity", async () => {

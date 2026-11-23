@@ -22,6 +22,7 @@ export async function main(): Promise<void> {
     env.OPPORTUN_GMAIL_MOCK,
     env.OPPORTUN_SOURCE_MOCK,
     env.OPPORTUN_OAUTH_MOCK,
+    env.OPPORTUN_AUTH_MOCK,
   ].includes('1');
   const mocks = wantsMocks
     ? (await import('./testSupport/index')).testSupportFromEnv(env, cfg)
