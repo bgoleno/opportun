@@ -52,11 +52,13 @@ when the milestone's work was merged.
   ([#889](https://github.com/bgoleno/opportun/issues/889); PR
   [#910](https://github.com/bgoleno/opportun/pull/910)).
 - **Postgres: deleting an opportunity while it is being saved no longer fails with an internal
-  error, and the delete always happens.** Adding an activity, moving a stage or adding a next step
-  beside a delete can answer an error more often, as it could before
+  error, and the delete always happens.** Adding an activity, a referral ask, a next step or a file
+  to an opportunity that is being deleted, or moving it to another stage, says it is not found,
+  with nothing written
   ([#917](https://github.com/bgoleno/opportun/issues/917),
-  [#925](https://github.com/bgoleno/opportun/issues/925); PR
-  [#923](https://github.com/bgoleno/opportun/pull/923)).
+  [#925](https://github.com/bgoleno/opportun/issues/925); PRs
+  [#923](https://github.com/bgoleno/opportun/pull/923),
+  [#929](https://github.com/bgoleno/opportun/pull/929)).
 
 ### Sign-in and settings
 
