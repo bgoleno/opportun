@@ -73,6 +73,13 @@ when the milestone's work was merged.
   copied it: the corner X is gone and Escape is refused
   ([#903](https://github.com/bgoleno/opportun/issues/903); PR
   [#907](https://github.com/bgoleno/opportun/pull/907)).
+- **A device token whose create answer was lost is listed, and the page says what to do.** If
+  creating a token fails halfway, in the token dialog or the extension setup, the list is read
+  again. A token the server made without its answer arriving shows in it, marked "Not shown here"
+  when it can be told apart, with a note to revoke it and create another. Its value can no longer
+  be shown. A refusal, a wrong password for example, is said as before
+  ([#904](https://github.com/bgoleno/opportun/issues/904); PR
+  [#918](https://github.com/bgoleno/opportun/pull/918)).
 
 ### Inbox
 
