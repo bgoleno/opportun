@@ -4,6 +4,7 @@
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
+import { onSlowTransaction } from '../src/db/gate';
 import { communications, dismissalFeedback, stageHistory } from '../src/db/schema';
 import { setRaceHook } from '../src/lib/racePoints';
 import { reclassify, upsertInbound } from '../src/repos/communications';
@@ -142,6 +143,8 @@ describe('a rejected message (#895)', () => {
       const { app, a } = await boot();
       const opp = await opportunity(app, a, 'Engineer');
       const id = await message(app, a);
+      // The link is parked inside its transaction on purpose.
+      onSlowTransaction(() => undefined);
       const pause = pauseAt('reclassify.read');
       const linking = reclassify(app.db, ctxOf(a), id, { opportunityId: opp.id }).then(
         () => 'linked',
