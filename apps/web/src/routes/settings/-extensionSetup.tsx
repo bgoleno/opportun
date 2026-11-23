@@ -53,6 +53,25 @@ export const ek = {
   password: ['auth', '2fa'] as const,
 };
 
+/**
+ * Whether a create may have made a token nobody has seen: anything but the server's own refusal
+ * (4xx). A dropped connection, a proxy's answer or one with no token in it says nothing of what the
+ * server did (#904).
+ */
+export function answerLost(err: unknown): boolean {
+  return !(err instanceof ApiError) || err.status >= 500;
+}
+
+export const lostTokenText = (name: string): string =>
+  `Could not confirm that "${name}" was created. If the list of device tokens has a new one by that name, its value can no longer be shown: revoke it there and create another.`;
+
+/** Creates a device token; an answer without one is a lost answer. */
+export async function createDeviceToken<T extends { token: string }>(body: unknown): Promise<T> {
+  const res = await api<T | undefined>('/device-tokens', { method: 'POST', body });
+  if (typeof res?.token !== 'string') throw new Error('no token in the answer');
+  return res;
+}
+
 /** Chrome and Firefox need genuinely different instructions, not different wording. */
 const INSTALL_STEPS: Record<string, string[]> = {
   chrome: [
@@ -81,11 +100,14 @@ export function ExtensionSetupDialog({
   open,
   onOpenChange,
   displayName,
+  onLost,
   pollMs = 2000,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   displayName: string;
+  /** The token of this name may have been made, and its answer was lost. */
+  onLost?: (name: string) => void;
   /** How often to look for this token's first use; small in tests. */
   pollMs?: number;
 }) {
@@ -184,27 +206,30 @@ export function ExtensionSetupDialog({
     setBusy(true);
     setError(null);
     try {
-      const res = await api<MintedToken>('/device-tokens', {
-        method: 'POST',
+      const res = await createDeviceToken<MintedToken>({
         // One token for the extension (tl and sec on #182): it keeps every token in one place,
         // so two would protect nothing one does not. Each route still checks its own scope.
-        body: {
-          name: proposedName,
-          scopes:
-            withAssist && assistAvailable ? ['capture:push', 'apply:assist'] : ['capture:push'],
-          password,
-        },
+        name: proposedName,
+        scopes: withAssist && assistAvailable ? ['capture:push', 'apply:assist'] : ['capture:push'],
+        password,
       });
       setMinted(res);
       setName(res.name);
       setPassword('');
       void qc.invalidateQueries({ queryKey: ek.tokens });
     } catch (err) {
-      setError(
-        err instanceof ApiError && err.code === 'invalid_password'
-          ? 'That is not your current password.'
-          : errorMessage(err),
-      );
+      // Read again whatever failed: a token made without its answer is then in the list (#904).
+      void qc.invalidateQueries({ queryKey: ek.tokens });
+      if (answerLost(err)) {
+        setError(lostTokenText(proposedName));
+        onLost?.(proposedName);
+      } else {
+        setError(
+          err instanceof ApiError && err.code === 'invalid_password'
+            ? 'That is not your current password.'
+            : errorMessage(err),
+        );
+      }
     } finally {
       setBusy(false);
     }

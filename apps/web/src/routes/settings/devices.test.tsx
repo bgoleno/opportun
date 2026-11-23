@@ -248,6 +248,207 @@ describe('DevicesCard', () => {
     expect(within(second).getByLabelText('Device token')).toHaveValue('odt_2');
   });
 
+  // https://github.com/bgoleno/opportun/issues/904: the server made the token and its answer never
+  // came, so nobody has seen the token's value, and the list did not show it to be revoked.
+  describe('a create whose answer is lost', () => {
+    const MADE: Meta = { ...LAPTOP, id: 't9', name: 'Work MacBook', lastUsedAt: null };
+    const SAYS =
+      'Could not confirm that "Work MacBook" was created. If the list of device tokens has a new one by that name, its value can no longer be shown: revoke it there and create another.';
+    const drop = (): never => {
+      throw new TypeError('Failed to fetch');
+    };
+    const FAILURES: [string, () => unknown][] = [
+      ['the connection drops', drop],
+      ['a proxy answers for the server', () => ({ status: 502 })],
+      [
+        'the server answers with an error after',
+        () => ({ status: 500, body: { error: { code: 'internal' } } }),
+      ],
+      ['the answer has no token in it', () => ({ status: 201, body: {} })],
+      ['the answer is empty', () => ({ status: 201 })],
+    ];
+
+    /** Opens Create, fills it in and presses Create; the server makes the token, then `answer`s. */
+    async function create(answer: () => unknown, made = true) {
+      const user = userEvent.setup();
+      let items: Meta[] = [];
+      const { calls } = mockApi({
+        'GET /device-tokens': () => ({ items }),
+        'GET /integrations/apple-mail': NOT_CONNECTED,
+        'POST /device-tokens': () => {
+          if (made) items = [MADE];
+          return answer();
+        },
+        'DELETE /device-tokens/t9': () => {
+          items = [{ ...MADE, revokedAt: NOW }];
+          return { status: 204 };
+        },
+      });
+      renderWithProviders(<DevicesCard />);
+      await user.click(await screen.findByRole('button', { name: 'Create token' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Create a device token' });
+      await user.type(within(dialog).getByLabelText('Name'), 'Work MacBook');
+      await user.type(within(dialog).getByLabelText('Current password'), PW);
+      await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+      return { user, dialog, calls };
+    }
+
+    it.each(FAILURES)(
+      '%s: it is listed, the page says so, and it can be revoked',
+      async (_w, answer) => {
+        const { user, dialog } = await create(answer);
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent(SAYS);
+        await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+        // Still said on the page, with the token in the list, and no token shown.
+        const row = await screen.findByRole('listitem', { name: 'Work MacBook' });
+        expect(screen.getByRole('alert')).toHaveTextContent(SAYS);
+        expect(screen.queryByRole('dialog', { name: 'Copy your device token' })).toBeNull();
+
+        await user.click(within(row).getByRole('button', { name: 'Revoke' }));
+        const sure = await screen.findByRole('dialog', { name: 'Revoke Work MacBook?' });
+        await user.click(within(sure).getByRole('button', { name: 'Revoke' }));
+        await waitFor(() => expect(screen.getByText('Revoked')).toBeInTheDocument());
+        // Revoked, so there is nothing left to say.
+        await waitFor(() => expect(screen.queryByText(SAYS)).toBeNull());
+      },
+    );
+
+    it('closed while it was in flight: the page says so, and the next create starts clean', async () => {
+      let fail!: () => void;
+      const { user, dialog } = await create(
+        () =>
+          new Promise((_, reject) => {
+            fail = () => reject(new TypeError('Failed to fetch'));
+          }),
+      );
+      await within(dialog).findByRole('button', { name: 'Creating...' });
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      fail();
+      expect(await screen.findByRole('alert')).toHaveTextContent(SAYS);
+      expect(await screen.findByRole('listitem', { name: 'Work MacBook' })).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Create token' }));
+      const again = await screen.findByRole('dialog', { name: 'Create a device token' });
+      expect(within(again).queryByRole('alert')).toBeNull();
+    });
+
+    // The extension setup names every token after the browser and the person.
+    it('revoking another token of that name leaves it said, until the lost one is revoked', async () => {
+      const user = userEvent.setup();
+      const older = { ...MADE, id: 't8', lastUsedAt: NOW - 5 * MIN };
+      const another = { ...LAPTOP, id: 't7' };
+      let items: Meta[] = [another];
+      const revoke = (id: string) => () => {
+        items = items.map((t) => (t.id === id ? { ...t, revokedAt: NOW } : t));
+        return { status: 204 };
+      };
+      mockApi({
+        'GET /device-tokens': () => ({ items }),
+        'GET /integrations/apple-mail': NOT_CONNECTED,
+        // Not made yet when the list is read: the connection dropped before the server was done.
+        'POST /device-tokens': drop,
+        'DELETE /device-tokens/t7': () => {
+          items = [MADE, older];
+          return { status: 204 };
+        },
+        'DELETE /device-tokens/t8': revoke('t8'),
+        'DELETE /device-tokens/t9': revoke('t9'),
+      });
+      renderWithProviders(<DevicesCard />);
+      await user.click(await screen.findByRole('button', { name: 'Create token' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Create a device token' });
+      await user.type(within(dialog).getByLabelText('Name'), 'Work MacBook');
+      await user.type(within(dialog).getByLabelText('Current password'), PW);
+      await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+      await within(dialog).findByRole('alert');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      const other = await screen.findByRole('listitem', { name: 'MacBook connector' });
+      await user.click(within(other).getByRole('button', { name: 'Revoke' }));
+      const sureOther = await screen.findByRole('dialog', { name: 'Revoke MacBook connector?' });
+      await user.click(within(sureOther).getByRole('button', { name: 'Revoke' }));
+      const rows = () => screen.findAllByRole('listitem', { name: 'Work MacBook' });
+      await waitFor(async () => expect(await rows()).toHaveLength(2));
+      expect(screen.getByText(SAYS)).toBeInTheDocument();
+      const revokeRow = async (n: number) => {
+        await user.click(within((await rows())[n]!).getByRole('button', { name: 'Revoke' }));
+        const sure = await screen.findByRole('dialog', { name: 'Revoke Work MacBook?' });
+        await user.click(within(sure).getByRole('button', { name: 'Revoke' }));
+        await waitFor(() =>
+          expect(screen.queryByRole('dialog', { name: 'Revoke Work MacBook?' })).toBeNull(),
+        );
+      };
+      await revokeRow(1);
+      expect(screen.getByText(SAYS)).toBeInTheDocument();
+      await revokeRow(0);
+      await waitFor(() => expect(screen.queryByText(SAYS)).toBeNull());
+    });
+
+    it('can be put away when the token was never made', async () => {
+      const { user, dialog } = await create(drop, false);
+      await within(dialog).findByRole('alert');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+      expect(screen.queryByText(SAYS)).toBeNull();
+      expect(screen.getByText('No device tokens yet.')).toBeInTheDocument();
+    });
+
+    it.each<[string, number, string, string]>([
+      ['a wrong password', 403, 'invalid_password', 'That is not your current password.'],
+      ['too many tokens', 409, 'too_many_tokens', 'Request failed (too_many_tokens).'],
+    ])(
+      'a refusal (%s) is said as before, and the list is read again',
+      async (_w, status, code, says) => {
+        const { user, dialog, calls } = await create(
+          () => ({ status, body: { error: { code } } }),
+          false,
+        );
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent(says);
+        const reads = () => calls.filter((c) => c.method === 'GET' && c.path === '/device-tokens');
+        await waitFor(() => expect(reads()).toHaveLength(2));
+        await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+        expect(screen.queryByRole('alert')).toBeNull();
+        expect(screen.queryByText(/Could not confirm/)).toBeNull();
+      },
+    );
+
+    it('of the extension setup: said in it and on the page, and listed', async () => {
+      const user = userEvent.setup();
+      const name = 'Chrome, Edge, Brave'.split(',')[0] + ' · this browser';
+      let items: Meta[] = [];
+      mockApi({
+        'GET /device-tokens': () => ({ items }),
+        'GET /integrations/apple-mail': NOT_CONNECTED,
+        'GET /auth/2fa': { enabled: false, recoveryCodesLeft: 0, hasPassword: true },
+        'GET /artifacts/extension': {
+          baseUrl: 'http://nas.local:8080',
+          buildCommand: 'pnpm build',
+          targets: [
+            {
+              id: 'chrome',
+              label: 'Chrome, Edge, Brave',
+              filename: 'opportun-chrome.zip',
+              available: true,
+              buildStamp: null,
+            },
+          ],
+        },
+        'POST /device-tokens': () => {
+          items = [{ ...MADE, name, scopes: ['capture:push'] }];
+          return drop();
+        },
+      });
+      renderWithProviders(<DevicesCard />);
+      await user.click(await screen.findByRole('button', { name: 'Set up' }));
+      const setup = await screen.findByRole('dialog', { name: 'Set up the browser extension' });
+      await user.type(await within(setup).findByLabelText('Password'), PW);
+      await user.click(within(setup).getByRole('button', { name: 'Continue' }));
+      const says = SAYS.replace('Work MacBook', name);
+      expect(await within(setup).findByRole('alert')).toHaveTextContent(says);
+      await user.click(within(setup).getByRole('button', { name: 'Close' }));
+      expect(await screen.findByRole('listitem', { name })).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent(says);
+    });
+  });
+
   it('validates the dialog: a name, at least one scope and the password are required', async () => {
     const user = userEvent.setup();
     const { calls } = mockApi({

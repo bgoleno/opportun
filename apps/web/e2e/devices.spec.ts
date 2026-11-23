@@ -154,6 +154,38 @@ test('apple mail: a connector batch lands in the Inbox with the Apple Mail badge
   await expect(page.getByRole('listitem', { name: /Northwind Labs/ })).toHaveCount(1);
 });
 
+// https://github.com/bgoleno/opportun/issues/904. The request reaches the server, which makes the
+// token; its answer does not reach the page.
+test('device token: one whose answer is lost is listed, and can be revoked', async ({ page }) => {
+  await registerUser(page);
+  await page.goto('/settings/integrations');
+  await expect(page.getByText('No device tokens yet.')).toBeVisible();
+  await page.route('**/api/v1/device-tokens', async (route) => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const made = await route.fetch();
+    expect(made.status()).toBe(201);
+    await route.abort('connectionreset');
+  });
+  await page.getByRole('button', { name: 'Create token' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Create a device token' });
+  await dialog.getByLabel('Name').fill('Lost MacBook');
+  await dialog.getByLabel('Current password').fill(PASSWORD);
+  await dialog.getByRole('button', { name: 'Create' }).click();
+  await expect(
+    dialog.getByText(/^Could not confirm that "Lost MacBook" was created/),
+  ).toBeVisible();
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByText(/^Could not confirm that "Lost MacBook" was created/)).toBeVisible();
+  const row = page.getByRole('listitem', { name: 'Lost MacBook' });
+  await row.getByRole('button', { name: 'Revoke' }).click();
+  await page
+    .getByRole('dialog', { name: 'Revoke Lost MacBook?' })
+    .getByRole('button', { name: 'Revoke' })
+    .click();
+  await expect(row.getByText('Revoked', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Could not confirm/)).toBeHidden();
+});
+
 test('capture: a LinkedIn profile posted by the extension becomes a contact (FR-C5)', async ({
   page,
   playwright,

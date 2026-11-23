@@ -4,7 +4,7 @@
 // next request. The Apple Mail line reflects the last batch the connector pushed.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Copy } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SharedDemoNotice } from '@/components/SharedDemoNotice';
 import { FormError } from '@/components/FormError';
@@ -25,7 +25,14 @@ import { toast } from '@/components/ui/toast';
 import { api, ApiError, errorMessage } from '@/lib/api';
 import { meQuery } from '@/lib/auth';
 import { useReviewUsage } from '@/components/apply/api';
-import { ek, ExtensionSetupDialog, type ArtifactList } from './-extensionSetup';
+import {
+  answerLost,
+  createDeviceToken,
+  ek,
+  ExtensionSetupDialog,
+  lostTokenText,
+  type ArtifactList,
+} from './-extensionSetup';
 
 const SCOPES = [
   { scope: 'mail:push', label: 'Apple Mail connector' },
@@ -97,6 +104,8 @@ export function DevicesCard() {
   const [settingUp, setSettingUp] = useState(false);
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
+  /** The name of a token whose create was never answered: it may be in the list, unseen (#904). */
+  const [lost, setLost] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<DeviceToken | null>(null);
   const refresh = () => qc.invalidateQueries({ queryKey: dk.tokens });
   const revoke = useMutation({
@@ -131,6 +140,14 @@ export function DevicesCard() {
         {/* Decision 132: mail stays on the demo, so a shared account says what that means. */}
         <SharedDemoNotice about="mail" />
         <AppleMailLine status={appleMail.data} />
+        {lost === null ? null : (
+          <div className="grid justify-items-start gap-2">
+            <FormError message={lostTokenText(lost)} />
+            <Button size="sm" variant="outline" onClick={() => setLost(null)}>
+              Dismiss
+            </Button>
+          </div>
+        )}
         {tokens.isError ? <FormError message={errorMessage(tokens.error)} /> : null}
         {tokens.isPending ? (
           <p className="text-muted-foreground">Loading...</p>
@@ -152,6 +169,7 @@ export function DevicesCard() {
         open={settingUp}
         onOpenChange={setSettingUp}
         displayName={me.data?.displayName ?? 'this browser'}
+        onLost={setLost}
       />
       <CreateDialog
         open={creating}
@@ -161,6 +179,8 @@ export function DevicesCard() {
           setCreated(token);
           void refresh();
         }}
+        onFailed={() => void refresh()}
+        onLost={setLost}
       />
       {created === null ? null : <ShowOnceDialog token={created} onDone={() => setCreated(null)} />}
       <ConfirmDialog
@@ -172,7 +192,13 @@ export function DevicesCard() {
         description="The device using this token is refused from its next request on. This cannot be undone: create a new token to reconnect it."
         confirmLabel="Revoke"
         onConfirm={async () => {
-          if (revoking !== null) await revoke.mutateAsync(revoking.id);
+          if (revoking === null) return;
+          await revoke.mutateAsync(revoking.id);
+          // Said until no live token of that name is left: names need not differ.
+          const another = items.some(
+            (t) => t.name === lost && t.revokedAt === null && t.id !== revoking.id,
+          );
+          if (revoking.name === lost && !another) setLost(null);
         }}
       />
     </Card>
@@ -304,7 +330,14 @@ function CreateDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (token: string) => void;
+  /** Whatever failed: the list is read again, as the token may have been made all the same. */
+  onFailed: () => void;
+  /** The token of this name may have been made, and its answer was lost. */
+  onLost: (name: string) => void;
 }) {
+  // Whether the dialog is still open when a create settles: read then, not when it started.
+  const open = useRef(props.open);
+  open.current = props.open;
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<Scope[]>(['mail:push']);
   const [password, setPassword] = useState('');
@@ -334,18 +367,26 @@ function CreateDialog(props: {
     setBusy(true);
     setError(null);
     try {
-      const res = await api<DeviceToken & { token: string }>('/device-tokens', {
-        method: 'POST',
-        body: { name: name.trim(), scopes, password },
+      const res = await createDeviceToken<DeviceToken & { token: string }>({
+        name: name.trim(),
+        scopes,
+        password,
       });
       reset();
       props.onCreated(res.token);
     } catch (err) {
-      setError(
-        err instanceof ApiError && err.code === 'invalid_password'
-          ? 'That is not your current password.'
-          : errorMessage(err),
-      );
+      props.onFailed();
+      if (answerLost(err)) {
+        // The page says so too, and alone does when the dialog was closed meanwhile.
+        if (open.current) setError(lostTokenText(name.trim()));
+        props.onLost(name.trim());
+      } else {
+        setError(
+          err instanceof ApiError && err.code === 'invalid_password'
+            ? 'That is not your current password.'
+            : errorMessage(err),
+        );
+      }
     } finally {
       setBusy(false);
     }
