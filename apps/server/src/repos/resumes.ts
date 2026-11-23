@@ -266,12 +266,26 @@ export async function updateResume(
   patch: ResumePatch,
 ): Promise<ResumeRow> {
   return await withTransaction(db, async (tx) => {
-    const row = await tx
-      .select()
-      .from(resumes)
-      .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id)))
-      .get();
+    const read = () =>
+      tx
+        .select()
+        .from(resumes)
+        .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id)))
+        .get();
+    let row = await read();
     if (row === undefined) throw notFound();
+    const relink = 'opportunityId' in patch;
+    if (relink && row.kind === 'base') throw new HttpError(422, 'base_cannot_attach');
+    // Matches the convention every other cross-table relink in this layer follows (e.g.
+    // communications.ts's reclassify): check ownership here too, rather than trusting the
+    // route layer alone to have done it first. Held before the resume's row is written (#944): a
+    // merge or a delete of it takes the two in that order. It can be waited for, so what is written
+    // below comes from a read after it: the status can have been saved meanwhile.
+    if (relink && patch.opportunityId != null) {
+      await holdOpportunity(tx, ctx, patch.opportunityId);
+      row = await read();
+      if (row === undefined) throw notFound();
+    }
     const status = patch.status ?? row.status;
     let submittedTo: string | null = null;
     let submittedAt: number | null = null;
@@ -281,15 +295,6 @@ export async function updateResume(
       submittedAt = patch.submittedAt ?? row.submittedAt ?? Date.now();
     } else if (patch.submittedTo !== undefined || patch.submittedAt !== undefined) {
       throw new HttpError(422, 'not_submitted');
-    }
-    const relink = 'opportunityId' in patch;
-    if (relink && row.kind === 'base') throw new HttpError(422, 'base_cannot_attach');
-    // Matches the convention every other cross-table relink in this layer follows (e.g.
-    // communications.ts's reclassify): check ownership here too, rather than trusting the
-    // route layer alone to have done it first. Held before the resume's row is written (#944): a
-    // merge or a delete of it takes the two in that order.
-    if (relink && patch.opportunityId != null) {
-      await holdOpportunity(tx, ctx, patch.opportunityId);
     }
     return await tx
       .update(resumes)

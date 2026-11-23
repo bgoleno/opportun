@@ -1,6 +1,6 @@
 import { COMPANY_DOMAIN_RESOLVE_KIND } from '../src/lib/companyDomainQueue';
 import { newId } from '@opportun/core';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jobs, opportunities } from '../src/db/schema';
@@ -859,50 +859,74 @@ describe('manual order (issue #240)', () => {
       expect(list.json().items.map((o: { id: string }) => o.id)).toEqual([...ids.slice(1), ids[0]]);
     });
 
-    // In statements of 500 (#944): one on, at, and one off the edge of one, and the most there can be.
-    it.each([499, 500, 501, 1999, 2000])('%i cards end in the order asked for', async (n) => {
-      const { app, a } = await boot();
-      const first = (await createOpp(a)).json<{ id: string }>();
+    /** `n` cards of the user's, all at 0 and last changed at 1. */
+    async function column(app: FastifyInstance, c: TestClient, n: number): Promise<string[]> {
+      const first = (await createOpp(c)).json<{ id: string }>();
       const row = await app.db
         .select()
         .from(opportunities)
         .where(eq(opportunities.id, first.id))
         .get();
-      const ids = [first.id, ...Array.from({ length: n }, () => newId())];
-      for (let i = 1; i < ids.length; i += 100) {
+      const ids = [first.id, ...Array.from({ length: n - 1 }, () => newId())];
+      for (let i = 1; i < n; i += 100) {
         const more = ids.slice(i, i + 100);
         await app.db
           .insert(opportunities)
           .values(more.map((id) => ({ ...row!, id, dedupeKey: null })))
           .run();
       }
-      // All but the first, the last of them first; and one of them twice, which its last value wins.
-      const asked = ids.slice(1).reverse();
-      const changes = asked.map((id, i) => ({ id, sortOrder: i - 1000 }));
-      const twice = changes[n - 1]!;
-      const res = await a.request({
-        method: 'POST',
-        url: '/api/v1/opportunities/reorder',
-        payload: { changes: [{ id: twice.id, sortOrder: 5 }, ...changes.slice(1)] },
-      });
-      expect(res.statusCode, res.body).toBe(204);
-      const after = await app.db
-        .select({ id: opportunities.id, sortOrder: opportunities.sortOrder })
-        .from(opportunities)
-        .all();
-      const byId = new Map(after.map((o) => [o.id, o.sortOrder]));
-      expect(asked.slice(1).map((id) => byId.get(id))).toEqual(
-        changes.slice(1).map((c) => c.sortOrder),
+      await app.db.update(opportunities).set({ updatedAt: 1 }).run();
+      return ids;
+    }
+    const cards = async (app: FastifyInstance) =>
+      new Map(
+        (
+          await app.db
+            .select({
+              id: opportunities.id,
+              sortOrder: opportunities.sortOrder,
+              updatedAt: opportunities.updatedAt,
+            })
+            .from(opportunities)
+            .all()
+        ).map((o) => [o.id, o]),
       );
-      // Neither of these two was asked for.
-      expect([byId.get(first.id), byId.get(asked[0]!)]).toEqual([0, 0]);
-      // One request, one time.
-      const times = await app.db
-        .select({ at: opportunities.updatedAt })
-        .from(opportunities)
-        .where(inArray(opportunities.id, asked.slice(1, 400)))
-        .all();
-      expect(new Set(times.map((t) => t.at)).size).toBe(1);
+    const reorder = (c: TestClient, changes: { id: string; sortOrder: number }[]) =>
+      c.request({ method: 'POST', url: '/api/v1/opportunities/reorder', payload: { changes } });
+
+    // In statements of 500 (#944): one under, at and one over the edge of one, and the most there can be.
+    it.each([499, 500, 501, 1999, 2000])('%i cards end in the order asked for', async (n) => {
+      const { app, a } = await boot();
+      const [left, ...ids] = await column(app, a, n + 1);
+      const changes = ids.reverse().map((id, i) => ({ id, sortOrder: i - 1000 }));
+      expect(changes).toHaveLength(n);
+      const res = await reorder(a, changes);
+      expect(res.statusCode, res.body).toBe(204);
+      const after = await cards(app);
+      expect(changes.map((c) => after.get(c.id)?.sortOrder)).toEqual(
+        changes.map((c) => c.sortOrder),
+      );
+      // One request, one time, in every statement of it; and the one not asked for is as it was.
+      const times = new Set(changes.map((c) => after.get(c.id)?.updatedAt));
+      expect(times.size).toBe(1);
+      expect(times.has(1)).toBe(false);
+      expect(after.get(left!)).toMatchObject({ sortOrder: 0, updatedAt: 1 });
+    });
+
+    it('a card named twice, far apart in a long one, takes its last place', async () => {
+      const { app, a } = await boot();
+      const ids = await column(app, a, 700);
+      const changes = ids.map((id, i) => ({ id, sortOrder: i }));
+      const res = await reorder(a, [
+        { id: ids[699]!, sortOrder: -5 },
+        ...changes,
+        { id: ids[0]!, sortOrder: 9000 },
+      ]);
+      expect(res.statusCode, res.body).toBe(204);
+      const after = await cards(app);
+      expect(after.get(ids[699]!)?.sortOrder).toBe(699);
+      expect(after.get(ids[0]!)?.sortOrder).toBe(9000);
+      expect(after.get(ids[1]!)?.sortOrder).toBe(1);
     });
 
     it('an id of another user, and one of none, between others of a long one change nothing', async () => {

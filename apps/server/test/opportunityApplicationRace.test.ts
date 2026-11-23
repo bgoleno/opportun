@@ -207,6 +207,39 @@ describe('an application started on the kept one while a merge moves a live one 
     },
   );
 
+  it.runIf(testDialect === 'postgres').each([
+    ['the other one', 'other'],
+    ['the kept one', 'keep'],
+  ] as const)(
+    'in the making, and the one on %s given up before the merge reads again: 409, with nothing merged',
+    async (_what, which) => {
+      const p = await pair();
+      const { submission: there } = await start(p, p.other);
+      const give = AsyncResource.bind(() =>
+        p.app.db
+          .update(applicationSubmissions)
+          .set({ status: 'abandoned' })
+          .where(eq(applicationSubmissions.opportunityId, p[which]))
+          .run(),
+      );
+      setRaceHook(async (point) => {
+        if (point === 'opportunities.merge.indexMet') await give();
+      });
+      const held = heldOpen(p.app, (tx) => start(p, p.keep, tx));
+      await held.reached;
+      const merging = ended(merge(p));
+      const blocked = await someoneBlocked(p.app);
+      held.go();
+      await held.done;
+      const outcome = await merging;
+      setRaceHook(undefined);
+      expect(outcome).toBe('409 conflict');
+      expect(blocked).toBe(true);
+      expect(await attemptsOf(p, p.other)).toEqual([there.id]);
+      expect(await attemptsOf(p, p.keep)).toHaveLength(1);
+    },
+  );
+
   it.runIf(testDialect === 'postgres')('made before it reads: the same', async () => {
     const p = await pair();
     const { submission: there } = await start(p, p.other);
@@ -287,27 +320,51 @@ describe('beside a merge or a delete, what names the one that goes', () => {
     expect(await written(p)).toEqual(before);
   });
 
-  it.each(WRITES)('%s first: the merge waits, and moves it', async (_w, write) => {
+  /** How often a merge or a delete takes the locks of the attempts there are. */
+  function countTries(): () => number {
+    let tries = 0;
+    setRaceHook((point) => {
+      if (point === 'opportunities.attempts.locked') tries += 1;
+      return Promise.resolve();
+    });
+    return () => {
+      setRaceHook(undefined);
+      return tries;
+    };
+  }
+
+  it.each(
+    WRITES.flatMap(([what, write]) => [
+      [`${what} first, then a merge`, merge, write, what] as const,
+      [`${what} first, then a delete`, remove, write, what] as const,
+    ]),
+  )('%s: it waits, and it goes with it', async (_w, going, write, what) => {
     const p = await pair();
     await resumeOf(p, p.keep);
     const held = heldOpen(p.app, (tx) => write(p, tx));
     await held.reached;
-    const merging = ended(merge(p));
+    const tries = countTries();
+    const outcome = ended(going(p));
     const blocked = await someoneBlocked(p.app);
     held.go();
     await held.done;
-    expect(await merging).toBe('ok');
+    expect(await outcome).toBe('ok');
     expect(blocked).toBe(true);
+    // An application was not there when the locks of the attempts were taken, and is when the row is
+    // had: only once more has its lock. On SQLite the first look is after it.
+    const started = what === 'an application started on it' && testDialect === 'postgres';
+    expect(tries()).toBe(started ? 2 : 1);
     const after = await written(p);
     expect(JSON.stringify(after)).not.toContain(p.other);
-    expect([after.resumes.length, after.sends.length, after.attempts.length]).toEqual(
-      _w === 'a resume sent for it'
-        ? [2, 1, 0]
-        : _w === 'a resume made for it'
-          ? [3, 0, 0]
-          : _w === 'a resume moved to it'
-            ? [2, 0, 0]
-            : [2, 0, 1],
+    const n = [after.resumes.length, after.sends.length, after.attempts.length];
+    const merged = going === merge;
+    expect(n).toEqual(
+      {
+        'a resume sent for it': [2, merged ? 1 : 0, 0],
+        'a resume made for it': [3, 0, 0],
+        'a resume moved to it': [2, 0, 0],
+        'an application started on it': [2, 0, merged ? 1 : 0],
+      }[what],
     );
   });
 
@@ -325,6 +382,32 @@ describe('beside a merge or a delete, what names the one that goes', () => {
   });
 });
 
+describe.runIf(testDialect === 'postgres')(
+  'a resume moved to it waits, and the merge is refused',
+  () => {
+    it.each(['in_review', 'final'] as const)(
+      'a status saved meanwhile (%s) stays',
+      async (status) => {
+        const p = await pair();
+        const id = await resumeOf(p, p.keep);
+        await start(p, p.keep);
+        await start(p, p.other);
+        const pause = pauseAt(LOCKED);
+        const merging = ended(merge(p));
+        await pause.reached;
+        const moving = ended(updateResume(p.app.db, p.ctx, id, { opportunityId: p.other }));
+        const blocked = await someoneBlocked(p.app);
+        await updateResume(p.app.db, p.ctx, id, { status, title: 'Renamed' });
+        pause.release();
+        expect([await merging, await moving]).toEqual(['409 live_submission_conflict', 'ok']);
+        expect(blocked).toBe(true);
+        const row = await p.app.db.select().from(resumes).where(eq(resumes.id, id)).get();
+        expect(row).toMatchObject({ opportunityId: p.other, status, title: 'Renamed' });
+      },
+    );
+  },
+);
+
 // The merge and the delete take the locks of the attempts there are, and then the user's. One made in
 // between has a lock they don't hold.
 describe('an attempt made after the locks on attempts were taken', () => {
@@ -339,6 +422,21 @@ describe('an attempt made after the locks on attempts were taken', () => {
     });
     const id = await attemptOn(p, p.other, step.id);
     return { held, outcome, id, stepId: step.id };
+  }
+  /** Parks the confirmation with the attempt's row; counts the tries of what goes from then on. */
+  function parkConfirmation() {
+    let tries = 0;
+    let arrived!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>((r) => (arrived = r));
+    const gate = new Promise<void>((r) => (release = r));
+    setRaceHook(async (point) => {
+      if (point === 'opportunities.attempts.locked') tries += 1;
+      if (point !== 'submissions.confirm.updated') return;
+      arrived();
+      await gate;
+    });
+    return { reached, release, tries: () => tries };
   }
   /** As inbound mail confirms it: the attempt's lock, its row, then its step. */
   async function confirm(p: Pair, id: string) {
@@ -365,16 +463,18 @@ describe('an attempt made after the locks on attempts were taken', () => {
   ])('%s beside its confirmation: both are done, and the attempt is whole', async (what, going) => {
     const p = await pair();
     const { held, outcome, id, stepId } = await madeMeanwhile(p, () => going(p));
-    const pause = pauseAt('submissions.confirm.updated');
+    const parked = parkConfirmation();
     const confirming = ended(confirm(p, id));
-    await pause.reached;
+    await parked.reached;
     held.go();
     await held.done;
     // The merge or the delete comes to wait for the confirmation.
-    expect(await someoneBlocked(p.app)).toBe(true);
-    await new Promise((r) => setTimeout(r, 300));
-    pause.release();
+    const blocked = await someoneBlocked(p.app);
+    parked.release();
     expect([await confirming, await outcome]).toEqual(['ok', 'ok']);
+    expect(blocked).toBe(true);
+    // Started over with its lock, not gone on without it.
+    expect(parked.tries()).toBe(1);
     const row = await p.app.db
       .select()
       .from(applicationSubmissions)

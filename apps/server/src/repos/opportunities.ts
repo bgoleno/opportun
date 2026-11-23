@@ -1004,12 +1004,30 @@ export async function mergeOpportunities(
   } catch (err) {
     // An application being started on the kept one isn't there to be read yet, and its index entry
     // is (#944). It is the same conflict; the start wins, and nothing was merged.
-    if (!isUniqueViolation(err)) throw err;
+    if (!metLiveIndex(err)) throw err;
+    await racePoint('opportunities.merge.indexMet');
     const other = await liveAttempt(db, ctx, otherId);
-    if (other === undefined || (await liveAttempt(db, ctx, keepId)) === undefined) throw err;
-    throw liveConflict(other.id);
+    if (other !== undefined && (await liveAttempt(db, ctx, keepId)) !== undefined) {
+      throw liveConflict(other.id);
+    }
+    // One of the two was given up since. The race is over: as a start that lost one answers.
+    throw new HttpError(
+      409,
+      'conflict',
+      'Another request changed this application. Try again.',
+      undefined,
+      { userFacing: true },
+    );
   }
 }
+
+/**
+ * Two live attempts of one opportunity met on their index. Postgres names it. SQLite has no such
+ * error here: its write gate lets no start in while a merge runs.
+ */
+const metLiveIndex = (err: unknown): boolean =>
+  isUniqueViolation(err) &&
+  (err as { constraint?: unknown }).constraint === 'application_submissions_live_uq';
 
 /** The opportunity's live attempt: it can have one (application_submissions_live_uq). */
 async function liveAttempt(
