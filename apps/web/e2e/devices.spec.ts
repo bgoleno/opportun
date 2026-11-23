@@ -175,7 +175,9 @@ test('device token: one whose answer is lost is listed, and can be revoked', asy
     dialog.getByText(/^Could not confirm that "Lost MacBook" was created/),
   ).toBeVisible();
   await dialog.getByRole('button', { name: 'Cancel' }).click();
-  await expect(page.getByText(/^"Lost MacBook" was created, but its value/)).toBeVisible();
+  await expect(
+    page.getByText(/^A token named "Lost MacBook" was created since then/),
+  ).toBeVisible();
   const row = page.getByRole('listitem', { name: 'Lost MacBook' });
   await expect(row.getByText('Not shown here')).toBeVisible();
   await row.getByRole('button', { name: 'Revoke' }).click();

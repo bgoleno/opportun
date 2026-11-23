@@ -2,7 +2,7 @@
 // (design D2, the Home Assistant pattern). One dialog mints the scoped token, hands over the
 // matching download and keeps both on screen for as long as the install takes, because the
 // token is shown exactly once and the install happens in another window.
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Copy, Download } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { useReviewUsage } from '@/components/apply/api';
@@ -54,6 +54,15 @@ export const ek = {
 };
 
 /**
+ * Reads the token list again, from now: a first read still out is not one, as it may have been
+ * answered before what was just done, and an invalidation alone would wait for it (#904).
+ */
+export async function rereadTokens(qc: QueryClient): Promise<void> {
+  await qc.cancelQueries({ queryKey: ek.tokens, exact: true });
+  await qc.invalidateQueries({ queryKey: ek.tokens });
+}
+
+/**
  * Whether a create may have made a token nobody has seen: anything but the server's own refusal
  * (4xx). A dropped connection, a proxy's answer (an error api() had to name itself, `http_408`) or
  * one with no token in it says nothing of what the server did (#904).
@@ -65,8 +74,17 @@ export function answerLost(err: unknown): boolean {
 /** What the list marks a token with whose value nobody was shown. */
 export const NOT_SHOWN = 'Not shown here';
 
-export const lostTokenText = (name: string): string =>
-  `Could not confirm that "${name}" was created. If it was, its value can no longer be shown: revoke what the list marks "${NOT_SHOWN}", and create another.`;
+/**
+ * What is said of a create that was not answered, while nothing is marked for it. `read` is whether
+ * the list had been read before it: if not, nothing in the list can be told to be what it made, and
+ * the sentence points at no token. `settled`, once another of that name has been answered.
+ */
+export const lostTokenText = (name: string, read: boolean, settled = false): string =>
+  `Could not confirm that "${name}" was created. ${
+    read
+      ? `If it was, its value can no longer be shown: revoke what the list marks "${NOT_SHOWN}"`
+      : 'If the list has one by that name whose value you do not have, it can no longer be shown: revoke it'
+  }${settled ? '' : ', and create another'}.`;
 
 /** Creates a device token; an answer without one is a lost answer. */
 export async function createDeviceToken<T extends { id: string; token: string }>(
@@ -114,10 +132,13 @@ export function ExtensionSetupDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   displayName: string;
-  /** The ids of the tokens in the list now. */
-  listed?: () => string[];
-  /** The token of this name may have been made, and its answer was lost; the ids from before it. */
-  onLost?: (name: string, before: string[]) => void;
+  /** The ids of the tokens in the list, or null when it has not been read. */
+  listed?: () => string[] | null;
+  /**
+   * The token of this name may have been made, and its answer was lost; `listed` from before it.
+   * Returns what to say of it.
+   */
+  onLost?: (name: string, before: string[] | null) => string;
   /** This one was made, and its value is on screen. */
   onShown?: (id: string, name: string) => void;
   /** How often to look for this token's first use; small in tests. */
@@ -217,7 +238,7 @@ export function ExtensionSetupDialog({
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const before = listed?.() ?? [];
+    const before = listed?.() ?? null;
     try {
       const res = await createDeviceToken<MintedToken>({
         // One token for the extension (tl and sec on #182): it keeps every token in one place,
@@ -233,10 +254,9 @@ export function ExtensionSetupDialog({
       onShown?.(res.id, proposedName);
     } catch (err) {
       // Read again whatever failed: a token made without its answer is then in the list (#904).
-      void qc.invalidateQueries({ queryKey: ek.tokens });
+      void rereadTokens(qc);
       if (answerLost(err)) {
-        setError(lostTokenText(proposedName));
-        onLost?.(proposedName, before);
+        setError(onLost?.(proposedName, before) ?? lostTokenText(proposedName, before !== null));
       } else {
         setError(
           err instanceof ApiError && err.code === 'invalid_password'

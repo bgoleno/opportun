@@ -255,9 +255,13 @@ describe('DevicesCard', () => {
     const SAYS =
       'Could not confirm that "Work MacBook" was created. If it was, its value can no longer be shown: revoke what the list marks "Not shown here", and create another.';
     const FOUND =
-      '"Work MacBook" was created, but its value was not shown here and no longer can be. Revoke what the list marks "Not shown here", and create another.';
-    /** After a create of that name that worked: there is no other to create. */
-    const FOUND_AFTER = FOUND.replace(', and create another.', '.');
+      'A token named "Work MacBook" was created since then, and its value was not shown here. Unless you have it, revoke what the list marks "Not shown here" and create another.';
+    /** Once a create of that name has been answered: there is no other to create. */
+    const answered = (text: string) => text.replace(/,? and create another\.$/, '.');
+    const FOUND_AFTER = answered(FOUND);
+    /** The list was not read before the create, so nothing in it can be told to be the lost one. */
+    const UNKNOWN =
+      'Could not confirm that "Work MacBook" was created. If the list has one by that name whose value you do not have, it can no longer be shown: revoke it, and create another.';
     const MARK = 'Not shown here';
     const drop = (): never => {
       throw new TypeError('Failed to fetch');
@@ -574,7 +578,152 @@ describe('DevicesCard', () => {
       await pressCreate(user, dialog);
       await saved(user);
       await screen.findByText('Request failed (http_500).');
-      expect(screen.getAllByRole('alert').map((x) => x.textContent)).toContain(SAYS);
+      expect(screen.getAllByRole('alert').map((x) => x.textContent)).toContain(answered(SAYS));
+    });
+
+    // tl on #918: a list that was not read is not an empty one.
+    describe('when the list was not read before the create', () => {
+      const OLDER = { ...MADE, id: 't8' };
+      it.each(['failed', 'unfinished'] as const)(
+        'its read %s: nothing is marked, and no token is named',
+        async (how) => {
+          const user = userEvent.setup();
+          let read = false;
+          const { state } = server(['made and lost'], [{ ...OLDER, lastUsedAt: NOW - MIN }], {
+            'GET /device-tokens': () => {
+              if (read) return { items: state.items };
+              return how === 'failed' ? { status: 500 } : new Promise(() => undefined);
+            },
+          });
+          renderWithProviders(<DevicesCard />);
+          if (how === 'failed') await screen.findByText('Request failed (http_500).');
+          const dialog = await fill(user);
+          read = true;
+          await pressCreate(user, dialog);
+          // Said so in the dialog too, whose sentence is set as the create fails.
+          expect(await within(dialog).findByRole('alert')).toHaveTextContent(UNKNOWN);
+          await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+          await waitFor(async () => expect(await rowsNamed()).toHaveLength(2));
+          expect(marked()).toEqual([]);
+          expect(screen.getByRole('alert')).toHaveTextContent(UNKNOWN);
+          expect(screen.getByRole('alert')).not.toHaveTextContent(MARK);
+        },
+      );
+
+      it('it was read once, and its last read failed', async () => {
+        const user = userEvent.setup();
+        let fail = false;
+        const { state } = server(['lost', 'made and lost'], [OLDER], {
+          'GET /device-tokens': () => (fail ? { status: 500 } : { items: state.items }),
+        });
+        const { queryClient } = renderWithProviders(<DevicesCard />);
+        await rowsNamed();
+        fail = true;
+        await act(() => queryClient.invalidateQueries({ queryKey: ['device-tokens'] }));
+        await screen.findByText('Request failed (http_500).');
+        fail = false;
+        const dialog = await fill(user);
+        await pressCreate(user, dialog);
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent(UNKNOWN);
+      });
+
+      it('a list being read again counts as read, when its last finished read worked', async () => {
+        const user = userEvent.setup();
+        let hold = false;
+        let go: () => void = () => undefined;
+        const { state } = server(['made and lost'], [OLDER], {
+          'GET /device-tokens': () => {
+            if (!hold) return { items: state.items };
+            hold = false;
+            return new Promise((resolve) => {
+              go = () => resolve({ items: state.items });
+            });
+          },
+        });
+        const { queryClient } = renderWithProviders(<DevicesCard />);
+        await rowsNamed();
+        hold = true;
+        act(() => void queryClient.invalidateQueries({ queryKey: ['device-tokens'] }));
+        const dialog = await fill(user);
+        await pressCreate(user, dialog);
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent(SAYS);
+        go();
+        await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+        await waitFor(async () => expect(await rowsNamed()).toHaveLength(2));
+        const [lost] = await rowsNamed();
+        await waitFor(() => expect(marked()).toEqual([lost]));
+      });
+
+      it('it stays so through a second lost create, in the dialog too', async () => {
+        const user = userEvent.setup();
+        let read = false;
+        const { state } = server(['lost', 'made and lost'], [OLDER], {
+          'GET /device-tokens': () => (read ? { items: state.items } : { status: 500 }),
+        });
+        renderWithProviders(<DevicesCard />);
+        await screen.findByText('Request failed (http_500).');
+        const dialog = await fill(user);
+        read = true;
+        await pressCreate(user, dialog);
+        await within(dialog).findByRole('alert');
+        await screen.findAllByRole('listitem', { name: 'Work MacBook', hidden: true });
+        await pressCreate(user, dialog);
+        await waitFor(async () =>
+          expect(
+            await screen.findAllByRole('listitem', { name: 'Work MacBook', hidden: true }),
+          ).toHaveLength(2),
+        );
+        expect(within(dialog).getByRole('alert')).toHaveTextContent(UNKNOWN);
+        await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+        expect(marked()).toEqual([]);
+        expect(screen.getByRole('alert')).toHaveTextContent(UNKNOWN);
+      });
+
+      it.each<[string, Meta[], boolean]>([
+        ['none of that name', [], false],
+        ['one that has been used', [{ ...OLDER, lastUsedAt: NOW - MIN }], false],
+        ['an old one never used, which might be it', [OLDER], true],
+      ])('after a retry that works, with %s in the list', async (_w, start, said) => {
+        const user = userEvent.setup();
+        let read = false;
+        const { state } = server(['lost', 'answered'], start, {
+          'GET /device-tokens': () => (read ? { items: state.items } : { status: 500 }),
+        });
+        renderWithProviders(<DevicesCard />);
+        await screen.findByText('Request failed (http_500).');
+        const dialog = await fill(user);
+        read = true;
+        await pressCreate(user, dialog);
+        await within(dialog).findByRole('alert');
+        await pressCreate(user, dialog);
+        await saved(user);
+        await waitFor(async () => expect(await rowsNamed()).toHaveLength(1 + start.length));
+        await waitFor(() =>
+          expect(screen.queryAllByRole('alert').map((x) => x.textContent)).toEqual(
+            said ? [answered(UNKNOWN)] : [],
+          ),
+        );
+        expect(marked()).toEqual([]);
+        if (said) await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+        await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+      });
+    });
+
+    it('one that has been used is not marked, and loses its mark when it is', async () => {
+      const user = userEvent.setup();
+      const { state } = server(['made and lost']);
+      const { queryClient } = renderWithProviders(<DevicesCard />);
+      await screen.findByText('No device tokens yet.');
+      const dialog = await fill(user);
+      await pressCreate(user, dialog);
+      await within(dialog).findByRole('alert');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(marked()).toHaveLength(1));
+      // Somebody has its value, so it is not the lost one.
+      state.items = state.items.map((t) => ({ ...t, lastUsedAt: NOW }));
+      await act(() => queryClient.invalidateQueries({ queryKey: ['device-tokens'] }));
+      await waitFor(() => expect(marked()).toEqual([]));
+      expect(screen.getByRole('alert')).toHaveTextContent(SAYS);
     });
 
     it.each(['Cancel', 'Dismiss'])(
@@ -662,6 +811,28 @@ describe('DevicesCard', () => {
         expect(await within(setup).findByRole('alert')).toHaveTextContent(named(SAYS));
         return { user, setup };
       }
+
+      it('a list that was not read: no token is named, in it or on the page', async () => {
+        const user = userEvent.setup();
+        let read = false;
+        const older = { ...MADE, id: 't8', name: NAME };
+        const { state } = server(['lost'], [older], {
+          ...SETUP,
+          'GET /device-tokens': () => (read ? { items: state.items } : { status: 500 }),
+        });
+        renderWithProviders(<DevicesCard />);
+        await screen.findByText('Request failed (http_500).');
+        await user.click(screen.getByRole('button', { name: 'Set up' }));
+        const setup = await screen.findByRole('dialog', { name: 'Set up the browser extension' });
+        await user.type(await within(setup).findByLabelText('Password'), PW);
+        read = true;
+        await user.click(within(setup).getByRole('button', { name: 'Continue' }));
+        expect(await within(setup).findByRole('alert')).toHaveTextContent(named(UNKNOWN));
+        await user.click(within(setup).getByRole('button', { name: 'Close' }));
+        await rowsNamed(NAME);
+        expect(marked()).toEqual([]);
+        expect(screen.getByRole('alert')).toHaveTextContent(named(UNKNOWN));
+      });
 
       it('one of that name from before is not marked', async () => {
         const older = { ...MADE, id: 't8', name: NAME, lastUsedAt: NOW - 5 * MIN };

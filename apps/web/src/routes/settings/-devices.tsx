@@ -32,6 +32,7 @@ import {
   ExtensionSetupDialog,
   lostTokenText,
   NOT_SHOWN,
+  rereadTokens,
   type ArtifactList,
 } from './-extensionSetup';
 
@@ -89,16 +90,25 @@ export function relativeTime(ms: number, now: number = Date.now()): string {
 interface Lost {
   /** The names they were sent with, and whether a create of that name has been shown since. */
   names: { name: string; settled: boolean }[];
+  /**
+   * Whether the list had been read before the first of them. If not, nothing in it can be told to
+   * be theirs: nothing is marked, and the page points at no token.
+   */
+  read: boolean;
   /** The ids that cannot be theirs: the list before the first of them, and those shown since. */
   known: string[];
 }
 
-/** The live tokens that a lost create may have made, of one name or of any. */
+/**
+ * The live tokens that a lost create may have made, of one name or of any. One that has been used is
+ * none: nobody has a lost one's value.
+ */
 function unseen(lost: Lost | null, list: DeviceToken[], name?: string): DeviceToken[] {
   if (lost === null) return [];
   return list.filter(
     (t) =>
       t.revokedAt === null &&
+      t.lastUsedAt === null &&
       !lost.known.includes(t.id) &&
       (name === undefined ? lost.names.some((n) => n.name === t.name) : t.name === name),
   );
@@ -110,8 +120,9 @@ function dropNames(lost: Lost | null, done: (n: Lost['names'][number]) => boolea
   return names.length === 0 ? null : { ...lost, names };
 }
 
+// A condition, not an order: another tab can have made one of the same name meanwhile.
 const foundTokenText = ({ name, settled }: Lost['names'][number]): string =>
-  `"${name}" was created, but its value was not shown here and no longer can be. Revoke what the list marks "${NOT_SHOWN}"${settled ? '' : ', and create another'}.`;
+  `A token named "${name}" was created since then, and its value was not shown here. Unless you have it, revoke what the list marks "${NOT_SHOWN}"${settled ? '' : ' and create another'}.`;
 
 export function DevicesCard() {
   const qc = useQueryClient();
@@ -134,10 +145,13 @@ export function DevicesCard() {
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
   const [lost, setLost] = useState<Lost | null>(null);
+  // As it is when a create settles, not when it started.
+  const lostNow = useRef(lost);
+  lostNow.current = lost;
   /** Every token shown here since the page opened: one may be missing from the list for a moment. */
   const shownIds = useRef<string[]>([]);
   const [revoking, setRevoking] = useState<DeviceToken | null>(null);
-  const refresh = () => qc.invalidateQueries({ queryKey: dk.tokens });
+  const refresh = () => rereadTokens(qc);
   const revoke = useMutation({
     mutationFn: (id: string) => api<void>(`/device-tokens/${id}`, { method: 'DELETE' }),
     // Revoking the last mail:push token disconnects Apple Mail.
@@ -146,18 +160,28 @@ export function DevicesCard() {
 
   const items = tokens.data?.items ?? [];
   const listNow = () => qc.getQueryData<{ items: DeviceToken[] }>(dk.tokens)?.items ?? [];
-  const onLost = (name: string, before: string[]) =>
+  /** The ids in the list, or null when it has not been read: not read is not the same as empty. */
+  const listed = () => {
+    const state = qc.getQueryState<{ items: DeviceToken[] }>(dk.tokens);
+    if (state?.data === undefined || state.status === 'error') return null;
+    return state.data.items.map((t) => t.id);
+  };
+  function onLost(name: string, before: string[] | null): string {
     setLost((cur) => ({
       // From before the first lost create: a second one's list may hold the first one's token.
-      known: cur?.known ?? [...before, ...shownIds.current],
+      read: cur?.read ?? before !== null,
+      known: cur?.known ?? [...(before ?? []), ...shownIds.current],
       names: [...(cur?.names ?? []).filter((n) => n.name !== name), { name, settled: false }],
     }));
+    return lostTokenText(name, lostNow.current?.read ?? before !== null);
+  }
   async function onShown(id: string, name: string) {
     shownIds.current.push(id);
     setLost((cur) =>
       cur === null
         ? null
         : {
+            read: cur.read,
             known: [...cur.known, id],
             names: cur.names.map((n) => (n.name === name ? { name, settled: true } : n)),
           },
@@ -206,9 +230,9 @@ export function DevicesCard() {
               <FormError
                 key={n.name}
                 message={
-                  unseen(lost, items, n.name).length === 0
-                    ? lostTokenText(n.name)
-                    : foundTokenText(n)
+                  lost.read && unseen(lost, items, n.name).length > 0
+                    ? foundTokenText(n)
+                    : lostTokenText(n.name, lost.read, n.settled)
                 }
               />
             ))}
@@ -228,7 +252,7 @@ export function DevicesCard() {
               <TokenRow
                 key={t.id}
                 token={t}
-                unseen={unseen(lost, [t]).length > 0}
+                unseen={lost?.read === true && unseen(lost, [t]).length > 0}
                 onRevoke={() => setRevoking(t)}
               />
             ))}
@@ -243,7 +267,7 @@ export function DevicesCard() {
         open={settingUp}
         onOpenChange={setSettingUp}
         displayName={me.data?.displayName ?? 'this browser'}
-        listed={() => listNow().map((t) => t.id)}
+        listed={listed}
         onLost={onLost}
         onShown={(id, name) => void onShown(id, name)}
       />
@@ -254,7 +278,7 @@ export function DevicesCard() {
           // One the server made after the list was last read (sec on #918).
           if (!open && lost !== null) void refresh();
         }}
-        listed={() => listNow().map((t) => t.id)}
+        listed={listed}
         onCreated={(res) => {
           setCreating(false);
           setCreated(res.token);
@@ -423,13 +447,16 @@ interface FieldErrors {
 function CreateDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The ids of the tokens in the list now. */
-  listed: () => string[];
+  /** The ids of the tokens in the list, or null when it has not been read. */
+  listed: () => string[] | null;
   onCreated: (made: { id: string; name: string; token: string }) => void;
   /** Whatever failed: the list is read again, as the token may have been made all the same. */
   onFailed: () => void;
-  /** The token of this name may have been made, and its answer was lost; the ids from before it. */
-  onLost: (name: string, before: string[]) => void;
+  /**
+   * The token of this name may have been made, and its answer was lost; `listed` from before it.
+   * Returns what to say of it.
+   */
+  onLost: (name: string, before: string[] | null) => string;
 }) {
   // Whether the dialog is still open when a create settles: read then, not when it started.
   const open = useRef(props.open);
@@ -476,8 +503,8 @@ function CreateDialog(props: {
       props.onFailed();
       if (answerLost(err)) {
         // The page says so too, and alone does when the dialog was closed meanwhile.
-        if (open.current) setError(lostTokenText(asked));
-        props.onLost(asked, before);
+        const says = props.onLost(asked, before);
+        if (open.current) setError(says);
       } else {
         setError(
           err instanceof ApiError && err.code === 'invalid_password'
