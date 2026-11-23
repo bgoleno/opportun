@@ -106,7 +106,13 @@ export async function attestSubmission(
   const now = Date.now();
   const submittedAt = input.submittedAt ?? now;
   if (submittedAt > now + CLOCK_SKEW_MS) {
-    throw new HttpError(422, 'submitted_at_in_future', 'That time has not happened yet.');
+    throw new HttpError(
+      422,
+      'submitted_at_in_future',
+      'That time has not happened yet.',
+      undefined,
+      { userFacing: true },
+    );
   }
   // Every caller before its transaction (test: two concurrent attests record one application).
   await racePoint('submissions.attest');
@@ -129,6 +135,8 @@ export async function attestSubmission(
         422,
         'submitted_at_before_handoff',
         'That is before you opened the form. Choose when you pressed Submit.',
+        undefined,
+        { userFacing: true },
       );
     }
     const opp = await opportunityFacts(tx, ctx, row.opportunityId);

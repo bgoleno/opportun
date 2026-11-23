@@ -85,7 +85,13 @@ export async function suggestIndustries(
     .where(and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.active, true)))
     .all();
   if (readResume === null && targets.length === 0) {
-    throw new HttpError(422, 'no_profile_input', 'Add a base resume or a role target first.');
+    throw new HttpError(
+      422,
+      'no_profile_input',
+      'Add a base resume or a role target first.',
+      undefined,
+      { userFacing: true },
+    );
   }
   // Over the budget nothing waits, unlike a posting: the user asked now, so they are told now.
   if (!(await discoveryBudgetHasRoom(db, ctx))) throw refused('budget_exceeded');
