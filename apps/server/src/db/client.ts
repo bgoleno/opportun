@@ -77,6 +77,29 @@ export const MIGRATIONS_DIR = fileURLToPath(new URL('../../drizzle', import.meta
 /** apps/server/drizzle-pg: the Postgres chain, from 0000_baseline (drizzle-pg.config.ts). */
 export const MIGRATIONS_PG_DIR = fileURLToPath(new URL('../../drizzle-pg', import.meta.url));
 
+/** Why a database is not opened, by name: the start-failure log line for each is in obs/catalog. */
+export type DatabaseRefusal =
+  | 'newer_database'
+  | 'two_databases'
+  | 'database_being_moved'
+  | 'database_move_interrupted'
+  | 'database_move_failed';
+
+/**
+ * A refusal to open the database, with a message written for the operator. The CLIs print that
+ * message; the server's log, which keeps no error's message, has a fixed line for each `refusal`
+ * (startFailure.ts, #887).
+ */
+export class DatabaseRefused extends Error {
+  override name = 'DatabaseRefused';
+  constructor(
+    readonly refusal: DatabaseRefusal,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 /** An open SQLite database (openDatabase). */
 export interface SqliteHandle {
   dialect: 'sqlite';
@@ -136,7 +159,7 @@ export function migrateLocked(sqlite: Sqlite, migrationsFolder: string = MIGRATI
         .get() as { created_at: number | string } | undefined;
       const lastApplied = last === undefined ? undefined : Number(last.created_at);
       if (lastApplied !== undefined && lastApplied > newestKnown) {
-        throw new Error(NEWER_DATABASE);
+        throw new DatabaseRefused('newer_database', NEWER_DATABASE);
       }
       const record = sqlite.prepare(
         `INSERT INTO "${MIGRATIONS_TABLE}" ("hash", "created_at") VALUES (?, ?)`,
@@ -198,7 +221,7 @@ export async function migrateLockedPg(
         const row = last.rows[0];
         const lastApplied = row === undefined ? undefined : Number(row.created_at);
         if (lastApplied !== undefined && lastApplied > newestKnown) {
-          throw new Error(NEWER_DATABASE);
+          throw new DatabaseRefused('newer_database', NEWER_DATABASE);
         }
         for (const migration of migrations) {
           if (lastApplied !== undefined && lastApplied >= migration.folderMillis) continue;
@@ -483,7 +506,7 @@ function asyncDatabase(sqlite: Sqlite, opts: ConnectOptions = {}): Db {
 }
 
 /** Both the data directory and sqliteDir hold a database (issue #179, incident #165). */
-export class SqliteDirConflict extends Error {
+export class SqliteDirConflict extends DatabaseRefused {
   override name = 'SqliteDirConflict';
 }
 
@@ -536,6 +559,7 @@ function migrateSqliteDir(
       const code = (err as { code?: unknown }).code;
       if (code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED') {
         throw new SqliteDirConflict(
+          'database_being_moved',
           `another process appears to be migrating ${oldFile} to ${sqliteDir} right now; ` +
             'refusing to run concurrently rather than guess. Wait for it to finish, then ' +
             'restart if the migration is still needed.',
@@ -546,6 +570,7 @@ function migrateSqliteDir(
 
     if (isOperatorFile(newFile)) {
       throw new SqliteDirConflict(
+        'two_databases',
         `a database exists at both ${oldFile} and ${newFile}. Opportun will not guess which one ` +
           'is current: move or remove whichever one is stale, then restart.',
       );
@@ -559,7 +584,8 @@ function migrateSqliteDir(
     ];
     for (const [, to] of files) {
       if (isOperatorFile(to)) {
-        throw new Error(
+        throw new DatabaseRefused(
+          'database_move_interrupted',
           `${to} already exists: an earlier migration attempt may have been interrupted. ` +
             `Check it by hand (sqlite3 ${to} 'PRAGMA integrity_check;') before removing it, ` +
             'then restart.',
@@ -586,7 +612,8 @@ function migrateSqliteDir(
     }
     if (check !== 'ok') {
       removeOperatorFile(newFile);
-      throw new Error(
+      throw new DatabaseRefused(
+        'database_move_failed',
         `the copy of ${oldFile} written to ${newFile} by VACUUM INTO failed integrity_check ` +
           `(${String(check)}); the pre-migration original is preserved at ${retiredBase}`,
       );
