@@ -77,6 +77,8 @@ const JobResponse = z.object({
   /** Added fields: an old build ignores them, a current one reports what happened. */
   opportunityId: z.string(),
   stage: z.enum(OPPORTUNITY_STAGES).nullable(),
+  /** Sent only when the capture is saved and what the opportunity lacked is not (#914). */
+  filled: z.literal(false).optional(),
 });
 const CaptureResponse = z.union([ProfileResponse, JobResponse]);
 
@@ -272,7 +274,12 @@ export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void
         // In the user's one capture slot (#309): see withCaptureSlot. resolveCapture bounds its own
         // waits for the ingest lock.
         const resolved = await withCaptureSlot(db, ctx.userId, () =>
-          resolveCapture(db, ctx, { posting, captureText: text, siteId: page.siteId }),
+          resolveCapture(db, ctx, {
+            posting,
+            captureText: text,
+            siteId: page.siteId,
+            log: req.log,
+          }),
         );
         return reply.code(resolved.createdOpportunity ? 201 : 200).send({
           kind: 'job' as const,
@@ -281,6 +288,7 @@ export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void
           refined: refinement !== null,
           opportunityId: resolved.opportunityId,
           stage: resolved.stageMovedTo,
+          ...(resolved.filled ? {} : { filled: false as const }),
         });
       });
     },

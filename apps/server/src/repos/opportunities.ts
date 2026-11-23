@@ -519,7 +519,7 @@ const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
  * from the company and link the last one left (#889).
  */
 export async function updateOpportunity(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   id: string,
   patch: UpdateOpportunityInput,
@@ -715,7 +715,7 @@ export async function recordAtsJobRef(
  * can flag a state without disturbing a ref an earlier run established.
  */
 export async function setPostingState(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   id: string,
   patch: {
