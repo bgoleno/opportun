@@ -2,8 +2,16 @@
 // module. Its network half is apps/server/src/sites/greenhouse.ts. The rules below are moved
 // unchanged from apps/server/src/lib/atsBoard.ts (boardFromUrl) and lib/atsJobRef.ts.
 import { greenhouseBoardJobUrl } from '../greenhouseJid';
-import { ATS_JOB_ID, ATS_SLUG, AtsOrgConfig, linkOnHost, segmentsOf } from './ats';
-import type { BoardRef, HostRule, JobRef, SiteIdentity, SiteUrl } from './types';
+import { ATS_JOB_ID, ATS_SLUG, AtsOrgConfig } from './ats';
+import {
+  linkOnHost,
+  segmentsOf,
+  type BoardRef,
+  type HostRule,
+  type JobRef,
+  type SiteIdentity,
+  type SiteUrl,
+} from './types';
 
 /** The Job Board API's host, the one Greenhouse host the server fetches from. */
 export const GREENHOUSE_API_HOST = 'boards-api.greenhouse.io';

@@ -7,7 +7,7 @@
 //
 // Hostile input: the body is capped before parsing and each job's block is at most a few
 // lines, so parsing is linear in the (capped) body size.
-import type { NormalizedPosting } from '@opportun/core';
+import { linkedin, type NormalizedPosting } from '@opportun/core';
 
 /** The LinkedIn job alert sender (a mail address; the board domain is derived from it). */
 export const LINKEDIN_ALERT_SENDER = 'jobalerts-noreply@linkedin.com';
@@ -65,7 +65,7 @@ function jobLink(line: string): { url: string; id: string } | null {
   const id = JOB_PATH.exec(url.pathname)?.[1];
   if (id === undefined) return null;
   // The canonical job page on the board's own origin, without tracking parameters.
-  return { url: `https://www.${BOARD_DOMAIN}/jobs/view/${id}/`, id };
+  return { url: linkedin.jobPageUrl({ site: linkedin.id, board: null, id }), id };
 }
 
 export function parseLinkedInAlert(text: string): NormalizedPosting[] {

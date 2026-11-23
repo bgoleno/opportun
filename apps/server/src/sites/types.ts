@@ -4,6 +4,7 @@
 // (test/siteContract.test.ts) fails if the two disagree.
 import type { NormalizedPosting, SiteIdentity } from '@opportun/core';
 import type { DiscoverySource, SourceContext } from '../adapters/discoverySource';
+import type { Recognition } from '../lib/linkedinCapture';
 
 export interface SiteApi {
   /** The API's URLs, each built only from a slug and id of the shapes a real board uses. */
@@ -26,13 +27,37 @@ export interface SiteApi {
   ): Promise<'yes' | 'no' | 'unknown'>;
 }
 
+/** A tab the browser extension sent, as the capture route received it. */
+export interface CaptureInputPage {
+  url: string;
+  title: string;
+  text: string;
+}
+
+/** The server half of capture. It reads the text the user's own browser rendered (C-1). */
+export interface SiteCapture {
+  recognize(input: CaptureInputPage): Recognition;
+  /**
+   * The job description in a capture's stored text, or null when there is none to find. It is
+   * deterministic and never calls AI: re-derive holds itself to the bar of a live capture with
+   * no AI key (see lib/postingRederive.ts).
+   */
+  storedDescriptionOf(text: string): string | null;
+}
+
+/** The site's job-alert mail. */
+export interface SiteAlertEmail {
+  /** The addresses the alerts come from (mail only, never fetched). */
+  readonly senders: readonly string[];
+  /** The leads in an alert's text; none when it is not this site's alert. */
+  parse(text: string): NormalizedPosting[];
+}
+
 export interface SiteModule {
   readonly identity: SiteIdentity;
   readonly api?: SiteApi;
   /** Through #777: the site's own MCP server. */
   readonly mcp?: never;
-  /** Moved here at step 3: the server half of capture, today's recognizer for the site. */
-  readonly capture?: never;
-  /** Moved here at step 3: the site's alert parser. */
-  readonly alertEmail?: never;
+  readonly capture?: SiteCapture;
+  readonly alertEmail?: SiteAlertEmail;
 }

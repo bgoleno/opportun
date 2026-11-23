@@ -1,14 +1,21 @@
-// URL handling for captured tabs. Pure functions, unit-tested.
+// URL handling for captured tabs. Pure functions, unit-tested. The capture sites (their hosts, job
+// ids and job links) are packages/core's, the same ones the server reads
+// (https://github.com/bgoleno/opportun/issues/769), through the subpath that has no dependencies.
+import {
+  CAPTURE_SITES,
+  indeed,
+  linkedin,
+  linkOnHost,
+  type CaptureSiteId,
+} from '@opportun/core/captureSites';
+
+export type { CaptureSiteId };
 
 /** The server's URL cap for a capture (apps/server/src/routes/common.ts HttpsUrl). */
 export const MAX_URL = 2048;
 
-/** The LinkedIn apex host, its www host, or a two-letter country subdomain (uk., de.). */
-const LINKEDIN_HOST = /^(?:www\.|[a-z][a-z]\.)?linkedin\.com$/;
-
 /** Jobs list views that show one posting in a detail pane, named by ?currentJobId=. */
 const JOBS_LIST_PATH = /^\/jobs\/(?:search|search-results|collections)(?:\/|$)/;
-const JOB_ID = /^\d{1,20}$/;
 
 function parse(href: string): URL | null {
   try {
@@ -21,39 +28,18 @@ function parse(href: string): URL | null {
 /** True for an https URL on a LinkedIn host. */
 export function isLinkedInUrl(href: string): boolean {
   const url = parse(href);
-  return (
-    url !== null && url.protocol === 'https:' && LINKEDIN_HOST.test(url.hostname.toLowerCase())
-  );
+  return url !== null && url.protocol === 'https:' && linkOnHost(url, linkedin.pageHosts);
 }
 
 /**
- * indeed.com and its www host only, as the server's capture site registry claims them. Indeed's
- * country sites (uk.indeed.com, indeed.co.uk) are out of scope
- * (https://github.com/bgoleno/opportun/issues/74) and stay unread.
- */
-const INDEED_HOST = /^(?:www\.)?indeed\.com$/;
-
-/**
- * An Indeed job key. The same rule as the server's `INDEED_JOB_KEY` (the alert parser's): the
- * extension cannot import server code, so it keeps this copy, and a test (indeed.test.ts) pins
- * the two equal.
- */
-export const INDEED_JOB_KEY = /^[0-9a-f]{8,32}$/i;
-
-/** The sites the popup may read, and the only tabs it reads at all. */
-export type CaptureSiteId = 'linkedin' | 'indeed';
-
-/**
  * Which capture site an https tab URL is on, or null for every other tab: the popup never reads
- * a tab this returns null for. Decided from the URL alone, never from page content.
+ * a tab this returns null for. Decided from the URL alone, never from page content. The host is
+ * compared as the URL writes it: one with a trailing dot is no capture site's.
  */
 export function captureSiteOf(href: string): CaptureSiteId | null {
   const url = parse(href);
   if (url === null || url.protocol !== 'https:') return null;
-  const host = url.hostname.toLowerCase();
-  if (LINKEDIN_HOST.test(host)) return 'linkedin';
-  if (INDEED_HOST.test(host)) return 'indeed';
-  return null;
+  return CAPTURE_SITES.find((s) => linkOnHost(url, s.pageHosts))?.id ?? null;
 }
 
 /**
@@ -64,14 +50,14 @@ export function captureSiteOf(href: string): CaptureSiteId | null {
  */
 export function indeedJobKey(href: string): string | null {
   const url = parse(href);
-  if (url === null || captureSiteOf(href) !== 'indeed') return null;
+  if (url === null || captureSiteOf(href) !== indeed.id) return null;
   const key =
     url.pathname === '/viewjob'
       ? url.searchParams.get('jk')
       : url.pathname === '/jobs' || url.pathname === '/'
         ? url.searchParams.get('vjk')
         : null;
-  return key !== null && INDEED_JOB_KEY.test(key) ? key.toLowerCase() : null;
+  return key !== null && indeed.isJobId(key) ? key.toLowerCase() : null;
 }
 
 /**
@@ -89,10 +75,11 @@ export function canonicalCaptureUrl(href: string): string {
   const url = parse(href);
   if (url === null) return href;
   const jk = indeedJobKey(href);
-  if (jk !== null) return `https://www.indeed.com/viewjob?jk=${jk}`;
-  if (LINKEDIN_HOST.test(url.hostname.toLowerCase()) && JOBS_LIST_PATH.test(url.pathname)) {
+  if (jk !== null) return indeed.jobPageUrl({ site: indeed.id, board: null, id: jk });
+  if (linkOnHost(url, linkedin.pageHosts) && JOBS_LIST_PATH.test(url.pathname)) {
     const id = url.searchParams.get('currentJobId');
-    if (id !== null && JOB_ID.test(id)) return `${url.origin}/jobs/view/${id}/`;
+    // The tab's own host is kept (uk. stays uk.), so this is not linkedin.jobPageUrl.
+    if (id !== null && linkedin.isJobId(id)) return `${url.origin}/jobs/view/${id}/`;
   }
   if (href.length > MAX_URL) return `${url.origin}${url.pathname}`.slice(0, MAX_URL);
   return href;

@@ -7,65 +7,16 @@
 // pending alert-email lead keys differently and the two never meet, which is exactly the bug
 // (#17) this exists to prevent. `<site>:<jobId>` is exact and needs no model.
 //
-// Adding a site is adding an entry here plus a recognizer (lib/captureRecognizers.ts). The
-// extension's own LinkedIn-specific gates (manifest host permissions, the popup's URL check)
-// are a separate piece of work, deliberately not in this seam.
-import type { NormalizedPosting } from '@opportun/core';
-import { INDEED_JOB_KEY } from './alertParsers/indeed';
+// The sites are packages/core's CAPTURE_SITES (https://github.com/bgoleno/opportun/issues/769), which
+// the extension reads too; a site's recognizer is in its server module (apps/server/src/sites).
+import {
+  CAPTURE_SITES,
+  linkOnHost,
+  type NormalizedPosting,
+  type SiteIdentity,
+} from '@opportun/core';
 
-export interface CaptureSite {
-  /** Stable, lowercase, and the prefix stored in a posting's externalId. */
-  id: string;
-  /** How the site is named to the user, e.g. in the merge heading. */
-  label: string;
-  matchesHost(host: string): boolean;
-  /** The site's own job id for a posting URL on it, or null. */
-  jobIdFromUrl(url: URL): string | null;
-  /** True when a bare id has the shape of this site's job ids. */
-  isJobId(id: string): boolean;
-}
-
-/** The LinkedIn apex, its www host, or a two-letter country subdomain (uk., de.). */
-const LINKEDIN_HOST = /^(?:www\.|[a-z][a-z]\.)?linkedin\.com$/;
-/** `/jobs/view/<id>` with an optional trailing slash; ids are digits. */
-const LINKEDIN_JOB_PATH = /^\/jobs\/view\/(\d{1,20})\/?$/;
-const LINKEDIN_JOB_ID = /^\d{1,20}$/;
-
-/**
- * indeed.com and its www host only. Country sites (uk.indeed.com, indeed.co.uk) are out of scope
- * for https://github.com/bgoleno/opportun/issues/73 and stay unclaimed.
- */
-const INDEED_HOST = /^(?:www\.)?indeed\.com$/;
-
-/**
- * The job key of an Indeed single-posting URL, `/viewjob?jk=<jk>`. The key rule is the alert
- * parser's own constant, not a second regex: an alert lead stores the same `jk` bare, and the
- * two must agree on what a job key is for the identity match to hold.
- */
-function indeedJobKey(url: URL): string | null {
-  if (url.pathname !== '/viewjob') return null;
-  const jk = url.searchParams.get('jk');
-  return jk !== null && INDEED_JOB_KEY.test(jk) ? jk.toLowerCase() : null;
-}
-
-export const CAPTURE_SITES: readonly CaptureSite[] = [
-  {
-    id: 'linkedin',
-    label: 'LinkedIn',
-    matchesHost: (host) => LINKEDIN_HOST.test(host),
-    jobIdFromUrl: (url) => LINKEDIN_JOB_PATH.exec(url.pathname)?.[1] ?? null,
-    isJobId: (id) => LINKEDIN_JOB_ID.test(id),
-  },
-  {
-    id: 'indeed',
-    label: 'Indeed',
-    matchesHost: (host) => INDEED_HOST.test(host),
-    jobIdFromUrl: indeedJobKey,
-    isJobId: (id) => INDEED_JOB_KEY.test(id),
-  },
-];
-
-const byId = new Map(CAPTURE_SITES.map((s) => [s.id, s]));
+const byId = new Map<string, SiteIdentity>(CAPTURE_SITES.map((s) => [s.id, s]));
 
 /**
  * The site whose label is `label`, or null. The inverse of siteLabel for a known site: a capture
@@ -74,7 +25,7 @@ const byId = new Map(CAPTURE_SITES.map((s) => [s.id, s]));
  * Case and surrounding whitespace are ignored, so a hand-edited "indeed " still finds Indeed
  * (https://github.com/bgoleno/opportun/issues/96).
  */
-export function siteOfLabel(label: string): CaptureSite | null {
+export function siteOfLabel(label: string): SiteIdentity | null {
   const wanted = label.trim().toLowerCase();
   if (wanted === '') return null;
   return CAPTURE_SITES.find((s) => s.label.toLowerCase() === wanted) ?? null;
@@ -85,8 +36,11 @@ export function siteLabel(siteId: string): string {
   return byId.get(siteId.toLowerCase())?.label ?? siteId;
 }
 
-/** The site serving `href`, or null. Https only: a capture is always of an https page. */
-export function siteOfUrl(href: string): CaptureSite | null {
+/**
+ * The site serving `href`, or null. Https only: a capture is always of an https page. One trailing
+ * dot on the host is dropped, and no more; then the host is compared as written.
+ */
+export function siteOfUrl(href: string): SiteIdentity | null {
   let url: URL;
   try {
     url = new URL(href);
@@ -94,8 +48,10 @@ export function siteOfUrl(href: string): CaptureSite | null {
     return null;
   }
   if (url.protocol !== 'https:') return null;
-  const host = url.hostname.toLowerCase().replace(/\.$/, '');
-  return CAPTURE_SITES.find((s) => s.matchesHost(host)) ?? null;
+  const { protocol, pathname, searchParams } = url;
+  const hostname = url.hostname.replace(/\.$/, '');
+  const asWritten = { protocol, hostname, pathname, searchParams };
+  return CAPTURE_SITES.find((s) => linkOnHost(asWritten, s.pageHosts)) ?? null;
 }
 
 /** `<site>:<id>` for a posting captured from a known site, or null. */
@@ -114,8 +70,8 @@ export function postingIdentity(posting: NormalizedPosting): string | null {
   // parser (a user-mapped MCP connector, say) can store its own opaque id beside a site URL, and
   // reading that as the site's id would make it contradict a capture of the very same posting
   // (https://github.com/bgoleno/opportun/issues/73).
-  const fromUrl = site.jobIdFromUrl(new URL(posting.postingUrl as string));
-  if (fromUrl !== null) return `${site.id}:${fromUrl.toLowerCase()}`;
+  const fromUrl = site.jobFromUrl(new URL(posting.postingUrl as string));
+  if (fromUrl !== null) return `${site.id}:${fromUrl.id.toLowerCase()}`;
   // Otherwise a bare externalId is the site's own id only when it has that id's shape.
   return externalId !== '' && site.isJobId(externalId)
     ? `${site.id}:${externalId.toLowerCase()}`
