@@ -320,7 +320,7 @@ export function ReactiveResumeCard() {
         ) : (
           <ReactiveResumeSettings
             status={status.data}
-            store={store.data?.store ?? 'google'}
+            store={store.data?.store ?? 'google_doc'}
             saving={save.isPending}
             validating={validate.isPending}
             storeSaving={setStore.isPending}

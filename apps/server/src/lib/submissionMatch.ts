@@ -79,7 +79,13 @@ export const CONFIRMATION_SKEW_MS = 5 * 60 * 1000;
 export const CONFIRMATION_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 const lower = (s: string): string => s.trim().toLowerCase();
-const bareDomain = (d: string): string => lower(d).replace(/\.+$/, '');
+/** A domain lowercased and trimmed, with every trailing dot removed by one scan from the end. */
+function bareDomain(d: string): string {
+  const s = lower(d);
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 0x2e) end -= 1;
+  return s.slice(0, end);
+}
 
 /**
  * The sender's domain from a From header: the address in the last `<...>` when the header ends

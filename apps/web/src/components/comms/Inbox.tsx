@@ -218,13 +218,70 @@ function BulkBar({
   // Asked first (#647): a reject wipes the messages' subject, snippet and body for good.
   const [confirming, setConfirming] = useState(false);
   const count = `${ids.length} message${ids.length === 1 ? '' : 's'}`;
+  // What the confirmation was opened on (#841). A reload that changes it closes the confirmation
+  // with a message, so it never acts on a count the user did not see; null while it is closed.
+  const openedOn = useRef<readonly string[] | null>(null);
+  // While the reject is in flight its own outcome is reported (ConfirmDialog), not the list's.
+  const inFlight = useRef(false);
+  const idsKey = [...ids].sort().join(',');
+  useEffect(() => {
+    const seen = openedOn.current;
+    if (!confirming || seen === null || inFlight.current) return;
+    if ([...seen].sort().join(',') === idsKey) return;
+    const gone = seen.filter((id) => !ids.includes(id)).length;
+    openedOn.current = null;
+    setConfirming(false);
+    toast({
+      title: 'Nothing was rejected',
+      description: `${gone} of the ${seen.length} selected messages ${gone === 1 ? 'is' : 'are'} no longer listed. Check the selection and reject again.`,
+    });
+    // ids is read through idsKey, its contents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsKey, confirming]);
+  // A reload that leaves none of them takes this bar, and its confirmation, away: say so then.
+  useEffect(
+    () => () => {
+      const seen = openedOn.current;
+      if (seen === null || inFlight.current) return;
+      toast({
+        title: 'Nothing was rejected',
+        description:
+          seen.length === 1
+            ? 'The selected message is no longer listed.'
+            : `None of the ${seen.length} selected messages are listed any more.`,
+      });
+    },
+    [],
+  );
+  // Escape or Cancel returns focus to the button that opened the confirmation (#841). A native
+  // <dialog> does that itself, but not to a disabled button, so the button is never disabled
+  // while the confirmation can be open, only marked so (aria-disabled), and focus is put back
+  // here too when the browser has left it on the page body.
+  const opener = useRef<HTMLButtonElement>(null);
+  const wasConfirming = useRef(false);
+  useEffect(() => {
+    if (wasConfirming.current && !confirming) {
+      const active = document.activeElement;
+      if (active === null || active === document.body) opener.current?.focus();
+    }
+    wasConfirming.current = confirming;
+  }, [confirming]);
+  const blocked = bulk.isPending || loading;
   const reject = async () => {
     // mutateAsync: the dialog stays open with the failure in it (ConfirmDialog), not a toast.
     // Each message goes with the link it was seen under (#666): a changed one is left alone.
-    const res = await bulk.mutateAsync({
-      items: rows.map((r) => ({ id: r.id, opportunityId: r.opportunityId })),
-      action: { kind: 'reject', reason },
-    });
+    inFlight.current = true;
+    let res: Awaited<ReturnType<typeof bulk.mutateAsync>>;
+    try {
+      res = await bulk.mutateAsync({
+        items: rows.map((r) => ({ id: r.id, opportunityId: r.opportunityId })),
+        action: { kind: 'reject', reason },
+      });
+    } finally {
+      inFlight.current = false;
+    }
+    // Done: the bar goes with its rows (onDone), and that is not the list changing under it.
+    openedOn.current = null;
     const notes = [
       res.skipped > 0 ? `${res.skipped} skipped (not yours or already gone).` : null,
       // Linked or moved in another tab or session since they were selected (#666).
@@ -255,16 +312,25 @@ function BulkBar({
       </Select>
       {/* Not while the list loads (#678): a row the new filter hides still looks selected. */}
       <Button
+        ref={opener}
         type="button"
         size="sm"
-        onClick={() => setConfirming(true)}
-        disabled={bulk.isPending || loading}
+        aria-disabled={blocked}
+        className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+        onClick={() => {
+          if (blocked) return;
+          openedOn.current = ids;
+          setConfirming(true);
+        }}
       >
         {bulk.isPending ? 'Rejecting...' : `Reject ${ids.length}`}
       </Button>
       <ConfirmDialog
         open={confirming}
-        onOpenChange={setConfirming}
+        onOpenChange={(o) => {
+          if (!o) openedOn.current = null;
+          setConfirming(o);
+        }}
         title={`Reject ${count}?`}
         description={`Rejecting removes the subject, snippet and body of ${ids.length === 1 ? 'this message' : `these ${count}`} for good. This cannot be undone.`}
         confirmLabel={`Reject ${ids.length}`}
@@ -352,7 +418,15 @@ function InboxList({
     channel: channel === '' ? undefined : channel,
     order,
   };
-  const { data, error, isPending, isPlaceholderData } = useInbox(tab, filters, page, pageSize);
+  const { data: fresh, error, isPlaceholderData } = useInbox(tab, filters, page, pageSize);
+  // A reload that fails keeps the list that last loaded on screen (#841), and with it the
+  // selection made from it, with a note that the list could not refresh. Without it the rows,
+  // the selection and an open confirmation all went at once.
+  const [lastLoaded, setLastLoaded] = useState(fresh);
+  useEffect(() => {
+    if (fresh !== undefined) setLastLoaded(fresh);
+  }, [fresh]);
+  const data = fresh ?? (error ? lastLoaded : undefined);
   // What was asked for, not what is being typed: the list on screen answers the debounced values.
   const filtered =
     (filters.q ?? '').trim() !== '' ||
@@ -369,10 +443,10 @@ function InboxList({
   // Only on the page's own answer, never on the page before still shown while it loads (tl).
   useEffect(() => {
     if (isPlaceholderData) return;
-    if (data !== undefined && page > 0 && data.items.length === 0 && data.total > 0) {
-      setPage(Math.max(0, Math.ceil(data.total / pageSize) - 1));
+    if (fresh !== undefined && page > 0 && fresh.items.length === 0 && fresh.total > 0) {
+      setPage(Math.max(0, Math.ceil(fresh.total / pageSize) - 1));
     }
-  }, [data, isPlaceholderData, page, pageSize]);
+  }, [fresh, isPlaceholderData, page, pageSize]);
   // A row that leaves the list leaves the selection (#647): only rows on screen are ever selected.
   // That covers a filter change too, a row the new filter hides is dropped, so a row still listed
   // stays selected, and a confirmation open for it stays open (#678).
@@ -452,9 +526,12 @@ function InboxList({
         />
       ) : null}
 
-      {error ? (
+      {error && data !== undefined ? (
+        <FormError message={`The list couldn't refresh. ${errorMessage(error)}`} />
+      ) : null}
+      {error && data === undefined ? (
         <FormError message={errorMessage(error)} />
-      ) : isPending ? (
+      ) : data === undefined ? (
         <p className="text-sm text-muted-foreground">Loading...</p>
       ) : data.items.length === 0 && data.total > 0 ? (
         // An empty page of a tab that has messages: a step-back to a page not cached yet (#678).

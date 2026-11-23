@@ -6,7 +6,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { and, eq, inArray, max } from 'drizzle-orm';
 import QRCode from 'qrcode';
 import { z } from 'zod';
-import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
+import { isUniqueViolation, lockScope, withTransaction, type Exec } from '../db/client';
 import { auditLog, settings } from '../db/schema';
 import { audit } from '../lib/audit';
 import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
@@ -872,11 +872,30 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       if (!confirmed) return reply;
       const { open } = req.body;
       const now = Date.now();
-      await db
-        .insert(settings)
-        .values({ key: REGISTRATION_OPEN_KEY, userId: null, value: open, updatedAt: now })
-        .onConflictDoUpdate({ target: settings.key, set: { value: open, updatedAt: now } })
-        .run();
+      const store = (exec: Exec) =>
+        exec
+          .insert(settings)
+          .values({ key: REGISTRATION_OPEN_KEY, userId: null, value: open, updatedAt: now })
+          .onConflictDoUpdate({ target: settings.key, set: { value: open, updatedAt: now } })
+          .run();
+      const record = (exec: Exec) =>
+        audit(exec, 'admin.registration_updated', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { open },
+        });
+      if (open) {
+        // Opening commits with its audit row (#853): a failed write leaves registration closed.
+        await withTransaction(db, async (tx) => {
+          await store(tx);
+          await record(tx);
+        });
+      } else {
+        // Closing is a stop (#815's rule): it commits, then is recorded, so a failed write never
+        // leaves registration open.
+        await store(db);
+        await record(db);
+      }
       return reply.code(200).send({ open });
     },
   );

@@ -31,6 +31,7 @@ import { insertResume } from '../repos/resumes';
 import { CsvError, parseCsv, unguardFormula, type CsvRecord } from './csv';
 import { HttpError } from './errors';
 import { cleanText } from './safeText';
+import { resumeStoreFor } from './resumeStores';
 
 export const OPPORTUNITY_COLUMNS = [
   'company',
@@ -548,14 +549,20 @@ async function importOpportunity(row: OpportunityRow, deps: RowDeps): Promise<Ou
     try {
       // Which store registers it is the user's own preference (#19), not always Google.
       const storeKind = await readDocumentStorePref(db, ctx);
-      const store = storeKind === 'reactive_resume' ? deps.reactiveResumeStore : deps.documentStore;
+      // Through the one registry (#771); the importer holds the Google and Reactive Resume stores.
+      const store = resumeStoreFor(storeKind, {
+        documentStore: () => deps.documentStore,
+        reactiveResumeStore: () => deps.reactiveResumeStore,
+        // Never a preference (DOCUMENT_STORE_PREFS): an upload has no link to register.
+        localFileStore: () => undefined,
+      });
       if (store === undefined) throw new Error('the document store is unavailable');
       const meta = await store.registerExisting(ctx, row.resumeDocRef);
       if (!(await trackedResume(db, ctx, meta.docRef))) {
         await insertResume(db, ctx, {
           kind: 'tailored',
           title: meta.title,
-          store: storeKind === 'reactive_resume' ? 'reactive_resume' : 'google_doc',
+          store: storeKind,
           docRef: meta.docRef,
           opportunityId: oppId,
           parentResumeId: null,

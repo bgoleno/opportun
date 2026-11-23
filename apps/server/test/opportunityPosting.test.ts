@@ -223,6 +223,40 @@ describe('POST /opportunities/:id/find-posting', () => {
     expect(second.json().opportunity.descriptionMd).toContain('SIEM II');
   });
 
+  // #835 (qa on #830): a board that could not be read is said as such, with a retry, and "no
+  // close match" only when the board was read.
+  it('a board that cannot be read answers unreachable, not none (#835)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    registerSource({
+      kind: 'ats_greenhouse',
+      // eslint-disable-next-line require-yield -- a board whose read fails before any posting
+      async *fetchPostings() {
+        throw new Error('fetch failed: ECONNRESET');
+      },
+    });
+
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ outcome: 'unreachable' });
+    expect((await getOpportunity(app.db, ctxOf(a), id)).postingState).toBeNull();
+  });
+
+  it('a board read with no match still answers none (#835)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    boardServes([posting('Reseller Sales Manager', '1')]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.json()).toMatchObject({ outcome: 'none' });
+  });
+
   it('answers no_board with the paste hint', async () => {
     const { app, a } = await boot();
     const id = await seed(app, a, {
@@ -463,6 +497,56 @@ describe('POST /opportunities/:id/find-posting', () => {
           i.bodyMd?.includes("Checked on the company's board; your description was kept.") === true,
       ),
     ).toBe(true);
+  });
+
+  // #835 (qa on #830): a Refetch that finds the same job, link and all, changed nothing, and says
+  // so; one that rewrote the link names the rewrite rather than "Checked".
+  it('a Refetch that changes nothing answers unchanged (#835)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, {
+      title: 'Staff Platform Engineer',
+      postingUrl: OWN_LINK,
+      descriptionMd: 'my own notes on the role',
+    });
+    await storeIdentity(app, id, OWN_LINK);
+    await setPostingState(app.db, ctxOf(a), id, {
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+    });
+    boardServes([posting('Platform Engineer', '1003')]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.json()).toMatchObject({ outcome: 'attached', unchanged: true });
+  });
+
+  it('a Refetch that rewrote the link names the rewrite, not "Checked" (#835)', async () => {
+    const { app, a } = await boot();
+    const careers = 'https://careers.sentineledge.example/jobs?gh_jid=1003';
+    const id = await seed(app, a, {
+      title: 'Staff Platform Engineer',
+      postingUrl: careers,
+      descriptionMd: 'my own notes on the role',
+    });
+    await storeIdentity(app, id, OWN_LINK);
+    await setPostingState(app.db, ctxOf(a), id, {
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+    });
+    boardServes([posting('Platform Engineer', '1003')]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.json()).toMatchObject({ outcome: 'attached' });
+    expect(res.json().unchanged).not.toBe(true);
+    expect((await getOpportunity(app.db, ctxOf(a), id)).postingUrl).toBe(OWN_LINK);
+    const { items } = await listActivities(app.db, ctxOf(a), id, { limit: 50, offset: 0 });
+    const line = items.find((i) => i.title === 'Job posting attached')?.bodyMd ?? '';
+    expect(line).not.toContain('Checked on the company');
+    expect(line).toContain('link');
+    expect(line).toContain('Your own description was kept.');
   });
 
   it('confirmed, own description, its own job missing: nothing changes, and it says so (#812)', async () => {

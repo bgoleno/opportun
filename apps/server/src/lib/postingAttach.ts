@@ -161,11 +161,17 @@ export async function attachPosting(
     atsJobRef != null &&
     current.atsJobRef.kind === atsJobRef.kind &&
     current.atsJobRef.externalId === atsJobRef.externalId;
+  // "Checked" only when nothing at all was rewritten (#835, qa on #830): a link or a board token
+  // replaced is a change, and is named as one.
+  const linkChanged = (patch.postingUrl ?? null) !== (current.postingUrl ?? null);
+  const orgChanged = sameJob && current.atsJobRef?.org !== atsJobRef?.org;
+  const checkedOnly = keep && sameJob && !linkChanged && !orgChanged;
   const howSaid = [
-    keep && sameJob
+    checkedOnly
       ? "Checked on the company's board; your description was kept."
       : ((refetch ? HOW_SAID_REFETCH : HOW_SAID).get(how) ?? ''),
-    keep && !sameJob ? 'Your own description was kept.' : '',
+    refetch && linkChanged ? "The posting link was updated to the board's." : '',
+    keep && !checkedOnly ? 'Your own description was kept.' : '',
   ]
     .filter((l) => l !== '')
     .join(' ');

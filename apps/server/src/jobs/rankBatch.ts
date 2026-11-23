@@ -196,6 +196,8 @@ export type SubmitOutcome =
        * the runner's backoff. False for any other failure: see refusedSend.
        */
       answered: boolean;
+      /** Postings whose wait this failure ended, at their last return (#827, #835). */
+      stoppedWaiting?: number;
     };
 
 /**
@@ -331,7 +333,18 @@ export async function submitRankBatch(
       },
       { scope: lockFor(ctx) },
     );
-    return { status: 'provider_error', returned, answered };
+    // How many of its postings this failure ended the wait of (#835): said in the job's error.
+    let stoppedWaiting = 0;
+    if (counted) {
+      const waiting = new Set(await listBatchWaitingIds(db, ctx));
+      stoppedWaiting = made.linked.filter((id) => !waiting.has(id)).length;
+    }
+    return {
+      status: 'provider_error',
+      returned,
+      answered,
+      ...(stoppedWaiting > 0 ? { stoppedWaiting } : {}),
+    };
   }
   await racePoint('rankBatch.provider_answered');
   if (!(await markBatchSubmitted(db, made.id, providerBatchId))) {
@@ -806,7 +819,17 @@ export const rankBatchSubmitJob: JobHandler<Record<string, never>> = {
     // after all, and a quick resend would leave that one an orphan no collect ever sees (point 7's
     // double send, sooner); that wait stays the sweep's, as before.
     if (outcome.status === 'provider_error' && outcome.answered) {
-      throw new Error('the provider refused the ranking batch; sending it again');
+      // On its last attempt it is not sent again by this job (#835, qa on #840): the error says
+      // what became of its postings instead.
+      const lastAttempt = ctx.attempt >= ctx.maxAttempts;
+      const stopped = outcome.stoppedWaiting ?? 0;
+      throw new Error(
+        !lastAttempt
+          ? 'the provider refused the ranking batch; sending it again'
+          : stopped > 0
+            ? `the provider refused the ranking batch again: ${stopped} posting${stopped === 1 ? '' : 's'} stopped waiting for a batch`
+            : 'the provider refused the ranking batch on every attempt: its postings wait for the next send',
+      );
     }
   },
 };
