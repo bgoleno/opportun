@@ -4,7 +4,7 @@
 // next request. The Apple Mail line reflects the last batch the connector pushed.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Copy } from 'lucide-react';
-import { useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SharedDemoNotice } from '@/components/SharedDemoNotice';
 import { FormError } from '@/components/FormError';
@@ -88,8 +88,11 @@ export function relativeTime(ms: number, now: number = Date.now()): string {
 
 /** Creates whose answer was lost: what they made, if anything, is in the list unseen (#904). */
 interface Lost {
-  /** The names they were sent with, and whether a create of that name has been shown since. */
-  names: { name: string; settled: boolean }[];
+  /**
+   * The names they were sent with. `settled`, once a create of that name has been shown since: how
+   * many reads of the list had finished by then, so that a later one is known to be later.
+   */
+  names: { name: string; settled: number | null }[];
   /**
    * Whether the list had been read before the first of them. If not, nothing in it can be told to
    * be theirs: nothing is marked, and the page points at no token.
@@ -117,12 +120,13 @@ function unseen(lost: Lost | null, list: DeviceToken[], name?: string): DeviceTo
 function dropNames(lost: Lost | null, done: (n: Lost['names'][number]) => boolean): Lost | null {
   if (lost === null) return null;
   const names = lost.names.filter((n) => !done(n));
+  if (names.length === lost.names.length) return lost;
   return names.length === 0 ? null : { ...lost, names };
 }
 
 // A condition, not an order: another tab can have made one of the same name meanwhile.
 const foundTokenText = ({ name, settled }: Lost['names'][number]): string =>
-  `A token named "${name}" was created since then, and its value was not shown here. Unless you have it, revoke what the list marks "${NOT_SHOWN}"${settled ? '' : ' and create another'}.`;
+  `A token named "${name}" was created since then, and its value was not shown here. Unless you have it, revoke what the list marks "${NOT_SHOWN}"${settled === null ? ' and create another' : ''}.`;
 
 export function DevicesCard() {
   const qc = useQueryClient();
@@ -171,29 +175,39 @@ export function DevicesCard() {
       // From before the first lost create: a second one's list may hold the first one's token.
       read: cur?.read ?? before !== null,
       known: cur?.known ?? [...(before ?? []), ...shownIds.current],
-      names: [...(cur?.names ?? []).filter((n) => n.name !== name), { name, settled: false }],
+      names: [...(cur?.names ?? []).filter((n) => n.name !== name), { name, settled: null }],
     }));
     return lostTokenText(name, lostNow.current?.read ?? before !== null);
   }
-  async function onShown(id: string, name: string) {
+  function onShown(id: string, name: string) {
     shownIds.current.push(id);
+    const settled = qc.getQueryState(dk.tokens)?.dataUpdateCount ?? 0;
     setLost((cur) =>
       cur === null
         ? null
         : {
             read: cur.read,
             known: [...cur.known, id],
-            names: cur.names.map((n) => (n.name === name ? { name, settled: true } : n)),
+            names: cur.names.map((n) => (n.name === name ? { name, settled } : n)),
           },
     );
-    await refresh();
-    // A list that could not be read says nothing of what was made.
-    const state = qc.getQueryState(dk.tokens);
-    if (state?.status !== 'success' || state.isInvalidated) return;
-    setLost((cur) =>
-      dropNames(cur, (n) => n.settled && unseen(cur, listNow(), n.name).length === 0),
-    );
+    void refresh();
   }
+  // A settled name goes with the first read of the list that shows nothing of it left over, whichever
+  // read that is: the one onShown starts may be cancelled by a later one (the dialog's own close, a
+  // revoke), and a list that could not be read says nothing of what was made.
+  useEffect(() => {
+    const state = qc.getQueryState<{ items: DeviceToken[] }>(dk.tokens);
+    if (state?.data === undefined || state.status !== 'success' || state.isInvalidated) return;
+    const { items: list } = state.data;
+    const reads = state.dataUpdateCount;
+    setLost((cur) =>
+      dropNames(
+        cur,
+        (n) => n.settled !== null && reads > n.settled && unseen(cur, list, n.name).length === 0,
+      ),
+    );
+  }, [qc, lost, tokens.dataUpdatedAt, tokens.isFetching]);
   function dismiss() {
     setLost(null);
     // One the server made after the list was last read (sec on #918).
@@ -232,7 +246,7 @@ export function DevicesCard() {
                 message={
                   lost.read && unseen(lost, items, n.name).length > 0
                     ? foundTokenText(n)
-                    : lostTokenText(n.name, lost.read, n.settled)
+                    : lostTokenText(n.name, lost.read, n.settled !== null)
                 }
               />
             ))}
@@ -269,7 +283,7 @@ export function DevicesCard() {
         displayName={me.data?.displayName ?? 'this browser'}
         listed={listed}
         onLost={onLost}
-        onShown={(id, name) => void onShown(id, name)}
+        onShown={onShown}
       />
       <CreateDialog
         open={creating}
@@ -282,7 +296,7 @@ export function DevicesCard() {
         onCreated={(res) => {
           setCreating(false);
           setCreated(res.token);
-          void onShown(res.id, res.name);
+          onShown(res.id, res.name);
         }}
         onFailed={() => void refresh()}
         onLost={onLost}

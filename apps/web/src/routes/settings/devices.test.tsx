@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { browserCloses, pressEscapeOn } from '@/test/dialog';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { DevicesCard, relativeTime } from './-devices';
+import { rereadTokens } from './-extensionSetup';
 
 const NOW = Date.UTC(2026, 9, 17, 12, 0, 0);
 const MIN = 60_000;
@@ -425,6 +426,115 @@ describe('DevicesCard', () => {
       expect(await rowsNamed()).toHaveLength(1);
       await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
       expect(marked()).toEqual([]);
+    });
+
+    // qa on #918: over a network the list takes longer than the dialog takes to close, and the
+    // dialog's own close reads the list again, which cancels the read still out.
+    describe('with a list that takes 100 ms to read', () => {
+      const SLOW = 100;
+      /** As `server`, and each list answer is what it held when it was asked for. */
+      const slow = (
+        plan: Parameters<typeof server>[0],
+        more: Record<string, unknown> = {},
+        failing: { now: boolean } = { now: false },
+      ) => {
+        const s = server(plan, [], {
+          'GET /device-tokens': async () => {
+            const items = s.state.items;
+            const fails = failing.now;
+            await new Promise((r) => setTimeout(r, SLOW));
+            return fails ? { status: 500 } : { items };
+          },
+          ...more,
+        });
+        return s;
+      };
+      /** The second create is answered; the browser then tells the page that its dialog closed. */
+      const answeredThenClosed = async (
+        user: ReturnType<typeof userEvent.setup>,
+        dialog: HTMLElement,
+      ) => {
+        await pressCreate(user, dialog);
+        await screen.findByRole('dialog', { name: 'Copy your device token' });
+        browserCloses(dialog);
+        await saved(user);
+      };
+
+      it('a retry that works, when the first was never made: nothing is left to say', async () => {
+        const user = userEvent.setup();
+        const { calls } = slow(['lost', 'answered']);
+        renderWithProviders(<DevicesCard />);
+        await screen.findByText('No device tokens yet.');
+        const dialog = await fill(user);
+        await pressCreate(user, dialog);
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent(SAYS);
+        await new Promise((r) => setTimeout(r, 2 * SLOW));
+        const reads = () =>
+          calls.filter((c) => c.method === 'GET' && c.path === '/device-tokens').length;
+        const before = reads();
+        await answeredThenClosed(user, dialog);
+        expect(reads()).toBe(before + 2); // The instrument: the close did read it again.
+        expect(await rowsNamed()).toHaveLength(1);
+        await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+        expect(marked()).toEqual([]);
+      });
+
+      it('a retry that works, when the first was made: only the lost one is left to say', async () => {
+        const user = userEvent.setup();
+        slow(['made and lost', 'answered']);
+        renderWithProviders(<DevicesCard />);
+        await screen.findByText('No device tokens yet.');
+        const dialog = await fill(user);
+        await pressCreate(user, dialog);
+        await within(dialog).findByRole('alert');
+        await answeredThenClosed(user, dialog);
+        await waitFor(async () => expect(await rowsNamed()).toHaveLength(2));
+        const [, lost] = await rowsNamed();
+        await waitFor(() => expect(marked()).toEqual([lost]));
+        await new Promise((r) => setTimeout(r, 3 * SLOW));
+        expect(screen.getByRole('alert')).toHaveTextContent(FOUND_AFTER);
+      });
+
+      // Settled by the answer, but every read it can be told by began before it.
+      it('a read that was out when the retry was answered settles nothing', async () => {
+        const user = userEvent.setup();
+        const { state } = slow(['lost', 'answered']);
+        const { queryClient } = renderWithProviders(<DevicesCard />);
+        await screen.findByText('No device tokens yet.');
+        const dialog = await fill(user);
+        await pressCreate(user, dialog);
+        await within(dialog).findByRole('alert');
+        await new Promise((r) => setTimeout(r, 2 * SLOW));
+        // A read of the list as it is now, still out when the retry is answered.
+        void queryClient.invalidateQueries({ queryKey: ['device-tokens'] });
+        // The lost create reaches the server only now.
+        state.items = [{ ...MADE, id: 'late' }];
+        await answeredThenClosed(user, dialog);
+        await waitFor(async () => expect(await rowsNamed()).toHaveLength(2));
+        const [, lost] = await rowsNamed();
+        await waitFor(() => expect(marked()).toEqual([lost]));
+        expect(screen.getByRole('alert')).toHaveTextContent(FOUND_AFTER);
+      });
+
+      it('a read that failed after the retry keeps it said, and the next that works ends it', async () => {
+        const user = userEvent.setup();
+        const failing = { now: false };
+        slow(['lost', 'answered'], {}, failing);
+        const { queryClient } = renderWithProviders(<DevicesCard />);
+        await screen.findByText('No device tokens yet.');
+        const dialog = await fill(user);
+        await pressCreate(user, dialog);
+        await within(dialog).findByRole('alert');
+        await new Promise((r) => setTimeout(r, 2 * SLOW));
+        failing.now = true;
+        await answeredThenClosed(user, dialog);
+        await screen.findByText('Request failed (http_500).');
+        expect(screen.getAllByRole('alert').map((x) => x.textContent)).toContain(answered(SAYS));
+        failing.now = false;
+        await act(() => queryClient.invalidateQueries({ queryKey: ['device-tokens'] }));
+        await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+        expect(marked()).toEqual([]);
+      });
     });
 
     it('a retry that works, when the first was made: the page says which one to revoke', async () => {
@@ -850,6 +960,46 @@ describe('DevicesCard', () => {
         expect(await within(row).findByText(MARK)).toBeInTheDocument();
         expect(screen.getByRole('alert')).toHaveTextContent(named(FOUND));
       });
+
+      // As the create dialog's (qa on #918): something else reads the list again meanwhile.
+      it.each<['lost' | 'made and lost', number]>([
+        ['lost', 0],
+        ['made and lost', 1],
+      ])(
+        'Continue again with a list that takes 100 ms, when the first was %s: %i marked',
+        async (first, n) => {
+          const user = userEvent.setup();
+          const { state } = server([first, 'answered'], [], {
+            ...SETUP,
+            'GET /device-tokens': async () => {
+              const items = state.items;
+              await new Promise((r) => setTimeout(r, 100));
+              return { items };
+            },
+          });
+          const { queryClient } = renderWithProviders(<DevicesCard />);
+          await screen.findByText('No device tokens yet.');
+          await user.click(await screen.findByRole('button', { name: 'Set up' }));
+          const setup = await screen.findByRole('dialog', { name: 'Set up the browser extension' });
+          await user.type(await within(setup).findByLabelText('Password'), PW);
+          await user.click(within(setup).getByRole('button', { name: 'Continue' }));
+          expect(await within(setup).findByRole('alert')).toHaveTextContent(named(SAYS));
+          await new Promise((r) => setTimeout(r, 200));
+          await user.click(within(setup).getByRole('button', { name: 'Continue' }));
+          expect(await within(setup).findByText('odt_g1')).toBeInTheDocument();
+          await act(() => rereadTokens(queryClient));
+          await user.click(within(setup).getByRole('button', { name: 'Close setup' }));
+          await user.click(await screen.findByRole('button', { name: 'Close anyway' }));
+          await waitFor(async () => expect(await rowsNamed(NAME)).toHaveLength(1 + n));
+          const [, lost] = await rowsNamed(NAME);
+          await waitFor(() => expect(marked()).toEqual(n === 0 ? [] : [lost]));
+          await waitFor(() =>
+            expect(screen.queryAllByRole('alert').map((x) => x.textContent)).toEqual(
+              n === 0 ? [] : [named(FOUND_AFTER)],
+            ),
+          );
+        },
+      );
 
       it.each<['lost' | 'made and lost', number]>([
         ['lost', 0],
