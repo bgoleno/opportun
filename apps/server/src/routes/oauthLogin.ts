@@ -708,11 +708,17 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
               sessionId: sessionIdFrom(req),
             });
       if (verified === null || !spendNonce(db, verified.nonce)) {
-        await audit(db, 'auth.oauth_bad_state', {
-          ...(req.userCtx === null ? {} : { userId: req.userCtx.userId }),
-          ip: req.ip,
-          detail: { provider, replay: verified !== null },
-        });
+        // A refusal's record: a failed write is logged, and the browser still lands on an app
+        // page (#853), never on raw 500 JSON.
+        try {
+          await audit(db, 'auth.oauth_bad_state', {
+            ...(req.userCtx === null ? {} : { userId: req.userCtx.userId }),
+            ip: req.ip,
+            detail: { provider, replay: verified !== null },
+          });
+        } catch (err) {
+          req.log.warn({ 'opportun.oauth.provider': provider, err }, 'oauth callback failed');
+        }
         // An app page that says the sign-in or link was not completed, not a raw JSON 403
         // (#662): the Security page for a signed-in browser, else the sign-in page. Nothing in
         // the request is trusted for this, the mode included: the state did not verify.
@@ -750,9 +756,18 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         );
         return fail('error');
       }
-      if (mode === 'link') return finishLink(req, reply, provider, identity);
-      if (mode === 'setpw') return finishSetPassword(req, reply, provider, identity);
-      return finishLogin(req, reply, provider, identity);
+      // A failure from here on (an audit write that rolled its step back, #779) lands on the
+      // mode's own page with a plain error (#853), not on raw 500 JSON. Each step has already
+      // changed nothing when it throws.
+      try {
+        if (mode === 'link') return await finishLink(req, reply, provider, identity);
+        if (mode === 'setpw') return await finishSetPassword(req, reply, provider, identity);
+        return await finishLogin(req, reply, provider, identity);
+      } catch (err) {
+        // The error's class, never its message (14.8).
+        req.log.warn({ 'opportun.oauth.provider': provider, err }, 'oauth callback failed');
+        return fail('error');
+      }
     },
   );
 
