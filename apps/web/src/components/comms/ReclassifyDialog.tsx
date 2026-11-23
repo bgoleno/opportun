@@ -12,9 +12,9 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
-import { toast } from '@/components/ui/toast';
 import { errorMessage } from '@/lib/api';
-import { classificationLabel, outreachLabel, useReclassify, type CommunicationView } from './api';
+import { classificationLabel, outreachLabel, type CommunicationView } from './api';
+import { useReclassifyInDialog } from './useReclassifyInDialog';
 
 /** Corrects the classification. Each correction is kept to improve the classifier. */
 export function ReclassifyDialog(props: {
@@ -27,21 +27,16 @@ export function ReclassifyDialog(props: {
     comm.classification ?? 'other',
   );
   const [outreach, setOutreach] = useState<string>(comm.outreachKind ?? 'targeted');
-  const save = useReclassify();
+  const correction = useReclassifyInDialog(comm.id, () => props.onOpenChange(false));
   const isOutreach = classification === 'solicitation';
 
   function submit() {
     const outreachKind = isOutreach
       ? (OUTREACH_KINDS.find((k) => k === outreach) ?? 'targeted')
       : null;
-    save.mutate(
-      { id: comm.id, input: { classification, outreachKind } },
-      {
-        onSuccess: () => {
-          toast({ title: 'Classification saved', variant: 'success' });
-          props.onOpenChange(false);
-        },
-      },
+    correction.save(
+      { classification, outreachKind },
+      { done: 'Classification saved', failed: 'Classification not saved' },
     );
   }
 
@@ -89,13 +84,13 @@ export function ReclassifyDialog(props: {
               </Select>
             </div>
           ) : null}
-          {save.error ? <FormError message={errorMessage(save.error)} /> : null}
+          {correction.error ? <FormError message={errorMessage(correction.error)} /> : null}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => props.onOpenChange(false)}>
             Cancel
           </Button>
-          <Button disabled={save.isPending} onClick={submit}>
+          <Button disabled={correction.isPending} onClick={submit}>
             Save
           </Button>
         </DialogFooter>
