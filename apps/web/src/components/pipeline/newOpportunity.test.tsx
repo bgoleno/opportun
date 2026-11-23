@@ -61,7 +61,10 @@ describe('NewOpportunityDialog', () => {
     'a %s over its limit of %i is said in plain words, and nothing is sent (#896)',
     async (label, max) => {
       const api = mockApi({
-        'POST /opportunities': { status: 201, body: { id: 'n', title: 't', companyName: 'c' } },
+        'POST /opportunities': () => ({
+          status: 201,
+          body: { id: 'n', title: 't', companyName: 'c' },
+        }),
       });
       const user = userEvent.setup();
       renderWithProviders(<NewOpportunityDialog open onOpenChange={() => undefined} />);

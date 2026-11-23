@@ -189,6 +189,8 @@ describe('DecidedResults', () => {
   });
 
   it('a 409 from an accepted result whose opportunity is still active leaves the button in place', async () => {
+    const SENTENCE =
+      "This job's opportunity is still in your pipeline. Dismiss the opportunity first, then unsuppress this result.";
     const r = result({
       id: 'a1',
       disposition: 'accepted',
@@ -197,10 +199,11 @@ describe('DecidedResults', () => {
     });
     mockApi({
       'GET /discovery/results': queueHandler({ accepted: [r] }),
-      'POST /discovery/results/a1/unsuppress': {
+      // A handler: a plain object here would be answered as a 200 body.
+      'POST /discovery/results/a1/unsuppress': () => ({
         status: 409,
-        body: { error: { code: 'opportunity_still_active' } },
-      },
+        body: { error: { code: 'opportunity_still_active', message: SENTENCE } },
+      }),
     });
     const user = userEvent.setup();
     renderWithProviders(<DecidedResults />);
@@ -209,6 +212,7 @@ describe('DecidedResults', () => {
     const row = await screen.findByRole('listitem', { name: 'Accepted Role at Globex' });
     await user.click(within(row).getByRole('button', { name: /unsuppress/i }));
 
+    expect(await toastRegion().findByText(SENTENCE)).toBeInTheDocument();
     // The refusal is reported, not hidden behind an assumed success: the row keeps the active
     // button rather than flipping to the Unsuppressed badge it has not actually earned.
     await waitFor(() =>
