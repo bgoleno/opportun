@@ -1,6 +1,7 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { browserCloses, pressEscapeOn } from '@/test/dialog';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { DevicesCard, relativeTime } from './-devices';
 
@@ -194,9 +195,13 @@ describe('DevicesCard', () => {
     });
     await user.click(within(shown).getByRole('button', { name: 'Copy token' }));
     expect(write).toHaveBeenCalledWith(TOKEN);
-    // Escape does not dismiss it: closing is only through the explicit confirmation.
-    await user.keyboard('{Escape}');
-    expect(screen.getByRole('dialog', { name: 'Copy your device token' })).toBeInTheDocument();
+    // Neither Escape nor a close the browser makes on its own dismisses it (#898): closing is only
+    // through the explicit confirmation.
+    pressEscapeOn(shown);
+    expect(screen.getByRole('dialog', { name: 'Copy your device token' })).toBe(shown);
+    browserCloses(shown);
+    expect(screen.getByRole('dialog', { name: 'Copy your device token' })).toBe(shown);
+    expect(within(shown).getByLabelText('Device token')).toHaveValue(TOKEN);
     await user.click(within(shown).getByRole('button', { name: 'I saved it' }));
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Copy your device token' })).toBeNull(),
@@ -208,6 +213,39 @@ describe('DevicesCard', () => {
     ).toBeInTheDocument();
     // Gone for good: the plaintext is nowhere on the page any more.
     expect(document.body.innerHTML).not.toContain(TOKEN);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/898: after an Escape on the first token's dialog, the
+  // next token was created and its dialog never showed.
+  it("shows the next token too, whatever was tried on the first one's dialog", async () => {
+    const user = userEvent.setup();
+    let made = 0;
+    mockApi({
+      'GET /device-tokens': { items: [] },
+      'GET /integrations/apple-mail': NOT_CONNECTED,
+      'POST /device-tokens': () => {
+        made += 1;
+        return { status: 201, body: { ...LAPTOP, id: `t${made}`, token: `odt_${made}` } };
+      },
+    });
+    renderWithProviders(<DevicesCard />);
+    const create = async () => {
+      await user.click(await screen.findByRole('button', { name: 'Create token' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Create a device token' });
+      await user.type(within(dialog).getByLabelText('Name'), 'Mac');
+      await user.type(within(dialog).getByLabelText('Current password'), PW);
+      await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+      return screen.findByRole('dialog', { name: 'Copy your device token' });
+    };
+    const first = await create();
+    expect(within(first).getByLabelText('Device token')).toHaveValue('odt_1');
+    pressEscapeOn(first);
+    browserCloses(first);
+    await user.click(within(first).getByRole('button', { name: 'I saved it' }));
+
+    const second = await create();
+    expect(second).toBeVisible();
+    expect(within(second).getByLabelText('Device token')).toHaveValue('odt_2');
   });
 
   it('validates the dialog: a name, at least one scope and the password are required', async () => {

@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { browserCloses, pressEscapeOn } from '@/test/dialog';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { PasswordCard } from './-password';
 import { TwoFactorCard } from './-twoFactor';
@@ -86,7 +87,11 @@ describe('TwoFactorCard', () => {
     expect(write).toHaveBeenCalledWith(
       CODES.map((c) => `${c.slice(0, 5)}-${c.slice(5)}`).join('\n'),
     );
-    await user.keyboard('{Escape}');
+    // Neither Escape nor a close the browser makes on its own takes the codes away (#898).
+    pressEscapeOn(done);
+    expect(screen.getByRole('dialog', { name: 'Save your recovery codes' })).toBe(done);
+    browserCloses(done);
+    expect(screen.getByRole('dialog', { name: 'Save your recovery codes' })).toBe(done);
     expect(screen.getByRole('list', { name: 'Recovery codes' })).toBeInTheDocument();
     await user.click(within(done).getByRole('button', { name: 'I saved them' }));
     await waitFor(() => expect(screen.queryByRole('list', { name: 'Recovery codes' })).toBeNull());
@@ -95,6 +100,76 @@ describe('TwoFactorCard', () => {
     // Gone for good: nothing on the page shows the codes or the secret any more.
     expect(document.body.textContent).not.toContain(CODES[0]!.slice(0, 5) + '-');
     expect(document.body.textContent).not.toContain(SECRET);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/898: closed while activation was in flight, two-factor
+  // went on and its recovery codes were never shown.
+  describe('while activation is in flight', () => {
+    async function inFlight() {
+      const user = userEvent.setup();
+      let answer!: (body: unknown) => void;
+      let enabled = false;
+      mockApi({
+        'GET /auth/2fa': () => ({ enabled, recoveryCodesLeft: enabled ? 10 : 0 }),
+        'POST /auth/2fa/enroll': { secret: SECRET, otpauthUrl: 'otpauth://x', qrDataUrl: QR },
+        'POST /auth/2fa/activate': () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      });
+      renderWithProviders(<TwoFactorCard />);
+      await startEnable(user);
+      const dialog = await screen.findByRole('dialog', { name: 'Set up two-factor sign-in' });
+      await user.type(within(dialog).getByLabelText('Code from the app'), '123456');
+      await user.click(within(dialog).getByRole('button', { name: 'Turn on' }));
+      await within(dialog).findByRole('button', { name: 'Turning on...' });
+      return {
+        user,
+        dialog,
+        succeed: () => {
+          enabled = true;
+          answer({ recoveryCodes: CODES });
+        },
+        fail: () => answer({ status: 403, body: { error: { code: 'invalid_code' } } }),
+      };
+    }
+
+    it('nothing closes the dialog, and the codes are shown', async () => {
+      const { user, dialog, succeed } = await inFlight();
+      const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+      expect(cancel).toBeDisabled();
+      await user.click(cancel);
+      expect(within(dialog).queryByRole('button', { name: 'Close' })).toBeNull();
+      await user.click(dialog); // the backdrop
+      pressEscapeOn(dialog);
+      expect(screen.getByRole('dialog', { name: 'Set up two-factor sign-in' })).toBe(dialog);
+      browserCloses(dialog);
+      expect(screen.getByRole('dialog', { name: 'Set up two-factor sign-in' })).toBe(dialog);
+
+      succeed();
+      const codes = await screen.findByRole('list', { name: 'Recovery codes' });
+      expect(within(codes).getAllByRole('listitem')).toHaveLength(CODES.length);
+    });
+
+    it('the card says On as soon as it succeeds, before the codes are put away', async () => {
+      const { succeed } = await inFlight();
+      expect(screen.getByText('Off')).toBeInTheDocument();
+      succeed();
+      await screen.findByRole('list', { name: 'Recovery codes' });
+      expect(await screen.findByText('On')).toBeInTheDocument();
+      expect(screen.queryByText('Off')).toBeNull();
+      expect(screen.getByRole('list', { name: 'Recovery codes' })).toBeInTheDocument();
+    });
+
+    it('once it has failed, the dialog can be left again', async () => {
+      const { dialog, fail } = await inFlight();
+      fail();
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent(/not valid/i);
+      expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeEnabled();
+      expect(within(dialog).getByRole('button', { name: 'Close' })).toBeInTheDocument();
+      pressEscapeOn(dialog);
+      expect(screen.queryByRole('dialog', { name: 'Set up two-factor sign-in' })).toBeNull();
+    });
   });
 
   it('a wrong activation code is shown and the dialog stays open', async () => {
