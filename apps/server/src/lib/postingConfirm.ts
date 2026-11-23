@@ -31,7 +31,13 @@ export async function confirmPosting(
     current.postingStateDetail === null ||
     !CONFIRMABLE_DETAILS.has(current.postingStateDetail)
   ) {
-    throw new HttpError(409, 'not_confirmable', 'This posting has nothing flagged to confirm.');
+    throw new HttpError(
+      409,
+      'not_confirmable',
+      'This posting has nothing flagged to confirm.',
+      undefined,
+      { userFacing: true },
+    );
   }
   const updated = await setPostingState(db, ctx, opportunityId, {
     postingState: 'confirmed',
@@ -66,7 +72,13 @@ export async function unconfirmPosting(
 ): Promise<OpportunityView> {
   const current = await getOpportunity(db, ctx, opportunityId);
   if (current.postingState !== 'confirmed' || current.postingStateDetail !== 'user_confirmed') {
-    throw new HttpError(409, 'not_user_confirmed', 'This posting was not confirmed by you.');
+    throw new HttpError(
+      409,
+      'not_user_confirmed',
+      'This posting was not confirmed by you.',
+      undefined,
+      { userFacing: true },
+    );
   }
   return await setPostingState(db, ctx, opportunityId, {
     postingState: 'needs_review',

@@ -139,7 +139,7 @@ export function ReactiveResumeSettings(props: ReactiveResumeSettingsProps) {
         <legend className="mb-1 font-medium">Where new base resumes go</legend>
         {(
           [
-            ['google', 'Google Docs', false],
+            ['google_doc', 'Google Docs', false],
             ['reactive_resume', 'Reactive Resume', !status.connected],
           ] as const
         ).map(([value, label, disabled]) => (

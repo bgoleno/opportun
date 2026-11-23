@@ -8,6 +8,7 @@ import { z } from 'zod';
 import {
   clearRrConfig,
   DOCUMENT_STORE_PREFS,
+  DocumentStorePrefInput,
   DOCUMENT_STORE_SETTING,
   parseRrBaseUrl,
   readDocumentStorePref,
@@ -51,6 +52,8 @@ const ValidationSchema = z.object({
   error: z.string().nullable(),
 });
 const StoreBody = z.object({ store: z.enum(DOCUMENT_STORE_PREFS) }).strict();
+/** What a client sends: the old name `google` too (#771), stored as `google_doc`. */
+const StoreInput = z.object({ store: DocumentStorePrefInput }).strict();
 
 export async function reactiveResumeRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
@@ -126,7 +129,7 @@ export async function reactiveResumeRoutes(app: FastifyInstance): Promise<void> 
   // Where NEW base resumes go. Existing resumes keep the store they were registered in.
   api.put(
     '/settings/document-store',
-    { schema: { body: StoreBody, response: { 200: StoreBody } } },
+    { schema: { body: StoreInput, response: { 200: StoreBody } } },
     async (req) => {
       const ctx = requireUser(req);
       if (req.body.store === 'reactive_resume' && !(await status(ctx)).connected) {
@@ -134,6 +137,8 @@ export async function reactiveResumeRoutes(app: FastifyInstance): Promise<void> 
           409,
           'reactive_resume_not_connected',
           'Connect Reactive Resume before choosing it.',
+          undefined,
+          { userFacing: true },
         );
       }
       await writeUserSetting(db, ctx, DOCUMENT_STORE_SETTING, req.body.store);

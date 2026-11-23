@@ -193,7 +193,13 @@ export async function mailFilterRoutes(app: FastifyInstance): Promise<void> {
       const ctx = app.requireUser(req);
       const label = req.body.label;
       if (label !== null && !labelIsSafe(label)) {
-        throw new HttpError(400, 'invalid_label', 'That label cannot be used in a Gmail query');
+        throw new HttpError(
+          400,
+          'invalid_label',
+          'That label cannot be used in a Gmail query',
+          undefined,
+          { userFacing: true },
+        );
       }
       await writeUserSetting(db, ctx, MAIL_LABEL_SETTING, label ?? '');
       return { label };
@@ -267,7 +273,9 @@ export async function mailFilterRoutes(app: FastifyInstance): Promise<void> {
       const ctx = app.requireUser(req);
       const pattern = req.body.pattern.trim().toLowerCase();
       if (!JOB_SENDER_SEEDS.some((seed) => seed.pattern === pattern)) {
-        throw new HttpError(404, 'not_found', `Not a built-in job sender: ${pattern}`);
+        throw new HttpError(404, 'not_found', `Not a built-in job sender: ${pattern}`, undefined, {
+          userFacing: true,
+        });
       }
       const existing = (await listRules(db, ctx)).find(
         (r) => r.effect === 'job_sender' && r.pattern === pattern,

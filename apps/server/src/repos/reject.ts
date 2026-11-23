@@ -108,7 +108,8 @@ export async function rejectCommunication(
     .from(communications)
     .where(and(ownedBy(communications.userId, ctx), eq(communications.id, id)))
     .get();
-  if (row === undefined) throw new HttpError(404, 'not_found', 'No such message');
+  if (row === undefined)
+    throw new HttpError(404, 'not_found', 'No such message', undefined, { userFacing: true });
   // After the read, before the erase (#678): a test links the message here to show the link check
   // is the erasing UPDATE's, not this read's.
   await racePoint('reject.read');
@@ -172,6 +173,8 @@ export async function rejectCommunication(
         409,
         'message_changed',
         'This message was linked or moved somewhere else since you saw it, so it was left as it is.',
+        undefined,
+        { userFacing: true },
       );
     }
   }

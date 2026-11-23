@@ -34,6 +34,7 @@ import {
   type ResumeRow,
 } from '../repos/resumes';
 import { IdParams, pageOf } from './common';
+import { resumeStoreFor } from '../lib/resumeStores';
 
 export const ResumeView = z.object({
   id: z.string(),
@@ -58,9 +59,11 @@ export const ResumeView = z.object({
  * preference for new resumes never strands existing ones.
  */
 export function storeFor(app: FastifyInstance, store: ResumeStore): DocumentStore {
-  if (store === 'google_doc') return app.documentStore;
-  if (store === 'reactive_resume') return app.reactiveResumeStore;
-  return app.localFileStore;
+  return resumeStoreFor(store, {
+    documentStore: () => app.documentStore,
+    reactiveResumeStore: () => app.reactiveResumeStore,
+    localFileStore: () => app.localFileStore,
+  });
 }
 
 /** The browser link for a resume; `rrBaseUrl` is the owner's Reactive Resume origin, if any. */
@@ -252,11 +255,8 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
           body.opportunityId === undefined
             ? null
             : await getOpportunity(db, ctx, body.opportunityId);
-        const store =
-          body.store ??
-          ((await readDocumentStorePref(db, ctx)) === 'reactive_resume'
-            ? 'reactive_resume'
-            : 'google_doc');
+        // The preference is a resume store's own name (#771).
+        const store = body.store ?? (await readDocumentStorePref(db, ctx));
         const meta = await storeFor(app, store).registerExisting(ctx, body.docRef);
         const row = await insertResume(db, ctx, {
           kind: opportunity === null ? 'base' : 'tailored',

@@ -109,7 +109,7 @@ function setup({ resumes = [], sends = [], attempts = [], opp = {}, extra = {} }
           'GET /opportunities/opp-1/submissions': { items: attempts, total: attempts.length },
         }),
     'GET /integrations/google': { connected: true, scopes: [] },
-    'GET /settings/document-store': { store: 'google' },
+    'GET /settings/document-store': { store: 'google_doc' },
     ...extra,
   });
   const user = userEvent.setup();

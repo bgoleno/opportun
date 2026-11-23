@@ -230,11 +230,19 @@ export function confirmationPageVerdict(
 /** The refusal for a page that may not confirm the attempt. */
 function verdictRefusal(verdict: Exclude<ConfirmationPageVerdict, 'ok'>): HttpError {
   return verdict === 'different_job'
-    ? new HttpError(409, 'different_job', 'This page is for another job, so it was not recorded.')
+    ? new HttpError(
+        409,
+        'different_job',
+        'This page is for another job, so it was not recorded.',
+        undefined,
+        { userFacing: true },
+      )
     : new HttpError(
         422,
         'wrong_site',
         "This page is not on this application's site, so it was not recorded.",
+        undefined,
+        { userFacing: true },
       );
 }
 
@@ -379,6 +387,7 @@ export async function confirmFromPage(
         'not_submitted',
         'Say you submitted this application in Opportun first, then record its confirmation page.',
         { submissionId: id, status: current.status },
+        { userFacing: true },
       );
     }
     if (!upgrading && !(AWAITING as readonly string[]).includes(current.status)) {
@@ -522,6 +531,7 @@ export async function unlinkConfirmation(db: Db, ctx: UserCtx, id: string): Prom
         'not_email_confirmed',
         'Only an application confirmed by an email can be unlinked from it.',
         { submissionId: id, status: current.status },
+        { userFacing: true },
       );
     }
     const now = Date.now();

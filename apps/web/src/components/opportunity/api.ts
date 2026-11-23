@@ -202,7 +202,10 @@ export interface PostingCandidateView {
 /** What POST /opportunities/:id/find-posting answers; see routes/opportunityPosting.ts. */
 export interface FindPostingResult {
   /** 'identified' (#398): the opportunity's own careers link got its Greenhouse identity. */
-  outcome: 'attached' | 'identified' | 'candidates' | 'none' | 'no_board';
+  /** 'unreachable' (#835): the company's boards could not be read, which is not "no match". */
+  outcome: 'attached' | 'identified' | 'candidates' | 'none' | 'no_board' | 'unreachable';
+  /** An attach that changed nothing: a Refetch that found the same job (#835). */
+  unchanged?: true;
   /** Present when the outcome is 'attached' or 'identified'. */
   opportunity?: OpportunityView;
   candidate?: PostingCandidateView;

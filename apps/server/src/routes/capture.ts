@@ -174,7 +174,13 @@ async function capturableLead(
 ): Promise<DiscoveryResultView> {
   const lead = await getResult(exec, ctx, resultId);
   if (lead.disposition !== 'pending' || lead.resolution !== 'needs_capture') {
-    throw new HttpError(409, 'not_capturable', 'That result no longer needs a capture.');
+    throw new HttpError(
+      409,
+      'not_capturable',
+      'That result no longer needs a capture.',
+      undefined,
+      { userFacing: true },
+    );
   }
   return lead;
 }

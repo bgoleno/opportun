@@ -103,7 +103,7 @@ export async function rederivePosting(
       reason === 'user_confirmed'
         ? 'You confirmed this posting yourself. Re-deriving would replace that decision.'
         : 'This opportunity already has a description. Edit it instead.';
-    throw new HttpError(409, reason, message);
+    throw new HttpError(409, reason, message, undefined, { userFacing: true });
   }
 
   const capture = await capturedPage(db, ctx, opportunityId);
@@ -112,6 +112,8 @@ export async function rederivePosting(
       409,
       'no_capture',
       'This opportunity has no stored capture to re-derive from.',
+      undefined,
+      { userFacing: true },
     );
   }
 
