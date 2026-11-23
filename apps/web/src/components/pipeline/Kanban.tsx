@@ -28,7 +28,12 @@ import { subjectLabel, type StageFlow } from '@/components/stage/useStageFlow';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { isTerminal, stageLabel, type OpportunityView } from '@/lib/opportunities';
 import { cn } from '@/lib/utils';
-import { BOARD_SCROLLER_ATTR, boardCollision, boardKeyboardCoordinates } from './boardKeyboard';
+import {
+  BOARD_SCROLLER_ATTR,
+  boardKeyboardCoordinates,
+  keyboardFirst,
+  type KeyboardStep,
+} from './boardKeyboard';
 import { reorderColumn } from './reorder';
 import { CardPreview, KanbanCard } from './KanbanCard';
 
@@ -146,6 +151,13 @@ export function Kanban(props: {
   // For the keyboard getter (#475): the columns in on-screen order, and a droppable's column.
   const order = useRef<readonly string[]>([]);
   const columnOfId = useRef<(id: UniqueIdentifier) => string | undefined>(() => undefined);
+  // Where a keyboard drag is (#886): shared by the getter and the collision.
+  const [step] = useState<KeyboardStep>(() => ({ at: null, column: null }));
+  const [collision] = useState(() => keyboardFirst(step, (id) => columnOfId.current(id)));
+  const place = (at: UniqueIdentifier | null) => {
+    step.at = at;
+    step.column = at === null ? null : (columnOfId.current(at) ?? null);
+  };
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     // Space only to pick up (issue #240): the default also starts a drag on Enter, which
@@ -158,6 +170,7 @@ export function Kanban(props: {
       coordinateGetter: boardKeyboardCoordinates(
         () => order.current,
         (id) => columnOfId.current(id),
+        step,
       ),
       keyboardCodes: START_WITH_SPACE_ONLY,
     }),
@@ -241,6 +254,7 @@ export function Kanban(props: {
   };
 
   function onDragEnd(e: DragEndEvent) {
+    place(null);
     setActiveId(null);
     const drop = dropOf(e.active.id, e.over?.id);
     if (drop.kind === 'stage') {
@@ -304,9 +318,12 @@ export function Kanban(props: {
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={boardCollision}
+      collisionDetection={collision}
       accessibility={{ announcements }}
       onDragStart={(e) => {
+        // A keyboard drag is over its own card until an arrow moves it (#886): at a narrow width
+        // the card's centre can be under a pinned column, however the board is scrolled.
+        place(e.activatorEvent instanceof KeyboardEvent ? e.active.id : null);
         // A keyboard drag starts with its card in view (#833, qa): a card at the end of a chain
         // column the pinned terminal columns cover (an expanded Dismissed hides the end of Offer)
         // is scrolled into the board's area, so it is over its own column, and announced there.
@@ -320,7 +337,10 @@ export function Kanban(props: {
         // Emptied on each drag, so the same outcome twice in a row is spoken twice.
         setOutcome('');
       }}
-      onDragCancel={() => setActiveId(null)}
+      onDragCancel={() => {
+        place(null);
+        setActiveId(null);
+      }}
       onDragEnd={onDragEnd}
     >
       <div className="flex items-start gap-3">
