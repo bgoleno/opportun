@@ -193,12 +193,12 @@ export function DevicesCard() {
     );
     void refresh();
   }
-  // A settled name goes with the first read of the list that shows nothing of it left over, whichever
-  // read that is: the one onShown starts may be cancelled by a later one (the dialog's own close, a
-  // revoke), and a list that could not be read says nothing of what was made.
+  // A settled name goes with the first later read of the list that shows nothing of it left over,
+  // whichever read that is: the one onShown starts may be cancelled by another (the dialog's own
+  // close, a revoke). Only reads that worked are counted, and one begun before was cancelled by it.
   useEffect(() => {
     const state = qc.getQueryState<{ items: DeviceToken[] }>(dk.tokens);
-    if (state?.data === undefined || state.status !== 'success' || state.isInvalidated) return;
+    if (state?.data === undefined) return;
     const { items: list } = state.data;
     const reads = state.dataUpdateCount;
     setLost((cur) =>
