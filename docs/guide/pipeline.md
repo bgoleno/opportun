@@ -402,6 +402,33 @@ if a single confident match was attached straight away on a board read only in p
 kept on the opportunity's timeline too, since that caveat stays true long after the toast
 confirming the attach is gone.
 
+If Find posting cannot read the company's board, or could not finish looking for one, the Details
+tab says "Couldn't read the company's board just now, so nothing was checked." in one notice, with
+**Try again** and **Add by hand** (the second opens "Add the posting", for a posting link or pasted text, with no
+search, since there is no board that was read to search; a confirmed posting has nothing to add,
+so it is not offered there). It stands in for the state's own line,
+so there is one notice and one **Try again**; the state's **Confirm** stays beside it when the
+state offers one. While a background check runs, only "Checking the company's job board for this
+posting." shows. The notice goes when a check ends or you attach or confirm a posting. A company
+whose board could not be looked for is not reported as having no board.
+
+Once a posting is confirmed, the Details tab says "Matched on the company's board." (or
+"Confirmed by you.") with a **Refetch** button, which asks first and then runs the search again.
+What it says afterwards depends on what changed:
+
+- **Something changed:** "Posting updated", "Updated from the board:" followed by what changed,
+  from the posting link, the job on the board, the description, the location, remote and the
+  compensation note, and "Your own description was kept." when yours was not replaced. The
+  timeline records it, naming the description and the facts it took.
+- **Nothing changed:** "Nothing changed", with "The posting matches the company's board.", or,
+  when your own description was kept, "Your own description was kept." (a description of yours is
+  kept without being compared with the board's, so it is not said to match). Nothing is added to
+  the timeline.
+
+A Refetch is not your confirmation: when it changes nothing or keeps your description, the
+posting stays as it was, matched or confirmed by you. One that changes anything while the description is
+not yours counts as matched. A row you pick yourself is always recorded on the timeline.
+
 The description is stored as text, so it survives the posting being taken down. A description
 you wrote or edited yourself is never overwritten; one Opportun wrote, such as the page text
 from a browser capture, is replaced by the posting it was standing in for.
