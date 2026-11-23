@@ -12,6 +12,7 @@ import { POSTING_RECONCILE_KIND } from '../src/lib/jobKinds';
 import { enqueue } from '../src/lib/jobQueue';
 import { settleAbandonedChecks, settleUnfinishedCheck } from '../src/lib/postingChecks';
 import { notFound } from '../src/lib/errors';
+import { setRaceHook } from '../src/lib/racePoints';
 import type { safeFetch } from '../src/lib/safeFetch';
 import { createCompany } from '../src/repos/companies';
 import {
@@ -34,6 +35,10 @@ vi.mock('../src/lib/postingReconcile', async (orig) => {
       if (flagFails) throw notFound();
       return real.flag(...args);
     },
+    writeReconcileNote: (...args: Parameters<typeof real.writeReconcileNote>) => {
+      if (flagFails) throw notFound();
+      return real.writeReconcileNote(...args);
+    },
   };
 });
 
@@ -41,6 +46,7 @@ const boot = useApi();
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
 const log = { warn: () => {}, info: () => {}, error: () => {} } as never;
 afterEach(() => {
+  setRaceHook(undefined);
   flagFails = false;
 });
 
@@ -221,6 +227,24 @@ describe('a check whose job dies ends its posting (#869)', () => {
     expect(await settleUnfinishedCheck(app.db, ctxOf(a), opp.id)).toBe(false);
     expect(await state(app, opp.id)).toEqual(['confirmed', 'user_confirmed']);
     expect(await notes(app, opp.id)).toEqual([]);
+  });
+});
+
+describe('a Confirm that lands while a check is being ended (#869)', () => {
+  it('stands: the note is written, and the state is the user’s', async () => {
+    const { app, a } = await boot();
+    const opp = await searching(app, a);
+    setRaceHook(async (point) => {
+      if (point !== 'postingChecks.settled') return;
+      setRaceHook(undefined);
+      await setPostingState(app.db, ctxOf(a), opp.id, {
+        postingState: 'confirmed',
+        postingStateDetail: 'user_confirmed',
+      });
+    });
+    expect(await settleUnfinishedCheck(app.db, ctxOf(a), opp.id)).toBe(true);
+    expect(await state(app, opp.id)).toEqual(['confirmed', 'user_confirmed']);
+    expect(await notes(app, opp.id)).toEqual([NOTE]);
   });
 });
 

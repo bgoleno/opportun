@@ -11,7 +11,8 @@ import { opportunities } from '../db/schema';
 import { ownedBy, type UserCtx } from '../repos/base';
 import { unfinishedDedupeKeys } from '../repos/jobs';
 import { POSTING_RECONCILE_KIND } from './jobKinds';
-import { flag } from './postingReconcile';
+import { writeReconcileNote } from './postingReconcile';
+import { racePoint } from './racePoints';
 
 const NOT_FINISHED =
   "The check of the company's board did not finish. Use Find posting to check again.";
@@ -30,7 +31,8 @@ export async function opportunityGone(db: Db, ctx: UserCtx, id: string): Promise
  * Ends one check that will not finish: the posting reads "the check did not finish", which offers
  * Find posting, and the timeline says so. Nothing is done while another check of it is pending or
  * running (a re-capture queued one), or once the posting is no longer `searching` (the UPDATE's own
- * condition: something else has settled it). Returns whether it settled it.
+ * condition: something else has settled it). The note is written on its own, so a Confirm that lands
+ * after the UPDATE stands. Returns whether it settled it.
  */
 export async function settleUnfinishedCheck(
   db: Db,
@@ -56,7 +58,9 @@ export async function settleUnfinishedCheck(
       ),
   );
   if (settled === 0) return false;
-  await flag(db, ctx, opportunityId, 'failed', NOT_FINISHED);
+  // A test lands a Confirm here: the note below must leave the state alone.
+  await racePoint('postingChecks.settled');
+  await writeReconcileNote(db, ctx, opportunityId, 'failed', NOT_FINISHED);
   return true;
 }
 

@@ -135,7 +135,7 @@ const KNOWN_RECONCILE_TITLES = new Set(Object.values(RECONCILE_NOTE_TITLES));
  * sequential writes -- the same risk this file already accepts between updateOpportunity and
  * setPostingState in confirm(). Not worth that blast radius for this.
  */
-async function writeReconcileNote(
+export async function writeReconcileNote(
   db: Db,
   ctx: UserCtx,
   opportunityId: string,
