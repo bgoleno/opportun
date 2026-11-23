@@ -4,7 +4,15 @@
 // that rule true in apps/server/src as throws are added, by reading every `new HttpError(...)`:
 // - a marked one must not use `err`, `error`, `cause` or any `.message` in its arguments (sec);
 // - none may carry a `message` key in its details, the one way text used to reach the client
-//   unmarked (the handler drops it too).
+//   unmarked (the handler drops it too);
+// - a marked message is a string literal, or an expression on REVIEWED below, each with the
+//   reason its text is safe to send (sec on #774): a new one fails here until it is reviewed;
+// - no route declares an error schema of its own: routes/common.ts's ErrorResponse keeps a marked
+//   sentence, where a schema naming only `code` strips it (#743).
+// This is a guard, not the rule's only keeper (tl on #774): it reads each throw's own arguments,
+// so it cannot see a message built in a variable from a caught error first, a `catch (e)` passed
+// whole, or options that are not written inline. The handler sends only what is marked, and the
+// reviewed list says, line by line, where each non-literal sentence comes from.
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import ts from 'typescript';
@@ -146,5 +154,80 @@ describe('every HttpError in apps/server/src keeps the rule (issue 750)', () => 
     // A scan that read nothing would pass for the wrong reason.
     expect(count).toBeGreaterThan(150);
     expect(problems).toEqual([]);
+  });
+});
+
+/**
+ * Every marked message that is not a string literal, by file and expression, with why its text is
+ * safe to send to the person using the app (#750, sec on #774). Our own constants, the caller's own
+ * input or rows, and our own error classes' authored text; never a provider's, a library's or a
+ * caught error's message, and nothing from configuration.
+ */
+const REVIEWED: Record<string, string> = {
+  'lib/demoOwnData.ts DEMO_FIXTURE_MESSAGE': 'a constant sentence in the same file',
+  'lib/demoOwnData.ts DEMO_RESUME_MESSAGE': 'a constant sentence in the same file',
+  'lib/postingRederive.ts message': 'one of two constant sentences chosen just above',
+  'repos/discovery.ts message': "zod's account of the caller's own source config, capped at 500",
+  'repos/discovery.ts problem': "userCronProblem's own sentences about the caller's own cron",
+  'repos/mailFilters.ts `Not a sender pattern: ${input.pattern}`': "the caller's own pattern",
+  'repos/mailFilters.ts `Already a ${input.effect} rule: ${pattern}`':
+    "the caller's own rule effect (an enum) and pattern",
+  'repos/profile.ts PROFILE_VALUE_MESSAGE': 'a constant sentence in the same file',
+  'repos/submissionReview.ts SNAPSHOT_BLOCK_MESSAGES.get(blocked)':
+    'a constant map of our own sentences, keyed by our own reason codes',
+  'repos/submissions.ts INELIGIBLE_MESSAGES.get(reason)':
+    'a constant map of our own sentences, keyed by our own reason codes',
+  "repos/submissions.ts `This application is ${row.status.replace('_', ' ')}, so it cannot be changed that way.`":
+    "the caller's own application's status (an enum)",
+  'repos/submissions.ts FIELD_REFUSAL_MESSAGES[problem.code]':
+    'a constant map of our own sentences, never the refused value (submissionDetailFields.test)',
+  'routes/communications.ts `Type ${PURGE_CONFIRMATION} to confirm`':
+    'a constant word in the same file',
+  'routes/importExport.ts problem.userText':
+    "PackError text: our own sentences, the uploader's own file names and CsvError text",
+  'routes/mailFilters.ts `Not a built-in job sender: ${pattern}`': "the caller's own pattern",
+};
+
+/** Every marked message that is not a string literal, as `<file> <expression>`. */
+function nonLiteralMarked(fileName: string, text: string): string[] {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true);
+  const found: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isNewExpression(n) && n.expression.getText(sf) === 'HttpError') {
+      const args = n.arguments ?? [];
+      const message = args[2];
+      if (
+        isMarked(args[4]) &&
+        message !== undefined &&
+        !ts.isStringLiteral(message) &&
+        !ts.isNoSubstitutionTemplateLiteral(message)
+      ) {
+        found.push(`${relative(SRC, fileName)} ${message.getText(sf).replace(/\s+/g, ' ')}`);
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+describe('every marked sentence that is not a literal has been reviewed (issue 750, sec on #774)', () => {
+  it('each is on REVIEWED, and REVIEWED holds nothing stale', () => {
+    const found = sourceFiles().flatMap((file) =>
+      nonLiteralMarked(file, readFileSync(file, 'utf8')),
+    );
+    expect(found.length).toBeGreaterThan(0);
+    expect(found.filter((key) => REVIEWED[key] === undefined)).toEqual([]);
+    expect(Object.keys(REVIEWED).filter((key) => !found.includes(key))).toEqual([]);
+  });
+});
+
+describe('no route declares an error schema of its own (issue 750, tl on #774)', () => {
+  it('routes use routes/common.ts ErrorResponse, which keeps a marked sentence', () => {
+    const local = sourceFiles()
+      .filter((file) => !file.endsWith(join('routes', 'common.ts')))
+      .filter((file) => /error:\s*z\.object\(/.test(readFileSync(file, 'utf8')))
+      .map((file) => relative(SRC, file));
+    expect(local).toEqual([]);
   });
 });

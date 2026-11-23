@@ -48,6 +48,7 @@ const FAKES = {
   OPPORTUN_GMAIL_MOCK: '1',
   OPPORTUN_SOURCE_MOCK: '1',
   OPPORTUN_OAUTH_MOCK: '1',
+  OPPORTUN_AUTH_MOCK: '1',
 } as const;
 
 export default defineConfig({
@@ -59,6 +60,7 @@ export default defineConfig({
   workers: 1,
   reporter: process.env.CI === undefined ? 'list' : [['list'], ['html', { open: 'never' }]],
   globalSetup: './e2e/global-setup.ts',
+  globalTeardown: './e2e/global-teardown.ts',
   use: {
     baseURL: BASE_URL,
     trace: 'retain-on-failure',

@@ -7,6 +7,7 @@ import { and, eq, gte, sql } from 'drizzle-orm';
 import { countAll, maxBoolAsInt, utcDay } from '../db/dialect';
 import { taskRuns } from '../db/schema';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 
 const DAY_MS = 86_400_000;
 
@@ -51,7 +52,7 @@ export async function spentTodayUsd(
     .from(taskRuns)
     .where(
       and(
-        eq(taskRuns.userId, ctx.userId),
+        ownedBy(taskRuns.userId, ctx),
         eq(taskRuns.taskKey, task),
         gte(taskRuns.createdAt, startOfUtcDay(now)),
       ),
@@ -82,7 +83,7 @@ export async function rankBudgetSkips(
     .from(taskRuns)
     .where(
       and(
-        eq(taskRuns.userId, ctx.userId),
+        ownedBy(taskRuns.userId, ctx),
         eq(taskRuns.taskKey, 'discovery.rank'),
         eq(taskRuns.status, 'error'),
         eq(taskRuns.error, 'budget_exceeded'),
@@ -220,7 +221,7 @@ export async function usageRollup(
     estCostUsd: sql<number>`coalesce(sum(${taskRuns.estCost}), 0)`,
     estimated: maxBoolAsInt(taskRuns.fallbackPricing),
   };
-  const where = and(eq(taskRuns.userId, ctx.userId), gte(taskRuns.createdAt, since));
+  const where = and(ownedBy(taskRuns.userId, ctx), gte(taskRuns.createdAt, since));
   const items = await db
     .select({ day, ...metrics })
     .from(taskRuns)

@@ -52,6 +52,7 @@ import { duplicate, HttpError, notFound } from '../lib/errors';
 import { isSystemWritten } from '../lib/postingFingerprint';
 import { lastActivityAt } from './activities';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { findOrCreateCompanySync } from './companies';
 import { detectDedupeCandidates, rejectDedupeCandidate } from './opportunityDedupe';
 import { likeContains, orderBy, sortColumns, type ListOpts, type Page } from './list';
@@ -137,7 +138,7 @@ async function nextSortOrder(exec: Exec, ctx: UserCtx, stage: OpportunityStage):
   const row = await exec
     .select({ max: max(opportunities.sortOrder) })
     .from(opportunities)
-    .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.stage, stage)))
+    .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.stage, stage)))
     .get();
   return row?.max === null || row?.max === undefined ? 0 : row.max + 10;
 }
@@ -176,7 +177,7 @@ function selectView(exec: Exec) {
 }
 
 function owned(ctx: UserCtx, id: string): SQL | undefined {
-  return and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, id));
+  return and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, id));
 }
 
 /**
@@ -195,9 +196,7 @@ async function reverseDuplicatesOf(
   const rows = await exec
     .select({ id: opportunities.id, possibleDuplicateOf: opportunities.possibleDuplicateOf })
     .from(opportunities)
-    .where(
-      and(eq(opportunities.userId, ctx.userId), inArray(opportunities.possibleDuplicateOf, ids)),
-    )
+    .where(and(ownedBy(opportunities.userId, ctx), inArray(opportunities.possibleDuplicateOf, ids)))
     .all();
   for (const row of rows) {
     if (row.possibleDuplicateOf === null) continue;
@@ -238,7 +237,7 @@ async function capturedOpportunityIds(
     .from(activities)
     .where(
       and(
-        eq(activities.userId, ctx.userId),
+        ownedBy(activities.userId, ctx),
         inArray(activities.opportunityId, ids),
         eq(activities.kind, 'capture'),
       ),
@@ -302,7 +301,7 @@ async function assertRoleTargetOwned(
   const row = await exec
     .select({ id: roleTargets.id })
     .from(roleTargets)
-    .where(and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.id, roleTargetId)))
+    .where(and(ownedBy(roleTargets.userId, ctx), eq(roleTargets.id, roleTargetId)))
     .get();
   if (row === undefined) throw notFound();
 }
@@ -322,7 +321,7 @@ async function claimDedupeKey(
     .from(opportunities)
     .where(
       and(
-        eq(opportunities.userId, ctx.userId),
+        ownedBy(opportunities.userId, ctx),
         eq(opportunities.dedupeKey, key),
         selfId === null ? undefined : ne(opportunities.id, selfId),
       ),
@@ -333,7 +332,7 @@ async function claimDedupeKey(
   await exec
     .update(opportunities)
     .set({ dedupeKey: null })
-    .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, holder.id)))
+    .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, holder.id)))
     .run();
 }
 
@@ -342,7 +341,7 @@ async function liveDuplicateId(exec: Exec, ctx: UserCtx, key: string): Promise<s
   const holder = await exec
     .select({ id: opportunities.id, stage: opportunities.stage })
     .from(opportunities)
-    .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.dedupeKey, key)))
+    .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.dedupeKey, key)))
     .get();
   return holder !== undefined && holder.stage !== 'dismissed' ? holder.id : undefined;
 }
@@ -363,7 +362,7 @@ export async function listOpportunities(
   opts: ListOpts & OpportunityFilters,
 ): Promise<Page<OpportunityView>> {
   const where = and(
-    eq(opportunities.userId, ctx.userId),
+    ownedBy(opportunities.userId, ctx),
     opts.stage === undefined ? undefined : inArray(opportunities.stage, opts.stage),
     opts.companyId === undefined ? undefined : eq(opportunities.companyId, opts.companyId),
     opts.q === undefined
@@ -821,7 +820,7 @@ export async function mergeOpportunities(
         .from(applicationSubmissions)
         .where(
           and(
-            eq(applicationSubmissions.userId, ctx.userId),
+            ownedBy(applicationSubmissions.userId, ctx),
             eq(applicationSubmissions.opportunityId, opportunityId),
             inArray(applicationSubmissions.status, ['draft', 'reviewed', 'handed_off']),
           ),
@@ -834,6 +833,7 @@ export async function mergeOpportunities(
         'live_submission_conflict',
         'Both opportunities have an open application. Cancel one of them before merging.',
         { submissionId: otherLive.id },
+        { userFacing: true },
       );
     }
     const [movedAttempts] = await tx
@@ -841,7 +841,7 @@ export async function mergeOpportunities(
       .from(applicationSubmissions)
       .where(
         and(
-          eq(applicationSubmissions.userId, ctx.userId),
+          ownedBy(applicationSubmissions.userId, ctx),
           eq(applicationSubmissions.opportunityId, otherId),
         ),
       )
@@ -864,7 +864,7 @@ export async function mergeOpportunities(
       await tx
         .update(table)
         .set(move)
-        .where(and(eq(table.userId, ctx.userId), eq(table.opportunityId, otherId)))
+        .where(and(ownedBy(table.userId, ctx), eq(table.opportunityId, otherId)))
         .run();
     }
     if (stageRank(other.stage) > stageRank(keep.stage)) {
@@ -960,12 +960,12 @@ export async function dismissPossibleDuplicate(
         .where(
           or(
             and(
-              eq(opportunities.userId, ctx.userId),
+              ownedBy(opportunities.userId, ctx),
               eq(opportunities.id, id),
               eq(opportunities.possibleDuplicateOf, otherId),
             ),
             and(
-              eq(opportunities.userId, ctx.userId),
+              ownedBy(opportunities.userId, ctx),
               eq(opportunities.id, otherId),
               eq(opportunities.possibleDuplicateOf, id),
             ),

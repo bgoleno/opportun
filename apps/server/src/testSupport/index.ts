@@ -8,12 +8,16 @@
 //                          from fixtures (mockSources.ts)
 //   OPPORTUN_OAUTH_MOCK=1  OAuth sign-in token/userinfo endpoints answer for the identity the
 //                          e2e encodes in the code (mockOAuth.ts)
+//   OPPORTUN_AUTH_MOCK=1   a sign-up without the per-IP limiter, for e2e's registerUser(); and
+//                          the run's spend of the sign-in rate limits, recorded and replayed
+//                          for e2e's global teardown to check (mockAuth.ts, #776)
 // A server started with NODE_ENV=production refuses all of them.
 import type { FastifyInstance } from 'fastify';
 import { registerSource, resetSources } from '../adapters/discoverySource';
 import type { BuildOptions } from '../app';
 import type { Config } from '../config';
 import { mockAiOverride, mockAiRoutes } from './mockAi';
+import { mockAuthRoutes } from './mockAuth';
 import { mockJobRoutes } from './mockJobs';
 import { createMockDocumentStore } from './mockDocs';
 import { createMockGoogleApi, mockGoogleTokenFetch } from './mockGoogle';
@@ -26,6 +30,7 @@ export const MOCK_FLAGS = [
   'OPPORTUN_GMAIL_MOCK',
   'OPPORTUN_SOURCE_MOCK',
   'OPPORTUN_OAUTH_MOCK',
+  'OPPORTUN_AUTH_MOCK',
 ] as const;
 export type MockFlag = (typeof MOCK_FLAGS)[number];
 
@@ -49,7 +54,7 @@ export function testSupportFromEnv(env: NodeJS.ProcessEnv, cfg: Config): TestSup
   if (enabled.length === 0) return undefined;
   if (env.NODE_ENV === 'production') {
     throw new Error(
-      `${enabled.join(', ')} must not be set in production: they replace real AI, Google and job board providers with test fakes`,
+      `${enabled.join(', ')} must not be set in production: they replace real AI, Google, sign-in and job board providers with test fakes, and open test-only routes such as a sign-up without its rate limit`,
     );
   }
   // The canned endpoint ignores response_format, and the SDK warns about that on every
@@ -72,6 +77,7 @@ export function testSupportFromEnv(env: NodeJS.ProcessEnv, cfg: Config): TestSup
     enabled,
     build,
     async register(app) {
+      if (on('OPPORTUN_AUTH_MOCK')) await mockAuthRoutes(app);
       if (on('OPPORTUN_AI_MOCK')) {
         await app.register(mockAiRoutes);
         await app.register(mockJobRoutes);

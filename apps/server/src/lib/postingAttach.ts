@@ -85,7 +85,13 @@ export async function attachPosting(
 ): Promise<OpportunityView> {
   const posting = sanitizePosting(raw);
   if (posting.descriptionMd == null || posting.descriptionMd === '') {
-    throw new HttpError(422, 'invalid_posting', 'That posting has no description text.');
+    throw new HttpError(
+      422,
+      'invalid_posting',
+      'That posting has no description text.',
+      undefined,
+      { userFacing: true },
+    );
   }
   const current = await getOpportunity(db, ctx, opportunityId);
   // The user's own writing outranks any board (design D11). A description the system wrote,
@@ -101,6 +107,8 @@ export async function attachPosting(
       409,
       'already_described',
       'This opportunity already has a description. Edit it instead.',
+      undefined,
+      { userFacing: true },
     );
   }
   // Issue #255: a Refetch calls this on an opportunity already `confirmed`; the timeline says
@@ -172,4 +180,32 @@ export async function attachPosting(
     externalUrl: posting.postingUrl,
   });
   return updated;
+}
+
+/**
+ * Records a posting identified through its own `gh_jid` link (#813): Find posting checked the job
+ * on Greenhouse's API and set its identity, with no posting text read, so nothing is attached.
+ * The same kind of entry as an attach, so the timeline says how every posting was found. `kept`:
+ * it also confirmed the posting, and the user's own description stays as it was.
+ */
+export async function recordIdentified(
+  db: Db,
+  ctx: UserCtx,
+  opportunityId: string,
+  boardUrl: string,
+  opts: { kept: boolean },
+): Promise<void> {
+  await createActivity(db, ctx, opportunityId, {
+    kind: 'link',
+    title: 'Job posting identified',
+    bodyMd: [
+      'Recognised on Greenhouse, by the job its posting link names.',
+      opts.kept ? 'Your own description was kept.' : '',
+    ]
+      .filter((l) => l !== '')
+      .join(' '),
+    occurredAt: Date.now(),
+    participants: [],
+    externalUrl: boardUrl,
+  });
 }

@@ -28,7 +28,7 @@ import { subjectLabel, type StageFlow } from '@/components/stage/useStageFlow';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { isTerminal, stageLabel, type OpportunityView } from '@/lib/opportunities';
 import { cn } from '@/lib/utils';
-import { boardCollision, boardKeyboardCoordinates } from './boardKeyboard';
+import { BOARD_SCROLLER_ATTR, boardCollision, boardKeyboardCoordinates } from './boardKeyboard';
 import { reorderColumn } from './reorder';
 import { CardPreview, KanbanCard } from './KanbanCard';
 
@@ -307,6 +307,15 @@ export function Kanban(props: {
       collisionDetection={boardCollision}
       accessibility={{ announcements }}
       onDragStart={(e) => {
+        // A keyboard drag starts with its card in view (#833, qa): a card at the end of a chain
+        // column the pinned terminal columns cover (an expanded Dismissed hides the end of Offer)
+        // is scrolled into the board's area, so it is over its own column, and announced there.
+        if (
+          e.activatorEvent instanceof KeyboardEvent &&
+          e.activatorEvent.target instanceof Element
+        ) {
+          e.activatorEvent.target.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+        }
         setActiveId(String(e.active.id));
         // Emptied on each drag, so the same outcome twice in a row is spoken twice.
         setOutcome('');
@@ -316,7 +325,10 @@ export function Kanban(props: {
     >
       <div className="flex items-start gap-3">
         {chain.length > 0 ? (
-          <div className="flex min-w-0 flex-1 items-start gap-3 overflow-x-auto pb-4">
+          <div
+            className="flex min-w-0 flex-1 items-start gap-3 overflow-x-auto pb-4"
+            {...{ [BOARD_SCROLLER_ATTR]: '' }}
+          >
             {chain.map(renderColumn)}
           </div>
         ) : null}

@@ -10,22 +10,14 @@ import {
   ATTRIBUTE_TYPES,
   type AttrKey,
   type Attributes,
-  type DropReason,
   OTHER,
   SPANS,
   type SpanDef,
 } from './catalog';
 import { exportAttributes } from './export/allowlist';
 import { gateAttributes, UnknownTelemetryKeyError } from './gate';
-import { obs, type GatedSpan } from './index';
-
-/** Counts a span the gate or a buffer dropped (opportun.obs.dropped). */
-export function countSpanDrop(reason: DropReason): void {
-  obs.record('opportun.obs.dropped', 1, {
-    'opportun.obs.signal': 'spans',
-    'opportun.obs.reason': reason,
-  });
-}
+import type { GatedSpan } from './index';
+import { countSpanDrop } from './state';
 
 const KIND_NAMES: Record<SpanKind, SpanDef['kind']> = {
   [SpanKind.INTERNAL]: 'internal',

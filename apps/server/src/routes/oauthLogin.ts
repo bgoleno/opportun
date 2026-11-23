@@ -76,7 +76,7 @@ export const OAUTH_BINDING_COOKIE_DEV = 'opportun_oauth';
 const LOGIN_PAGE = '/login';
 const SECURITY_PAGE = '/settings/security';
 /** Starts and callbacks per IP: generous for people, tight for a script. */
-const OAUTH_IP_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
+export const OAUTH_IP_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
 
 const ProviderParams = z.object({ provider: z.enum(OAUTH_PROVIDERS) });
 /**
