@@ -905,9 +905,9 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'workday capture retry failed': ['opportun.discovery_result.id'],
   'posting reconciliation failed': ['opportun.opportunity.id'],
   'saved capture: the kept-apart note gave up a lock wait': ['opportun.opportunity.id'],
-  'saved capture: the fingerprint gave up a lock wait': ['opportun.opportunity.id'],
   'saved capture: the fill gave up a lock wait': ['opportun.opportunity.id'],
   'saved capture: the stage move gave up a lock wait': ['opportun.opportunity.id'],
+  'saved capture: what follows a stage move gave up a lock wait': ['opportun.opportunity.id'],
   'saved capture: the posting state gave up a lock wait': ['opportun.opportunity.id'],
   'unfinished posting check not settled': ['opportun.opportunity.id'],
   'ats job ref backfill': [

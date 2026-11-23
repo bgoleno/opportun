@@ -8,7 +8,7 @@
 import { AiUnavailableError, runStructured } from '@opportun/ai';
 import { newId } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import pg from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PostgresConfig } from '../src/config';
@@ -44,6 +44,12 @@ import { pauseAt } from './race';
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
   return { ...real, runStructured: vi.fn() };
+});
+
+// Passed through: what each step of a saved capture is given to wait (#914).
+vi.mock('../src/db/client', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/db/client')>();
+  return { ...real, boundLockWaits: vi.fn(real.boundLockWaits) };
 });
 
 const PASSWORD = 'correct horse battery';
@@ -564,11 +570,14 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
       const { app, a } = await boot();
       const bearer = await token(a);
       const id = await tracked(a);
-      const began = Date.now();
+      vi.mocked(boundLockWaits).mockClear();
       const res = await pushHolding(app, bearer, 'captureResolve.recorded', () => holdRow(app, id));
-      // Three steps, each with a wait of its own, would take three budgets at the least: so this
-      // holds on a host two budgets slower than it needs to be.
-      expect(Date.now() - began).toBeLessThan(3 * CAPTURE_SLOT.lockTimeoutMs);
+      // The entry's own bound, then one budget: the fill is given it and spends it, and nothing is
+      // left for the stage move and the state.
+      const [entry, fill, ...rest] = vi.mocked(boundLockWaits).mock.calls.map(([, ms]) => ms);
+      expect(entry).toBe(CAPTURE_SLOT.lockTimeoutMs);
+      expect(fill).toBeGreaterThan(CAPTURE_SLOT.lockTimeoutMs / 2);
+      expect(rest).toEqual([1, 1]);
       expect(res.statusCode, res.body).toBe(200);
       expect(res.json()).toMatchObject({ opportunityId: id, stage: null, filled: false });
       expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject({
@@ -601,6 +610,66 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
         .all();
       expect(leads).toHaveLength(1);
     }, 90_000);
+
+    // tl on #955: a description without its fingerprint would read as the user's own, for good.
+    it('the row of a new opportunity, before the capture is recorded: its text stays the system’s', async () => {
+      const { app, a } = await boot();
+      const bearer = await token(a);
+      const only = async () => {
+        const rows = await app.db
+          .select({ id: opportunities.id })
+          .from(opportunities)
+          .where(eq(opportunities.userId, a.userId))
+          .all();
+        expect(rows).toHaveLength(1);
+        return rows[0]!.id;
+      };
+      const res = await pushHolding(app, bearer, 'captureResolve.settled', async () =>
+        holdRow(app, await only()),
+      );
+      expectBusy(res);
+      const id = await only();
+      expect(await entries(app, a, id)).toEqual([]);
+      await holder?.query('ROLLBACK');
+      const again = await push(app, bearer);
+      expect(again.statusCode, again.body).toBe(200);
+      const opp = await getOpportunity(app.db, ctxOf(a), id);
+      expect(opp.descriptionMd).toContain('TPS reporting');
+      expect(opp.descriptionFingerprint).not.toBeNull();
+      expect(opp.descriptionIsUserWritten).toBe(false);
+      expect(await entries(app, a, id)).toHaveLength(1);
+    }, 90_000);
+
+    it('the row of one kept apart from another: saved, without the note', async () => {
+      const { app, a } = await boot();
+      const bearer = await token(a);
+      // Another posting with the same key: the capture of JOB is kept apart from it.
+      const other = await app.inject({
+        method: 'POST',
+        url: '/api/v1/connector/capture',
+        headers: { authorization: `Bearer ${bearer}` },
+        payload: { ...JOB, url: JOB.url.replace('3901234567', '3901234599') },
+      });
+      expect(other.statusCode, other.body).toBe(201);
+      const { opportunityId: first } = other.json<{ opportunityId: string }>();
+      const res = await pushHolding(app, bearer, 'captureResolve.recorded', async () => {
+        const rows = await app.db
+          .select({ id: opportunities.id })
+          .from(opportunities)
+          .where(and(eq(opportunities.userId, a.userId), ne(opportunities.id, first)))
+          .all();
+        expect(rows).toHaveLength(1);
+        await holdRow(app, rows[0]!.id);
+      });
+      expect(res.statusCode, res.body).toBe(201);
+      const { opportunityId: id } = res.json<{ opportunityId: string }>();
+      const titles = (
+        await listActivities(app.db, ctxOf(a), id, { limit: 50, offset: 0 })
+      ).items.map((x) => x.title);
+      expect(titles.filter((t) => t.startsWith('Kept apart'))).toEqual([]);
+      expect(titles.filter((t) => t.startsWith('Captured'))).toHaveLength(1);
+      expect(await reconciles(app, a)).toContain(id);
+    }, 120_000);
 
     it('the bound ends with its transaction, and others have none', async () => {
       const { app } = await boot();
@@ -683,6 +752,130 @@ describe('#914: a saved capture whose step gave up a wait', () => {
     failAt('opportunities.update.locked', () => new Error('the fill broke'));
     const res = await push(app, bearer);
     expect(res.statusCode, res.body).toBe(500);
+  });
+
+  // tl on #955: the move is committed, so it is what the answer says, whatever follows it.
+  it.each(['55P03', '57014', '40P01'])(
+    '%s after the stage move: the answer says it moved',
+    async (code) => {
+      const { app, a, bearer, id } = await capture();
+      let queued = 0;
+      setRaceHook(async (point) => {
+        if (point !== 'jobs.enqueue') return;
+        queued += 1;
+        // The first is the company's lookup, the second the posting's check.
+        if (queued === 1) throw pgError(code);
+      });
+      const res = await push(app, bearer);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ opportunityId: id, stage: 'interested' });
+      const kinds = (
+        await app.db.select({ kind: jobs.kind }).from(jobs).where(eq(jobs.userId, a.userId)).all()
+      ).map((j) => j.kind);
+      expect(kinds).toEqual([POSTING_RECONCILE_KIND]);
+    },
+  );
+
+  it('a duplicate refused for a fill with no location is not tried again', async () => {
+    const { app, bearer } = await capture();
+    let tries = 0;
+    setRaceHook(async (point) => {
+      if (point !== 'opportunities.update.locked') return;
+      tries += 1;
+      throw new HttpError(409, 'duplicate');
+    });
+    const res = await push(app, bearer);
+    expect(res.statusCode, res.body).toBe(409);
+    expect(tries).toBe(1);
+  });
+
+  // em and tl on #955: the fill's location is another opportunity's of theirs. Refused after the
+  // entry was recorded, each retry would record it again.
+  describe('a location that is another opportunity’s', () => {
+    /** Captured without a location or pay; one with the location added by hand; then both are read. */
+    async function heldLocation() {
+      const { app, a } = await boot();
+      const bearer = await token(a);
+      const first = await push(app, bearer);
+      expect(first.statusCode, first.body).toBe(201);
+      const { opportunityId: id } = first.json<{ opportunityId: string }>();
+      const other = await a.request({
+        method: 'POST',
+        url: '/api/v1/opportunities',
+        payload: {
+          companyName: 'Initech',
+          title: 'Staff Platform Engineer',
+          location: 'Austin, TX',
+          sourceKind: 'manual',
+        },
+      });
+      expect(other.statusCode, other.body).toBe(201);
+      vi.mocked(runStructured).mockResolvedValue({
+        kind: 'job',
+        name: null,
+        headline: null,
+        company: 'Initech',
+        title: 'Staff Platform Engineer',
+        location: 'Austin, TX',
+        compNote: '$200K/yr - $240K/yr',
+        descriptionMd: null,
+      } as never);
+      const row = async (which = id) =>
+        (await app.db.select().from(opportunities).where(eq(opportunities.id, which)).get())!;
+      const entries = async () =>
+        (await listActivities(app.db, ctxOf(a), id, { limit: 50, offset: 0 })).items.filter(
+          (x) => x.kind === 'capture',
+        );
+      return { app, bearer, id, row, entries, other: other.json<{ id: string }>().id };
+    }
+
+    it('is left out, the rest is filled, and each capture is answered as saved', async () => {
+      const { app, bearer, id, row, entries, other } = await heldLocation();
+      const before = await row();
+      const holder = await row(other);
+      const res = await push(app, bearer);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ opportunityId: id });
+      expect(res.json()).not.toHaveProperty('filled');
+      expect(await row()).toMatchObject({
+        location: null,
+        dedupeKey: before.dedupeKey,
+        compNote: '$200K/yr - $240K/yr',
+      });
+      expect(await row(other)).toEqual(holder);
+      expect(await entries()).toHaveLength(2);
+
+      // Again, with the location alone left to fill: nothing is written for it.
+      let writes = 0;
+      setRaceHook(async (point) => {
+        if (point === 'opportunities.update.locked') writes += 1;
+      });
+      const again = await push(app, bearer);
+      expect(again.statusCode, again.body).toBe(200);
+      expect(again.json()).not.toHaveProperty('filled');
+      expect(writes).toBe(0);
+      expect(await entries()).toHaveLength(3);
+    });
+
+    it('a wait that ends in the second try is the fill’s', async () => {
+      const { app, bearer, row, entries } = await heldLocation();
+      // The first try is refused before it gets here.
+      failAt('opportunities.update.locked', () => pgError('55P03'));
+      const res = await push(app, bearer);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ filled: false });
+      expect((await row()).compNote).toBeNull();
+      expect(await entries()).toHaveLength(2);
+    });
+
+    it('any other refusal of the fill still fails the capture', async () => {
+      const { app, bearer, entries } = await heldLocation();
+      failAt('opportunities.update.locked', () => new HttpError(409, 'duplicate'));
+      // The second try has no location, so a 409 there is not the key's.
+      const res = await push(app, bearer);
+      expect(res.statusCode, res.body).toBe(409);
+      expect(await entries()).toHaveLength(2);
+    });
   });
 
   it('a fill nobody blocks, and a capture with nothing to fill, send no filled', async () => {

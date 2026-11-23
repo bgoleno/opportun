@@ -33,6 +33,7 @@ import { discoveryResults, opportunities } from '../db/schema';
 import { POSTING_RECONCILE_KIND } from './jobKinds';
 import { sanitizePosting } from './postingSanitize';
 import { CAPTURE_SLOT } from './captureLimit';
+import { HttpError } from './errors';
 import { racePoint } from './racePoints';
 import { postingIdentity, siteLabel } from './captureSites';
 import { sourceLabel } from './sourceLabels';
@@ -332,6 +333,13 @@ async function recordCapture(
  * its own fingerprint, so a re-capture would have overwritten the employer's copy with the
  * aggregator's page text and then skipped the re-search that would have restored it. The ATS
  * copy wins every conflict (design D4), and a capture fills missing fields only (D15, D24).
+ *
+ * A location that would make it another opportunity of the user's (its company, title and that
+ * location, 409 duplicate) is left out, and the rest is filled, as the posting check does
+ * (lib/postingReconcile): the capture is recorded by now, so refusing it would have it recorded again
+ * with each retry (em and tl on https://github.com/bgoleno/opportun/issues/914). It is not said:
+ * `filled: false` is for what can be added by hand, and this would be refused there too. Called in one
+ * transaction: the first try is a savepoint, and a wait that ends in the second undoes both.
  */
 async function fillOpportunity(
   db: Exec,
@@ -349,7 +357,17 @@ async function fillOpportunity(
   if (opp.location == null && posting.location != null) patch.location = posting.location;
   if (opp.remote == null && posting.remote != null) patch.remote = posting.remote;
   if (opp.compNote == null && posting.compNote != null) patch.compNote = posting.compNote;
-  if (Object.keys(patch).length > 0) await updateOpportunity(db, ctx, opp.id, patch);
+  if (Object.keys(patch).length === 0) return;
+  try {
+    await updateOpportunity(db, ctx, opp.id, patch);
+  } catch (err) {
+    if (!(err instanceof HttpError) || err.code !== 'duplicate' || patch.location === undefined) {
+      throw err;
+    }
+    const rest = { ...patch };
+    delete rest.location;
+    if (Object.keys(rest).length > 0) await updateOpportunity(db, ctx, opp.id, rest);
+  }
 }
 
 /**
@@ -391,8 +409,8 @@ async function advance(
   ctx: UserCtx,
   opportunityId: string,
   waitMs: number,
-): Promise<OpportunityStage | null> {
-  const moved = await withTransaction(
+): Promise<OpportunityView | null> {
+  return await withTransaction(
     db,
     async (tx) => {
       await boundLockWaits(tx, waitMs);
@@ -410,9 +428,6 @@ async function advance(
     // A bounded wait for the lock (#309): resolveCapture runs in the user's capture slot.
     { scope: ingestScope(ctx), lockTimeoutMs: waitMs },
   );
-  if (moved === null) return null;
-  await afterStageChange(db, ctx, moved);
-  return 'interested';
 }
 
 /** Stores the capture as a new accepted lead of the user's extension channel source. */
@@ -458,9 +473,9 @@ function fillFrom(lead: NormalizedPosting, capture: NormalizedPosting): Normaliz
 /** What is logged for a step after the save that gave up a wait (#914): its name, nothing else. */
 type GaveUp =
   | 'saved capture: the kept-apart note gave up a lock wait'
-  | 'saved capture: the fingerprint gave up a lock wait'
   | 'saved capture: the fill gave up a lock wait'
   | 'saved capture: the stage move gave up a lock wait'
+  | 'saved capture: what follows a stage move gave up a lock wait'
   | 'saved capture: the posting state gave up a lock wait';
 
 interface Settled {
@@ -582,6 +597,13 @@ async function settleLead(
     await recordFoldedLead(tx, ctx, opportunity.id, other);
     linkedLeadIds.push(other.id);
   }
+  // Said to be the system's with the description itself: a description without its fingerprint reads
+  // as the user's own for good (tl on #955). The row is nobody else's yet, so nothing waits.
+  if (createdOpportunity && opportunity.descriptionMd != null && opportunity.descriptionMd !== '') {
+    opportunity = await updateOpportunity(tx, ctx, opportunity.id, {
+      descriptionFingerprint: descriptionFingerprint(opportunity.descriptionMd),
+    });
+  }
   return { opportunity, resultId, createdOpportunity, keptApartFrom, linkedLeadIds };
 }
 
@@ -620,10 +642,12 @@ export async function resolveCapture(
   // wait below makes the answer an error: "try again" would be untrue, and a retry would record it
   // twice (tl on https://github.com/bgoleno/opportun/pull/318, and on
   // https://github.com/bgoleno/opportun/issues/914). A step that cannot have its locks in time is
-  // skipped. One budget for them all: each waits for what is left as it starts, and 1 ms when nothing
-  // is, so a step nobody blocks still goes through. A step with several waits can overrun it, the fill
-  // by its attempt's, user's and row's if three holders block it one after another: some 15 s, and
-  // 1 ms for each step after.
+  // skipped. The one exception is the check's own job, queued at the end: swallowing that would leave
+  // `searching` with no check behind it, so it may throw, as it always could.
+  // One budget for them all: each step waits for what is left as it starts, and 1 ms when nothing is,
+  // so a step nobody blocks still goes through. A step with several waits can overrun it, the fill by
+  // its attempt's, user's and row's if three holders block it one after another: some 15 s, and 1 ms
+  // for each step after.
   await racePoint('captureResolve.recorded');
   const deadline = Date.now() + CAPTURE_SLOT.lockTimeoutMs;
   const waitMs = (): number => Math.max(1, deadline - Date.now());
@@ -653,19 +677,7 @@ export async function resolveCapture(
   }
 
   let filled = true;
-  if (createdOpportunity) {
-    // The create path already stored the description; record that the system wrote it.
-    const { descriptionMd } = opportunity;
-    if (descriptionMd != null && descriptionMd !== '') {
-      await unlessBlocked('saved capture: the fingerprint gave up a lock wait', () =>
-        bounded((tx) =>
-          updateOpportunity(tx, ctx, opportunity.id, {
-            descriptionFingerprint: descriptionFingerprint(descriptionMd),
-          }),
-        ),
-      );
-    }
-  } else {
+  if (!createdOpportunity) {
     // updateOpportunity keeps its own lock order (the attempt, the user, rows): a savepoint in this
     // transaction, which holds nothing before it.
     const fill = await unlessBlocked('saved capture: the fill gave up a lock wait', () =>
@@ -679,7 +691,14 @@ export async function resolveCapture(
   const stage = await unlessBlocked('saved capture: the stage move gave up a lock wait', () =>
     advance(db, ctx, opportunity.id, waitMs()),
   );
-  const stageMovedTo = stage?.value ?? null;
+  const moved = stage?.value ?? null;
+  // Its own step: the move is committed, whatever becomes of what follows it. A company's lookup
+  // lost here is queued again by the opportunity's next move.
+  if (moved !== null) {
+    await unlessBlocked('saved capture: what follows a stage move gave up a lock wait', () =>
+      afterStageChange(db, ctx, moved),
+    );
+  }
 
   const current = await getOpportunity(db, ctx, opportunity.id);
   if (current.postingState !== 'confirmed') {
@@ -710,7 +729,7 @@ export async function resolveCapture(
     opportunityId: opportunity.id,
     resultId,
     createdOpportunity,
-    stageMovedTo,
+    stageMovedTo: moved === null ? null : 'interested',
     linkedLeadIds,
     filled,
   };
