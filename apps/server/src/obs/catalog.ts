@@ -644,6 +644,7 @@ export const AUDIT_EVENTS = [
   'admin.oauth_provider_configured',
   'admin.oauth_provider_removed',
   'admin.password_reset',
+  'admin.registration_updated',
   'ai.discovery_budget.updated',
   'ai.key.validated',
   'ai.policy.updated',
@@ -954,6 +955,8 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'google token revocation failed': [],
   'google grant revocation after a failed connect failed': [],
   'oauth sign-in exchange failed': ['opportun.oauth.provider'],
+  'oauth callback failed': ['opportun.oauth.provider'],
+  'google callback failed': [],
 };
 
 export const LOG_MESSAGES: ReadonlyMap<string, readonly AttrKey[]> = new Map(

@@ -213,11 +213,17 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
       // Single use, like the sign-in flow: the nonce is spent on this callback whatever
       // happens next, so a state replayed inside its ten minute window is refused.
       if (verified === null || !spendNonce(db, verified.nonce)) {
-        await audit(db, 'google.bad_state', {
-          userId: ctx.userId,
-          ip: req.ip,
-          detail: { replay: verified !== null },
-        });
+        // A refusal's record: a failed write is logged, and the browser still lands on an app
+        // page (#853).
+        try {
+          await audit(db, 'google.bad_state', {
+            userId: ctx.userId,
+            ip: req.ip,
+            detail: { replay: verified !== null },
+          });
+        } catch (err) {
+          req.log.warn({ err }, 'google callback failed');
+        }
         // An app page, not a raw JSON 403 (#662), as for a callback with no session above.
         return reply.redirect(`${SETTINGS_PAGE}?google=not_completed`);
       }
@@ -269,7 +275,9 @@ export async function googleAuthRoutes(app: FastifyInstance): Promise<void> {
             req.log.warn('google grant revocation after a failed connect failed');
           }
         }
-        throw err;
+        // An app page with a plain error (#853), not raw 500 JSON; nothing was stored.
+        req.log.warn({ err }, 'google callback failed');
+        return reply.redirect(`${SETTINGS_PAGE}?google=error`);
       }
       return reply.redirect(SETTINGS_PAGE);
     },

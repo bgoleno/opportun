@@ -23,3 +23,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # The CodeQL steps (init, analyze, upload-sarif) are one action, github/codeql-action, and
+    # must move together (#872): init and analyze at different versions fail the CodeQL jobs, as
+    # the split bumps in #791 and #793 did. One pull request for all of them.
+    groups:
+      codeql-action:
+        patterns:
+          - 'github/codeql-action*'

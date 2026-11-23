@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { runStructured } from '@opportun/ai';
 import type { FastifyInstance } from 'fastify';
 import { reconcilePosting } from '../src/jobs/postingReconcile';
+import { POSTING_RECONCILE_KIND } from '../src/lib/jobKinds';
+import { enqueue } from '../src/lib/jobQueue';
 import { rederivePosting } from '../src/lib/postingRederive';
 import { descriptionFingerprint } from '../src/lib/postingFingerprint';
 import type { BoardLookup } from '../src/lib/postingSearch';
@@ -130,6 +132,101 @@ describe('reconcilePosting', () => {
     );
     expect(out.atsJobRef).toMatchObject({ kind: 'ats_greenhouse', externalId: '1000000001' });
     expect(out.postingUrl).toBe('https://job-boards.greenhouse.io/soylent/jobs/1000000001');
+  });
+
+  // #852 (qa's regression pass 3): Find posting clicked while the background check reads the
+  // board wrote a second attach, recorded as a Refetch. While the posting is searching, Find
+  // posting is refused, so the check's own result is the one attach.
+  it('Find posting while the check reads the board is refused; the check attaches once (#852)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const opp = await seedCaptured(app, ctx);
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    let reading: () => void = () => undefined;
+    const started = new Promise<void>((r) => {
+      reading = r;
+    });
+    const board: BoardLookup = async (...args) => {
+      reading();
+      await held;
+      return boardWith([atsPosting()])(...args);
+    };
+
+    // The check's own job row, unfinished while it runs, as captureResolve queues it.
+    await enqueue(
+      app.db,
+      POSTING_RECONCILE_KIND,
+      { opportunityId: opp.id },
+      {
+        dedupeKey: `${POSTING_RECONCILE_KIND}:${opp.id}`,
+        userId: a.userId,
+        runAt: Date.now() + 3_600_000,
+      },
+    );
+    const check = run(app, ctx, opp.id, board);
+    await started;
+    const click = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${opp.id}/find-posting`,
+    });
+    expect(click.statusCode).toBe(409);
+    expect(click.json().error).toMatchObject({ code: 'posting_searching' });
+    release();
+    await check;
+
+    expect((await getOpportunity(app.db, ctx, opp.id)).postingState).toBe('confirmed');
+    const { items } = await listActivities(app.db, ctx, opp.id, { limit: 50, offset: 0 });
+    expect(items.filter((i) => i.title === 'Job posting attached')).toEqual([]);
+  });
+
+  // tl on #865: 'searching' left behind by a check that died, or whose job row is gone, must not
+  // take Find posting away: with no unfinished check, it runs.
+  it('searching with no unfinished check: Find posting runs (#852)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const opp = await seedCaptured(app, ctx);
+    expect((await getOpportunity(app.db, ctx, opp.id)).postingState).toBe('searching');
+    const click = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${opp.id}/find-posting`,
+    });
+    expect(click.statusCode, click.body).toBe(200);
+  });
+
+  // qa on #865: a click just as the check ends found the posting confirmed and refetched it, a
+  // second attach. The page says what state it saw; a posting confirmed since is left alone.
+  it('a click that saw the check running, landing just after it confirmed, changes nothing (#852)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const opp = await seedCaptured(app, ctx);
+    await run(app, ctx, opp.id, boardWith([atsPosting()]));
+    const confirmed = await getOpportunity(app.db, ctx, opp.id);
+    expect(confirmed.postingState).toBe('confirmed');
+
+    const click = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${opp.id}/find-posting?seen=searching`,
+    });
+    expect(click.statusCode, click.body).toBe(200);
+    expect(click.json()).toMatchObject({ outcome: 'already_confirmed' });
+    const { items } = await listActivities(app.db, ctx, opp.id, { limit: 50, offset: 0 });
+    expect(items.filter((i) => i.title === 'Job posting attached')).toEqual([]);
+    expect(await getOpportunity(app.db, ctx, opp.id)).toMatchObject({
+      descriptionMd: confirmed.descriptionMd,
+      updatedAt: confirmed.updatedAt,
+    });
+
+    // A Refetch the user asked for on a confirmed posting still runs.
+    const refetch = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${opp.id}/find-posting?seen=confirmed`,
+    });
+    expect(refetch.json().outcome).not.toBe('already_confirmed');
   });
 
   // #851 (qa's regression pass 3): the board read is held, and the user saves a description

@@ -292,7 +292,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                   variant="outline"
                   className="w-fit"
                   disabled={find.isPending}
-                  onClick={() => find.mutate()}
+                  onClick={() => find.mutate(opp.postingState ?? 'none')}
                 >
                   {find.isPending ? 'Searching...' : 'Find posting'}
                 </Button>
