@@ -207,6 +207,15 @@ describe('signal B: the sender address, never the display name (criterion 1)', (
   });
 });
 
+describe('the sender domain of a long address', () => {
+  it('strips trailing dots from it', () => {
+    const started = performance.now();
+    expect(senderDomain(`x@a${'.'.repeat(100_000)}x`)).toBe(`a${'.'.repeat(100_000)}x`);
+    expect(senderDomain(`x@ExampleCorp.Example${'.'.repeat(100_000)}`)).toBe('examplecorp.example');
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+});
+
 describe('signal C: the role title and the company name in the subject or text (criterion 1)', () => {
   it.each([
     ['both in the text', 'Re: your application', 'Senior Platform Engineer at Example Corp', true],

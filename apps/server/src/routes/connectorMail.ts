@@ -15,6 +15,7 @@ import { HttpError } from '../lib/errors';
 import { rateLimit } from '../lib/rateLimit';
 import { putSyncState } from '../repos/communications';
 import { workflow } from '../obs/workflow';
+import { ErrorResponse } from './common';
 
 const MB = 1024 * 1024;
 /** Messages per batch; the connector splits larger syncs. */
@@ -98,8 +99,6 @@ export function capBody(body: string, bytes: number): string {
   while (end > 0 && (buf.readUInt8(end) & 0xc0) === 0x80) end -= 1;
   return buf.subarray(0, end).toString('utf8') + TRUNCATED_MARK;
 }
-
-const ErrorResponse = z.object({ error: z.object({ code: z.string() }) });
 
 export async function connectorMailRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();

@@ -25,7 +25,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { isSystemWritten, replaceAllowedByFlag } from '../lib/postingFingerprint';
-import { attachPosting } from '../lib/postingAttach';
+import { attachPosting, recordIdentified } from '../lib/postingAttach';
 import { confirmPosting, unconfirmPosting } from '../lib/postingConfirm';
 import { rederivePosting } from '../lib/postingRederive';
 import type { SourceContext } from '../adapters/discoverySource';
@@ -57,7 +57,9 @@ const CandidateView = z.object({
 const FindResponse = z.object({
   /** 'identified' (#398): the opportunity's own careers link got its Greenhouse identity from
    *  Greenhouse's API; no posting was attached. */
-  outcome: z.enum(['attached', 'identified', 'candidates', 'none', 'no_board']),
+  outcome: z.enum(['attached', 'identified', 'candidates', 'none', 'no_board', 'unreachable']),
+  /** An attach that changed nothing: a Refetch that found the same job (#835). */
+  unchanged: z.literal(true).optional(),
   /** Present when the outcome is 'attached' or 'identified'. */
   opportunity: OpportunityView.optional(),
   candidate: CandidateView.optional(),
@@ -105,6 +107,15 @@ function userWritten(opp: OpportunityRowView): boolean {
   return !isSystemWritten(opp.descriptionMd, opp.descriptionFingerprint);
 }
 
+/** Whether two identities name the same job on the same board. */
+function sameRef(
+  a: { kind: string; org: string | null; externalId: string } | null | undefined,
+  b: { kind: string; org: string | null; externalId: string } | null | undefined,
+): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  return a.kind === b.kind && a.org === b.org && a.externalId === b.externalId;
+}
+
 export async function opportunityPostingRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
 
@@ -145,6 +156,10 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       if (userWritten(current)) {
         const identified = await identifyOwnLink(ctx, current, sctx);
         if (current.postingState === 'confirmed' && identified !== null) {
+          // On the timeline, as every other way a posting is found (#813).
+          await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+            kept: false,
+          });
           return { outcome: 'identified' as const, opportunity: identified };
         }
         // Not confirmed yet (#756, tl): Greenhouse's own answer for its embedded link is the
@@ -155,6 +170,9 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
             postingState: 'confirmed',
             postingStateDetail: 'user_confirmed',
             atsJobRef: identified.atsJobRef,
+          });
+          await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+            kept: true,
           });
           return { outcome: 'identified' as const, opportunity: confirmed };
         }
@@ -208,13 +226,30 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           { keepDescription: true },
         );
         const note = outcome.note === undefined ? {} : { note: outcome.note };
-        return { outcome: 'attached' as const, opportunity, candidate: outcome.candidate, ...note };
+        // A Refetch that found the same job, link and description changed nothing (#835, qa on
+        // #830): said so, instead of "Posting attached".
+        const unchanged =
+          current.postingState === 'confirmed' &&
+          opportunity.postingUrl === current.postingUrl &&
+          opportunity.descriptionMd === current.descriptionMd &&
+          sameRef(opportunity.atsJobRef, current.atsJobRef);
+        return {
+          outcome: 'attached' as const,
+          opportunity,
+          candidate: outcome.candidate,
+          ...(unchanged ? { unchanged: true as const } : {}),
+          ...note,
+        };
       }
       // No board read answered the opportunity's own careers link: its identity can still come
       // from Greenhouse's API, while the posting itself is left to the user to choose (#398).
       const identified = await identifyOwnLink(ctx, current, sctx);
       const note = outcome.note === undefined ? {} : { note: outcome.note };
       if (identified !== null && outcome.status !== 'candidates') {
+        // On the timeline, as the user-described cases above are (#813, tl on #847).
+        await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+          kept: false,
+        });
         return { outcome: 'identified' as const, opportunity: identified, ...note };
       }
       if (outcome.status === 'candidates') {
@@ -229,6 +264,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       if (outcome.status === 'none') {
         return { outcome: 'none' as const, candidates: outcome.candidates, ...note };
       }
+      if (outcome.status === 'unreachable') return { outcome: 'unreachable' as const };
       return {
         outcome: 'no_board' as const,
         needsCareersUrl: outcome.needsCareersUrl,

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { audit } from '../src/lib/audit';
 import { HttpError } from '../src/lib/errors';
+import { ErrorResponse } from '../src/routes/common';
 import { captureLogs, testApp, type TestAppOptions } from './helpers';
 import { queryAll, queryOne } from './db';
 import { WITHHELD } from '../src/obs/log';
@@ -226,6 +227,17 @@ describe('central error handler', () => {
         throw new Error('database password is hunter2-internal');
       });
       // #750: an HttpError's message reaches the client only when its thrower marks it.
+      // #750: a route that declares its error response keeps a marked sentence, since the shared
+      // schema names `message` (a schema naming only `code` stripped it, #743).
+      a.get(
+        '/api/v1/__test/marked-schema',
+        { schema: { response: { 409: ErrorResponse } } },
+        async () => {
+          throw new HttpError(409, 'pattern_taken', 'That pattern is already in use.', undefined, {
+            userFacing: true,
+          });
+        },
+      );
       a.get('/api/v1/__test/marked', async () => {
         throw new HttpError(409, 'pattern_taken', 'That pattern is already in use.', undefined, {
           userFacing: true,
@@ -273,6 +285,15 @@ describe('central error handler', () => {
   it("sends a marked HttpError's own sentence", async () => {
     const a = await boot({}, routes);
     const res = await a.inject({ method: 'GET', url: '/api/v1/__test/marked' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      error: { code: 'pattern_taken', message: 'That pattern is already in use.' },
+    });
+  });
+
+  it('keeps a marked sentence on a route that declares the shared error response (#750)', async () => {
+    const a = await boot({}, routes);
+    const res = await a.inject({ method: 'GET', url: '/api/v1/__test/marked-schema' });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({
       error: { code: 'pattern_taken', message: 'That pattern is already in use.' },

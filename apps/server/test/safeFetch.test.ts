@@ -211,6 +211,35 @@ describe('safeFetch', () => {
     );
   });
 
+  it('a hostname longer than DNS allows is refused before it is fetched', async () => {
+    // 265 characters, under an allowed domain: DNS names stop at 253.
+    const allow = { allowHosts: ['example.com'] };
+    const long = `${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(60)}.example.com`;
+    expect(long.length).toBeGreaterThan(253);
+    const start = harness({ [long]: [PUBLIC_IP] }, [ok()]);
+    expect(await reason(createSafeFetch(start)(`https://${long}/`, allow))).toBe('scheme');
+    expect(start.requests).toEqual([]);
+    const hop = harness({ 'jobs.example.com': [PUBLIC_IP], [long]: [PUBLIC_IP] }, [
+      { status: 307, headers: { location: `https://${long}/next` }, body: body() },
+      ok(),
+    ]);
+    expect(await reason(createSafeFetch(hop)('https://jobs.example.com/', allow))).toBe('scheme');
+    expect(hop.requests.map((r) => r.url.hostname)).toEqual(['jobs.example.com']);
+    // At the limit, it is still fetched.
+    const at = `${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(49)}.example.com`;
+    expect(at.length).toBe(253);
+    const ok253 = harness({ [at]: [PUBLIC_IP] }, [ok()]);
+    expect((await createSafeFetch(ok253)(`https://${at}/`, allow)).status).toBe(200);
+  });
+
+  it('trailing dots are stripped from a long hostname', () => {
+    const started = performance.now();
+    expect(isProhibitedHost(`a${'.'.repeat(100_000)}x`)).toBe(false);
+    expect(isProhibitedHost(`linkedin.com${'.'.repeat(100_000)}`)).toBe(true);
+    expect(isPageFetchProhibited(`www.indeed.com${'.'.repeat(100_000)}`)).toBe(true);
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
   it('follows up to 3 redirects (relative ones included) and blocks the 4th', async () => {
     const hop = (to: string): RawResponse => ({
       status: 302,

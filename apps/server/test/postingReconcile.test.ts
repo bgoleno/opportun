@@ -131,6 +131,19 @@ describe('reconcilePosting', () => {
     expect(out.postingUrl).toBe('https://job-boards.greenhouse.io/soylent/jobs/1000000001');
   });
 
+  it('a board that cannot be read is a check that did not finish, not "found nothing" (#835)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const opp = await seedCaptured(app, ctx);
+    const broken: BoardLookup = async () => {
+      throw new Error('fetch failed: ETIMEDOUT');
+    };
+    await run(app, ctx, opp.id, broken);
+    const out = await getOpportunity(app.db, ctx, opp.id);
+    expect(out).toMatchObject({ postingState: 'needs_review', postingStateDetail: 'failed' });
+    expect(out.descriptionMd).toBe(opp.descriptionMd);
+  });
+
   it('re-fingerprints what it wrote, so its own text is not read as a user edit', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);

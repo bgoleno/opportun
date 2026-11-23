@@ -3,6 +3,15 @@ import { z } from 'zod';
 
 export const IdParams = z.object({ id: z.string().min(1).max(64) });
 
+/**
+ * The error body a route declares for an error status: the code, and the sentence its thrower
+ * marked for users when there is one (#750). One shared schema, so a route that declares its
+ * errors never strips that sentence (a local schema naming only `code` did, #743).
+ */
+export const ErrorResponse = z.object({
+  error: z.object({ code: z.string(), message: z.string().optional() }),
+});
+
 export const MAX_LIMIT = 200;
 export const DEFAULT_LIMIT = 50;
 

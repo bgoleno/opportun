@@ -229,6 +229,8 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
         'not_your_application',
         // The same words as the web's (components/apply/api.ts), which is what the visitor reads.
         'This application was started in another session on this shared demo account. You can read it or cancel it; only that session can change it.',
+        undefined,
+        { userFacing: true },
       );
     }
   });

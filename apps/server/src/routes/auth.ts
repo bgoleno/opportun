@@ -51,6 +51,7 @@ import {
 } from '../lib/twoFactor';
 import { clearCsrfCookie, isSecureRequest, issueCsrfCookie } from '../plugins/security';
 import { requireAdmin, requireUser, type UserCtx } from '../repos/base';
+import { ErrorResponse } from './common';
 import {
   activateTotp,
   findUserId,
@@ -186,11 +187,6 @@ const PublicUser = z.object({
   isAdmin: z.boolean(),
 });
 const UserResponse = z.object({ user: PublicUser });
-// The message is kept (#743): a response schema drops what it does not name, and a refusal such as
-// password_changed (#643) carries the sentence the user is meant to read.
-const ErrorResponse = z.object({
-  error: z.object({ code: z.string(), message: z.string().optional() }),
-});
 
 type PublicUserT = z.infer<typeof PublicUser>;
 

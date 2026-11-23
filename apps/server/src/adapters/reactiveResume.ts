@@ -69,13 +69,27 @@ export function parseRrBaseUrl(raw: string): string {
       400,
       'invalid_base_url',
       'Enter the https address of your Reactive Resume.',
+      undefined,
+      { userFacing: true },
     );
   }
   if (url.protocol !== 'https:') {
-    throw new HttpError(400, 'invalid_base_url', 'Reactive Resume must be reached over https.');
+    throw new HttpError(
+      400,
+      'invalid_base_url',
+      'Reactive Resume must be reached over https.',
+      undefined,
+      { userFacing: true },
+    );
   }
   if (url.username !== '' || url.password !== '') {
-    throw new HttpError(400, 'invalid_base_url', 'The address must not contain credentials.');
+    throw new HttpError(
+      400,
+      'invalid_base_url',
+      'The address must not contain credentials.',
+      undefined,
+      { userFacing: true },
+    );
   }
   return url.origin;
 }
@@ -324,6 +338,8 @@ function rrHttpError(status: number, body: Buffer): HttpError {
       409,
       'reactive_resume_unauthorized',
       'Reactive Resume rejected the API key. Create a new API key in Reactive Resume and save it in Settings > Integrations.',
+      undefined,
+      { userFacing: true },
     );
   }
   if (status === 403 && code === 'RESUME_LOCKED') {
@@ -331,6 +347,8 @@ function rrHttpError(status: number, body: Buffer): HttpError {
       409,
       'reactive_resume_locked',
       'The resume is locked in Reactive Resume. Unlock it there, then try again.',
+      undefined,
+      { userFacing: true },
     );
   }
   if (status === 409) {
@@ -338,6 +356,8 @@ function rrHttpError(status: number, body: Buffer): HttpError {
       409,
       'reactive_resume_conflict',
       'The resume changed in Reactive Resume while the edit was being applied. Try again.',
+      undefined,
+      { userFacing: true },
     );
   }
   if (status === 403 || status === 404) return new HttpError(422, 'reactive_resume_unavailable');
@@ -389,6 +409,7 @@ async function rrCall(
       'reactive_resume_unreachable',
       'Reactive Resume could not be reached at the configured address.',
       { reason },
+      { userFacing: true },
     );
   }
   let json: unknown;
@@ -475,6 +496,8 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
         409,
         'reactive_resume_not_connected',
         'Connect Reactive Resume in Settings > Integrations first.',
+        undefined,
+        { userFacing: true },
       );
     }
     return cfg;
@@ -548,6 +571,7 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
             'edit_spans_formatting',
             'This edit crosses formatting (bold, italic or a link) in Reactive Resume; apply it by hand there.',
             { index },
+            { userFacing: true },
           );
         }
         return { index, outcome: 'applied' };
@@ -628,6 +652,8 @@ export async function writeRrConfig(
             422,
             'api_key_required',
             'Enter the API key again when setting or changing the Reactive Resume address.',
+            undefined,
+            { userFacing: true },
           );
         }
       } else {

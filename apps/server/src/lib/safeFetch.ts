@@ -345,8 +345,18 @@ const realDeps: SafeFetchDeps = {
  * review). Used for list matching only; the name resolved and connected to is the caller's.
  */
 function normalizeHost(host: string): string {
-  return host.trim().toLowerCase().replace(/\.+$/, '');
+  return withoutTrailingDots(host.trim().toLowerCase());
 }
+
+/** `s` with every trailing dot removed, by one scan from the end. */
+function withoutTrailingDots(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 0x2e) end -= 1;
+  return s.slice(0, end);
+}
+
+/** The longest name DNS allows, without its optional trailing dot (RFC 1035 section 2.3.4). */
+const MAX_HOSTNAME_LENGTH = 253;
 
 /**
  * True when `host` is allowed by one of `entries`, both sides normalized: a string entry is that
@@ -390,6 +400,10 @@ function parseTarget(raw: string | URL): URL {
   if (url.username !== '' || url.password !== '') {
     throw new FetchBlockedError('scheme', 'credentials in URL');
   }
+  // A name DNS could not resolve is not a valid URL to fetch. Checked here, on the first URL and on
+  // every redirect target, before any host list, rate token or lookup.
+  const name = url.hostname.endsWith('.') ? url.hostname.slice(0, -1) : url.hostname;
+  if (name.length > MAX_HOSTNAME_LENGTH) throw new FetchBlockedError('scheme', 'not a valid URL');
   return url;
 }
 
