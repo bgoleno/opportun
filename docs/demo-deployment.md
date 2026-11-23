@@ -446,7 +446,7 @@ recommends.
 
 Set a hard spend limit on the Anthropic key in `OPPORTUN_DEMO_AI_KEY` (or the key held by
 `OPPORTUN_DEMO_AI_KEY_FILE`), in the [Anthropic console](https://console.anthropic.com),
-**before** DNS points at the host. All 13 default task policies are `anthropic`, so this is the
+**before** DNS points at the host. Every default task policy is `anthropic`, so this is the
 only provider to configure.
 
 This is not optional, and it is not the same protection as `#280`'s in-app per-user
@@ -535,7 +535,11 @@ A dedicated account:
 
 - **is an ordinary account**, never an administrator, and its data is its own;
 - **is not reset**: the nightly reset deletes and reseeds the five pinned accounts only, and
-  leaves a dedicated account and its data as they are;
+  leaves a dedicated account and its data as they are. It still waits for the reset: a request
+  from a dedicated account that arrives while the reset runs is held until it is done, and then
+  answered as usual (its session stays valid), and a slow AI call on a dedicated account holds the
+  reset off like any other, up to the 40 second limit below, so it can delay the shared accounts'
+  reset by that long;
 - **is out of `demo-admin`'s reach**: on a demo server, `demo-admin` is an administrator only for
   the user list, the pepper rotation list, password resets, and the jobs list and its retry, and
   even there it sees and acts on the five pinned accounts only. It cannot reset a dedicated
@@ -624,6 +628,8 @@ On a shared account, enforced by the server:
 
   These time limits apply to every account on a demo server, a dedicated one included: the server
   sets them before it looks up whose request it is.
+  So a dedicated account is not reset, but its requests and its AI calls are held and limited by
+  the same gate.
 
   What this does not cover:
   - **Slow work that is not an AI call**: AI calls and the chat's reply end on the stop, and a job
