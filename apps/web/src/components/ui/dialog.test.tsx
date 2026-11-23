@@ -48,7 +48,7 @@ describe('DialogContent', () => {
 // https://github.com/bgoleno/opportun/issues/898: a dialog that shows something once, or must wait
 // for a request, refuses to close by not changing its `open`. The browser closed it all the same.
 describe('DialogContent with guardClose', () => {
-  function Guarded({ accepts, guard = true }: { accepts: boolean; guard?: boolean }) {
+  function Guarded({ accepts, unguarded }: { accepts: boolean; unguarded?: true }) {
     const [open, setOpen] = useState(true);
     const [asked, setAsked] = useState(0);
     return (
@@ -61,7 +61,7 @@ describe('DialogContent with guardClose', () => {
             if (accepts) setOpen(next);
           }}
         >
-          <DialogContent guardClose={guard}>
+          <DialogContent {...(unguarded ? {} : { guardClose: true })}>
             <DialogTitle>Example</DialogTitle>
             <input aria-label="File" type="file" />
           </DialogContent>
@@ -69,7 +69,7 @@ describe('DialogContent with guardClose', () => {
       </>
     );
   }
-  function setup(props: { accepts: boolean; guard?: boolean }) {
+  function setup(props: { accepts: boolean; unguarded?: true }) {
     render(<Guarded {...props} />);
     const dialog = screen.getByRole('dialog');
     return { dialog };
@@ -77,7 +77,8 @@ describe('DialogContent with guardClose', () => {
 
   it('Escape asks the parent, and a refused one leaves it open', () => {
     const { dialog } = setup({ accepts: false });
-    pressEscapeOn(dialog);
+    // Refused, so it never leaves the screen (nor the focus the dialog), not shown again after.
+    expect(pressEscapeOn(dialog)).toBe(true);
     expect(screen.getByText('asked 1')).toBeInTheDocument();
     expect(dialog).toHaveAttribute('open');
     expect(screen.getByLabelText('File')).toBeInTheDocument();
@@ -115,7 +116,7 @@ describe('DialogContent with guardClose', () => {
   });
 
   it('without it, the browser closes the dialog on Escape as before', () => {
-    const { dialog } = setup({ accepts: false, guard: false });
+    const { dialog } = setup({ accepts: false, unguarded: true });
     const cancel = new Event('cancel', { cancelable: true });
     fireEvent(dialog, cancel);
     expect(cancel.defaultPrevented).toBe(false);

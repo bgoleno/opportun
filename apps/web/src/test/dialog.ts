@@ -9,9 +9,13 @@ export function browserCloses(dialog: HTMLElement): void {
   fireEvent(dialog, new Event('close'));
 }
 
-/** Escape on a modal dialog: a `cancel` the page may refuse, and a native close if it does not. */
-export function pressEscapeOn(dialog: HTMLElement): void {
+/**
+ * Escape on a modal dialog: a `cancel` the page may refuse, and a native close if it does not.
+ * Returns whether it was refused.
+ */
+export function pressEscapeOn(dialog: HTMLElement): boolean {
   const cancel = new Event('cancel', { cancelable: true });
   fireEvent(dialog, cancel);
   if (!cancel.defaultPrevented) browserCloses(dialog);
+  return cancel.defaultPrevented;
 }
