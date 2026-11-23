@@ -29,6 +29,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { isTerminal, stageLabel, type OpportunityView } from '@/lib/opportunities';
 import { cn } from '@/lib/utils';
 import {
+  BOARD_GAP_CLASS,
   BOARD_SCROLLER_ATTR,
   boardKeyboardCoordinates,
   keyboardFirst,
@@ -343,17 +344,19 @@ export function Kanban(props: {
       }}
       onDragEnd={onDragEnd}
     >
-      <div className="flex items-start gap-3">
+      <div className={cn('flex items-start', BOARD_GAP_CLASS)}>
         {chain.length > 0 ? (
           <div
-            className="flex min-w-0 flex-1 items-start gap-3 overflow-x-auto pb-4"
+            className={cn('flex min-w-0 flex-1 items-start overflow-x-auto pb-4', BOARD_GAP_CLASS)}
             {...{ [BOARD_SCROLLER_ATTR]: '' }}
           >
             {chain.map(renderColumn)}
           </div>
         ) : null}
         {terminal.length > 0 ? (
-          <div className="flex shrink-0 items-start gap-3 pb-4">{terminal.map(renderColumn)}</div>
+          <div className={cn('flex shrink-0 items-start pb-4', BOARD_GAP_CLASS)}>
+            {terminal.map(renderColumn)}
+          </div>
         ) : null}
       </div>
       {/* The overlay follows the pointer above every scroll container. */}
