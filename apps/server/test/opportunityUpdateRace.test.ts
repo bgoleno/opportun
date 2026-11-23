@@ -4,13 +4,17 @@
 // and the same outcomes hold.
 import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { dedupeKey } from '@opportun/core';
+import { dedupeKey, type AtsJobRef } from '@opportun/core';
 import { describe, expect, it } from 'vitest';
 import { companies, opportunities } from '../src/db/schema';
 import { writeGateOf } from '../src/db/client';
 import { onSlowTransaction } from '../src/db/gate';
 import type { UserCtx } from '../src/repos/base';
-import { createOpportunity, transitionOpportunity } from '../src/repos/opportunities';
+import {
+  createOpportunity,
+  transitionOpportunity,
+  updateOpportunity,
+} from '../src/repos/opportunities';
 import { useApi } from './api';
 import { queryOne, sqliteOnly, testDialect } from './db';
 import type { TestClient } from './isolation';
@@ -245,6 +249,61 @@ describe("a create and an update that claim one dismissed holder's key: neither 
     pause.release();
     await Promise.all([first, other]);
     expect(seen).toBe(testDialect === 'postgres' ? 'arrived' : 'waiting');
+  });
+});
+
+// tl on #910: the identity of a `gh_jid` link was proven on the company's own boards (#785), so a
+// company change drops it, and a link save that read it before must not put it back.
+describe('a link save and a company save: an identity proven for the old company goes', () => {
+  const PROVEN: AtsJobRef = {
+    kind: 'ats_greenhouse',
+    org: 'initech',
+    externalId: '1000001',
+    url: 'https://boards.greenhouse.io/initech/jobs/1000001',
+    verifiedVia: 'gh_jid',
+  };
+  const LINK = { postingUrl: 'https://www.initech.example/careers/two?gh_jid=1000001' };
+  const COMPANY = { companyName: 'Hooli' };
+
+  it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
+    ['the link, then the company', LINK, COMPANY],
+    ['the company, then the link', COMPANY, LINK],
+  ])('%s', async (_what, one, two) => {
+    const { app, a } = await boot();
+    const { id } = await create(app, a);
+    await app.db
+      .update(opportunities)
+      .set({
+        postingUrl: 'https://www.initech.example/careers/one?gh_jid=1000001',
+        atsJobRef: PROVEN,
+        postingState: 'confirmed',
+      })
+      .where(eq(opportunities.id, id));
+    onSlowTransaction(() => undefined);
+    const pause = pauseAt(LOCKED);
+    // The repository's own save: the route also asks Greenhouse about a new link.
+    const first = updateOpportunity(app.db, ctxOf(a), id, one);
+    await pause.reached;
+    const second = updateOpportunity(app.db, ctxOf(a), id, two);
+    const seen = await settledOrWaiting(app, second, pause);
+    pause.release();
+    await Promise.all([first, second]);
+    const row = await app.db
+      .select({ postingUrl: opportunities.postingUrl, atsJobRef: opportunities.atsJobRef })
+      .from(opportunities)
+      .where(eq(opportunities.id, id))
+      .get();
+    expect(await expectKeyMatches(app, id)).toMatchObject(COMPANY);
+    expect(row).toEqual({ ...LINK, atsJobRef: null });
+    expect(seen).toBe('waiting');
+  });
+
+  it('the same job on a new link, with the company as it was, keeps it', async () => {
+    const { app, a } = await boot();
+    const { id } = await create(app, a);
+    await app.db.update(opportunities).set({ atsJobRef: PROVEN }).where(eq(opportunities.id, id));
+    const saved = await updateOpportunity(app.db, ctxOf(a), id, LINK);
+    expect(saved.atsJobRef).toEqual(PROVEN);
   });
 });
 

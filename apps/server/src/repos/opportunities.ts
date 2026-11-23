@@ -505,15 +505,17 @@ export class DescriptionChanged extends Error {
 }
 
 /**
- * The user's lock (lock order: submissionScope). A create, and an update of the company or of a part
- * of the dedupe key, hold it from before they read what they write from (#889).
+ * The user's lock (lock order: submissionScope). A create, and an update of the company, title,
+ * location or posting link, hold it from before they read what they write from (#889).
  */
 const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
 
 /**
- * Edits descriptive fields. Changing company, title or location re-claims the dedupe key, under the
- * user's lock; a patch with none of the three writes neither the company nor the key, so it cannot
- * put back what another save has changed since this one read the row (#889).
+ * Edits descriptive fields. Changing company, title or location re-claims the dedupe key; a patch
+ * with none of the three writes neither the company nor the key, so it cannot put back what another
+ * save has changed since this one read the row. Those three, and a posting link, are saved one at a
+ * time, under the user's lock and from a read made under it: each save's key and ATS identity come
+ * from the company and link the last one left (#889).
  */
 export async function updateOpportunity(
   db: Db,
@@ -539,17 +541,18 @@ export async function updateOpportunity(
     let current = await getViewSync(tx, ctx, id);
     // A new posting URL will mark the live attempt (#144): its lock comes first, before the user's
     // below (lock order: submissionScope). Taken for any posting URL, the same one too: whether it
-    // is a change is known only from the read made under the user's lock.
+    // is a change is known only from the read made under the user's lock, below.
     const lockedAttempt =
       patch.postingUrl === undefined ? null : await lockLiveAttempt(tx, ctx, id);
     if (patch.roleTargetId != null) await assertRoleTargetOwned(tx, ctx, patch.roleTargetId);
     const { companyName, ...fields } = patch;
     const changesKey =
       companyName !== undefined || fields.title !== undefined || fields.location !== undefined;
-    // Two saves could each change one part of the key and each make it from the other's old part, so
-    // these are made one at a time, and from the row as the last one left it: on Postgres the first
-    // read can be of before the lock was had.
-    if (changesKey) {
+    // Two saves could each change one part of the key and each make it from the other's old part. So
+    // could a link's identity be kept from a company another save has just changed (#785), or from a
+    // link it has just replaced (tl on #910). So these are made one at a time, and from the row as
+    // the last one left it: on Postgres the first read can be of before the locks were had.
+    if (changesKey || patch.postingUrl !== undefined) {
       await lockScope(tx, userScope(ctx));
       current = await getViewSync(tx, ctx, id);
     }
