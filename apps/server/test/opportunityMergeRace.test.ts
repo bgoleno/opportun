@@ -6,6 +6,7 @@ import { eq, or } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { newId } from '@opportun/core';
 import { describe, expect, it } from 'vitest';
+import { withTransaction } from '../src/db/client';
 import { onSlowTransaction } from '../src/db/gate';
 import {
   activities,
@@ -665,6 +666,28 @@ describe('a merge decides from what there is once it has its locks', () => {
       .where(eq(activities.opportunityId, p.keep))
       .all();
     expect(notes.map((n) => n.title)).toContain('Merged duplicate: Initech, Night Manager');
+    await expectGone(p, p.other);
+  });
+
+  it('a stage move of the kept one waits for it, so it is not written over', async () => {
+    const p = await pair();
+    const move = (to: 'interested' | 'applied', id: string) =>
+      withTransaction(p.app.db, (tx) => transitionOpportunityIn(tx, p.ctx, id, { to }));
+    await move('interested', p.other);
+    expect(
+      await beside(
+        p.app,
+        LOCKED,
+        () => merge(p),
+        () => move('applied', p.keep),
+      ),
+    ).toEqual(['ok', 'ok']);
+    const row = await p.app.db
+      .select()
+      .from(opportunities)
+      .where(eq(opportunities.id, p.keep))
+      .get();
+    expect(row?.stage).toBe('applied');
     await expectGone(p, p.other);
   });
 
