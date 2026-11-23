@@ -158,6 +158,28 @@ describe('detectAts', () => {
     expect(outcome).toMatchObject({ status: 'found', kind: 'ats_greenhouse', org: 'initech' });
   });
 
+  // The Greenhouse site's fetch host is an exact rule (#769): that host only, on every hop.
+  it('does not follow a greenhouse probe onto a subdomain of its API host', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const company = await createCompany(app.db, ctx, { name: 'Initech', status: 'followed' });
+    const probe = 'https://boards-api.greenhouse.io/v1/boards/initech/jobs';
+    const elsewhere = 'https://x.boards-api.greenhouse.io/v1/boards/initech/jobs';
+    const { fetch, requested } = net(
+      { 'x.boards-api.greenhouse.io': [PUBLIC_IP] },
+      {
+        [probe]: () => respond(302, '', { location: elsewhere }),
+        [elsewhere]: () => respond(200, GREENHOUSE_JOBS),
+      },
+    );
+
+    // The refused hop is a failed probe, so detection is retried later: no board is recorded.
+    await expect(detectAts(app.db, ctx, company.id, { fetch, log })).rejects.toThrow(/retrying/);
+
+    expect(requested).toContain(probe);
+    expect(requested).not.toContain(elsewhere);
+  });
+
   it('"Initech Labs" probes initechlabs, initech-labs, then the domain label, and registers the first hit', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);

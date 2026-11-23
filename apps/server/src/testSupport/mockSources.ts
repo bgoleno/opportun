@@ -12,7 +12,7 @@ import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { DiscoverySource } from '../adapters/discoverySource';
-import { GREENHOUSE_HOST } from '../adapters/sources/greenhouse';
+import { GREENHOUSE_API_HOST as GREENHOUSE_HOST } from '@opportun/core';
 import { users } from '../db/schema';
 import { suggestCompanies } from '../jobs/companySuggest';
 import type { safeFetch } from '../lib/safeFetch';
