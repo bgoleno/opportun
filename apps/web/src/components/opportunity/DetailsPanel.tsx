@@ -286,6 +286,12 @@ function LinkEditor({ opp, onDone }: { opp: OpportunityView; onDone: () => void 
   );
 }
 
+/** What a Refetch changed, as its toast names it (#866). */
+const CHANGED_SAID = new Map<NonNullable<FindPostingResult['changed']>[number], string>([
+  ['link', 'posting link'],
+  ['job', 'job on the board'],
+]);
+
 export function DetailsPanel({ opp }: { opp: OpportunityView }) {
   const posting = safeHttpUrl(opp.postingUrl);
   const find = useFindPosting(opp.id);
@@ -296,15 +302,20 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
   const checksEnded = useChecksEnded(opp.postingState);
   /** `untilCheck`: the refusal for a running check, true only until that check ends (#870). */
   const [findError, setFindError] = useState<{ message: string; untilCheck?: number } | null>(null);
-  /** The board could not be read (#835): said as such, with a retry, not as "no match". */
-  const [unreachable, setUnreachable] = useState(false);
+  /**
+   * The board could not be read (#835): said as such, with a retry, not as "no match". Kept as
+   * `checksEnded` when Find posting was pressed: a check that ends since has its own result to
+   * show, and what could not be read before it no longer matters (#866).
+   */
+  const [unreachableAt, setUnreachableAt] = useState<number | null>(null);
+  const unreachable = unreachableAt === checksEnded;
   const [editing, setEditing] = useState<'description' | 'link' | null>(null);
   const described = opp.descriptionMd != null && opp.descriptionMd.trim() !== '';
 
   // The posting is looked up only when asked for: nothing searches a board on its own.
   async function runFind() {
     setFindError(null);
-    setUnreachable(false);
+    setUnreachableAt(null);
     try {
       const result = await find.mutateAsync(opp.postingState ?? 'none');
       if (result.outcome === 'already_confirmed') {
@@ -317,7 +328,7 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
         return;
       }
       if (result.outcome === 'unreachable') {
-        setUnreachable(true);
+        setUnreachableAt(checksEnded);
         return;
       }
       if (result.outcome === 'attached' && result.unchanged === true) {
@@ -325,6 +336,16 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
         toast({
           title: 'Nothing changed',
           description: "The posting matches the company's board.",
+          variant: 'success',
+        });
+        return;
+      }
+      if (result.outcome === 'attached' && result.changed !== undefined) {
+        // A Refetch says what it changed (#866, qa on #860): nothing was attached anew.
+        const what = result.changed.map((c) => CHANGED_SAID.get(c) ?? c).join(', ');
+        toast({
+          title: 'Posting updated',
+          description: `Updated from the board: ${what}.${result.note === undefined ? '' : ` ${result.note}`}`,
           variant: 'success',
         });
         return;
@@ -441,24 +462,13 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
           {findError !== null && (findError.untilCheck ?? checksEnded) === checksEnded ? (
             <FormError message={findError.message} />
           ) : null}
-          {unreachable ? (
-            <div role="status" className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="flex-1">
-                Couldn't read the company's board just now, so nothing was checked.
-              </span>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={find.isPending}
-                onClick={() => void runFind()}
-              >
-                Try again
-              </Button>
-            </div>
-          ) : null}
           <PostingStateBanner
             opp={opp}
+            unreachable={unreachable}
+            // A confirmed posting is there already: nothing to add.
+            {...(opp.postingState === 'confirmed'
+              ? {}
+              : { onAddByHand: () => setFound({ outcome: 'unreachable' }) })}
             busy={find.isPending}
             onAction={() => void runFind()}
             confirmBusy={confirmPosting.isPending}

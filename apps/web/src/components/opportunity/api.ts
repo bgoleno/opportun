@@ -208,7 +208,8 @@ export interface PostingCandidateView {
 export interface FindPostingResult {
   /** 'identified' (#398): the opportunity's own careers link got its Greenhouse identity. */
   /**
-   * 'unreachable' (#835): the company's boards could not be read, which is not "no match".
+   * 'unreachable' (#835, #866): the company's boards could not be read, or the search for one
+   * could not finish, which is not "no match" or "no board".
    * 'already_confirmed' (#852): a background check confirmed it after the page loaded.
    */
   outcome:
@@ -221,6 +222,8 @@ export interface FindPostingResult {
     | 'already_confirmed';
   /** An attach that changed nothing: a Refetch that found the same job (#835). */
   unchanged?: true;
+  /** What a Refetch changed (#866): absent on a first attach, and when `unchanged`. */
+  changed?: ('link' | 'job' | 'description' | 'location' | 'remote' | 'compensation')[];
   /** Present when the outcome is 'attached' or 'identified'. */
   opportunity?: OpportunityView;
   candidate?: PostingCandidateView;

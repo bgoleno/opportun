@@ -257,6 +257,27 @@ describe('POST /opportunities/:id/find-posting', () => {
     expect(res.json()).toMatchObject({ outcome: 'none' });
   });
 
+  it('a search for a board that could not finish answers unreachable, not no_board (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, {
+      title: 'Staff Product Manager',
+      company: 'Meridian Systems',
+      ats: false,
+    });
+    app.jobs.services.sourceFetch = (async () => {
+      throw new Error('fetch failed: ECONNREFUSED');
+    }) as unknown as typeof safeFetch;
+
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ outcome: 'unreachable' });
+    expect((await getOpportunity(app.db, ctxOf(a), id)).postingState).toBeNull();
+  });
+
   it('answers no_board with the paste hint', async () => {
     const { app, a } = await boot();
     const id = await seed(app, a, {
@@ -491,12 +512,9 @@ describe('POST /opportunities/:id/find-posting', () => {
       location: null,
     });
     const { items } = await listActivities(app.db, ctxOf(a), id, { limit: 50, offset: 0 });
-    expect(
-      items.some(
-        (i) =>
-          i.bodyMd?.includes("Checked on the company's board; your description was kept.") === true,
-      ),
-    ).toBe(true);
+    // It said "Checked on the company's board" each time (#812); a Refetch that changes nothing now
+    // leaves the timeline as it was (#866).
+    expect(items.filter((i) => i.kind === 'link')).toEqual([]);
   });
 
   // #835 (qa on #830): a Refetch that finds the same job, link and all, changed nothing, and says
@@ -519,6 +537,117 @@ describe('POST /opportunities/:id/find-posting', () => {
       url: `/api/v1/opportunities/${id}/find-posting`,
     });
     expect(res.json()).toMatchObject({ outcome: 'attached', unchanged: true });
+    expect(res.json().changed).toBeUndefined();
+  });
+
+  const refetch = async (a: TestClient, id: string) => {
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting?seen=confirmed`,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    return res.json();
+  };
+  const entries = async (app: { db: Db }, a: TestClient, id: string) =>
+    (await listActivities(app.db, ctxOf(a), id, { limit: 50, offset: 0 })).items.filter(
+      (i) => i.title === 'Job posting attached',
+    );
+
+  it('Refetches that change nothing add no timeline entry, on the board description (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    boardServes([posting('Staff Product Manager, SIEM', '7663059003')]);
+    const first = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    // The first attach is recorded, with nothing said of what it changed: it is the first.
+    expect(first.json()).toMatchObject({ outcome: 'attached' });
+    expect(first.json().changed).toBeUndefined();
+    expect(await entries(app, a, id)).toHaveLength(1);
+
+    for (let i = 0; i < 2; i += 1) {
+      expect(await refetch(a, id)).toMatchObject({ outcome: 'attached', unchanged: true });
+    }
+    expect(await entries(app, a, id)).toHaveLength(1);
+  });
+
+  it('a Refetch that changes only the description says so (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    boardServes([posting('Staff Product Manager, SIEM', '7663059003')]);
+    await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    boardServes([
+      {
+        ...posting('Staff Product Manager, SIEM', '7663059003'),
+        descriptionMd: 'What We Do: now also Kafka.',
+      },
+    ]);
+
+    const body = await refetch(a, id);
+
+    expect(body).toMatchObject({ outcome: 'attached', changed: ['description'] });
+    expect(body.unchanged).toBeUndefined();
+    expect((await entries(app, a, id)).map((i) => i.bodyMd)).toContainEqual(
+      expect.stringContaining("The description was updated to the board's."),
+    );
+  });
+
+  it('a row picked on a confirmed posting names each thing it changed (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    boardServes([{ ...posting('Staff Product Manager, SIEM', '7663059003'), location: undefined }]);
+    await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    const picked = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/posting`,
+      payload: {
+        posting: {
+          ...posting('Staff Product Manager, SIEM', '7663059004'),
+          descriptionMd: 'Another text.',
+          remote: true,
+          compNote: '$200k',
+        },
+      },
+    });
+    expect(picked.statusCode, picked.body).toBe(200);
+    const line = (await entries(app, a, id)).map((i) => i.bodyMd ?? '');
+    expect(line).toContainEqual(
+      expect.stringContaining("The posting link was updated to the board's."),
+    );
+    expect(line).toContainEqual(
+      expect.stringContaining('Took location, remote, compensation from the board.'),
+    );
+  });
+
+  it('a Refetch that fills in facts the opportunity lacked is not "nothing changed" (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    const bare = { ...posting('Staff Product Manager, SIEM', '7663059003'), location: undefined };
+    boardServes([bare]);
+    await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    boardServes([{ ...bare, location: 'Berlin', remote: false, compNote: '$200k' }]);
+
+    const body = await refetch(a, id);
+
+    expect(body).toMatchObject({ changed: ['location', 'remote', 'compensation'] });
+    expect(body.unchanged).toBeUndefined();
+    expect(await entries(app, a, id)).toHaveLength(2);
+  });
+
+  it('a row picked by hand is recorded even when it changes nothing (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    const same = posting('Staff Product Manager, SIEM', '7663059003');
+    boardServes([same]);
+    await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    const picked = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/posting`,
+      payload: { posting: same },
+    });
+    expect(picked.statusCode, picked.body).toBe(200);
+    expect(await entries(app, a, id)).toHaveLength(2);
   });
 
   it('a Refetch that rewrote the link names the rewrite, not "Checked" (#835)', async () => {
@@ -539,7 +668,7 @@ describe('POST /opportunities/:id/find-posting', () => {
       method: 'POST',
       url: `/api/v1/opportunities/${id}/find-posting`,
     });
-    expect(res.json()).toMatchObject({ outcome: 'attached' });
+    expect(res.json()).toMatchObject({ outcome: 'attached', changed: ['link'] });
     expect(res.json().unchanged).not.toBe(true);
     expect((await getOpportunity(app.db, ctxOf(a), id)).postingUrl).toBe(OWN_LINK);
     const { items } = await listActivities(app.db, ctxOf(a), id, { limit: 50, offset: 0 });

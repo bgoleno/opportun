@@ -723,6 +723,12 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
       { outcome: 'none', candidates: [] },
       "This job was not found on the company's board. Paste the posting on the Details tab.",
     ],
+    // #866: never a silent button; Find posting stays there to try again.
+    [
+      'unreachable',
+      { outcome: 'unreachable' },
+      "The company's board couldn't be read just now, so nothing was checked. Try Find posting again.",
+    ],
     [
       'no_board',
       { outcome: 'no_board', needsCareersUrl: true },

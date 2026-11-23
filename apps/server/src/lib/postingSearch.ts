@@ -510,6 +510,8 @@ export async function findPosting(
   const company = await getCompany(db, ctx, opp.companyId);
   const refs = await refsFromMail(db, ctx, opportunityId, opts.readBody, sctx.log);
   let owned = await companyBoards(db, ctx, company);
+  /** Detection could not finish, so whether the company has a board is not known (#866). */
+  let detectionFailed = false;
   if (owned.length === 0) {
     // FR-D9 detection, only when the company has no board on record.
     try {
@@ -523,16 +525,18 @@ export async function findPosting(
         owned = [{ kind: detected.kind, org: detected.org, config: boardConfig(board) }];
       }
     } catch (err) {
-      // A transient probe failure is not a verdict; the user still gets the paste path.
+      // A transient probe failure is not a verdict: "no board" would say the company has none. It
+      // is tried again, as a board that could not be read is, and the panel keeps the paste path.
       if (!(err instanceof AtsDetectTransientError)) throw err;
+      detectionFailed = true;
       sctx.log.warn({ 'opportun.company.id': company.id, err }, 'ats detection failed');
     }
   }
   const foreign = referenceBoards(refs, owned);
-  const noBoard = (): FindOutcome => ({
-    status: 'no_board',
-    needsCareersUrl: company.careersUrl == null,
-  });
+  const noBoard = (): FindOutcome =>
+    detectionFailed
+      ? { status: 'unreachable' }
+      : { status: 'no_board', needsCareersUrl: company.careersUrl == null };
   if (owned.length === 0 && foreign.length === 0) return noBoard();
 
   /** An undescribed posting cannot be attached: the user is shown it to pick or paste for. */

@@ -65,6 +65,11 @@ const FIND_SAID = new Map<FindPostingResult['outcome'], string>([
   ['identified', 'Recognised on Greenhouse.'],
   ['candidates', 'Several postings could be this job. Choose it on the Details tab.'],
   ['none', "This job was not found on the company's board. Paste the posting on the Details tab."],
+  // Never a silent button (#866): Find posting stays there to try again.
+  [
+    'unreachable',
+    "The company's board couldn't be read just now, so nothing was checked. Try Find posting again.",
+  ],
   [
     'no_board',
     'No job board is known for this company yet. Add its careers page on the Details tab.',

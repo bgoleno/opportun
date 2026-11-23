@@ -5,7 +5,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { qk, type OpportunityView } from '@/lib/opportunities';
-import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
+import { mockApi, renderWithProviders, toastRegion, type ApiCall } from '@/test/render';
 import { useOpportunity } from './api';
 import { DetailsPanel } from './DetailsPanel';
 
@@ -219,6 +219,149 @@ describe('Find posting', () => {
     await waitFor(() => expect(finds()).toBe(2));
   });
 
+  // #866 (qa on #860): the banner and the notice each said it, each with a Try again.
+  it.each([
+    ['failed', true],
+    ['none_found', true],
+    ['ambiguous', true],
+    ['no_board', true],
+    ['edited', false],
+  ] as const)(
+    'a board that cannot be read, at %s: one notice, one Try again (#866)',
+    async (postingStateDetail, confirmable) => {
+      const opp = { ...BARE, postingState: 'needs_review', postingStateDetail } as OpportunityView;
+      const api = setup({ 'POST /opportunities/opp-1/find-posting': { outcome: 'unreachable' } });
+      renderWithProviders(<DetailsPanel opp={opp} />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+
+      expect(await screen.findByText(/couldn't read the company's board/i)).toBeInTheDocument();
+      const notices = screen.getAllByRole('status');
+      expect(notices).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: 'Try again' })).toHaveLength(1);
+      // The state's own way to settle it stays.
+      expect(screen.queryAllByRole('button', { name: 'Confirm' })).toHaveLength(
+        confirmable ? 1 : 0,
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+      await waitFor(() =>
+        expect(
+          api.calls.filter((c: ApiCall) => c.path === '/opportunities/opp-1/find-posting'),
+        ).toHaveLength(2),
+      );
+    },
+  );
+
+  // A failed detection used to open the dialog, so the way to add the posting by hand stays.
+  it('a board that cannot be read keeps the way to add the posting by hand (#866)', async () => {
+    const api = setup({
+      'POST /opportunities/opp-1/find-posting': { outcome: 'unreachable' },
+      'POST /opportunities/opp-1/posting': { ...BARE, descriptionMd: 'Pasted.' },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Add by hand' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add the posting' });
+    expect(dialog).toHaveTextContent(
+      "The company's board couldn't be read just now. Add the posting by hand.",
+    );
+    expect(dialog).not.toHaveTextContent(/no job board found|no close match/i);
+    await userEvent.click(within(dialog).getByRole('radio', { name: 'Pasted text' }));
+    await userEvent.type(within(dialog).getByLabelText('Posting description'), 'Pasted.');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Attach posting' }));
+    await waitFor(() =>
+      expect(
+        api.calls.find((c: ApiCall) => c.path === '/opportunities/opp-1/posting')?.body,
+      ).toEqual({ text: 'Pasted.' }),
+    );
+  });
+
+  it('a Refetch that cannot read the board says so once, and offers no pasting over it (#866)', async () => {
+    setup({ 'POST /opportunities/opp-1/find-posting': { outcome: 'unreachable' } });
+    renderWithProviders(
+      <DetailsPanel opp={{ ...BARE, descriptionMd: 'Text.', postingState: 'confirmed' }} />,
+    );
+    await userEvent.click(await screen.findByRole('button', { name: 'Refetch' }));
+    const ask = await screen.findByRole('dialog', { name: 'Refetch this posting?' });
+    await userEvent.click(within(ask).getByRole('button', { name: 'Refetch' }));
+    expect(await screen.findByText(/couldn't read the company's board/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Try again' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Add by hand' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Confirm' })).toBeNull();
+  });
+
+  it('the notice goes when a check settles the posting meanwhile (#866)', async () => {
+    let now = { ...BARE } as OpportunityView;
+    setup({
+      'GET /opportunities/opp-1': () => now,
+      'POST /opportunities/opp-1/find-posting': { outcome: 'unreachable' },
+    });
+    const { queryClient } = renderWithProviders(<Live />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+    expect(await screen.findByText(/couldn't read the company's board/i)).toBeInTheDocument();
+
+    // While a check runs it says only that, then what it found.
+    now = { ...BARE, postingState: 'searching' } as OpportunityView;
+    await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+    expect(await screen.findByText(/checking the company's job board/i)).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't read the company's board/i)).toBeNull();
+
+    now = {
+      ...BARE,
+      postingState: 'needs_review',
+      postingStateDetail: 'none_found',
+    } as OpportunityView;
+    await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+    expect(
+      await screen.findByText("This posting is not on the company's board right now."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't read the company's board/i)).toBeNull();
+  });
+
+  it.each([
+    [['description'], 'Updated from the board: description.'],
+    [['link', 'job'], 'Updated from the board: posting link, job on the board.'],
+    [
+      ['location', 'remote', 'compensation'],
+      'Updated from the board: location, remote, compensation.',
+    ],
+  ])(
+    'a Refetch that changed %j says what changed, not "Posting attached" (#866)',
+    async (changed, said) => {
+      setup({
+        'POST /opportunities/opp-1/find-posting': {
+          outcome: 'attached',
+          changed,
+          opportunity: BARE,
+          candidate: CANDIDATE('A title never in a toast here', 'United States', '7663059003'),
+        },
+      });
+      renderWithProviders(<DetailsPanel opp={BARE} />);
+      await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+      expect(await toastRegion().findByText('Posting updated')).toBeInTheDocument();
+      expect(toastRegion().getByText(said)).toBeInTheDocument();
+      expect(toastRegion().queryByText(/A title never in a toast here/)).toBeNull();
+    },
+  );
+
+  it('a Refetch from a board read in part says that too (#866)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'attached',
+        changed: ['description'],
+        opportunity: BARE,
+        candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
+        note: 'Large Workday board: part read.',
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(
+      await toastRegion().findByText(
+        'Updated from the board: description. Large Workday board: part read.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('a Refetch that changes nothing says so, not "Posting attached" (#835)', async () => {
     setup({
       'POST /opportunities/opp-1/find-posting': {
@@ -359,6 +502,24 @@ describe('Find posting', () => {
     expect(within(dialog).queryByText(/more than one posting/i)).not.toBeInTheDocument();
     expect(within(dialog).getByText(/one posting on the .* board may match/i)).toBeInTheDocument();
     expect(within(dialog).getByText(/isn't on the company's board now/i)).toBeInTheDocument();
+  });
+
+  it('a company name ending in s takes an apostrophe alone (#866)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'candidates',
+        candidates: [CANDIDATE('Staff Product Manager, SIEM', 'United States', '1')],
+        board: [],
+        needsConfirmation: true,
+      },
+    });
+    renderWithProviders(
+      <DetailsPanel opp={{ ...BARE, companyName: 'Vandelay Industries' } as OpportunityView} />,
+    );
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(
+      await screen.findByText(/on a board that is not Vandelay Industries' own board\./),
+    ).toBeInTheDocument();
   });
 
   it('says a referenced posting needs checking when it is not the company board', async () => {
