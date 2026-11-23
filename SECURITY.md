@@ -191,8 +191,11 @@ using the app (`HttpError` in `apps/server/src/lib/errors.ts`, the handler in
   that threw it marks it as written for the user. Such a sentence may repeat what that person sent
   or owns, never another error's text, a stack, a path, someone else's data or configuration. It is
   cut to 300 characters. A `message` in the details is dropped, so the details cannot carry text
-  around that rule. A test reads every throw in the server and fails on a marked one that passes on a
-  caught error's text (`apps/server/test/userFacingErrors.test.ts`).
+  around that rule. A test reads every throw in the server
+  (`apps/server/test/userFacingErrors.test.ts`). It fails on a marked one that passes on a caught
+  error's text, and on a marked message that is neither a literal sentence nor on its reviewed list,
+  where each entry says where the text comes from. So a new non-literal message fails until it is
+  reviewed.
 - **A stage change the pipeline does not allow** gets `invalid_transition` with the pipeline's own
   sentence and the two stages.
 - **A request that fails validation** gets the code `validation` and the list of what was wrong
@@ -205,8 +208,11 @@ using the app (`HttpError` in `apps/server/src/lib/errors.ts`, the handler in
 
 The end-to-end tests run the server with fakes in place of outside services, each turned on by an
 environment variable: `OPPORTUN_AI_MOCK`, `OPPORTUN_DOCS_MOCK`, `OPPORTUN_GMAIL_MOCK`,
-`OPPORTUN_SOURCE_MOCK` and `OPPORTUN_OAUTH_MOCK` (`apps/server/src/testSupport/index.ts`). Some also
-add test-only routes under `/__mock/`.
+`OPPORTUN_SOURCE_MOCK`, `OPPORTUN_OAUTH_MOCK` and `OPPORTUN_AUTH_MOCK`
+(`apps/server/src/testSupport/index.ts`). Some also add test-only routes under `/__mock/`. The last
+adds a sign-up that skips the sign-in rate limit, so the tests stay under it. That sign-up cannot
+create the first account, so it never makes the administrator, and it keeps registration's other
+rules.
 
 - **A production server refuses to start** with any of them set to `1`: under `NODE_ENV=production`,
   which the shipped image sets (`deploy/Dockerfile`), the server stops at startup with an error that
